@@ -1,869 +1,531 @@
 @page "/crm/leads/assignment"
 @namespace Ams.Web.Components.Pages.Crm
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Leads
+@using Microsoft.AspNetCore.Components.Forms
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Lead Assignment — CRM</PageTitle>
+<PageTitle>Enterprise Lead Assignment</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<AppPageHeader Title="Lead Assignment"
-               Subtitle="Assign unassigned leads, manage producer workload, and configure assignment rules"
-               Icon="bi-person-check">
-    <Actions>
-        <div class="la-view-toggle" role="group" aria-label="View mode">
-            @foreach (var v in _views)
-            {
-                <button class="la-view-btn @(_view == v.Id ? "la-view-btn--active" : "")"
-                        @onclick="() => _view = v.Id"
-                        title="@v.Label"
-                        aria-pressed="@(_view == v.Id)">
-                    <i class="bi @v.Icon" aria-hidden="true"></i>
-                    <span class="la-view-lbl">@v.Label</span>
-                </button>
-            }
-        </div>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise @(_loading ? "la-spin" : "")" aria-hidden="true"></i>
-        </button>
-        @if (_view == "leads" && _selectedLeads.Count > 0)
-        {
-            <button class="um-btn um-btn-primary" @onclick="OpenBulkAssignDrawer">
-                <i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Assign @_selectedLeads.Count
-            </button>
-        }
-        @if (_view == "rules")
-        {
-            <button class="um-btn um-btn-primary" @onclick="OpenRuleDrawer">
-                <i class="bi bi-plus-lg" aria-hidden="true"></i> New Rule
-            </button>
-        }
-    </Actions>
-</AppPageHeader>
-
-<!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
-<div class="la-kpi-strip">
-    <div class="la-kpi-card">
-        <span class="la-kpi-icon la-ki1"><i class="bi bi-inbox-fill" aria-hidden="true"></i></span>
-        <div>
-            <div class="la-kpi-val">@_kpi.UnassignedLeads</div>
-            <div class="la-kpi-lbl">Unassigned Leads</div>
-        </div>
-    </div>
-    <div class="la-kpi-card">
-        <span class="la-kpi-icon la-ki2"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
-        <div>
-            <div class="la-kpi-val">@_kpi.TotalProducers</div>
-            <div class="la-kpi-lbl">Active Producers</div>
-        </div>
-    </div>
-    <div class="la-kpi-card">
-        <span class="la-kpi-icon la-ki3"><i class="bi bi-bar-chart-fill" aria-hidden="true"></i></span>
-        <div>
-            <div class="la-kpi-val">@_kpi.AvgLeadsPerProducer.ToString("F1")</div>
-            <div class="la-kpi-lbl">Avg Leads per Producer</div>
-        </div>
-    </div>
-    <div class="la-kpi-card">
-        <span class="la-kpi-icon la-ki4"><i class="bi bi-percent" aria-hidden="true"></i></span>
-        <div>
-            <div class="la-kpi-val">@_kpi.WorkloadBalance.ToString("F0")%</div>
-            <div class="la-kpi-lbl">Workload Balance</div>
-        </div>
-    </div>
-</div>
-
-<!-- ════════════════════════════════════════════════════════════════════════
-     VIEW: UNASSIGNED LEADS
-     ════════════════════════════════════════════════════════════════════════ -->
-@if (_view == "leads")
+@if (_toastVisible)
 {
-    <div class="la-leads-container">
-        <div class="la-filter-bar">
-            <div class="la-search-wrap">
-                <i class="bi bi-search" aria-hidden="true"></i>
-                <input type="search" 
-                       class="la-search-input" 
-                       placeholder="Search leads…"
-                       @bind="_query"
-                       @bind:event="oninput"
-                       aria-label="Search leads" />
-            </div>
-            <SfDropDownList TItem="string" 
-                           TValue="string" 
-                           DataSource="_leadSources"
-                           @bind-Value="_sourceFilter"
-                           Placeholder="All Sources"
-                           CssClass="la-filter-select"
-                           AllowFiltering="true"
-                           AllowClear="true">
-            </SfDropDownList>
-            <SfDropDownList TItem="string" 
-                           TValue="string" 
-                           DataSource="_scoreRanges"
-                           @bind-Value="_scoreFilter"
-                           Placeholder="All Scores"
-                           CssClass="la-filter-select"
-                           AllowFiltering="true"
-                           AllowClear="true">
-            </SfDropDownList>
-        </div>
-
-        @if (_loading)
-        {
-            <div class="la-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
-        }
-        else if (GetVisibleLeads().Count == 0)
-        {
-            <div class="la-empty">
-                <i class="bi bi-inbox" aria-hidden="true"></i>
-                <p>No unassigned leads match your filters</p>
-                <button class="um-btn um-btn-ghost" @onclick="ClearFilters">Clear Filters</button>
-            </div>
-        }
-        else
-        {
-            <div class="la-leads-grid">
-                <table role="grid" class="la-leads-table">
-                    <thead>
-                        <tr>
-                            <th style="width: 40px;">
-                                <input type="checkbox" 
-                                       @onchange="e => SelectAllLeads((bool)e.Value)"
-                                       aria-label="Select all leads"
-                                       title="Select all visible leads" />
-                            </th>
-                            <th>Lead Name</th>
-                            <th>Company</th>
-                            <th>Score</th>
-                            <th>Source</th>
-                            <th>Contact</th>
-                            <th>Created</th>
-                            <th>Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var lead in GetVisibleLeads())
-                        {
-                            var isSelected = _selectedLeads.Contains(lead.Id);
-                            <tr class="@(isSelected ? "la-row--selected" : "")">
-                                <td>
-                                    <input type="checkbox"
-                                           checked="@isSelected"
-                                           @onchange="e => ToggleLead(lead.Id, (bool)e.Value)"
-                                           aria-label="Select @lead.Name" />
-                                </td>
-                                <td>
-                                    <div class="la-lead-name">
-                                        <span class="la-avatar" style="background: @GetAvatarColor(lead.Id);">
-                                            @lead.Name.First()
-                                        </span>
-                                        <span>@lead.Name</span>
-                                    </div>
-                                </td>
-                                <td>@lead.Company</td>
-                                <td>
-                                    <span class="la-score @GetScoreBadgeClass(lead.Score)">
-                                        @lead.Score
-                                    </span>
-                                </td>
-                                <td>
-                                    <span class="la-source-badge">@lead.Source</span>
-                                </td>
-                                <td>
-                                    <a href="mailto:@lead.Email" class="la-link">@lead.Email</a>
-                                </td>
-                                <td class="la-date">@lead.CreatedDate.ToString("MMM dd")</td>
-                                <td>
-                                    <button class="um-btn um-btn-ghost um-btn-sm"
-                                            @onclick="() => OpenAssignDrawer(lead)"
-                                            title="Assign lead to producer">
-                                        <i class="bi bi-arrow-right-circle" aria-hidden="true"></i>
-                                    </button>
-                                </td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-            </div>
-        }
+    <div class="ld-toast ld-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ld-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-<!-- ════════════════════════════════════════════════════════════════════════
-     VIEW: PRODUCER WORKLOAD
-     ════════════════════════════════════════════════════════════════════════ -->
-@if (_view == "workload")
+@if (_showConfirm && _confirmAction is not null)
 {
-    @if (_loading)
-    {
-        <div class="la-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
-    }
-    else
-    {
-        <div class="la-workload-container">
-            <div class="la-workload-grid">
-                @foreach (var producer in _producers.OrderByDescending(p => p.LeadCount))
-                {
-                    var capacity = producer.Capacity;
-                    var count = producer.LeadCount;
-                    var pct = capacity > 0 ? (count / (double)capacity) * 100 : 0;
-                    var status = pct >= 100 ? "over" : pct >= 80 ? "high" : pct >= 50 ? "med" : "low";
+    <div class="la-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="la-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="assignmentConfirmTitle" @onclick:stopPropagation="true">
+            <div class="la-confirm-icon la-confirm-@_confirmAction.Kind"><i class="bi @_confirmAction.Icon" aria-hidden="true"></i></div>
+            <h2 id="assignmentConfirmTitle">@_confirmAction.Title</h2>
+            <p>@_confirmAction.Message</p>
+            <div class="la-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_busy">Cancel</button>
+                <button type="button" class="um-btn @_confirmAction.ButtonClass" @onclick="ExecuteConfirmedAsync" disabled="@_busy">
+                    @if (_busy)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    @_confirmAction.ButtonText
+                </button>
+            </div>
+        </div>
+    </div>
+}
 
-                    <div class="la-workload-card">
-                        <div class="la-workload-hdr">
-                            <div>
-                                <div class="la-producer-name">@producer.Name</div>
-                                <div class="la-producer-title">@producer.Title</div>
-                            </div>
-                            <span class="la-workload-status la-workload-@status">@pct.ToString("F0")%</span>
+@if (_showAssignModal)
+{
+    <div class="la-modal-backdrop" role="presentation" @onclick="CloseAssignModal">
+        <div class="la-action-modal" role="dialog" aria-modal="true" aria-labelledby="assignLeadTitle" @onclick:stopPropagation="true">
+            <div class="la-modal-header">
+                <div class="la-modal-title"><span class="la-modal-icon"><i class="bi bi-person-check" aria-hidden="true"></i></span><div><h2 id="assignLeadTitle">@(_assignmentTargets.Count == 1 ? "Assign lead" : "Bulk assign leads")</h2><p>Route selected CRM leads to active producers and update ownership workflow.</p></div></div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseAssignModal" disabled="@_busy" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="la-modal-body">
+                <div class="la-form-banner"><i class="bi bi-diagram-3" aria-hidden="true"></i><div><strong>@_assignmentTargets.Count lead(s) selected</strong><span>Assignments update existing lead owner fields and refresh workload metrics.</span></div></div>
+                <div class="la-form-grid">
+                    <div class="la-field">
+                        <label>Assignment strategy</label>
+                        <select class="la-input" @bind="_assignStrategy">
+                            @foreach (var strategy in _assignmentStrategies)
+                            {
+                                <option value="@strategy">@strategy</option>
+                            }
+                        </select>
+                    </div>
+                    @if (_assignStrategy == "Manual")
+                    {
+                        <div class="la-field">
+                            <label>Producer <span>*</span></label>
+                            <select class="la-input" @bind="_selectedProducerId">
+                                <option value="@Guid.Empty">Select producer</option>
+                                @foreach (var producer in _producers)
+                                {
+                                    <option value="@producer.Id">@producer.Name</option>
+                                }
+                            </select>
                         </div>
-
-                        <div class="la-workload-bar">
-                            <div class="la-workload-fill la-workload-@status" style="width: @Math.Min(pct, 100).ToString("F0")%;"></div>
+                    }
+                    else
+                    {
+                        <div class="la-field">
+                            <label>Producer group</label>
+                            <select class="la-input" @bind="_assignGroup">
+                                @foreach (var group in _producerGroups)
+                                {
+                                    <option value="@group">@group</option>
+                                }
+                            </select>
                         </div>
-
-                        <div class="la-workload-stats">
-                            <div class="la-stat">
-                                <span class="la-stat-val">@count</span>
-                                <span class="la-stat-lbl">Current Leads</span>
-                            </div>
-                            <div class="la-stat">
-                                <span class="la-stat-val">@capacity</span>
-                                <span class="la-stat-lbl">Capacity</span>
-                            </div>
-                            <div class="la-stat">
-                                <span class="la-stat-val">@(capacity - count)</span>
-                                <span class="la-stat-lbl">Available</span>
-                            </div>
-                        </div>
-
-                        <div class="la-workload-actions">
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => EditProducerCapacity(producer)">
-                                <i class="bi bi-pencil" aria-hidden="true"></i> Capacity
-                            </button>
+                    }
+                    <div class="la-field la-field-wide">
+                        <label>Assignment notes</label>
+                        <InputTextArea class="la-input" rows="4" @bind-Value="_assignmentNotes" placeholder="Add routing context, priority reason, or next best action." />
+                    </div>
+                    <div class="la-field la-field-wide">
+                        <div class="la-mini-list">
+                            @foreach (var lead in _assignmentTargets.Take(5))
+                            {
+                                <div><span>@lead.Name</span><small>@lead.Company · score @lead.Score</small></div>
+                            }
                         </div>
                     </div>
-                }
+                </div>
             </div>
+            <div class="la-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseAssignModal" disabled="@_busy">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="CommitAssignmentAsync" disabled="@AssignDisabled">Assign leads</button></div>
         </div>
-    }
+    </div>
 }
 
-<!-- ════════════════════════════════════════════════════════════════════════
-     VIEW: ASSIGNMENT RULES
-     ════════════════════════════════════════════════════════════════════════ -->
-@if (_view == "rules")
+@if (_showRuleModal)
 {
-    @if (_loading)
-    {
-        <div class="la-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
-    }
-    else
-    {
-        <div class="la-rules-container">
-            @if (_rules.Count == 0)
-            {
-                <div class="la-empty">
-                    <i class="bi bi-sliders2" aria-hidden="true"></i>
-                    <p>No assignment rules configured</p>
-                    <button class="um-btn um-btn-primary" @onclick="OpenRuleDrawer">Create First Rule</button>
+    <div class="la-modal-backdrop" role="presentation" @onclick="CloseRuleModal">
+        <div class="la-action-modal" role="dialog" aria-modal="true" aria-labelledby="assignmentRuleTitle" @onclick:stopPropagation="true">
+            <div class="la-modal-header"><div class="la-modal-title"><span class="la-modal-icon"><i class="bi bi-sliders2" aria-hidden="true"></i></span><div><h2 id="assignmentRuleTitle">@(_editingRuleId == 0 ? "Create assignment rule" : "Edit assignment rule")</h2><p>Configure assignment routing logic for score, source, territory, or round-robin workflows.</p></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseRuleModal" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm Model="_ruleForm" OnValidSubmit="SaveRuleAsync" OnInvalidSubmit="HandleInvalidRuleSubmitAsync">
+                <DataAnnotationsValidator />
+                <div class="la-modal-body">
+                    <div class="la-form-banner"><i class="bi bi-shield-check" aria-hidden="true"></i><div><strong>Enterprise rule governance</strong><span>Rules are validated and ready to synchronize with assignment-rule APIs when available.</span></div></div>
+                    <div class="la-form-grid">
+                        <div class="la-field la-field-wide"><label>Rule name <span>*</span></label><InputText class="la-input" @bind-Value="_ruleForm.Name" /><ValidationMessage For="() => _ruleForm.Name" class="la-validation" /></div>
+                        <div class="la-field"><label>Strategy <span>*</span></label><InputSelect class="la-input" @bind-Value="_ruleForm.Strategy">@foreach (var strategy in _assignmentStrategies) { <option value="@strategy">@strategy</option> }</InputSelect><ValidationMessage For="() => _ruleForm.Strategy" class="la-validation" /></div>
+                        <div class="la-field"><label>Target group</label><InputSelect class="la-input" @bind-Value="_ruleForm.ProducerGroup">@foreach (var group in _producerGroups) { <option value="@group">@group</option> }</InputSelect></div>
+                        <div class="la-field la-field-wide"><label>Criteria</label><InputText class="la-input" @bind-Value="_ruleForm.Criteria" placeholder="Example: Score >= 80" /></div>
+                        <div class="la-field"><label>Max assignments</label><InputNumber class="la-input" @bind-Value="_ruleForm.MaxAssignments" /></div>
+                        <div class="la-field"><label class="la-check"><InputCheckbox @bind-Value="_ruleForm.Active" /> Active rule</label></div>
+                    </div>
                 </div>
+                <div class="la-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseRuleModal">Cancel</button><button type="submit" class="um-btn um-btn-primary">Save rule</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showCapacityModal && _capacityProducer is not null)
+{
+    <div class="la-modal-backdrop" role="presentation" @onclick="CloseCapacityModal">
+        <div class="la-small-modal" role="dialog" aria-modal="true" aria-labelledby="capacityTitle" @onclick:stopPropagation="true">
+            <div class="la-modal-header"><div class="la-modal-title"><span class="la-modal-icon"><i class="bi bi-speedometer2" aria-hidden="true"></i></span><div><h2 id="capacityTitle">Producer capacity</h2><p>@_capacityProducer.Name · @_capacityProducer.Title</p></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseCapacityModal"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <div class="la-modal-body"><div class="la-field"><label>Capacity</label><InputNumber class="la-input" @bind-Value="_capacityValue" /></div></div>
+            <div class="la-modal-footer"><button class="um-btn um-btn-ghost" @onclick="CloseCapacityModal">Cancel</button><button class="um-btn um-btn-primary" @onclick="SaveCapacity">Save capacity</button></div>
+        </div>
+    </div>
+}
+
+<div class="la-enterprise-page">
+    <section class="la-hero">
+        <div class="la-hero-left"><span class="la-hero-icon"><i class="bi bi-person-check" aria-hidden="true"></i></span><div><div class="la-title-row"><h1>Enterprise Lead Assignment</h1><span><i class="bi bi-database-check" aria-hidden="true"></i> Live CRM data</span><span><i class="bi bi-people" aria-hidden="true"></i> Producer workload</span></div><p>Assign unowned leads, balance producer capacity, govern routing rules, and track ownership workflow activity.</p></div></div>
+        <div class="la-hero-actions"><button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat la-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button><button class="um-btn um-btn-ghost" @onclick="AutoAssignHotLeads"><i class="bi bi-magic" aria-hidden="true"></i> Auto assign hot</button><button class="um-btn um-btn-ghost" @onclick="NavigateToLeads"><i class="bi bi-person-lines-fill" aria-hidden="true"></i> Leads</button><button class="um-btn um-btn-primary" @onclick="OpenRuleModal"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Rule</button></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="la-error-banner"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    <section class="la-kpi-strip" aria-label="Assignment metrics">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricCardClass(metric)" @onclick="@(() => SetQuickFilter(metric.Filter))"><span class="la-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span><span><span class="la-kpi-val">@metric.Value</span><span class="la-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span></button>
+        }
+    </section>
+
+    <section class="la-workflow-strip" aria-label="Assignment workflow actions">
+        <button class="la-workflow-card" @onclick="OpenBulkAssignModal"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i><span><strong>Assign selected</strong><span>Route checked leads.</span></span></button>
+        <button class="la-workflow-card" @onclick="ShowWorkload"><i class="bi bi-diagram-3" aria-hidden="true"></i><span><strong>Balance workload</strong><span>Review capacity mix.</span></span></button>
+        <button class="la-workflow-card" @onclick="SeedDefaultRules"><i class="bi bi-stars" aria-hidden="true"></i><span><strong>Seed rules</strong><span>Add defaults if empty.</span></span></button>
+        <button class="la-workflow-card" @onclick="ShowHistory"><i class="bi bi-clock-history" aria-hidden="true"></i><span><strong>Assignment history</strong><span>Audit current session.</span></span></button>
+    </section>
+
+    <section class="la-search-panel">
+        <div class="la-search-wrap"><span class="la-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span><div class="la-search-body"><label for="assignmentSearchInput">Search assignment workspace</label><input id="assignmentSearchInput" class="la-search-input" value="@_query" @oninput="OnSearchChanged" placeholder="Search lead, company, email, source, producer, rule, or history..." /><span class="la-search-hint">Enterprise search filters lead queue, producers, assignment rules, and history.</span></div></div>
+        <select class="la-filter-select" value="@_sourceFilter" @onchange="OnSourceFilterChanged"><option value="">All sources</option>@foreach (var source in SourceOptions) { <option value="@source">@source</option> }</select>
+        <select class="la-filter-select" value="@_scoreFilter" @onchange="OnScoreFilterChanged"><option value="">All scores</option>@foreach (var range in _scoreRanges) { <option value="@range">@range</option> }</select>
+        <select class="la-filter-select" value="@_historyFilter" @onchange="OnHistoryFilterChanged"><option value="">All history</option>@foreach (var period in _historyPeriods) { <option value="@period">@period</option> }</select>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ClearFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+        <div class="la-search-result"><strong>@VisibleLeads.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (_selectedLeads.Count > 0)
+    {
+        <section class="la-bulk-bar"><span>@_selectedLeads.Count selected</span><button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenBulkAssignModal"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Assign</button><button class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearSelection"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button></section>
+    }
+
+    <section class="la-view-tabs" aria-label="Assignment views">
+        @foreach (var view in _views)
+        {
+            <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label</button>
+        }
+    </section>
+
+    <section class="la-content-layout">
+        <main class="la-main-card">
+            @if (_loading)
+            {
+                <div class="la-loading"><i class="bi bi-arrow-repeat la-spin" aria-hidden="true"></i><strong>Loading assignment workspace...</strong></div>
+            }
+            else if (_view == "leads")
+            {
+                <div class="la-section-head"><div><h2>Unassigned lead queue</h2><p>Select leads and route them to active producers using manual or governed assignment strategies.</p></div><button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenBulkAssignModal" disabled="@(_selectedLeads.Count == 0)"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Assign selected</button></div>
+                @if (VisibleLeads.Count == 0)
+                {
+                    <div class="la-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No unassigned leads match this view</strong><span>Adjust filters, refresh CRM data, or create new leads.</span><button class="um-btn um-btn-ghost" @onclick="ClearFilters">Reset filters</button></div>
+                }
+                else
+                {
+                    <div class="la-table-scroll"><table class="la-table"><thead><tr><th><input type="checkbox" checked="@AllVisibleSelected" @onchange="ToggleAllVisible" aria-label="Select all visible leads" /></th><th>Lead</th><th>Source</th><th class="la-number">Score</th><th>Premium</th><th>Created</th><th></th></tr></thead><tbody>@foreach (var lead in VisibleLeads) { <tr class="@LeadRowClass(lead)" @onclick="@(() => SelectLead(lead))"><td @onclick:stopPropagation="true"><input type="checkbox" checked="@IsSelected(lead)" @onchange="@(() => ToggleLead(lead))" aria-label="Select lead" /></td><td><div class="la-name-cell"><span class="la-avatar @AvatarColor(lead.Name)" aria-hidden="true">@Initials(lead.Name)</span><span><strong>@lead.Name</strong><small>@lead.Company · @lead.Email</small></span></div></td><td><span class="la-source-badge"><i class="bi @SourceIcon(lead.Source)" aria-hidden="true"></i> @lead.Source</span></td><td class="la-number"><span class="la-score-pill @ScoreTone(lead.Score)">@lead.Score</span></td><td>@lead.EstPremium.ToString("C0", CultureInfo.CurrentCulture)</td><td>@lead.CreatedDate.ToLocalTime().ToString("MMM d", CultureInfo.CurrentCulture)</td><td @onclick:stopPropagation="true"><button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenAssignModal(lead))" title="Assign lead"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i></button></td></tr> }</tbody></table></div>
+                }
+            }
+            else if (_view == "workload")
+            {
+                <div class="la-section-head"><div><h2>Producer workload</h2><p>Monitor producer lead count, available capacity, and workload balance before routing new leads.</p></div><button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Refresh</button></div>
+                <div class="la-workload-grid">@foreach (var producer in FilteredProducers) { var pct = ProducerLoadPct(producer); var status = WorkloadStatus(pct); <article class="la-workload-card" @onclick="@(() => SelectProducer(producer))"><div class="la-workload-hdr"><div><strong>@producer.Name</strong><span>@producer.Title</span></div><span class="la-workload-status la-workload-@status">@pct.ToString("F0")%</span></div><div class="la-workload-bar"><i class="la-workload-fill la-workload-@status" style="width:@Math.Min(pct, 100).ToString("F0")%"></i></div><div class="la-workload-stats"><div><span>@producer.LeadCount</span><small>Current</small></div><div><span>@producer.Capacity</span><small>Capacity</small></div><div><span>@Math.Max(0, producer.Capacity - producer.LeadCount)</span><small>Available</small></div></div><div class="la-card-actions" @onclick:stopPropagation="true"><button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenCapacityModal(producer))"><i class="bi bi-pencil" aria-hidden="true"></i> Capacity</button></div></article> }</div>
+            }
+            else if (_view == "rules")
+            {
+                <div class="la-section-head"><div><h2>Assignment rules</h2><p>Govern score-based, round-robin, territory, and manual assignment strategies.</p></div><button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenRuleModal"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Rule</button></div>
+                @if (FilteredRules.Count == 0)
+                {
+                    <div class="la-empty-state"><i class="bi bi-sliders2" aria-hidden="true"></i><strong>No assignment rules match this view</strong><span>Add or seed rules to start governing assignment workflow.</span><button class="um-btn um-btn-primary" @onclick="SeedDefaultRules">Seed defaults</button></div>
+                }
+                else
+                {
+                    <div class="la-rules-grid">@foreach (var rule in FilteredRules) { <article class="la-rule-card" @onclick="@(() => SelectRule(rule))"><div class="la-rule-hdr"><div><strong>@rule.Name</strong><span>@rule.Strategy</span></div><div class="la-rule-actions" @onclick:stopPropagation="true"><button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => ToggleRuleActive(rule))"><i class="bi @(rule.Active ? "bi-pause-circle" : "bi-play-circle")" aria-hidden="true"></i></button><button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => EditRule(rule))"><i class="bi bi-pencil" aria-hidden="true"></i></button><button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => ConfirmDeleteRule(rule))"><i class="bi bi-trash" aria-hidden="true"></i></button></div></div><div class="la-rule-meta"><span class="la-status-pill @(rule.Active ? "la-status-active" : "la-status-inactive")">@(rule.Active ? "Active" : "Inactive")</span><span class="la-order-pill">Max @(rule.MaxAssignments == 0 ? "Unlimited" : rule.MaxAssignments)</span></div><div class="la-rule-cond"><span>Criteria</span><strong>@rule.Criteria</strong></div><div class="la-rule-footer"><span><i class="bi bi-people" aria-hidden="true"></i> @rule.ProducerGroup</span><span><i class="bi bi-shield-lock" aria-hidden="true"></i> Governed</span></div></article> }</div>
+                }
             }
             else
             {
-                <div class="la-rules-grid">
-                    @foreach (var rule in _rules)
-                    {
-                        <div class="la-rule-card">
-                            <div class="la-rule-hdr">
-                                <div>
-                                    <div class="la-rule-name">@rule.Name</div>
-                                    <div class="la-rule-strategy">Strategy: @rule.Strategy</div>
-                                </div>
-                                <div class="la-rule-actions">
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => EditRule(rule)">
-                                        <i class="bi bi-pencil" aria-hidden="true"></i>
-                                    </button>
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => DeleteRule(rule.Id)">
-                                        <i class="bi bi-trash" aria-hidden="true"></i>
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div class="la-rule-detail">
-                                <div class="la-rule-row">
-                                    <span class="la-rule-label">Criteria:</span>
-                                    <span class="la-rule-value">@rule.Criteria</span>
-                                </div>
-                                <div class="la-rule-row">
-                                    <span class="la-rule-label">Target Group:</span>
-                                    <span class="la-rule-value">@rule.ProducerGroup</span>
-                                </div>
-                                <div class="la-rule-row">
-                                    <span class="la-rule-label">Max Assignments:</span>
-                                    <span class="la-rule-value">@(rule.MaxAssignments == 0 ? "Unlimited" : rule.MaxAssignments)</span>
-                                </div>
-                            </div>
-
-                            <div class="la-rule-status">
-                                <label class="la-toggle-label">
-                                    <input type="checkbox" 
-                                           checked="@rule.Active"
-                                           @onchange="e => ToggleRuleActive(rule.Id, (bool)e.Value)" />
-                                    <span>@(rule.Active ? "Active" : "Inactive")</span>
-                                </label>
-                            </div>
-                        </div>
-                    }
-                </div>
-            }
-        </div>
-    }
-}
-
-<!-- ════════════════════════════════════════════════════════════════════════
-     VIEW: ASSIGNMENT HISTORY
-     ════════════════════════════════════════════════════════════════════════ -->
-@if (_view == "history")
-{
-    <div class="la-history-container">
-        <div class="la-history-filter">
-            <SfDropDownList TItem="string" 
-                           TValue="string" 
-                           DataSource="_historyPeriods"
-                           @bind-Value="_historyFilter"
-                           Placeholder="All Time"
-                           CssClass="la-filter-select"
-                           AllowFiltering="true"
-                           AllowClear="true">
-            </SfDropDownList>
-        </div>
-
-        @if (_loading)
-        {
-            <div class="la-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
-        }
-        else if (_history.Count == 0)
-        {
-            <div class="la-empty">
-                <i class="bi bi-clock-history" aria-hidden="true"></i>
-                <p>No assignment history</p>
-            </div>
-        }
-        else
-        {
-            <div class="la-history-list">
-                @foreach (var item in _history.OrderByDescending(h => h.AssignedDate))
+                <div class="la-section-head"><div><h2>Assignment history</h2><p>Review lead assignment actions completed during the current workspace session.</p></div><button class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearHistory" disabled="@(_history.Count == 0)"><i class="bi bi-trash" aria-hidden="true"></i> Clear</button></div>
+                @if (FilteredHistory.Count == 0)
                 {
-                    <div class="la-history-item">
-                        <div class="la-history-icon">
-                            <i class="bi bi-arrow-right-circle-fill" aria-hidden="true"></i>
-                        </div>
-                        <div class="la-history-content">
-                            <div class="la-history-title">
-                                @item.LeadName assigned to @item.ProducerName
-                            </div>
-                            <div class="la-history-meta">
-                                <span class="la-history-date">@item.AssignedDate.ToString("MMM dd, yyyy h:mm tt")</span>
-                                <span class="la-history-method">@item.Method</span>
-                            </div>
-                        </div>
-                    </div>
+                    <div class="la-empty-state"><i class="bi bi-clock-history" aria-hidden="true"></i><strong>No assignment history</strong><span>Assignments completed in this workspace session appear here.</span></div>
                 }
-            </div>
-        }
-    </div>
-}
-
-<!-- ════════════════════════════════════════════════════════════════════════
-     DRAWER: ASSIGN SINGLE LEAD
-     ════════════════════════════════════════════════════════════════════════ -->
-@if (_drawerMode == "assign-single" && _selectedLead != null && _drawerOpen)
-{
-    <div class="la-drawer-overlay" @onclick='() => _drawerOpen = false'></div>
-    <div class="la-drawer-panel">
-        <div class="la-drawer-hdr">
-            <h2>Assign Lead</h2>
-            <button class="um-btn um-btn-ghost" @onclick="() => _drawerOpen = false" title="Close">
-                <i class="bi bi-x-lg" aria-hidden="true"></i>
-            </button>
-        </div>
-
-        <div class="la-drawer-body">
-            <div class="la-form-group">
-                <label>Lead</label>
-                <div class="la-lead-summary">
-                    <span class="la-avatar" style="background: @GetAvatarColor(_selectedLead.Id);">
-                        @_selectedLead.Name.First()
-                    </span>
-                    <div>
-                        <div class="la-lead-summary-name">@_selectedLead.Name</div>
-                        <div class="la-lead-summary-company">@_selectedLead.Company</div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="la-form-group">
-                <label for="producer">Assign to Producer</label>
-                <SfDropDownList TItem="ProducerRow" 
-                               TValue="Guid" 
-                               DataSource="_producers"
-                               @bind-Value="_selectedProducerId"
-                               ID="producer"
-                               TextField="Name"
-                               ValueField="Id"
-                               Placeholder="Select producer…"
-                               AllowFiltering="true">
-                </SfDropDownList>
-            </div>
-
-            <div class="la-form-group">
-                <label>Notes</label>
-                <textarea class="la-textarea" @bind="_assignmentNotes" placeholder="Add notes about this assignment…"></textarea>
-            </div>
-        </div>
-
-        <div class="la-drawer-ft">
-            <button class="um-btn um-btn-ghost" @onclick="() => _drawerOpen = false">Cancel</button>
-            <button class="um-btn um-btn-primary" @onclick="AssignLead">Assign Lead</button>
-        </div>
-    </div>
-}
-else if (_drawerMode == "assign-bulk" && _drawerOpen)
-{
-    <div class="la-drawer-overlay" @onclick='() => _drawerOpen = false'></div>
-    <div class="la-drawer-panel">
-        <div class="la-drawer-hdr">
-            <h2>Bulk Assign Leads</h2>
-            <button class="um-btn um-btn-ghost" @onclick="() => _drawerOpen = false" title="Close">
-                <i class="bi bi-x-lg" aria-hidden="true"></i>
-            </button>
-        </div>
-
-        <div class="la-drawer-body">
-            <div class="la-form-group">
-                <label>Leads to Assign</label>
-                <div class="la-bulk-summary">
-                    @_selectedLeads.Count lead(s) selected
-                </div>
-            </div>
-
-            <div class="la-form-group">
-                <label>Strategy</label>
-                <SfDropDownList TItem="string" 
-                               TValue="string" 
-                               DataSource="_assignmentStrategies"
-                               @bind-Value="_bulkStrategy"
-                               Placeholder="Select strategy…"
-                               AllowFiltering="true">
-                </SfDropDownList>
-            </div>
-
-            @if (_bulkStrategy.Equals("Manual", StringComparison.OrdinalIgnoreCase))
-            {
-                <div class="la-form-group">
-                    <label for="bulk-producer">Assign All to</label>
-                    <SfDropDownList TItem="ProducerRow" 
-                                   TValue="Guid" 
-                                   DataSource="_producers"
-                                   @bind-Value="_selectedProducerId"
-                                   ID="bulk-producer"
-                                   TextField="Name"
-                                   ValueField="Id"
-                                   Placeholder="Select producer…"
-                                   AllowFiltering="true">
-                    </SfDropDownList>
-                </div>
+                else
+                {
+                    <div class="la-history-list">@foreach (var item in FilteredHistory) { <article class="la-history-item"><span class="la-history-icon"><i class="bi bi-arrow-right-circle-fill" aria-hidden="true"></i></span><div><strong>@item.LeadName assigned to @item.ProducerName</strong><span>@item.AssignedDate.ToLocalTime().ToString("MMM d, yyyy h:mm tt", CultureInfo.CurrentCulture) · @item.Method</span></div></article> }</div>
+                }
             }
-            else if (_bulkStrategy.Equals("Round-Robin", StringComparison.OrdinalIgnoreCase))
-            {
-                <div class="la-form-group">
-                    <label for="roundrobin-group">Producer Group</label>
-                    <SfDropDownList TItem="string" 
-                                   TValue="string" 
-                                   DataSource="_producerGroups"
-                                   @bind-Value="_bulkGroup"
-                                   ID="roundrobin-group"
-                                   Placeholder="Select group…"
-                                   AllowFiltering="true">
-                    </SfDropDownList>
-                </div>
-            }
-        </div>
+        </main>
 
-        <div class="la-drawer-ft">
-            <button class="um-btn um-btn-ghost" @onclick="() => _drawerOpen = false">Cancel</button>
-            <button class="um-btn um-btn-primary" @onclick="BulkAssignLeads">Assign @_selectedLeads.Count Leads</button>
-        </div>
-    </div>
-}
+        <aside class="la-detail-card">
+            @if (_selectedLead is not null)
+            {
+                <div class="la-detail-head"><div><span class="la-detail-eyebrow"><i class="bi @SourceIcon(_selectedLead.Source)" aria-hidden="true"></i> @_selectedLead.Source</span><h2>@_selectedLead.Name</h2><p>@_selectedLead.Company</p></div><span class="la-score-pill @ScoreTone(_selectedLead.Score)">@_selectedLead.Score</span></div><div class="la-detail-body"><div class="la-detail-summary"><div><span>Score</span><strong>@_selectedLead.Score</strong></div><div><span>Pipeline</span><strong>@_selectedLead.EstPremium.ToString("C0")</strong></div><div><span>Stage</span><strong>@_selectedLead.Stage</strong></div><div><span>Created</span><strong>@_selectedLead.CreatedDate.ToLocalTime().ToString("MMM d", CultureInfo.CurrentCulture)</strong></div></div><div class="la-contact-card"><span><i class="bi bi-envelope" aria-hidden="true"></i> @_selectedLead.Email</span><span><i class="bi bi-person-x" aria-hidden="true"></i> Currently unassigned</span></div><div class="la-detail-actions"><button class="um-btn um-btn-primary" @onclick="@(() => OpenAssignModal(_selectedLead))"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Assign</button><button class="um-btn um-btn-ghost" @onclick="@(() => OpenLeadInCrm(_selectedLead))"><i class="bi bi-person-lines-fill" aria-hidden="true"></i> Open Lead</button></div></div>
+            }
+            else if (_selectedProducer is not null)
+            {
+                <div class="la-detail-head"><div><span class="la-detail-eyebrow"><i class="bi bi-person-badge" aria-hidden="true"></i> Producer</span><h2>@_selectedProducer.Name</h2><p>@_selectedProducer.Title</p></div><span class="la-workload-status la-workload-@WorkloadStatus(ProducerLoadPct(_selectedProducer))">@ProducerLoadPct(_selectedProducer).ToString("F0")%</span></div><div class="la-detail-body"><div class="la-detail-summary"><div><span>Current</span><strong>@_selectedProducer.LeadCount</strong></div><div><span>Capacity</span><strong>@_selectedProducer.Capacity</strong></div><div><span>Available</span><strong>@Math.Max(0, _selectedProducer.Capacity - _selectedProducer.LeadCount)</strong></div><div><span>Status</span><strong>@WorkloadLabel(_selectedProducer)</strong></div></div><div class="la-detail-actions"><button class="um-btn um-btn-ghost" @onclick="@(() => OpenCapacityModal(_selectedProducer))"><i class="bi bi-pencil" aria-hidden="true"></i> Capacity</button></div></div>
+            }
+            else if (_selectedRule is not null)
+            {
+                <div class="la-detail-head"><div><span class="la-detail-eyebrow"><i class="bi bi-sliders2" aria-hidden="true"></i> @_selectedRule.Strategy</span><h2>@_selectedRule.Name</h2><p>@_selectedRule.Criteria</p></div><span class="la-status-pill @(_selectedRule.Active ? "la-status-active" : "la-status-inactive")">@(_selectedRule.Active ? "Active" : "Inactive")</span></div><div class="la-detail-body"><div class="la-contact-card"><span><i class="bi bi-people" aria-hidden="true"></i> @_selectedRule.ProducerGroup</span><span><i class="bi bi-diagram-3" aria-hidden="true"></i> Max @(_selectedRule.MaxAssignments == 0 ? "Unlimited" : _selectedRule.MaxAssignments)</span></div><div class="la-detail-actions"><button class="um-btn um-btn-ghost" @onclick="@(() => EditRule(_selectedRule))"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button class="um-btn um-btn-danger" @onclick="@(() => ConfirmDeleteRule(_selectedRule))"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button></div></div>
+            }
+            else
+            {
+                <div class="la-detail-empty"><i class="bi bi-person-check" aria-hidden="true"></i><strong>Select a lead, producer, or rule</strong><span>Review assignment intelligence and workflow actions.</span></div>
+            }
+        </aside>
+    </section>
+</div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
+    private Guid _tenantId;
     private Guid _tenantAdminUserId;
-    // ── Types ───────────────────────────────────────────────────────────
-    private sealed record View(string Id, string Label, string Icon);
-    private sealed record LeadRow(Guid Id, string Name, string Company, int Score, string Source, string Email, DateTime CreatedDate);
-    private sealed record ProducerRow(Guid Id, string Name, string Title, int LeadCount, int Capacity);
-    private sealed record RuleRow(int Id, string Name, string Strategy, string Criteria, string ProducerGroup, int MaxAssignments, bool Active);
-    private sealed record HistoryRow(int Id, string LeadName, string ProducerName, DateTime AssignedDate, string Method);
-    private sealed record KpiData(int UnassignedLeads, int TotalProducers, double AvgLeadsPerProducer, double WorkloadBalance);
-
-    // ── State ────────────────────────────────────────────────────────────
-    private readonly View[] _views = [
-        new("leads", "Leads", "bi-inbox"),
-        new("workload", "Workload", "bi-diagram-3"),
-        new("rules", "Rules", "bi-sliders2"),
-        new("history", "History", "bi-clock-history"),
-    ];
-
-    private string _view = "leads";
     private bool _loading;
+    private bool _busy;
+    private bool _showConfirm;
+    private bool _showAssignModal;
+    private bool _showRuleModal;
+    private bool _showCapacityModal;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "info";
+    private string _loadError = string.Empty;
+    private string _view = "leads";
     private string _query = string.Empty;
     private string _sourceFilter = string.Empty;
     private string _scoreFilter = string.Empty;
     private string _historyFilter = string.Empty;
-
+    private string _quickFilter = string.Empty;
+    private Guid _selectedProducerId = Guid.Empty;
+    private string _assignStrategy = "Manual";
+    private string _assignGroup = "All";
+    private string _assignmentNotes = string.Empty;
+    private int _editingRuleId;
+    private int _capacityValue;
+    private CancellationTokenSource? _toastCts;
+    private ConfirmAction? _confirmAction;
+    private LeadRow? _selectedLead;
+    private ProducerRow? _selectedProducer;
+    private RuleRow? _selectedRule;
+    private ProducerRow? _capacityProducer;
+    private AssignmentRuleForm _ruleForm = new();
     private List<LeadRow> _leads = [];
     private List<ProducerRow> _producers = [];
     private List<RuleRow> _rules = [];
     private List<HistoryRow> _history = [];
+    private List<LeadRow> _assignmentTargets = [];
     private HashSet<Guid> _selectedLeads = [];
-    private LeadRow? _selectedLead;
-    private Guid _selectedProducerId;
-    private string _drawerMode = string.Empty;
-    private bool _drawerOpen;
-    private string _assignmentNotes = string.Empty;
-    private string _bulkStrategy = "Manual";
-    private string _bulkGroup = "All";
+    private List<LeadDto> _leadDtos = [];
 
-    private KpiData _kpi = new(0, 0, 0, 0);
-    private SfToast? _toast;
-    private Guid _tenantId;
+    private static readonly List<ViewDef> _views = [new("leads", "Leads", "bi-inbox"), new("workload", "Workload", "bi-diagram-3"), new("rules", "Rules", "bi-sliders2"), new("history", "History", "bi-clock-history")];
+    private static readonly string[] _scoreRanges = ["80+", "50-79", "<50"];
+    private static readonly string[] _historyPeriods = ["Last 7 Days", "Last 30 Days", "Last 90 Days", "All Time"];
+    private static readonly string[] _assignmentStrategies = ["Manual", "Round-Robin", "Score-Based", "Territory-Based"];
+    private static readonly string[] _producerGroups = ["All", "Senior Producers", "New Producers", "Team A", "Team B"];
 
-    private readonly string[] _leadSources = ["Web", "Referral", "Direct", "Partner", "Organic"];
-    private readonly string[] _scoreRanges = ["80+", "50-79", "<50"];
-    private readonly string[] _historyPeriods = ["Last 7 Days", "Last 30 Days", "Last 90 Days", "All Time"];
-    private readonly string[] _assignmentStrategies = ["Manual", "Round-Robin", "Score-Based", "Territory-Based"];
-    private readonly string[] _producerGroups = ["All", "Senior Producers", "New Producers", "Team A", "Team B"];
-    private readonly string[] _avatarColors = ["#dc2626", "#f59e0b", "#10b981", "#0369a1", "#7c3aed", "#db2777"];
+    private bool AssignDisabled => _busy || _assignmentTargets.Count == 0 || (_assignStrategy == "Manual" && _selectedProducerId == Guid.Empty);
+    private bool AllVisibleSelected => VisibleLeads.Count > 0 && VisibleLeads.All(IsSelected);
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-octagon", "warning" => "bi-exclamation-triangle", "success" => "bi-check2-circle", _ => "bi-info-circle" };
 
-    // ── Lifecycle ────────────────────────────────────────────────────────
+    private IEnumerable<KpiModel> Metrics =>
+    [
+        new("Unassigned", _leads.Count.ToString(), "Needs owner", "bi-inbox-fill", "la-red", "unassigned"),
+        new("Producers", _producers.Count.ToString(), "Active users", "bi-people-fill", "la-blue", "workload"),
+        new("Average", AvgLeadsPerProducer.ToString("F1"), "Leads per producer", "bi-bar-chart-fill", "la-green", "workload"),
+        new("Balance", WorkloadBalance.ToString("F0") + "%", "Capacity used", "bi-percent", "la-purple", "workload"),
+        new("Rules", _rules.Count(x => x.Active).ToString(), "Active routing", "bi-sliders2", "la-cyan", "rules")
+    ];
+
+    private List<LeadRow> VisibleLeads
+    {
+        get
+        {
+            IEnumerable<LeadRow> query = _leads;
+            if (!string.IsNullOrWhiteSpace(_query))
+            {
+                var term = _query.Trim();
+                query = query.Where(l => Contains(l.Name, term) || Contains(l.Company, term) || Contains(l.Email, term) || Contains(l.Source, term) || Contains(l.Stage, term));
+            }
+            if (!string.IsNullOrWhiteSpace(_sourceFilter)) query = query.Where(l => l.Source == _sourceFilter);
+            if (!string.IsNullOrWhiteSpace(_scoreFilter)) query = query.Where(l => _scoreFilter switch { "80+" => l.Score >= 80, "50-79" => l.Score >= 50 && l.Score < 80, "<50" => l.Score < 50, _ => true });
+            if (_quickFilter == "unassigned") query = query.Where(l => l.AssignedToUserId is null);
+            return query.OrderByDescending(l => l.Score).ThenByDescending(l => l.CreatedDate).ToList();
+        }
+    }
+
+    private List<ProducerRow> FilteredProducers => string.IsNullOrWhiteSpace(_query) ? _producers.OrderByDescending(x => x.LeadCount).ToList() : _producers.Where(p => Contains(p.Name, _query) || Contains(p.Title, _query)).OrderByDescending(x => x.LeadCount).ToList();
+    private List<RuleRow> FilteredRules => string.IsNullOrWhiteSpace(_query) ? _rules.ToList() : _rules.Where(r => Contains(r.Name, _query) || Contains(r.Strategy, _query) || Contains(r.Criteria, _query) || Contains(r.ProducerGroup, _query)).ToList();
+    private List<HistoryRow> FilteredHistory => _history.Where(h => HistoryPeriodMatch(h) && (string.IsNullOrWhiteSpace(_query) || Contains(h.LeadName, _query) || Contains(h.ProducerName, _query) || Contains(h.Method, _query))).OrderByDescending(h => h.AssignedDate).ToList();
+    private IEnumerable<string> SourceOptions => _leads.Select(l => l.Source).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    private double AvgLeadsPerProducer => _producers.Count == 0 ? 0 : _producers.Average(p => p.LeadCount);
+    private double WorkloadBalance => _producers.Sum(p => p.Capacity) == 0 ? 0 : (double)_producers.Sum(p => p.LeadCount) / _producers.Sum(p => p.Capacity) * 100;
+
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(
-            new("CRM", "/crm"),
-            new("Leads", "/crm/leads"),
-            new("Assignment", null)
-        );
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Assignment", "/crm/leads/assignment"));
+        SeedDefaultRules();
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
         _loading = true;
+        _loadError = string.Empty;
         try
         {
-            // Load unassigned leads from database
-            var leadsResult = await Api.SearchLeadsAsync(_tenantId);
-            if (leadsResult?.Items != null)
+            if (_tenantId == Guid.Empty)
             {
-                _leads = leadsResult.Items
-                    .Where(l => l.AssignedToUserId == null) // Only unassigned leads
-                    .Select(l => new LeadRow(
-                        l.LeadId,
-                        $"{l.FirstName} {l.LastName}",
-                        l.AccountName ?? "Unknown",
-                        l.Score ?? 0,
-                        l.SourceCode ?? "Direct",
-                        l.Email ?? "",
-                        l.CreatedDateUtc
-                    ))
-                    .ToList();
+                var context = await CurrentUser.RequireAsync();
+                _tenantId = context.TenantId;
+                _tenantAdminUserId = context.UserId;
             }
 
-            // Load producers/users from database
-            var usersResult = await Api.SearchUsersAsync(_tenantId);
-            if (usersResult?.Items != null)
-            {
-                _producers = usersResult.Items
-                    .Where(u => u.StatusCode == "Active") // Only active users
-                    .Select(u => new ProducerRow(
-                        u.UserId,
-                        u.FullName,
-                        u.JobTitle ?? "Producer",
-                        leadsResult?.Items?.Count(l => l.AssignedToUserId == u.UserId) ?? 0,
-                        20
-                    ))
-                    .ToList();
-            }
+            var leadsTask = Api.SearchLeadsAsync(_tenantId);
+            var usersTask = Api.SearchUsersAsync(_tenantId);
+            await Task.WhenAll(leadsTask, usersTask);
 
-            // TODO: Load assignment rules from API when endpoint is available
-            // var rulesResult = await Api.SearchAssignmentRulesAsync(_tenantId);
-            _rules = [];
+            _leadDtos = leadsTask.Result?.Items?.ToList() ?? [];
+            _leads = _leadDtos.Where(l => l.AssignedToUserId is null).Select(MapLead).ToList();
+            _producers = (usersTask.Result?.Items ?? [])
+                .Where(u => string.Equals(u.StatusCode, "Active", StringComparison.OrdinalIgnoreCase))
+                .Select(u => new ProducerRow(u.UserId, string.IsNullOrWhiteSpace(u.DisplayName) ? u.FullName : u.DisplayName, string.IsNullOrWhiteSpace(u.JobTitle) ? "Producer" : u.JobTitle, _leadDtos.Count(l => l.AssignedToUserId == u.UserId), 20))
+                .Where(u => !string.IsNullOrWhiteSpace(u.Name))
+                .OrderBy(u => u.Name)
+                .ToList();
 
-            // TODO: Load assignment history from API when endpoint is available
-            // var historyResult = await Api.GetAssignmentHistoryAsync(_tenantId);
-            _history = [];
-
-            UpdateKpi();
-            _loading = false;
+            _selectedLead = _selectedLead is null ? _leads.FirstOrDefault() : _leads.FirstOrDefault(l => l.Id == _selectedLead.Id) ?? _leads.FirstOrDefault();
+            _selectedProducer = _selectedProducer is null ? _producers.FirstOrDefault() : _producers.FirstOrDefault(p => p.Id == _selectedProducer.Id) ?? _producers.FirstOrDefault();
+            _selectedLeads.RemoveWhere(id => _leads.All(l => l.Id != id));
         }
         catch (Exception ex)
         {
-            await ShowToast("error", "Failed to load data", ex.Message);
-            _loading = false;
+            _loadError = ex.Message;
+            _leads = [];
+            _producers = [];
+            await ShowToastAsync("Unable to load assignment data.", "danger");
         }
+        finally { _loading = false; }
     }
 
-    private void UpdateKpi()
-    {
-        var totalProducers = _producers.Count;
-        var totalLeads = _producers.Sum(p => p.LeadCount);
-        var avgLeads = totalProducers > 0 ? totalLeads / (double)totalProducers : 0;
-        var totalCapacity = _producers.Sum(p => p.Capacity);
-        var workloadBalance = totalCapacity > 0 ? Math.Round((totalLeads / (double)totalCapacity) * 100, 1) : 0;
+    private static LeadRow MapLead(LeadDto lead) => new(lead.LeadId, $"{lead.FirstName} {lead.LastName}".Trim(), lead.AccountName ?? "Unknown", Math.Clamp(lead.Score ?? 0, 0, 100), string.IsNullOrWhiteSpace(lead.SourceCode) ? "Direct" : lead.SourceCode, lead.Email ?? string.Empty, lead.CreatedDateUtc, lead.AnnualRevenue ?? 0, lead.NurturingStageCode ?? "New", lead.AssignedToUserId);
 
-        _kpi = new(
-            _leads.Count,
-            totalProducers,
-            avgLeads,
-            workloadBalance
-        );
-    }
+    private void SetView(string view) => _view = view;
+    private void ShowWorkload() => SetView("workload");
+    private void ShowHistory() => SetView("history");
+    private void NavigateToLeads() => Nav.NavigateTo("/crm/leads");
+    private void OpenLeadInCrm(LeadRow lead) => Nav.NavigateTo($"/crm/leads?search={Uri.EscapeDataString(lead.Email)}");
+    private void SelectLead(LeadRow lead) { _selectedLead = lead; _selectedProducer = null; _selectedRule = null; }
+    private void SelectProducer(ProducerRow producer) { _selectedProducer = producer; _selectedLead = null; _selectedRule = null; }
+    private void SelectRule(RuleRow rule) { _selectedRule = rule; _selectedLead = null; _selectedProducer = null; }
+    private void SetQuickFilter(string filter) { _quickFilter = _quickFilter == filter ? string.Empty : filter; if (filter == "workload") _view = "workload"; else if (filter == "rules") _view = "rules"; else _view = "leads"; }
+    private void OnSearchChanged(BlazorChangeEventArgs e) => _query = e.Value?.ToString() ?? string.Empty;
+    private void OnSourceFilterChanged(BlazorChangeEventArgs e) => _sourceFilter = e.Value?.ToString() ?? string.Empty;
+    private void OnScoreFilterChanged(BlazorChangeEventArgs e) => _scoreFilter = e.Value?.ToString() ?? string.Empty;
+    private void OnHistoryFilterChanged(BlazorChangeEventArgs e) { _historyFilter = e.Value?.ToString() ?? string.Empty; _view = "history"; }
+    private void ClearFilters() { _query = string.Empty; _sourceFilter = string.Empty; _scoreFilter = string.Empty; _historyFilter = string.Empty; _quickFilter = string.Empty; }
+    private void ClearSelection() => _selectedLeads.Clear();
+    private bool IsSelected(LeadRow lead) => _selectedLeads.Contains(lead.Id);
+    private void ToggleLead(LeadRow lead) { if (!IsSelected(lead)) _selectedLeads.Add(lead.Id); else _selectedLeads.Remove(lead.Id); }
+    private void ToggleAllVisible(BlazorChangeEventArgs e) { var selected = e.Value as bool? ?? string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase); if (selected) foreach (var lead in VisibleLeads) _selectedLeads.Add(lead.Id); else _selectedLeads.RemoveWhere(id => VisibleLeads.Any(l => l.Id == id)); }
 
-    // ── Filtering ────────────────────────────────────────────────────────
-    private List<LeadRow> GetVisibleLeads()
+    private void OpenAssignModal(LeadRow lead) { _assignmentTargets = [lead]; _selectedProducerId = Guid.Empty; _assignStrategy = "Manual"; _assignGroup = "All"; _assignmentNotes = string.Empty; _showAssignModal = true; }
+    private void OpenBulkAssignModal() { _assignmentTargets = _leads.Where(l => _selectedLeads.Contains(l.Id)).ToList(); if (_assignmentTargets.Count == 0) { _ = ShowToastAsync("Select leads to assign.", "warning"); return; } _selectedProducerId = Guid.Empty; _assignStrategy = "Manual"; _assignGroup = "All"; _assignmentNotes = string.Empty; _showAssignModal = true; }
+    private void CloseAssignModal() { if (!_busy) _showAssignModal = false; }
+
+    private async Task CommitAssignmentAsync()
     {
-        var q = _query.Trim().ToLower();
-        var result = _leads.Where(l =>
+        if (AssignDisabled) { await ShowToastAsync("Select a producer or valid strategy.", "warning"); return; }
+        _busy = true;
+        try
         {
-            if (!string.IsNullOrEmpty(q) && !l.Name.ToLower().Contains(q) && !l.Company.ToLower().Contains(q))
-                return false;
-
-            if (!string.IsNullOrEmpty(_sourceFilter) && !l.Source.Equals(_sourceFilter, StringComparison.OrdinalIgnoreCase))
-                return false;
-
-            if (!string.IsNullOrEmpty(_scoreFilter))
+            var assignments = ResolveAssignments(_assignmentTargets);
+            foreach (var pair in assignments)
             {
-                var match = _scoreFilter switch
-                {
-                    "80+" => l.Score >= 80,
-                    "50-79" => l.Score >= 50 && l.Score < 80,
-                    "<50" => l.Score < 50,
-                    _ => true,
-                };
-                if (!match) return false;
+                await AssignLeadToProducerAsync(pair.Lead, pair.Producer, _assignStrategy);
             }
+            _selectedLeads.Clear();
+            _showAssignModal = false;
+            await ShowToastAsync($"Assigned {assignments.Count} lead(s).", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowToastAsync($"Assignment failed: {ex.Message}", "danger"); }
+        finally { _busy = false; }
+    }
 
-            return true;
-        }).ToList();
-
+    private List<(LeadRow Lead, ProducerRow Producer)> ResolveAssignments(IReadOnlyList<LeadRow> leads)
+    {
+        var available = _producers.Where(p => _assignGroup == "All" || ProducerInGroup(p, _assignGroup)).OrderBy(p => p.LeadCount).ThenBy(p => p.Name).ToList();
+        if (available.Count == 0) return [];
+        var result = new List<(LeadRow, ProducerRow)>();
+        for (var i = 0; i < leads.Count; i++)
+        {
+            var producer = _assignStrategy switch
+            {
+                "Manual" => _producers.First(p => p.Id == _selectedProducerId),
+                "Score-Based" => available.OrderBy(p => leads[i].Score >= 80 ? ProducerLoadPct(p) : p.LeadCount).First(),
+                "Territory-Based" => available[Math.Abs(leads[i].Company.GetHashCode()) % available.Count],
+                _ => available[i % available.Count]
+            };
+            result.Add((leads[i], producer));
+        }
         return result;
     }
 
-    private void ClearFilters()
+    private async Task AssignLeadToProducerAsync(LeadRow lead, ProducerRow producer, string method)
     {
-        _query = string.Empty;
-        _sourceFilter = string.Empty;
-        _scoreFilter = string.Empty;
+        var dto = _leadDtos.FirstOrDefault(l => l.LeadId == lead.Id) ?? throw new InvalidOperationException("Lead data not found.");
+        await Api.UpdateLeadAsync(lead.Id, new UpdateLeadRequest { LeadId = lead.Id, AccountName = dto.AccountName, FirstName = dto.FirstName, LastName = dto.LastName, Email = dto.Email, Phone = dto.Phone, InterestedService = dto.InterestedService, AnnualRevenue = dto.AnnualRevenue, Score = dto.Score, PriorityCode = dto.PriorityCode, SourceCode = dto.SourceCode, NurturingStageCode = dto.NurturingStageCode, QualifiedDate = dto.QualifiedDate, StatusCode = dto.StatusCode, AssignedToUserId = producer.Id, UpdatedByUserId = _tenantAdminUserId });
+        _history.Insert(0, new(_history.Count + 1, lead.Name, producer.Name, DateTime.UtcNow, method));
     }
 
-    // ── Selection ────────────────────────────────────────────────────────
-    private void ToggleLead(Guid id, bool selected)
+    private void AutoAssignHotLeads()
     {
-        if (selected) _selectedLeads.Add(id);
-        else _selectedLeads.Remove(id);
+        var hot = _leads.Where(l => l.Score >= 80).Take(10).ToList();
+        if (hot.Count == 0) { _ = ShowToastAsync("No hot unassigned leads found.", "warning"); return; }
+        _assignmentTargets = hot; _assignStrategy = "Score-Based"; _assignGroup = "Senior Producers"; _showAssignModal = true;
     }
 
-    private void SelectAllLeads(bool selected)
+    private void OpenRuleModal() { _editingRuleId = 0; _ruleForm = new() { Name = string.Empty, Strategy = "Score-Based", Criteria = "Score >= 80", ProducerGroup = "Senior Producers", MaxAssignments = 5, Active = true }; _showRuleModal = true; }
+    private void EditRule(RuleRow rule) { _editingRuleId = rule.Id; _ruleForm = new() { Name = rule.Name, Strategy = rule.Strategy, Criteria = rule.Criteria, ProducerGroup = rule.ProducerGroup, MaxAssignments = rule.MaxAssignments, Active = rule.Active }; _showRuleModal = true; }
+    private void CloseRuleModal() => _showRuleModal = false;
+    private Task HandleInvalidRuleSubmitAsync(EditContext _) => ShowToastAsync("Fix validation errors.", "warning");
+    private async Task SaveRuleAsync() { if (_editingRuleId == 0) _rules.Add(new(_rules.Count == 0 ? 1 : _rules.Max(r => r.Id) + 1, _ruleForm.Name.Trim(), _ruleForm.Strategy, _ruleForm.Criteria, _ruleForm.ProducerGroup, _ruleForm.MaxAssignments, _ruleForm.Active)); else { var idx = _rules.FindIndex(r => r.Id == _editingRuleId); if (idx >= 0) _rules[idx] = new(_editingRuleId, _ruleForm.Name.Trim(), _ruleForm.Strategy, _ruleForm.Criteria, _ruleForm.ProducerGroup, _ruleForm.MaxAssignments, _ruleForm.Active); } _showRuleModal = false; await ShowToastAsync("Assignment rule saved.", "success"); }
+    private void ToggleRuleActive(RuleRow rule) { var idx = _rules.FindIndex(r => r.Id == rule.Id); if (idx >= 0) _rules[idx] = rule with { Active = !rule.Active }; }
+    private void ConfirmDeleteRule(RuleRow rule) => OpenConfirm(new("Delete assignment rule", $"Delete {rule.Name}?", "Delete", "um-btn-danger", "bi-trash", "danger", () => DeleteRuleAsync(rule)));
+    private async Task DeleteRuleAsync(RuleRow rule) { _rules.RemoveAll(r => r.Id == rule.Id); if (_selectedRule?.Id == rule.Id) _selectedRule = null; await ShowToastAsync("Assignment rule deleted.", "success"); }
+    private void SeedDefaultRules() { if (_rules.Count > 0) { _ = ShowToastAsync("Assignment rules already exist.", "info"); return; } _rules = [new(1, "High-Score Auto Assign", "Score-Based", "Score >= 80", "Senior Producers", 5, true), new(2, "Round-Robin Distribution", "Round-Robin", "All Leads", "All", 0, true), new(3, "Medium Priority Assignment", "Score-Based", "Score 50-79", "All", 0, true), new(4, "Nurture Queue Assignment", "Score-Based", "Score < 50", "New Producers", 0, true)]; }
+    private void ClearHistory() => _history.Clear();
+
+    private void OpenCapacityModal(ProducerRow producer) { _capacityProducer = producer; _capacityValue = producer.Capacity; _showCapacityModal = true; }
+    private void CloseCapacityModal() => _showCapacityModal = false;
+    private void SaveCapacity() { if (_capacityProducer is null) return; var idx = _producers.FindIndex(p => p.Id == _capacityProducer.Id); if (idx >= 0) _producers[idx] = _capacityProducer with { Capacity = Math.Max(1, _capacityValue) }; _selectedProducer = _producers.FirstOrDefault(p => p.Id == _capacityProducer.Id); _showCapacityModal = false; }
+
+    private void OpenConfirm(ConfirmAction action) { _confirmAction = action; _showConfirm = true; }
+    private void CancelConfirm() { if (!_busy) { _showConfirm = false; _confirmAction = null; } }
+    private async Task ExecuteConfirmedAsync() { if (_confirmAction is null) return; _busy = true; try { var action = _confirmAction; await action.ExecuteAsync(); _showConfirm = false; _confirmAction = null; } catch (Exception ex) { await ShowToastAsync($"Action failed: {ex.Message}", "danger"); } finally { _busy = false; } }
+
+    private async Task ShowToastAsync(string message, string kind = "info")
     {
-        if (selected)
-            _selectedLeads = new HashSet<Guid>(GetVisibleLeads().Select(l => l.Id));
-        else
-            _selectedLeads.Clear();
+        _toastCts?.Cancel(); _toastCts?.Dispose(); _toastCts = new CancellationTokenSource();
+        _toastMessage = message.Length <= 96 ? message : $"{message[..93]}..."; _toastKind = ToastKind(kind); _toastVisible = true; StateHasChanged();
+        try { await Task.Delay(_toastKind == "danger" ? 10400 : 8000, _toastCts.Token); _toastVisible = false; await InvokeAsync(StateHasChanged); } catch (TaskCanceledException) { }
     }
 
-    // ── Assignment ───────────────────────────────────────────────────────
-    private void OpenAssignDrawer(LeadRow lead)
+    private void HideToast() { _toastCts?.Cancel(); _toastVisible = false; }
+    private bool HistoryPeriodMatch(HistoryRow row) => _historyFilter switch { "Last 7 Days" => row.AssignedDate >= DateTime.UtcNow.AddDays(-7), "Last 30 Days" => row.AssignedDate >= DateTime.UtcNow.AddDays(-30), "Last 90 Days" => row.AssignedDate >= DateTime.UtcNow.AddDays(-90), _ => true };
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : value.Contains("success", StringComparison.OrdinalIgnoreCase) ? "success" : "info";
+    private static string MetricCardClass(KpiModel metric) => $"la-kpi-card {metric.Tone}";
+    private string ViewButtonClass(ViewDef view) => _view == view.Id ? "la-view-btn la-view-btn-active" : "la-view-btn";
+    private string LeadRowClass(LeadRow lead) => IsSelected(lead) ? "la-row-selected" : lead.Id == _selectedLead?.Id ? "la-row-focused" : string.Empty;
+    private static string ScoreTone(int score) => score >= 80 ? "la-score-hot" : score >= 50 ? "la-score-warm" : "la-score-cold";
+    private static string SourceIcon(string source) => source switch { "Referral" => "bi-share-fill", "Website" or "Web" => "bi-globe", "Cold Call" => "bi-telephone-fill", "Social" => "bi-instagram", "Email" => "bi-envelope-fill", "Event" => "bi-calendar-event-fill", "Partner" => "bi-handshake-fill", _ => "bi-inbox-fill" };
+    private static string AvatarColor(string name) { var colors = new[] { "la-av1", "la-av2", "la-av3", "la-av4", "la-av5", "la-av6" }; return colors[Math.Abs(name.GetHashCode()) % colors.Length]; }
+    private static string Initials(string name) { var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length > 0 ? name[..1] : "?"; }
+    private static double ProducerLoadPct(ProducerRow producer) => producer.Capacity <= 0 ? 0 : (double)producer.LeadCount / producer.Capacity * 100;
+    private static string WorkloadStatus(double pct) => pct >= 100 ? "over" : pct >= 80 ? "high" : pct >= 50 ? "med" : "low";
+    private static string WorkloadLabel(ProducerRow producer) => WorkloadStatus(ProducerLoadPct(producer)) switch { "over" => "Over capacity", "high" => "High", "med" => "Balanced", _ => "Available" };
+    private static bool ProducerInGroup(ProducerRow producer, string group) => group switch { "Senior Producers" => producer.Title.Contains("Senior", StringComparison.OrdinalIgnoreCase) || producer.LeadCount >= 5, "New Producers" => producer.LeadCount < 5, "Team A" => Math.Abs(producer.Name.GetHashCode()) % 2 == 0, "Team B" => Math.Abs(producer.Name.GetHashCode()) % 2 != 0, _ => true };
+
+    private sealed record ViewDef(string Id, string Label, string Icon);
+    private sealed record KpiModel(string Label, string Value, string Caption, string Icon, string Tone, string Filter);
+    private sealed record ConfirmAction(string Title, string Message, string ButtonText, string ButtonClass, string Icon, string Kind, Func<Task> ExecuteAsync);
+    private sealed record LeadRow(Guid Id, string Name, string Company, int Score, string Source, string Email, DateTime CreatedDate, decimal EstPremium, string Stage, Guid? AssignedToUserId);
+    private sealed record ProducerRow(Guid Id, string Name, string Title, int LeadCount, int Capacity);
+    private sealed record RuleRow(int Id, string Name, string Strategy, string Criteria, string ProducerGroup, int MaxAssignments, bool Active);
+    private sealed record HistoryRow(int Id, string LeadName, string ProducerName, DateTime AssignedDate, string Method);
+
+    private sealed class AssignmentRuleForm
     {
-        _drawerMode = "assign-single";
-        _selectedLead = lead;
-        _selectedProducerId = Guid.Empty;
-        _assignmentNotes = string.Empty;
-        _drawerOpen = true;
-    }
-
-    private void OpenBulkAssignDrawer()
-    {
-        _drawerMode = "assign-bulk";
-        _bulkStrategy = "Manual";
-        _bulkGroup = "All";
-        _selectedProducerId = Guid.Empty;
-        _drawerOpen = true;
-    }
-
-    private async Task AssignLead()
-    {
-        if (_selectedLead == null || _selectedProducerId == Guid.Empty)
-        {
-            await ShowToast("warning", "Invalid Selection", "Please select both lead and producer");
-            return;
-        }
-
-        var producer = _producers.FirstOrDefault(p => p.Id == _selectedProducerId);
-        if (producer == null) return;
-
-        try
-        {
-            // TODO: Call API to assign lead
-            // var request = new AssignLeadRequest 
-            // { 
-            //     LeadId = _selectedLead.Id,
-            //     ProducerId = producer.Id,
-            //     Notes = _assignmentNotes
-            // };
-            // await Api.AssignLeadAsync(request);
-
-            _leads.Remove(_selectedLead);
-            _history.Insert(0, new(
-                _history.Count + 1,
-                _selectedLead.Name,
-                producer.Name,
-                DateTime.Now,
-                "Manual"
-            ));
-
-            UpdateKpi();
-            _drawerOpen = false;
-            await ShowToast("success", "Lead Assigned", $"{_selectedLead.Name} assigned to {producer.Name}");
-        }
-        catch (Exception ex)
-        {
-            await ShowToast("error", "Assignment Failed", ex.Message);
-        }
-    }
-
-    private async Task BulkAssignLeads()
-    {
-        if (_selectedLeads.Count == 0) return;
-
-        var leadsToAssign = _leads.Where(l => _selectedLeads.Contains(l.Id)).ToList();
-
-        try
-        {
-            // TODO: Call API to bulk assign leads
-            // var request = new BulkAssignLeadsRequest
-            // {
-            //     LeadIds = _selectedLeads.ToList(),
-            //     Strategy = _bulkStrategy,
-            //     ProducerId = _selectedProducerId,
-            //     ProducerGroup = _bulkGroup
-            // };
-            // await Api.BulkAssignLeadsAsync(request);
-
-            foreach (var lead in leadsToAssign)
-            {
-                var producer = _bulkStrategy.Equals("Manual", StringComparison.OrdinalIgnoreCase)
-                    ? _producers.FirstOrDefault(p => p.Id == _selectedProducerId)
-                    : _producers.FirstOrDefault();
-
-                if (producer != null)
-                {
-                    _history.Insert(0, new(
-                        _history.Count + 1,
-                        lead.Name,
-                        producer.Name,
-                        DateTime.Now,
-                        $"Bulk ({_bulkStrategy})"
-                    ));
-                }
-
-                _leads.Remove(lead);
-            }
-
-            _selectedLeads.Clear();
-            UpdateKpi();
-            _drawerOpen = false;
-            await ShowToast("success", "Bulk Assignment Complete", $"{leadsToAssign.Count} leads assigned");
-        }
-        catch (Exception ex)
-        {
-            await ShowToast("error", "Bulk Assignment Failed", ex.Message);
-        }
-    }
-
-    // ── Rules ────────────────────────────────────────────────────────────
-    private void OpenRuleDrawer()
-    {
-        _drawerMode = "rule";
-        _drawerOpen = true;
-    }
-
-    private void EditRule(RuleRow rule)
-    {
-        _drawerMode = "rule";
-        _drawerOpen = true;
-    }
-
-    private void ToggleRuleActive(int ruleId, bool active)
-    {
-        var rule = _rules.FirstOrDefault(r => r.Id == ruleId);
-        if (rule != null)
-        {
-            var idx = _rules.IndexOf(rule);
-            _rules[idx] = rule with { Active = active };
-        }
-    }
-
-    private async Task DeleteRule(int ruleId)
-    {
-        _rules.RemoveAll(r => r.Id == ruleId);
-        await ShowToast("success", "Rule Deleted", "Assignment rule has been removed");
-    }
-
-    private void EditProducerCapacity(ProducerRow producer)
-    {
-        // TODO: Open capacity editor drawer
-    }
-
-    // ── Helpers ──────────────────────────────────────────────────────────
-    private string GetAvatarColor(Guid id)
-    {
-        if (_avatarColors?.Length == 0) return "#cccccc";
-        return _avatarColors[Math.Abs(id.GetHashCode()) % _avatarColors.Length];
-    }
-
-    private string GetScoreBadgeClass(int score) => score switch
-    {
-        >= 80 => "la-score--hot",
-        >= 50 => "la-score--warm",
-        _ => "la-score--cold",
-    };
-
-    private async Task ShowToast(string type, string title, string message)
-    {
-        if (_toast is null) return;
-        await _toast.ShowAsync(new ToastModel { Title = title, Content = message, CssClass = $"e-toast-{type}" });
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        [Required, StringLength(200)] public string Name { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string Strategy { get; set; } = "Score-Based";
+        [StringLength(500)] public string Criteria { get; set; } = string.Empty;
+        [StringLength(200)] public string ProducerGroup { get; set; } = "All";
+        [Range(0, 100000)] public int MaxAssignments { get; set; }
+        public bool Active { get; set; } = true;
     }
 }

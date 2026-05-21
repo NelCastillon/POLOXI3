@@ -26,6 +26,13 @@ public sealed class CommissionsController : ControllerBase
     public async Task<IActionResult> CreatePayee([FromBody] CreateCommissionPayeeRequest request, CancellationToken cancellationToken)
         => Ok(await _service.CreatePayeeAsync(request, cancellationToken));
 
+    [HttpPost("seed")]
+    public async Task<IActionResult> EnsureSeed([FromQuery] Guid tenantId, [FromQuery] Guid? createdByUserId = null, CancellationToken cancellationToken = default)
+    {
+        await _service.EnsureSeedAsync(tenantId, createdByUserId, cancellationToken);
+        return NoContent();
+    }
+
     [HttpPut("payees/{id:guid}")]
     public async Task<IActionResult> UpdatePayee(Guid id, [FromBody] UpdateCommissionPayeeRequest request, CancellationToken cancellationToken)
     {

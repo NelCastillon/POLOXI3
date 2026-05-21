@@ -1,124 +1,252 @@
 @page "/commissions/split-rules"
 @page "/commissions/splits"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Commissions
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Commission Split Rules</PageTitle>
+<PageTitle>Commission Split Rules â€” AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="Commission Split Rules" Icon="bi-scissors">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Rule</button>
-    </Actions>
-</AppPageHeader>
+@if (_toastVisible)
+{
+    <div class="sr-toast sr-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="sr-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
 
-<div class="toolbar">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
+@if (_showStatusConfirm && _statusTarget is not null && !string.IsNullOrWhiteSpace(_pendingStatus))
+{
+    <div class="sr-modal-backdrop" role="presentation" @onclick="CancelStatusUpdate">
+        <div class="sr-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="sr-status-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingStatus == "Archived" ? "um-confirm-icon--danger" : null)"><i class="bi @PendingStatusIcon" aria-hidden="true"></i></div>
+                <div class="um-confirm-title" id="sr-status-title">@PendingStatusTitle</div>
+                <div class="um-confirm-body">Mark split rule <strong>@_statusTarget.RuleName</strong> as <strong>@_pendingStatus</strong>?</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelStatusUpdate" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn @(_pendingStatus == "Archived" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteStatusUpdateAsync" disabled="@_busy">@PendingStatusAction</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="sr-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="sr-modal sr-action-modal" role="dialog" aria-modal="true" aria-labelledby="sr-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-scissors" aria-hidden="true"></i>
+                <span id="sr-form-title">@(_editingId == Guid.Empty ? "New Split Rule" : "Edit Split Rule")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="sr-modal-intro"><span><i class="bi bi-shield-check" aria-hidden="true"></i> Split workflow</span><p>Configure plan-specific split percentages, producer/payee routing, overrides, priorities, and effective dates.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Plan <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.CommissionPlanId"><option value="@Guid.Empty">Select plan...</option>@foreach (var plan in _plans) { <option value="@plan.CommissionPlanId">@plan.PlanName</option> }</InputSelect>
+                            <ValidationMessage For="() => _form.CommissionPlanId" class="text-danger" />
+                            @if (_form.CommissionPlanId == Guid.Empty && _saveAttempted) { <div class="text-danger">Commission Plan is required.</div> }
+                        </div>
+                        <div class="um-field">
+                            <label>Payee</label>
+                            <InputSelect class="form-select" @bind-Value="_form.PayeeId"><option value="">Any payee / plan default</option>@foreach (var payee in _payees) { <option value="@payee.PayeeId">@PayeeLabel(payee)</option> }</InputSelect>
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Rule Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.RuleName" />
+                            <ValidationMessage For="() => _form.RuleName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Split Type <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.SplitTypeCode">@foreach (var type in _splitTypes) { <option value="@type">@type</option> }</InputSelect>
+                            <ValidationMessage For="() => _form.SplitTypeCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Split % <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_form.SplitPct" />
+                            <ValidationMessage For="() => _form.SplitPct" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Override Rate %</label>
+                            <InputNumber class="form-control" @bind-Value="_form.OverrideRatePct" />
+                            <ValidationMessage For="() => _form.OverrideRatePct" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Priority <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_form.Priority" />
+                            <ValidationMessage For="() => _form.Priority" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Effective Start <span class="text-danger">*</span></label>
+                            <InputDate class="form-control" @bind-Value="_form.EffectiveStartDate" />
+                            <ValidationMessage For="() => _form.EffectiveStartDate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Effective End</label>
+                            <InputDate class="form-control" @bind-Value="_form.EffectiveEndDate" />
+                            <ValidationMessage For="() => _form.EffectiveEndDate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Status <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.StatusCode">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect>
+                            <ValidationMessage For="() => _form.StatusCode" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full sr-balance-preview"><span>Allocation preview</span><strong>@_form.SplitPct.ToString("N2")%</strong><small>@(_form.OverrideRatePct.HasValue ? $"Override rate {_form.OverrideRatePct:N2}% applies" : "No override rate configured")</small></div>
+                        @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editingId == Guid.Empty ? "Create Rule" : "Save Changes")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="sr-enterprise-page">
+    <section class="sr-header">
+        <div class="sr-header-left"><div class="sr-lob-icon"><i class="bi bi-scissors" aria-hidden="true"></i></div><div class="sr-header-info"><div class="sr-title-row"><h1 class="sr-page-title">Commission Split Rules</h1><span class="sr-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live split data</span><span class="sr-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span></div><div class="sr-sub-row"><span>Configure producer, CSR, house account, referral, and branch override split workflows.</span><span class="sr-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span><span class="sr-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span></div></div></div>
+        <div class="sr-header-actions"><button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions2")'><i class="bi bi-cash-coin" aria-hidden="true"></i> Commissions</button><button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="@RefreshIconClass" aria-hidden="true"></i> Refresh</button><button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Rule</button></div>
+    </section>
+
+    <section class="sr-kpi-strip" aria-label="Commission split metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="@KpiClass(kpi)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)"><span class="sr-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span><span class="sr-kpi-copy"><span class="sr-kpi-label">@kpi.Label</span><span class="sr-kpi-value">@kpi.Value</span><span class="sr-kpi-caption">@kpi.Caption</span></span></button>
+        }
+    </section>
+
+    <section class="sr-workflow-strip" aria-label="Split workflow shortcuts"><button type="button" class="sr-workflow-card sr-wf-create" @onclick="OpenCreate"><span class="sr-workflow-icon"><i class="bi bi-plus-circle" aria-hidden="true"></i></span><span class="sr-workflow-content"><strong>1</strong><span>Create</span><small>Add split rules.</small></span></button><button type="button" class="sr-workflow-card sr-wf-plans" @onclick='() => Nav.NavigateTo("/commissions/plans")'><span class="sr-workflow-icon"><i class="bi bi-clipboard-check" aria-hidden="true"></i></span><span class="sr-workflow-content"><strong>2</strong><span>Plans</span><small>Maintain rates.</small></span></button><button type="button" class="sr-workflow-card sr-wf-ledger" @onclick='() => Nav.NavigateTo("/commissions/producer-ledger")'><span class="sr-workflow-icon"><i class="bi bi-journal-text" aria-hidden="true"></i></span><span class="sr-workflow-content"><strong>3</strong><span>Ledger</span><small>Audit credits.</small></span></button><button type="button" class="sr-workflow-card sr-wf-statements" @onclick='() => Nav.NavigateTo("/commissions/statements")'><span class="sr-workflow-icon"><i class="bi bi-file-earmark-text" aria-hidden="true"></i></span><span class="sr-workflow-content"><strong>4</strong><span>Statements</span><small>Review payouts.</small></span></button><button type="button" class="sr-workflow-card sr-wf-batches" @onclick='() => Nav.NavigateTo("/commissions/payout-batches")'><span class="sr-workflow-icon"><i class="bi bi-box-seam" aria-hidden="true"></i></span><span class="sr-workflow-content"><strong>5</strong><span>Batches</span><small>Run payments.</small></span></button><button type="button" class="sr-workflow-card sr-wf-exceptions" @onclick='() => Nav.NavigateTo("/commissions/exceptions")'><span class="sr-workflow-icon"><i class="bi bi-exclamation-circle" aria-hidden="true"></i></span><span class="sr-workflow-content"><strong>6</strong><span>Exceptions</span><small>Resolve disputes.</small></span></button></section>
+
+    <section class="sr-enterprise-search" aria-label="Commission split filters"><div class="sr-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div><div class="sr-search-body"><label for="sr-search">Search split rules</label><input id="sr-search" class="sr-search-input" type="search" placeholder="Search rule, plan, payee, type, status..." @bind="SearchFilter" @bind:event="oninput" /><span class="sr-search-hint">Filters apply instantly across synchronized commission split rules.</span></div><select class="sr-filter-select" @bind="TypeFilter" aria-label="Split type filter"><option value="">All split types</option>@foreach (var type in _splitTypes) { <option value="@type">@type</option> }</select><select class="sr-filter-select" @bind="StatusFilter" aria-label="Status filter"><option value="">All statuses</option>@foreach (var status in _statuses) { <option value="@status">@status</option> }</select><select class="sr-filter-select" @bind="PlanFilter" aria-label="Plan filter"><option value="">All plans</option>@foreach (var plan in _plans) { <option value="@plan.CommissionPlanId.ToString()">@plan.PlanName</option> }</select><div class="sr-search-result"><strong>@_filtered.Count</strong><span>matches</span></div></section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger sr-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    }
+
+    <section class="sr-content-layout"><div class="sr-grid-wrap"><div class="sr-grid-toolbar"><div><strong>Split rule register</strong><span>@ActiveFilterText</span></div><div class="sr-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ActivateSelected" disabled="@(!CanActivateSelected)"><i class="bi bi-check2-circle" aria-hidden="true"></i> Activate</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ArchiveSelected" disabled="@(!CanArchiveSelected)"><i class="bi bi-archive" aria-hidden="true"></i> Archive</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button></div></div>
+        @if (_loading)
+        {
+            <div class="sr-loading"><i class="bi bi-arrow-repeat sr-spin" aria-hidden="true"></i><strong>Loading split rules...</strong><span>Syncing schema, seed data, payees, plans, and split rules.</span></div>
+        }
+        else if (!_filtered.Any())
+        {
+            <div class="sr-empty-state"><i class="bi bi-scissors" aria-hidden="true"></i><strong>No split rules found</strong><span>Adjust filters or create a split rule for a commission plan.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">New Split Rule</button></div>
+        }
+        else
+        {
+            <div class="sr-table-scroll"><table class="sr-table"><thead><tr><th>Rule</th><th>Plan</th><th>Payee</th><th>Type</th><th class="sr-number">Split</th><th class="sr-number">Override</th><th>Effective</th><th>Status</th><th class="sr-actions-col">Actions</th></tr></thead><tbody>@foreach (var item in PagedItems) { <tr class="@RowClass(item)" @onclick="() => SelectRule(item)"><td><div class="sr-entry-cell"><span class="sr-entry-icon @TypeIconTone(item.SplitTypeCode)"><i class="bi bi-scissors" aria-hidden="true"></i></span><span><strong>@item.RuleName</strong><span>Priority @item.Priority Â· @ShortId(item.SplitRuleId)</span></span></div></td><td>@PlanName(item.CommissionPlanId)</td><td>@PayeeName(item.PayeeId)</td><td><span class="sr-type-chip @TypeCss(item.SplitTypeCode)">@item.SplitTypeCode</span></td><td class="sr-number sr-net">@item.SplitPct.ToString("N2")%</td><td class="sr-number">@(item.OverrideRatePct?.ToString("N2") ?? "â€”")</td><td>@EffectiveLabel(item)</td><td><span class="sr-status-chip @StatusCss(item.StatusCode)">@item.StatusCode</span></td><td><div class="sr-row-acts"><button type="button" class="um-btn um-btn-primary um-btn-xs" title="Inspect" @onclick:stopPropagation="true" @onclick="() => SelectRule(item)"><i class="bi bi-layout-sidebar-inset" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Model in ledger" @onclick:stopPropagation="true" @onclick='() => Nav.NavigateTo("/commissions/producer-ledger")'><i class="bi bi-journal-text" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Archive" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Archived")' disabled="@(item.StatusCode == "Archived")"><i class="bi bi-archive" aria-hidden="true"></i></button></div></td></tr> }</tbody></table></div>
+            <div class="sr-pager"><span>Showing @PageStart-@PageEnd of @_filtered.Count</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button><span>Page @_page of @TotalPages</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button></div></div>
+        }
+    </div><aside class="sr-detail-panel" aria-label="Selected split rule detail">@if (_selected is null) { <div class="sr-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a split rule</strong><span>Choose a row to inspect plan, payee, split allocation, effective dates, and workflow actions.</span></div> } else { <div class="sr-detail-head"><div><span class="sr-detail-eyebrow"><i class="bi bi-scissors" aria-hidden="true"></i> Split detail</span><h2>@_selected.RuleName</h2><div class="sr-detail-meta"><span>@_selected.SplitTypeCode</span><span class="sr-status-chip @StatusCss(_selected.StatusCode)">@_selected.StatusCode</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div><div class="sr-detail-body"><div class="sr-progress-card"><div><span>Split allocation</span><strong>@AllocationLabel(_selected)</strong></div><div class="sr-progress-track"><span style="width:@AllocationPercent(_selected)%"></span></div></div><div class="sr-detail-summary"><div class="sr-meta-row"><span class="sr-meta-lbl">Plan</span><span class="sr-meta-val">@PlanName(_selected.CommissionPlanId)</span></div><div class="sr-meta-row"><span class="sr-meta-lbl">Payee</span><span class="sr-meta-val">@PayeeName(_selected.PayeeId)</span></div><div class="sr-meta-row"><span class="sr-meta-lbl">Split %</span><span class="sr-meta-val">@_selected.SplitPct.ToString("N2")%</span></div><div class="sr-meta-row"><span class="sr-meta-lbl">Override</span><span class="sr-meta-val">@(_selected.OverrideRatePct?.ToString("N2") ?? "No override")</span></div><div class="sr-meta-row"><span class="sr-meta-lbl">Priority</span><span class="sr-meta-val">@_selected.Priority</span></div><div class="sr-meta-row"><span class="sr-meta-lbl">Effective</span><span class="sr-meta-val">@EffectiveLabel(_selected)</span></div></div><div class="sr-note-card"><span><i class="bi bi-diagram-3" aria-hidden="true"></i> Workflow context</span><p>This split rule is applied to @PlanName(_selected.CommissionPlanId) and routes @_selected.SplitPct.ToString("N2")% of eligible commission to @PayeeName(_selected.PayeeId).</p></div><div class="sr-detail-actions"><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, "Active")' disabled="@(_selected.StatusCode == "Active")"><i class="bi bi-check2-circle" aria-hidden="true"></i> Activate</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, "Archived")' disabled="@(_selected.StatusCode == "Archived")"><i class="bi bi-archive" aria-hidden="true"></i> Archive</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/commissions/producer-ledger")'><i class="bi bi-journal-text" aria-hidden="true"></i> Ledger</button></div></div> }</aside></section>
 </div>
 
-@if (_loading)
-{
-    <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
-}
-else if (!string.IsNullOrWhiteSpace(_loadError))
-{
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
-}
-else
-{
-    <SfGrid TValue="CommissionSplitRuleDto" DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-        <GridEvents TValue="CommissionSplitRuleDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="10"></GridPageSettings>
-        <GridColumns>
-            <GridColumn Field="@nameof(CommissionSplitRuleDto.RuleName)" HeaderText="Rule Name" Width="240"></GridColumn>
-            <GridColumn Field="@nameof(CommissionSplitRuleDto.SplitTypeCode)" HeaderText="Split Type" Width="130"></GridColumn>
-            <GridColumn Field="@nameof(CommissionSplitRuleDto.SplitPct)" HeaderText="Split %" Format="N4" Width="110"></GridColumn>
-            <GridColumn Field="@nameof(CommissionSplitRuleDto.Priority)" HeaderText="Priority" Width="100"></GridColumn>
-            <GridColumn Field="@nameof(CommissionSplitRuleDto.EffectiveStartDate)" HeaderText="Effective Start" Type="ColumnType.Date" Format="d" Width="150"></GridColumn>
-            <GridColumn Field="@nameof(CommissionSplitRuleDto.StatusCode)" HeaderText="Status" Width="120"></GridColumn>
-            <GridColumn Field="@nameof(CommissionSplitRuleDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="g" Width="180"></GridColumn>
-            <GridColumn HeaderText="Actions" Width="90"><Template>@{ var item = (CommissionSplitRuleDto)context; }<button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button></Template></GridColumn>
-        </GridColumns>
-    </SfGrid>
-}
-
-<SfDialog @bind-Visible="_showForm" Width="680px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates><Content>
-        <div class="um-modal-header"><i class="bi bi-scissors" aria-hidden="true"></i><span>@(_editingId == Guid.Empty ? "New Split Rule" : "Edit Split Rule")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
-        <EditForm EditContext="_editContext"><DataAnnotationsValidator />
-            <div class="um-modal-body"><div class="um-form-grid">
-                <div class="um-field"><label>Plan <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.CommissionPlanId" class="um-input"><option value="@Guid.Empty">Select plan…</option>@foreach (var plan in _plans) { <option value="@plan.CommissionPlanId">@plan.PlanName</option> }</InputSelect><ValidationMessage For="() => _form.CommissionPlanId" class="validation-message text-danger" /></div>
-                <div class="um-field"><label>Rule Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.RuleName" class="um-input" /><ValidationMessage For="() => _form.RuleName" class="validation-message text-danger" /></div>
-                <div class="um-field"><label>Split Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.SplitTypeCode" class="um-input"><option value="Producer">Producer</option><option value="CSR">CSR</option><option value="House Account">House Account</option><option value="Override">Override</option></InputSelect><ValidationMessage For="() => _form.SplitTypeCode" class="validation-message text-danger" /></div>
-                <div class="um-field"><label>Split %</label><InputNumber @bind-Value="_form.SplitPct" class="um-input" /><ValidationMessage For="() => _form.SplitPct" class="validation-message text-danger" /></div>
-                <div class="um-field"><label>Override Rate %</label><InputNumber @bind-Value="_form.OverrideRatePct" class="um-input" /><ValidationMessage For="() => _form.OverrideRatePct" class="validation-message text-danger" /></div>
-                <div class="um-field"><label>Priority</label><InputNumber @bind-Value="_form.Priority" class="um-input" /><ValidationMessage For="() => _form.Priority" class="validation-message text-danger" /></div>
-                <div class="um-field"><label>Effective Start <span class="text-danger">*</span></label><InputDate @bind-Value="_form.EffectiveStartDate" class="um-input" /><ValidationMessage For="() => _form.EffectiveStartDate" class="validation-message text-danger" /></div>
-                <div class="um-field"><label>Effective End</label><InputDate @bind-Value="_form.EffectiveEndDate" class="um-input" /><ValidationMessage For="() => _form.EffectiveEndDate" class="validation-message text-danger" /></div>
-                <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input"><option value="Active">Active</option><option value="Inactive">Inactive</option><option value="Draft">Draft</option></InputSelect><ValidationMessage For="() => _form.StatusCode" class="validation-message text-danger" /></div>
-                @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
-            </div></div>
-        </EditForm>
-        <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Saving…" : "Save Rule")</button></div>
-    </Content></DialogTemplates>
-</SfDialog>
-
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
+    private const int PageSize = 12;
     private Guid _tenantId;
-    private string? _searchTerm, _loadError, _formError;
-    private bool _loading, _showForm, _saving;
+    private Guid _tenantAdminUserId;
     private List<CommissionSplitRuleDto> _items = [];
+    private List<CommissionSplitRuleDto> _filtered = [];
     private List<CommissionPlanDto> _plans = [];
-    private Guid _editingId = Guid.Empty;
+    private List<CommissionPayeeDto> _payees = [];
+    private CommissionSplitRuleDto? _selected;
+    private CommissionSplitRuleDto? _statusTarget;
     private SplitRuleForm _form = new();
-    private EditContext _editContext = default!;
+    private Guid _editingId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _typeFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _planFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _pendingStatus;
+    private int _page = 1;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showStatusConfirm;
+    private bool _toastVisible;
+    private bool _saveAttempted;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private readonly List<string> _splitTypes = ["Producer", "CSR", "House Account", "Override", "Referral", "Branch Manager"];
+    private readonly List<string> _statuses = ["Active", "Draft", "Inactive", "Archived"];
 
-    protected override async Task OnInitializedAsync()
-    {
-        await ResolveCurrentUserContextAsync();
-        _editContext = new(_form);
-        await LoadAsync();
-    }
+    private IEnumerable<CommissionSplitRuleDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private bool CanActivateSelected => _selected is not null && _selected.StatusCode != "Active";
+    private bool CanArchiveSelected => _selected is not null && _selected.StatusCode != "Archived";
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All split rules" : $"Filtered by {_kpiFilter}";
+    private string PendingStatusIcon => _pendingStatus switch { "Active" => "bi-check2-circle", "Archived" => "bi-archive-fill", "Inactive" => "bi-pause-circle", _ => "bi-arrow-repeat" };
+    private string PendingStatusTitle => _pendingStatus switch { "Active" => "Activate Split Rule", "Archived" => "Archive Split Rule", "Inactive" => "Deactivate Split Rule", _ => "Update Split Rule" };
+    private string PendingStatusAction => _pendingStatus switch { "Active" => "Activate", "Archived" => "Archive", "Inactive" => "Deactivate", _ => "Update" };
+    private string RefreshIconClass => _loading ? "bi bi-arrow-repeat sr-spin" : "bi bi-arrow-clockwise";
+    private IReadOnlyList<KpiModel> Kpis => [new("all", "Rules", _items.Count.ToString("N0"), "All split rules", "bi-scissors", "sr-ki-blue"), new("active", "Active", _items.Count(x => x.StatusCode == "Active").ToString("N0"), "Currently applied", "bi-check2-circle", "sr-ki-green"), new("producer", "Producer", CountType("Producer").ToString("N0"), "Producer splits", "bi-person-badge", "sr-ki-blue"), new("override", "Overrides", _items.Count(x => x.SplitTypeCode.Contains("Override", StringComparison.OrdinalIgnoreCase) || x.OverrideRatePct.HasValue).ToString("N0"), "Override rules", "bi-building", "sr-ki-amber"), new("house", "House", CountType("House Account").ToString("N0"), "House accounts", "bi-house", "sr-ki-purple"), new("shared", "Split %", _items.Sum(x => x.SplitPct).ToString("N0") + "%", "Configured allocation", "bi-pie-chart", "sr-ki-cyan")];
+    private string SearchFilter { get => _searchTerm; set { _searchTerm = value; ApplyFilters(resetPage: true); } }
+    private string TypeFilter { get => _typeFilter; set { _typeFilter = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
+    private string PlanFilter { get => _planFilter; set { _planFilter = value; ApplyFilters(resetPage: true); } }
 
-    private async Task LoadAsync()
-    {
-        _loading = true;
-        _loadError = null;
-        try
-        {
-            var result = await Api.SearchCommissionSplitRulesAsync(_tenantId, _searchTerm);
-            var plans = await Api.SearchCommissionPlansAsync(_tenantId);
-            _items = result?.Items.ToList() ?? [];
-            _plans = plans?.Items.ToList() ?? [];
-        }
-        catch (Exception ex)
-        {
-            _loadError = ex.Message;
-            _items = [];
-        }
-        finally { _loading = false; }
-    }
-
-    private void OnRowSelected(RowSelectEventArgs<CommissionSplitRuleDto> args) => OpenEdit(args.Data);
-    private void OpenCreate() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
-    private void OpenEdit(CommissionSplitRuleDto item) { _editingId = item.SplitRuleId; _form = new SplitRuleForm { CommissionPlanId = item.CommissionPlanId, RuleName = item.RuleName, SplitTypeCode = item.SplitTypeCode, SplitPct = item.SplitPct, OverrideRatePct = item.OverrideRatePct, Priority = item.Priority, EffectiveStartDate = item.EffectiveStartDate.ToDateTime(TimeOnly.MinValue), EffectiveEndDate = item.EffectiveEndDate?.ToDateTime(TimeOnly.MinValue), StatusCode = item.StatusCode }; _editContext = new(_form); _formError = null; _showForm = true; }
-    private void CloseForm() => _showForm = false;
-    private async Task SaveAsync() { if (!_editContext.Validate()) return; if (_form.EffectiveEndDate.HasValue && _form.EffectiveEndDate.Value < _form.EffectiveStartDate) { _formError = "Effective End must be on or after Effective Start."; return; } _saving = true; try { if (_editingId == Guid.Empty) await Api.CreateCommissionSplitRuleAsync(new CreateCommissionSplitRuleRequest { TenantId = _tenantId, CommissionPlanId = _form.CommissionPlanId, RuleName = _form.RuleName, SplitTypeCode = _form.SplitTypeCode, SplitPct = _form.SplitPct, OverrideRatePct = _form.OverrideRatePct, Priority = _form.Priority, EffectiveStartDate = DateOnly.FromDateTime(_form.EffectiveStartDate), EffectiveEndDate = _form.EffectiveEndDate.HasValue ? DateOnly.FromDateTime(_form.EffectiveEndDate.Value) : null, StatusCode = _form.StatusCode }); else await Api.UpdateCommissionSplitRuleAsync(_editingId, new UpdateCommissionSplitRuleRequest { TenantId = _tenantId, SplitRuleId = _editingId, CommissionPlanId = _form.CommissionPlanId, RuleName = _form.RuleName, SplitTypeCode = _form.SplitTypeCode, SplitPct = _form.SplitPct, OverrideRatePct = _form.OverrideRatePct, Priority = _form.Priority, EffectiveStartDate = DateOnly.FromDateTime(_form.EffectiveStartDate), EffectiveEndDate = _form.EffectiveEndDate.HasValue ? DateOnly.FromDateTime(_form.EffectiveEndDate.Value) : null, StatusCode = _form.StatusCode }); _showForm = false; await LoadAsync(); } catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; } finally { _saving = false; } }
-    private sealed class SplitRuleForm { [RequiredGuid(ErrorMessage = "Commission Plan is required.")] public Guid CommissionPlanId { get; set; } [Required, StringLength(200)] public string RuleName { get; set; } = string.Empty; [Required, StringLength(50)] public string SplitTypeCode { get; set; } = "Producer"; [Range(0, 100)] public decimal SplitPct { get; set; } [Range(0, 100)] public decimal? OverrideRatePct { get; set; } [Range(0, 9999)] public int Priority { get; set; } = 100; [Required] public DateTime EffectiveStartDate { get; set; } = DateTime.Today; public DateTime? EffectiveEndDate { get; set; } [Required, StringLength(50)] public string StatusCode { get; set; } = "Active"; }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
-    }
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Commissions", "/commissions2"), new("Split Rules", "/commissions/splits")); await LoadAsync(); }
+    private async Task LoadAsync() { _loading = true; _loadError = null; try { await Api.EnsureCommissionSeedAsync(_tenantId, _tenantAdminUserId); await Api.EnsureCommissionSplitRulesSeedAsync(_tenantId, _tenantAdminUserId); var rules = await Api.SearchCommissionSplitRulesAsync(_tenantId, string.Empty); var plans = await Api.SearchCommissionPlansAsync(_tenantId, string.Empty); var payees = await Api.SearchCommissionPayeesAsync(_tenantId, string.Empty); _items = rules?.Items.OrderBy(x => StatusSort(x.StatusCode)).ThenBy(x => x.Priority).ThenBy(x => x.RuleName).ToList() ?? []; _plans = plans?.Items.OrderBy(x => x.PlanName).ToList() ?? []; _payees = payees?.Items.OrderBy(x => x.PayeeTypeCode).ToList() ?? []; ApplyFilters(resetPage: true); EnsureSelectedStillVisible(); } catch (Exception ex) { _loadError = $"Commission split rules failed to load: {ex.Message}"; ShowToast(_loadError, "danger"); _items = []; _filtered = []; } finally { _loading = false; } }
+    private void ApplyFilters(bool resetPage) { IEnumerable<CommissionSplitRuleDto> query = _items; if (!string.IsNullOrWhiteSpace(_searchTerm)) { var term = _searchTerm.Trim(); query = query.Where(x => Contains(x.RuleName, term) || Contains(x.SplitTypeCode, term) || Contains(x.StatusCode, term) || Contains(PlanName(x.CommissionPlanId), term) || Contains(PayeeName(x.PayeeId), term)); } if (!string.IsNullOrWhiteSpace(_typeFilter)) query = query.Where(x => x.SplitTypeCode == _typeFilter); if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.StatusCode == _statusFilter); if (!string.IsNullOrWhiteSpace(_planFilter) && Guid.TryParse(_planFilter, out var planId)) query = query.Where(x => x.CommissionPlanId == planId); query = _kpiFilter switch { "active" => query.Where(x => x.StatusCode == "Active"), "producer" => query.Where(x => x.SplitTypeCode == "Producer"), "override" => query.Where(x => x.SplitTypeCode.Contains("Override", StringComparison.OrdinalIgnoreCase) || x.OverrideRatePct.HasValue), "house" => query.Where(x => x.SplitTypeCode == "House Account"), "shared" => query.Where(x => x.SplitPct > 0), _ => query }; _filtered = query.OrderBy(x => StatusSort(x.StatusCode)).ThenBy(x => x.Priority).ThenBy(x => x.RuleName).ToList(); if (resetPage) _page = 1; if (_page > TotalPages) _page = TotalPages; }
+    private void SetKpiFilter(string filter) { _kpiFilter = _kpiFilter == filter && filter != "all" ? "all" : filter; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _searchTerm = string.Empty; _typeFilter = string.Empty; _statusFilter = string.Empty; _planFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); ShowToast("Split rule filters reset.", "info"); }
+    private void SelectRule(CommissionSplitRuleDto item) => _selected = item;
+    private void OpenCreate() { _editingId = Guid.Empty; _saveAttempted = false; _formError = null; _form = new SplitRuleForm { CommissionPlanId = _plans.FirstOrDefault()?.CommissionPlanId ?? Guid.Empty, PayeeId = _payees.FirstOrDefault()?.PayeeId, RuleName = string.Empty, SplitTypeCode = "Producer", SplitPct = 100, Priority = 100, EffectiveStartDate = DateTime.Today, StatusCode = "Active" }; _showForm = true; if (!_plans.Any()) ShowToast("No commission plans are loaded yet. Refresh will seed plans if the database is empty.", "warning"); }
+    private void OpenEdit(CommissionSplitRuleDto item) { _editingId = item.SplitRuleId; _saveAttempted = false; _formError = null; _form = new SplitRuleForm { CommissionPlanId = item.CommissionPlanId, PayeeId = item.PayeeId, RuleName = item.RuleName, SplitTypeCode = item.SplitTypeCode, SplitPct = item.SplitPct, OverrideRatePct = item.OverrideRatePct, Priority = item.Priority, EffectiveStartDate = item.EffectiveStartDate.ToDateTime(TimeOnly.MinValue), EffectiveEndDate = item.EffectiveEndDate?.ToDateTime(TimeOnly.MinValue), StatusCode = item.StatusCode }; _showForm = true; }
+    private void CloseForm() { if (_busy) return; _showForm = false; _saveAttempted = false; }
+    private async Task SaveAsync() { _saveAttempted = true; if (!ValidateForm()) return; _busy = true; _formError = null; var savedId = _editingId; try { if (_editingId == Guid.Empty) { savedId = await Api.CreateCommissionSplitRuleAsync(new CreateCommissionSplitRuleRequest { TenantId = _tenantId, CommissionPlanId = _form.CommissionPlanId, RuleName = _form.RuleName.Trim(), SplitTypeCode = _form.SplitTypeCode, PayeeId = _form.PayeeId, SplitPct = _form.SplitPct, OverrideRatePct = _form.OverrideRatePct, Priority = _form.Priority, EffectiveStartDate = DateOnly.FromDateTime(_form.EffectiveStartDate), EffectiveEndDate = _form.EffectiveEndDate.HasValue ? DateOnly.FromDateTime(_form.EffectiveEndDate.Value) : null, StatusCode = _form.StatusCode, CreatedByUserId = _tenantAdminUserId }); ShowToast("Split rule created.", "success"); } else { await Api.UpdateCommissionSplitRuleAsync(_editingId, new UpdateCommissionSplitRuleRequest { TenantId = _tenantId, SplitRuleId = _editingId, CommissionPlanId = _form.CommissionPlanId, RuleName = _form.RuleName.Trim(), SplitTypeCode = _form.SplitTypeCode, PayeeId = _form.PayeeId, SplitPct = _form.SplitPct, OverrideRatePct = _form.OverrideRatePct, Priority = _form.Priority, EffectiveStartDate = DateOnly.FromDateTime(_form.EffectiveStartDate), EffectiveEndDate = _form.EffectiveEndDate.HasValue ? DateOnly.FromDateTime(_form.EffectiveEndDate.Value) : null, StatusCode = _form.StatusCode, ModifiedByUserId = _tenantAdminUserId }); ShowToast("Split rule updated.", "success"); } _showForm = false; await LoadAsync(); _selected = _items.FirstOrDefault(x => x.SplitRuleId == savedId) ?? _selected; } catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; ShowToast(_formError, "danger"); } finally { _busy = false; } }
+    private void ActivateSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Active"); }
+    private void ArchiveSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Archived"); }
+    private void ConfirmStatusUpdate(CommissionSplitRuleDto item, string status) { _statusTarget = item; _pendingStatus = status; _showStatusConfirm = true; }
+    private void CancelStatusUpdate() { if (_busy) return; _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; }
+    private async Task ExecuteStatusUpdateAsync() { if (_statusTarget is null || string.IsNullOrWhiteSpace(_pendingStatus)) return; _busy = true; var selectedId = _statusTarget.SplitRuleId; try { await Api.UpdateCommissionSplitRuleAsync(_statusTarget.SplitRuleId, new UpdateCommissionSplitRuleRequest { TenantId = _tenantId, SplitRuleId = _statusTarget.SplitRuleId, CommissionPlanId = _statusTarget.CommissionPlanId, RuleName = _statusTarget.RuleName, SplitTypeCode = _statusTarget.SplitTypeCode, PayeeId = _statusTarget.PayeeId, SplitPct = _statusTarget.SplitPct, OverrideRatePct = _statusTarget.OverrideRatePct, Priority = _statusTarget.Priority, EffectiveStartDate = _statusTarget.EffectiveStartDate, EffectiveEndDate = _statusTarget.EffectiveEndDate, StatusCode = _pendingStatus, ModifiedByUserId = _tenantAdminUserId }); ShowToast($"Split rule marked {_pendingStatus.ToLowerInvariant()}.", "success"); _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; await LoadAsync(); _selected = _items.FirstOrDefault(x => x.SplitRuleId == selectedId) ?? _selected; } catch (Exception ex) { ShowToast($"Update failed: {ex.Message}", "danger"); } finally { _busy = false; } }
+    private Task NotifyValidationAsync(EditContext _) { _saveAttempted = true; ShowToast("Please correct validation errors before saving.", "warning"); return Task.CompletedTask; }
+    private async Task ExportAsync() { if (!_filtered.Any()) { ShowToast("No split rules are available to export.", "warning"); return; } var csv = new StringBuilder(); csv.AppendLine("SplitRuleId,RuleName,Plan,Payee,SplitType,SplitPct,OverrideRatePct,Priority,EffectiveStart,EffectiveEnd,Status"); foreach (var item in _filtered) csv.AppendLine(string.Join(',', Csv(item.SplitRuleId.ToString()), Csv(item.RuleName), Csv(PlanName(item.CommissionPlanId)), Csv(PayeeName(item.PayeeId)), Csv(item.SplitTypeCode), item.SplitPct, item.OverrideRatePct?.ToString("0.####") ?? string.Empty, item.Priority, Csv(item.EffectiveStartDate.ToString("yyyy-MM-dd")), Csv(item.EffectiveEndDate?.ToString("yyyy-MM-dd") ?? string.Empty), Csv(item.StatusCode))); var bytes = Encoding.UTF8.GetBytes(csv.ToString()); await Js.InvokeVoidAsync("amsShell.downloadBase64", $"commission-split-rules-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes)); ShowToast($"Exported {_filtered.Count:N0} split rules.", "success"); }
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() => _selected = _selected is null ? _filtered.FirstOrDefault() : _items.FirstOrDefault(x => x.SplitRuleId == _selected.SplitRuleId) ?? _filtered.FirstOrDefault();
+    private string PlanName(Guid planId) => _plans.FirstOrDefault(x => x.CommissionPlanId == planId)?.PlanName ?? ShortId(planId);
+    private string PayeeName(Guid? payeeId) { if (!payeeId.HasValue || payeeId.Value == Guid.Empty) return "Plan default"; var payee = _payees.FirstOrDefault(x => x.PayeeId == payeeId.Value); return payee is null ? ShortId(payeeId.Value) : PayeeLabel(payee); }
+    private string PayeeLabel(CommissionPayeeDto payee) => $"{payee.PayeeTypeCode} Â· {payee.SplitPercentage:N2}%";
+    private int CountType(string type) => _items.Count(x => x.SplitTypeCode == type);
+    private bool ValidateForm() { if (_form.CommissionPlanId == Guid.Empty) { _formError = "Commission Plan is required."; ShowToast(_formError, "warning"); return false; } if (string.IsNullOrWhiteSpace(_form.RuleName)) { _formError = "Rule Name is required."; ShowToast(_formError, "warning"); return false; } if (_form.SplitPct < 0 || _form.SplitPct > 100) { _formError = "Split percent must be between 0 and 100."; ShowToast(_formError, "warning"); return false; } if (_form.OverrideRatePct is < 0 or > 100) { _formError = "Override rate must be between 0 and 100."; ShowToast(_formError, "warning"); return false; } if (_form.EffectiveEndDate.HasValue && _form.EffectiveEndDate.Value < _form.EffectiveStartDate) { _formError = "Effective End must be on or after Effective Start."; ShowToast(_formError, "warning"); return false; } return true; }
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static int StatusSort(string status) => status switch { "Active" => 0, "Draft" => 1, "Inactive" => 2, "Archived" => 3, _ => 4 };
+    private static int AllocationPercent(CommissionSplitRuleDto item) => (int)Math.Clamp(item.SplitPct, 0, 100);
+    private static string AllocationLabel(CommissionSplitRuleDto item) => item.SplitPct >= 100 ? "Full allocation" : $"{item.SplitPct:N0}% allocation";
+    private static string EffectiveLabel(CommissionSplitRuleDto item) => item.EffectiveEndDate.HasValue ? $"{item.EffectiveStartDate:MMM d, yyyy} - {item.EffectiveEndDate:MMM d, yyyy}" : $"From {item.EffectiveStartDate:MMM d, yyyy}";
+    private static string StatusCss(string status) => $"sr-st-{status.ToLowerInvariant()}";
+    private static string TypeCss(string type) => $"sr-t-{type.ToLowerInvariant().Replace(" ", "-")}";
+    private static string TypeIconTone(string type) => type switch { "House Account" => "sr-di-purple", "Override" => "sr-di-amber", "Referral" => "sr-di-cyan", "CSR" => "sr-di-green", "Branch Manager" => "sr-di-red", _ => "sr-di-blue" };
+    private static string ShortId(Guid value) => value.ToString("N")[..8];
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private string KpiClass(KpiModel kpi) => $"sr-kpi-card {kpi.Tone} {(_kpiFilter == kpi.Filter ? "sr-kpi-active" : string.Empty)}";
+    private string RowClass(CommissionSplitRuleDto item) => $"sr-table-row {(_selected?.SplitRuleId == item.SplitRuleId ? "sr-table-row--selected" : string.Empty)}";
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter split rules by {Label}"; }
+    private sealed class SplitRuleForm { [RequiredGuid(ErrorMessage = "Commission Plan is required.")] public Guid CommissionPlanId { get; set; } public Guid? PayeeId { get; set; } [Required, StringLength(200)] public string RuleName { get; set; } = string.Empty; [Required, StringLength(50)] public string SplitTypeCode { get; set; } = "Producer"; [Range(0, 100)] public decimal SplitPct { get; set; } = 100; [Range(0, 100)] public decimal? OverrideRatePct { get; set; } [Range(0, 9999)] public int Priority { get; set; } = 100; [Required] public DateTime EffectiveStartDate { get; set; } = DateTime.Today; public DateTime? EffectiveEndDate { get; set; } [Required, StringLength(50)] public string StatusCode { get; set; } = "Active"; }
 }

@@ -44,6 +44,22 @@ BEGIN
     (NEWID(),@TenantId,N'Personal Lines Households',N'bi-house',N'mks-ic-purple',N'Households with personal auto, home, umbrella, or package opportunities',12400,1,N'Type = Personal|Policy: Auto OR HO',SYSUTCDATETIME(),0),
     (NEWID(),@TenantId,N'Lapsed — 60–180d',N'bi-arrow-counterclockwise',N'mks-ic-amber',N'Lapsed accounts in the win-back window',6300,1,N'LapseDate BETWEEN 60 AND 180 days',SYSUTCDATETIME(),0),
     (NEWID(),@TenantId,N'NPS Promoters',N'bi-star-fill',N'mks-ic-gold',N'Promoters eligible for review and referral requests',2100,1,N'NPS >= 9',SYSUTCDATETIME(),0);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Marketing.EmailBlast WHERE TenantId = @TenantId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Marketing.EmailBlast (EmailBlastId,TenantId,CampaignId,Name,Subject,PreviewText,AudienceSegment,SenderName,SenderEmail,Status,ScheduledDateUtc,SentDateUtc,RecipientCount,SentCount,OpenCount,ClickCount,BounceCount,UnsubscribeCount,CreatedDateUtc,IsDeleted) VALUES
+    (NEWID(),@TenantId,NULL,N'Home + Auto Bundle Launch',N'Bundle your home and auto coverage this month',N'Personal lines households with package opportunities.',N'Personal Lines Households',N'AgencyBinder Team',N'marketing@agencybinder.local',N'Sent',DATEADD(day,-21,SYSUTCDATETIME()),DATEADD(day,-21,SYSUTCDATETIME()),12400,11200,3237,884,42,18,DATEADD(day,-30,SYSUTCDATETIME()),0),
+    (NEWID(),@TenantId,NULL,N'Umbrella Cross-Sell Preview',N'Is your liability protection enough?',N'Commercial client umbrella cross-sell workflow.',N'Active Commercial Clients',N'AgencyBinder Team',N'marketing@agencybinder.local',N'Scheduled',DATEADD(day,4,SYSUTCDATETIME()),NULL,3840,0,0,0,0,0,DATEADD(day,-7,SYSUTCDATETIME()),0),
+    (NEWID(),@TenantId,NULL,N'Lapsed Policy Win-Back',N'We can help restart your protection',N'Win-back sequence for recently lapsed accounts.',N'Lapsed — 60–180d',N'AgencyBinder Team',N'marketing@agencybinder.local',N'Draft',DATEADD(day,8,SYSUTCDATETIME()),NULL,6300,0,0,0,0,0,DATEADD(day,-3,SYSUTCDATETIME()),0);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Marketing.LandingPage WHERE TenantId = @TenantId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Marketing.LandingPage (LandingPageId,TenantId,CampaignId,Name,Slug,TemplateName,Status,PublishedUrl,PrimaryCta,ViewCount,ConversionCount,ConversionRate,LastPublishedDateUtc,CreatedDateUtc,IsDeleted) VALUES
+    (NEWID(),@TenantId,NULL,N'Bundle Review Landing Page',N'home-auto-bundle-review',N'Insurance Benefit Card',N'Published',N'https://agencybinder.local/lp/home-auto-bundle-review',N'Review My Bundle',1840,126,6.85,DATEADD(day,-20,SYSUTCDATETIME()),DATEADD(day,-31,SYSUTCDATETIME()),0),
+    (NEWID(),@TenantId,NULL,N'Commercial Umbrella Review',N'commercial-umbrella-review',N'Modern Promo',N'Draft',N'https://agencybinder.local/lp/commercial-umbrella-review',N'Schedule a Review',0,0,0,NULL,DATEADD(day,-6,SYSUTCDATETIME()),0),
+    (NEWID(),@TenantId,NULL,N'Lapsed Policy Restart',N'lapsed-policy-restart',N'Win-Back Offer',N'Draft',N'https://agencybinder.local/lp/lapsed-policy-restart',N'Restart Coverage',0,0,0,NULL,DATEADD(day,-3,SYSUTCDATETIME()),0);
 END;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -253,7 +269,7 @@ END;";
     }
 
     [HttpGet("campaigns")]
-    public async Task<IActionResult> GetCampaigns([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, CancellationToken cancellationToken)
+    public async Task<IActionResult> GetCampaigns([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, [FromQuery] string? status = null, [FromQuery] string? type = null, CancellationToken cancellationToken = default)
     {
         await EnsureCampaignDataAsync(tenantId, cancellationToken);
         const string sql = @"
@@ -264,10 +280,20 @@ SELECT CampaignId, TenantId, Name, Type, Status, Segment, Goal, Description, Sub
 FROM Comms.Campaign
 WHERE TenantId = @TenantId AND IsDeleted = 0
   AND (@SearchTerm IS NULL OR @SearchTerm = '' OR Name LIKE '%' + @SearchTerm + '%' OR Segment LIKE '%' + @SearchTerm + '%' OR Type LIKE '%' + @SearchTerm + '%')
+  AND (@Status IS NULL OR @Status = '' OR Status = @Status)
+  AND (@Type IS NULL OR @Type = '' OR Type = @Type)
 ORDER BY StartDate DESC, Name;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        var items = (await cn.QueryAsync<CommunicationCampaignDto>(new CommandDefinition(sql, new { TenantId = tenantId, SearchTerm = searchTerm }, cancellationToken: cancellationToken))).AsList();
+        var items = (await cn.QueryAsync<CommunicationCampaignDto>(new CommandDefinition(sql, new { TenantId = tenantId, SearchTerm = searchTerm, Status = status, Type = type }, cancellationToken: cancellationToken))).AsList();
         return Ok(new PagedResult<CommunicationCampaignDto> { Items = items, TotalCount = items.Count, PageNumber = 1, PageSize = items.Count });
+    }
+
+    [HttpPost("campaigns/seed")]
+    public async Task<IActionResult> EnsureCampaignSeed([FromQuery] Guid tenantId, CancellationToken cancellationToken)
+    {
+        await EnsureCampaignDataAsync(tenantId, cancellationToken);
+        await EnsureMarketingDataAsync(tenantId, cancellationToken);
+        return NoContent();
     }
 
     [HttpGet("campaigns/{id:guid}/builder")]
@@ -288,6 +314,42 @@ WHERE CampaignId = @Id AND TenantId = @TenantId AND IsDeleted = 0;";
         var campaign = await cn.QuerySingleOrDefaultAsync<CommunicationCampaignDto>(new CommandDefinition(campaignSql, new { Id = id, TenantId = tenantId }, cancellationToken: cancellationToken));
         if (campaign is null) return NotFound();
 
+        var data = await GetBuilderDataAsync(cn, tenantId, campaign, cancellationToken);
+        return Ok(data);
+    }
+
+    [HttpGet("campaigns/builder-workspace")]
+    public async Task<IActionResult> GetCampaignBuilderWorkspace([FromQuery] Guid tenantId, CancellationToken cancellationToken)
+    {
+        await EnsureCampaignDataAsync(tenantId, cancellationToken);
+        await EnsureMarketingDataAsync(tenantId, cancellationToken);
+
+        var campaign = new CommunicationCampaignDto
+        {
+            CampaignId = Guid.Empty,
+            TenantId = tenantId,
+            Name = string.Empty,
+            Type = "Email",
+            Status = "Draft",
+            Segment = string.Empty,
+            Goal = "Cross-Sell",
+            Description = string.Empty,
+            Subject = string.Empty,
+            SenderName = "AgencyBinder Team",
+            ReplyToEmail = "marketing@agencybinder.local",
+            TemplateName = "Insurance Benefit Card",
+            CtaLabel = "Get a Quote",
+            SendMode = "Scheduled",
+            Timezone = "Eastern",
+            FollowUpDays = 7,
+            SendFollowUp = true,
+            SuppressRecentContacts = true,
+            SuppressOptOut = true,
+            StartDate = DateTime.UtcNow.Date.AddDays(7),
+            ScheduledDateUtc = DateTime.UtcNow.Date.AddDays(7)
+        };
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var data = await GetBuilderDataAsync(cn, tenantId, campaign, cancellationToken);
         return Ok(data);
     }

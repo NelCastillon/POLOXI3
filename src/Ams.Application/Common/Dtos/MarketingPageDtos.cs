@@ -105,6 +105,53 @@ public sealed class MarketingReviewRequestDto
     public int NpsScore { get; set; }
 }
 
+public sealed class MarketingAnalyticsMetricDto
+{
+    public Guid AnalyticsMetricId { get; set; }
+    public Guid TenantId { get; set; }
+    public string CampaignName { get; set; } = string.Empty;
+    public string Channel { get; set; } = string.Empty;
+    public string CampaignType { get; set; } = string.Empty;
+    public string SegmentName { get; set; } = string.Empty;
+    public string Goal { get; set; } = string.Empty;
+    public string PeriodCode { get; set; } = string.Empty;
+    public DateTime PeriodStartDate { get; set; }
+    public DateTime PeriodEndDate { get; set; }
+    public int Reached { get; set; }
+    public decimal OpenRate { get; set; }
+    public decimal ClickRate { get; set; }
+    public int Conversions { get; set; }
+    public decimal Revenue { get; set; }
+    public decimal Spend { get; set; }
+    public decimal UnsubscribeRate { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public DateTime UpdatedDateUtc { get; set; }
+
+    public decimal Roas => Spend > 0 ? Revenue / Spend : 0;
+}
+
+public sealed class MarketingAnalyticsResult
+{
+    public List<MarketingAnalyticsMetricDto> Items { get; set; } = [];
+    public List<MarketingAnalyticsChannelSummaryDto> Channels { get; set; } = [];
+    public List<MarketingAnalyticsOpportunitySummaryDto> Opportunities { get; set; } = [];
+}
+
+public sealed class MarketingAnalyticsChannelSummaryDto
+{
+    public string Name { get; set; } = string.Empty;
+    public int Percent { get; set; }
+    public int Reached { get; set; }
+    public decimal Revenue { get; set; }
+}
+
+public sealed class MarketingAnalyticsOpportunitySummaryDto
+{
+    public string Name { get; set; } = string.Empty;
+    public int Conversions { get; set; }
+    public decimal Revenue { get; set; }
+}
+
 public sealed class MarketingReviewsResult
 {
     public List<MarketingReviewDto> Reviews { get; set; } = [];

@@ -1,264 +1,140 @@
 @page "/commissions/clawbacks"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Commissions
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Commission Clawbacks — AMS</PageTitle>
+<PageTitle>Commission Clawbacks — AMS Enterprise</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<!-- Initiate Clawback Dialog -->
-<SfDialog @bind-Visible="_showNew" Width="620px" ShowCloseIcon="false" IsModal="true">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i><span>Initiate Clawback</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseNew"><i class="bi bi-x-lg"></i></button></div>
-            <EditForm EditContext="_editContext">
-                <DataAnnotationsValidator />
-                <div class="um-modal-body"><div class="um-form-grid">
-                    <div class="um-field"><label>Reason Code <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.ReasonCode" class="um-input">@foreach (var r in _reasonCodes) { <option value="@r">@r</option> }</InputSelect><ValidationMessage For="() => _form.ReasonCode" class="validation-message text-danger" /></div>
-                    <div class="um-field"><label>Producer / Payee Note</label><InputText @bind-Value="_form.PayeeNote" class="um-input" placeholder="Producer name…" /><ValidationMessage For="() => _form.PayeeNote" class="validation-message text-danger" /></div>
-                    <div class="um-field"><label>Clawback Amount <span class="text-danger">*</span></label><InputNumber @bind-Value="_form.Amount" class="um-input" /><ValidationMessage For="() => _form.Amount" class="validation-message text-danger" /></div>
-                    <div class="um-field"><label>Original Transaction Reference</label><InputText @bind-Value="_form.Reference" class="um-input" placeholder="TX-… or STM-…" /><ValidationMessage For="() => _form.Reference" class="validation-message text-danger" /></div>
-                    <div class="um-field um-field--full"><label>Notes</label><InputTextArea @bind-Value="_form.Notes" class="um-input" rows="3" /><ValidationMessage For="() => _form.Notes" class="validation-message text-danger" /></div>
-                    @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
-                </div></div>
-            </EditForm>
-            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseNew">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="InitiateAsync" disabled="@_saving">@(_saving ? "Saving…" : "Initiate Clawback")</button></div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
-
-<!-- What-If Modeling Panel -->
-<SfDialog @bind-Visible="_showModel" Width="600px" ShowCloseIcon="true" IsModal="true" Header="Clawback Impact Modeler">
-    <DialogTemplates>
-        <Content>
-            <div class="cw-model-body">
-                <p class="cw-model-intro">Simulate the net-pay impact of one or more clawbacks before approving. Adjusts for active payment plans and split arrangements.</p>
-                <div class="cw-model-grid">
-                    <div class="cw-mg-row cw-mg-hdr"><span>Scenario</span><span>Gross Earned</span><span>Clawback</span><span>Net Payout</span><span>Δ Impact</span></div>
-                    <div class="cw-mg-row"><span>Current (no clawback)</span><span>@Fmt(GrossEarned)</span><span>—</span><span>@Fmt(GrossEarned)</span><span class="cw-pos">—</span></div>
-                    <div class="cw-mg-row"><span>Pending clawbacks</span><span>@Fmt(GrossEarned)</span><span>@Fmt(PendingClawbacks)</span><span>@Fmt(GrossEarned - PendingClawbacks)</span><span class="cw-neg">−@Fmt(PendingClawbacks)</span></div>
-                    <div class="cw-mg-row"><span>With payment plan (3 mo)</span><span>@Fmt(GrossEarned)</span><span>@Fmt(PendingClawbacks)</span><span>@Fmt(GrossEarned - (PendingClawbacks / 3))</span><span class="cw-neg">−@Fmt(PendingClawbacks / 3)/mo</span></div>
-                    <div class="cw-mg-row"><span>Approved clawbacks</span><span>@Fmt(GrossEarned)</span><span>@Fmt(ApprovedClawbacks)</span><span>@Fmt(GrossEarned - ApprovedClawbacks)</span><span class="cw-neg">−@Fmt(ApprovedClawbacks)</span></div>
-                </div>
-                <div class="cw-model-note">Values are illustrative. Final amounts are calculated at batch run time.</div>
-            </div>
-        </Content>
-    </DialogTemplates>
-    <DialogButtons>
-        <DialogButton Content="Close" OnClick="() => _showModel = false"></DialogButton>
-    </DialogButtons>
-</SfDialog>
-
-<AppPageHeader Title="Commission Clawbacks"
-               Subtitle="Review, approve, and model commission clawbacks including payment cancellations, chargebacks, and repayment arrangements"
-               Icon="bi-arrow-counterclockwise">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="() => _showModel = true">
-            <i class="bi bi-calculator" aria-hidden="true"></i> Clawback Modeler
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/exceptions")'>
-            <i class="bi bi-exclamation-circle" aria-hidden="true"></i> Disputes
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenNew">
-            <i class="bi bi-plus-circle" aria-hidden="true"></i> Initiate Clawback
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<!-- KPI strip -->
-<div class="cw-kpi-strip">
-    @CwKpi("bi-arrow-counterclockwise","Total",    (_items?.Count ?? 0).ToString(),                                      "cw-ki-blue")
-    @CwKpi("bi-hourglass",             "Pending",  (_items?.Count(x=>x.StatusCode=="Pending") ?? 0).ToString(),          "cw-ki-amber")
-    @CwKpi("bi-check-circle",          "Approved", (_items?.Count(x=>x.StatusCode=="Approved") ?? 0).ToString(),         "cw-ki-green")
-    @CwKpi("bi-x-circle",              "Denied",   (_items?.Count(x=>x.StatusCode=="Denied")  ?? 0).ToString(),          "cw-ki-gray")
-    @CwKpi("bi-currency-dollar",       "$ Pending",Fmt(_items?.Where(x=>x.StatusCode=="Pending").Sum(x=>x.Amount)),       "cw-ki-amber")
-    @CwKpi("bi-currency-dollar",       "$ Applied",Fmt(_items?.Where(x=>x.StatusCode=="Approved").Sum(x=>x.Amount)),      "cw-ki-red")
-</div>
-
-<!-- Sub-nav -->
-<div class="cw-subnav">
-    <button class="cw-snav-btn cw-snav-active"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Clawbacks</button>
-    <button class="cw-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/statements")'><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements</button>
-    <button class="cw-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/exceptions")'><i class="bi bi-exclamation-circle" aria-hidden="true"></i> Exceptions</button>
-    <button class="cw-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/forecast")'><i class="bi bi-graph-up" aria-hidden="true"></i> Forecast</button>
-    <button class="cw-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/planner")'><i class="bi bi-calculator" aria-hidden="true"></i> What-If Planner</button>
-</div>
-
-<!-- Toolbar -->
-<div class="cw-toolbar">
-    <SfTextBox Placeholder="Search…" @bind-Value="_searchTerm" Width="270px"></SfTextBox>
-    <select class="e-input cw-sel" @bind="_filterStatus">
-        <option value="">All Statuses</option>
-        <option value="Pending">Pending</option>
-        <option value="Approved">Approved</option>
-        <option value="Denied">Denied</option>
-        <option value="Reversed">Reversed</option>
-    </select>
-    <select class="e-input cw-sel" @bind="_filterReason">
-        <option value="">All Reasons</option>
-        @foreach (var r in _reasonCodes) { <option value="@r">@r</option> }
-    </select>
-</div>
-
-@if (_items is null)
+@if (_toastVisible)
 {
-    <div style="padding:2rem"><SfSpinner Visible="true" /></div>
+    <div class="cw-toast cw-toast-@_toastKind" role="status" aria-live="polite"><i class="bi @ToastIconClass" aria-hidden="true"></i><span>@_toastMessage</span><button type="button" class="cw-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
 }
-else
+
+@if (_showStatusConfirm && _statusTarget is not null && !string.IsNullOrWhiteSpace(_pendingStatus))
 {
-<div class="cw-grid-wrap">
-    <SfGrid DataSource="FilteredItems" AllowSorting="true" AllowPaging="true" Height="480px">
-        <GridPageSettings PageSize="15"></GridPageSettings>
-        <GridColumns>
-            <GridColumn Field="@nameof(CommissionClawbackDto.ClawbackDate)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
-            <GridColumn HeaderText="Reason" Width="180">
-                <Template>
-                    @{ var c = (CommissionClawbackDto)context; }
-                    <span class="cw-reason-chip cw-r-@c.ReasonCode.ToLower().Replace(" ","-")">@c.ReasonCode</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(CommissionClawbackDto.Amount)" HeaderText="Amount" Format="C2" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
-            <GridColumn Field="@nameof(CommissionClawbackDto.Notes)" HeaderText="Notes" Width="240"></GridColumn>
-            <GridColumn HeaderText="Status" Width="110">
-                <Template>
-                    @{ var c2 = (CommissionClawbackDto)context; }
-                    <span class="cw-status-chip cw-st-@c2.StatusCode.ToLower()">@c2.StatusCode</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(CommissionClawbackDto.ApprovedDateUtc)" HeaderText="Approved" Type="ColumnType.DateTime" Format="d" Width="110"></GridColumn>
-            <GridColumn HeaderText="Actions" Width="150">
-                <Template>
-                    @{ var c3 = (CommissionClawbackDto)context; }
-                    <div class="cw-row-acts">
-                        @if (c3.StatusCode == "Pending")
-                        {
-                            <button class="um-btn um-btn-primary um-btn-xs" @onclick:stopPropagation="true" @onclick='() => SetStatusAsync(c3, "Approved")' title="Approve">
-                                <i class="bi bi-check-circle" aria-hidden="true"></i> Approve
-                            </button>
-                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick='() => SetStatusAsync(c3, "Denied")' title="Deny">
-                                <i class="bi bi-x-circle" aria-hidden="true"></i>
-                            </button>
-                        }
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _showModel = true" title="Model impact">
-                            <i class="bi bi-calculator" aria-hidden="true"></i>
-                        </button>
-                    </div>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
+    <div class="cw-modal-backdrop" role="presentation" @onclick="CancelStatusUpdate"><div class="cw-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="cw-status-title" @onclick:stopPropagation="true"><div class="um-confirm-dialog"><div class="um-confirm-icon @(_pendingStatus == "Denied" || _pendingStatus == "Reversed" ? "um-confirm-icon--danger" : null)"><i class="bi @PendingStatusIcon" aria-hidden="true"></i></div><div class="um-confirm-title" id="cw-status-title">@PendingStatusTitle</div><div class="um-confirm-body">Mark clawback <strong>@_statusTarget.ReasonCode</strong> for <strong>@_statusTarget.Amount.ToString("C2")</strong> as <strong>@_pendingStatus</strong>?</div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelStatusUpdate" disabled="@_busy">Cancel</button><button type="button" class="um-btn @(_pendingStatus == "Denied" || _pendingStatus == "Reversed" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteStatusUpdateAsync" disabled="@_busy">@PendingStatusAction</button></div></div></div></div>
 }
+
+@if (_showModel)
+{
+    <div class="cw-modal-backdrop" role="presentation" @onclick="CloseModel"><div class="cw-modal cw-model-modal" role="dialog" aria-modal="true" aria-labelledby="cw-model-title" @onclick:stopPropagation="true"><div class="um-modal-header"><i class="bi bi-calculator" aria-hidden="true"></i><span id="cw-model-title">Clawback Impact Modeler</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseModel"><i class="bi bi-x-lg"></i></button></div><div class="um-modal-body"><div class="cw-modal-intro"><span><i class="bi bi-shield-check" aria-hidden="true"></i> Payout impact model</span><p>Compare pending and approved recovery amounts against gross commission exposure and a three-month repayment scenario.</p></div><div class="cw-model-grid"><div class="cw-mg-row cw-mg-hdr"><span>Scenario</span><span>Gross Earned</span><span>Clawback</span><span>Net Payout</span><span>Impact</span></div><div class="cw-mg-row"><span>Current payout</span><span>@GrossEarned.ToString("C0")</span><span>—</span><span>@GrossEarned.ToString("C0")</span><span class="cw-pos">—</span></div><div class="cw-mg-row"><span>Pending clawbacks</span><span>@GrossEarned.ToString("C0")</span><span>@PendingClawbacks.ToString("C0")</span><span>@(GrossEarned - PendingClawbacks).ToString("C0")</span><span class="cw-neg">−@PendingClawbacks.ToString("C0")</span></div><div class="cw-mg-row"><span>3-month recovery</span><span>@GrossEarned.ToString("C0")</span><span>@(PendingClawbacks / 3m).ToString("C0") / mo</span><span>@(GrossEarned - (PendingClawbacks / 3m)).ToString("C0")</span><span class="cw-neg">−@((PendingClawbacks / 3m).ToString("C0"))/mo</span></div><div class="cw-mg-row"><span>Approved clawbacks</span><span>@GrossEarned.ToString("C0")</span><span>@ApprovedClawbacks.ToString("C0")</span><span>@(GrossEarned - ApprovedClawbacks).ToString("C0")</span><span class="cw-neg">−@ApprovedClawbacks.ToString("C0")</span></div></div><div class="cw-model-note">Values are modeled from synchronized commission clawback data. Final amounts are applied during payout and statement workflows.</div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseModel">Close</button><button type="button" class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/commissions/statements")'>Review Statements</button></div></div></div>
+}
+
+@if (_showForm)
+{
+    <div class="cw-modal-backdrop" role="presentation" @onclick="CloseForm"><div class="cw-modal cw-action-modal" role="dialog" aria-modal="true" aria-labelledby="cw-form-title" @onclick:stopPropagation="true"><div class="um-modal-header"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i><span id="cw-form-title">@(_editingId == Guid.Empty ? "Initiate Clawback" : "Edit Clawback")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button></div><EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync"><DataAnnotationsValidator /><div class="um-modal-body"><div class="cw-modal-intro"><span><i class="bi bi-shield-check" aria-hidden="true"></i> Recovery workflow</span><p>Create or update a commission recovery tied to an existing payee and transaction. Approval and reversal actions require confirmation.</p></div><div class="um-form-grid"><div class="um-field"><label>Reason Code <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.ReasonCode">@foreach (var r in _reasonCodes) { <option value="@r">@r</option> }</InputSelect><ValidationMessage For="() => _form.ReasonCode" class="text-danger" /></div><div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.StatusCode">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div><div class="um-field"><label>Payee</label><InputSelect class="form-select" @bind-Value="_form.PayeeId"><option value="">Auto-select payee</option>@foreach (var payee in _payees) { <option value="@payee.PayeeId">@PayeeLabel(payee)</option> }</InputSelect></div><div class="um-field"><label>Transaction</label><InputSelect class="form-select" @bind-Value="_form.OriginalTransactionId"><option value="">Auto-select transaction</option>@foreach (var tx in _transactions) { <option value="@tx.TransactionId">@TransactionLabel(tx)</option> }</InputSelect></div><div class="um-field"><label>Clawback Date <span class="text-danger">*</span></label><InputDate class="form-control" @bind-Value="_form.ClawbackDate" /><ValidationMessage For="() => _form.ClawbackDate" class="text-danger" /></div><div class="um-field"><label>Amount <span class="text-danger">*</span></label><InputNumber class="form-control" @bind-Value="_form.Amount" /><ValidationMessage For="() => _form.Amount" class="text-danger" /></div><div class="um-field um-field--full"><label>Notes</label><InputTextArea class="form-control" rows="3" @bind-Value="_form.Notes" /><ValidationMessage For="() => _form.Notes" class="text-danger" /></div><div class="um-field um-field--full cw-clawback-preview"><span>Recovery preview</span><strong>@_form.Amount.ToString("C2")</strong><small>@_form.ReasonCode · @_form.StatusCode · @(_form.ClawbackDate.ToString("MMM d, yyyy"))</small></div>@if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }</div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editingId == Guid.Empty ? "Initiate Clawback" : "Save Changes")</button></div></EditForm></div></div>
+}
+
+<div class="cw-enterprise-page">
+    <section class="cw-header"><div class="cw-header-left"><div class="cw-lob-icon"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i></div><div class="cw-header-info"><div class="cw-title-row"><h1 class="cw-page-title">Commission Clawbacks</h1><span class="cw-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live recovery data</span><span class="cw-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span></div><div class="cw-sub-row"><span>Review, approve, deny, reverse, and model commission recovery impact.</span><span class="cw-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span><span class="cw-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span></div></div></div><div class="cw-header-actions"><button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions2")'><i class="bi bi-cash-coin" aria-hidden="true"></i> Commissions</button><button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat cw-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button><button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Initiate Clawback</button></div></section>
+
+    <section class="cw-kpi-strip" aria-label="Clawback metrics">@foreach (var kpi in Kpis) { <button type="button" class="@KpiClass(kpi)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)"><span class="cw-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span><span class="cw-kpi-copy"><span class="cw-kpi-label">@kpi.Label</span><span class="cw-kpi-value">@kpi.Value</span><span class="cw-kpi-caption">@kpi.Caption</span></span></button> }</section>
+
+    <section class="cw-workflow-strip" aria-label="Clawback workflow shortcuts"><button type="button" class="cw-workflow-card cw-wf-create" @onclick="OpenCreate"><span class="cw-workflow-icon"><i class="bi bi-plus-circle" aria-hidden="true"></i></span><span class="cw-workflow-content"><strong>1</strong><span>Initiate</span><small>Create recovery.</small></span></button><button type="button" class="cw-workflow-card cw-wf-model" @onclick="OpenModel"><span class="cw-workflow-icon"><i class="bi bi-calculator" aria-hidden="true"></i></span><span class="cw-workflow-content"><strong>2</strong><span>Model</span><small>Impact payout.</small></span></button><button type="button" class="cw-workflow-card cw-wf-statements" @onclick='() => Nav.NavigateTo("/commissions/statements")'><span class="cw-workflow-icon"><i class="bi bi-file-earmark-text" aria-hidden="true"></i></span><span class="cw-workflow-content"><strong>3</strong><span>Statements</span><small>Reconcile.</small></span></button><button type="button" class="cw-workflow-card cw-wf-exceptions" @onclick='() => Nav.NavigateTo("/commissions/exceptions2")'><span class="cw-workflow-icon"><i class="bi bi-exclamation-circle" aria-hidden="true"></i></span><span class="cw-workflow-content"><strong>4</strong><span>Exceptions</span><small>Resolve blockers.</small></span></button><button type="button" class="cw-workflow-card cw-wf-forecast" @onclick='() => Nav.NavigateTo("/commissions/forecast2")'><span class="cw-workflow-icon"><i class="bi bi-graph-up" aria-hidden="true"></i></span><span class="cw-workflow-content"><strong>5</strong><span>Forecast</span><small>Compare accrual.</small></span></button><button type="button" class="cw-workflow-card cw-wf-planner" @onclick='() => Nav.NavigateTo("/commissions/planner")'><span class="cw-workflow-icon"><i class="bi bi-calculator" aria-hidden="true"></i></span><span class="cw-workflow-content"><strong>6</strong><span>Planner</span><small>What-if model.</small></span></button></section>
+
+    <section class="cw-enterprise-search" aria-label="Clawback filters"><div class="cw-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div><div class="cw-search-body"><label for="cw-search">Search clawbacks</label><input id="cw-search" class="cw-search-input" type="search" placeholder="Search reason, status, payee, transaction, notes..." @bind="SearchFilter" @bind:event="oninput" /><span class="cw-search-hint">Filters apply instantly across synchronized clawback data.</span></div><select class="cw-filter-select" @bind="ReasonFilter" aria-label="Reason filter"><option value="">All reasons</option>@foreach (var reason in _reasonCodes) { <option value="@reason">@reason</option> }</select><select class="cw-filter-select" @bind="StatusFilter" aria-label="Status filter"><option value="">All statuses</option>@foreach (var status in _statuses) { <option value="@status">@status</option> }</select><div class="cw-search-result"><strong>@_filtered.Count</strong><span>matches</span></div></section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError)) { <div class="alert alert-danger cw-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div> }
+
+    <section class="cw-content-layout"><div class="cw-grid-wrap"><div class="cw-grid-toolbar"><div><strong>Clawback register</strong><span>@ActiveFilterText</span></div><div class="cw-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ApproveSelected" disabled="@(!CanApproveSelected)"><i class="bi bi-check2-circle" aria-hidden="true"></i> Approve</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="DenySelected" disabled="@(!CanDenySelected)"><i class="bi bi-x-circle" aria-hidden="true"></i> Deny</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button></div></div>
+        @if (_loading) { <div class="cw-loading"><i class="bi bi-arrow-repeat cw-spin" aria-hidden="true"></i><strong>Loading clawbacks...</strong><span>Syncing schema, seed data, payees, transactions, and recovery records.</span></div> }
+        else if (!_filtered.Any()) { <div class="cw-empty-state"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i><strong>No clawbacks found</strong><span>Adjust filters or initiate a new commission recovery.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">Initiate Clawback</button></div> }
+        else { <div class="cw-table-scroll"><table class="cw-table"><thead><tr><th>Date</th><th>Reason</th><th>Payee</th><th>Transaction</th><th class="cw-number">Original</th><th class="cw-number">Clawback</th><th>Status</th><th>Approved</th><th class="cw-actions-col">Actions</th></tr></thead><tbody>@foreach (var item in PagedItems) { <tr class="@RowClass(item)" @onclick="() => SelectClawback(item)"><td>@item.ClawbackDate.ToString("MMM d, yyyy")</td><td><span class="cw-reason-chip @ReasonCss(item.ReasonCode)">@item.ReasonCode</span></td><td><div class="cw-payee-cell"><strong>@item.PayeeTypeCode</strong><span>@ShortId(item.PayeeId)</span></div></td><td><div class="cw-payee-cell"><strong>@item.SourceEntityName</strong><span>@ShortId(item.OriginalTransactionId)</span></div></td><td class="cw-number">@item.OriginalCommissionAmount.ToString("C0")</td><td class="cw-number cw-risk">@item.Amount.ToString("C0")</td><td><span class="cw-status-chip @StatusCss(item.StatusCode)">@item.StatusCode</span></td><td>@(item.ApprovedDateUtc?.ToLocalTime().ToString("MMM d, yyyy") ?? "—")</td><td><div class="cw-row-acts"><button type="button" class="um-btn um-btn-primary um-btn-xs" title="Inspect" @onclick:stopPropagation="true" @onclick="() => SelectClawback(item)"><i class="bi bi-layout-sidebar-inset" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Approve" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Approved")' disabled="@(item.StatusCode == "Approved")"><i class="bi bi-check2-circle" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Model" @onclick:stopPropagation="true" @onclick="OpenModel"><i class="bi bi-calculator" aria-hidden="true"></i></button></div></td></tr> }</tbody></table></div><div class="cw-pager"><span>Showing @PageStart-@PageEnd of @_filtered.Count</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button><span>Page @_page of @TotalPages</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button></div></div> }
+    </div><aside class="cw-detail-panel" aria-label="Selected clawback detail">@if (_selected is null) { <div class="cw-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a clawback</strong><span>Choose a row to inspect recovery details, approval workflow, transaction context, and payout impact.</span></div> } else { <div class="cw-detail-head"><div><span class="cw-detail-eyebrow"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Recovery detail</span><h2>@_selected.ReasonCode</h2><div class="cw-detail-meta"><span>@_selected.ClawbackDate.ToString("MMM d, yyyy")</span><span class="cw-status-chip @StatusCss(_selected.StatusCode)">@_selected.StatusCode</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div><div class="cw-detail-body"><div class="cw-impact-card"><span>Recovery amount</span><strong>@_selected.Amount.ToString("C2")</strong><small>@((_selected.OriginalCommissionAmount <= 0 ? 0 : (_selected.Amount / _selected.OriginalCommissionAmount) * 100m).ToString("N1"))% of original commission</small></div><div class="cw-detail-summary"><div class="cw-meta-row"><span class="cw-meta-lbl">Payee</span><span class="cw-meta-val">@_selected.PayeeName</span></div><div class="cw-meta-row"><span class="cw-meta-lbl">Transaction</span><span class="cw-meta-val">@_selected.TransactionReference</span></div><div class="cw-meta-row"><span class="cw-meta-lbl">Original Commission</span><span class="cw-meta-val">@_selected.OriginalCommissionAmount.ToString("C2")</span></div><div class="cw-meta-row"><span class="cw-meta-lbl">Approved</span><span class="cw-meta-val">@(_selected.ApprovedDateUtc?.ToLocalTime().ToString("g") ?? "Not approved")</span></div></div><div class="cw-note-card"><span><i class="bi bi-card-text" aria-hidden="true"></i> Workflow notes</span><p>@(string.IsNullOrWhiteSpace(_selected.Notes) ? "No clawback notes have been captured." : _selected.Notes)</p></div><div class="cw-detail-actions"><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenModel"><i class="bi bi-calculator" aria-hidden="true"></i> Model</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, "Approved")' disabled="@(_selected.StatusCode == "Approved")"><i class="bi bi-check2-circle" aria-hidden="true"></i> Approve</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, "Denied")' disabled="@(_selected.StatusCode == "Denied")"><i class="bi bi-x-circle" aria-hidden="true"></i> Deny</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, "Reversed")' disabled="@(_selected.StatusCode == "Reversed")"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reverse</button></div></div> }</aside></section>
+</div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
+    private const int PageSize = 12;
     private Guid _tenantId;
-    private string? _searchTerm;
-    private string _filterStatus = "", _filterReason = "";
-    private bool _showNew, _showModel, _saving;
-    private string? _formError;
+    private Guid _tenantAdminUserId;
+    private List<CommissionClawbackDto> _items = [];
+    private List<CommissionClawbackDto> _filtered = [];
+    private List<CommissionPayeeDto> _payees = [];
+    private List<CommissionTransactionDto> _transactions = [];
+    private CommissionClawbackDto? _selected;
+    private CommissionClawbackDto? _statusTarget;
     private ClawbackForm _form = new();
-    private EditContext _editContext = default!;
-    private SfToast _toast = default!;
+    private Guid _editingId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _reasonFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _pendingStatus;
+    private int _page = 1;
+    private bool _loading, _busy, _showForm, _showModel, _showStatusConfirm, _toastVisible, _saveAttempted;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError, _formError;
+    private readonly List<string> _reasonCodes = ["Policy Cancellation", "Non-Sufficient Funds", "Policy Rescission", "Fraud/Misrepresentation", "Carrier Chargeback", "Calculation Error", "Overpayment", "Other"];
+    private readonly List<string> _statuses = ["Pending", "Approved", "Denied", "Reversed"];
 
-    private readonly List<string> _reasonCodes =
-        ["Policy Cancellation","Non-Sufficient Funds","Policy Rescission","Fraud/Misrepresentation","Carrier Chargeback","Calculation Error","Overpayment","Other"];
+    private IEnumerable<CommissionClawbackDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private decimal PendingClawbacks => _items.Where(x => x.StatusCode == "Pending").Sum(x => x.Amount);
+    private decimal ApprovedClawbacks => _items.Where(x => x.StatusCode == "Approved").Sum(x => x.Amount);
+    private decimal GrossEarned => _transactions.Sum(x => x.CommissionAmount) + _items.Sum(x => x.Amount);
+    private bool CanApproveSelected => _selected is not null && _selected.StatusCode != "Approved";
+    private bool CanDenySelected => _selected is not null && _selected.StatusCode != "Denied";
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All commission clawbacks" : $"Filtered by {_kpiFilter}";
+    private string PendingStatusIcon => _pendingStatus switch { "Approved" => "bi-check2-circle", "Denied" => "bi-x-circle", "Reversed" => "bi-arrow-counterclockwise", _ => "bi-arrow-repeat" };
+    private string PendingStatusTitle => _pendingStatus switch { "Approved" => "Approve Clawback", "Denied" => "Deny Clawback", "Reversed" => "Reverse Clawback", _ => "Update Clawback" };
+    private string PendingStatusAction => _pendingStatus switch { "Approved" => "Approve", "Denied" => "Deny", "Reversed" => "Reverse", _ => "Update" };
+    private IReadOnlyList<KpiModel> Kpis => [new("all", "Clawbacks", _items.Count.ToString("N0"), "All records", "bi-arrow-counterclockwise", "cw-ki-blue"), new("pending", "Pending", _items.Count(x => x.StatusCode == "Pending").ToString("N0"), "Needs review", "bi-hourglass", "cw-ki-amber"), new("approved", "Approved", _items.Count(x => x.StatusCode == "Approved").ToString("N0"), "Applied recovery", "bi-check2-circle", "cw-ki-green"), new("denied", "Denied", _items.Count(x => x.StatusCode == "Denied").ToString("N0"), "Rejected", "bi-x-circle", "cw-ki-gray"), new("pendingAmount", "Pending $", PendingClawbacks.ToString("C0"), "Recovery exposure", "bi-currency-dollar", "cw-ki-amber"), new("approvedAmount", "Approved $", ApprovedClawbacks.ToString("C0"), "Payout offset", "bi-cash-stack", "cw-ki-red")];
+    private string SearchFilter { get => _searchTerm; set { _searchTerm = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
+    private string ReasonFilter { get => _reasonFilter; set { _reasonFilter = value; ApplyFilters(resetPage: true); } }
 
-    private List<CommissionClawbackDto>? _items;
-    private decimal GrossEarned => (_items ?? []).Sum(x => x.Amount) + 14500m;
-    private decimal PendingClawbacks => (_items ?? []).Where(x => x.StatusCode == "Pending").Sum(x => x.Amount);
-    private decimal ApprovedClawbacks => (_items ?? []).Where(x => x.StatusCode == "Approved").Sum(x => x.Amount);
-
-    private IEnumerable<CommissionClawbackDto> FilteredItems => (_items ?? []).Where(x =>
-        (string.IsNullOrEmpty(_filterStatus) || x.StatusCode == _filterStatus) &&
-        (string.IsNullOrEmpty(_filterReason) || x.ReasonCode == _filterReason));
-
-    protected override async Task OnInitializedAsync()
-    {
-        await ResolveCurrentUserContextAsync();
-        _editContext = new(_form);
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Commissions","/commissions"), new("Clawbacks",""));
-        await LoadAsync();
-    }
-
-    private async Task LoadAsync()
-    {
-        var result = await Api.SearchCommissionClawbacksAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? [];
-    }
-
-    async Task InitiateAsync()
-    {
-        if (!_editContext.Validate()) return;
-        _saving = true;
-        try
-        {
-            var notes = string.Join("\n", new[] { _form.Notes, string.IsNullOrWhiteSpace(_form.PayeeNote) ? null : $"Payee note: {_form.PayeeNote}", string.IsNullOrWhiteSpace(_form.Reference) ? null : $"Reference: {_form.Reference}" }.Where(x => !string.IsNullOrWhiteSpace(x)));
-            await Api.CreateCommissionClawbackAsync(new CreateCommissionClawbackRequest { TenantId = _tenantId, ClawbackDate = DateOnly.FromDateTime(DateTime.UtcNow), Amount = _form.Amount, ReasonCode = _form.ReasonCode, Notes = notes, StatusCode = "Pending" });
-            _showNew = false;
-            await LoadAsync();
-            await _toast.ShowAsync(new ToastModel { Content = "Clawback initiated.", CssClass = "e-toast-warning" });
-        }
-        catch (Exception ex)
-        {
-            _formError = $"Save failed: {ex.Message}";
-            await _toast.ShowAsync(new ToastModel { Content = _formError, CssClass = "e-toast-danger" });
-        }
-        finally { _saving = false; }
-    }
-
-    private void OpenNew() { _form = new(); _editContext = new(_form); _formError = null; _showNew = true; }
-    private void CloseNew() => _showNew = false;
-
-    private async Task SetStatusAsync(CommissionClawbackDto item, string status)
-    {
-        try
-        {
-            await Api.UpdateCommissionClawbackAsync(item.ClawbackId, new UpdateCommissionClawbackRequest { TenantId = _tenantId, ClawbackId = item.ClawbackId, PayeeId = item.PayeeId, OriginalTransactionId = item.OriginalTransactionId, ClawbackDate = item.ClawbackDate, Amount = item.Amount, ReasonCode = item.ReasonCode, Notes = item.Notes, StatusCode = status, ApprovedDateUtc = status == "Approved" ? DateTime.UtcNow : item.ApprovedDateUtc });
-            await LoadAsync();
-            await _toast.ShowAsync(new ToastModel { Content = $"Clawback {status.ToLowerInvariant()}.", CssClass = status == "Approved" ? "e-toast-success" : "e-toast-warning" });
-        }
-        catch (Exception ex)
-        {
-            await _toast.ShowAsync(new ToastModel { Content = $"Update failed: {ex.Message}", CssClass = "e-toast-danger" });
-        }
-    }
-
-    static string Fmt(decimal? v) => v.HasValue ? v.Value.ToString("C0") : "$0";
-
-    private sealed class ClawbackForm
-    {
-        [Required, StringLength(100)] public string ReasonCode { get; set; } = "Policy Cancellation";
-        [StringLength(200)] public string? PayeeNote { get; set; }
-        [Range(0.01, 100000000)] public decimal Amount { get; set; }
-        [StringLength(100)] public string? Reference { get; set; }
-        [StringLength(1000)] public string? Notes { get; set; }
-    }
-
-    RenderFragment CwKpi(string icon, string label, string val, string color) => __builder =>
-    {
-        <div class="cw-kpi-card @color">
-            <i class="bi @icon cw-kpi-icon" aria-hidden="true"></i>
-            <div><div class="cw-kpi-val">@val</div><div class="cw-kpi-lbl">@label</div></div>
-        </div>
-    };
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
-    }
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Commissions", "/commissions2"), new("Clawbacks", "/commissions/clawbacks")); await LoadAsync(); }
+    private async Task LoadAsync() { _loading = true; _loadError = null; try { await Api.EnsureCommissionSeedAsync(_tenantId, _tenantAdminUserId); await Api.EnsureCommissionClawbacksSeedAsync(_tenantId); var clawbacks = await Api.SearchCommissionClawbacksAsync(_tenantId, string.Empty); var payees = await Api.SearchCommissionPayeesAsync(_tenantId, string.Empty); var tx = await Api.SearchCommissionTransactionsAsync(_tenantId, string.Empty); _items = clawbacks?.Items.OrderBy(x => StatusSort(x.StatusCode)).ThenByDescending(x => x.ClawbackDate).ToList() ?? []; _payees = payees?.Items.OrderBy(x => x.PayeeTypeCode).ToList() ?? []; _transactions = tx?.Items.OrderByDescending(x => x.TransactionDate).ToList() ?? []; ApplyFilters(resetPage: true); EnsureSelectedStillVisible(); } catch (Exception ex) { _loadError = $"Commission clawbacks failed to load: {ex.Message}"; ShowToast(_loadError, "danger"); _items = []; _filtered = []; } finally { _loading = false; } }
+    private void ApplyFilters(bool resetPage) { IEnumerable<CommissionClawbackDto> query = _items; if (!string.IsNullOrWhiteSpace(_searchTerm)) { var term = _searchTerm.Trim(); query = query.Where(x => Contains(x.ReasonCode, term) || Contains(x.StatusCode, term) || Contains(x.Notes, term) || Contains(x.PayeeName, term) || Contains(x.PayeeTypeCode, term) || Contains(x.TransactionReference, term) || Contains(x.SourceEntityName, term)); } if (!string.IsNullOrWhiteSpace(_reasonFilter)) query = query.Where(x => x.ReasonCode == _reasonFilter); if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.StatusCode == _statusFilter); query = _kpiFilter switch { "pending" => query.Where(x => x.StatusCode == "Pending"), "approved" => query.Where(x => x.StatusCode == "Approved"), "denied" => query.Where(x => x.StatusCode == "Denied"), "pendingAmount" => query.Where(x => x.StatusCode == "Pending"), "approvedAmount" => query.Where(x => x.StatusCode == "Approved"), _ => query }; _filtered = query.OrderBy(x => StatusSort(x.StatusCode)).ThenByDescending(x => x.ClawbackDate).ToList(); if (resetPage) _page = 1; if (_page > TotalPages) _page = TotalPages; }
+    private void SetKpiFilter(string filter) { _kpiFilter = _kpiFilter == filter && filter != "all" ? "all" : filter; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _searchTerm = string.Empty; _statusFilter = string.Empty; _reasonFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); ShowToast("Clawback filters reset.", "info"); }
+    private void SelectClawback(CommissionClawbackDto item) => _selected = item;
+    private void OpenCreate() { _editingId = Guid.Empty; _saveAttempted = false; _formError = null; _form = new ClawbackForm { ReasonCode = "Policy Cancellation", StatusCode = "Pending", ClawbackDate = DateTime.Today, PayeeId = _payees.FirstOrDefault()?.PayeeId, OriginalTransactionId = _transactions.FirstOrDefault()?.TransactionId, Amount = Math.Min(1000, Math.Max(250, _transactions.FirstOrDefault()?.CommissionAmount ?? 1000)) }; _showForm = true; }
+    private void OpenEdit(CommissionClawbackDto item) { _editingId = item.ClawbackId; _saveAttempted = false; _formError = null; _form = new ClawbackForm { PayeeId = item.PayeeId, OriginalTransactionId = item.OriginalTransactionId, ClawbackDate = item.ClawbackDate.ToDateTime(TimeOnly.MinValue), Amount = item.Amount, ReasonCode = item.ReasonCode, StatusCode = item.StatusCode, Notes = item.Notes }; _showForm = true; }
+    private void CloseForm() { if (_busy) return; _showForm = false; _saveAttempted = false; }
+    private void OpenModel() => _showModel = true;
+    private void CloseModel() => _showModel = false;
+    private async Task SaveAsync() { _saveAttempted = true; if (!ValidateForm()) return; _busy = true; _formError = null; var savedId = _editingId; try { if (_editingId == Guid.Empty) { savedId = await Api.CreateCommissionClawbackAsync(ToCreateRequest()); ShowToast("Commission clawback initiated.", "success"); } else { await Api.UpdateCommissionClawbackAsync(_editingId, ToUpdateRequest()); ShowToast("Commission clawback updated.", "success"); } _showForm = false; await LoadAsync(); _selected = _items.FirstOrDefault(x => x.ClawbackId == savedId) ?? _selected; } catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; ShowToast(_formError, "danger"); } finally { _busy = false; } }
+    private Task NotifyValidationAsync(EditContext _) { _saveAttempted = true; ShowToast("Please correct validation errors before saving.", "warning"); return Task.CompletedTask; }
+    private CreateCommissionClawbackRequest ToCreateRequest() => new() { TenantId = _tenantId, PayeeId = _form.PayeeId, CommissionResultId = SelectedCommissionResultId(), OriginalTransactionId = _form.OriginalTransactionId, ClawbackDate = DateOnly.FromDateTime(_form.ClawbackDate), Amount = _form.Amount, ReasonCode = _form.ReasonCode, Notes = _form.Notes, StatusCode = _form.StatusCode, ApprovedByUserId = _form.StatusCode == "Approved" ? _tenantAdminUserId : null, ApprovedDateUtc = _form.StatusCode == "Approved" ? DateTime.UtcNow : null, CreatedByUserId = _tenantAdminUserId };
+    private UpdateCommissionClawbackRequest ToUpdateRequest() => new() { TenantId = _tenantId, ClawbackId = _editingId, PayeeId = _form.PayeeId, CommissionResultId = SelectedCommissionResultId(), OriginalTransactionId = _form.OriginalTransactionId, ClawbackDate = DateOnly.FromDateTime(_form.ClawbackDate), Amount = _form.Amount, ReasonCode = _form.ReasonCode, Notes = _form.Notes, StatusCode = _form.StatusCode, ApprovedByUserId = _form.StatusCode == "Approved" ? _tenantAdminUserId : null, ApprovedDateUtc = _form.StatusCode == "Approved" ? DateTime.UtcNow : null, ModifiedByUserId = _tenantAdminUserId };
+    private void ApproveSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Approved"); }
+    private void DenySelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Denied"); }
+    private void ConfirmStatusUpdate(CommissionClawbackDto item, string status) { _statusTarget = item; _pendingStatus = status; _showStatusConfirm = true; }
+    private void CancelStatusUpdate() { if (_busy) return; _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; }
+    private async Task ExecuteStatusUpdateAsync() { if (_statusTarget is null || string.IsNullOrWhiteSpace(_pendingStatus)) return; _busy = true; var selectedId = _statusTarget.ClawbackId; try { await Api.UpdateCommissionClawbackAsync(_statusTarget.ClawbackId, new UpdateCommissionClawbackRequest { TenantId = _tenantId, ClawbackId = _statusTarget.ClawbackId, PayeeId = _statusTarget.PayeeId, CommissionResultId = _statusTarget.CommissionResultId, OriginalTransactionId = _statusTarget.OriginalTransactionId, ClawbackDate = _statusTarget.ClawbackDate, Amount = _statusTarget.Amount, ReasonCode = _statusTarget.ReasonCode, Notes = _statusTarget.Notes, StatusCode = _pendingStatus, ApprovedByUserId = _pendingStatus == "Approved" ? _tenantAdminUserId : _statusTarget.ApprovedByUserId, ApprovedDateUtc = _pendingStatus == "Approved" ? DateTime.UtcNow : _statusTarget.ApprovedDateUtc, ModifiedByUserId = _tenantAdminUserId }); ShowToast($"Clawback marked {_pendingStatus.ToLowerInvariant()}.", "success"); _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; await LoadAsync(); _selected = _items.FirstOrDefault(x => x.ClawbackId == selectedId) ?? _selected; } catch (Exception ex) { ShowToast($"Update failed: {ex.Message}", "danger"); } finally { _busy = false; } }
+    private async Task ExportAsync() { if (!_filtered.Any()) { ShowToast("No clawbacks are available to export.", "warning"); return; } var csv = new StringBuilder(); csv.AppendLine("ClawbackId,Date,Reason,Payee,Transaction,OriginalCommission,Amount,Status,ApprovedDate,Notes"); foreach (var item in _filtered) csv.AppendLine(string.Join(',', Csv(item.ClawbackId.ToString()), Csv(item.ClawbackDate.ToString("yyyy-MM-dd")), Csv(item.ReasonCode), Csv(item.PayeeName), Csv(item.TransactionReference), item.OriginalCommissionAmount, item.Amount, Csv(item.StatusCode), Csv(item.ApprovedDateUtc?.ToString("O") ?? string.Empty), Csv(item.Notes ?? string.Empty))); var bytes = Encoding.UTF8.GetBytes(csv.ToString()); await Js.InvokeVoidAsync("amsShell.downloadBase64", $"commission-clawbacks-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes)); ShowToast($"Exported {_filtered.Count:N0} clawbacks.", "success"); }
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() => _selected = _selected is null ? _filtered.FirstOrDefault() : _items.FirstOrDefault(x => x.ClawbackId == _selected.ClawbackId) ?? _filtered.FirstOrDefault();
+    private bool ValidateForm() { if (_form.Amount <= 0) { _formError = "Amount must be greater than zero."; ShowToast(_formError, "warning"); return false; } if (string.IsNullOrWhiteSpace(_form.ReasonCode)) { _formError = "Reason Code is required."; ShowToast(_formError, "warning"); return false; } return true; }
+    private string PayeeLabel(CommissionPayeeDto payee) => $"{payee.PayeeTypeCode} · {payee.SplitPercentage:N2}%";
+    private static string TransactionLabel(CommissionTransactionDto tx) => $"{tx.SourceEntityName} · {tx.CommissionAmount:C0}";
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private Guid? SelectedCommissionResultId() => _editingId == Guid.Empty ? null : _items.FirstOrDefault(x => x.ClawbackId == _editingId)?.CommissionResultId;
+    private static int StatusSort(string status) => status switch { "Pending" => 0, "Approved" => 1, "Denied" => 2, "Reversed" => 3, _ => 4 };
+    private static string StatusCss(string status) => $"cw-st-{status.ToLowerInvariant()}";
+    private static string ReasonCss(string reason) => $"cw-r-{reason.ToLowerInvariant().Replace("/", "-").Replace(" ", "-")}";
+    private static string ShortId(Guid id) => id == Guid.Empty ? "—" : id.ToString("N")[..8];
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private string KpiClass(KpiModel kpi) => $"cw-kpi-card {kpi.Tone} {(_kpiFilter == kpi.Filter ? "cw-kpi-active" : string.Empty)}";
+    private string RowClass(CommissionClawbackDto item) => $"cw-table-row {(_selected?.ClawbackId == item.ClawbackId ? "cw-table-row--selected" : string.Empty)}";
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter clawbacks by {Label}"; }
+    private sealed class ClawbackForm { public Guid? PayeeId { get; set; } public Guid? OriginalTransactionId { get; set; } [Required] public DateTime ClawbackDate { get; set; } = DateTime.Today; [Range(0.01, 100000000)] public decimal Amount { get; set; } [Required, StringLength(100)] public string ReasonCode { get; set; } = "Policy Cancellation"; [Required, StringLength(50)] public string StatusCode { get; set; } = "Pending"; [StringLength(1000)] public string? Notes { get; set; } }
 }

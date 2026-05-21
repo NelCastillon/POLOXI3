@@ -1,272 +1,218 @@
 @page "/marketing/segments"
 @namespace Ams.Web.Components.Pages
-@using Syncfusion.Blazor.QueryBuilder
+@using Ams.Application.Common.Dtos
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Audience Segments — AMS</PageTitle>
+<PageTitle>Audience Segments — AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="Audience Segments"
-               Subtitle="Build and manage targeted insurance audience segments for campaign personalization"
-               Icon="bi-pie-chart-fill">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/marketing/rules-engine")'>
-            <i class="bi bi-lightning-charge" aria-hidden="true"></i> Rules Engine
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Segment
-        </button>
-    </Actions>
-</AppPageHeader>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    <div class="mseg-toast mseg-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="mseg-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
 }
 
-<!-- KPI -->
-<div class="mks-kpi-strip">
-    <div class="mks-kpi-card"><div class="mks-kv">@_segments.Count</div><div class="mks-kl">Total Segments</div></div>
-    <div class="mks-kpi-card"><div class="mks-kv">@_segments.Sum(s => s.Count).ToString("N0")</div><div class="mks-kl">Total Contacts</div></div>
-    <div class="mks-kpi-card"><div class="mks-kv">@_segments.Count(s => s.IsDynamic)</div><div class="mks-kl">Dynamic Segments</div></div>
-    <div class="mks-kpi-card"><div class="mks-kv">@_segments.Count(s => !s.IsDynamic)</div><div class="mks-kl">Static Segments</div></div>
-</div>
-
-<!-- Segment cards -->
-<div class="mks-seg-grid position-relative">
-    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading segments…</span></div> }
-    @foreach (var seg in _segments)
-    {
-        <div class="mks-seg-card">
-            <div class="mks-seg-header">
-                <div class="mks-seg-icon @seg.ColorCss"><i class="bi @seg.Icon" aria-hidden="true"></i></div>
-                <div class="mks-seg-meta">
-                    <div class="mks-seg-name">@seg.Name</div>
-                    <span class="mks-seg-badge @(seg.IsDynamic ? "mks-dyn" : "mks-static")">@(seg.IsDynamic ? "Dynamic" : "Static")</span>
-                </div>
-            </div>
-            <div class="mks-seg-desc">@seg.Description</div>
-            <div class="mks-seg-stat">
-                <span class="mks-seg-cnt">@seg.Count.ToString("N0")</span>
-                <span class="mks-seg-cnt-lbl">contacts</span>
-                <span class="mks-seg-updated">Updated @seg.Updated.ToString("MMM d")</span>
-            </div>
-            <div class="mks-seg-rules">
-                @foreach (var rule in seg.Rules)
-                {
-                    <span class="mks-rule-chip">@rule</span>
-                }
-            </div>
-            <div class="mks-seg-footer">
-                <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo($"/marketing/campaigns/new")'>
-                    <i class="bi bi-megaphone" aria-hidden="true"></i> Use in Campaign
-                </button>
-                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(seg)">
-                    <i class="bi bi-pencil" aria-hidden="true"></i> Edit
-                </button>
-            </div>
-        </div>
-    }
-</div>
-
-<!-- Create segment dialog -->
-<SfDialog @bind-Visible="_showCreate" Width="720px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-pie-chart" aria-hidden="true"></i><span>New Audience Segment</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseCreate"><i class="bi bi-x-lg"></i></button></div>
-            <EditForm EditContext="_createEditContext">
+@if (_showForm)
+{
+    <div class="mseg-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="mseg-modal mseg-action-modal" role="dialog" aria-modal="true" aria-labelledby="mseg-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header"><i class="bi bi-pie-chart" aria-hidden="true"></i><span id="mseg-form-title">@(_editingId == Guid.Empty ? "Create Audience Segment" : "Edit Audience Segment")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
                 <DataAnnotationsValidator />
-                <div class="um-modal-body"><div class="um-form-grid">
-                <div class="um-field"><label>Segment Name <span class="text-danger">*</span></label>
-                    <InputText @bind-Value="_createForm.Name" class="um-input" placeholder="e.g. SMB No Workers Comp" />
-                    <ValidationMessage For="() => _createForm.Name" class="validation-message text-danger" />
-                </div>
-                <div class="um-field"><label>Segment Type</label>
-                    <InputSelect @bind-Value="_createForm.Type" class="um-input"><option>Dynamic</option><option>Static</option></InputSelect>
-                    <ValidationMessage For="() => _createForm.Type" class="validation-message text-danger" />
-                </div>
-                <div class="um-field um-field--full"><label>Description</label>
-                    <InputTextArea @bind-Value="_createForm.Description" class="um-input" rows="3" placeholder="Who is in this segment?" />
-                    <ValidationMessage For="() => _createForm.Description" class="validation-message text-danger" />
-                </div>
-                <div>
-                    <label class="mks-dlg-lbl">Segment Rules (Query Builder)</label>
-                    <div class="mks-qb-wrap">
-                        <SfQueryBuilder TValue="SegmentContact" @ref="_qb">
-                            <QueryBuilderColumns>
-                                <QueryBuilderColumn Field="AccountType"    Label="Account Type"     Type="Syncfusion.Blazor.QueryBuilder.ColumnType.String" />
-                                <QueryBuilderColumn Field="Status"         Label="Account Status"   Type="Syncfusion.Blazor.QueryBuilder.ColumnType.String" />
-                                <QueryBuilderColumn Field="PolicyCount"    Label="Policy Count"     Type="Syncfusion.Blazor.QueryBuilder.ColumnType.Number" />
-                                <QueryBuilderColumn Field="Lob"            Label="Line of Business" Type="Syncfusion.Blazor.QueryBuilder.ColumnType.String" />
-                                <QueryBuilderColumn Field="Premium"        Label="Annual Premium"   Type="Syncfusion.Blazor.QueryBuilder.ColumnType.Number" />
-                                <QueryBuilderColumn Field="LossRatio"      Label="Loss Ratio %"     Type="Syncfusion.Blazor.QueryBuilder.ColumnType.Number" />
-                                <QueryBuilderColumn Field="LastNps"        Label="NPS Score"        Type="Syncfusion.Blazor.QueryBuilder.ColumnType.Number" />
-                                <QueryBuilderColumn Field="DaysSinceContact" Label="Days Since Contact" Type="Syncfusion.Blazor.QueryBuilder.ColumnType.Number" />
-                                <QueryBuilderColumn Field="State"          Label="State"            Type="Syncfusion.Blazor.QueryBuilder.ColumnType.String" />
-                                <QueryBuilderColumn Field="ProducerName"   Label="Producer"         Type="Syncfusion.Blazor.QueryBuilder.ColumnType.String" />
-                            </QueryBuilderColumns>
-                        </SfQueryBuilder>
+                <div class="um-modal-body">
+                    <div class="mseg-modal-intro"><span><i class="bi bi-shield-check" aria-hidden="true"></i> Segment configuration</span><p>Define audience membership, rules, icon treatment, and contact counts for tenant-scoped marketing personalization.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Name <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.Name" /><ValidationMessage For="() => _form.Name" class="text-danger" /></div>
+                        <div class="um-field"><label>Type <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.Type"><option>Dynamic</option><option>Static</option></InputSelect><ValidationMessage For="() => _form.Type" class="text-danger" /></div>
+                        <div class="um-field"><label>Icon</label><InputSelect class="form-select" @bind-Value="_form.Icon"><option value="bi-pie-chart">Pie chart</option><option value="bi-building">Commercial</option><option value="bi-house">Household</option><option value="bi-briefcase">Business</option><option value="bi-star-fill">Promoters</option><option value="bi-shield-check">Coverage</option></InputSelect></div>
+                        <div class="um-field"><label>Color</label><InputSelect class="form-select" @bind-Value="_form.ColorCss"><option value="mseg-ic-blue">Blue</option><option value="mseg-ic-purple">Purple</option><option value="mseg-ic-amber">Amber</option><option value="mseg-ic-green">Green</option><option value="mseg-ic-red">Red</option><option value="mseg-ic-gold">Gold</option></InputSelect></div>
+                        <div class="um-field"><label>Contact Count</label><InputNumber class="form-control" @bind-Value="_form.ContactCount" /><ValidationMessage For="() => _form.ContactCount" class="text-danger" /></div>
+                        <div class="um-field"><label>Rule Mode</label><InputSelect class="form-select" @bind-Value="_form.RuleMode"><option>All</option><option>Any</option></InputSelect></div>
+                        <div class="um-field um-field--full"><label>Description</label><InputTextArea class="form-control" rows="3" @bind-Value="_form.Description" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Rules</label><InputTextArea class="form-control" rows="4" @bind-Value="_form.Rules" placeholder="Status = Active|Type = Commercial|Policies >= 1" /><ValidationMessage For="() => _form.Rules" class="text-danger" /></div>
                     </div>
                 </div>
-                @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
-                </div></div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@(_editingId == Guid.Empty ? "Create Segment" : "Save Changes")</button></div>
             </EditForm>
-            <div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="CloseCreate">Cancel</button><button class="um-btn um-btn-primary" @onclick="CommitCreateAsync" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Create</button></div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+    </div>
+}
 
-<!-- Edit segment dialog -->
-<SfDialog @bind-Visible="_showEdit" Width="640px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-pencil-square" aria-hidden="true"></i><span>Edit Audience Segment</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showEdit = false"><i class="bi bi-x-lg"></i></button></div>
-            <EditForm EditContext="_editEditContext">
-                <DataAnnotationsValidator />
-                <div class="um-modal-body"><div class="um-form-grid">
-                    <div class="um-field"><label>Segment Name <span class="text-danger">*</span></label><InputText @bind-Value="_editForm.Name" class="um-input" /><ValidationMessage For="() => _editForm.Name" class="validation-message text-danger" /></div>
-                    <div class="um-field"><label>Segment Type</label><InputSelect @bind-Value="_editForm.Type" class="um-input"><option>Dynamic</option><option>Static</option></InputSelect><ValidationMessage For="() => _editForm.Type" class="validation-message text-danger" /></div>
-                    <div class="um-field"><label>Contact Count</label><InputNumber @bind-Value="_editForm.ContactCount" class="um-input" /><ValidationMessage For="() => _editForm.ContactCount" class="validation-message text-danger" /></div>
-                    <div class="um-field um-field--full"><label>Description</label><InputTextArea @bind-Value="_editForm.Description" class="um-input" rows="3" /><ValidationMessage For="() => _editForm.Description" class="validation-message text-danger" /></div>
-                    <div class="um-field um-field--full"><label>Rules</label><InputTextArea @bind-Value="_editForm.Rules" class="um-input" rows="3" /><ValidationMessage For="() => _editForm.Rules" class="validation-message text-danger" /></div>
-                    @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
+@if (_showConfirm)
+{
+    <div class="mseg-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="mseg-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="mseg-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @ConfirmIconTone"><i class="bi @ConfirmIcon"></i></div>
+                <div class="um-confirm-title" id="mseg-confirm-title">@ConfirmTitle</div>
+                <div class="um-confirm-body">@((MarkupString)ConfirmBody)</div>
+                <div class="mseg-config-panel"><span class="mseg-config-eyebrow"><i class="bi bi-sliders" aria-hidden="true"></i> Configuration required</span><div class="mseg-config-grid">
+                    @if (_confirmAction == ConfirmAction.Recalculate)
+                    {
+                        <label><span>Refresh mode</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="CountsOnly">Counts only</option><option value="FullRules">Full rules evaluation</option></select></label>
+                        <label><span>Audit note</span><input class="form-control" @bind="_actionConfig.Note" placeholder="Reason for recalculation" /></label>
+                        <label class="mseg-config-check"><input type="checkbox" @bind="_actionConfig.NotifyStakeholders" /> Notify campaign owners</label>
+                        <label class="mseg-config-check"><input type="checkbox" @bind="_actionConfig.RefreshAfterAction" /> Refresh after recalculation</label>
+                    }
+                    else if (_confirmAction == ConfirmAction.Archive)
+                    {
+                        <label class="mseg-config-full"><span>Reason</span><input class="form-control" @bind="_actionConfig.Reason" placeholder="Document why this segment is being archived" /></label>
+                        <label class="mseg-config-check"><input type="checkbox" @bind="_actionConfig.ExportBeforeAction" /> Export segment before archive</label>
+                        <label class="mseg-config-check"><input type="checkbox" @bind="_actionConfig.NotifyStakeholders" /> Notify stakeholders</label>
+                    }
+                    else if (_confirmAction == ConfirmAction.Duplicate)
+                    {
+                        <label class="mseg-config-full"><span>New segment label</span><input class="form-control" @bind="_actionConfig.NewName" /></label>
+                        <label><span>Starting type</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="Same">Same as source</option><option value="Static">Static review</option><option value="Dynamic">Dynamic review</option></select></label>
+                        <label class="mseg-config-check"><input type="checkbox" @bind="_actionConfig.CopyRules" /> Copy rules</label>
+                    }
+                    else if (_confirmAction == ConfirmAction.Sync)
+                    {
+                        <label><span>Seed mode</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="MissingOnly">Add missing seed data only</option><option value="RepairSchema">Repair schema and seed data</option></select></label>
+                        <label class="mseg-config-check"><input type="checkbox" @bind="_actionConfig.RefreshAfterAction" /> Refresh after sync</label>
+                    }
+                    else if (_confirmAction == ConfirmAction.Export)
+                    {
+                        <label><span>Export scope</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="Filtered">Current filtered results</option><option value="All">All active segments</option></select></label>
+                        <label class="mseg-config-check"><input type="checkbox" @bind="_actionConfig.IncludeRules" /> Include rule definitions</label>
+                    }
                 </div></div>
-            </EditForm>
-            <div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="() => _showEdit = false">Cancel</button><button class="um-btn um-btn-primary" @onclick="CommitEditAsync" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Save</button></div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_busy">Cancel</button><button type="button" class="um-btn @ConfirmButtonClass" @onclick="ExecuteConfirmAsync" disabled="@_busy">@ConfirmButtonText</button></div>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="mseg-enterprise-page">
+    <section class="mseg-header">
+        <div class="mseg-header-left"><div class="mseg-lob-icon"><i class="bi bi-pie-chart-fill" aria-hidden="true"></i></div><div class="mseg-header-info"><div class="mseg-title-row"><h1 class="mseg-page-title">Audience Segments</h1><span class="mseg-status-pill"><i class="bi bi-database-check"></i> Live marketing data</span><span class="mseg-status-pill"><i class="bi bi-shield-lock"></i> Tenant scoped</span></div><div class="mseg-sub-row"><span>Build targeted insurance audiences for campaigns, email blasts, landing pages, and retention workflows.</span><span class="mseg-sub-chip"><i class="bi bi-arrow-repeat"></i> Seed sync enabled</span><span class="mseg-sub-chip"><i class="bi bi-check2-circle"></i> @_filtered.Count active matches</span></div></div></div>
+        <div class="mseg-header-actions"><button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat mseg-spin" : "bi-arrow-clockwise")"></i> Refresh</button><button type="button" class="um-btn um-btn-ghost" @onclick="ConfigureSync" disabled="@_busy"><i class="bi bi-cloud-arrow-down"></i> Sync Seed</button><button type="button" class="um-btn um-btn-ghost" @onclick="ConfigureExport" disabled="@(!_filtered.Any())"><i class="bi bi-download"></i> Export</button><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle"></i> New Segment</button></div>
+    </section>
+
+    <section class="mseg-kpi-strip" aria-label="Audience segment metrics">@foreach (var kpi in Kpis) { <button type="button" class="mseg-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "mseg-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)"><span class="mseg-kpi-icon"><i class="bi @kpi.Icon"></i></span><span class="mseg-kpi-copy"><span class="mseg-kpi-label">@kpi.Label</span><span class="mseg-kpi-value">@kpi.Value</span><span class="mseg-kpi-caption">@kpi.Caption</span></span></button> }</section>
+
+    <section class="mseg-workflow-strip" aria-label="Marketing workflow shortcuts">
+        <button type="button" class="mseg-workflow-card mseg-wf-campaign" @onclick='() => Nav.NavigateTo("/marketing/campaigns")'><span class="mseg-workflow-icon"><i class="bi bi-megaphone"></i></span><span class="mseg-workflow-content"><strong>1</strong><span>Campaigns</span><small>Use segments in journeys.</small></span></button>
+        <button type="button" class="mseg-workflow-card mseg-wf-builder" @onclick='() => Nav.NavigateTo("/marketing/campaigns/new")'><span class="mseg-workflow-icon"><i class="bi bi-magic"></i></span><span class="mseg-workflow-content"><strong>2</strong><span>Builder</span><small>Compose targeted sends.</small></span></button>
+        <button type="button" class="mseg-workflow-card mseg-wf-email" @onclick='() => Nav.NavigateTo("/marketing/email")'><span class="mseg-workflow-icon"><i class="bi bi-envelope-paper"></i></span><span class="mseg-workflow-content"><strong>3</strong><span>Email</span><small>Activate audiences.</small></span></button>
+        <button type="button" class="mseg-workflow-card mseg-wf-pages" @onclick='() => Nav.NavigateTo("/marketing/landing-pages")'><span class="mseg-workflow-icon"><i class="bi bi-layout-text-window"></i></span><span class="mseg-workflow-content"><strong>4</strong><span>Pages</span><small>Match destinations.</small></span></button>
+        <button type="button" class="mseg-workflow-card mseg-wf-rules" @onclick='() => Nav.NavigateTo("/marketing/rules-engine")'><span class="mseg-workflow-icon"><i class="bi bi-lightning-charge"></i></span><span class="mseg-workflow-content"><strong>5</strong><span>Rules</span><small>Advanced logic.</small></span></button>
+    </section>
+
+    <section class="mseg-enterprise-search" aria-label="Audience segment filters"><div class="mseg-search-icon"><i class="bi bi-search"></i></div><div class="mseg-search-body"><label for="mseg-search">Search segments</label><input id="mseg-search" class="mseg-search-input" type="search" placeholder="Search name, description, rules..." @bind="SearchFilter" @bind:event="oninput" /><span class="mseg-search-hint">Filters apply instantly across synchronized audience segment data.</span></div><select class="mseg-filter-select" @bind="TypeFilter"><option value="">All types</option><option value="dynamic">Dynamic</option><option value="static">Static</option></select><select class="mseg-filter-select" @bind="VolumeFilter"><option value="">Volume: all</option><option value="large">1,000+ contacts</option><option value="small">Under 1,000</option><option value="empty">No contacts</option></select><select class="mseg-filter-select" @bind="FreshnessFilter"><option value="">Freshness: all</option><option value="fresh">Updated 7 days</option><option value="stale">Stale 30 days</option></select><div class="mseg-search-result"><strong>@_filtered.Count</strong><span>matches</span></div></section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError)) { <div class="alert alert-danger mseg-load-error" style="border-left:4px solid #dc3545; animation:um-shake .3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div> }
+
+    <section class="mseg-content-layout">
+        <div class="mseg-grid-wrap"><div class="mseg-grid-toolbar"><div><strong>Audience segment command center</strong><span>@ActiveFilterText</span></div><div class="mseg-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/marketing/rules-engine")'><i class="bi bi-lightning-charge"></i> Rules</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle"></i> Add</button></div></div>
+            @if (_loading) { <div class="mseg-loading"><i class="bi bi-arrow-repeat mseg-spin"></i><strong>Loading audience segments...</strong><span>Syncing schema, seed data, dynamic rules, and contact counts.</span></div> }
+            else if (!_filtered.Any()) { <div class="mseg-empty-state"><i class="bi bi-inbox"></i><strong>No audience segments found</strong><span>Adjust filters or create a DB-backed marketing segment.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">New Segment</button></div> }
+            else { <div class="mseg-table-scroll"><table class="mseg-table"><thead><tr><th>Segment</th><th>Type</th><th class="mseg-number">Contacts</th><th>Rules</th><th>Updated</th><th class="mseg-actions-col">Actions</th></tr></thead><tbody>@foreach (var segment in _paged) { <tr class="mseg-table-row @(IsSelected(segment) ? "mseg-table-row--selected" : null)" @onclick="() => SelectSegment(segment)"><td><div class="mseg-segment-cell"><span class="mseg-segment-icon @NormalizeColor(segment.ColorCss)"><i class="bi @segment.Icon"></i></span><div><strong>@segment.Name</strong><span>@segment.Description</span></div></div></td><td><span class="mseg-type-chip @(segment.IsDynamic ? "mseg-type-dynamic" : "mseg-type-static")">@(segment.IsDynamic ? "Dynamic" : "Static")</span></td><td class="mseg-number">@segment.ContactCount.ToString("N0")</td><td><div class="mseg-rule-list">@foreach (var rule in SplitRules(segment.Rules).Take(2)) { <span>@rule</span> }</div></td><td>@segment.UpdatedDateUtc.ToString("MMM d, yyyy")</td><td><div class="mseg-row-acts"><button type="button" class="um-btn um-btn-primary um-btn-xs" @onclick="() => UseInCampaign(segment)" @onclick:stopPropagation="true" title="Use in campaign"><i class="bi bi-megaphone"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(segment)" @onclick:stopPropagation="true" title="Edit"><i class="bi bi-pencil"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfigureRecalculate(segment)" @onclick:stopPropagation="true" title="Recalculate"><i class="bi bi-arrow-repeat"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfigureDuplicate(segment)" @onclick:stopPropagation="true" title="Duplicate"><i class="bi bi-copy"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfigureArchive(segment)" @onclick:stopPropagation="true" title="Archive"><i class="bi bi-archive"></i></button></div></td></tr> }</tbody></table></div><div class="mseg-pager"><span>Page @_page of @TotalPages · @_filtered.Count records</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left"></i> Previous</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right"></i></button></div></div> }
+        </div>
+        <aside class="mseg-detail-panel">@if (_selected is null) { <div class="mseg-detail-empty"><i class="bi bi-layout-sidebar-inset"></i><strong>Select an audience segment</strong><span>Click any row to inspect membership, rules, freshness, and workflow actions.</span></div> } else { <div class="mseg-detail-head"><div><span class="mseg-detail-eyebrow"><i class="bi bi-pie-chart"></i> Segment detail</span><h2>@_selected.Name</h2><div class="mseg-detail-meta"><span>@(_selected.IsDynamic ? "Dynamic" : "Static")</span><span>@_selected.ContactCount.ToString("N0") contacts</span><span>@_selected.UpdatedDateUtc.ToString("MMM d, yyyy")</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearSelection"><i class="bi bi-x-lg"></i></button></div><div class="mseg-detail-body"><div class="mseg-detail-summary"><div class="mseg-meta-row"><span class="mseg-meta-lbl">Contacts</span><span class="mseg-meta-val">@_selected.ContactCount.ToString("N0")</span></div><div class="mseg-meta-row"><span class="mseg-meta-lbl">Type</span><span class="mseg-meta-val">@(_selected.IsDynamic ? "Dynamic" : "Static")</span></div><div class="mseg-meta-row"><span class="mseg-meta-lbl">Rules</span><span class="mseg-meta-val">@SplitRules(_selected.Rules).Count</span></div><div class="mseg-meta-row"><span class="mseg-meta-lbl">Updated</span><span class="mseg-meta-val">@_selected.UpdatedDateUtc.ToString("MMM d")</span></div></div><div class="mseg-contact-card"><strong>Rule definition</strong>@foreach (var rule in SplitRules(_selected.Rules)) { <span><i class="bi bi-funnel"></i>@rule</span> }</div><div class="mseg-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="() => UseInCampaign(_selected)"><i class="bi bi-megaphone"></i> Use</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil"></i> Edit</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureRecalculate(_selected)"><i class="bi bi-arrow-repeat"></i> Recalculate</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureDuplicate(_selected)"><i class="bi bi-copy"></i> Duplicate</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureArchive(_selected)"><i class="bi bi-archive"></i> Archive</button></div></div> }</aside>
+    </section>
+</div>
 
 @code {
+    private const int PageSize = 10;
     Guid TenantId { get; set; }
     Guid TenantAdminUserId { get; set; }
     Guid DevTenantId { get; set; }
     Guid DevUserId { get; set; }
     private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private SfToast? _toast;
-    private SfQueryBuilder<SegmentContact>? _qb;
-    private bool _showCreate, _showEdit, _loading, _saving;
-    private string? _loadError, _formError;
-    private SegmentForm _createForm = new();
-    private SegmentForm _editForm = new();
-    private EditContext _createEditContext = default!;
-    private EditContext _editEditContext = default!;
-    private SegRow? _editSeg;
+    private string _search = string.Empty;
+    private string _typeFilter = string.Empty;
+    private string _volumeFilter = string.Empty;
+    private string _freshnessFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _loadError;
+    private string? _toastMessage;
+    private string _toastKind = "success";
+    private bool _toastVisible;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showConfirm;
+    private bool _saveAttempted;
+    private int _page = 1;
+    private Guid _editingId = Guid.Empty;
+    private ConfirmAction _confirmAction;
+    private MarketingSegmentDto? _selected;
+    private MarketingSegmentDto? _confirmTarget;
+    private SegmentForm _form = new();
+    private ActionConfiguration _actionConfig = new();
+    private List<MarketingSegmentDto> _items = [];
+    private List<MarketingSegmentDto> _filtered = [];
+    private List<MarketingSegmentDto> _paged = [];
 
-    // Stub type used only for SfQueryBuilder column schema
-    private sealed class SegmentContact
-    {
-        public string AccountType      { get; set; } = "";
-        public string Status           { get; set; } = "";
-        public int    PolicyCount      { get; set; }
-        public string Lob              { get; set; } = "";
-        public decimal Premium         { get; set; }
-        public decimal LossRatio       { get; set; }
-        public int    LastNps          { get; set; }
-        public int    DaysSinceContact { get; set; }
-        public string State            { get; set; } = "";
-        public string ProducerName     { get; set; } = "";
+    private string SearchFilter { get => _search; set { _search = value; ApplyFilters(resetPage: true); } }
+    private string TypeFilter { get => _typeFilter; set { _typeFilter = value; ApplyFilters(resetPage: true); } }
+    private string VolumeFilter { get => _volumeFilter; set { _volumeFilter = value; ApplyFilters(resetPage: true); } }
+    private string FreshnessFilter { get => _freshnessFilter; set { _freshnessFilter = value; ApplyFilters(resetPage: true); } }
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private string ActiveFilterText => _filtered.Count == _items.Count ? "All synchronized audience segments" : $"Filtered to {_filtered.Count:N0} of {_items.Count:N0} audience segments";
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ConfirmTitle => _confirmAction switch { ConfirmAction.Recalculate => "Configure Recalculation", ConfirmAction.Archive => "Configure Archive", ConfirmAction.Duplicate => "Configure Duplicate", ConfirmAction.Sync => "Configure Seed Sync", ConfirmAction.Export => "Configure Export", _ => "Confirm Action" };
+    private string ConfirmBody => _confirmAction switch { ConfirmAction.Recalculate when _confirmTarget is not null => $"Configure contact refresh for <strong>{_confirmTarget.Name}</strong> before execution.", ConfirmAction.Archive when _confirmTarget is not null => $"Configure archive settings for <strong>{_confirmTarget.Name}</strong>. It will be removed from active segment views.", ConfirmAction.Duplicate when _confirmTarget is not null => $"Configure copy settings for <strong>{_confirmTarget.Name}</strong>.", ConfirmAction.Sync => "Configure seed synchronization before repairing schema or adding missing segment records.", ConfirmAction.Export => $"Configure export settings for {_filtered.Count:N0} current segment matches.", _ => string.Empty };
+    private string ConfirmButtonText => _confirmAction switch { ConfirmAction.Recalculate => "Run Recalculation", ConfirmAction.Archive => "Execute Archive", ConfirmAction.Duplicate => "Create Copy", ConfirmAction.Sync => "Run Sync", ConfirmAction.Export => "Export File", _ => "Execute" };
+    private string ConfirmButtonClass => _confirmAction == ConfirmAction.Archive ? "um-btn-danger" : "um-btn-primary";
+    private string ConfirmIcon => _confirmAction switch { ConfirmAction.Recalculate => "bi-arrow-repeat", ConfirmAction.Archive => "bi-archive-fill", ConfirmAction.Duplicate => "bi-copy", ConfirmAction.Sync => "bi-cloud-arrow-down-fill", ConfirmAction.Export => "bi-download", _ => "bi-question-circle-fill" };
+    private string ConfirmIconTone => _confirmAction == ConfirmAction.Archive ? "um-confirm-icon--danger" : string.Empty;
+    private IEnumerable<KpiModel> Kpis => [new("all", "Total", _items.Count.ToString("N0"), "All active segments", "bi-pie-chart", "mseg-ki-blue"), new("contacts", "Contacts", _items.Sum(x => x.ContactCount).ToString("N0"), "Total audience reach", "bi-people", "mseg-ki-green"), new("dynamic", "Dynamic", _items.Count(x => x.IsDynamic).ToString("N0"), "Rule-driven audiences", "bi-lightning-charge", "mseg-ki-purple"), new("static", "Static", _items.Count(x => !x.IsDynamic).ToString("N0"), "Curated lists", "bi-list-check", "mseg-ki-amber"), new("large", "Large", _items.Count(x => x.ContactCount >= 1000).ToString("N0"), "1,000+ contacts", "bi-bar-chart", "mseg-ki-cyan"), new("stale", "Stale", _items.Count(IsStale).ToString("N0"), "Needs refresh", "bi-clock-history", "mseg-ki-red")];
+
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home","/"), new("Marketing","/marketing/campaigns"), new("Segments", null)); await LoadAsync(); }
+    private async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchMarketingSegmentsAsync(_tenantId, _search); _items = result?.Items.Select(NormalizeSegment).ToList() ?? []; ApplyFilters(); EnsureSelectedStillVisible(); } catch (Exception ex) { _loadError = $"Failed to load segments: {ex.Message}"; _items = []; _filtered = []; _paged = []; } finally { _loading = false; } }
+    private void ApplyFilters(bool resetPage = false) { var query = _items.AsEnumerable(); if (!string.IsNullOrWhiteSpace(_search)) query = query.Where(x => x.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Description.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Rules.Contains(_search, StringComparison.OrdinalIgnoreCase)); query = _typeFilter switch { "dynamic" => query.Where(x => x.IsDynamic), "static" => query.Where(x => !x.IsDynamic), _ => query }; query = _volumeFilter switch { "large" => query.Where(x => x.ContactCount >= 1000), "small" => query.Where(x => x.ContactCount is > 0 and < 1000), "empty" => query.Where(x => x.ContactCount == 0), _ => query }; query = _freshnessFilter switch { "fresh" => query.Where(x => x.UpdatedDateUtc >= DateTime.UtcNow.AddDays(-7)), "stale" => query.Where(IsStale), _ => query }; query = _kpiFilter switch { "contacts" => query.Where(x => x.ContactCount > 0), "dynamic" => query.Where(x => x.IsDynamic), "static" => query.Where(x => !x.IsDynamic), "large" => query.Where(x => x.ContactCount >= 1000), "stale" => query.Where(IsStale), _ => query }; _filtered = query.OrderByDescending(x => x.UpdatedDateUtc).ThenBy(x => x.Name).ToList(); if (resetPage) _page = 1; if (_page > TotalPages) _page = TotalPages; _paged = _filtered.Skip((_page - 1) * PageSize).Take(PageSize).ToList(); }
+    private void SetKpiFilter(string filter) { _kpiFilter = _kpiFilter == filter ? "all" : filter; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _search = string.Empty; _typeFilter = string.Empty; _volumeFilter = string.Empty; _freshnessFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); }
+    private void PreviousPage() { if (_page <= 1) return; _page--; ApplyFilters(); }
+    private void NextPage() { if (_page >= TotalPages) return; _page++; ApplyFilters(); }
+    private void SelectSegment(MarketingSegmentDto item) => _selected = item;
+    private void ClearSelection() => _selected = null;
+    private bool IsSelected(MarketingSegmentDto item) => _selected?.SegmentId == item.SegmentId;
+    private void OpenCreate() { _editingId = Guid.Empty; _saveAttempted = false; _form = new SegmentForm { Type = "Dynamic", Icon = "bi-pie-chart", ColorCss = "mseg-ic-blue", RuleMode = "All" }; _showForm = true; }
+    private void OpenEdit(MarketingSegmentDto item) { _editingId = item.SegmentId; _saveAttempted = false; _form = new() { Name = item.Name, Type = item.IsDynamic ? "Dynamic" : "Static", Description = item.Description, ContactCount = item.ContactCount, Rules = item.Rules, Icon = item.Icon, ColorCss = NormalizeColor(item.ColorCss), RuleMode = "All" }; _showForm = true; }
+    private void CloseForm() { if (_busy) return; _showForm = false; _editingId = Guid.Empty; _saveAttempted = false; }
+    private async Task SaveAsync() { _saveAttempted = true; _busy = true; try { var dto = ToDto(); if (_editingId == Guid.Empty) { await Api.CreateMarketingSegmentAsync(dto); ShowToast("Audience segment created.", "success"); } else { await Api.UpdateMarketingSegmentAsync(_editingId, dto); ShowToast("Audience segment saved.", "success"); } _showForm = false; _editingId = Guid.Empty; await LoadAsync(); } catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", "danger"); } finally { _busy = false; }
     }
 
-    private List<SegRow> _segments = [];
+    private Task NotifyValidationAsync(EditContext _) { _saveAttempted = true; ShowToast("Please correct the validation errors before saving.", "warning"); return Task.CompletedTask; }
+    private MarketingSegmentDto ToDto() => new() { SegmentId = _editingId, TenantId = _tenantId, Name = _form.Name.Trim(), Icon = _form.Icon, ColorCss = _form.ColorCss, Description = _form.Description.Trim(), ContactCount = _form.ContactCount, IsDynamic = _form.Type == "Dynamic", Rules = NormalizeRules(_form.Rules) };
+    private void UseInCampaign(MarketingSegmentDto item) { ShowToast($"Using {item.Name} in campaign builder.", "info"); Nav.NavigateTo("/marketing/campaigns/new"); }
+    private void ConfigureRecalculate(MarketingSegmentDto item) => ShowConfirm(item, ConfirmAction.Recalculate);
+    private void ConfigureArchive(MarketingSegmentDto item) => ShowConfirm(item, ConfirmAction.Archive);
+    private void ConfigureDuplicate(MarketingSegmentDto item) => ShowConfirm(item, ConfirmAction.Duplicate);
+    private void ConfigureSync() => ShowConfirm(null, ConfirmAction.Sync);
+    private void ConfigureExport() { if (!_filtered.Any()) { ShowToast("No audience segments are available to export.", "warning"); return; } ShowConfirm(null, ConfirmAction.Export); }
+    private void ShowConfirm(MarketingSegmentDto? item, ConfirmAction action) { _confirmTarget = item; _confirmAction = action; _actionConfig = CreateDefaultConfiguration(item, action); _showConfirm = true; }
+    private void CancelConfirm() { if (_busy) return; _showConfirm = false; _confirmTarget = null; }
+    private async Task ExecuteConfirmAsync() { if (_confirmTarget is null && _confirmAction is not (ConfirmAction.Sync or ConfirmAction.Export)) return; _busy = true; try { if (_confirmAction == ConfirmAction.Recalculate) { await Api.RecalculateMarketingSegmentAsync(_confirmTarget!.SegmentId); ShowToast($"Recalculated {_confirmTarget.Name}.", "success"); } else if (_confirmAction == ConfirmAction.Archive) { if (_actionConfig.ExportBeforeAction) await ExportCoreAsync([_confirmTarget!]); await Api.ArchiveMarketingSegmentAsync(_confirmTarget!.SegmentId); ShowToast($"Archived {_confirmTarget.Name}.", "success"); } else if (_confirmAction == ConfirmAction.Duplicate) { await Api.DuplicateMarketingSegmentAsync(_confirmTarget!.SegmentId); ShowToast($"Duplicated {_confirmTarget.Name}.", "success"); } else if (_confirmAction == ConfirmAction.Sync) { await Api.EnsureMarketingSegmentSeedAsync(_tenantId); ShowToast("Audience segment seed data synchronized.", "success"); } else if (_confirmAction == ConfirmAction.Export) { var exportItems = _actionConfig.ExecutionMode == "All" ? _items : _filtered; await ExportCoreAsync(exportItems); ShowToast($"Exported {exportItems.Count:N0} segments.", "success"); } _showConfirm = false; _confirmTarget = null; if (_confirmAction != ConfirmAction.Export && _actionConfig.RefreshAfterAction) await LoadAsync(); } catch (Exception ex) { ShowToast($"Action failed: {ex.Message}", "danger"); } finally { _busy = false; } }
+    private async Task ExportCoreAsync(IReadOnlyCollection<MarketingSegmentDto> items) { if (!items.Any()) return; var csv = new StringBuilder(); csv.AppendLine(_actionConfig.IncludeRules ? "Name,Type,Contacts,Description,Rules,Updated" : "Name,Type,Contacts,Description,Updated"); foreach (var item in items) { if (_actionConfig.IncludeRules) csv.AppendLine(string.Join(',', Csv(item.Name), item.IsDynamic ? "Dynamic" : "Static", item.ContactCount, Csv(item.Description), Csv(item.Rules), Csv(item.UpdatedDateUtc.ToString("yyyy-MM-dd")))); else csv.AppendLine(string.Join(',', Csv(item.Name), item.IsDynamic ? "Dynamic" : "Static", item.ContactCount, Csv(item.Description), Csv(item.UpdatedDateUtc.ToString("yyyy-MM-dd")))); } var bytes = Encoding.UTF8.GetBytes(csv.ToString()); await Js.InvokeVoidAsync("amsShell.downloadBase64", $"marketing-segments-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes)); }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() { if (_selected is null) return; _selected = _items.FirstOrDefault(x => x.SegmentId == _selected.SegmentId); }
+    private static bool IsStale(MarketingSegmentDto item) => item.UpdatedDateUtc < DateTime.UtcNow.AddDays(-30);
+    private static List<string> SplitRules(string rules) => string.IsNullOrWhiteSpace(rules) ? ["All contacts"] : rules.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+    private static string NormalizeRules(string value) => string.Join('|', SplitRules(value));
+    private static string NormalizeColor(string value) => value.Replace("mks-ic-", "mseg-ic-") switch { "mseg-ic-purple" => "mseg-ic-purple", "mseg-ic-amber" => "mseg-ic-amber", "mseg-ic-green" => "mseg-ic-green", "mseg-ic-red" => "mseg-ic-red", "mseg-ic-gold" => "mseg-ic-gold", _ => "mseg-ic-blue" };
+    private static MarketingSegmentDto NormalizeSegment(MarketingSegmentDto item) { item.ColorCss = NormalizeColor(item.ColorCss); if (string.IsNullOrWhiteSpace(item.Icon)) item.Icon = "bi-pie-chart"; return item; }
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private static ActionConfiguration CreateDefaultConfiguration(MarketingSegmentDto? item, ConfirmAction action) => action switch { ConfirmAction.Recalculate => new() { ExecutionMode = "CountsOnly", NotifyStakeholders = true, RefreshAfterAction = true, Note = "Scheduled audience refresh" }, ConfirmAction.Archive => new() { Reason = "Audience lifecycle complete", ExportBeforeAction = false, NotifyStakeholders = true, RefreshAfterAction = true }, ConfirmAction.Duplicate => new() { ExecutionMode = "Same", NewName = item is null ? string.Empty : $"{item.Name} Copy", CopyRules = true, RefreshAfterAction = true }, ConfirmAction.Sync => new() { ExecutionMode = "MissingOnly", RefreshAfterAction = true }, ConfirmAction.Export => new() { ExecutionMode = "Filtered", IncludeRules = true, RefreshAfterAction = false }, _ => new() };
+    async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); TenantId = context.TenantId; TenantAdminUserId = context.UserId; _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; DevTenantId = context.TenantId; DevUserId = context.UserId; }
 
-    protected override async Task OnInitializedAsync()
-    {
-        await ResolveCurrentUserContextAsync();
-        _createEditContext = new(_createForm);
-        _editEditContext = new(_editForm);
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Marketing","/marketing/campaigns"), new("Segments",""));
-        await LoadAsync();
-    }
-
-    private async Task LoadAsync()
-    {
-        _loading = true; _loadError = null;
-        try
-        {
-            var result = await Api.SearchMarketingSegmentsAsync(_tenantId);
-            _segments = result?.Items.Select(x => new SegRow(x.SegmentId, x.Name, x.Icon, x.ColorCss, x.Description, x.ContactCount, x.IsDynamic, x.UpdatedDateUtc, SplitRules(x.Rules))).ToList() ?? [];
-        }
-        catch (Exception ex) { _loadError = $"Failed to load segments: {ex.Message}"; _segments = []; }
-        finally { _loading = false; }
-    }
-
-    private static List<string> SplitRules(string rules) => string.IsNullOrWhiteSpace(rules) ? ["(all contacts)"] : rules.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-    private void OpenCreate() { _createForm = new(); _createEditContext = new(_createForm); _formError = null; _showCreate = true; }
-    private void CloseCreate() => _showCreate = false;
-    private void OpenEdit(SegRow seg)
-    {
-        _editSeg = seg;
-        _editForm = new SegmentForm { Name = seg.Name, Type = seg.IsDynamic ? "Dynamic" : "Static", Description = seg.Description, ContactCount = seg.Count, Rules = string.Join('|', seg.Rules) };
-        _editEditContext = new(_editForm);
-        _formError = null;
-        _showEdit = true;
-    }
-
-    private async Task CommitCreateAsync()
-    {
-        _formError = null;
-        if (!_createEditContext.Validate()) return;
-        // Extract rule summary chips from the query builder
-        var rules = new List<string>();
-        if (_qb is not null)
-        {
-            var sql = _qb.GetSqlFromRules();
-            if (!string.IsNullOrWhiteSpace(sql))
-                rules.Add(sql.Length > 60 ? sql[..60] + "…" : sql);
-        }
-        if (rules.Count == 0) rules.Add("(all contacts)");
-
-        _saving = true;
-        try
-        {
-            await Api.CreateMarketingSegmentAsync(new MarketingSegmentDto { TenantId = _tenantId, Name = _createForm.Name, Icon = "bi-pie-chart", ColorCss = "mks-ic-blue", Description = _createForm.Description ?? string.Empty, ContactCount = 0, IsDynamic = _createForm.Type == "Dynamic", Rules = string.Join('|', rules) });
-            _showCreate = false;
-            await LoadAsync();
-        }
-        catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; }
-        finally { _saving = false; }
-    }
-
-    private async Task CommitEditAsync()
-    {
-        if (_editSeg is null) return;
-        _formError = null;
-        if (!_editEditContext.Validate()) return;
-        _saving = true;
-        try
-        {
-            await Api.UpdateMarketingSegmentAsync(_editSeg.Id, new MarketingSegmentDto { SegmentId = _editSeg.Id, TenantId = _tenantId, Name = _editForm.Name, Icon = _editSeg.Icon, ColorCss = _editSeg.ColorCss, Description = _editForm.Description ?? string.Empty, ContactCount = _editForm.ContactCount, IsDynamic = _editForm.Type == "Dynamic", Rules = _editForm.Rules ?? string.Empty });
-            _showEdit = false;
-            await LoadAsync();
-        }
-        catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; }
-        finally { _saving = false; }
-    }
-
-    private sealed record SegRow(Guid Id, string Name, string Icon, string ColorCss, string Description, int Count, bool IsDynamic, DateTime Updated, List<string> Rules);
-    private sealed record LV(string Value, string Label);
-
-    private sealed class SegmentForm
-    {
-        [Required, StringLength(200)] public string Name { get; set; } = string.Empty;
-        [StringLength(1000)] public string? Description { get; set; }
-        [Required, StringLength(20)] public string Type { get; set; } = "Dynamic";
-        [Range(0, 100000000)] public int ContactCount { get; set; }
-        [StringLength(2000)] public string? Rules { get; set; }
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
-    }
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter by {Label}"; }
+    private enum ConfirmAction { Recalculate, Archive, Duplicate, Sync, Export }
+    private sealed class ActionConfiguration { public string ExecutionMode { get; set; } = string.Empty; public string Reason { get; set; } = string.Empty; public string Note { get; set; } = string.Empty; public string NewName { get; set; } = string.Empty; public bool NotifyStakeholders { get; set; } public bool ExportBeforeAction { get; set; } public bool CopyRules { get; set; } public bool IncludeRules { get; set; } = true; public bool RefreshAfterAction { get; set; } = true; }
+    private sealed class SegmentForm { [Required, StringLength(200)] public string Name { get; set; } = string.Empty; [Required, StringLength(20)] public string Type { get; set; } = "Dynamic"; [StringLength(80)] public string Icon { get; set; } = "bi-pie-chart"; [StringLength(80)] public string ColorCss { get; set; } = "mseg-ic-blue"; [StringLength(20)] public string RuleMode { get; set; } = "All"; [StringLength(1000)] public string Description { get; set; } = string.Empty; [Range(0, 100000000)] public int ContactCount { get; set; } [StringLength(2000)] public string Rules { get; set; } = string.Empty; }
 }

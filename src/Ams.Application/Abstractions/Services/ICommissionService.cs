@@ -10,6 +10,7 @@ public interface ICommissionService
     Task<PagedResult<CommissionPayeeDto>> SearchPayeesAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default);
     Task<Guid> CreatePayeeAsync(CreateCommissionPayeeRequest request, CancellationToken cancellationToken = default);
     Task UpdatePayeeAsync(Guid id, UpdateCommissionPayeeRequest request, CancellationToken cancellationToken = default);
+    Task EnsureSeedAsync(Guid tenantId, Guid? createdByUserId = null, CancellationToken cancellationToken = default);
     Task<CommissionTransactionDto?> GetTransactionByIdAsync(Guid id, CancellationToken cancellationToken = default);
     Task<PagedResult<CommissionTransactionDto>> SearchTransactionsAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default);
     Task<Guid> CreateTransactionAsync(CreateCommissionTransactionRequest request, CancellationToken cancellationToken = default);

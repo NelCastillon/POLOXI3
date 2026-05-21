@@ -1,142 +1,200 @@
 @page "/marketing/reviews"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Review Requests — AMS</PageTitle>
+<PageTitle>Reputation & Review Requests — AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="Reputation &amp; Review Requests"
-               Subtitle="Automate Google, Facebook, and Yelp review requests from satisfied policyholders"
-               Icon="bi-star-fill">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/marketing/campaigns/new")'>
-            <i class="bi bi-megaphone" aria-hidden="true"></i> New Review Campaign
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenSend">
-            <i class="bi bi-send" aria-hidden="true"></i> Send Requests
-        </button>
-    </Actions>
-</AppPageHeader>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    <div class="mkv-toast mkv-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="mkv-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
 }
 
-<!-- KPI -->
-<div class="mkv-kpi-strip">
-    <div class="mkv-kpi-card"><i class="bi bi-star-fill mkv-ki mkv-ki-gold"></i><div><div class="mkv-kv">@_avgRating.ToString("N1")</div><div class="mkv-kl">Avg. Rating</div></div></div>
-    <div class="mkv-kpi-card"><i class="bi bi-chat-square-text mkv-ki mkv-ki-blue"></i><div><div class="mkv-kv">@_reviews.Count</div><div class="mkv-kl">Total Reviews</div></div></div>
-    <div class="mkv-kpi-card"><i class="bi bi-send mkv-ki mkv-ki-blue"></i><div><div class="mkv-kv">@_requests.Count</div><div class="mkv-kl">Requests Sent</div></div></div>
-    <div class="mkv-kpi-card"><i class="bi bi-check-circle mkv-ki mkv-ki-green"></i><div><div class="mkv-kv">@(_requests.Any() ? (_requests.Count(r => r.ReviewLeft) * 100m / _requests.Count).ToString("N1") : "0")%</div><div class="mkv-kl">Response Rate</div></div></div>
-    <div class="mkv-kpi-card"><i class="bi bi-google mkv-ki mkv-ki-blue"></i><div><div class="mkv-kv">@_reviews.Count(r => r.Platform == "Google")</div><div class="mkv-kl">Google Reviews</div></div></div>
-</div>
-
-<!-- Tabs: Reviews / Requests -->
-<div class="mkv-tabs">
-    <button class="mkv-tab @(_tab == "reviews" ? "mkv-tab--active" : "")" @onclick='() => _tab = "reviews"'>
-        <i class="bi bi-star" aria-hidden="true"></i> Recent Reviews
-    </button>
-    <button class="mkv-tab @(_tab == "requests" ? "mkv-tab--active" : "")" @onclick='() => _tab = "requests"'>
-        <i class="bi bi-send" aria-hidden="true"></i> Sent Requests
-    </button>
-</div>
-
-@if (_tab == "reviews")
+@if (_showReviewForm)
 {
-    <div class="mkv-reviews-list position-relative">
-        @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading reviews…</span></div> }
-        @foreach (var rev in _reviews)
-        {
-            <div class="mkv-review-card">
-                <div class="mkv-rev-header">
-                    <div class="mkv-rev-av">@rev.ClientName[0]</div>
-                    <div>
-                        <div class="mkv-rev-name">@rev.ClientName</div>
-                        <div class="mkv-rev-meta">@rev.Platform · @rev.Date.ToString("MMM d, yyyy")</div>
+    <div class="mkv-modal-backdrop" role="presentation" @onclick="CloseForms">
+        <div class="mkv-modal mkv-action-modal" role="dialog" aria-modal="true" aria-labelledby="mkv-review-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header"><i class="bi bi-star-fill" aria-hidden="true"></i><span id="mkv-review-form-title">@(_editingReviewId == Guid.Empty ? "Add Review" : "Edit Review")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForms" disabled="@_busy"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm Model="_reviewForm" OnValidSubmit="SaveReviewAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="mkv-modal-intro"><span><i class="bi bi-stars" aria-hidden="true"></i> Reputation record</span><p>Capture client review, source platform, rating, public content, and agency response for DB-backed reputation tracking.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Client name <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_reviewForm.ClientName" /><ValidationMessage For="() => _reviewForm.ClientName" class="text-danger" /></div>
+                        <div class="um-field"><label>Platform <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_reviewForm.Platform">@foreach (var platform in _platforms) { <option value="@platform">@platform</option> }</InputSelect><ValidationMessage For="() => _reviewForm.Platform" class="text-danger" /></div>
+                        <div class="um-field"><label>Rating</label><InputNumber class="form-control" @bind-Value="_reviewForm.Rating" /><ValidationMessage For="() => _reviewForm.Rating" class="text-danger" /></div>
+                        <div class="um-field"><label>Review date</label><InputDate class="form-control" @bind-Value="_reviewForm.ReviewDate" /></div>
+                        <div class="um-field um-field--full"><label>Review content <span class="text-danger">*</span></label><InputTextArea class="form-control" rows="4" @bind-Value="_reviewForm.Content" /><ValidationMessage For="() => _reviewForm.Content" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Agency response</label><InputTextArea class="form-control" rows="3" @bind-Value="_reviewForm.Response" /><ValidationMessage For="() => _reviewForm.Response" class="text-danger" /></div>
                     </div>
-                    <div class="mkv-stars">@RenderStars(rev.Rating)</div>
-                    <span class="mkv-plt-badge @PltCss(rev.Platform)">@rev.Platform</span>
                 </div>
-                <div class="mkv-rev-body">@rev.Content</div>
-                @if (!string.IsNullOrEmpty(rev.Response))
-                {
-                    <div class="mkv-rev-response"><i class="bi bi-reply" aria-hidden="true"></i> <em>@rev.Response</em></div>
-                }
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForms" disabled="@_busy">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@(_editingReviewId == Guid.Empty ? "Add Review" : "Save Changes")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showRequestForm)
+{
+    <div class="mkv-modal-backdrop" role="presentation" @onclick="CloseForms">
+        <div class="mkv-modal mkv-action-modal" role="dialog" aria-modal="true" aria-labelledby="mkv-request-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header"><i class="bi bi-send" aria-hidden="true"></i><span id="mkv-request-form-title">@(_editingRequestId == Guid.Empty ? "Send Review Request" : "Edit Review Request")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForms" disabled="@_busy"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm Model="_requestForm" OnValidSubmit="SaveRequestAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="mkv-modal-intro"><span><i class="bi bi-send-check" aria-hidden="true"></i> Request workflow</span><p>Send or update a review request with client, channel, destination platform, NPS signal, sent date, and completion state.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Client name <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_requestForm.ClientName" /><ValidationMessage For="() => _requestForm.ClientName" class="text-danger" /></div>
+                        <div class="um-field"><label>Channel <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_requestForm.Channel">@foreach (var channel in _channels) { <option value="@channel">@channel</option> }</InputSelect><ValidationMessage For="() => _requestForm.Channel" class="text-danger" /></div>
+                        <div class="um-field"><label>Platform <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_requestForm.Platform">@foreach (var platform in _platforms) { <option value="@platform">@platform</option> }</InputSelect><ValidationMessage For="() => _requestForm.Platform" class="text-danger" /></div>
+                        <div class="um-field"><label>NPS score</label><InputNumber class="form-control" @bind-Value="_requestForm.NpsScore" /><ValidationMessage For="() => _requestForm.NpsScore" class="text-danger" /></div>
+                        <div class="um-field"><label>Sent date</label><InputDate class="form-control" @bind-Value="_requestForm.SentDate" /></div>
+                        <label class="mkv-form-check"><InputCheckbox @bind-Value="_requestForm.ReviewLeft" /> Review left</label>
+                    </div>
+                </div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForms" disabled="@_busy">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@(_editingRequestId == Guid.Empty ? "Send Request" : "Save Changes")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showConfirm)
+{
+    <div class="mkv-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="mkv-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="mkv-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @ConfirmIconTone"><i class="bi @ConfirmIcon"></i></div>
+                <div class="um-confirm-title" id="mkv-confirm-title">@ConfirmTitle</div>
+                <div class="um-confirm-body">@ConfirmBody</div>
+                <div class="mkv-config-panel">
+                    <span class="mkv-config-eyebrow"><i class="bi bi-sliders" aria-hidden="true"></i> Configuration required</span>
+                    <div class="mkv-config-grid">
+                        @if (_confirmAction == ConfirmAction.Reply)
+                        {
+                            <label class="mkv-config-full"><span>Response</span><textarea class="form-control" rows="4" @bind="_actionConfig.ResponseText"></textarea></label>
+                            <label class="mkv-config-check"><input type="checkbox" @bind="_actionConfig.RefreshAfterAction" /> Refresh after reply</label>
+                        }
+                        else if (_confirmAction == ConfirmAction.CompleteRequest)
+                        {
+                            <label><span>Completion mode</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="MarkOnly">Mark request complete</option><option value="CreateReview">Mark complete and add review later</option></select></label>
+                            <label class="mkv-config-check"><input type="checkbox" @bind="_actionConfig.RefreshAfterAction" /> Refresh after update</label>
+                        }
+                        else if (_confirmAction == ConfirmAction.DuplicateRequest)
+                        {
+                            <label class="mkv-config-full"><span>Copy label</span><input class="form-control" @bind="_actionConfig.NewName" /></label>
+                            <label><span>Destination platform</span><select class="form-select" @bind="_actionConfig.Platform">@foreach (var platform in _platforms) { <option value="@platform">@platform</option> }</select></label>
+                        }
+                        else if (_confirmAction == ConfirmAction.ArchiveReview || _confirmAction == ConfirmAction.ArchiveRequest)
+                        {
+                            <label class="mkv-config-full"><span>Reason</span><input class="form-control" @bind="_actionConfig.Reason" placeholder="Document why this reputation record is being archived" /></label>
+                            <label class="mkv-config-check"><input type="checkbox" @bind="_actionConfig.ExportBeforeAction" /> Export snapshot before archiving</label>
+                        }
+                        else if (_confirmAction == ConfirmAction.Sync)
+                        {
+                            <label><span>Seed mode</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="MissingOnly">Add missing seed data only</option><option value="RepairSchema">Repair schema and seed data</option></select></label>
+                            <label class="mkv-config-check"><input type="checkbox" @bind="_actionConfig.RefreshAfterAction" /> Refresh after sync</label>
+                        }
+                        else if (_confirmAction == ConfirmAction.Export)
+                        {
+                            <label><span>Export dataset</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="Current">Current tab and filters</option><option value="Reviews">All reviews</option><option value="Requests">All requests</option></select></label>
+                            <label class="mkv-config-check"><input type="checkbox" @bind="_actionConfig.IncludeResponses" /> Include responses and NPS data</label>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_busy">Cancel</button><button type="button" class="um-btn @ConfirmButtonClass" @onclick="ExecuteConfirmAsync" disabled="@_busy">@ConfirmButtonText</button></div>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="mkv-enterprise-page">
+    <section class="mkv-header">
+        <div class="mkv-header-left"><div class="mkv-lob-icon"><i class="bi bi-star-fill" aria-hidden="true"></i></div><div class="mkv-header-info"><div class="mkv-title-row"><h1 class="mkv-page-title">Reputation & Review Requests</h1><span class="mkv-status-pill"><i class="bi bi-database-check"></i> Live reputation data</span><span class="mkv-status-pill"><i class="bi bi-shield-lock"></i> Tenant scoped</span></div><div class="mkv-sub-row"><span>Automate review requests, monitor public sentiment, and respond from a DB-backed command center.</span><span class="mkv-sub-chip"><i class="bi bi-stars"></i> @_filteredReviews.Count reviews</span><span class="mkv-sub-chip"><i class="bi bi-send-check"></i> @_filteredRequests.Count requests</span></div></div></div>
+        <div class="mkv-header-actions"><button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat mkv-spin" : "bi-arrow-clockwise")"></i> Refresh</button><button type="button" class="um-btn um-btn-ghost" @onclick="ConfigureSync" disabled="@_busy"><i class="bi bi-cloud-arrow-down"></i> Sync Seed</button><button type="button" class="um-btn um-btn-ghost" @onclick="ConfigureExport" disabled="@(!_reviews.Any() && !_requests.Any())"><i class="bi bi-download"></i> Export</button><button type="button" class="um-btn um-btn-ghost" @onclick="OpenCreateReview"><i class="bi bi-star"></i> Add Review</button><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreateRequest"><i class="bi bi-send"></i> Send Request</button></div>
+    </section>
+
+    <section class="mkv-kpi-strip" aria-label="Reputation metrics">@foreach (var kpi in Kpis) { <button type="button" class="mkv-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "mkv-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)"><span class="mkv-kpi-icon"><i class="bi @kpi.Icon"></i></span><span class="mkv-kpi-copy"><span class="mkv-kpi-label">@kpi.Label</span><span class="mkv-kpi-value">@kpi.Value</span><span class="mkv-kpi-caption">@kpi.Caption</span></span></button> }</section>
+
+    <section class="mkv-workflow-strip" aria-label="Review workflow shortcuts">
+        <button type="button" class="mkv-workflow-card mkv-wf-rules" @onclick='() => Nav.NavigateTo("/tenant/config/marketing/review-request-rules")'><span class="mkv-workflow-icon"><i class="bi bi-sliders"></i></span><span class="mkv-workflow-content"><strong>1</strong><span>Rules</span><small>Request triggers.</small></span></button>
+        <button type="button" class="mkv-workflow-card mkv-wf-segments" @onclick='() => Nav.NavigateTo("/marketing/segments")'><span class="mkv-workflow-icon"><i class="bi bi-pie-chart"></i></span><span class="mkv-workflow-content"><strong>2</strong><span>Segments</span><small>NPS promoters.</small></span></button>
+        <button type="button" class="mkv-workflow-card mkv-wf-builder" @onclick='() => Nav.NavigateTo("/marketing/campaigns/new?goal=Reviews")'><span class="mkv-workflow-icon"><i class="bi bi-magic"></i></span><span class="mkv-workflow-content"><strong>3</strong><span>Builder</span><small>Review campaign.</small></span></button>
+        <button type="button" class="mkv-workflow-card mkv-wf-email" @onclick='() => Nav.NavigateTo("/marketing/email")'><span class="mkv-workflow-icon"><i class="bi bi-envelope-paper"></i></span><span class="mkv-workflow-content"><strong>4</strong><span>Email</span><small>Request nurture.</small></span></button>
+        <button type="button" class="mkv-workflow-card mkv-wf-pages" @onclick='() => Nav.NavigateTo("/marketing/landing-pages")'><span class="mkv-workflow-icon"><i class="bi bi-layout-text-window"></i></span><span class="mkv-workflow-content"><strong>5</strong><span>Pages</span><small>Review landing.</small></span></button>
+    </section>
+
+    <section class="mkv-enterprise-search" aria-label="Review filters">
+        <div class="mkv-search-icon"><i class="bi bi-search"></i></div>
+        <div class="mkv-search-body"><label for="mkv-search">Search reputation records</label><input id="mkv-search" class="mkv-search-input" type="search" placeholder="Search client, platform, content, response, channel..." @bind="SearchFilter" @bind:event="oninput" /><span class="mkv-search-hint">Filters apply instantly across reviews and review requests.</span></div>
+        <select class="mkv-filter-select" @bind="PlatformFilter"><option value="">All platforms</option>@foreach (var platform in _platforms) { <option value="@platform">@platform</option> }</select>
+        <select class="mkv-filter-select" @bind="RatingFilter"><option value="">Rating/NPS: all</option><option value="promoter">Promoters</option><option value="five">5-star</option><option value="low">Needs attention</option></select>
+        <select class="mkv-filter-select" @bind="RequestFilter"><option value="">Requests: all</option><option value="completed">Completed</option><option value="pending">Pending</option></select>
+        <div class="mkv-search-result"><strong>@ActiveCount</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError)) { <div class="alert alert-danger mkv-load-error" style="border-left:4px solid #dc3545; animation:um-shake .3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div> }
+
+    <section class="mkv-content-layout">
+        <div class="mkv-grid-wrap"><div class="mkv-grid-toolbar"><div><strong>Reputation command center</strong><span>@ActiveFilterText</span></div><div class="mkv-toolbar-actions"><button type="button" class="mkv-tab @(_tab == "reviews" ? "mkv-tab--active" : null)" @onclick='() => SetTab("reviews")'><i class="bi bi-star"></i> Reviews</button><button type="button" class="mkv-tab @(_tab == "requests" ? "mkv-tab--active" : null)" @onclick='() => SetTab("requests")'><i class="bi bi-send"></i> Requests</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser"></i> Reset</button></div></div>
+            @if (_loading) { <div class="mkv-loading"><i class="bi bi-arrow-repeat mkv-spin"></i><strong>Loading reputation data...</strong><span>Syncing reviews, requests, platforms, responses, NPS scores, and completion state.</span></div> }
+            else if (_tab == "reviews")
+            {
+                @if (!_pagedReviews.Any()) { <div class="mkv-empty-state"><i class="bi bi-inbox"></i><strong>No reviews found</strong><span>Adjust filters or add a DB-backed review.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreateReview">Add Review</button></div> }
                 else
                 {
-                    <button class="um-btn um-btn-ghost um-btn-xs">
-                        <i class="bi bi-reply" aria-hidden="true"></i> Reply
-                    </button>
+                    <div class="mkv-review-list">
+                        @foreach (var review in _pagedReviews)
+                        {
+                            <article class="@ReviewCardCss(review)" @onclick="() => SelectReview(review)">
+                                <div class="mkv-review-head"><span class="mkv-avatar">@Initials(review.ClientName)</span><div><strong>@review.ClientName</strong><span>@review.Platform · @review.ReviewDate.ToString("MMM d, yyyy")</span></div><span class="mkv-stars">@RenderStars(review.Rating)</span><span class="mkv-platform-chip @PlatformCss(review.Platform)">@review.Platform</span></div>
+                                <p>@review.Content</p>
+                                @if (!string.IsNullOrWhiteSpace(review.Response)) { <div class="mkv-response"><i class="bi bi-reply"></i><span>@review.Response</span></div> }
+                                <div class="mkv-card-actions"><button type="button" class="um-btn um-btn-primary um-btn-xs" @onclick="() => ConfigureReply(review)" @onclick:stopPropagation="true"><i class="bi bi-reply"></i> Reply</button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEditReview(review)" @onclick:stopPropagation="true"><i class="bi bi-pencil"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfigureArchiveReview(review)" @onclick:stopPropagation="true"><i class="bi bi-archive"></i></button></div>
+                            </article>
+                        }
+                    </div>
+                    <div class="mkv-pager"><span>Page @_reviewPage of @ReviewTotalPages · @_filteredReviews.Count records</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousReviewPage" disabled="@(_reviewPage <= 1)"><i class="bi bi-chevron-left"></i> Previous</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextReviewPage" disabled="@(_reviewPage >= ReviewTotalPages)">Next <i class="bi bi-chevron-right"></i></button></div></div>
                 }
-            </div>
-        }
-    </div>
-}
-else
-{
-    <div class="app-datagrid" style="background:var(--um-bg-card);border:1px solid var(--um-border);border-radius:12px;overflow:hidden">
-        <SfGrid CssClass="marketing-grid" TValue="ReviewRequest" DataSource="_requests" AllowPaging="true" AllowSorting="true" AllowTextWrap="true" EnableHover="true" RowHeight="60">
-            <GridTextWrapSettings WrapMode="WrapMode.Content" />
-            <GridPageSettings PageSize="20" />
-            <GridColumns>
-                <GridColumn Field="@nameof(ReviewRequest.ClientName)" HeaderText="Client" MinWidth="280" />
-                <GridColumn Field="@nameof(ReviewRequest.Channel)" HeaderText="Channel" Width="100" />
-                <GridColumn Field="@nameof(ReviewRequest.SentDate)" HeaderText="Sent" Width="120" Type="ColumnType.Date" Format="MMM d, yyyy" />
-                <GridColumn Field="@nameof(ReviewRequest.Platform)" HeaderText="Platform" Width="110">
-                    <Template>@{ var r = (ReviewRequest)context; }<span class="mkv-plt-badge @PltCss(r.Platform)">@r.Platform</span></Template>
-                </GridColumn>
-                <GridColumn Field="@nameof(ReviewRequest.ReviewLeft)" HeaderText="Review Left" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
-                    <Template>@{ var r = (ReviewRequest)context; }<i class="bi @(r.ReviewLeft ? "bi-check-circle-fill mkv-chk" : "bi-x-circle mkv-xc")" aria-hidden="true"></i></Template>
-                </GridColumn>
-                <GridColumn Field="@nameof(ReviewRequest.NpsScore)" HeaderText="NPS" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
-            </GridColumns>
-        </SfGrid>
-    </div>
-}
-
-<!-- Bulk send dialog -->
-<SfDialog @bind-Visible="_showSend" Width="480px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-send" aria-hidden="true"></i><span>Send Review Requests</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showSend = false"><i class="bi bi-x-lg"></i></button></div>
-            <EditForm EditContext="_sendEditContext">
-                <DataAnnotationsValidator />
-                <div class="um-modal-body"><div class="um-form-grid">
-                <div class="um-field"><label>Client Name <span class="text-danger">*</span></label>
-                    <InputText @bind-Value="_sendForm.ClientName" class="um-input" />
-                    <ValidationMessage For="() => _sendForm.ClientName" class="validation-message text-danger" />
-                </div>
-                <div class="um-field"><label>Target Platform</label>
-                    <InputSelect @bind-Value="_sendForm.Platform" class="um-input"><option>Google</option><option>Facebook</option><option>Yelp</option></InputSelect>
-                    <ValidationMessage For="() => _sendForm.Platform" class="validation-message text-danger" />
-                </div>
-                <div class="um-field"><label>NPS Score</label>
-                    <InputNumber @bind-Value="_sendForm.NpsScore" class="um-input" />
-                    <ValidationMessage For="() => _sendForm.NpsScore" class="validation-message text-danger" />
-                </div>
-                <div class="um-field"><label>Channel</label>
-                    <InputSelect @bind-Value="_sendForm.Channel" class="um-input"><option>Email</option><option>SMS</option><option>Both</option></InputSelect>
-                    <ValidationMessage For="() => _sendForm.Channel" class="validation-message text-danger" />
-                </div>
-                @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
-                </div></div>
-            </EditForm>
-        </Content>
-        <FooterTemplate>
-            <div class="um-modal-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showSend = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="SendRequestAsync">
-                    <i class="bi bi-send" aria-hidden="true"></i> Send
-                </button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+            }
+            else
+            {
+                @if (!_pagedRequests.Any()) { <div class="mkv-empty-state"><i class="bi bi-inbox"></i><strong>No review requests found</strong><span>Adjust filters or send a DB-backed request.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreateRequest">Send Request</button></div> }
+                else
+                {
+                    <div class="mkv-table-scroll"><table class="mkv-table"><thead><tr><th>Client</th><th>Channel</th><th>Sent</th><th>Platform</th><th>Completed</th><th class="mkv-number">NPS</th><th class="mkv-actions-col">Actions</th></tr></thead><tbody>@foreach (var request in _pagedRequests) { <tr class="@RequestRowCss(request)" @onclick="() => SelectRequest(request)"><td><div class="mkv-account-cell"><span class="mkv-avatar">@Initials(request.ClientName)</span><div><strong>@request.ClientName</strong><span>@(request.ReviewLeft ? "Review left" : "Awaiting review")</span></div></div></td><td>@request.Channel</td><td>@request.SentDate.ToString("MMM d, yyyy")</td><td><span class="mkv-platform-chip @PlatformCss(request.Platform)">@request.Platform</span></td><td><i class="bi @(request.ReviewLeft ? "bi-check-circle-fill mkv-chk" : "bi-x-circle mkv-xc")" aria-hidden="true"></i></td><td class="mkv-number">@request.NpsScore</td><td><div class="mkv-row-acts"><button type="button" class="um-btn um-btn-primary um-btn-xs" @onclick="() => ConfigureCompleteRequest(request)" @onclick:stopPropagation="true" title="Complete"><i class="bi bi-check2-circle"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEditRequest(request)" @onclick:stopPropagation="true" title="Edit"><i class="bi bi-pencil"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfigureDuplicateRequest(request)" @onclick:stopPropagation="true" title="Duplicate"><i class="bi bi-copy"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfigureArchiveRequest(request)" @onclick:stopPropagation="true" title="Archive"><i class="bi bi-archive"></i></button></div></td></tr> }</tbody></table></div>
+                    <div class="mkv-pager"><span>Page @_requestPage of @RequestTotalPages · @_filteredRequests.Count records</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousRequestPage" disabled="@(_requestPage <= 1)"><i class="bi bi-chevron-left"></i> Previous</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextRequestPage" disabled="@(_requestPage >= RequestTotalPages)">Next <i class="bi bi-chevron-right"></i></button></div></div>
+                }
+            }
+        </div>
+        <aside class="mkv-detail-panel">
+            @if (_tab == "reviews")
+            {
+                @if (_selectedReview is null) { <div class="mkv-detail-empty"><i class="bi bi-layout-sidebar-inset"></i><strong>Select a review</strong><span>Click a review to inspect rating, response status, and reputation actions.</span></div> }
+                else { <div class="mkv-detail-head"><div><span class="mkv-detail-eyebrow"><i class="bi bi-star"></i> Review detail</span><h2>@_selectedReview.ClientName</h2><div class="mkv-detail-meta"><span>@_selectedReview.Platform</span><span>@RenderStars(_selectedReview.Rating)</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearSelection"><i class="bi bi-x-lg"></i></button></div><div class="mkv-detail-body"><div class="mkv-detail-summary"><div class="mkv-meta-row"><span class="mkv-meta-lbl">Rating</span><span class="mkv-meta-val">@_selectedReview.Rating / 5</span></div><div class="mkv-meta-row"><span class="mkv-meta-lbl">Review date</span><span class="mkv-meta-val">@_selectedReview.ReviewDate.ToString("MMM d, yyyy")</span></div><div class="mkv-meta-row"><span class="mkv-meta-lbl">Platform</span><span class="mkv-meta-val">@_selectedReview.Platform</span></div><div class="mkv-meta-row"><span class="mkv-meta-lbl">Response</span><span class="mkv-meta-val">@(string.IsNullOrWhiteSpace(_selectedReview.Response) ? "Needed" : "Posted")</span></div></div><div class="mkv-contact-card"><strong>Review content</strong><span><i class="bi bi-chat-quote"></i>@_selectedReview.Content</span>@if (!string.IsNullOrWhiteSpace(_selectedReview.Response)) { <span><i class="bi bi-reply"></i>@_selectedReview.Response</span> }</div><div class="mkv-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="() => ConfigureReply(_selectedReview)"><i class="bi bi-reply"></i> Reply</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => OpenEditReview(_selectedReview)"><i class="bi bi-pencil"></i> Edit</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureArchiveReview(_selectedReview)"><i class="bi bi-archive"></i> Archive</button></div></div> }
+            }
+            else
+            {
+                @if (_selectedRequest is null) { <div class="mkv-detail-empty"><i class="bi bi-layout-sidebar-inset"></i><strong>Select a request</strong><span>Click a request to inspect NPS, channel, completion state, and actions.</span></div> }
+                else { <div class="mkv-detail-head"><div><span class="mkv-detail-eyebrow"><i class="bi bi-send"></i> Request detail</span><h2>@_selectedRequest.ClientName</h2><div class="mkv-detail-meta"><span>@_selectedRequest.Channel</span><span>@_selectedRequest.Platform</span><span>@(_selectedRequest.ReviewLeft ? "Completed" : "Pending")</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearSelection"><i class="bi bi-x-lg"></i></button></div><div class="mkv-detail-body"><div class="mkv-detail-summary"><div class="mkv-meta-row"><span class="mkv-meta-lbl">NPS</span><span class="mkv-meta-val">@_selectedRequest.NpsScore</span></div><div class="mkv-meta-row"><span class="mkv-meta-lbl">Sent</span><span class="mkv-meta-val">@_selectedRequest.SentDate.ToString("MMM d, yyyy")</span></div><div class="mkv-meta-row"><span class="mkv-meta-lbl">Channel</span><span class="mkv-meta-val">@_selectedRequest.Channel</span></div><div class="mkv-meta-row"><span class="mkv-meta-lbl">Status</span><span class="mkv-meta-val">@(_selectedRequest.ReviewLeft ? "Review left" : "Awaiting review")</span></div></div><div class="mkv-contact-card"><strong>Request routing</strong><span><i class="bi bi-person-heart"></i>@_selectedRequest.ClientName</span><span><i class="bi bi-send"></i>@_selectedRequest.Channel</span><span><i class="bi bi-star"></i>@_selectedRequest.Platform</span></div><div class="mkv-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="() => ConfigureCompleteRequest(_selectedRequest)"><i class="bi bi-check2-circle"></i> Complete</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => OpenEditRequest(_selectedRequest)"><i class="bi bi-pencil"></i> Edit</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureDuplicateRequest(_selectedRequest)"><i class="bi bi-copy"></i> Duplicate</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureArchiveRequest(_selectedRequest)"><i class="bi bi-archive"></i> Archive</button></div></div> }
+            }
+        </aside>
+    </section>
+</div>
 
 @code {
+    private const int PageSize = 10;
     Guid TenantId { get; set; }
     Guid TenantAdminUserId { get; set; }
     Guid DevTenantId { get; set; }
@@ -144,87 +202,242 @@ else
     private Guid _tenantAdminUserId;
     private Guid _tenantId;
     private string _tab = "reviews";
-    private bool _showSend;
+    private string _search = string.Empty;
+    private string _platformFilter = string.Empty;
+    private string _ratingFilter = string.Empty;
+    private string _requestFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _loadError;
+    private string? _toastMessage;
+    private string _toastKind = "success";
+    private bool _toastVisible;
     private bool _loading;
-    private string? _loadError, _formError;
-    private ReviewRequestForm _sendForm = new();
-    private EditContext _sendEditContext = default!;
+    private bool _busy;
+    private bool _showReviewForm;
+    private bool _showRequestForm;
+    private bool _showConfirm;
+    private int _reviewPage = 1;
+    private int _requestPage = 1;
+    private Guid _editingReviewId = Guid.Empty;
+    private Guid _editingRequestId = Guid.Empty;
+    private ConfirmAction _confirmAction;
+    private MarketingReviewDto? _selectedReview;
+    private MarketingReviewRequestDto? _selectedRequest;
+    private MarketingReviewDto? _confirmReview;
+    private MarketingReviewRequestDto? _confirmRequest;
+    private ReviewForm _reviewForm = new();
+    private ReviewRequestForm _requestForm = new();
+    private ActionConfiguration _actionConfig = new();
+    private List<MarketingReviewDto> _reviews = [];
+    private List<MarketingReviewRequestDto> _requests = [];
+    private List<MarketingReviewDto> _filteredReviews = [];
+    private List<MarketingReviewRequestDto> _filteredRequests = [];
+    private List<MarketingReviewDto> _pagedReviews = [];
+    private List<MarketingReviewRequestDto> _pagedRequests = [];
+    private readonly string[] _platforms = ["Google", "Facebook", "Yelp", "Other"];
+    private readonly string[] _channels = ["Email", "SMS", "Both"];
 
-    private List<ReviewRow>     _reviews  = [];
-    private List<ReviewRequest> _requests = [];
-    private decimal _avgRating;
+    private string SearchFilter { get => _search; set { _search = value; ApplyFilters(resetPage: true); } }
+    private string PlatformFilter { get => _platformFilter; set { _platformFilter = value; ApplyFilters(resetPage: true); } }
+    private string RatingFilter { get => _ratingFilter; set { _ratingFilter = value; ApplyFilters(resetPage: true); } }
+    private string RequestFilter { get => _requestFilter; set { _requestFilter = value; ApplyFilters(resetPage: true); } }
+    private int ReviewTotalPages => Math.Max(1, (int)Math.Ceiling(_filteredReviews.Count / (double)PageSize));
+    private int RequestTotalPages => Math.Max(1, (int)Math.Ceiling(_filteredRequests.Count / (double)PageSize));
+    private int ActiveCount => _tab == "reviews" ? _filteredReviews.Count : _filteredRequests.Count;
+    private decimal AverageRating => _reviews.Count == 0 ? 0 : Math.Round((decimal)_reviews.Average(x => x.Rating), 1);
+    private decimal ResponseRate => _requests.Count == 0 ? 0 : Math.Round(_requests.Count(x => x.ReviewLeft) * 100m / _requests.Count, 1);
+    private string ActiveFilterText => _tab == "reviews" ? (_filteredReviews.Count == _reviews.Count ? "All synchronized reviews" : $"Filtered to {_filteredReviews.Count:N0} of {_reviews.Count:N0} reviews") : (_filteredRequests.Count == _requests.Count ? "All synchronized review requests" : $"Filtered to {_filteredRequests.Count:N0} of {_requests.Count:N0} requests");
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private IEnumerable<KpiModel> Kpis =>
+    [
+        new("all", "Reviews", _reviews.Count.ToString("N0"), "Public feedback", "bi-star-fill", "mkv-ki-gold"),
+        new("rating", "Avg Rating", AverageRating.ToString("N1"), "Portfolio score", "bi-stars", "mkv-ki-amber"),
+        new("requests", "Requests", _requests.Count.ToString("N0"), "Sent asks", "bi-send", "mkv-ki-blue"),
+        new("response", "Response", $"{ResponseRate:N1}%", "Reviews left", "bi-check-circle", "mkv-ki-green"),
+        new("google", "Google", _reviews.Count(x => x.Platform == "Google").ToString("N0"), "Google reviews", "bi-google", "mkv-ki-cyan"),
+        new("needed", "Needs Reply", _reviews.Count(x => string.IsNullOrWhiteSpace(x.Response)).ToString("N0"), "Response queue", "bi-reply", "mkv-ki-red")
+    ];
 
-    protected override async Task OnInitializedAsync()
+    private string ConfirmTitle => _confirmAction switch
     {
-        await ResolveCurrentUserContextAsync();
-        _sendEditContext = new(_sendForm);
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Marketing","/marketing/campaigns"), new("Reviews",""));
-        await LoadAsync();
-    }
-
-    private async Task LoadAsync()
-    {
-        _loading = true; _loadError = null;
-        try
-        {
-            var result = await Api.SearchMarketingReviewsAsync(_tenantId);
-            _reviews = result?.Reviews.Select(x => new ReviewRow(x.ClientName, x.Platform, x.Rating, x.ReviewDate, x.Content, x.Response)).ToList() ?? [];
-            _requests = result?.Requests.Select(x => new ReviewRequest(x.ClientName, x.Channel, x.SentDate, x.Platform, x.ReviewLeft, x.NpsScore)).ToList() ?? [];
-            _avgRating = _reviews.Any() ? (decimal)_reviews.Average(r => r.Rating) : 0m;
-        }
-        catch (Exception ex) { _loadError = $"Failed to load reviews: {ex.Message}"; _reviews = []; _requests = []; _avgRating = 0; }
-        finally { _loading = false; }
-    }
-
-    private static string RenderStars(int r) => string.Concat(Enumerable.Range(1, 5).Select(i => i <= r ? "★" : "☆"));
-    private static string PltCss(string p) => p switch
-    {
-        "Google"   => "mkv-plt mkv-plt--google",
-        "Facebook" => "mkv-plt mkv-plt--fb",
-        "Yelp"     => "mkv-plt mkv-plt--yelp",
-        _          => "mkv-plt",
+        ConfirmAction.Reply => "Configure Reply",
+        ConfirmAction.CompleteRequest => "Configure Completion",
+        ConfirmAction.DuplicateRequest => "Configure Duplicate",
+        ConfirmAction.ArchiveReview => "Configure Review Archive",
+        ConfirmAction.ArchiveRequest => "Configure Request Archive",
+        ConfirmAction.Sync => "Configure Seed Sync",
+        ConfirmAction.Export => "Configure Export",
+        _ => "Confirm Action"
     };
 
-    private void OpenSend()
+    private string ConfirmBody => _confirmAction switch
     {
-        _sendForm = new();
-        _sendEditContext = new(_sendForm);
-        _formError = null;
-        _showSend = true;
-    }
+        ConfirmAction.Reply when _confirmReview is not null => $"Configure agency response for {_confirmReview.ClientName}.",
+        ConfirmAction.CompleteRequest when _confirmRequest is not null => $"Mark {_confirmRequest.ClientName}'s request as completed.",
+        ConfirmAction.DuplicateRequest when _confirmRequest is not null => $"Create a working copy of {_confirmRequest.ClientName}'s request.",
+        ConfirmAction.ArchiveReview when _confirmReview is not null => $"Archive {_confirmReview.ClientName}'s review from active reputation views.",
+        ConfirmAction.ArchiveRequest when _confirmRequest is not null => $"Archive {_confirmRequest.ClientName}'s review request from active views.",
+        ConfirmAction.Sync => "Configure seed synchronization before repairing schema or adding missing reputation records.",
+        ConfirmAction.Export => $"Configure export settings for {ActiveCount:N0} current reputation matches.",
+        _ => string.Empty
+    };
 
-    private async Task SendRequestAsync()
+    private string ConfirmButtonText => _confirmAction switch
     {
-        _formError = null;
-        if (!_sendEditContext.Validate()) return;
+        ConfirmAction.Reply => "Save Reply",
+        ConfirmAction.CompleteRequest => "Mark Complete",
+        ConfirmAction.DuplicateRequest => "Create Copy",
+        ConfirmAction.ArchiveReview => "Archive",
+        ConfirmAction.ArchiveRequest => "Archive",
+        ConfirmAction.Sync => "Run Sync",
+        ConfirmAction.Export => "Export File",
+        _ => "Execute"
+    };
+
+    private string ConfirmButtonClass => IsArchiveAction ? "um-btn-danger" : "um-btn-primary";
+
+    private string ConfirmIcon => _confirmAction switch
+    {
+        ConfirmAction.Reply => "bi-reply-fill",
+        ConfirmAction.CompleteRequest => "bi-check-circle-fill",
+        ConfirmAction.DuplicateRequest => "bi-copy",
+        ConfirmAction.ArchiveReview => "bi-archive-fill",
+        ConfirmAction.ArchiveRequest => "bi-archive-fill",
+        ConfirmAction.Sync => "bi-cloud-arrow-down-fill",
+        ConfirmAction.Export => "bi-download",
+        _ => "bi-question-circle-fill"
+    };
+
+    private string ConfirmIconTone => IsArchiveAction ? "um-confirm-icon--danger" : string.Empty;
+    private bool IsArchiveAction => _confirmAction == ConfirmAction.ArchiveReview || _confirmAction == ConfirmAction.ArchiveRequest;
+
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Marketing", "/marketing/campaigns"), new("Reviews", null)); await LoadAsync(); }
+    private async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchMarketingReviewsAsync(_tenantId); _reviews = result?.Reviews.ToList() ?? []; _requests = result?.Requests.ToList() ?? []; ApplyFilters(); EnsureSelectedStillVisible(); } catch (Exception ex) { _loadError = $"Failed to load reputation data: {ex.Message}"; _reviews = []; _requests = []; _filteredReviews = []; _filteredRequests = []; _pagedReviews = []; _pagedRequests = []; } finally { _loading = false; } }
+    private void ApplyFilters(bool resetPage = false) { var reviews = _reviews.AsEnumerable(); var requests = _requests.AsEnumerable(); if (!string.IsNullOrWhiteSpace(_search)) { reviews = reviews.Where(x => x.ClientName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Platform.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Content.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Response.Contains(_search, StringComparison.OrdinalIgnoreCase)); requests = requests.Where(x => x.ClientName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Platform.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Channel.Contains(_search, StringComparison.OrdinalIgnoreCase)); } if (!string.IsNullOrWhiteSpace(_platformFilter)) { reviews = reviews.Where(x => x.Platform == _platformFilter); requests = requests.Where(x => x.Platform == _platformFilter); } reviews = _ratingFilter switch { "promoter" => reviews.Where(x => x.Rating >= 4), "five" => reviews.Where(x => x.Rating == 5), "low" => reviews.Where(x => x.Rating <= 3), _ => reviews }; requests = _ratingFilter switch { "promoter" => requests.Where(x => x.NpsScore >= 9), "low" => requests.Where(x => x.NpsScore <= 6), _ => requests }; requests = _requestFilter switch { "completed" => requests.Where(x => x.ReviewLeft), "pending" => requests.Where(x => !x.ReviewLeft), _ => requests }; reviews = _kpiFilter switch { "rating" => reviews.Where(x => x.Rating >= 4), "google" => reviews.Where(x => x.Platform == "Google"), "needed" => reviews.Where(x => string.IsNullOrWhiteSpace(x.Response)), _ => reviews }; requests = _kpiFilter switch { "requests" => requests, "response" => requests.Where(x => x.ReviewLeft), _ => requests }; _filteredReviews = reviews.OrderByDescending(x => x.ReviewDate).ThenByDescending(x => x.Rating).ToList(); _filteredRequests = requests.OrderByDescending(x => x.SentDate).ThenByDescending(x => x.NpsScore).ToList(); if (resetPage) { _reviewPage = 1; _requestPage = 1; } if (_reviewPage > ReviewTotalPages) _reviewPage = ReviewTotalPages; if (_requestPage > RequestTotalPages) _requestPage = RequestTotalPages; _pagedReviews = _filteredReviews.Skip((_reviewPage - 1) * PageSize).Take(PageSize).ToList(); _pagedRequests = _filteredRequests.Skip((_requestPage - 1) * PageSize).Take(PageSize).ToList(); }
+    private void SetTab(string tab) { _tab = tab; ClearSelection(); ApplyFilters(); }
+    private void SetKpiFilter(string filter) { _kpiFilter = _kpiFilter == filter ? "all" : filter; if (filter is "requests" or "response") _tab = "requests"; if (filter is "rating" or "google" or "needed") _tab = "reviews"; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _search = string.Empty; _platformFilter = string.Empty; _ratingFilter = string.Empty; _requestFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); }
+    private void PreviousReviewPage() { if (_reviewPage <= 1) return; _reviewPage--; ApplyFilters(); }
+    private void NextReviewPage() { if (_reviewPage >= ReviewTotalPages) return; _reviewPage++; ApplyFilters(); }
+    private void PreviousRequestPage() { if (_requestPage <= 1) return; _requestPage--; ApplyFilters(); }
+    private void NextRequestPage() { if (_requestPage >= RequestTotalPages) return; _requestPage++; ApplyFilters(); }
+    private void SelectReview(MarketingReviewDto item) { _selectedReview = item; _selectedRequest = null; }
+    private void SelectRequest(MarketingReviewRequestDto item) { _selectedRequest = item; _selectedReview = null; }
+    private void ClearSelection() { _selectedReview = null; _selectedRequest = null; }
+    private string ReviewCardCss(MarketingReviewDto item) => _selectedReview?.ReviewId == item.ReviewId ? "mkv-review-card mkv-review-card--selected" : "mkv-review-card";
+    private string RequestRowCss(MarketingReviewRequestDto item) => _selectedRequest?.ReviewRequestId == item.ReviewRequestId ? "mkv-table-row mkv-table-row--selected" : "mkv-table-row";
+    private void OpenCreateReview() { _editingReviewId = Guid.Empty; _reviewForm = new ReviewForm { Platform = "Google", Rating = 5, ReviewDate = DateTime.Today, Content = "Great service and responsive support." }; _showReviewForm = true; }
+    private void OpenEditReview(MarketingReviewDto item) { _editingReviewId = item.ReviewId; _reviewForm = new() { ClientName = item.ClientName, Platform = item.Platform, Rating = item.Rating, ReviewDate = item.ReviewDate, Content = item.Content, Response = item.Response }; _showReviewForm = true; }
+    private void OpenCreateRequest() { _editingRequestId = Guid.Empty; _requestForm = new ReviewRequestForm { Channel = "Email", Platform = "Google", SentDate = DateTime.Today, NpsScore = 9 }; _showRequestForm = true; }
+    private void OpenEditRequest(MarketingReviewRequestDto item) { _editingRequestId = item.ReviewRequestId; _requestForm = new() { ClientName = item.ClientName, Channel = item.Channel, Platform = item.Platform, SentDate = item.SentDate, ReviewLeft = item.ReviewLeft, NpsScore = item.NpsScore }; _showRequestForm = true; }
+    private void CloseForms() { if (_busy) return; _showReviewForm = false; _showRequestForm = false; _editingReviewId = Guid.Empty; _editingRequestId = Guid.Empty; }
+    private async Task SaveReviewAsync() { _busy = true; try { var request = ToReviewDto(); if (_editingReviewId == Guid.Empty) { await Api.CreateMarketingReviewAsync(request); ShowToast("Review added.", "success"); } else { await Api.UpdateMarketingReviewAsync(_editingReviewId, request); ShowToast("Review saved.", "success"); } CloseForms(); await LoadAsync(); } catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", "danger"); } finally { _busy = false; } }
+    private async Task SaveRequestAsync() { _busy = true; try { var request = ToRequestDto(); if (_editingRequestId == Guid.Empty) { await Api.CreateMarketingReviewRequestAsync(request); ShowToast("Review request sent.", "success"); } else { await Api.UpdateMarketingReviewRequestAsync(_editingRequestId, request); ShowToast("Review request saved.", "success"); } CloseForms(); await LoadAsync(); } catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", "danger"); } finally { _busy = false; } }
+    private Task NotifyValidationAsync(EditContext _) { ShowToast("Please correct the validation errors before saving.", "warning"); return Task.CompletedTask; }
+    private MarketingReviewDto ToReviewDto() => new() { ReviewId = _editingReviewId, TenantId = _tenantId, ClientName = _reviewForm.ClientName.Trim(), Platform = _reviewForm.Platform, Rating = _reviewForm.Rating, ReviewDate = _reviewForm.ReviewDate ?? DateTime.UtcNow, Content = _reviewForm.Content.Trim(), Response = _reviewForm.Response.Trim() };
+    private MarketingReviewRequestDto ToRequestDto() => new() { ReviewRequestId = _editingRequestId, TenantId = _tenantId, ClientName = _requestForm.ClientName.Trim(), Channel = _requestForm.Channel, Platform = _requestForm.Platform, SentDate = _requestForm.SentDate ?? DateTime.UtcNow, ReviewLeft = _requestForm.ReviewLeft, NpsScore = _requestForm.NpsScore };
+    private void ConfigureReply(MarketingReviewDto item) => ShowConfirm(item, null, ConfirmAction.Reply);
+    private void ConfigureArchiveReview(MarketingReviewDto item) => ShowConfirm(item, null, ConfirmAction.ArchiveReview);
+    private void ConfigureCompleteRequest(MarketingReviewRequestDto item) => ShowConfirm(null, item, ConfirmAction.CompleteRequest);
+    private void ConfigureDuplicateRequest(MarketingReviewRequestDto item) => ShowConfirm(null, item, ConfirmAction.DuplicateRequest);
+    private void ConfigureArchiveRequest(MarketingReviewRequestDto item) => ShowConfirm(null, item, ConfirmAction.ArchiveRequest);
+    private void ConfigureSync() => ShowConfirm(null, null, ConfirmAction.Sync);
+    private void ConfigureExport() => ShowConfirm(null, null, ConfirmAction.Export);
+    private void ShowConfirm(MarketingReviewDto? review, MarketingReviewRequestDto? request, ConfirmAction action) { _confirmReview = review; _confirmRequest = request; _confirmAction = action; _actionConfig = CreateDefaultConfiguration(review, request, action); _showConfirm = true; }
+    private void CancelConfirm() { if (_busy) return; _showConfirm = false; _confirmReview = null; _confirmRequest = null; }
+    private async Task ExecuteConfirmAsync()
+    {
+        _busy = true;
         try
         {
-            await Api.CreateMarketingReviewRequestAsync(new MarketingReviewRequestDto { TenantId = _tenantId, ClientName = _sendForm.ClientName, Channel = _sendForm.Channel, Platform = _sendForm.Platform, NpsScore = _sendForm.NpsScore });
-            _showSend = false;
-            await LoadAsync();
+            if (_confirmAction == ConfirmAction.Reply && _confirmReview is not null)
+            {
+                await Api.ReplyMarketingReviewAsync(_confirmReview.ReviewId, _actionConfig.ResponseText);
+                ShowToast($"Reply saved for {_confirmReview.ClientName}.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.CompleteRequest && _confirmRequest is not null)
+            {
+                await Api.CompleteMarketingReviewRequestAsync(_confirmRequest.ReviewRequestId);
+                ShowToast($"Marked {_confirmRequest.ClientName}'s request complete.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.DuplicateRequest && _confirmRequest is not null)
+            {
+                await Api.DuplicateMarketingReviewRequestAsync(_confirmRequest.ReviewRequestId);
+                ShowToast($"Duplicated {_confirmRequest.ClientName}'s request.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.ArchiveReview && _confirmReview is not null)
+            {
+                if (_actionConfig.ExportBeforeAction)
+                {
+                    await ExportReviewsAsync(new[] { _confirmReview });
+                }
+
+                await Api.ArchiveMarketingReviewAsync(_confirmReview.ReviewId);
+                ShowToast($"Archived {_confirmReview.ClientName}'s review.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.ArchiveRequest && _confirmRequest is not null)
+            {
+                if (_actionConfig.ExportBeforeAction)
+                {
+                    await ExportRequestsAsync(new[] { _confirmRequest });
+                }
+
+                await Api.ArchiveMarketingReviewRequestAsync(_confirmRequest.ReviewRequestId);
+                ShowToast($"Archived {_confirmRequest.ClientName}'s request.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.Sync)
+            {
+                await Api.EnsureMarketingReviewSeedAsync(_tenantId);
+                ShowToast("Review seed data synchronized.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.Export)
+            {
+                await ExportConfiguredAsync();
+            }
+
+            _showConfirm = false;
+            _confirmReview = null;
+            _confirmRequest = null;
+            if (_confirmAction != ConfirmAction.Export && _actionConfig.RefreshAfterAction)
+            {
+                await LoadAsync();
+            }
         }
-        catch (Exception ex) { _formError = $"Send failed: {ex.Message}"; }
+        catch (Exception ex)
+        {
+            ShowToast($"Action failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
-
-    private sealed record ReviewRow(string ClientName, string Platform, int Rating, DateTime Date, string Content, string Response);
-    private sealed record ReviewRequest(string ClientName, string Channel, DateTime SentDate, string Platform, bool ReviewLeft, int NpsScore);
-
-    private sealed class ReviewRequestForm
+    private async Task ExportConfiguredAsync() { if (_actionConfig.ExecutionMode == "Reviews" || (_actionConfig.ExecutionMode == "Current" && _tab == "reviews")) { await ExportReviewsAsync(_actionConfig.ExecutionMode == "Reviews" ? _reviews : _filteredReviews); ShowToast("Reviews exported.", "success"); } else { await ExportRequestsAsync(_actionConfig.ExecutionMode == "Requests" ? _requests : _filteredRequests); ShowToast("Review requests exported.", "success"); } }
+    private async Task ExportReviewsAsync(IReadOnlyCollection<MarketingReviewDto> items) { if (!items.Any()) return; var csv = new StringBuilder(); csv.AppendLine(_actionConfig.IncludeResponses ? "ClientName,Platform,Rating,ReviewDate,Content,Response" : "ClientName,Platform,Rating,ReviewDate,Content"); foreach (var item in items) { if (_actionConfig.IncludeResponses) csv.AppendLine(string.Join(',', Csv(item.ClientName), Csv(item.Platform), item.Rating, Csv(item.ReviewDate.ToString("yyyy-MM-dd")), Csv(item.Content), Csv(item.Response))); else csv.AppendLine(string.Join(',', Csv(item.ClientName), Csv(item.Platform), item.Rating, Csv(item.ReviewDate.ToString("yyyy-MM-dd")), Csv(item.Content))); } var bytes = Encoding.UTF8.GetBytes(csv.ToString()); await Js.InvokeVoidAsync("amsShell.downloadBase64", $"marketing-reviews-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes)); }
+    private async Task ExportRequestsAsync(IReadOnlyCollection<MarketingReviewRequestDto> items) { if (!items.Any()) return; var csv = new StringBuilder(); csv.AppendLine(_actionConfig.IncludeResponses ? "ClientName,Channel,SentDate,Platform,ReviewLeft,NpsScore" : "ClientName,Channel,SentDate,Platform,ReviewLeft"); foreach (var item in items) { if (_actionConfig.IncludeResponses) csv.AppendLine(string.Join(',', Csv(item.ClientName), Csv(item.Channel), Csv(item.SentDate.ToString("yyyy-MM-dd")), Csv(item.Platform), item.ReviewLeft, item.NpsScore)); else csv.AppendLine(string.Join(',', Csv(item.ClientName), Csv(item.Channel), Csv(item.SentDate.ToString("yyyy-MM-dd")), Csv(item.Platform), item.ReviewLeft)); } var bytes = Encoding.UTF8.GetBytes(csv.ToString()); await Js.InvokeVoidAsync("amsShell.downloadBase64", $"marketing-review-requests-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes)); }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() { if (_selectedReview is not null) _selectedReview = _reviews.FirstOrDefault(x => x.ReviewId == _selectedReview.ReviewId); if (_selectedRequest is not null) _selectedRequest = _requests.FirstOrDefault(x => x.ReviewRequestId == _selectedRequest.ReviewRequestId); }
+    private static string RenderStars(int rating) => string.Concat(Enumerable.Range(1, 5).Select(i => i <= rating ? "★" : "☆"));
+    private static string Initials(string n) { var parts = n.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant() : n.Length > 0 ? n[..1].ToUpperInvariant() : "?"; }
+    private static string PlatformCss(string platform) => $"mkv-plt-{platform.ToLowerInvariant()}";
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private static ActionConfiguration CreateDefaultConfiguration(MarketingReviewDto? review, MarketingReviewRequestDto? request, ConfirmAction action) => action switch
     {
-        [Required, StringLength(200)] public string ClientName { get; set; } = string.Empty;
-        [Required, StringLength(80)] public string Channel { get; set; } = "Email";
-        [Required, StringLength(80)] public string Platform { get; set; } = "Google";
-        [Range(1, 10)] public int NpsScore { get; set; } = 9;
-    }
+        ConfirmAction.Reply => new() { ResponseText = string.IsNullOrWhiteSpace(review?.Response) ? "Thank you for sharing your experience. We appreciate your trust in our agency." : review.Response, RefreshAfterAction = true },
+        ConfirmAction.CompleteRequest => new() { ExecutionMode = "MarkOnly", RefreshAfterAction = true },
+        ConfirmAction.DuplicateRequest => new() { NewName = request?.ClientName ?? string.Empty, Platform = request?.Platform ?? "Google", RefreshAfterAction = true },
+        ConfirmAction.ArchiveReview => new() { Reason = "No longer actionable", ExportBeforeAction = false, RefreshAfterAction = true },
+        ConfirmAction.ArchiveRequest => new() { Reason = "No longer actionable", ExportBeforeAction = false, RefreshAfterAction = true },
+        ConfirmAction.Sync => new() { ExecutionMode = "MissingOnly", RefreshAfterAction = true },
+        ConfirmAction.Export => new() { ExecutionMode = "Current", IncludeResponses = true, RefreshAfterAction = false },
+        _ => new()
+    };
+    async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); TenantId = context.TenantId; TenantAdminUserId = context.UserId; _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; DevTenantId = context.TenantId; DevUserId = context.UserId; }
 
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
-    }
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter by {Label}"; }
+    private enum ConfirmAction { Reply, CompleteRequest, DuplicateRequest, ArchiveReview, ArchiveRequest, Sync, Export }
+    private sealed class ActionConfiguration { public string ExecutionMode { get; set; } = string.Empty; public string Reason { get; set; } = string.Empty; public string NewName { get; set; } = string.Empty; public string Platform { get; set; } = "Google"; public string ResponseText { get; set; } = string.Empty; public bool IncludeResponses { get; set; } = true; public bool ExportBeforeAction { get; set; } public bool RefreshAfterAction { get; set; } = true; }
+    private sealed class ReviewForm { [Required, StringLength(200)] public string ClientName { get; set; } = string.Empty; [Required, StringLength(80)] public string Platform { get; set; } = "Google"; [Range(1, 5)] public int Rating { get; set; } = 5; public DateTime? ReviewDate { get; set; } = DateTime.Today; [Required, StringLength(2000)] public string Content { get; set; } = string.Empty; [StringLength(2000)] public string Response { get; set; } = string.Empty; }
+    private sealed class ReviewRequestForm { [Required, StringLength(200)] public string ClientName { get; set; } = string.Empty; [Required, StringLength(80)] public string Channel { get; set; } = "Email"; [Required, StringLength(80)] public string Platform { get; set; } = "Google"; public DateTime? SentDate { get; set; } = DateTime.Today; public bool ReviewLeft { get; set; } [Range(0, 10)] public int NpsScore { get; set; } = 9; }
 }

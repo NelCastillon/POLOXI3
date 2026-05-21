@@ -1,229 +1,126 @@
 @page "/crm/leads/engagement-factors"
 @namespace Ams.Web.Components.Pages.Crm
 @using System.ComponentModel.DataAnnotations
+@using System.Globalization
 @using Ams.Application.Common.Dtos
 @using Ams.Application.Features.Leads
+@using Microsoft.AspNetCore.Components.Forms
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
 
-<PageTitle>Lead Engagement Factors — CRM</PageTitle>
+<PageTitle>Enterprise Lead Engagement Factors</PageTitle>
 
-<AppPageHeader Title="Lead Engagement Factors"
-               Subtitle="Manage tenant-scoped engagement factors used to calculate lead engagement level"
-               Icon="bi-activity">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick="OpenCreateFactor">
-            <i class="bi bi-activity" aria-hidden="true"></i> New Factor
-        </button>
-        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/crm/leads")'>
-            <i class="bi bi-person-plus" aria-hidden="true"></i> Leads
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<div class="ls-factor-kpi pc-kpi-strip">
-    <div class="pc-kpi-card @(_factorFilter is null ? "pc-kpi-card--active" : "")" @onclick="() => SetFactorFilter(null)" title="Show all engagement factors">
-        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-activity" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_factors.Count</div><div class="pc-kpi-label">Factors</div></div>
-    </div>
-    <div class="pc-kpi-card @(_factorFilter == "Active" ? "pc-kpi-card--active" : "")" @onclick='() => SetFactorFilter("Active")' title="Show active factors">
-        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_factors.Count(x => x.IsActive)</div><div class="pc-kpi-label">Active</div></div>
-    </div>
-    <div class="pc-kpi-card @(_factorFilter == "Inactive" ? "pc-kpi-card--active" : "")" @onclick='() => SetFactorFilter("Inactive")' title="Show inactive factors">
-        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-pause-circle" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_factors.Count(x => !x.IsActive)</div><div class="pc-kpi-label">Inactive</div></div>
-    </div>
-    <div class="pc-kpi-card @(_factorFilter == "Positive" ? "pc-kpi-card--active" : "")" @onclick='() => SetFactorFilter("Positive")' title="Show factors that add engagement points">
-        <span class="pc-kpi-icon pc-kpi-icon--success"><i class="bi bi-plus-circle" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_factors.Count(x => x.Points > 0)</div><div class="pc-kpi-label">Positive</div></div>
-    </div>
-    <div class="pc-kpi-card @(_factorFilter == "Negative" ? "pc-kpi-card--active" : "")" @onclick='() => SetFactorFilter("Negative")' title="Show factors that subtract engagement points">
-        <span class="pc-kpi-icon pc-kpi-icon--danger"><i class="bi bi-dash-circle" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_factors.Count(x => x.Points < 0)</div><div class="pc-kpi-label">Negative</div></div>
-    </div>
-</div>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-        <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i> @_loadError
+    <div class="ld-toast ld-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ld-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-<div class="ls-factor-layout row g-3 mb-3">
-    <div class="col-12 col-xl-8">
-        <div class="um-grid-card ls-panel ls-factor-panel h-100 position-relative">
-            @if (_loading)
-            {
-                <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
-            }
-            <div class="ls-panel-header">
-                <div class="ls-panel-title-wrap">
-                    <span class="ls-panel-icon"><i class="bi bi-activity" aria-hidden="true"></i></span>
-                    <div>
-                        <h3>Engagement Factor Management</h3>
-                        <p>Create, edit, activate, deactivate, and delete factors used in lead engagement scoring.</p>
-                    </div>
-                </div>
-                <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreateFactor"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Factor</button>
-            </div>
-            @if (FilteredFactors.Count == 0)
-            {
-                <div class="ls-empty-state">
-                    <i class="bi bi-activity" aria-hidden="true"></i>
-                    <h4>No engagement factors match this view</h4>
-                    <p>Change the KPI filter or add a new factor to start configuring engagement logic.</p>
-                    <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreateFactor"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Factor</button>
-                </div>
-            }
-            else
-            {
-                <div class="ls-rules-grid">
-                    @foreach (var factor in FilteredFactors.OrderBy(f => f.SortOrder).ThenByDescending(f => f.Points))
+@if (_showConfirm && _confirmAction is not null)
+{
+    <div class="ef-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="ef-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="engagementConfirmTitle" @onclick:stopPropagation="true">
+            <div class="ef-confirm-icon ef-confirm-@_confirmAction.Kind"><i class="bi @_confirmAction.Icon" aria-hidden="true"></i></div>
+            <h2 id="engagementConfirmTitle">@_confirmAction.Title</h2>
+            <p>@_confirmAction.Message</p>
+            <div class="ef-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_busy">Cancel</button>
+                <button type="button" class="um-btn @_confirmAction.ButtonClass" @onclick="ExecuteConfirmedAsync" disabled="@_busy">
+                    @if (_busy)
                     {
-                        <div class="ls-rule-card">
-                            <div class="ls-rule-hdr">
-                                <div class="ls-rule-heading">
-                                    <span class="ls-rule-avatar @FactorAvatarClass(factor)"><i class="@FactorIcon(factor)" aria-hidden="true"></i></span>
-                                    <div>
-                                        <div class="ls-rule-title">@factor.FactorName</div>
-                                        <div class="ls-rule-subtitle">@MetricLabel(factor.Metric)</div>
-                                    </div>
-                                </div>
-                                <div class="ls-rule-actions">
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditFactor(factor)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ConfirmDeleteFactor(factor)" title="Delete"><i class="bi bi-trash" aria-hidden="true"></i></button>
-                                </div>
-                            </div>
-                            <div class="ls-rule-meta">
-                                <span class="ls-status-pill @(factor.IsActive ? "ls-status-pill--active" : "ls-status-pill--inactive")">@(factor.IsActive ? "Active" : "Inactive")</span>
-                                <span class="ls-points-pill @PointsClass(factor.Points)">@FormatPoints(factor.Points)</span>
-                                <span class="ls-order-pill">Order @factor.SortOrder</span>
-                            </div>
-                            <div class="ls-rule-cond">
-                                <span>Condition</span>
-                                <strong>@FactorCondition(factor)</strong>
-                            </div>
-                            <div class="ls-rule-footer">
-                                <span><i class="bi bi-diagram-3" aria-hidden="true"></i> @factor.Operator</span>
-                                <span><i class="bi bi-database-check" aria-hidden="true"></i> Tenant scoped</span>
-                            </div>
-                        </div>
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
                     }
-                </div>
-            }
-        </div>
-    </div>
-    <div class="col-12 col-xl-4">
-        <div class="um-grid-card ls-panel ls-preview-panel h-100 position-relative">
-            <div class="ls-panel-header ls-panel-header--compact">
-                <div class="ls-panel-title-wrap">
-                    <span class="ls-panel-icon ls-panel-icon--preview"><i class="bi bi-people" aria-hidden="true"></i></span>
-                    <div>
-                        <h3>Engaged Leads Preview</h3>
-                        <p>Review lead engagement levels affected by configured factors.</p>
-                    </div>
-                </div>
-            </div>
-            <div class="ls-preview-toolbar">
-                <SfTextBox Placeholder="Search leads..." @bind-Value="_searchTerm" Width="100%"></SfTextBox>
-                <button class="um-btn um-btn-primary um-btn-sm" @onclick="LoadAsync"><i class="bi bi-search" aria-hidden="true"></i></button>
-            </div>
-            <div class="ls-preview-grid app-datagrid">
-                <SfGrid TValue="LeadEngagementRow" DataSource="_filtered" AllowPaging="true" AllowSorting="true" Height="520px" EnableHover="true" RowHeight="52">
-                    <GridPageSettings PageSize="10" PageSizes="@(new[] { 10, 25, 50 })"></GridPageSettings>
-                    <GridColumns>
-                        <GridColumn Field="@nameof(LeadEngagementRow.Level)" HeaderText="Level" Width="100">
-                            <Template>@{ var r = (LeadEngagementRow)context; }<span class="badge @LevelClass(r.Level)">@r.Level</span></Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(LeadEngagementRow.FullName)" HeaderText="Lead" Width="180">
-                            <Template>
-                                @{ var r = (LeadEngagementRow)context; }
-                                <div class="fw-semibold">@r.FullName</div>
-                                <div class="text-muted small">@r.AccountName</div>
-                            </Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(LeadEngagementRow.Score)" HeaderText="Score" Width="90" TextAlign="TextAlign.Right">
-                            <Template>@{ var r = (LeadEngagementRow)context; }<strong>@r.Score</strong></Template>
-                        </GridColumn>
-                        <GridColumn HeaderText="" Width="70" TextAlign="TextAlign.Right">
-                            <Template>@{ var r = (LeadEngagementRow)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo($"/crm/leads/{r.LeadId}")'><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template>
-                        </GridColumn>
-                    </GridColumns>
-                </SfGrid>
+                    @_confirmAction.ButtonText
+                </button>
             </div>
         </div>
     </div>
-</div>
+}
 
 @if (_showFactorForm)
 {
-    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseFactorForm">
-        <div class="mt-modal ls-rule-modal" role="dialog" aria-modal="true" aria-labelledby="leadEngagementFactorTitle" @onclick:stopPropagation="true">
-            <EditForm Model="_factorForm" OnValidSubmit="SaveFactorAsync">
-                <DataAnnotationsValidator />
-                <div class="um-modal-header">
-                    <i class="bi bi-activity" aria-hidden="true"></i>
-                    <span id="leadEngagementFactorTitle">@(_editingFactorId == Guid.Empty ? "New Engagement Factor" : "Edit Engagement Factor")</span>
-                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseFactorForm" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+    <div class="ef-modal-backdrop" role="presentation" @onclick="CloseFactorForm">
+        <div class="ef-factor-modal" role="dialog" aria-modal="true" aria-labelledby="leadEngagementFactorTitle" @onclick:stopPropagation="true">
+            <div class="ef-modal-header">
+                <div class="ef-modal-title">
+                    <span class="ef-modal-icon"><i class="bi bi-activity" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 id="leadEngagementFactorTitle">@(_editingFactorId == Guid.Empty ? "Create engagement factor" : "Edit engagement factor")</h2>
+                        <p>Configure tenant-scoped activity criteria that influence lead engagement level and producer follow-up priority.</p>
+                    </div>
                 </div>
-                <div class="um-modal-body">
-                    <div class="um-form-grid">
-                        <div class="um-field um-field--full">
-                            <label>Factor name <span class="text-danger">*</span></label>
-                            <InputText class="um-input" @bind-Value="_factorForm.FactorName" />
-                            <ValidationMessage For="() => _factorForm.FactorName" class="text-danger" />
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseFactorForm" disabled="@_savingFactor" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_factorForm" OnValidSubmit="SaveFactorAsync" OnInvalidSubmit="HandleInvalidFactorSubmitAsync">
+                <DataAnnotationsValidator />
+                <div class="ef-modal-body">
+                    <div class="ef-form-banner">
+                        <i class="bi bi-shield-check" aria-hidden="true"></i>
+                        <div>
+                            <strong>Enterprise engagement governance</strong>
+                            <span>Factors are validated, ordered, tenant scoped, and synchronized with the active CRM engagement workflow.</span>
                         </div>
-                        <div class="um-field">
-                            <label>Metric <span class="text-danger">*</span></label>
-                            <InputSelect class="um-input" @bind-Value="_factorForm.Metric">
+                    </div>
+                    <div class="ef-form-grid">
+                        <div class="ef-field ef-field-wide">
+                            <label>Factor name <span>*</span></label>
+                            <InputText class="ef-input" @bind-Value="_factorForm.FactorName" placeholder="Example: Opened nurture email" />
+                            <ValidationMessage For="() => _factorForm.FactorName" class="ef-validation" />
+                        </div>
+                        <div class="ef-field">
+                            <label>Metric <span>*</span></label>
+                            <InputSelect class="ef-input" @bind-Value="_factorForm.Metric">
                                 @foreach (var item in _metricOptions)
                                 {
                                     <option value="@item.Value">@item.Label</option>
                                 }
                             </InputSelect>
-                            <ValidationMessage For="() => _factorForm.Metric" class="text-danger" />
+                            <ValidationMessage For="() => _factorForm.Metric" class="ef-validation" />
                         </div>
-                        <div class="um-field">
-                            <label>Condition <span class="text-danger">*</span></label>
-                            <InputSelect class="um-input" @bind-Value="_factorForm.Operator">
+                        <div class="ef-field">
+                            <label>Condition <span>*</span></label>
+                            <InputSelect class="ef-input" @bind-Value="_factorForm.Operator">
                                 @foreach (var item in _operatorOptions)
                                 {
                                     <option value="@item.Value">@item.Label</option>
                                 }
                             </InputSelect>
-                            <ValidationMessage For="() => _factorForm.Operator" class="text-danger" />
+                            <ValidationMessage For="() => _factorForm.Operator" class="ef-validation" />
                         </div>
-                        <div class="um-field">
+                        <div class="ef-field ef-field-wide">
                             <label>Value</label>
-                            <InputText class="um-input" @bind-Value="_factorForm.Value" placeholder="Example: 1, 14, 30" />
-                            <ValidationMessage For="() => _factorForm.Value" class="text-danger" />
+                            <InputText class="ef-input" @bind-Value="_factorForm.Value" placeholder="Example: 1, 14, 30" />
+                            <ValidationMessage For="() => _factorForm.Value" class="ef-validation" />
                         </div>
-                        <div class="um-field">
-                            <label>Points <span class="text-danger">*</span></label>
-                            <InputNumber class="um-input" @bind-Value="_factorForm.Points" />
-                            <ValidationMessage For="() => _factorForm.Points" class="text-danger" />
+                        <div class="ef-field">
+                            <label>Points <span>*</span></label>
+                            <InputNumber class="ef-input" @bind-Value="_factorForm.Points" />
+                            <ValidationMessage For="() => _factorForm.Points" class="ef-validation" />
                         </div>
-                        <div class="um-field">
+                        <div class="ef-field">
                             <label>Sort order</label>
-                            <InputNumber class="um-input" @bind-Value="_factorForm.SortOrder" />
-                            <ValidationMessage For="() => _factorForm.SortOrder" class="text-danger" />
+                            <InputNumber class="ef-input" @bind-Value="_factorForm.SortOrder" />
+                            <ValidationMessage For="() => _factorForm.SortOrder" class="ef-validation" />
                         </div>
-                        <div class="um-field um-field--checkbox">
-                            <label><InputCheckbox @bind-Value="_factorForm.IsActive" /> Active</label>
+                        <div class="ef-field ef-field-wide">
+                            <label class="ef-check"><InputCheckbox @bind-Value="_factorForm.IsActive" /> Active engagement factor</label>
                         </div>
                     </div>
                 </div>
-                <div class="um-modal-footer">
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseFactorForm">Cancel</button>
+                <div class="ef-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseFactorForm" disabled="@_savingFactor">Cancel</button>
                     <button type="submit" class="um-btn um-btn-primary" disabled="@_savingFactor">
-                        <i class="bi bi-check-lg" aria-hidden="true"></i> Save Factor
+                        @if (_savingFactor)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        @(_editingFactorId == Guid.Empty ? "Create factor" : "Save factor")
                     </button>
                 </div>
             </EditForm>
@@ -231,107 +128,242 @@
     </div>
 }
 
-@if (_deleteFactor is not null)
-{
-    <div class="mt-modal-backdrop" role="presentation" @onclick="CancelDeleteFactor">
-        <div class="mt-modal ls-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="deleteEngagementFactorTitle" @onclick:stopPropagation="true">
-            <div class="um-confirm-dialog">
-                <div class="um-modal-header">
-                    <i class="bi bi-trash" aria-hidden="true"></i>
-                    <span id="deleteEngagementFactorTitle">Delete Engagement Factor</span>
-                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CancelDeleteFactor" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+<div class="ef-enterprise-page">
+    <section class="ef-hero">
+        <div class="ef-hero-left">
+            <span class="ef-hero-icon"><i class="bi bi-activity" aria-hidden="true"></i></span>
+            <div>
+                <div class="ef-title-row">
+                    <h1>Enterprise Engagement Factors</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> Live CRM data</span>
+                    <span><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
                 </div>
-                <div class="um-modal-body">
-                    <p>Delete <strong>@_deleteFactor.FactorName</strong>? This removes the factor from future engagement scoring.</p>
-                </div>
-                <div class="um-modal-footer">
-                    <button class="um-btn um-btn-ghost" @onclick="CancelDeleteFactor">Cancel</button>
-                    <button class="um-btn um-btn-danger" @onclick="DeleteFactorAsync"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
-                </div>
+                <p>Manage activity factors that calculate lead engagement level, surface high-touch prospects, and guide follow-up workflows.</p>
             </div>
         </div>
-    </div>
-}
+        <div class="ef-hero-actions">
+            <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh engagement data"><i class="bi @(_loading ? "bi-arrow-repeat ef-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button class="um-btn um-btn-ghost" @onclick="SyncEngagementAsync" disabled="@_loading" title="Reload factors and engagement preview"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Sync engagement</button>
+            <button class="um-btn um-btn-ghost" @onclick="NavigateToLeads" title="Open enterprise leads"><i class="bi bi-person-lines-fill" aria-hidden="true"></i> Leads</button>
+            <button class="um-btn um-btn-primary" @onclick="OpenCreateFactor" title="Create engagement factor"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Factor</button>
+        </div>
+    </section>
 
-<style>
-@@keyframes um-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }
-.ls-factor-kpi { margin-bottom: 1.25rem; }
-.ls-factor-kpi .pc-kpi-card { cursor: pointer; transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease; }
-.ls-factor-kpi .pc-kpi-card:hover { transform: translateY(-2px); box-shadow: 0 12px 30px rgba(15,23,42,.10); }
-.ls-factor-layout { align-items: stretch; }
-.ls-panel { padding: 0 !important; overflow: hidden; border: 1px solid rgba(148,163,184,.22); box-shadow: 0 18px 45px rgba(15,23,42,.07); }
-.ls-panel-header { display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; padding:1.15rem 1.25rem; border-bottom:1px solid rgba(148,163,184,.18); background:linear-gradient(135deg, rgba(248,250,252,.96), rgba(239,246,255,.72)); }
-.ls-panel-header--compact { padding-bottom: .95rem; }
-.ls-panel-title-wrap { display:flex; align-items:flex-start; gap:.8rem; min-width:0; }
-.ls-panel-icon { width:2.35rem; height:2.35rem; border-radius:.8rem; display:inline-flex; align-items:center; justify-content:center; color:#7c3aed; background:linear-gradient(135deg,#ede9fe,#f5f3ff); box-shadow:inset 0 0 0 1px rgba(124,58,237,.14); flex:0 0 auto; }
-.ls-panel-icon--preview { color:#2563eb; background:linear-gradient(135deg,#dbeafe,#eff6ff); box-shadow:inset 0 0 0 1px rgba(37,99,235,.14); }
-.ls-panel-title-wrap h3 { margin:0; font-size:1rem; font-weight:800; color:#0f172a; letter-spacing:-.01em; }
-.ls-panel-title-wrap p { margin:.15rem 0 0; color:#64748b; font-size:.82rem; line-height:1.35; }
-.ls-rules-grid { padding:1.25rem; display:grid; grid-template-columns:repeat(auto-fill, minmax(19rem, 1fr)); gap:1rem; }
-.ls-rule-card { position:relative; padding:1rem; border:1px solid rgba(148,163,184,.24); border-radius:1rem; background:linear-gradient(180deg,#fff,rgba(248,250,252,.96)); box-shadow:0 10px 25px rgba(15,23,42,.06); transition:transform .16s ease, box-shadow .16s ease, border-color .16s ease; }
-.ls-rule-card:hover { transform:translateY(-2px); border-color:rgba(124,58,237,.35); box-shadow:0 18px 38px rgba(15,23,42,.10); }
-.ls-rule-hdr { display:flex; align-items:flex-start; justify-content:space-between; gap:.75rem; margin-bottom:.85rem; }
-.ls-rule-heading { display:flex; align-items:center; gap:.7rem; min-width:0; }
-.ls-rule-avatar { width:2.45rem; height:2.45rem; border-radius:.85rem; display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; }
-.ls-rule-avatar--positive { color:#047857; background:#d1fae5; }
-.ls-rule-avatar--negative { color:#b91c1c; background:#fee2e2; }
-.ls-rule-avatar--neutral { color:#475569; background:#e2e8f0; }
-.ls-rule-title { font-weight:800; color:#0f172a; line-height:1.2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:14rem; }
-.ls-rule-subtitle { color:#64748b; font-size:.75rem; margin-top:.1rem; }
-.ls-rule-actions { display:flex; gap:.25rem; flex:0 0 auto; }
-.ls-rule-meta { display:flex; align-items:center; flex-wrap:wrap; gap:.4rem; margin-bottom:.8rem; }
-.ls-status-pill, .ls-points-pill, .ls-order-pill { display:inline-flex; align-items:center; border-radius:999px; padding:.22rem .55rem; font-size:.72rem; font-weight:800; line-height:1; }
-.ls-status-pill--active { color:#047857; background:#d1fae5; }
-.ls-status-pill--inactive { color:#475569; background:#e2e8f0; }
-.ls-points-pill--positive { color:#047857; background:#dcfce7; }
-.ls-points-pill--negative { color:#b91c1c; background:#fee2e2; }
-.ls-points-pill--neutral { color:#475569; background:#e2e8f0; }
-.ls-order-pill { color:#334155; background:#f1f5f9; }
-.ls-rule-cond { display:flex; flex-direction:column; gap:.25rem; padding:.75rem; border-radius:.8rem; background:#f8fafc; border:1px solid rgba(148,163,184,.20); }
-.ls-rule-cond span { color:#64748b; font-size:.7rem; text-transform:uppercase; font-weight:800; letter-spacing:.05em; }
-.ls-rule-cond strong { color:#0f172a; font-size:.86rem; line-height:1.35; }
-.ls-rule-footer { display:flex; align-items:center; justify-content:space-between; gap:.5rem; margin-top:.8rem; color:#64748b; font-size:.75rem; }
-.ls-rule-footer span { display:inline-flex; align-items:center; gap:.35rem; }
-.ls-empty-state { margin:1.25rem; min-height:22rem; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:2rem; border:1px dashed rgba(148,163,184,.45); border-radius:1rem; background:linear-gradient(180deg,#fff,#f8fafc); }
-.ls-empty-state i { font-size:2.4rem; color:#94a3b8; margin-bottom:.75rem; }
-.ls-empty-state h4 { margin:0; font-size:1rem; font-weight:800; color:#0f172a; }
-.ls-empty-state p { margin:.4rem 0 1rem; color:#64748b; max-width:28rem; }
-.ls-preview-toolbar { display:flex; align-items:center; gap:.5rem; padding:1rem 1rem .8rem; }
-.ls-preview-grid { padding:0 1rem 1rem; }
-.ls-rule-modal { width:min(56rem, calc(100vw - 2rem)) !important; }
-.ls-confirm-modal { width:min(32rem, calc(100vw - 2rem)) !important; }
-.ls-rule-modal .um-input { width:100%; padding:.55rem .75rem; border:1px solid var(--border-color); border-radius:var(--r-md); background:var(--surface-input); color:var(--text-primary); font:inherit; }
-.ls-rule-modal .um-input:focus { outline:none; border-color:var(--brand-500); box-shadow:var(--ring); }
-@@media (max-width: 768px) {
-    .ls-panel-header { flex-direction:column; }
-    .ls-rules-grid { grid-template-columns:1fr; padding:1rem; }
-    .ls-rule-title { max-width:11rem; }
-}
-</style>
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="ef-error-banner"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    <section class="ef-kpi-strip" aria-label="Lead engagement factor metrics">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricCardClass(metric)" @onclick="@(() => SetQuickFilter(metric.Filter))">
+                <span class="ef-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                <span><span class="ef-kpi-val">@metric.Value</span><span class="ef-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
+            </button>
+        }
+    </section>
+
+    <section class="ef-workflow-strip" aria-label="Engagement workflow actions">
+        <button class="ef-workflow-card" @onclick="OpenCreateFactor"><i class="bi bi-plus-square" aria-hidden="true"></i><span><strong>Create factor</strong><span>Add engagement criteria.</span></span></button>
+        <button class="ef-workflow-card" @onclick="ActivateAllFactors"><i class="bi bi-check2-circle" aria-hidden="true"></i><span><strong>Activate factors</strong><span>Enable all engagement logic.</span></span></button>
+        <button class="ef-workflow-card" @onclick="SeedDefaultFactorsAsync"><i class="bi bi-stars" aria-hidden="true"></i><span><strong>Seed defaults</strong><span>Add enterprise defaults if empty.</span></span></button>
+        <button class="ef-workflow-card" @onclick="ShowAnalytics"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i><span><strong>Analyze engagement</strong><span>Review level distribution.</span></span></button>
+    </section>
+
+    <section class="ef-search-panel">
+        <div class="ef-search-wrap">
+            <span class="ef-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="ef-search-body">
+                <label for="engagementSearchInput">Search engagement workspace</label>
+                <input id="engagementSearchInput" class="ef-search-input" value="@_searchTerm" @oninput="OnSearchChanged" placeholder="Search factors, metrics, conditions, leads, accounts, or levels..." />
+                <span class="ef-search-hint">Enterprise search filters engagement factors and current lead engagement preview records.</span>
+            </div>
+        </div>
+        <select class="ef-filter-select" value="@_factorFilter" @onchange="OnFactorFilterChanged">
+            <option value="">All factors</option>
+            <option value="Active">Active factors</option>
+            <option value="Inactive">Inactive factors</option>
+            <option value="Positive">Positive points</option>
+            <option value="Negative">Negative points</option>
+        </select>
+        <select class="ef-filter-select" value="@_levelFilter" @onchange="OnLevelFilterChanged">
+            <option value="">All levels</option>
+            <option value="High">High</option>
+            <option value="Medium">Medium</option>
+            <option value="Low">Low</option>
+        </select>
+        <select class="ef-filter-select" value="@_metricFilter" @onchange="OnMetricFilterChanged">
+            <option value="">All metrics</option>
+            @foreach (var item in _metricOptions)
+            {
+                <option value="@item.Value">@item.Label</option>
+            }
+        </select>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+        <div class="ef-search-result"><strong>@FilteredLeads.Count</strong><span>matches</span></div>
+    </section>
+
+    <section class="ef-view-tabs" aria-label="Lead engagement views">
+        @foreach (var view in _views)
+        {
+            <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label</button>
+        }
+    </section>
+
+    <section class="ef-content-layout">
+        <main class="ef-main-card">
+            @if (_loading)
+            {
+                <div class="ef-loading"><i class="bi bi-arrow-repeat ef-spin" aria-hidden="true"></i><strong>Loading enterprise engagement workspace...</strong></div>
+            }
+            else if (_view == "factors")
+            {
+                <div class="ef-section-head">
+                    <div><h2>Engagement factor management</h2><p>Create, edit, activate, deactivate, duplicate, and delete tenant-scoped engagement factors.</p></div>
+                    <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreateFactor"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Factor</button>
+                </div>
+                @if (FilteredFactors.Count == 0)
+                {
+                    <div class="ef-empty-state"><i class="bi bi-activity" aria-hidden="true"></i><strong>No engagement factors match this view</strong><span>Adjust filters or add a new factor to start configuring engagement logic.</span><button class="um-btn um-btn-primary" @onclick="OpenCreateFactor">Create factor</button></div>
+                }
+                else
+                {
+                    <div class="ef-rules-grid">
+                        @foreach (var factor in FilteredFactors.OrderBy(f => f.SortOrder).ThenByDescending(f => f.Points))
+                        {
+                            <article class="ef-rule-card" @onclick="@(() => SelectFactor(factor))">
+                                <div class="ef-rule-hdr">
+                                    <div class="ef-rule-heading">
+                                        <span class="ef-rule-avatar @FactorAvatarClass(factor)"><i class="@FactorIcon(factor)" aria-hidden="true"></i></span>
+                                        <div><strong>@factor.FactorName</strong><span>@MetricLabel(factor.Metric)</span></div>
+                                    </div>
+                                    <div class="ef-rule-actions" @onclick:stopPropagation="true">
+                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => ToggleFactorActiveAsync(factor))" title="Toggle active state"><i class="bi @(factor.IsActive ? "bi-pause-circle" : "bi-play-circle")" aria-hidden="true"></i></button>
+                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenEditFactor(factor))" title="Edit factor"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => DuplicateFactorAsync(factor))" title="Duplicate factor"><i class="bi bi-copy" aria-hidden="true"></i></button>
+                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => ConfirmDeleteFactor(factor))" title="Delete factor"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                    </div>
+                                </div>
+                                <div class="ef-rule-meta">
+                                    <span class="ef-status-pill @(factor.IsActive ? "ef-status-pill-active" : "ef-status-pill-inactive")">@(factor.IsActive ? "Active" : "Inactive")</span>
+                                    <span class="ef-points-pill @PointsClass(factor.Points)">@FormatPoints(factor.Points) pts</span>
+                                    <span class="ef-order-pill">Order @factor.SortOrder</span>
+                                </div>
+                                <div class="ef-rule-cond"><span>Condition</span><strong>@FactorCondition(factor)</strong></div>
+                                <div class="ef-rule-footer"><span><i class="bi bi-diagram-3" aria-hidden="true"></i> @factor.Operator</span><span><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span></div>
+                            </article>
+                        }
+                    </div>
+                }
+            }
+            else if (_view == "leads")
+            {
+                <div class="ef-section-head">
+                    <div><h2>Engaged leads preview</h2><p>Review lead engagement level, score, account, and workflow readiness from current factor configuration.</p></div>
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="NavigateToLeads"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Leads</button>
+                </div>
+                @if (FilteredLeads.Count == 0)
+                {
+                    <div class="ef-empty-state"><i class="bi bi-people" aria-hidden="true"></i><strong>No engaged leads match this view</strong><span>Adjust search or engagement filters to view CRM records.</span><button class="um-btn um-btn-ghost" @onclick="ResetFilters">Reset filters</button></div>
+                }
+                else
+                {
+                    <div class="ef-table-scroll">
+                        <table class="ef-table">
+                            <thead><tr><th>Lead</th><th>Level</th><th class="ef-number">Score</th><th>Account</th><th></th></tr></thead>
+                            <tbody>
+                                @foreach (var lead in FilteredLeads)
+                                {
+                                    <tr class="@LeadRowClass(lead)" @onclick="@(() => SelectLead(lead))">
+                                        <td><div class="ef-name-cell"><span class="ef-avatar @AvatarColor(lead.FullName)" aria-hidden="true">@Initials(lead.FullName)</span><span><strong>@lead.FullName</strong><small>@lead.AccountName</small></span></div></td>
+                                        <td><span class="@LevelBadge(lead.Level)">@lead.Level</span></td>
+                                        <td class="ef-number"><span class="ef-score-pill @ScoreTone(lead.Score)">@lead.Score</span></td>
+                                        <td>@lead.AccountName</td>
+                                        <td @onclick:stopPropagation="true"><button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenLeadInCrm(lead))" title="Find lead in CRM"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            }
+            else
+            {
+                <div class="ef-section-head"><div><h2>Engagement analytics</h2><p>Monitor lead engagement distribution and factor contribution readiness.</p></div><button class="um-btn um-btn-ghost um-btn-sm" @onclick="SyncEngagementAsync"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Refresh analytics</button></div>
+                <div class="ef-analytics-grid">
+                    <section>
+                        <h3>Engagement distribution</h3>
+                        @foreach (var row in LevelDistribution)
+                        {
+                            <div class="ef-stage-row"><span>@row.Label</span><div><i class="@row.Tone" style="width:@row.WidthPercent%"></i></div><strong>@row.Count</strong><small>@row.Percent.ToString("F0")%</small></div>
+                        }
+                    </section>
+                    <section>
+                        <h3>Metric configuration</h3>
+                        @foreach (var metric in MetricBreakdown)
+                        {
+                            <button class="@MetricRowClass(metric.Metric)" @onclick="@(() => SelectMetric(metric.Metric))"><span><i class="bi @MetricIcon(metric.Metric)" aria-hidden="true"></i> @MetricLabel(metric.Metric)</span><div><i style="width:@metric.WidthPercent%"></i></div><strong>@metric.Total</strong><small>@metric.Active active</small></button>
+                        }
+                    </section>
+                </div>
+            }
+        </main>
+
+        <aside class="ef-detail-card">
+            @if (_selectedFactor is not null)
+            {
+                <div class="ef-detail-head"><div><span class="ef-detail-eyebrow"><i class="@FactorIcon(_selectedFactor)" aria-hidden="true"></i> @MetricLabel(_selectedFactor.Metric)</span><h2>@_selectedFactor.FactorName</h2><p>@FactorCondition(_selectedFactor)</p></div><span class="ef-points-pill @PointsClass(_selectedFactor.Points)">@FormatPoints(_selectedFactor.Points)</span></div>
+                <div class="ef-detail-body">
+                    <div class="ef-detail-summary"><div><span>Status</span><strong>@(_selectedFactor.IsActive ? "Active" : "Inactive")</strong></div><div><span>Sort</span><strong>@_selectedFactor.SortOrder</strong></div><div><span>Operator</span><strong>@_selectedFactor.Operator</strong></div><div><span>Created</span><strong>@_selectedFactor.CreatedDateUtc.ToLocalTime().ToString("MMM d", CultureInfo.CurrentCulture)</strong></div></div>
+                    <div class="ef-contact-card"><span><i class="bi bi-list-check" aria-hidden="true"></i> @FactorCondition(_selectedFactor)</span><span><i class="bi bi-lightning-charge" aria-hidden="true"></i> @FormatPoints(_selectedFactor.Points) engagement points when matched</span><span><i class="bi bi-building-lock" aria-hidden="true"></i> Tenant-scoped CRM engagement factor</span></div>
+                    <div class="ef-detail-actions"><button class="um-btn um-btn-ghost" @onclick="@(() => OpenEditFactor(_selectedFactor))"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button class="um-btn um-btn-ghost" @onclick="@(() => ToggleFactorActiveAsync(_selectedFactor))"><i class="bi bi-power" aria-hidden="true"></i> Toggle</button><button class="um-btn um-btn-danger" @onclick="@(() => ConfirmDeleteFactor(_selectedFactor))"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button></div>
+                </div>
+            }
+            else if (_selectedLead is not null)
+            {
+                <div class="ef-detail-head"><div><span class="ef-detail-eyebrow"><i class="bi bi-person-lines-fill" aria-hidden="true"></i> Engagement preview</span><h2>@_selectedLead.FullName</h2><p>@_selectedLead.AccountName</p></div><span class="@LevelBadge(_selectedLead.Level)">@_selectedLead.Level</span></div>
+                <div class="ef-detail-body">
+                    <div class="ef-detail-summary"><div><span>Score</span><strong>@_selectedLead.Score</strong></div><div><span>Level</span><strong>@_selectedLead.Level</strong></div><div><span>Account</span><strong>@_selectedLead.AccountName</strong></div><div><span>Workflow</span><strong>@LeadWorkflowLabel(_selectedLead)</strong></div></div>
+                    <div class="ef-contact-card"><span><i class="bi bi-bar-chart" aria-hidden="true"></i> @_selectedLead.Level priority from current engagement score</span><span><i class="bi bi-activity" aria-hidden="true"></i> Engagement preview is synchronized from lead activity summary.</span></div>
+                    <div class="ef-detail-actions"><button class="um-btn um-btn-ghost" @onclick="@(() => OpenLeadInCrm(_selectedLead))"><i class="bi bi-person-lines-fill" aria-hidden="true"></i> Open Lead</button><button class="um-btn um-btn-primary" @onclick="OpenCreateFactor"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add Factor</button></div>
+                </div>
+            }
+            else
+            {
+                <div class="ef-detail-empty"><i class="bi bi-activity" aria-hidden="true"></i><strong>Select a factor or lead</strong><span>Review engagement factor intelligence, lead engagement details, and workflow actions.</span></div>
+            }
+        </aside>
+    </section>
+</div>
 
 @code {
     private Guid _tenantId;
-    private string? _searchTerm;
-    private string? _loadError;
-    private string? _factorFilter;
+    private string _searchTerm = string.Empty;
+    private string _loadError = string.Empty;
+    private string _factorFilter = string.Empty;
+    private string _levelFilter = string.Empty;
+    private string _metricFilter = string.Empty;
+    private string _quickFilter = string.Empty;
+    private string _view = "factors";
     private bool _loading;
+    private bool _busy;
     private bool _showFactorForm;
+    private bool _showConfirm;
     private bool _savingFactor;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "info";
     private Guid _editingFactorId = Guid.Empty;
+    private CancellationTokenSource? _toastCts;
+    private ConfirmAction? _confirmAction;
     private LeadEngagementFactorForm _factorForm = new();
-    private LeadEngagementFactorDto? _deleteFactor;
+    private LeadEngagementFactorDto? _selectedFactor;
+    private LeadEngagementRow? _selectedLead;
     private List<LeadEngagementFactorDto> _factors = [];
     private List<LeadEngagementRow> _leads = [];
-    private List<LeadEngagementRow> _filtered = [];
 
-    private List<LeadEngagementFactorDto> FilteredFactors => _factorFilter switch
-    {
-        "Active" => _factors.Where(x => x.IsActive).ToList(),
-        "Inactive" => _factors.Where(x => !x.IsActive).ToList(),
-        "Positive" => _factors.Where(x => x.Points > 0).ToList(),
-        "Negative" => _factors.Where(x => x.Points < 0).ToList(),
-        _ => [.. _factors]
-    };
+    private static readonly List<ViewDef> _views = [new("factors", "Factors", "bi-activity"), new("leads", "Engaged Leads", "bi-people"), new("analytics", "Analytics", "bi-graph-up-arrow")];
 
     private static readonly List<LabelValue> _metricOptions =
     [
@@ -353,63 +385,155 @@
         new("IsNotZero", "Is not zero"),
     ];
 
+    private IEnumerable<KpiModel> Metrics =>
+    [
+        new("Factors", _factors.Count.ToString(), "Tenant factors", "bi-activity", "ef-blue", ""),
+        new("Active", _factors.Count(x => x.IsActive).ToString(), "Enabled now", "bi-check-circle", "ef-green", "Active"),
+        new("High", _leads.Count(x => x.Level == "High").ToString(), "Engaged leads", "bi-lightning-charge", "ef-red", "High"),
+        new("Average", AverageScore.ToString("F0"), "Engagement score", "bi-speedometer2", "ef-purple", ""),
+        new("Positive", _factors.Count(x => x.Points > 0).ToString(), "Adds points", "bi-plus-circle", "ef-cyan", "Positive")
+    ];
+
+    private List<LeadEngagementFactorDto> FilteredFactors
+    {
+        get
+        {
+            IEnumerable<LeadEngagementFactorDto> query = _factors;
+            if (!string.IsNullOrWhiteSpace(_searchTerm))
+            {
+                var term = _searchTerm.Trim();
+                query = query.Where(x => Contains(x.FactorName, term) || Contains(x.Metric, term) || Contains(x.Operator, term) || Contains(x.Value, term) || Contains(FactorCondition(x), term));
+            }
+            if (!string.IsNullOrWhiteSpace(_metricFilter)) query = query.Where(x => x.Metric == _metricFilter);
+            query = _factorFilter switch
+            {
+                "Active" => query.Where(x => x.IsActive),
+                "Inactive" => query.Where(x => !x.IsActive),
+                "Positive" => query.Where(x => x.Points > 0),
+                "Negative" => query.Where(x => x.Points < 0),
+                _ => query
+            };
+            query = _quickFilter switch
+            {
+                "Active" => query.Where(x => x.IsActive),
+                "Positive" => query.Where(x => x.Points > 0),
+                _ => query
+            };
+            return query.ToList();
+        }
+    }
+
+    private List<LeadEngagementRow> FilteredLeads
+    {
+        get
+        {
+            IEnumerable<LeadEngagementRow> query = _leads;
+            if (!string.IsNullOrWhiteSpace(_searchTerm))
+            {
+                var term = _searchTerm.Trim();
+                query = query.Where(x => Contains(x.FullName, term) || Contains(x.AccountName, term) || Contains(x.Level, term));
+            }
+            if (!string.IsNullOrWhiteSpace(_levelFilter)) query = query.Where(x => x.Level == _levelFilter);
+            query = _quickFilter switch
+            {
+                "High" => query.Where(x => x.Level == "High"),
+                _ => query
+            };
+            return query.OrderByDescending(x => x.Score).ThenBy(x => x.FullName).ToList();
+        }
+    }
+
+    private double AverageScore => _leads.Count == 0 ? 0 : _leads.Average(x => x.Score);
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-octagon", "warning" => "bi-exclamation-triangle", "success" => "bi-check2-circle", _ => "bi-info-circle" };
+
+    private IEnumerable<DistributionRow> LevelDistribution
+    {
+        get
+        {
+            var total = Math.Max(1, _leads.Count);
+            var rows = new[]
+            {
+                new DistributionRow("High", _leads.Count(x => x.Level == "High"), 0, "ef-dist-high"),
+                new DistributionRow("Medium", _leads.Count(x => x.Level == "Medium"), 0, "ef-dist-medium"),
+                new DistributionRow("Low", _leads.Count(x => x.Level == "Low"), 0, "ef-dist-low")
+            };
+            var max = Math.Max(1, rows.Max(x => x.Count));
+            return rows.Select(x => x with { WidthPercent = (double)x.Count / max * 100, Percent = (double)x.Count / total * 100 });
+        }
+    }
+
+    private IEnumerable<MetricBreakdownRow> MetricBreakdown
+    {
+        get
+        {
+            var rows = _factors.GroupBy(x => x.Metric).Select(g => new MetricBreakdownRow(g.Key, g.Count(), g.Count(x => x.IsActive), 0)).ToList();
+            var max = Math.Max(1, rows.Select(x => x.Total).DefaultIfEmpty(1).Max());
+            return rows.OrderByDescending(x => x.Total).Select(x => x with { WidthPercent = max == 0 ? 0 : (double)x.Total / max * 100 });
+        }
+    }
+
     protected override async Task OnInitializedAsync()
     {
         var context = await CurrentUser.RequireAsync();
         _tenantId = context.TenantId;
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Lead Engagement Factors", null));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Lead Engagement Factors", "/crm/leads/engagement-factors"));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
         _loading = true;
-        _loadError = null;
+        _loadError = string.Empty;
         try
         {
-            if (_tenantId == Guid.Empty)
-            {
-                _tenantId = (await CurrentUser.RequireAsync()).TenantId;
-            }
+            if (_tenantId == Guid.Empty) _tenantId = (await CurrentUser.RequireAsync()).TenantId;
 
             var factorsTask = Api.GetLeadEngagementFactorsAsync(_tenantId);
-            var leadsTask = Api.SearchLeadsAsync(_tenantId, _searchTerm);
+            var leadsTask = Api.SearchLeadsAsync(_tenantId, string.IsNullOrWhiteSpace(_searchTerm) ? null : _searchTerm);
             await Task.WhenAll(factorsTask, leadsTask);
 
-            _factors = factorsTask.Result?.ToList() ?? [];
+            _factors = factorsTask.Result?.OrderBy(x => x.SortOrder).ThenBy(x => x.FactorName).ToList() ?? [];
             var leadItems = leadsTask.Result?.Items?.Take(25).ToList() ?? [];
             var rows = new List<LeadEngagementRow>();
             foreach (var lead in leadItems)
             {
                 var summary = await Api.GetLeadEngagementSummaryAsync(lead.LeadId);
-                rows.Add(new LeadEngagementRow(
-                    lead.LeadId,
-                    $"{lead.FirstName} {lead.LastName}".Trim(),
-                    lead.AccountName ?? "—",
-                    summary?.Score ?? 0,
-                    summary?.Level ?? "Low"));
+                rows.Add(new LeadEngagementRow(lead.LeadId, $"{lead.FirstName} {lead.LastName}".Trim(), lead.AccountName ?? "—", summary?.Score ?? 0, NormalizeLevel(summary?.Level)));
             }
 
             _leads = rows.OrderByDescending(x => x.Score).ToList();
-            ApplyFilter();
+            _selectedFactor = _selectedFactor is null ? _factors.FirstOrDefault() : _factors.FirstOrDefault(x => x.EngagementFactorId == _selectedFactor.EngagementFactorId) ?? _factors.FirstOrDefault();
+            _selectedLead = _selectedLead is null ? _leads.FirstOrDefault() : _leads.FirstOrDefault(x => x.LeadId == _selectedLead.LeadId) ?? _leads.FirstOrDefault();
         }
         catch (Exception ex)
         {
             _loadError = $"Failed to load lead engagement factors: {ex.Message}";
             _factors = [];
             _leads = [];
-            _filtered = [];
+            await ShowToastAsync("Unable to load engagement data.", "danger");
         }
         finally { _loading = false; }
     }
 
-    private void SetFactorFilter(string? filter)
+    private async Task SyncEngagementAsync()
     {
-        _factorFilter = filter;
-        ApplyFilter();
+        await LoadAsync();
+        await ShowToastAsync("Lead engagement data synchronized.", "success");
     }
 
-    private void ApplyFilter() => _filtered = [.. _leads];
+    private void SetView(string view) => _view = view;
+    private void ShowAnalytics() => SetView("analytics");
+    private void NavigateToLeads() => Nav.NavigateTo("/crm/leads");
+    private void OpenLeadInCrm(LeadEngagementRow lead) => Nav.NavigateTo($"/crm/leads?search={Uri.EscapeDataString(lead.FullName)}");
+    private void SelectFactor(LeadEngagementFactorDto factor) { _selectedFactor = factor; _selectedLead = null; }
+    private void SelectLead(LeadEngagementRow lead) { _selectedLead = lead; _selectedFactor = null; }
+    private void SelectMetric(string metric) { _metricFilter = _metricFilter == metric ? string.Empty : metric; _view = "factors"; }
+    private void SetQuickFilter(string filter) { _quickFilter = _quickFilter == filter ? string.Empty : filter; if (filter == "High") _view = "leads"; else _view = "factors"; }
+    private void ResetFilters() { _searchTerm = string.Empty; _factorFilter = string.Empty; _levelFilter = string.Empty; _metricFilter = string.Empty; _quickFilter = string.Empty; }
+    private void OnSearchChanged(BlazorChangeEventArgs e) => _searchTerm = e.Value?.ToString() ?? string.Empty;
+    private void OnFactorFilterChanged(BlazorChangeEventArgs e) { _factorFilter = e.Value?.ToString() ?? string.Empty; _quickFilter = string.Empty; }
+    private void OnLevelFilterChanged(BlazorChangeEventArgs e) { _levelFilter = e.Value?.ToString() ?? string.Empty; _quickFilter = string.Empty; _view = "leads"; }
+    private void OnMetricFilterChanged(BlazorChangeEventArgs e) { _metricFilter = e.Value?.ToString() ?? string.Empty; _view = "factors"; }
 
     private void OpenCreateFactor()
     {
@@ -432,8 +556,8 @@
         _factorForm = new()
         {
             FactorName = factor.FactorName,
-            Metric = factor.Metric,
-            Operator = factor.Operator,
+            Metric = string.IsNullOrWhiteSpace(factor.Metric) ? "ActivityCount" : factor.Metric,
+            Operator = string.IsNullOrWhiteSpace(factor.Operator) ? "GreaterThanOrEqual" : factor.Operator,
             Value = factor.Value,
             Points = factor.Points,
             IsActive = factor.IsActive,
@@ -442,7 +566,8 @@
         _showFactorForm = true;
     }
 
-    private void CloseFactorForm() => _showFactorForm = false;
+    private void CloseFactorForm() { if (!_savingFactor) _showFactorForm = false; }
+    private Task HandleInvalidFactorSubmitAsync(EditContext _) => ShowToastAsync("Fix validation errors.", "warning");
 
     private async Task SaveFactorAsync()
     {
@@ -451,124 +576,147 @@
         {
             if (_editingFactorId == Guid.Empty)
             {
-                await Api.CreateLeadEngagementFactorAsync(new CreateLeadEngagementFactorRequest
-                {
-                    TenantId = _tenantId,
-                    FactorName = _factorForm.FactorName.Trim(),
-                    Metric = _factorForm.Metric,
-                    Operator = _factorForm.Operator,
-                    Value = _factorForm.Value?.Trim() ?? string.Empty,
-                    Points = _factorForm.Points,
-                    IsActive = _factorForm.IsActive,
-                    SortOrder = _factorForm.SortOrder
-                });
+                var id = await Api.CreateLeadEngagementFactorAsync(new CreateLeadEngagementFactorRequest { TenantId = _tenantId, FactorName = _factorForm.FactorName.Trim(), Metric = _factorForm.Metric, Operator = _factorForm.Operator, Value = _factorForm.Value?.Trim() ?? string.Empty, Points = _factorForm.Points, IsActive = _factorForm.IsActive, SortOrder = _factorForm.SortOrder });
+                _editingFactorId = id;
+                await ShowToastAsync("Engagement factor created.", "success");
             }
             else
             {
-                await Api.UpdateLeadEngagementFactorAsync(_editingFactorId, new UpdateLeadEngagementFactorRequest
-                {
-                    EngagementFactorId = _editingFactorId,
-                    TenantId = _tenantId,
-                    FactorName = _factorForm.FactorName.Trim(),
-                    Metric = _factorForm.Metric,
-                    Operator = _factorForm.Operator,
-                    Value = _factorForm.Value?.Trim() ?? string.Empty,
-                    Points = _factorForm.Points,
-                    IsActive = _factorForm.IsActive,
-                    SortOrder = _factorForm.SortOrder
-                });
+                await Api.UpdateLeadEngagementFactorAsync(_editingFactorId, new UpdateLeadEngagementFactorRequest { EngagementFactorId = _editingFactorId, TenantId = _tenantId, FactorName = _factorForm.FactorName.Trim(), Metric = _factorForm.Metric, Operator = _factorForm.Operator, Value = _factorForm.Value?.Trim() ?? string.Empty, Points = _factorForm.Points, IsActive = _factorForm.IsActive, SortOrder = _factorForm.SortOrder });
+                await ShowToastAsync("Engagement factor saved.", "success");
             }
-
             _showFactorForm = false;
             await LoadAsync();
         }
         catch (Exception ex)
         {
             _loadError = $"Failed to save engagement factor: {ex.Message}";
+            await ShowToastAsync("Save failed.", "danger");
         }
-        finally
-        {
-            _savingFactor = false;
-        }
+        finally { _savingFactor = false; }
     }
 
-    private void ConfirmDeleteFactor(LeadEngagementFactorDto factor) => _deleteFactor = factor;
-    private void CancelDeleteFactor() => _deleteFactor = null;
-
-    private async Task DeleteFactorAsync()
+    private async Task ToggleFactorActiveAsync(LeadEngagementFactorDto factor)
     {
-        if (_deleteFactor is null) return;
         try
         {
-            await Api.DeleteLeadEngagementFactorAsync(_deleteFactor.EngagementFactorId);
-            _deleteFactor = null;
+            await Api.UpdateLeadEngagementFactorAsync(factor.EngagementFactorId, new UpdateLeadEngagementFactorRequest { EngagementFactorId = factor.EngagementFactorId, TenantId = _tenantId, FactorName = factor.FactorName, Metric = factor.Metric, Operator = factor.Operator, Value = factor.Value, Points = factor.Points, IsActive = !factor.IsActive, SortOrder = factor.SortOrder });
+            await ShowToastAsync(!factor.IsActive ? "Engagement factor activated." : "Engagement factor paused.", "success");
             await LoadAsync();
         }
-        catch (Exception ex)
+        catch (Exception ex) { await ShowToastAsync($"Toggle failed: {ex.Message}", "danger"); }
+    }
+
+    private async Task DuplicateFactorAsync(LeadEngagementFactorDto factor)
+    {
+        try
         {
-            _loadError = $"Failed to delete engagement factor: {ex.Message}";
+            await Api.CreateLeadEngagementFactorAsync(new CreateLeadEngagementFactorRequest { TenantId = _tenantId, FactorName = $"{factor.FactorName} Copy", Metric = factor.Metric, Operator = factor.Operator, Value = factor.Value, Points = factor.Points, IsActive = false, SortOrder = _factors.Count == 0 ? 10 : _factors.Max(f => f.SortOrder) + 10 });
+            await ShowToastAsync("Engagement factor duplicated as inactive.", "success");
+            await LoadAsync();
         }
+        catch (Exception ex) { await ShowToastAsync($"Duplicate failed: {ex.Message}", "danger"); }
     }
 
-    private static string FactorCondition(LeadEngagementFactorDto factor)
+    private void ConfirmDeleteFactor(LeadEngagementFactorDto factor) => OpenConfirm(new("Delete engagement factor", $"Delete {factor.FactorName}? This removes it from future engagement scoring.", "Delete", "um-btn-danger", "bi-trash", "danger", () => DeleteFactorAsync(factor)));
+
+    private async Task DeleteFactorAsync(LeadEngagementFactorDto factor)
     {
-        var metric = MetricLabel(factor.Metric);
-        var op = _operatorOptions.FirstOrDefault(x => x.Value == factor.Operator)?.Label ?? factor.Operator;
-        return string.IsNullOrWhiteSpace(factor.Value) ? $"{metric} · {op}" : $"{metric} · {op} · {factor.Value}";
+        await Api.DeleteLeadEngagementFactorAsync(factor.EngagementFactorId);
+        if (_selectedFactor?.EngagementFactorId == factor.EngagementFactorId) _selectedFactor = null;
+        await ShowToastAsync("Engagement factor deleted.", "success");
+        await LoadAsync();
     }
 
+    private void ActivateAllFactors()
+    {
+        if (_factors.Count == 0) { _ = ShowToastAsync("No engagement factors to activate.", "warning"); return; }
+        OpenConfirm(new("Activate engagement factors", $"Activate {_factors.Count(x => !x.IsActive)} inactive engagement factor(s)?", "Activate", "um-btn-primary", "bi-check2-circle", "warning", ActivateAllFactorsAsync));
+    }
+
+    private async Task ActivateAllFactorsAsync()
+    {
+        foreach (var factor in _factors.Where(x => !x.IsActive))
+        {
+            await Api.UpdateLeadEngagementFactorAsync(factor.EngagementFactorId, new UpdateLeadEngagementFactorRequest { EngagementFactorId = factor.EngagementFactorId, TenantId = _tenantId, FactorName = factor.FactorName, Metric = factor.Metric, Operator = factor.Operator, Value = factor.Value, Points = factor.Points, IsActive = true, SortOrder = factor.SortOrder });
+        }
+        await ShowToastAsync("Engagement factors activated.", "success");
+        await LoadAsync();
+    }
+
+    private async Task SeedDefaultFactorsAsync()
+    {
+        if (_factors.Count > 0) { await ShowToastAsync("Default engagement data already exists.", "info"); return; }
+        OpenConfirm(new("Seed default engagement", "Create enterprise default engagement factors for this tenant?", "Seed defaults", "um-btn-primary", "bi-stars", "warning", CreateDefaultFactorsAsync));
+    }
+
+    private async Task CreateDefaultFactorsAsync()
+    {
+        var defaults = new[]
+        {
+            new LeadEngagementFactorSeed("Recent activity logged", "ActivityCount", "GreaterThanOrEqual", "1", 20, 10),
+            new LeadEngagementFactorSeed("Opened nurture email", "EmailsOpened", "GreaterThanOrEqual", "1", 15, 20),
+            new LeadEngagementFactorSeed("Clicked campaign link", "Clicks", "GreaterThanOrEqual", "1", 18, 30),
+            new LeadEngagementFactorSeed("Visited portal", "PortalVisits", "GreaterThanOrEqual", "2", 12, 40),
+            new LeadEngagementFactorSeed("No recent touch", "DaysSinceTouch", "GreaterThan", "30", -20, 50)
+        };
+        foreach (var factor in defaults)
+        {
+            await Api.CreateLeadEngagementFactorAsync(new CreateLeadEngagementFactorRequest { TenantId = _tenantId, FactorName = factor.FactorName, Metric = factor.Metric, Operator = factor.Operator, Value = factor.Value, Points = factor.Points, IsActive = true, SortOrder = factor.SortOrder });
+        }
+        await ShowToastAsync("Default engagement factors seeded.", "success");
+        await LoadAsync();
+    }
+
+    private void OpenConfirm(ConfirmAction action) { _confirmAction = action; _showConfirm = true; }
+    private void CancelConfirm() { if (!_busy) { _showConfirm = false; _confirmAction = null; } }
+    private async Task ExecuteConfirmedAsync() { if (_confirmAction is null) return; _busy = true; try { var action = _confirmAction; await action.ExecuteAsync(); _showConfirm = false; _confirmAction = null; } catch (Exception ex) { await ShowToastAsync($"Action failed: {ex.Message}", "danger"); } finally { _busy = false; } }
+
+    private async Task ShowToastAsync(string message, string kind = "info")
+    {
+        _toastCts?.Cancel(); _toastCts?.Dispose(); _toastCts = new CancellationTokenSource();
+        _toastMessage = message.Length <= 96 ? message : $"{message[..93]}..."; _toastKind = ToastKind(kind); _toastVisible = true; StateHasChanged();
+        try { await Task.Delay(_toastKind == "danger" ? 10400 : 8000, _toastCts.Token); _toastVisible = false; await InvokeAsync(StateHasChanged); } catch (TaskCanceledException) { }
+    }
+
+    private void HideToast() { _toastCts?.Cancel(); _toastVisible = false; }
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : value.Contains("success", StringComparison.OrdinalIgnoreCase) ? "success" : "info";
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static string NormalizeLevel(string? level) => string.IsNullOrWhiteSpace(level) ? "Low" : level.Trim() switch { "high" => "High", "medium" => "Medium", "low" => "Low", var value => CultureInfo.CurrentCulture.TextInfo.ToTitleCase(value.ToLowerInvariant()) };
+    private static string LeadWorkflowLabel(LeadEngagementRow lead) => lead.Level switch { "High" => "Immediate follow-up", "Medium" => "Nurture sequence", _ => "Monitor" };
+    private static string FactorCondition(LeadEngagementFactorDto factor) { var metric = MetricLabel(factor.Metric); var op = _operatorOptions.FirstOrDefault(x => x.Value == factor.Operator)?.Label ?? factor.Operator; return string.IsNullOrWhiteSpace(factor.Value) ? $"{metric} · {op}" : $"{metric} · {op} · {factor.Value}"; }
     private static string MetricLabel(string metric) => _metricOptions.FirstOrDefault(x => x.Value == metric)?.Label ?? metric;
-
-    private static string FactorIcon(LeadEngagementFactorDto factor) => factor.Metric switch
-    {
-        "EmailsSent" => "bi bi-envelope",
-        "EmailsOpened" => "bi bi-envelope-open",
-        "Clicks" => "bi bi-cursor",
-        "PortalVisits" => "bi bi-globe2",
-        "ActivityCount" => "bi bi-lightning",
-        "DaysSinceTouch" => "bi bi-clock-history",
-        _ => "bi bi-activity"
-    };
-
-    private static string FactorAvatarClass(LeadEngagementFactorDto factor) => factor.Points switch
-    {
-        > 0 => "ls-rule-avatar--positive",
-        < 0 => "ls-rule-avatar--negative",
-        _ => "ls-rule-avatar--neutral"
-    };
-
+    private static string FactorIcon(LeadEngagementFactorDto factor) => $"bi {MetricIcon(factor.Metric)}";
+    private static string MetricIcon(string metric) => metric switch { "EmailsSent" => "bi-envelope", "EmailsOpened" => "bi-envelope-open", "Clicks" => "bi-cursor", "PortalVisits" => "bi-globe2", "ActivityCount" => "bi-lightning", "DaysSinceTouch" => "bi-clock-history", _ => "bi-activity" };
+    private static string FactorAvatarClass(LeadEngagementFactorDto factor) => factor.Points switch { > 0 => "ef-rule-avatar-positive", < 0 => "ef-rule-avatar-negative", _ => "ef-rule-avatar-neutral" };
     private static string FormatPoints(int points) => points > 0 ? $"+{points}" : points.ToString();
-    private static string PointsClass(int points) => points < 0 ? "ls-points-pill--negative" : points > 0 ? "ls-points-pill--positive" : "ls-points-pill--neutral";
-    private static string LevelClass(string level) => level switch
-    {
-        "High" => "bg-success",
-        "Medium" => "bg-warning text-dark",
-        _ => "bg-secondary"
-    };
+    private static string PointsClass(int points) => points < 0 ? "ef-points-negative" : points > 0 ? "ef-points-positive" : "ef-points-neutral";
+    private string MetricCardClass(KpiModel metric) => $"ef-kpi-card {metric.Tone} {(_quickFilter == metric.Filter && !string.IsNullOrWhiteSpace(metric.Filter) ? "ef-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewDef view) => _view == view.Id ? "ef-view-btn ef-view-btn-active" : "ef-view-btn";
+    private string LeadRowClass(LeadEngagementRow lead) => lead.LeadId == _selectedLead?.LeadId ? "ef-row-selected" : string.Empty;
+    private string MetricRowClass(string metric) => _metricFilter == metric ? "ef-funnel-row ef-active" : "ef-funnel-row";
+    private static string LevelBadge(string level) => level switch { "High" => "ef-level ef-level-high", "Medium" => "ef-level ef-level-medium", _ => "ef-level ef-level-low" };
+    private static string ScoreTone(int score) => score >= 80 ? "ef-score-high" : score >= 40 ? "ef-score-medium" : "ef-score-low";
+    private static string AvatarColor(string name) { var colors = new[] { "ef-av1", "ef-av2", "ef-av3", "ef-av4", "ef-av5", "ef-av6" }; return colors[Math.Abs(name.GetHashCode()) % colors.Length]; }
+    private static string Initials(string name) { var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length > 0 ? name[..1] : "?"; }
 
-    private sealed record LeadEngagementRow(Guid LeadId, string FullName, string AccountName, int Score, string Level);
+    private sealed record ViewDef(string Id, string Label, string Icon);
     private sealed record LabelValue(string Value, string Label);
+    private sealed record KpiModel(string Label, string Value, string Caption, string Icon, string Tone, string Filter);
+    private sealed record ConfirmAction(string Title, string Message, string ButtonText, string ButtonClass, string Icon, string Kind, Func<Task> ExecuteAsync);
+    private sealed record DistributionRow(string Label, int Count, double WidthPercent, string Tone) { public double Percent { get; init; } }
+    private sealed record MetricBreakdownRow(string Metric, int Total, int Active, double WidthPercent);
+    private sealed record LeadEngagementFactorSeed(string FactorName, string Metric, string Operator, string Value, int Points, int SortOrder);
+    private sealed record LeadEngagementRow(Guid LeadId, string FullName, string AccountName, int Score, string Level);
 
     private sealed class LeadEngagementFactorForm
     {
-        [Required, StringLength(200)]
-        public string FactorName { get; set; } = string.Empty;
-
-        [Required, StringLength(100)]
-        public string Metric { get; set; } = "ActivityCount";
-
-        [Required, StringLength(50)]
-        public string Operator { get; set; } = "GreaterThanOrEqual";
-
-        [StringLength(500)]
-        public string? Value { get; set; }
-
-        [Range(-1000, 1000)]
-        public int Points { get; set; }
-
+        [Required, StringLength(200)] public string FactorName { get; set; } = string.Empty;
+        [Required, StringLength(100)] public string Metric { get; set; } = "ActivityCount";
+        [Required, StringLength(50)] public string Operator { get; set; } = "GreaterThanOrEqual";
+        [StringLength(500)] public string? Value { get; set; }
+        [Range(-1000, 1000)] public int Points { get; set; }
         public bool IsActive { get; set; } = true;
-
-        [Range(0, 100000)]
-        public int SortOrder { get; set; }
+        [Range(0, 100000)] public int SortOrder { get; set; }
     }
 }

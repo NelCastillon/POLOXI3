@@ -1,7 +1,12 @@
-@page "/crm/leads"
+﻿@page "/crm/leads"
 @namespace Ams.Web.Components.Pages.Crm
 @using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using Ams.Application.Common.Dtos
 @using Ams.Application.Common.Validation
+@using Ams.Application.Features.Leads
+@using Microsoft.AspNetCore.Components.Forms
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
@@ -9,1121 +14,507 @@
 @inject LeadScoringRealtimeClient LeadScoringRealtime
 @implements IAsyncDisposable
 
-<PageTitle>Leads</PageTitle>
+<PageTitle>Enterprise Leads</PageTitle>
 
-<AppPageHeader Title="Leads"
-               Subtitle="Track, score and convert every prospect — grid, Kanban, source funnel and producer breakdown"
-               Icon="bi-person-plus-fill">
-    <Actions>
-        <!-- View switcher -->
-        <div class="ld-view-toggle" role="group" aria-label="View mode">
-            @foreach (var v in _views)
-            {
-                <button class="ld-view-btn @(_view == v.Id ? "ld-view-btn--active" : "")"
-                        @onclick="() => SetView(v.Id)"
-                        title="@v.Label"
-                        aria-pressed="@(_view == v.Id)">
-                    <i class="bi @v.Icon" aria-hidden="true"></i>
-                    <span class="ld-view-label">@v.Label</span>
+@if (_toastVisible)
+{
+    <div class="ld-toast ld-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ld-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showConfirm && _confirmAction is not null)
+{
+    <div class="ld-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="ld-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="leadConfirmTitle" @onclick:stopPropagation="true">
+            <div class="ld-confirm-icon ld-confirm-@_confirmAction.Kind"><i class="bi @_confirmAction.Icon" aria-hidden="true"></i></div>
+            <h2 id="leadConfirmTitle">@_confirmAction.Title</h2>
+            <p>@_confirmAction.Message</p>
+            <div class="ld-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_busy">Cancel</button>
+                <button type="button" class="um-btn @_confirmAction.ButtonClass" @onclick="ExecuteConfirmedAsync" disabled="@_busy">
+                    @if (_busy)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    @_confirmAction.ButtonText
                 </button>
-            }
-        </div>
-
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh">
-            <i class="bi bi-arrow-clockwise @(_loading ? "ld-spin" : "")" aria-hidden="true"></i>
-        </button>
-
-        <button class="um-btn um-btn-ghost" @onclick="() => _showImport = true">
-            <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Import
-        </button>
-
-        <button class="um-btn um-btn-primary" @onclick='OnNewLeadClick'>
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Lead
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
-<div class="ld-kpi-strip">
-    <div class="ld-kpi-card">
-        <span class="ld-kpi-icon ld-kpi-i1"><i class="bi bi-person-plus-fill" aria-hidden="true"></i></span>
-        <div>
-            <div class="ld-kpi-val">@_kpi.TotalLeads</div>
-            <div class="ld-kpi-lbl">Total Leads</div>
+            </div>
         </div>
     </div>
-    <div class="ld-kpi-card">
-        <span class="ld-kpi-icon ld-kpi-i2"><i class="bi bi-fire" aria-hidden="true"></i></span>
-        <div>
-            <div class="ld-kpi-val">@_kpi.Hot</div>
-            <div class="ld-kpi-lbl">Hot</div>
-        </div>
-    </div>
-    <div class="ld-kpi-card">
-        <span class="ld-kpi-icon ld-kpi-i3"><i class="bi bi-trophy-fill" aria-hidden="true"></i></span>
-        <div>
-            <div class="ld-kpi-val">@_kpi.Converted</div>
-            <div class="ld-kpi-lbl">Converted</div>
-        </div>
-    </div>
-    <div class="ld-kpi-card">
-        <span class="ld-kpi-icon ld-kpi-i4"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span>
-        <div>
-            <div class="ld-kpi-val">@_kpi.ConversionRate.ToString("F1")%</div>
-            <div class="ld-kpi-lbl">Conversion Rate</div>
-        </div>
-    </div>
-    <div class="ld-kpi-card">
-        <span class="ld-kpi-icon ld-kpi-i5"><i class="bi bi-calendar-x" aria-hidden="true"></i></span>
-        <div>
-            <div class="ld-kpi-val @(_kpi.Stale > 0 ? "ld-kpi-val--warn" : "")">@_kpi.Stale</div>
-            <div class="ld-kpi-lbl">Stale (&gt;30 d)</div>
-        </div>
-    </div>
-    <div class="ld-kpi-card">
-        <span class="ld-kpi-icon ld-kpi-i1"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
-        <div>
-            <div class="ld-kpi-val">@_kpi.EstPipeline.ToString("C0")</div>
-            <div class="ld-kpi-lbl">Est. Pipeline</div>
-        </div>
-    </div>
-</div>
-
-<!-- ── Filter / search bar ───────────────────────────────────────────────── -->
-<div class="ld-filter-bar">
-    <div class="ld-search-wrap">
-        <i class="bi bi-search ld-search-icon" aria-hidden="true"></i>
-        <input class="ld-search-input" type="search" placeholder="Search leads…"
-               value="@_search"
-               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; ApplyFilters(); })" />
-    </div>
-
-    <SfDropDownList TValue="string" TItem="LabelValue"
-                    DataSource="_stageOptions"
-                    Placeholder="All Stages"
-                    ShowClearButton="true"
-                    Width="145px"
-                    Value="_filterStage"
-                    ValueChanged="@((string v) => { _filterStage = v; ApplyFilters(); })">
-        <DropDownListFieldSettings Value="Value" Text="Label" />
-    </SfDropDownList>
-
-    <SfDropDownList TValue="string" TItem="LabelValue"
-                    DataSource="_sourceOptions"
-                    Placeholder="All Sources"
-                    ShowClearButton="true"
-                    Width="145px"
-                    Value="_filterSource"
-                    ValueChanged="@((string v) => { _filterSource = v; ApplyFilters(); })">
-        <DropDownListFieldSettings Value="Value" Text="Label" />
-    </SfDropDownList>
-
-    <SfDropDownList TValue="string" TItem="LabelValue"
-                    DataSource="_ownerOptions"
-                    Placeholder="All Owners"
-                    ShowClearButton="true"
-                    Width="145px"
-                    Value="_filterOwner"
-                    ValueChanged="@((string v) => { _filterOwner = v; ApplyFilters(); })">
-        <DropDownListFieldSettings Value="Value" Text="Label" />
-    </SfDropDownList>
-
-    <SfDropDownList TValue="string" TItem="LabelValue"
-                    DataSource="_ratingOptions"
-                    Placeholder="All Ratings"
-                    ShowClearButton="true"
-                    Width="130px"
-                    Value="_filterRating"
-                    ValueChanged="@((string v) => { _filterRating = v; ApplyFilters(); })">
-        <DropDownListFieldSettings Value="Value" Text="Label" />
-    </SfDropDownList>
-
-    @if (_selected.Count > 0)
-    {
-        <div class="ld-bulk-actions">
-            <span class="ld-bulk-count">@_selected.Count selected</span>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showAssign = true">
-                <i class="bi bi-person-check" aria-hidden="true"></i> Assign
-            </button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showMerge = true">
-                <i class="bi bi-intersect" aria-hidden="true"></i> Merge
-            </button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ConvertToOpportunityAsync">
-                <i class="bi bi-trophy" aria-hidden="true"></i> Convert
-            </button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showCampaign = true">
-                <i class="bi bi-megaphone" aria-hidden="true"></i> Campaign
-            </button>
-            <button class="um-btn um-btn-ghost um-btn-sm ld-deselect-btn" @onclick="ClearSelection">
-                <i class="bi bi-x-lg" aria-hidden="true"></i>
-            </button>
-        </div>
-    }
-</div>
-
-<!-- ════════════════════════════════════════════════════════════════════════
-     VIEW: GRID
-     ════════════════════════════════════════════════════════════════════════ -->
-@if (_view == "grid")
-{
-    @if (_loading)
-    {
-        <div class="ld-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading leads…</span></div>
-    }
-    else
-    {
-        <div class="ld-grid-card app-datagrid">
-            <SfGrid @ref="_grid"
-                    TValue="LeadRow"
-                    DataSource="_filtered"
-                    AllowPaging="true"
-                    AllowSorting="true"
-                    AllowFiltering="true"
-                    AllowSelection="true"
-                    EnableHover="true"
-                    RowHeight="56">
-                <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
-                <GridSelectionSettings Type="Syncfusion.Blazor.Grids.SelectionType.Multiple" />
-                <GridPageSettings PageSize="25" PageSizes="@(new int[]{10,25,50,100})" />
-                <GridEvents TValue="LeadRow" RowSelected="OnRowSelected" RowDeselected="OnRowDeselected" />
-                <GridColumns>
-                    <GridColumn Type="ColumnType.CheckBox" Width="48" />
-                    <GridColumn HeaderText="Rating" Width="100" AllowFiltering="false" AllowSorting="true" Field="@nameof(LeadRow.Rating)">
-                        <Template>
-                            @{ var r = (LeadRow)context; }
-                            <span class="@RatingBadge(r.Rating)">@r.Rating</span>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn HeaderText="Lead" Width="220" Field="@nameof(LeadRow.FullName)">
-                        <Template>
-                            @{ var r = (LeadRow)context; }
-                            <div class="ld-name-cell">
-                                <div class="ld-avatar @AvatarColor(r.FullName)">@Initials(r.FullName)</div>
-                                <div>
-                                    <div class="ld-item-name">@r.FullName</div>
-                                    <div class="ld-item-sub">@r.CompanyName</div>
-                                </div>
-                            </div>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(LeadRow.Stage)" HeaderText="Stage" Width="140">
-                        <Template>
-                            @{ var r = (LeadRow)context; }
-                            <span class="@StageBadge(r.Stage)">@r.Stage</span>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(LeadRow.Source)" HeaderText="Source" Width="130">
-                        <Template>
-                            @{ var r = (LeadRow)context; }
-                            <span class="ld-source-badge">
-                                <i class="bi @SourceIcon(r.Source)" aria-hidden="true"></i> @r.Source
-                            </span>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(LeadRow.Owner)" HeaderText="Owner" Width="140" />
-                    <GridColumn Field="@nameof(LeadRow.EstPremium)" HeaderText="Est. Premium" Width="140" TextAlign="TextAlign.Right">
-                        <Template>
-                            @{ var r = (LeadRow)context; }
-                            <span class="ld-mono ld-bold">@r.EstPremium.ToString("C0")</span>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(LeadRow.Score)" HeaderText="Score" Width="120">
-                        <Template>
-                            @{ var r = (LeadRow)context; }
-                            <div class="ld-score-wrap">
-                                <div class="ld-score-bar" style="width:@r.Score%;background:@ScoreColor(r.Score)"></div>
-                                <span class="ld-score-num">@r.Score</span>
-                            </div>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(LeadRow.LastActivity)" HeaderText="Last Activity" Width="130">
-                        <Template>
-                            @{ var r = (LeadRow)context; }
-                            <span class="@(r.DaysSinceActivity > 30 ? "ld-stale" : "")">
-                                @(r.LastActivity.HasValue ? r.LastActivity.Value.ToString("d") : "—")
-                            </span>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(LeadRow.CreatedAt)" HeaderText="Created" Width="120">
-                        <Template>@{ var r = (LeadRow)context; }<span class="ld-mono">@r.CreatedAt.ToString("d")</span></Template>
-                    </GridColumn>
-                    <GridColumn HeaderText="" Width="90" AllowFiltering="false" AllowSorting="false" TextAlign="TextAlign.Right">
-                        <Template>
-                            @{ var r = (LeadRow)context; }
-                            <div class="ld-row-actions">
-                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEdit(r)" title="Edit">
-                                    <i class="bi bi-pencil" aria-hidden="true"></i>
-                                </button>
-                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenDetail(r)" title="View">
-                                    <i class="bi bi-arrow-right" aria-hidden="true"></i>
-                                </button>
-                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="(e) => OpenRowMenu(r, e)" title="More">
-                                    <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
-                                </button>
-                            </div>
-                        </Template>
-                    </GridColumn>
-                </GridColumns>
-            </SfGrid>
-        </div>
-    }
 }
 
-<!-- ════════════════════════════════════════════════════════════════════════
-     VIEW: KANBAN
-     ════════════════════════════════════════════════════════════════════════ -->
-@if (_view == "kanban")
+@if (_showLeadModal)
 {
-    @if (_loading)
-    {
-        <div class="ld-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
-    }
-    else
-    {
-        <div class="ld-kanban-wrap">
-            <SfKanban TValue="LeadRow"
-                      KeyField="@nameof(LeadRow.Stage)"
-                      DataSource="_filtered">
-                <KanbanColumns>
-                    @foreach (var col in _kanbanColumns)
-                    {
-                        <KanbanColumn HeaderText="@col.Label"
-                                      KeyField="@(new List<string> { col.Key })"
-                                      AllowDrop="true"
-                                      AllowDrag="true"
-                                      ShowItemCount="true" />
-                    }
-                </KanbanColumns>
-                <KanbanCardSettings HeaderField="@nameof(LeadRow.LeadId)"
-                                    ContentField="@nameof(LeadRow.FullName)">
-                    <Template>
-                        @{ var r = (LeadRow)context; }
-                        <div class="ld-card" @onclick="() => OpenDetail(r)">
-                            <div class="ld-card-hdr">
-                                <span class="@RatingBadge(r.Rating)">@r.Rating</span>
-                                <span class="ld-card-score" style="color:@ScoreColor(r.Score)" title="Lead score">@r.Score</span>
-                            </div>
-                            <div class="ld-card-name">@r.FullName</div>
-                            <div class="ld-card-company">@r.CompanyName</div>
-                            <div class="ld-card-meta">
-                                <span class="ld-source-badge">
-                                    <i class="bi @SourceIcon(r.Source)" aria-hidden="true"></i> @r.Source
-                                </span>
-                                <span class="ld-mono">@r.EstPremium.ToString("C0")</span>
-                            </div>
-                            <div class="ld-card-footer">
-                                <span class="ld-card-owner"><i class="bi bi-person" aria-hidden="true"></i> @r.Owner</span>
-                                @if (r.DaysSinceActivity > 30)
+    <div class="ld-modal-backdrop" role="presentation" @onclick="CloseLeadModal">
+        <div class="ld-lead-modal" role="dialog" aria-modal="true" aria-labelledby="leadFormTitle" @onclick:stopPropagation="true">
+            <div class="ld-modal-header">
+                <div class="ld-modal-title">
+                    <span class="ld-modal-icon"><i class="bi bi-person-plus" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 id="leadFormTitle">@(_editingId == Guid.Empty ? "Create enterprise lead" : "Edit enterprise lead")</h2>
+                        <p>Capture prospect details, scoring, ownership, source, and nurture workflow metadata.</p>
+                    </div>
+                </div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseLeadModal" disabled="@_savingLead" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_leadForm" OnValidSubmit="SaveLeadAsync" OnInvalidSubmit="HandleInvalidLeadSubmitAsync">
+                <DataAnnotationsValidator />
+                <div class="ld-modal-body">
+                    <div class="ld-form-banner">
+                        <i class="bi bi-shield-check" aria-hidden="true"></i>
+                        <div>
+                            <strong>Enterprise validations enabled</strong>
+                            <span>Required identity, source, owner, email, phone, score, and premium checks are enforced before save.</span>
+                        </div>
+                    </div>
+                    <div class="ld-form-grid">
+                        <div class="ld-field">
+                            <label>First name <span>*</span></label>
+                            <InputText class="ld-input" @bind-Value="_leadForm.FirstName" placeholder="First name" />
+                            <ValidationMessage For="() => _leadForm.FirstName" class="ld-validation" />
+                        </div>
+                        <div class="ld-field">
+                            <label>Last name <span>*</span></label>
+                            <InputText class="ld-input" @bind-Value="_leadForm.LastName" placeholder="Last name" />
+                            <ValidationMessage For="() => _leadForm.LastName" class="ld-validation" />
+                        </div>
+                        <div class="ld-field ld-field-wide">
+                            <label>Company <span>*</span></label>
+                            <InputText class="ld-input" @bind-Value="_leadForm.Company" placeholder="Company or account name" />
+                            <ValidationMessage For="() => _leadForm.Company" class="ld-validation" />
+                        </div>
+                        <div class="ld-field">
+                            <label>Email <span>*</span></label>
+                            <InputText class="ld-input" type="email" @bind-Value="_leadForm.Email" placeholder="name@company.com" />
+                            <ValidationMessage For="() => _leadForm.Email" class="ld-validation" />
+                        </div>
+                        <div class="ld-field">
+                            <label>Phone</label>
+                            <InputText class="ld-input" type="tel" @bind-Value="_leadForm.Phone" @bind-Value:after="OnPhoneChanged" placeholder="(555) 123-4567" />
+                            <ValidationMessage For="() => _leadForm.Phone" class="ld-validation" />
+                            @if (!string.IsNullOrWhiteSpace(_leadForm.Phone))
+                            {
+                                <span class="@PhoneHintClass">@PhoneStatusText</span>
+                            }
+                        </div>
+                        <div class="ld-field">
+                            <label>Source <span>*</span></label>
+                            <InputSelect class="ld-input" @bind-Value="_leadForm.Source">
+                                <option value="">Select source</option>
+                                @foreach (var source in _sourceOptions)
                                 {
-                                    <span class="ld-stale-chip" title="No activity for @r.DaysSinceActivity days">
-                                        <i class="bi bi-clock" aria-hidden="true"></i> @r.DaysSinceActivity d
-                                    </span>
+                                    <option value="@source.Value">@source.Label</option>
                                 }
-                            </div>
+                            </InputSelect>
+                            <ValidationMessage For="() => _leadForm.Source" class="ld-validation" />
                         </div>
-                    </Template>
-                </KanbanCardSettings>
-                <KanbanSwimlaneSettings KeyField="@(_swimByOwner ? nameof(LeadRow.Owner) : string.Empty)"
-                                        ShowEmptyRow="false" />
-            </SfKanban>
-        </div>
-        <div class="ld-kanban-toolbar">
-            <label class="ld-toggle-label">
-                <input type="checkbox" @bind="_swimByOwner" />
-                Swimlanes by owner
-            </label>
-        </div>
-    }
-}
-
-<!-- ════════════════════════════════════════════════════════════════════════
-     VIEW: SOURCE FUNNEL
-     ════════════════════════════════════════════════════════════════════════ -->
-@if (_view == "funnel")
-{
-    <div class="ld-funnel-layout">
-
-        <!-- Left: funnel visual -->
-        <div class="ld-funnel-chart-wrap">
-            <h3 class="ld-section-hdr">Leads by Source</h3>
-            <div class="ld-funnel-bars">
-                @foreach (var s in _sourceFunnel)
-                {
-                    var pct = _sourceFunnel.Max(x => x.Total) == 0 ? 0
-                              : (double)s.Total / _sourceFunnel.Max(x => x.Total) * 100;
-                    <div class="ld-funnel-row @(_funnelSource == s.Source ? "ld-funnel-row--active" : "")"
-                         @onclick="() => SelectFunnelSource(s.Source)"
-                         role="button" tabindex="0">
-                        <div class="ld-funnel-lbl">
-                            <i class="bi @SourceIcon(s.Source)" aria-hidden="true"></i>
-                            <span>@s.Source</span>
+                        <div class="ld-field">
+                            <label>Stage</label>
+                            <InputSelect class="ld-input" @bind-Value="_leadForm.Stage">
+                                @foreach (var stage in _stageOptions)
+                                {
+                                    <option value="@stage.Value">@stage.Label</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _leadForm.Stage" class="ld-validation" />
                         </div>
-                        <div class="ld-funnel-bar-track">
-                            <div class="ld-funnel-bar-fill" style="width:@pct.ToString("F1",System.Globalization.CultureInfo.InvariantCulture)%"></div>
+                        <div class="ld-field">
+                            <label>Priority</label>
+                            <InputSelect class="ld-input" @bind-Value="_leadForm.Priority">
+                                @foreach (var rating in _ratingOptions)
+                                {
+                                    <option value="@rating.Value">@rating.Label</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _leadForm.Priority" class="ld-validation" />
                         </div>
-                        <div class="ld-funnel-nums">
-                            <span class="ld-funnel-total">@s.Total</span>
-                            <span class="ld-funnel-conv @(s.ConvPct >= 20 ? "ld-conv--good" : s.ConvPct >= 10 ? "ld-conv--mid" : "ld-conv--low")">
-                                @s.ConvPct.ToString("F0")% conv.
-                            </span>
+                        <div class="ld-field">
+                            <label>Owner <span>*</span></label>
+                            <InputSelect class="ld-input" @bind-Value="_leadForm.Owner">
+                                <option value="">Assign owner</option>
+                                @foreach (var owner in _ownerOptions)
+                                {
+                                    <option value="@owner.Value">@owner.Label</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _leadForm.Owner" class="ld-validation" />
+                        </div>
+                        <div class="ld-field">
+                            <label>Estimated premium</label>
+                            <InputNumber class="ld-input" @bind-Value="_leadForm.EstPremium" />
+                            <ValidationMessage For="() => _leadForm.EstPremium" class="ld-validation" />
+                        </div>
+                        <div class="ld-field">
+                            <label>Lead score</label>
+                            <InputNumber class="ld-input" @bind-Value="_leadForm.Score" />
+                            <ValidationMessage For="() => _leadForm.Score" class="ld-validation" />
+                        </div>
+                        <div class="ld-field ld-field-wide">
+                            <label>Notes / interested service</label>
+                            <InputTextArea class="ld-input" rows="4" @bind-Value="_leadForm.Notes" placeholder="Coverage interests, timing, decision process, or next best action" />
+                            <ValidationMessage For="() => _leadForm.Notes" class="ld-validation" />
                         </div>
                     </div>
-                }
-            </div>
-
-            <!-- Stage breakdown for selected source -->
-            @if (!string.IsNullOrEmpty(_funnelSource))
-            {
-                var stages = _filtered.Where(x => x.Source == _funnelSource)
-                                      .GroupBy(x => x.Stage)
-                                      .Select(g => (Stage: g.Key, Count: g.Count()))
-                                      .OrderBy(x => StageOrder(x.Stage))
-                                      .ToList();
-                <div class="ld-funnel-stages">
-                    <h4 class="ld-funnel-stages-hdr">@_funnelSource — Stage Breakdown</h4>
-                    <div class="ld-funnel-stage-bars">
-                        @foreach (var sg in stages)
+                </div>
+                <div class="ld-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseLeadModal" disabled="@_savingLead">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_savingLead">
+                        @if (_savingLead)
                         {
-                            var maxC = stages.Max(s => s.Count);
-                            var sp = maxC == 0 ? 0 : (double)sg.Count / maxC * 100;
-                            <div class="ld-fstage-row">
-                                <span class="@StageBadge(sg.Stage)" style="min-width:90px">@sg.Stage</span>
-                                <div class="ld-fstage-track">
-                                    <div class="ld-fstage-fill @StageFill(sg.Stage)" style="width:@sp.ToString("F1",System.Globalization.CultureInfo.InvariantCulture)%"></div>
-                                </div>
-                                <span class="ld-fstage-count">@sg.Count</span>
-                            </div>
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
                         }
-                    </div>
-                </div>
-            }
-        </div>
-
-        <!-- Right: source table -->
-        <div class="ld-funnel-table-wrap">
-            <h3 class="ld-section-hdr">Source Performance</h3>
-            <SfGrid TValue="SourceRow"
-                    DataSource="_sourceFunnel"
-                    AllowSorting="true"
-                    EnableHover="true"
-                    RowHeight="48">
-                <GridColumns>
-                    <GridColumn Field="@nameof(SourceRow.Source)" HeaderText="Source" Width="160">
-                        <Template>
-                            @{ var s = (SourceRow)context; }
-                            <span class="ld-source-badge">
-                                <i class="bi @SourceIcon(s.Source)" aria-hidden="true"></i> @s.Source
-                            </span>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(SourceRow.Total)"     HeaderText="Total"    Width="80"  TextAlign="TextAlign.Right" />
-                    <GridColumn Field="@nameof(SourceRow.Converted)" HeaderText="Conv."    Width="80"  TextAlign="TextAlign.Right" />
-                    <GridColumn Field="@nameof(SourceRow.ConvPct)"   HeaderText="Conv. %"  Width="90"  TextAlign="TextAlign.Right">
-                        <Template>
-                            @{ var s = (SourceRow)context; }
-                            <span class="@(s.ConvPct >= 20 ? "ld-conv--good" : s.ConvPct >= 10 ? "ld-conv--mid" : "ld-conv--low")">
-                                @s.ConvPct.ToString("F1")%
-                            </span>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(SourceRow.AvgScore)"    HeaderText="Avg Score" Width="100" TextAlign="TextAlign.Right" />
-                    <GridColumn Field="@nameof(SourceRow.AvgPremium)"  HeaderText="Avg Premium" Width="130" TextAlign="TextAlign.Right">
-                        <Template>
-                            @{ var s = (SourceRow)context; }
-                            <span class="ld-mono">@s.AvgPremium.ToString("C0")</span>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(SourceRow.TotalPipeline)" HeaderText="Pipeline" Width="130" TextAlign="TextAlign.Right">
-                        <Template>
-                            @{ var s = (SourceRow)context; }
-                            <span class="ld-mono ld-bold">@s.TotalPipeline.ToString("C0")</span>
-                        </Template>
-                    </GridColumn>
-                </GridColumns>
-            </SfGrid>
-        </div>
-    </div>
-}
-
-<!-- ════════════════════════════════════════════════════════════════════════
-     VIEW: BY PRODUCER
-     ════════════════════════════════════════════════════════════════════════ -->
-@if (_view == "producer")
-{
-    <div class="ld-producer-layout">
-
-        <!-- Producer leaderboard -->
-        <div class="ld-producer-board">
-            <h3 class="ld-section-hdr">Producer Leaderboard</h3>
-            <div class="ld-producer-list">
-                @{ int rank = 0; }
-                @foreach (var p in _producerRows.OrderByDescending(x => x.Pipeline))
-                {
-                    rank++;
-                    var maxPipe = _producerRows.Max(x => x.Pipeline);
-                    var barPct  = maxPipe == 0 ? 0 : (double)p.Pipeline / (double)maxPipe * 100;
-                    <div class="ld-producer-row @(_producerFilter == p.Owner ? "ld-producer-row--active" : "")"
-                         @onclick="() => SelectProducer(p.Owner)"
-                         role="button" tabindex="0">
-                        <span class="ld-rank @(rank == 1 ? "ld-rank--gold" : rank == 2 ? "ld-rank--silver" : rank == 3 ? "ld-rank--bronze" : "")">
-                            @rank
-                        </span>
-                        <div class="ld-producer-info">
-                            <div class="ld-producer-name">@p.Owner</div>
-                            <div class="ld-producer-bar-track">
-                                <div class="ld-producer-bar-fill" style="width:@barPct.ToString("F1",System.Globalization.CultureInfo.InvariantCulture)%"></div>
-                            </div>
-                        </div>
-                        <div class="ld-producer-stats">
-                            <div class="ld-pstat">
-                                <span class="ld-pstat-val">@p.Total</span>
-                                <span class="ld-pstat-lbl">leads</span>
-                            </div>
-                            <div class="ld-pstat">
-                                <span class="ld-pstat-val">@p.ConvPct.ToString("F0")%</span>
-                                <span class="ld-pstat-lbl">conv.</span>
-                            </div>
-                            <div class="ld-pstat">
-                                <span class="ld-pstat-val ld-mono">@p.Pipeline.ToString("C0")</span>
-                                <span class="ld-pstat-lbl">pipeline</span>
-                            </div>
-                        </div>
-                    </div>
-                }
-            </div>
-        </div>
-
-        <!-- Right: producer detail grid -->
-        <div class="ld-producer-detail">
-            <h3 class="ld-section-hdr">
-                @if (!string.IsNullOrEmpty(_producerFilter))
-                {
-                    <span>@_producerFilter's Leads</span>
-                    <button class="um-btn um-btn-ghost um-btn-sm" style="margin-left:.5rem" @onclick="() => _producerFilter = string.Empty">
-                        <i class="bi bi-x-lg" aria-hidden="true"></i>
+                        @(_editingId == Guid.Empty ? "Create lead" : "Save changes")
                     </button>
-                }
-                else
-                {
-                    <span>All Producer Leads</span>
-                }
-            </h3>
-            <div class="ld-grid-card app-datagrid">
-                <SfGrid TValue="LeadRow"
-                        DataSource="@ProducerFiltered()"
-                        AllowPaging="true"
-                        AllowSorting="true"
-                        EnableHover="true"
-                        RowHeight="52">
-                    <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
-                    <GridColumns>
-                        <GridColumn HeaderText="Rating" Width="90" Field="@nameof(LeadRow.Rating)">
-                            <Template>@{ var r = (LeadRow)context; }<span class="@RatingBadge(r.Rating)">@r.Rating</span></Template>
-                        </GridColumn>
-                        <GridColumn HeaderText="Lead" Width="200" Field="@nameof(LeadRow.FullName)">
-                            <Template>
-                                @{ var r = (LeadRow)context; }
-                                <div class="ld-name-cell">
-                                    <div class="ld-avatar @AvatarColor(r.FullName)">@Initials(r.FullName)</div>
-                                    <div>
-                                        <div class="ld-item-name">@r.FullName</div>
-                                        <div class="ld-item-sub">@r.CompanyName</div>
-                                    </div>
-                                </div>
-                            </Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(LeadRow.Stage)"      HeaderText="Stage"    Width="130">
-                            <Template>@{ var r = (LeadRow)context; }<span class="@StageBadge(r.Stage)">@r.Stage</span></Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(LeadRow.Source)"     HeaderText="Source"   Width="120">
-                            <Template>@{ var r = (LeadRow)context; }<span class="ld-source-badge"><i class="bi @SourceIcon(r.Source)" aria-hidden="true"></i> @r.Source</span></Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(LeadRow.EstPremium)" HeaderText="Est. Premium" Width="130" TextAlign="TextAlign.Right">
-                            <Template>@{ var r = (LeadRow)context; }<span class="ld-mono ld-bold">@r.EstPremium.ToString("C0")</span></Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(LeadRow.Score)"      HeaderText="Score"    Width="80"  TextAlign="TextAlign.Right" />
-                        <GridColumn Field="@nameof(LeadRow.LastActivity)" HeaderText="Last Activity" Width="130">
-                            <Template>
-                                @{ var r = (LeadRow)context; }
-                                <span class="@(r.DaysSinceActivity > 30 ? "ld-stale" : "")">
-                                    @(r.LastActivity.HasValue ? r.LastActivity.Value.ToString("d") : "—")
-                                </span>
-                            </Template>
-                        </GridColumn>
-                        <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
-                            <Template>
-                                @{ var r = (LeadRow)context; }
-                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenDetail(r)">
-                                    <i class="bi bi-arrow-right" aria-hidden="true"></i>
-                                </button>
-                            </Template>
-                        </GridColumn>
-                    </GridColumns>
-                </SfGrid>
-            </div>
-        </div>
-
-    </div>
-}
-
-<!-- ── Detail slide-over ─────────────────────────────────────────────────── -->
-@if (_detail is not null)
-{
-    <div class="ld-overlay" @onclick="() => _detail = null" role="button" tabindex="-1" aria-label="Close"></div>
-    <div class="ld-detail-panel" role="complementary" aria-label="Lead detail">
-        <div class="ld-detail-hdr">
-            <span class="@RatingBadge(_detail.Rating)">@_detail.Rating</span>
-            <span class="@StageBadge(_detail.Stage)">@_detail.Stage</span>
-            <button class="um-btn um-btn-ghost um-btn-sm" style="margin-left:auto" @onclick="() => _detail = null">
-                <i class="bi bi-x-lg" aria-hidden="true"></i>
-            </button>
-        </div>
-        <div class="ld-detail-identity">
-            <div class="ld-detail-avatar @AvatarColor(_detail.FullName)">@Initials(_detail.FullName)</div>
-            <div>
-                <h2 class="ld-detail-name">@_detail.FullName</h2>
-                <div class="ld-detail-company">@_detail.CompanyName</div>
-            </div>
-        </div>
-        <div class="ld-detail-body">
-            @DetailRow("Source",      @<span class="ld-source-badge"><i class="bi @SourceIcon(_detail.Source)" aria-hidden="true"></i> @_detail.Source</span>)
-            @DetailRow("Owner",       @<span>@_detail.Owner</span>)
-            @DetailRow("Email",       @<span class="ld-mono">@_detail.Email</span>)
-            @DetailRow("Phone",       @<span class="ld-mono">@_detail.Phone</span>)
-            @DetailRow("Est. Premium",@<span class="ld-mono ld-bold">@_detail.EstPremium.ToString("C0")</span>)
-            @DetailRow("Score",       @<div class="ld-score-wrap" style="max-width:120px"><div class="ld-score-bar" style="width:@_detail.Score%;background:@ScoreColor(_detail.Score)"></div><span class="ld-score-num">@_detail.Score</span></div>)
-            @DetailRow("Created",     @<span class="ld-mono">@_detail.CreatedAt.ToString("d")</span>)
-            @DetailRow("Last Activity",@<span class="@(_detail.DaysSinceActivity > 30 ? "ld-stale" : "ld-mono")">@(_detail.LastActivity.HasValue ? _detail.LastActivity.Value.ToString("d") : "—")</span>)
-            @if (!string.IsNullOrEmpty(_detail.Notes)) { @DetailRow("Notes", @<p class="ld-detail-notes">@_detail.Notes</p>) }
-        </div>
-        <div class="ld-detail-actions">
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_detail!)">
-                <i class="bi bi-pencil" aria-hidden="true"></i> Edit
-            </button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { _selected.Clear(); _selected.Add(_detail!); _showAssign = true; }">
-                <i class="bi bi-person-check" aria-hidden="true"></i> Assign
-            </button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { _selected.Clear(); _selected.Add(_detail!); ConvertToOpportunityAsync(); }">
-                <i class="bi bi-trophy" aria-hidden="true"></i> Convert
-            </button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { _selected.Clear(); _selected.Add(_detail!); _showCampaign = true; }">
-                <i class="bi bi-megaphone" aria-hidden="true"></i> Campaign
-            </button>
-        </div>
-        <div class="ld-detail-footer">
-            <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo($"/crm/leads/{_detail.LeadId}")'>
-                Open Full Record <i class="bi bi-arrow-right" aria-hidden="true"></i>
-            </button>
-        </div>
-    </div>
-}
-
-<!-- ── Add/Edit Drawer ──────────────────────────────────────────────────── -->
-<AppCrudDrawer @bind-Visible="_showAdd" 
-               Title="@(_editingId == Guid.Empty ? "Create New Lead" : "Edit Lead")"
-               Icon="bi-person-plus"
-               OnConfirm="SaveLeadAsync" 
-               IsBusy="_savingLead"
-               Width="420px">
-    <Content>
-        <EditForm @key="_leadForm" Model="_leadForm" OnValidSubmit="SaveLeadAsync">
-            <DataAnnotationsValidator />
-
-            <div class="form-row">
-                <label class="form-label">First Name <span class="form-required">*</span></label>
-                <InputText class="form-control" placeholder="John" @bind-Value="_leadForm.FirstName" />
-                <ValidationMessage For="() => _leadForm.FirstName" class="text-danger" />
-            </div>
-            <div class="form-row">
-                <label class="form-label">Last Name <span class="form-required">*</span></label>
-                <InputText class="form-control" placeholder="Doe" @bind-Value="_leadForm.LastName" />
-                <ValidationMessage For="() => _leadForm.LastName" class="text-danger" />
-            </div>
-            <div class="form-row">
-                <label class="form-label">Company <span class="form-required">*</span></label>
-                <InputText class="form-control" placeholder="Company Name" @bind-Value="_leadForm.Company" />
-                <ValidationMessage For="() => _leadForm.Company" class="text-danger" />
-            </div>
-            <div class="form-row">
-                <label class="form-label">Email <span class="form-required">*</span></label>
-                <InputText type="email" class="form-control" placeholder="john@example.com" @bind-Value="_leadForm.Email" />
-                <ValidationMessage For="() => _leadForm.Email" class="text-danger" />
-            </div>
-            <div class="form-row">
-                <label class="form-label">Phone</label>
-                <div class="ld-phone-field @PhoneFieldCss">
-                    <InputText type="tel" class="form-control" placeholder="(555) 123-4567" @bind-Value="_leadForm.Phone" @bind-Value:after="OnPhoneChanged" />
-                    @if (!string.IsNullOrWhiteSpace(_leadForm.Phone))
-                    {
-                        <span class="ld-phone-status @PhoneStatusCss" title="@PhoneStatusText">
-                            <i class="bi @(IsPhoneValid(_leadForm.Phone) ? "bi-check-circle-fill" : "bi-exclamation-circle-fill")" aria-hidden="true"></i>
-                        </span>
-                    }
                 </div>
-                @if (!string.IsNullOrWhiteSpace(_leadForm.Phone))
-                {
-                    <div class="ld-phone-hint @PhoneHintCss">
-                        <i class="bi @(IsPhoneValid(_leadForm.Phone) ? "bi-shield-check" : "bi-info-circle")" aria-hidden="true"></i>
-                        <span>@PhoneStatusText</span>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showImport)
+{
+    <div class="ld-modal-backdrop" role="presentation" @onclick="CloseImport">
+        <div class="ld-action-modal" role="dialog" aria-modal="true" aria-labelledby="importLeadsTitle" @onclick:stopPropagation="true">
+            <div class="ld-modal-header">
+                <div class="ld-modal-title">
+                    <span class="ld-modal-icon"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 id="importLeadsTitle">Import leads</h2>
+                        <p>Upload CSV records for validation and staged import.</p>
                     </div>
-                }
-                <ValidationMessage For="() => _leadForm.Phone" class="text-danger" />
+                </div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseImport" aria-label="Close import dialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
             </div>
-            <div class="form-row">
-                <label class="form-label">Source <span class="form-required">*</span></label>
-                <InputSelect class="form-control" @bind-Value="_leadForm.Source">
-                    <option value="">Select source</option>
-                    @foreach (var opt in _sourceOptions)
-                    {
-                        <option value="@opt.Value">@opt.Label</option>
-                    }
-                </InputSelect>
-                <ValidationMessage For="() => _leadForm.Source" class="text-danger" />
-            </div>
-            <div class="form-row">
-                <label class="form-label">Owner</label>
-                <InputSelect class="form-control" @bind-Value="_leadForm.Owner">
-                    <option value="">Assign to owner</option>
-                    @foreach (var opt in _ownerOptions)
-                    {
-                        <option value="@opt.Value">@opt.Label</option>
-                    }
-                </InputSelect>
-            </div>
-            <div class="form-row">
-                <label class="form-label">Est. Premium</label>
-                <InputNumber class="form-control" placeholder="0.00" step="0.01" min="0" @bind-Value="_leadForm.EstPremium" />
-                <ValidationMessage For="() => _leadForm.EstPremium" class="text-danger" />
-            </div>
-            <div class="form-row">
-                <label class="form-label">Notes</label>
-                <InputTextArea class="form-control" rows="3" placeholder="Add notes…" @bind-Value="_leadForm.Notes" />
-            </div>
-        </EditForm>
-    </Content>
-</AppCrudDrawer>
-
-<!-- ══════════════════════════════════════════════════════════
-     DIALOG — Import Leads
-     ══════════════════════════════════════════════════════════ -->
-<SfDialog @bind-Visible="_showImport" Width="540px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="ld-dlg-hdr"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Import Leads</span></Header>
-        <Content>
-            <div class="ld-import-body">
-                <p class="ld-import-intro">
-                    Upload a <strong>.CSV</strong> or <strong>.XLSX</strong> file. Required columns:
-                    <code>FirstName, LastName, Company, Email, Source</code>.
-                </p>
-                <SfUploader AllowedExtensions=".csv,.xlsx"
-                            MaxFileSize="5242880"
-                            AutoUpload="false"
-                            @ref="_uploader">
-                    <UploaderEvents ValueChange="OnFileSelected" />
-                </SfUploader>
-
+            <div class="ld-modal-body">
+                <div class="ld-form-banner">
+                    <i class="bi bi-filetype-csv" aria-hidden="true"></i>
+                    <div>
+                        <strong>CSV format</strong>
+                        <span>Required columns: FirstName, LastName, Company, Email, Source. Optional: Phone, Owner, Premium, Notes.</span>
+                    </div>
+                </div>
+                <InputFile OnChange="OnFileSelectedAsync" accept=".csv" />
                 @if (_importErrors.Count > 0)
                 {
                     <div class="ld-import-errors">
-                        <div class="ld-import-errors-hdr"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_importErrors.Count validation error(s)</div>
+                        <strong>@_importErrors.Count validation issue(s)</strong>
                         <ul>
-                            @foreach (var e in _importErrors.Take(5))
+                            @foreach (var error in _importErrors.Take(6))
                             {
-                                <li>@e</li>
+                                <li>@error</li>
                             }
-                            @if (_importErrors.Count > 5) { <li>… and @(_importErrors.Count - 5) more</li> }
                         </ul>
                     </div>
                 }
-
                 @if (_importPreview.Count > 0)
                 {
                     <div class="ld-import-preview">
-                        <div class="ld-import-preview-hdr">Preview — first @_importPreview.Count row(s)</div>
-                        <SfGrid TValue="LeadImportRow"
-                                DataSource="_importPreview"
-                                AllowPaging="false"
-                                EnableHover="true"
-                                Height="160px">
-                            <GridColumns>
-                                <GridColumn Field="@nameof(LeadImportRow.FullName)"    HeaderText="Name"    Width="160" />
-                                <GridColumn Field="@nameof(LeadImportRow.CompanyName)" HeaderText="Company" Width="160" />
-                                <GridColumn Field="@nameof(LeadImportRow.Email)"       HeaderText="Email"   Width="200" />
-                                <GridColumn Field="@nameof(LeadImportRow.Source)"      HeaderText="Source"  Width="120" />
-                            </GridColumns>
-                        </SfGrid>
+                        <strong>Preview</strong>
+                        <div class="ld-mini-table">
+                            @foreach (var row in _importPreview.Take(6))
+                            {
+                                <div><span>@row.FullName</span><span>@row.CompanyName</span><span>@row.Email</span><span>@row.Source</span></div>
+                            }
+                        </div>
                     </div>
                 }
-
-                <div class="ld-import-options">
-                    <label class="ld-toggle-label">
-                        <input type="checkbox" @bind="_importDedupe" />
-                        Skip duplicate emails
-                    </label>
-                    <label class="ld-toggle-label">
-                        <input type="checkbox" @bind="_importAssignRoundRobin" />
-                        Auto-assign (round-robin)
-                    </label>
+                <div class="ld-check-row">
+                    <label><InputCheckbox @bind-Value="_importDedupe" /> Skip duplicate emails</label>
+                    <label><InputCheckbox @bind-Value="_importAssignRoundRobin" /> Auto assign unowned records</label>
                 </div>
             </div>
-        </Content>
-        <FooterTemplate>
-            <div class="ld-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => { _showImport = false; _importPreview.Clear(); _importErrors.Clear(); }">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="CommitImportAsync" disabled="@(_importPreview.Count == 0 || _importErrors.Count > 0)">
-                    <i class="bi bi-check-lg" aria-hidden="true"></i> Import @(_importPreview.Count > 0 ? $"{_importPreview.Count} Lead(s)" : "")
-                </button>
+            <div class="ld-modal-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseImport">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="ConfirmImport" disabled="@ImportDisabled">Import @_importPreview.Count</button>
             </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+    </div>
+}
 
-<!-- ══════════════════════════════════════════════════════════
-     MODAL — Assign Owner
-     ══════════════════════════════════════════════════════════ -->
 @if (_showAssign)
 {
-    <div class="mt-modal-backdrop" role="presentation" @onclick="() => _showAssign = false">
-        <div class="mt-modal ld-enterprise-modal" role="dialog" aria-modal="true" aria-labelledby="assignOwnerTitle" @onclick:stopPropagation="true">
-            <div class="um-modal-header">
-                <i class="bi bi-person-check" aria-hidden="true"></i>
-                <span id="assignOwnerTitle">Assign Owner</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showAssign = false" aria-label="Close"><i class="bi bi-x-lg"></i></button>
-            </div>
-            <div class="um-modal-body">
-                <div class="um-form-grid">
-                    <div class="um-field um-field--full">
-                        <p class="ld-assign-info">Assign <strong>@_selected.Count lead(s)</strong> to:</p>
-                    </div>
-                    <div class="um-field um-field--full">
-                        <label>Owner</label>
-                        <InputSelect class="um-input" @bind-Value="_assignTarget">
-                            <option value="">Select owner…</option>
-                            @foreach (var owner in _ownerOptions)
-                            {
-                                <option value="@owner.Value">@owner.Label</option>
-                            }
-                        </InputSelect>
-                    </div>
-                    <div class="um-field um-field--full um-field--checkbox">
-                        <label><InputCheckbox @bind-Value="_assignNotify" /> Notify owner by email</label>
+    <div class="ld-modal-backdrop" role="presentation" @onclick="CloseAssign">
+        <div class="ld-action-modal" role="dialog" aria-modal="true" aria-labelledby="assignOwnerTitle" @onclick:stopPropagation="true">
+            <div class="ld-modal-header">
+                <div class="ld-modal-title">
+                    <span class="ld-modal-icon"><i class="bi bi-person-check" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 id="assignOwnerTitle">Assign owner</h2>
+                        <p>Route selected leads to an active producer.</p>
                     </div>
                 </div>
+                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseAssign" aria-label="Close assign dialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
             </div>
-            <div class="um-modal-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showAssign = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="CommitAssignAsync" disabled="@string.IsNullOrEmpty(_assignTarget)">
-                    <i class="bi bi-check-lg" aria-hidden="true"></i> Assign
-                </button>
+            <div class="ld-modal-body">
+                <div class="ld-form-banner"><i class="bi bi-people" aria-hidden="true"></i><div><strong>@_selected.Count selected lead(s)</strong><span>Assignment updates existing CRM lead owner fields.</span></div></div>
+                <select class="ld-input" @bind="_assignTarget">
+                    <option value="">Select owner</option>
+                    @foreach (var owner in _ownerOptions)
+                    {
+                        <option value="@owner.Value">@owner.Label</option>
+                    }
+                </select>
+                <div class="ld-check-row"><label><InputCheckbox @bind-Value="_assignNotify" /> Add notification flag to workflow</label></div>
             </div>
+            <div class="ld-modal-footer"><button class="um-btn um-btn-ghost" @onclick="CloseAssign">Cancel</button><button class="um-btn um-btn-primary" @onclick="ConfirmAssign" disabled="@AssignDisabled">Assign leads</button></div>
         </div>
     </div>
 }
 
-<!-- ══════════════════════════════════════════════════════════
-     MODAL — Merge Duplicates
-     ══════════════════════════════════════════════════════════ -->
 @if (_showMerge)
 {
-    <div class="mt-modal-backdrop" role="presentation" @onclick="() => _showMerge = false">
-        <div class="mt-modal ld-enterprise-modal" role="dialog" aria-modal="true" aria-labelledby="mergeLeadsTitle" @onclick:stopPropagation="true">
-            <div class="um-modal-header">
-                <i class="bi bi-intersect" aria-hidden="true"></i>
-                <span id="mergeLeadsTitle">Merge Duplicates</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showMerge = false" aria-label="Close"><i class="bi bi-x-lg"></i></button>
-            </div>
-            <div class="um-modal-body">
-                <div class="um-form-grid">
-                    <div class="um-field um-field--full">
-                        @if (_selected.Count < 2)
-                        {
-                            <div class="ld-merge-warn">
-                                <i class="bi bi-info-circle" aria-hidden="true"></i>
-                                Select at least 2 leads in the grid before merging.
-                            </div>
-                        }
-                        else
-                        {
-                            <p class="ld-merge-intro">
-                                Merging <strong>@_selected.Count leads</strong>. Choose the <em>master</em> record — all other records will be de-duplicated into it.
-                            </p>
-                            <div class="ld-merge-list">
-                                @foreach (var r in _selected)
-                                {
-                                    <label class="ld-merge-option @(_mergeTarget == r.LeadId.ToString() ? "ld-merge-option--active" : "")">
-                                        <input type="radio" name="merge-target" value="@r.LeadId" @onchange="() => _mergeTarget = r.LeadId.ToString()" />
-                                        <div class="ld-merge-card">
-                                            <div class="ld-merge-name">@r.FullName</div>
-                                            <div class="ld-merge-meta">@r.CompanyName · @r.Email · @r.Source</div>
-                                            <div class="ld-merge-meta">Score: @r.Score · Stage: @r.Stage · Owner: @r.Owner</div>
-                                        </div>
-                                    </label>
-                                }
-                            </div>
-                        }
+    <div class="ld-modal-backdrop" role="presentation" @onclick="CloseMerge">
+        <div class="ld-action-modal" role="dialog" aria-modal="true" aria-labelledby="mergeLeadsTitle" @onclick:stopPropagation="true">
+            <div class="ld-modal-header">
+                <div class="ld-modal-title">
+                    <span class="ld-modal-icon"><i class="bi bi-intersect" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 id="mergeLeadsTitle">Merge duplicate leads</h2>
+                        <p>Select a master record; duplicates are safely marked lost with merge notes.</p>
                     </div>
                 </div>
+                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseMerge" aria-label="Close merge dialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
             </div>
-            <div class="um-modal-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showMerge = false">Cancel</button>
-                <button class="um-btn um-btn-danger" @onclick="CommitMergeAsync" disabled="@(string.IsNullOrEmpty(_mergeTarget) || _selected.Count < 2)">
-                    <i class="bi bi-intersect" aria-hidden="true"></i> Merge into Master
-                </button>
+            <div class="ld-modal-body">
+                @if (_selected.Count < 2)
+                {
+                    <div class="ld-empty-state"><i class="bi bi-info-circle" aria-hidden="true"></i><strong>Select at least two leads</strong><span>Use table checkboxes to select records before merging.</span></div>
+                }
+                else
+                {
+                    <div class="ld-merge-list">
+                        @foreach (var lead in _selected)
+                        {
+                            <button type="button" class="@MergeOptionClass(lead)" @onclick="@(() => SelectMergeTarget(lead))">
+                                <i class="@MergeOptionIconClass(lead)" aria-hidden="true"></i>
+                                <span><strong>@lead.FullName</strong><small>@lead.CompanyName · @lead.Email · @lead.Stage · @lead.Owner</small></span>
+                            </button>
+                        }
+                    </div>
+                }
             </div>
+            <div class="ld-modal-footer"><button class="um-btn um-btn-ghost" @onclick="CloseMerge">Cancel</button><button class="um-btn um-btn-danger" @onclick="ConfirmMerge" disabled="@MergeDisabled">Merge duplicates</button></div>
         </div>
     </div>
 }
 
-<!-- ══════════════════════════════════════════════════════════
-     MODAL — Convert to Opportunity
-     ══════════════════════════════════════════════════════════ -->
 @if (_showConvert)
 {
-    <div class="mt-modal-backdrop" role="presentation" @onclick="() => _showConvert = false">
-        <div class="mt-modal ld-enterprise-modal" role="dialog" aria-modal="true" aria-labelledby="convertLeadsTitle" @onclick:stopPropagation="true">
-            <div class="um-modal-header">
-                <i class="bi bi-trophy" aria-hidden="true"></i>
-                <span id="convertLeadsTitle">Convert to Opportunity</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showConvert = false" aria-label="Close"><i class="bi bi-x-lg"></i></button>
-            </div>
-            <div class="um-modal-body">
-                <div class="um-form-grid">
-                    <div class="um-field um-field--full">
-                        <p>Convert <strong>@_selected.Count lead(s)</strong> to opportunities?</p>
-                        <ul class="ld-convert-list">
-                            @foreach (var r in _selected.Take(5))
-                            {
-                                <li>@r.FullName — @r.CompanyName (@r.EstPremium.ToString("C0") est.)</li>
-                            }
-                            @if (_selected.Count > 5) { <li>… and @(_selected.Count - 5) more</li> }
-                        </ul>
-                    </div>
-                    <div class="um-field um-field--full um-field--checkbox">
-                        <label><InputCheckbox @bind-Value="_convertKeepLead" /> Keep lead record after conversion</label>
-                    </div>
-                    <div class="um-field um-field--full um-field--checkbox">
-                        <label><InputCheckbox @bind-Value="_convertCreateActivity" /> Create follow-up activity on new opportunity</label>
-                    </div>
-                </div>
-            </div>
-            <div class="um-modal-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showConvert = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="CommitConvertAsync">
-                    <i class="bi bi-check-lg" aria-hidden="true"></i> Convert
-                </button>
-            </div>
+    <div class="ld-modal-backdrop" role="presentation" @onclick="CloseConvert">
+        <div class="ld-action-modal" role="dialog" aria-modal="true" aria-labelledby="convertTitle" @onclick:stopPropagation="true">
+            <div class="ld-modal-header"><div class="ld-modal-title"><span class="ld-modal-icon"><i class="bi bi-trophy" aria-hidden="true"></i></span><div><h2 id="convertTitle">Convert to pipeline</h2><p>Move selected leads into converted workflow state and record activity.</p></div></div><button class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseConvert"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <div class="ld-modal-body"><div class="ld-form-banner"><i class="bi bi-diagram-3" aria-hidden="true"></i><div><strong>@_selected.Count lead(s) ready for conversion</strong><span>Stage becomes Converted, status is updated, score is lifted if needed.</span></div></div><ul class="ld-action-list">@foreach (var lead in _selected.Take(5)) { <li>@lead.FullName — @lead.CompanyName (@lead.EstPremium.ToString("C0"))</li> }</ul><div class="ld-check-row"><label><InputCheckbox @bind-Value="_convertKeepLead" /> Keep lead visible after conversion</label><label><InputCheckbox @bind-Value="_convertCreateActivity" /> Create follow-up workflow activity</label></div></div>
+            <div class="ld-modal-footer"><button class="um-btn um-btn-ghost" @onclick="CloseConvert">Cancel</button><button class="um-btn um-btn-primary" @onclick="ConfirmCommitConvert">Convert leads</button></div>
         </div>
     </div>
 }
 
-<!-- ══════════════════════════════════════════════════════════
-     MODAL — Enroll Campaign
-     ══════════════════════════════════════════════════════════ -->
 @if (_showCampaign)
 {
-    <div class="mt-modal-backdrop" role="presentation" @onclick="() => _showCampaign = false">
-        <div class="mt-modal ld-enterprise-modal" role="dialog" aria-modal="true" aria-labelledby="campaignLeadsTitle" @onclick:stopPropagation="true">
-            <div class="um-modal-header">
-                <i class="bi bi-megaphone" aria-hidden="true"></i>
-                <span id="campaignLeadsTitle">Enroll in Campaign</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showCampaign = false" aria-label="Close"><i class="bi bi-x-lg"></i></button>
-            </div>
-            <div class="um-modal-body">
-                <div class="um-form-grid">
-                    <div class="um-field um-field--full">
-                        <p>Enroll <strong>@_selected.Count lead(s)</strong> into a campaign:</p>
-                    </div>
-                    <div class="um-field um-field--full">
-                        <label>Campaign</label>
-                        <InputSelect class="um-input" @bind-Value="_campaignTarget">
-                            <option value="">Select campaign…</option>
-                            @foreach (var campaign in _campaignOptions)
-                            {
-                                <option value="@campaign.Value">@campaign.Label</option>
-                            }
-                        </InputSelect>
-                    </div>
-                    <div class="um-field um-field--full um-field--checkbox">
-                        <label><InputCheckbox @bind-Value="_campaignSendImmediately" /> Send first campaign email immediately</label>
-                    </div>
-                </div>
-            </div>
-            <div class="um-modal-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showCampaign = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="CommitCampaignAsync" disabled="@string.IsNullOrEmpty(_campaignTarget)">
-                    <i class="bi bi-check-lg" aria-hidden="true"></i> Enroll
-                </button>
-            </div>
+    <div class="ld-modal-backdrop" role="presentation" @onclick="CloseCampaign">
+        <div class="ld-action-modal" role="dialog" aria-modal="true" aria-labelledby="campaignTitle" @onclick:stopPropagation="true">
+            <div class="ld-modal-header"><div class="ld-modal-title"><span class="ld-modal-icon"><i class="bi bi-megaphone" aria-hidden="true"></i></span><div><h2 id="campaignTitle">Enroll campaign</h2><p>Create campaign enrollment records for selected leads.</p></div></div><button class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseCampaign"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <div class="ld-modal-body"><select class="ld-input" @bind="_campaignTarget"><option value="">Select campaign</option>@foreach (var campaign in _campaignOptions) { <option value="@campaign.Value">@campaign.Label</option> }</select><div class="ld-check-row"><label><InputCheckbox @bind-Value="_campaignSendImmediately" /> Send first email immediately</label></div></div>
+            <div class="ld-modal-footer"><button class="um-btn um-btn-ghost" @onclick="CloseCampaign">Cancel</button><button class="um-btn um-btn-primary" @onclick="ConfirmCampaign" disabled="@CampaignDisabled">Enroll leads</button></div>
         </div>
     </div>
 }
 
-<!-- ── Row context menu ───────────────────────────────────────────────────── -->
-@if (_menuLead is not null)
-{
-    <div class="ld-ctx-overlay" @onclick="() => _menuLead = null"></div>
-    <div class="ld-ctx-menu" style="top:@(_menuY)px;left:@(_menuX)px">
-        <button @onclick="() => { OpenEdit(_menuLead!); _menuLead = null; }">
-            <i class="bi bi-pencil" aria-hidden="true"></i> Edit Lead
-        </button>
-        <button @onclick="() => { OpenDetail(_menuLead!); _menuLead = null; }">
-            <i class="bi bi-person" aria-hidden="true"></i> View Detail
-        </button>
-        <button @onclick='() => Nav.NavigateTo($"/crm/leads/{_menuLead!.LeadId}")'>
-            <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Full Record
-        </button>
-        <div class="ld-ctx-sep"></div>
-        <button @onclick="() => { _selected.Clear(); _selected.Add(_menuLead!); _showAssign  = true; _menuLead = null; }">
-            <i class="bi bi-person-check" aria-hidden="true"></i> Assign Owner
-        </button>
-        <button @onclick="() => { _selected.Clear(); _selected.Add(_menuLead!); ConvertToOpportunityAsync(); _menuLead = null; }">
-            <i class="bi bi-trophy" aria-hidden="true"></i> Convert to Opportunity
-        </button>
-        <button @onclick="() => { _selected.Clear(); _selected.Add(_menuLead!); _showCampaign = true; _menuLead = null; }">
-            <i class="bi bi-megaphone" aria-hidden="true"></i> Enroll Campaign
-        </button>
-        <div class="ld-ctx-sep"></div>
-        <button class="ld-ctx-danger" @onclick="() => { /* delete */ _menuLead = null; }">
-            <i class="bi bi-trash" aria-hidden="true"></i> Delete
-        </button>
-    </div>
-}
+<div class="ld-enterprise-page">
+    <section class="ld-hero">
+        <div class="ld-hero-left">
+            <span class="ld-hero-icon"><i class="bi bi-person-lines-fill" aria-hidden="true"></i></span>
+            <div><div class="ld-title-row"><h1>Enterprise Leads</h1><span><i class="bi bi-database-check"></i> Live CRM data</span><span><i class="bi bi-shield-lock"></i> Tenant scoped</span></div><p>Track, score, nurture, assign, and convert prospects through a governed sales workflow.</p></div>
+        </div>
+        <div class="ld-hero-actions">
+            <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh leads list"><i class="bi @(_loading ? "bi-arrow-repeat ld-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button class="um-btn um-btn-ghost" @onclick="OpenImport" title="Import leads from CSV"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Import</button>
+            <button class="um-btn um-btn-primary" @onclick="OnNewLeadClick" title="Create a new lead"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Lead</button>
+        </div>
+    </section>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="ld-error-banner"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    <section class="ld-kpi-strip" aria-label="Lead performance metrics">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricCardClass(metric)" @onclick="@(() => SetQuickFilter(metric.Filter))">
+                <span class="ld-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                <span><span class="ld-kpi-val">@metric.Value</span><span class="ld-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
+            </button>
+        }
+    </section>
+
+    <section class="ld-workflow-strip" aria-label="Lead workflow">
+        <button class="ld-workflow-card" @onclick="ShowBoardView"><i class="bi bi-kanban" aria-hidden="true"></i><span><strong>Nurture board</strong><span>Move prospects by stage.</span></span></button>
+        <button class="ld-workflow-card" @onclick="ShowHotLeads"><i class="bi bi-fire" aria-hidden="true"></i><span><strong>Prioritize hot</strong><span>Focus high intent leads.</span></span></button>
+        <button class="ld-workflow-card" @onclick="ShowFunnelView"><i class="bi bi-funnel" aria-hidden="true"></i><span><strong>Source funnel</strong><span>Measure channel quality.</span></span></button>
+        <button class="ld-workflow-card" @onclick="ShowProducerView"><i class="bi bi-person-badge" aria-hidden="true"></i><span><strong>Producer view</strong><span>Balance owner workload.</span></span></button>
+    </section>
+
+    <section class="ld-search-panel">
+        <div class="ld-search-wrap">
+            <span class="ld-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="ld-search-body"><label for="leadSearchInput">Search CRM leads</label><input id="leadSearchInput" class="ld-search-input" value="@_search" @oninput="OnSearchChanged" placeholder="Search name, company, email, phone, source, owner, or stage..." /><span class="ld-search-hint">Enterprise search filters the current in-memory CRM dataset instantly.</span></div>
+        </div>
+        <select class="ld-filter-select" value="@_filterStage" @onchange="OnStageFilterChanged"><option value="">All stages</option>@foreach (var option in _stageOptions) { <option value="@option.Value">@option.Label</option> }</select>
+        <select class="ld-filter-select" value="@_filterSource" @onchange="OnSourceFilterChanged"><option value="">All sources</option>@foreach (var option in _sourceOptions) { <option value="@option.Value">@option.Label</option> }</select>
+        <select class="ld-filter-select" value="@_filterOwner" @onchange="OnOwnerFilterChanged"><option value="">All owners</option>@foreach (var option in _ownerOptions) { <option value="@option.Value">@option.Label</option> }</select>
+        <select class="ld-filter-select" value="@_filterRating" @onchange="OnRatingFilterChanged"><option value="">All ratings</option>@foreach (var option in _ratingOptions) { <option value="@option.Value">@option.Label</option> }</select>
+        <div class="ld-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (_selected.Count > 0)
+    {
+        <section class="ld-bulk-bar"><span>@_selected.Count selected</span><button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenAssign"><i class="bi bi-person-check"></i> Assign</button><button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenMerge"><i class="bi bi-intersect"></i> Merge</button><button class="um-btn um-btn-ghost um-btn-sm" @onclick="ConfirmConvertToOpportunity"><i class="bi bi-trophy"></i> Convert</button><button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenCampaign"><i class="bi bi-megaphone"></i> Campaign</button><button class="um-btn um-btn-ghost um-btn-sm ld-deselect-btn" @onclick="ClearSelection"><i class="bi bi-x-lg" aria-hidden="true"></i></button></section>
+    }
+
+    <section class="ld-view-tabs" aria-label="Lead views">
+        @foreach (var view in _views)
+        {
+            <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label</button>
+        }
+    </section>
+
+    <section class="ld-content-layout">
+        <main class="ld-main-card">
+            @if (_loading)
+            {
+                <div class="ld-loading"><i class="bi bi-arrow-repeat ld-spin" aria-hidden="true"></i><strong>Loading enterprise lead workspace...</strong></div>
+            }
+            else if (_filtered.Count == 0)
+            {
+                <div class="ld-empty-state"><i class="bi bi-person-plus" aria-hidden="true"></i><strong>No leads match this view</strong><span>Adjust filters or create a new lead.</span><button class="um-btn um-btn-primary" @onclick="OnNewLeadClick">Create lead</button></div>
+            }
+            else if (_view == "table")
+            {
+                <div class="ld-table-scroll"><table class="ld-table"><thead><tr><th><input type="checkbox" checked="@AllPageSelected" @onchange="ToggleCurrentPageSelection" aria-label="Select all leads on this page" /></th><th>Lead</th><th>Stage</th><th>Source</th><th>Owner</th><th class="ld-number">Score</th><th class="ld-number">Premium</th><th>Created</th><th></th></tr></thead><tbody>@foreach (var lead in _paged) { <tr class="@LeadRowClass(lead)" @onclick="@(() => OpenDetail(lead))"><td @onclick:stopPropagation="true"><input type="checkbox" checked="@IsSelected(lead)" @onchange="@(() => ToggleSelection(lead))" aria-label="Select lead" /></td><td><div class="ld-name-cell"><span class="ld-avatar @AvatarColor(lead.FullName)" aria-hidden="true">@Initials(lead.FullName)</span><span><strong>@lead.FullName</strong><small>@lead.CompanyName · @lead.Email</small></span></div></td><td><span class="@StageBadge(lead.Stage)">@lead.Stage</span></td><td><span class="ld-source-badge"><i class="bi @SourceIcon(lead.Source)" aria-hidden="true"></i> @lead.Source</span></td><td>@lead.Owner</td><td class="ld-number"><span class="ld-score-pill @ScoreTone(lead.Score)">@lead.Score</span></td><td class="ld-number">@lead.EstPremium.ToString("C0", CultureInfo.CurrentCulture)</td><td>@lead.CreatedAt.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture)</td><td @onclick:stopPropagation="true"><div class="ld-row-actions"><button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenEdit(lead))" title="Edit lead"><i class="bi bi-pencil" aria-hidden="true"></i></button><button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenLeadCampaign(lead))" title="Enroll campaign"><i class="bi bi-megaphone" aria-hidden="true"></i></button><button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => ConfirmDisqualify(lead))" title="Disqualify lead"><i class="bi bi-x-octagon" aria-hidden="true"></i></button></div></td></tr> }</tbody></table></div><div class="ld-pager"><span>@PageSummary</span><div><button class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_pageIndex <= 1)" title="Previous page"><i class="bi bi-chevron-left" aria-hidden="true"></i></button><span>Page @_pageIndex of @TotalPages</span><button class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_pageIndex >= TotalPages)" title="Next page"><i class="bi bi-chevron-right" aria-hidden="true"></i></button></div></div>
+            }
+            else if (_view == "board")
+            {
+                <div class="ld-board">@foreach (var stage in _boardStages) { var stageLeads = _filtered.Where(l => l.Stage == stage).ToList(); <section class="ld-board-col"><header><strong>@stage</strong><span>@stageLeads.Count</span></header>@foreach (var lead in stageLeads) { <article class="ld-board-card" @onclick="@(() => OpenDetail(lead))"><div><strong>@lead.FullName</strong><span>@lead.CompanyName</span></div><div><span class="@RatingBadge(lead.Rating)">@lead.Rating</span><span>@lead.EstPremium.ToString("C0")</span></div><small>@lead.Owner · score @lead.Score</small></article> }</section> }</div>
+            }
+            else if (_view == "funnel")
+            {
+                <div class="ld-analytics-grid"><section><h3>Source performance</h3>@foreach (var source in _sourceFunnel) { <button class="@FunnelRowClass(source)" @onclick="@(() => SelectFunnelSource(source.Source))"><span><i class="bi @SourceIcon(source.Source)" aria-hidden="true"></i> @source.Source</span><div><i style="width:@source.WidthPercent%"></i></div><strong>@source.Total</strong><small>@source.ConvPct.ToString("F0")% conv.</small></button> }</section><section><h3>Stage mix</h3>@foreach (var stage in StageBreakdown) { <div class="ld-stage-row"><span>@stage.Stage</span><div><i style="width:@stage.WidthPercent%"></i></div><strong>@stage.Count</strong></div> }</section></div>
+            }
+            else
+            {
+                <div class="ld-producer-grid">@foreach (var producer in _producerRows) { <article class="@ProducerCardClass(producer)" @onclick="@(() => SelectProducer(producer.Owner))"><div><strong>@producer.Owner</strong><span>@producer.Total leads · @producer.ConvPct.ToString("F0")% conversion</span></div><strong>@producer.Pipeline.ToString("C0")</strong><div class="ld-producer-meter"><i style="width:@producer.WidthPercent%"></i></div></article> }</div>
+            }
+        </main>
+
+        <aside class="ld-detail-card">
+            @if (_detail is null)
+            {
+                <div class="ld-detail-empty"><i class="bi bi-person-vcard" aria-hidden="true"></i><strong>Select a lead</strong><span>Review lead intelligence, contact details, and workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="ld-detail-head"><div><span class="ld-detail-eyebrow"><i class="bi @SourceIcon(_detail.Source)" aria-hidden="true"></i> @_detail.Source</span><h2>@_detail.FullName</h2><p>@_detail.CompanyName</p></div><span class="@StageBadge(_detail.Stage)">@_detail.Stage</span></div><div class="ld-detail-body"><div class="ld-detail-summary"><div><span>Score</span><strong>@_detail.Score</strong></div><div><span>Rating</span><strong>@_detail.Rating</strong></div><div><span>Pipeline</span><strong>@_detail.EstPremium.ToString("C0")</strong></div><div><span>Owner</span><strong>@_detail.Owner</strong></div></div><div class="ld-contact-card"><span><i class="bi bi-envelope" aria-hidden="true"></i> @_detail.Email</span><span><i class="bi bi-telephone" aria-hidden="true"></i> @_detail.Phone</span><span><i class="bi bi-card-text" aria-hidden="true"></i> @(_detail.Notes ?? "No notes captured")</span></div><div class="ld-detail-actions"><button class="um-btn um-btn-ghost" @onclick="@(() => OpenEdit(_detail))"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button class="um-btn um-btn-ghost" @onclick="@(() => OpenLeadAssign(_detail))"><i class="bi bi-person-check" aria-hidden="true"></i> Assign</button><button class="um-btn um-btn-primary" @onclick="@(() => OpenLeadConvert(_detail))"><i class="bi bi-trophy" aria-hidden="true"></i> Convert</button><button class="um-btn um-btn-danger" @onclick="@(() => ConfirmDisqualify(_detail))"><i class="bi bi-x-octagon" aria-hidden="true"></i> Disqualify</button></div></div>
+            }
+        </aside>
+    </section>
+</div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private SfToast?    _toast;
-    private SfGrid<LeadRow>? _grid;
-    private SfUploader? _uploader;
-
-    // ── View state ────────────────────────────────────────────────────────────
-    private string _view   = "grid";
-    private bool   _loading = false;
-    private bool   _hasLoaded = false;
-
-    private record ViewDef(string Id, string Label, string Icon);
-    private static readonly List<ViewDef> _views =
-    [
-        new("grid",     "Grid",     "bi-table"),
-        new("kanban",   "Kanban",   "bi-kanban"),
-        new("funnel",   "Funnel",   "bi-funnel-fill"),
-        new("producer", "Producer", "bi-person-badge"),
-    ];
-
-    // ── Data ──────────────────────────────────────────────────────────────────
-    private List<LeadRow>   _leads    = [];
-    private List<LeadRow>   _filtered = [];
-    private List<SourceRow> _sourceFunnel  = [];
-    private List<ProducerRow> _producerRows = [];
-    private LeadKpi         _kpi = new();
-
-    // ── Filters ───────────────────────────────────────────────────────────────
-    private string _search        = string.Empty;
-    private string _filterStage   = string.Empty;
-    private string _filterSource  = string.Empty;
-    private string _filterOwner   = string.Empty;
-    private string _filterRating  = string.Empty;
-
-    // ── Selection ─────────────────────────────────────────────────────────────
-    private List<LeadRow> _selected = [];
-
-    // ── Detail slide-over ─────────────────────────────────────────────────────
-    private LeadRow? _detail = null;
-
-    // ── Row context menu ──────────────────────────────────────────────────────
-    private LeadRow? _menuLead = null;
-    private double   _menuX = 0, _menuY = 0;
-
-    // ── Kanban ────────────────────────────────────────────────────────────────
-    private bool _swimByOwner = false;
-
-    private record KanbanColDef(string Key, string Label);
-    private static readonly List<KanbanColDef> _kanbanColumns =
-    [
-        new("New",         "New"),
-        new("Contacted",   "Contacted"),
-        new("Qualified",   "Qualified"),
-        new("Proposal",    "Proposal"),
-        new("Negotiation", "Negotiation"),
-        new("Converted",   "Converted"),
-        new("Lost",        "Lost"),
-    ];
-
-    // ── Funnel ────────────────────────────────────────────────────────────────
-    private string _funnelSource = string.Empty;
-
-    // ── Producer ──────────────────────────────────────────────────────────────
-    private string _producerFilter = string.Empty;
-
-    // ── Dialogs ───────────────────────────────────────────────────────────────
-    private bool   _showImport    = false;
-    private bool   _showAssign    = false;
-    private bool   _showMerge     = false;
-    private bool   _showConvert   = false;
-    private bool   _showCampaign  = false;
-    private bool   _showAdd       = false;
-    private bool   _savingLead    = false;
-    private Guid   _editingId     = Guid.Empty;
     private Guid TenantAdminUserId { get; set; }
-
-    // Import
-    private List<LeadImportRow> _importPreview = [];
-    private List<string>        _importErrors  = [];
-    private bool _importDedupe           = true;
-    private bool _importAssignRoundRobin = false;
-
-    // Add/Edit Lead Form
-    private LeadFormModel _leadForm = new();
-
-    // Assign
+    private bool _loading;
+    private bool _hasLoaded;
+    private bool _busy;
+    private bool _savingLead;
+    private bool _showLeadModal;
+    private bool _showImport;
+    private bool _showAssign;
+    private bool _showMerge;
+    private bool _showConvert;
+    private bool _showCampaign;
+    private bool _showConfirm;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "info";
+    private string _loadError = string.Empty;
+    private CancellationTokenSource? _toastCts;
+    private ConfirmAction? _confirmAction;
+    private Guid _editingId = Guid.Empty;
+    private string _view = "table";
+    private string _search = string.Empty;
+    private string _filterStage = string.Empty;
+    private string _filterSource = string.Empty;
+    private string _filterOwner = string.Empty;
+    private string _filterRating = string.Empty;
+    private string _quickFilter = string.Empty;
+    private string _funnelSource = string.Empty;
+    private string _producerFilter = string.Empty;
     private string _assignTarget = string.Empty;
-    private bool   _assignNotify = true;
-
-    // Merge
     private string _mergeTarget = string.Empty;
-
-    // Convert
-    private bool _convertKeepLead       = false;
+    private string _campaignTarget = string.Empty;
+    private bool _assignNotify = true;
+    private bool _convertKeepLead;
     private bool _convertCreateActivity = true;
-
-    // Campaign
-    private string _campaignTarget          = string.Empty;
-    private bool   _campaignSendImmediately = false;
-
-    // ── Static reference data ─────────────────────────────────────────────────
-    private static readonly List<LabelValue> _stageOptions =
-    [
-        new("New","New"), new("Contacted","Contacted"), new("Qualified","Qualified"),
-        new("Proposal","Proposal"), new("Negotiation","Negotiation"),
-        new("Converted","Converted"), new("Lost","Lost"),
-    ];
-    private static readonly List<LabelValue> _sourceOptions =
-    [
-        new("Referral","Referral"), new("Website","Website"), new("Cold Call","Cold Call"),
-        new("Social","Social"), new("Email","Email"), new("Event","Event"),
-        new("Partner","Partner"), new("Inbound","Inbound"),
-    ];
-    private static readonly List<LabelValue> _ratingOptions =
-    [
-        new("Hot","Hot"), new("Warm","Warm"), new("Cold","Cold"),
-    ];
+    private bool _campaignSendImmediately;
+    private bool _importDedupe = true;
+    private bool _importAssignRoundRobin;
+    private int _pageIndex = 1;
+    private const int PageSize = 12;
+    private LeadRow? _detail;
+    private LeadFormModel _leadForm = new();
+    private List<LeadRow> _leads = [];
+    private List<LeadRow> _filtered = [];
+    private List<LeadRow> _paged = [];
+    private List<LeadRow> _selected = [];
+    private List<LeadImportRow> _importPreview = [];
+    private List<string> _importErrors = [];
     private List<LabelValue> _ownerOptions = [];
-    private static readonly List<LabelValue> _campaignOptions =
+    private List<SourceRow> _sourceFunnel = [];
+    private List<ProducerRow> _producerRows = [];
+    private LeadKpi _kpi = new();
+
+    private static readonly List<ViewDef> _views = [new("table", "Table", "bi-table"), new("board", "Board", "bi-kanban"), new("funnel", "Funnel", "bi-funnel"), new("producer", "Producer", "bi-person-badge")];
+    private static readonly string[] _boardStages = ["New", "Contacted", "Qualified", "Proposal", "Negotiation", "Converted", "Lost"];
+    private static readonly List<LabelValue> _stageOptions = [new("New", "New"), new("Contacted", "Contacted"), new("Qualified", "Qualified"), new("Proposal", "Proposal"), new("Negotiation", "Negotiation"), new("Converted", "Converted"), new("Lost", "Lost")];
+    private static readonly List<LabelValue> _sourceOptions = [new("Referral", "Referral"), new("Website", "Website"), new("Cold Call", "Cold Call"), new("Social", "Social"), new("Email", "Email"), new("Event", "Event"), new("Partner", "Partner"), new("Inbound", "Inbound")];
+    private static readonly List<LabelValue> _ratingOptions = [new("Hot", "Hot"), new("Warm", "Warm"), new("Cold", "Cold")];
+    private static readonly List<LabelValue> _campaignOptions = [new("c1", "Q3 Commercial BOP Drip"), new("c2", "Renewal Win-Back 2025"), new("c3", "Mid-Market Cyber Awareness"), new("c4", "New Business Referral Series")];
+
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private bool AllPageSelected => _paged.Count > 0 && _paged.All(IsSelected);
+    private string PageSummary => _filtered.Count == 0 ? "No leads" : $"Showing {((_pageIndex - 1) * PageSize) + 1}-{Math.Min(_pageIndex * PageSize, _filtered.Count)} of {_filtered.Count}";
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-octagon", "warning" => "bi-exclamation-triangle", "success" => "bi-check2-circle", _ => "bi-info-circle" };
+    private string PhoneStatusText => IsPhoneValid(_leadForm.Phone) ? $"Phone formatted as {NormalizePhone(_leadForm.Phone)}" : "Enter a valid 10-digit phone number.";
+    private string PhoneHintClass => IsPhoneValid(_leadForm.Phone) ? "ld-field-hint ld-hint-good" : "ld-field-hint ld-hint-bad";
+    private bool ImportDisabled => _importPreview.Count == 0 || _importErrors.Count > 0;
+    private bool AssignDisabled => string.IsNullOrWhiteSpace(_assignTarget);
+    private bool MergeDisabled => string.IsNullOrWhiteSpace(_mergeTarget) || _selected.Count < 2;
+    private bool CampaignDisabled => string.IsNullOrWhiteSpace(_campaignTarget);
+
+    private IEnumerable<KpiModel> Metrics =>
     [
-        new("c1","Q3 Commercial BOP Drip"),
-        new("c2","Renewal Win-Back 2025"),
-        new("c3","Mid-Market Cyber Awareness"),
-        new("c4","New Business Referral Series"),
+        new("Total", _leads.Count.ToString(), "All CRM leads", "bi-person-plus-fill", "ld-blue", ""),
+        new("Hot", _leads.Count(x => x.Rating == "Hot").ToString(), "High priority", "bi-fire", "ld-red", "hot"),
+        new("Converted", _leads.Count(x => x.Stage == "Converted").ToString(), "Won pipeline", "bi-trophy", "ld-green", "converted"),
+        new("Conversion", _kpi.ConversionRate.ToString("F1") + "%", "Lead-to-pipeline", "bi-graph-up-arrow", "ld-purple", "converted"),
+        new("Stale", _leads.Count(x => x.DaysSinceActivity > 30 && x.Stage != "Converted" && x.Stage != "Lost").ToString(), "Needs activity", "bi-calendar-x", "ld-amber", "stale"),
+        new("Pipeline", _leads.Where(x => x.Stage != "Converted" && x.Stage != "Lost").Sum(x => x.EstPremium).ToString("C0"), "Open premium", "bi-cash-coin", "ld-cyan", "pipeline")
     ];
 
-    // ── Lifecycle ─────────────────────────────────────────────────────────────
+    private IEnumerable<StageBreakdownRow> StageBreakdown
+    {
+        get
+        {
+            var rows = _filtered.GroupBy(x => x.Stage).Select(g => new StageBreakdownRow(g.Key, g.Count(), 0)).ToList();
+            var max = rows.Count == 0 ? 1 : rows.Max(x => x.Count);
+            return rows.OrderBy(x => StageOrder(x.Stage)).Select(x => x with { WidthPercent = max == 0 ? 0 : (double)x.Count / max * 100 });
+        }
+    }
+
     protected override async Task OnInitializedAsync()
     {
         Nav.LocationChanged += OnLocationChanged;
@@ -1135,11 +526,7 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender || _hasLoaded)
-        {
-            return;
-        }
-
+        if (!firstRender || _hasLoaded) return;
         await ResolveCurrentUserContextAsync();
         await LoadAsync();
         StateHasChanged();
@@ -1148,64 +535,31 @@
     private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs args)
     {
         var path = Nav.ToBaseRelativePath(args.Location).Split('?', '#')[0].Trim('/');
-        if (!string.Equals(path, "crm/leads", StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        _ = InvokeAsync(async () =>
-        {
-            await ResolveCurrentUserContextAsync();
-            await LoadAsync();
-            StateHasChanged();
-        });
-    }
-
-    private async Task OnLeadScoresChangedAsync(Guid tenantId)
-    {
-        await InvokeAsync(async () =>
-        {
-            await LoadAsync();
-            StateHasChanged();
-        });
+        if (string.Equals(path, "crm/leads", StringComparison.OrdinalIgnoreCase)) _ = InvokeAsync(LoadAsync);
     }
 
     private async Task StartLeadScoringRealtimeAsync()
     {
-        try
-        {
-            if (_tenantId != Guid.Empty)
-            {
-                await LeadScoringRealtime.StartAsync(_tenantId, OnLeadScoresChangedAsync);
-            }
-        }
-        catch (Exception ex)
-        {
-            await ShowToastAsync($"Real-time lead scoring updates are unavailable: {ex.Message}", "e-toast-warning");
-        }
+        try { if (_tenantId != Guid.Empty) await LeadScoringRealtime.StartAsync(_tenantId, _ => InvokeAsync(LoadAsync)); }
+        catch (Exception ex) { await ShowToastAsync($"Realtime unavailable: {ex.Message}", "warning"); }
     }
 
     public async ValueTask DisposeAsync()
     {
         Nav.LocationChanged -= OnLocationChanged;
         await LeadScoringRealtime.DisposeAsync();
+        _toastCts?.Cancel();
+        _toastCts?.Dispose();
     }
 
     private async Task LoadAsync()
     {
-        _loading = true; StateHasChanged();
+        _loading = true;
+        _loadError = string.Empty;
         try
         {
-            if (_tenantId == Guid.Empty)
-            {
-                await ResolveCurrentUserContextAsync();
-            }
-
-            if (_tenantId == Guid.Empty)
-            {
-                _hasLoaded = false;
-                return;
-            }
+            if (_tenantId == Guid.Empty) await ResolveCurrentUserContextAsync();
+            if (_tenantId == Guid.Empty) return;
 
             var leadsTask = Api.SearchLeadsAsync(_tenantId);
             var usersTask = Api.SearchUsersAsync(_tenantId);
@@ -1213,26 +567,23 @@
 
             var users = usersTask.Result?.Items?.ToList() ?? [];
             var ownerLookup = users.ToDictionary(u => u.UserId, u => string.IsNullOrWhiteSpace(u.DisplayName) ? u.FullName : u.DisplayName);
-
-            _ownerOptions = users
-                .Where(u => u.StatusCode.Equals("Active", StringComparison.OrdinalIgnoreCase))
-                .Select(u => new LabelValue(u.UserId.ToString(), string.IsNullOrWhiteSpace(u.DisplayName) ? u.FullName : u.DisplayName))
-                .Where(o => !string.IsNullOrWhiteSpace(o.Label))
-                .OrderBy(o => o.Label)
-                .ToList();
-
-            var response = leadsTask.Result;
-            _leads = response?.Items?.Select(l => MapToLeadRow(l, ownerLookup)).ToList() ?? [];
+            _ownerOptions = users.Where(u => string.Equals(u.StatusCode, "Active", StringComparison.OrdinalIgnoreCase)).Select(u => new LabelValue(u.UserId.ToString(), string.IsNullOrWhiteSpace(u.DisplayName) ? u.FullName : u.DisplayName)).Where(x => !string.IsNullOrWhiteSpace(x.Label)).OrderBy(x => x.Label).ToList();
+            _leads = leadsTask.Result?.Items?.Select(l => MapToLeadRow(l, ownerLookup)).ToList() ?? [];
             RebuildDerived();
+            _detail = _detail is null ? _filtered.FirstOrDefault() : _leads.FirstOrDefault(x => x.LeadId == _detail.LeadId) ?? _filtered.FirstOrDefault();
             _hasLoaded = true;
         }
         catch (Exception ex)
         {
-            await ShowToastAsync($"Error loading leads: {ex.Message}", "e-toast-danger");
+            _loadError = ex.Message;
             _leads = [];
-            _hasLoaded = false;
+            RebuildDerived();
+            await ShowToastAsync("Unable to load leads.", "danger");
         }
-        finally { _loading = false; }
+        finally
+        {
+            _loading = false;
+        }
     }
 
     private LeadRow MapToLeadRow(LeadDto dto, IReadOnlyDictionary<Guid, string> ownerLookup)
@@ -1249,552 +600,275 @@
             Email = dto.Email ?? string.Empty,
             Phone = dto.Phone ?? string.Empty,
             Stage = NormalizeStage(dto.NurturingStageCode, dto.StatusCode),
-            Source = string.IsNullOrWhiteSpace(dto.SourceCode) ? "Direct" : dto.SourceCode,
+            Source = string.IsNullOrWhiteSpace(dto.SourceCode) ? "Inbound" : dto.SourceCode,
             Owner = dto.AssignedToUserId.HasValue && ownerLookup.TryGetValue(dto.AssignedToUserId.Value, out var owner) ? owner : "Unassigned",
-            Rating = ScoreToRating(score),
+            Rating = ScoreToRating(score, dto.PriorityCode),
             Score = score,
             EstPremium = dto.AnnualRevenue ?? 0,
             CreatedAt = dto.CreatedDateUtc,
-            LastActivity = null,
+            LastActivity = dto.ModifiedDateUtc,
             Notes = dto.InterestedService
         };
     }
 
-    private static string NormalizeStage(string? stage, int statusCode)
-    {
-        if (!string.IsNullOrWhiteSpace(stage))
-        {
-            return stage.Trim() switch
-            {
-                "Closed" => "Lost",
-                "Won" => "Converted",
-                var s => s
-            };
-        }
-
-        return statusCode switch
-        {
-            2 => "Contacted",
-            3 => "Qualified",
-            4 => "Converted",
-            5 => "Lost",
-            _ => "New",
-        };
-    }
-
-    private static string ScoreToRating(int score) => score switch
-    {
-        >= 80 => "Hot",
-        >= 50 => "Warm",
-        _ => "Cold",
-    };
-
     private void RebuildDerived()
     {
-        ApplyFilters();
+        ApplyFilters(false);
+        var maxSource = Math.Max(1, _leads.GroupBy(x => x.Source).Select(g => g.Count()).DefaultIfEmpty(1).Max());
+        _sourceFunnel = _leads.GroupBy(x => x.Source).Select(g => new SourceRow(g.Key, g.Count(), g.Count(x => x.Stage == "Converted"), (int)g.Average(x => x.Score), g.Average(x => x.EstPremium), g.Sum(x => x.EstPremium), (double)g.Count() / maxSource * 100)).OrderByDescending(x => x.Total).ToList();
+        var maxProducer = Math.Max(1, _leads.GroupBy(x => x.Owner).Select(g => g.Sum(x => x.EstPremium)).DefaultIfEmpty(1).Max());
+        _producerRows = _leads.GroupBy(x => x.Owner).Select(g => new ProducerRow(g.Key, g.Count(), g.Count(x => x.Stage == "Converted"), g.Sum(x => x.EstPremium), maxProducer == 0 ? 0 : (double)(g.Sum(x => x.EstPremium) / maxProducer) * 100)).OrderByDescending(x => x.Pipeline).ToList();
+        _kpi = new LeadKpi { ConversionRate = _leads.Count == 0 ? 0 : (double)_leads.Count(x => x.Stage == "Converted") / _leads.Count * 100 };
+    }
 
-        _sourceFunnel = _leads
-            .GroupBy(x => x.Source)
-            .Select(g => new SourceRow
-            {
-                Source        = g.Key,
-                Total         = g.Count(),
-                Converted     = g.Count(x => x.Stage == "Converted"),
-                AvgScore      = g.Any() ? (int)g.Average(x => x.Score) : 0,
-                AvgPremium    = g.Any() ? g.Average(x => x.EstPremium) : 0,
-                TotalPipeline = g.Sum(x => x.EstPremium),
-            })
-            .OrderByDescending(x => x.Total)
-            .ToList();
-
-        _producerRows = _leads
-            .GroupBy(x => x.Owner)
-            .Select(g => new ProducerRow
-            {
-                Owner    = g.Key,
-                Total    = g.Count(),
-                Converted= g.Count(x => x.Stage == "Converted"),
-                Pipeline = g.Sum(x => x.EstPremium),
-            })
-            .OrderByDescending(x => x.Pipeline)
-            .ToList();
-
-        _kpi = new LeadKpi
+    private void ApplyFilters(bool resetPage = true)
+    {
+        IEnumerable<LeadRow> query = _leads;
+        if (!string.IsNullOrWhiteSpace(_search))
         {
-            TotalLeads     = _leads.Count,
-            Hot            = _leads.Count(x => x.Rating == "Hot"),
-            Converted      = _leads.Count(x => x.Stage == "Converted"),
-            ConversionRate = _leads.Count == 0 ? 0 : (double)_leads.Count(x => x.Stage == "Converted") / _leads.Count * 100,
-            Stale          = _leads.Count(x => x.DaysSinceActivity > 30),
-            EstPipeline    = _leads.Where(x => x.Stage != "Converted" && x.Stage != "Lost").Sum(x => x.EstPremium),
-        };
+            var term = _search.Trim();
+            query = query.Where(x => Contains(x.FullName, term) || Contains(x.CompanyName, term) || Contains(x.Email, term) || Contains(x.Phone, term) || Contains(x.Source, term) || Contains(x.Owner, term) || Contains(x.Stage, term));
+        }
+        if (!string.IsNullOrWhiteSpace(_filterStage)) query = query.Where(x => x.Stage == _filterStage);
+        if (!string.IsNullOrWhiteSpace(_filterSource)) query = query.Where(x => x.Source == _filterSource);
+        if (!string.IsNullOrWhiteSpace(_filterOwner)) query = query.Where(x => x.AssignedToUserId?.ToString() == _filterOwner);
+        if (!string.IsNullOrWhiteSpace(_filterRating)) query = query.Where(x => x.Rating == _filterRating);
+        query = _quickFilter switch { "hot" => query.Where(x => x.Rating == "Hot"), "converted" => query.Where(x => x.Stage == "Converted"), "stale" => query.Where(x => x.DaysSinceActivity > 30 && x.Stage != "Converted" && x.Stage != "Lost"), "pipeline" => query.Where(x => x.Stage != "Converted" && x.Stage != "Lost"), _ => query };
+        if (!string.IsNullOrWhiteSpace(_producerFilter)) query = query.Where(x => x.Owner == _producerFilter);
+        _filtered = query.OrderByDescending(x => x.Score).ThenByDescending(x => x.CreatedAt).ToList();
+        if (resetPage) _pageIndex = 1;
+        _pageIndex = Math.Clamp(_pageIndex, 1, TotalPages);
+        ApplyPaging();
     }
 
-    private void ApplyFilters()
+    private void ApplyPaging() => _paged = _filtered.Skip((_pageIndex - 1) * PageSize).Take(PageSize).ToList();
+    private void PreviousPage() { if (_pageIndex > 1) { _pageIndex--; ApplyPaging(); } }
+    private void NextPage() { if (_pageIndex < TotalPages) { _pageIndex++; ApplyPaging(); } }
+    private void SetView(string view) { _view = view; if (view != "producer") _producerFilter = string.Empty; }
+    private void SetQuickFilter(string filter) { _quickFilter = _quickFilter == filter ? string.Empty : filter; ApplyFilters(); }
+    private void ShowBoardView() => SetView("board");
+    private void ShowFunnelView() => SetView("funnel");
+    private void ShowProducerView() => SetView("producer");
+    private void ShowHotLeads() => SetQuickFilter("hot");
+    private void OpenDetail(LeadRow lead) => _detail = lead;
+    private void SelectFunnelSource(string source) { _funnelSource = _funnelSource == source ? string.Empty : source; _filterSource = _funnelSource; ApplyFilters(); }
+    private void SelectProducer(string producer) { _producerFilter = _producerFilter == producer ? string.Empty : producer; ApplyFilters(); }
+    private void ClearSelection() => _selected.Clear();
+    private bool IsSelected(LeadRow lead) => _selected.Any(x => x.LeadId == lead.LeadId);
+    private void ToggleSelection(LeadRow lead) { if (IsSelected(lead)) _selected.RemoveAll(x => x.LeadId == lead.LeadId); else _selected.Add(lead); }
+    private void ToggleCurrentPageSelection(BlazorChangeEventArgs e) { var selected = e.Value as bool? ?? string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase); if (selected) { foreach (var lead in _paged.Where(x => !IsSelected(x))) _selected.Add(lead); } else { _selected.RemoveAll(x => _paged.Any(p => p.LeadId == x.LeadId)); } }
+    private void OnSearchChanged(BlazorChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; ApplyFilters(); }
+    private void OnStageFilterChanged(BlazorChangeEventArgs e) { _filterStage = e.Value?.ToString() ?? string.Empty; ApplyFilters(); }
+    private void OnSourceFilterChanged(BlazorChangeEventArgs e) { _filterSource = e.Value?.ToString() ?? string.Empty; ApplyFilters(); }
+    private void OnOwnerFilterChanged(BlazorChangeEventArgs e) { _filterOwner = e.Value?.ToString() ?? string.Empty; ApplyFilters(); }
+    private void OnRatingFilterChanged(BlazorChangeEventArgs e) { _filterRating = e.Value?.ToString() ?? string.Empty; ApplyFilters(); }
+
+    private void OnNewLeadClick() { _editingId = Guid.Empty; _leadForm = new LeadFormModel { Source = "Referral", Stage = "New", Priority = "Warm", Score = 50, Owner = _ownerOptions.FirstOrDefault()?.Value ?? string.Empty }; _showLeadModal = true; }
+    private void OpenEdit(LeadRow lead) { _editingId = lead.LeadId; _leadForm = new LeadFormModel { FirstName = lead.FirstName, LastName = lead.LastName, Company = lead.CompanyName, Email = lead.Email, Phone = lead.Phone, Source = lead.Source, Stage = lead.Stage, Priority = lead.Rating, Owner = lead.AssignedToUserId?.ToString() ?? string.Empty, EstPremium = lead.EstPremium, Score = lead.Score, Notes = lead.Notes ?? string.Empty }; _showLeadModal = true; }
+    private void CloseLeadModal() { if (!_savingLead) _showLeadModal = false; }
+    private void OpenImport() => _showImport = true;
+    private void CloseImport() { _showImport = false; _importErrors.Clear(); _importPreview.Clear(); }
+    private void OpenAssign() => _showAssign = true;
+    private void CloseAssign() => _showAssign = false;
+    private void OpenMerge() => _showMerge = true;
+    private void CloseMerge() => _showMerge = false;
+    private void SelectMergeTarget(LeadRow lead) => _mergeTarget = lead.LeadId.ToString();
+    private void CloseConvert() => _showConvert = false;
+    private void OpenCampaign() => _showCampaign = true;
+    private void CloseCampaign() => _showCampaign = false;
+    private void OpenLeadAssign(LeadRow lead) { _selected = [lead]; _showAssign = true; }
+    private void OpenLeadCampaign(LeadRow lead) { _selected = [lead]; _showCampaign = true; }
+    private void OpenLeadConvert(LeadRow lead) { _selected = [lead]; ConfirmConvertToOpportunity(); }
+
+    private async Task SaveLeadAsync()
     {
-        _filtered = _leads.Where(r =>
-            (string.IsNullOrEmpty(_filterStage)  || r.Stage  == _filterStage) &&
-            (string.IsNullOrEmpty(_filterSource) || r.Source == _filterSource) &&
-            (string.IsNullOrEmpty(_filterOwner)  || r.AssignedToUserId?.ToString() == _filterOwner) &&
-            (string.IsNullOrEmpty(_filterRating) || r.Rating == _filterRating) &&
-            (string.IsNullOrEmpty(_search) ||
-             r.FullName.Contains(_search,    StringComparison.OrdinalIgnoreCase) ||
-             r.CompanyName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             r.Email.Contains(_search,       StringComparison.OrdinalIgnoreCase))
-        ).ToList();
-    }
-
-    private List<LeadRow> ProducerFiltered() =>
-        string.IsNullOrEmpty(_producerFilter)
-            ? _filtered
-            : _filtered.Where(x => x.Owner == _producerFilter).ToList();
-
-    private void SetView(string v) { _view = v; _selected.Clear(); }
-    private void SelectFunnelSource(string s) => _funnelSource = _funnelSource == s ? string.Empty : s;
-    private void SelectProducer(string p)     => _producerFilter = _producerFilter == p ? string.Empty : p;
-    private void OpenDetail(LeadRow r)        => _detail = r;
-    private void ClearSelection()             => _selected.Clear();
-
-    private void OnNewLeadClick()
-    {
-        _editingId = Guid.Empty;
-        ClearFormFields();
-        _showAdd = true;
-    }
-
-    private void OpenEdit(LeadRow lead)
-    {
-        _editingId = lead.LeadId;
-        _leadForm = new()
+        if (!ValidateLeadForm()) return;
+        _savingLead = true;
+        try
         {
-            FirstName = lead.FirstName,
-            LastName = lead.LastName,
-            Company = lead.CompanyName,
-            Email = lead.Email,
-            Phone = lead.Phone,
-            Source = lead.Source == "Direct" ? string.Empty : lead.Source,
-            Owner = lead.AssignedToUserId?.ToString() ?? string.Empty,
-            EstPremium = lead.EstPremium,
-            Notes = lead.Notes ?? string.Empty
-        };
-        _showAdd = true;
+            var assignedToUserId = Guid.TryParse(_leadForm.Owner, out var ownerId) ? ownerId : (Guid?)null;
+            if (_editingId == Guid.Empty)
+            {
+                await Api.CreateLeadAsync(new CreateLeadRequest { TenantId = _tenantId, LeadNumber = $"LD-{DateTime.UtcNow:yyyyMMddHHmmss}", AccountName = _leadForm.Company.Trim(), FirstName = _leadForm.FirstName.Trim(), LastName = _leadForm.LastName.Trim(), Email = _leadForm.Email.Trim(), Phone = NormalizePhone(_leadForm.Phone), InterestedService = _leadForm.Notes, AnnualRevenue = _leadForm.EstPremium, Score = _leadForm.Score, PriorityCode = _leadForm.Priority, SourceCode = _leadForm.Source, NurturingStageCode = _leadForm.Stage, AssignedToUserId = assignedToUserId, CreatedByUserId = TenantAdminUserId });
+                await ShowToastAsync("Lead created.", "success");
+            }
+            else
+            {
+                await Api.UpdateLeadAsync(_editingId, new UpdateLeadRequest { LeadId = _editingId, AccountName = _leadForm.Company.Trim(), FirstName = _leadForm.FirstName.Trim(), LastName = _leadForm.LastName.Trim(), Email = _leadForm.Email.Trim(), Phone = NormalizePhone(_leadForm.Phone), InterestedService = _leadForm.Notes, AnnualRevenue = _leadForm.EstPremium, Score = _leadForm.Score, PriorityCode = _leadForm.Priority, SourceCode = _leadForm.Source, NurturingStageCode = _leadForm.Stage, StatusCode = StageToStatusCode(_leadForm.Stage), AssignedToUserId = assignedToUserId, UpdatedByUserId = TenantAdminUserId });
+                await ShowToastAsync("Lead saved.", "success");
+            }
+            _showLeadModal = false;
+            _editingId = Guid.Empty;
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowToastAsync($"Save failed: {ex.Message}", "danger"); }
+        finally { _savingLead = false; }
     }
 
-    private void OpenRowMenu(LeadRow r, Microsoft.AspNetCore.Components.Web.MouseEventArgs e)
+    private bool ValidateLeadForm()
     {
-        _menuLead = r;
-        _menuX = Math.Max(12, e.ClientX - 208);
-        _menuY = Math.Max(12, e.ClientY - 4);
+        if (string.IsNullOrWhiteSpace(_leadForm.FirstName) || string.IsNullOrWhiteSpace(_leadForm.LastName) || string.IsNullOrWhiteSpace(_leadForm.Company) || string.IsNullOrWhiteSpace(_leadForm.Email) || string.IsNullOrWhiteSpace(_leadForm.Source) || string.IsNullOrWhiteSpace(_leadForm.Owner)) { _ = ShowToastAsync("Complete required lead fields.", "warning"); return false; }
+        if (!new EmailAddressAttribute().IsValid(_leadForm.Email)) { _ = ShowToastAsync("Enter a valid email address.", "warning"); return false; }
+        if (!IsPhoneValid(_leadForm.Phone)) { _ = ShowToastAsync("Enter a valid phone number.", "warning"); return false; }
+        return true;
     }
 
-    private void OnRowSelected(RowSelectEventArgs<LeadRow> args)
-    {
-        if (!_selected.Any(x => x.LeadId == args.Data.LeadId))
-            _selected.Add(args.Data);
-    }
+    private Task HandleInvalidLeadSubmitAsync(EditContext _) => ShowToastAsync("Fix validation errors.", "warning");
 
-    private void OnRowDeselected(RowDeselectEventArgs<LeadRow> args) =>
-        _selected.RemoveAll(x => x.LeadId == args.Data.LeadId);
-
-    // ── Actions ───────────────────────────────────────────────────────────────
-    private void OnFileSelected(UploadChangeEventArgs args)
+    private async Task OnFileSelectedAsync(InputFileChangeEventArgs args)
     {
-        _importErrors.Clear();
-        _importPreview.Clear();
-        // TODO: parse CSV/XLSX from args.Files[0].Stream
-        // Stub: show empty preview
-        StateHasChanged();
+        _importErrors.Clear(); _importPreview.Clear();
+        try
+        {
+            using var stream = args.File.OpenReadStream(5 * 1024 * 1024);
+            using var reader = new StreamReader(stream);
+            var header = await reader.ReadLineAsync();
+            if (string.IsNullOrWhiteSpace(header)) { _importErrors.Add("CSV file is empty."); return; }
+            var columns = header.Split(',').Select(x => x.Trim()).ToArray();
+            var lineNo = 1;
+            while (!reader.EndOfStream && _importPreview.Count < 100)
+            {
+                lineNo++;
+                var line = await reader.ReadLineAsync();
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                var values = line.Split(',');
+                string Get(string name) { var idx = Array.FindIndex(columns, c => string.Equals(c, name, StringComparison.OrdinalIgnoreCase)); return idx >= 0 && idx < values.Length ? values[idx].Trim() : string.Empty; }
+                var row = new LeadImportRow { FirstName = Get("FirstName"), LastName = Get("LastName"), CompanyName = Get("Company"), Email = Get("Email"), Source = Get("Source"), Phone = Get("Phone"), Owner = Get("Owner"), PremiumText = Get("Premium"), Notes = Get("Notes") };
+                if (string.IsNullOrWhiteSpace(row.FirstName) || string.IsNullOrWhiteSpace(row.LastName) || string.IsNullOrWhiteSpace(row.CompanyName) || string.IsNullOrWhiteSpace(row.Email) || string.IsNullOrWhiteSpace(row.Source)) _importErrors.Add($"Line {lineNo}: missing required fields.");
+                else _importPreview.Add(row);
+            }
+        }
+        catch (Exception ex) { _importErrors.Add(ex.Message); }
     }
 
     private async Task CommitImportAsync()
     {
-        // TODO: Api.ImportLeadsAsync(_tenantId, _importPreview, _importDedupe, _importAssignRoundRobin)
-        _showImport = false;
-        _importPreview.Clear();
-        await ShowToastAsync($"Import queued — {_importPreview.Count} lead(s) will be processed.", "e-toast-success");
+        var created = 0;
+        foreach (var row in _importPreview)
+        {
+            if (_importDedupe && _leads.Any(x => string.Equals(x.Email, row.Email, StringComparison.OrdinalIgnoreCase))) continue;
+            var ownerId = ResolveOwnerId(row.Owner) ?? (_importAssignRoundRobin ? ResolveOwnerId(_ownerOptions.ElementAtOrDefault(created % Math.Max(1, _ownerOptions.Count))?.Label) : null);
+            await Api.CreateLeadAsync(new CreateLeadRequest { TenantId = _tenantId, LeadNumber = $"LD-{DateTime.UtcNow:yyyyMMddHHmmss}-{created + 1}", AccountName = row.CompanyName, FirstName = row.FirstName, LastName = row.LastName, Email = row.Email, Phone = NormalizePhone(row.Phone), InterestedService = row.Notes, AnnualRevenue = decimal.TryParse(row.PremiumText, out var premium) ? premium : null, Score = 45, PriorityCode = "Warm", SourceCode = row.Source, NurturingStageCode = "New", AssignedToUserId = ownerId, CreatedByUserId = TenantAdminUserId });
+            created++;
+        }
+        CloseImport();
+        await ShowToastAsync($"Imported {created} lead(s).", "success");
         await LoadAsync();
     }
 
     private async Task CommitAssignAsync()
     {
-        if (_selected.Count == 0)
-        {
-            await ShowToastAsync("Select at least one lead to assign.", "e-toast-danger");
-            return;
-        }
-
-        if (!Guid.TryParse(_assignTarget, out var assignedToUserId))
-        {
-            await ShowToastAsync("Select a valid owner from the user table.", "e-toast-danger");
-            return;
-        }
-
-        try
-        {
-            foreach (var lead in _selected)
-            {
-                await Api.UpdateLeadAsync(lead.LeadId, new UpdateLeadRequest
-                {
-                    LeadId = lead.LeadId,
-                    AccountName = lead.CompanyName,
-                    FirstName = lead.FirstName,
-                    LastName = lead.LastName,
-                    Email = lead.Email,
-                    Phone = lead.Phone,
-                    InterestedService = lead.Notes,
-                    Score = lead.Score,
-                    PriorityCode = lead.Rating,
-                    SourceCode = lead.Source,
-                    NurturingStageCode = lead.Stage,
-                    StatusCode = StageToStatusCode(lead.Stage),
-                    AssignedToUserId = assignedToUserId,
-                });
-            }
-
-            var ownerName = _ownerOptions.FirstOrDefault(o => o.Value == _assignTarget)?.Label ?? "selected owner";
-            _showAssign = false;
-            _detail = null;
-            await ShowToastAsync($"{_selected.Count} lead(s) assigned to {ownerName}.", "e-toast-success");
-            _selected.Clear();
-            _assignTarget = string.Empty;
-            await LoadAsync();
-        }
-        catch (Exception ex)
-        {
-            await ShowToastAsync($"Assignment failed: {ex.Message}", "e-toast-danger");
-        }
+        if (!Guid.TryParse(_assignTarget, out var ownerId)) { await ShowToastAsync("Select an owner.", "warning"); return; }
+        foreach (var lead in _selected) await UpdateLeadWorkflowAsync(lead, lead.Stage, StageToStatusCode(lead.Stage), ownerId, lead.Rating, lead.Score, lead.Notes);
+        var owner = _ownerOptions.FirstOrDefault(x => x.Value == _assignTarget)?.Label ?? "owner";
+        CloseAssign(); _selected.Clear(); await ShowToastAsync($"Assigned to {owner}.", "success"); await LoadAsync();
     }
 
     private async Task CommitMergeAsync()
     {
-        // TODO: Api.MergeLeadsAsync(_tenantId, masterId, duplicateIds)
-        await Task.Delay(0);
-        _showMerge   = false;
-        _mergeTarget = string.Empty;
-        await ShowToastAsync($"Leads merged.", "e-toast-success");
-        _selected.Clear();
-        await LoadAsync();
+        if (!Guid.TryParse(_mergeTarget, out var masterId)) { await ShowToastAsync("Select a master lead.", "warning"); return; }
+        var master = _selected.First(x => x.LeadId == masterId);
+        foreach (var duplicate in _selected.Where(x => x.LeadId != masterId)) await UpdateLeadWorkflowAsync(duplicate, "Lost", 5, duplicate.AssignedToUserId, duplicate.Rating, duplicate.Score, $"Merged into {master.FullName}. {duplicate.Notes}");
+        CloseMerge(); _selected.Clear(); await ShowToastAsync($"Merged into {master.FullName}.", "success"); await LoadAsync();
     }
 
-    private void ConvertToOpportunityAsync() => _showConvert = true;
+    private void ConfirmConvertToOpportunity()
+    {
+        if (_selected.Count == 0) { _ = ShowToastAsync("Select leads to convert.", "warning"); return; }
+        OpenConfirm(new ConfirmAction("Convert leads", $"Review conversion options for {_selected.Count} lead(s)?", "Continue", "um-btn-primary", "bi-trophy", "warning", () => { _showConvert = true; return Task.CompletedTask; }));
+    }
 
     private async Task CommitConvertAsync()
     {
-        // TODO: Api.ConvertLeadsToOpportunitiesAsync(_tenantId, _selected.Select(x=>x.LeadId), _convertKeepLead, _convertCreateActivity)
-        await Task.Delay(0);
-        _showConvert = false;
-        _detail      = null;
-        await ShowToastAsync($"{_selected.Count} lead(s) converted to opportunities.", "e-toast-success");
-        _selected.Clear();
-        await LoadAsync();
+        foreach (var lead in _selected.ToList())
+        {
+            await UpdateLeadWorkflowAsync(lead, "Converted", 4, lead.AssignedToUserId, "Hot", Math.Max(lead.Score, 85), lead.Notes, DateTime.UtcNow);
+            if (_convertCreateActivity) await Api.CreateLeadCommunicationAsync(lead.LeadId, new CreateLeadCommunicationRequest { TenantId = _tenantId, LeadId = lead.LeadId, Channel = "Workflow", Subject = "Lead converted", Preview = "Lead converted from enterprise Leads workspace.", SentByUserId = TenantAdminUserId, SentAt = DateTime.UtcNow, Opened = true, Clicked = false });
+        }
+        CloseConvert(); _selected.Clear(); await ShowToastAsync("Lead conversion completed.", "success"); await LoadAsync();
     }
 
     private async Task CommitCampaignAsync()
     {
-        // TODO: Api.EnrollLeadsInCampaignAsync(_tenantId, _selected.Select(x=>x.LeadId), _campaignTarget, _campaignSendImmediately)
-        await Task.Delay(0);
-        _showCampaign        = false;
-        _campaignTarget      = string.Empty;
-        _detail              = null;
-        await ShowToastAsync($"{_selected.Count} lead(s) enrolled in campaign.", "e-toast-success");
-        _selected.Clear();
+        var campaignName = _campaignOptions.FirstOrDefault(x => x.Value == _campaignTarget)?.Label ?? _campaignTarget;
+        foreach (var lead in _selected) await Api.CreateLeadCampaignAsync(lead.LeadId, new CreateLeadCampaignEnrollmentRequest { TenantId = _tenantId, LeadId = lead.LeadId, CampaignName = campaignName, Status = "Active", EnrolledAt = DateTime.UtcNow, EmailsSent = _campaignSendImmediately ? 1 : 0, EmailsOpen = 0, Clicks = 0, LastTouch = _campaignSendImmediately ? DateTime.UtcNow : null, CreatedByUserId = TenantAdminUserId });
+        CloseCampaign(); _selected.Clear(); await ShowToastAsync("Campaign enrollment completed.", "success");
     }
 
-    private async Task SaveLeadAsync()
-    {
-        try
-        {
-            _savingLead = true;
-            var normalizedPhone = NormalizePhone(_leadForm.Phone);
-            if (_editingId == Guid.Empty)
-            {
-                await Api.CreateLeadAsync(new CreateLeadRequest
-                {
-                    TenantId = _tenantId,
-                    LeadNumber = $"LD-{DateTime.UtcNow:yyyyMMddHHmmss}",
-                    AccountName = _leadForm.Company.Trim(),
-                    FirstName = _leadForm.FirstName.Trim(),
-                    LastName = _leadForm.LastName.Trim(),
-                    Email = _leadForm.Email.Trim(),
-                    Phone = normalizedPhone,
-                    InterestedService = _leadForm.Notes,
-                    AnnualRevenue = _leadForm.EstPremium,
-                    Score = _leadForm.EstPremium > 0 ? 50 : 25,
-                    PriorityCode = _leadForm.EstPremium >= 25000 ? "Hot" : _leadForm.EstPremium > 0 ? "Warm" : "Cold",
-                    SourceCode = _leadForm.Source,
-                    NurturingStageCode = "New",
-                    AssignedToUserId = Guid.TryParse(_leadForm.Owner, out var ownerId) ? ownerId : null,
-                    CreatedByUserId = TenantAdminUserId
-                });
-            }
-            else
-            {
-                await Api.UpdateLeadAsync(_editingId, new UpdateLeadRequest
-                {
-                    LeadId = _editingId,
-                    AccountName = _leadForm.Company.Trim(),
-                    FirstName = _leadForm.FirstName.Trim(),
-                    LastName = _leadForm.LastName.Trim(),
-                    Email = _leadForm.Email.Trim(),
-                    Phone = normalizedPhone,
-                    InterestedService = _leadForm.Notes,
-                    AnnualRevenue = _leadForm.EstPremium,
-                    PriorityCode = _leadForm.EstPremium >= 25000 ? "Hot" : _leadForm.EstPremium > 0 ? "Warm" : "Cold",
-                    SourceCode = _leadForm.Source,
-                    NurturingStageCode = "New",
-                    StatusCode = 1,
-                    AssignedToUserId = Guid.TryParse(_leadForm.Owner, out var ownerId) ? ownerId : null,
-                    UpdatedByUserId = TenantAdminUserId
-                });
-            }
+    private void ConfirmImport() => OpenConfirm(new("Import leads", $"Import {_importPreview.Count} validated lead(s)?", "Import", "um-btn-primary", "bi-cloud-arrow-up", "warning", CommitImportAsync));
+    private void ConfirmAssign() => OpenConfirm(new("Assign owner", $"Assign {_selected.Count} selected lead(s)?", "Assign", "um-btn-primary", "bi-person-check", "warning", CommitAssignAsync));
+    private void ConfirmMerge() => OpenConfirm(new("Merge duplicates", $"Merge {_selected.Count} selected lead(s)?", "Merge", "um-btn-danger", "bi-intersect", "danger", CommitMergeAsync));
+    private void ConfirmCommitConvert() => OpenConfirm(new("Confirm conversion", $"Convert {_selected.Count} selected lead(s)?", "Convert", "um-btn-primary", "bi-trophy", "warning", CommitConvertAsync));
+    private void ConfirmCampaign() => OpenConfirm(new("Enroll campaign", $"Enroll {_selected.Count} lead(s)?", "Enroll", "um-btn-primary", "bi-megaphone", "warning", CommitCampaignAsync));
+    private void ConfirmDisqualify(LeadRow lead) => OpenConfirm(new("Disqualify lead", $"Disqualify {lead.FullName}?", "Disqualify", "um-btn-danger", "bi-x-octagon", "danger", () => DisqualifyLeadAsync(lead)));
 
-            _showAdd = false;
-            _editingId = Guid.Empty;
-            _leadForm = new();
-            await ShowToastAsync("Lead saved successfully.", "e-toast-success");
-            await LoadAsync();
-        }
-        catch (Exception ex)
-        {
-            await ShowToastAsync($"Error: {ex.Message}", "e-toast-danger");
-        }
-        finally
-        {
-            _savingLead = false;
-        }
+    private async Task DisqualifyLeadAsync(LeadRow lead) { await UpdateLeadWorkflowAsync(lead, "Lost", 5, lead.AssignedToUserId, lead.Rating, lead.Score, lead.Notes); _selected.RemoveAll(x => x.LeadId == lead.LeadId); _detail = null; await ShowToastAsync("Lead disqualified.", "success"); await LoadAsync(); }
+
+    private async Task UpdateLeadWorkflowAsync(LeadRow lead, string stage, int status, Guid? ownerId, string priority, int score, string? notes, DateTime? qualifiedDate = null)
+    {
+        await Api.UpdateLeadAsync(lead.LeadId, new UpdateLeadRequest { LeadId = lead.LeadId, AccountName = lead.CompanyName, FirstName = lead.FirstName, LastName = lead.LastName, Email = lead.Email, Phone = lead.Phone, InterestedService = notes, AnnualRevenue = lead.EstPremium, Score = score, PriorityCode = priority, SourceCode = lead.Source, NurturingStageCode = stage, QualifiedDate = qualifiedDate, StatusCode = status, AssignedToUserId = ownerId, UpdatedByUserId = TenantAdminUserId });
     }
 
-    private void ClearFormFields()
+    private void OpenConfirm(ConfirmAction action) { _confirmAction = action; _showConfirm = true; }
+    private void CancelConfirm() { if (!_busy) { _showConfirm = false; _confirmAction = null; } }
+    private async Task ExecuteConfirmedAsync() { if (_confirmAction is null) return; _busy = true; try { var action = _confirmAction; await action.ExecuteAsync(); _showConfirm = false; _confirmAction = null; } catch (Exception ex) { await ShowToastAsync($"Action failed: {ex.Message}", "danger"); } finally { _busy = false; } }
+
+    private async Task ShowToastAsync(string message, string kind = "info")
     {
-        _leadForm = new();
+        _toastCts?.Cancel(); _toastCts?.Dispose(); _toastCts = new CancellationTokenSource();
+        _toastMessage = message.Length <= 96 ? message : $"{message[..93]}..."; _toastKind = ToastKind(kind); _toastVisible = true; StateHasChanged();
+        try { await Task.Delay(_toastKind == "danger" ? 10400 : 8000, _toastCts.Token); _toastVisible = false; await InvokeAsync(StateHasChanged); } catch (TaskCanceledException) { }
     }
 
-    private void OnPhoneChanged()
-    {
-        if (IsPhoneValid(_leadForm.Phone))
-        {
-            _leadForm.Phone = NormalizePhone(_leadForm.Phone);
-        }
-    }
+    private void HideToast() { _toastCts?.Cancel(); _toastVisible = false; }
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : value.Contains("success", StringComparison.OrdinalIgnoreCase) ? "success" : "info";
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; TenantAdminUserId = context.UserId; }
+    private void OnPhoneChanged() { if (IsPhoneValid(_leadForm.Phone)) _leadForm.Phone = NormalizePhone(_leadForm.Phone) ?? string.Empty; }
+    private Guid? ResolveOwnerId(string? owner) => Guid.TryParse(owner, out var id) ? id : Guid.TryParse(_ownerOptions.FirstOrDefault(x => string.Equals(x.Label, owner, StringComparison.OrdinalIgnoreCase))?.Value, out var byName) ? byName : null;
+    private static bool IsPhoneValid(string? value) { if (string.IsNullOrWhiteSpace(value)) return true; var digits = new string(value.Where(char.IsDigit).ToArray()); if (digits.Length == 11 && digits[0] == '1') digits = digits[1..]; return digits.Length == 10; }
+    private static string? NormalizePhone(string? value) { if (string.IsNullOrWhiteSpace(value)) return null; var digits = new string(value.Where(char.IsDigit).ToArray()); if (digits.Length == 11 && digits[0] == '1') digits = digits[1..]; return digits.Length == 10 ? $"({digits[..3]}) {digits.Substring(3, 3)}-{digits[6..]}" : value.Trim(); }
+    private static bool Contains(string value, string term) => value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static string NormalizeStage(string? stage, int statusCode) => !string.IsNullOrWhiteSpace(stage) ? stage.Trim() switch { "Closed" => "Lost", "Won" => "Converted", var s => s } : statusCode switch { 2 => "Contacted", 3 => "Qualified", 4 => "Converted", 5 => "Lost", _ => "New" };
+    private static string ScoreToRating(int score, string? priority = null) => string.Equals(priority, "Hot", StringComparison.OrdinalIgnoreCase) || score >= 80 ? "Hot" : score >= 50 ? "Warm" : "Cold";
+    private static int StageOrder(string stage) => Array.IndexOf(_boardStages, stage) is var index && index >= 0 ? index : 99;
+    private static int StageToStatusCode(string stage) => stage switch { "Contacted" => 2, "Qualified" => 3, "Converted" => 4, "Lost" => 5, _ => 1 };
+    private string MetricCardClass(KpiModel metric) => $"ld-kpi-card {metric.Tone} {(_quickFilter == metric.Filter ? "ld-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewDef view) => _view == view.Id ? "ld-view-btn ld-view-btn-active" : "ld-view-btn";
+    private string LeadRowClass(LeadRow lead) => lead.LeadId == _detail?.LeadId ? "ld-row-selected" : string.Empty;
+    private string FunnelRowClass(SourceRow source) => _funnelSource == source.Source ? "ld-funnel-row ld-active" : "ld-funnel-row";
+    private string ProducerCardClass(ProducerRow producer) => _producerFilter == producer.Owner ? "ld-producer-card ld-active" : "ld-producer-card";
+    private static string RatingBadge(string rating) => rating switch { "Hot" => "ld-rating ld-rating-hot", "Warm" => "ld-rating ld-rating-warm", _ => "ld-rating ld-rating-cold" };
+    private static string StageBadge(string stage) => $"ld-stage ld-stage-{stage.ToLowerInvariant().Replace(" ", "-")}";
+    private string MergeOptionClass(LeadRow lead) => _mergeTarget == lead.LeadId.ToString() ? "ld-merge-option ld-merge-option-active" : "ld-merge-option";
+    private string MergeOptionIconClass(LeadRow lead) => _mergeTarget == lead.LeadId.ToString() ? "bi bi-check-circle-fill" : "bi bi-circle";
+    private static string SourceIcon(string source) => source switch { "Referral" => "bi-share-fill", "Website" => "bi-globe", "Cold Call" => "bi-telephone-fill", "Social" => "bi-instagram", "Email" => "bi-envelope-fill", "Event" => "bi-calendar-event-fill", "Partner" => "bi-handshake-fill", _ => "bi-inbox-fill" };
+    private static string ScoreTone(int score) => score >= 80 ? "ld-score-hot" : score >= 50 ? "ld-score-warm" : "ld-score-cold";
+    private static string AvatarColor(string name) { var colors = new[] { "ld-av1", "ld-av2", "ld-av3", "ld-av4", "ld-av5", "ld-av6" }; return colors[Math.Abs(name.GetHashCode()) % colors.Length]; }
+    private static string Initials(string name) { var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length > 0 ? name[..1] : "?"; }
 
-    private string PhoneFieldCss => string.IsNullOrWhiteSpace(_leadForm.Phone) ? string.Empty : IsPhoneValid(_leadForm.Phone) ? "ld-phone-field--valid" : "ld-phone-field--invalid";
-    private string PhoneStatusCss => IsPhoneValid(_leadForm.Phone) ? "ld-phone-status--valid" : "ld-phone-status--invalid";
-    private string PhoneHintCss => IsPhoneValid(_leadForm.Phone) ? "ld-phone-hint--valid" : "ld-phone-hint--invalid";
-    private string PhoneStatusText => IsPhoneValid(_leadForm.Phone) ? $"Phone formatted as {NormalizePhone(_leadForm.Phone)}" : "Enter a valid 10-digit phone number, for example (555) 123-4567.";
-
-    private static bool IsPhoneValid(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return true;
-        var digits = new string(value.Where(char.IsDigit).ToArray());
-        if (digits.Length == 11 && digits[0] == '1') digits = digits[1..];
-        return digits.Length == 10;
-    }
-
-    private static string? NormalizePhone(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        var digits = new string(value.Where(char.IsDigit).ToArray());
-        if (digits.Length == 11 && digits[0] == '1') digits = digits[1..];
-        return digits.Length == 10 ? $"({digits[..3]}) {digits.Substring(3, 3)}-{digits[6..]}" : value.Trim();
-    }
-
-    private async Task ShowToastAsync(string msg, string css = "e-toast-info")
-    {
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = css });
-    }
-
-    // ── Render helpers ────────────────────────────────────────────────────────
-    private static RenderFragment DetailRow(string label, RenderFragment val) => __builder =>
-    {
-        <div class="ld-detail-row">
-            <span class="ld-detail-lbl">@label</span>
-            @val
-        </div>;
-    };
-
-    // ── Static badge / style helpers ──────────────────────────────────────────
-    private static string RatingBadge(string r) => r switch
-    {
-        "Hot"  => "ld-rating ld-rating--hot",
-        "Warm" => "ld-rating ld-rating--warm",
-        _      => "ld-rating ld-rating--cold",
-    };
-
-    private static string StageBadge(string s) => s switch
-    {
-        "New"         => "ld-stage ld-stage--new",
-        "Contacted"   => "ld-stage ld-stage--contacted",
-        "Qualified"   => "ld-stage ld-stage--qualified",
-        "Proposal"    => "ld-stage ld-stage--proposal",
-        "Negotiation" => "ld-stage ld-stage--negotiation",
-        "Converted"   => "ld-stage ld-stage--converted",
-        "Lost"        => "ld-stage ld-stage--lost",
-        _             => "ld-stage",
-    };
-
-    private static string StageFill(string s) => s switch
-    {
-        "Converted"   => "ld-sf--converted",
-        "Lost"        => "ld-sf--lost",
-        "Negotiation" => "ld-sf--negotiation",
-        "Proposal"    => "ld-sf--proposal",
-        _             => "ld-sf--default",
-    };
-
-    private static int StageOrder(string s) => s switch
-    {
-        "New" => 0, "Contacted" => 1, "Qualified" => 2, "Proposal" => 3,
-        "Negotiation" => 4, "Converted" => 5, "Lost" => 6, _ => 99,
-    };
-
-    private static int StageToStatusCode(string stage) => stage switch
-    {
-        "Contacted" => 2,
-        "Qualified" => 3,
-        "Converted" => 4,
-        "Lost" => 5,
-        _ => 1,
-    };
-
-    private static string SourceIcon(string s) => s switch
-    {
-        "Referral"  => "bi-share-fill",
-        "Website"   => "bi-globe",
-        "Cold Call" => "bi-telephone-fill",
-        "Social"    => "bi-instagram",
-        "Email"     => "bi-envelope-fill",
-        "Event"     => "bi-calendar-event-fill",
-        "Partner"   => "bi-handshake-fill",
-        "Inbound"   => "bi-inbox-fill",
-        _           => "bi-question-circle",
-    };
-
-    private static string ScoreColor(int s) =>
-        s >= 75 ? "#16a34a" : s >= 50 ? "#b45309" : "#dc2626";
-
-    private static string AvatarColor(string name)
-    {
-        var colors = new[] { "ld-av1","ld-av2","ld-av3","ld-av4","ld-av5","ld-av6" };
-        return colors[Math.Abs(name.GetHashCode()) % colors.Length];
-    }
-
-    private static string Initials(string name)
-    {
-        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length > 0 ? name[..1] : "?";
-    }
-
-    // ── Models ────────────────────────────────────────────────────────────────
-    private sealed class LeadRow
-    {
-        public Guid      LeadId          { get; set; } = Guid.NewGuid();
-        public Guid?     AssignedToUserId { get; set; }
-        public string    FirstName       { get; set; } = string.Empty;
-        public string    LastName        { get; set; } = string.Empty;
-        public string    FullName        { get; set; } = string.Empty;
-        public string    CompanyName     { get; set; } = string.Empty;
-        public string    Email           { get; set; } = string.Empty;
-        public string    Phone           { get; set; } = string.Empty;
-        public string    Stage           { get; set; } = "New";
-        public string    Source          { get; set; } = string.Empty;
-        public string    Owner           { get; set; } = string.Empty;
-        public string    Rating          { get; set; } = "Cold";
-        public int       Score           { get; set; }
-        public decimal   EstPremium      { get; set; }
-        public DateTime  CreatedAt       { get; set; } = DateTime.UtcNow;
-        public DateTime? LastActivity    { get; set; }
-        public int       DaysSinceActivity => LastActivity.HasValue
-            ? (int)(DateTime.UtcNow - LastActivity.Value).TotalDays : 999;
-        public string?   Notes           { get; set; }
-    }
-
-    private sealed class LeadImportRow
-    {
-        public string FullName    { get; set; } = string.Empty;
-        public string CompanyName { get; set; } = string.Empty;
-        public string Email       { get; set; } = string.Empty;
-        public string Source      { get; set; } = string.Empty;
-    }
-
-    private sealed class SourceRow
-    {
-        public string  Source        { get; set; } = string.Empty;
-        public int     Total         { get; set; }
-        public int     Converted     { get; set; }
-        public int     AvgScore      { get; set; }
-        public decimal AvgPremium    { get; set; }
-        public decimal TotalPipeline { get; set; }
-        public double  ConvPct       => Total == 0 ? 0 : (double)Converted / Total * 100;
-    }
-
-    private sealed class ProducerRow
-    {
-        public string  Owner     { get; set; } = string.Empty;
-        public int     Total     { get; set; }
-        public int     Converted { get; set; }
-        public decimal Pipeline  { get; set; }
-        public double  ConvPct   => Total == 0 ? 0 : (double)Converted / Total * 100;
-    }
-
-    private sealed class LeadKpi
-    {
-        public int     TotalLeads     { get; set; }
-        public int     Hot            { get; set; }
-        public int     Converted      { get; set; }
-        public double  ConversionRate { get; set; }
-        public int     Stale          { get; set; }
-        public decimal EstPipeline    { get; set; }
-    }
-
+    private sealed record ViewDef(string Id, string Label, string Icon);
     private sealed record LabelValue(string Value, string Label);
-
-    // ── Form Models ───────────────────────────────────────────────────────────
-    private class LeadFormModel
+    private sealed record KpiModel(string Label, string Value, string Caption, string Icon, string Tone, string Filter);
+    private sealed record ConfirmAction(string Title, string Message, string ButtonText, string ButtonClass, string Icon, string Kind, Func<Task> ExecuteAsync);
+    private sealed record StageBreakdownRow(string Stage, int Count, double WidthPercent);
+    private sealed record SourceRow(string Source, int Total, int Converted, int AvgScore, decimal AvgPremium, decimal TotalPipeline, double WidthPercent) { public double ConvPct => Total == 0 ? 0 : (double)Converted / Total * 100; }
+    private sealed record ProducerRow(string Owner, int Total, int Converted, decimal Pipeline, double WidthPercent) { public double ConvPct => Total == 0 ? 0 : (double)Converted / Total * 100; }
+    private sealed class LeadKpi { public double ConversionRate { get; set; } }
+    private sealed class LeadRow { public Guid LeadId { get; set; } public Guid? AssignedToUserId { get; set; } public string FirstName { get; set; } = string.Empty; public string LastName { get; set; } = string.Empty; public string FullName { get; set; } = string.Empty; public string CompanyName { get; set; } = string.Empty; public string Email { get; set; } = string.Empty; public string Phone { get; set; } = string.Empty; public string Stage { get; set; } = "New"; public string Source { get; set; } = string.Empty; public string Owner { get; set; } = string.Empty; public string Rating { get; set; } = "Cold"; public int Score { get; set; } public decimal EstPremium { get; set; } public DateTime CreatedAt { get; set; } public DateTime? LastActivity { get; set; } public int DaysSinceActivity => LastActivity.HasValue ? (int)(DateTime.UtcNow - LastActivity.Value).TotalDays : 999; public string? Notes { get; set; } }
+    private sealed class LeadImportRow { public string FirstName { get; set; } = string.Empty; public string LastName { get; set; } = string.Empty; public string FullName => $"{FirstName} {LastName}".Trim(); public string CompanyName { get; set; } = string.Empty; public string Email { get; set; } = string.Empty; public string Source { get; set; } = string.Empty; public string Phone { get; set; } = string.Empty; public string Owner { get; set; } = string.Empty; public string PremiumText { get; set; } = string.Empty; public string Notes { get; set; } = string.Empty; }
+    private sealed class LeadFormModel
     {
-        [Required(ErrorMessage = "First name is required")]
-        [StringLength(100, ErrorMessage = "First name cannot exceed 100 characters")]
-        public string FirstName { get; set; } = string.Empty;
-
-        [Required(ErrorMessage = "Last name is required")]
-        [StringLength(100, ErrorMessage = "Last name cannot exceed 100 characters")]
-        public string LastName { get; set; } = string.Empty;
-
-        [Required(ErrorMessage = "Company is required")]
-        [StringLength(200, ErrorMessage = "Company cannot exceed 200 characters")]
-        public string Company { get; set; } = string.Empty;
-
-        [Required(ErrorMessage = "Email is required")]
-        [AmsEmailAddress]
-        [StringLength(200, ErrorMessage = "Email cannot exceed 200 characters")]
-        public string Email { get; set; } = string.Empty;
-
-        [AmsPhone]
-        [StringLength(30, ErrorMessage = "Phone cannot exceed 30 characters")]
-        public string Phone { get; set; } = string.Empty;
-
-        [Required(ErrorMessage = "Source is required")]
-        [StringLength(50, ErrorMessage = "Source cannot exceed 50 characters")]
-        public string Source { get; set; } = string.Empty;
-
-        [StringLength(100, ErrorMessage = "Owner cannot exceed 100 characters")]
-        public string Owner { get; set; } = string.Empty;
-
-        [Range(0, 99999999.99, ErrorMessage = "Est. Premium must be between 0 and 99,999,999.99")]
-        public decimal EstPremium { get; set; } = 0;
-
-        [StringLength(1000, ErrorMessage = "Notes cannot exceed 1000 characters")]
-        public string Notes { get; set; } = string.Empty;
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        [Required, StringLength(100)] public string FirstName { get; set; } = string.Empty;
+        [Required, StringLength(100)] public string LastName { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string Company { get; set; } = string.Empty;
+        [Required, AmsEmailAddress, StringLength(200)] public string Email { get; set; } = string.Empty;
+        [AmsPhone, StringLength(30)] public string Phone { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string Source { get; set; } = string.Empty;
+        [Required, StringLength(100)] public string Owner { get; set; } = string.Empty;
+        [StringLength(50)] public string Stage { get; set; } = "New";
+        [StringLength(50)] public string Priority { get; set; } = "Warm";
+        [Range(0, 99999999.99)] public decimal EstPremium { get; set; }
+        [Range(0, 100)] public int Score { get; set; } = 50;
+        [StringLength(1000)] public string Notes { get; set; } = string.Empty;
     }
 }

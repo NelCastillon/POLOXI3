@@ -2,8 +2,11 @@
 @page "/crm/leads/scoring"
 @namespace Ams.Web.Components.Pages.Crm
 @using System.ComponentModel.DataAnnotations
+@using System.Globalization
 @using Ams.Application.Common.Dtos
 @using Ams.Application.Features.Leads
+@using Microsoft.AspNetCore.Components.Forms
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
@@ -11,222 +14,116 @@
 @inject LeadScoringRealtimeClient LeadScoringRealtime
 @implements IAsyncDisposable
 
-<PageTitle>Lead Scoring Factors — CRM</PageTitle>
+<PageTitle>Enterprise Lead Scoring</PageTitle>
 
-<AppPageHeader Title="Lead Scoring Factors"
-               Subtitle="Manage tenant-scoped scoring factors used to calculate lead priority and score"
-               Icon="bi-sliders">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick="OpenCreateRule">
-            <i class="bi bi-sliders" aria-hidden="true"></i> New Factor
-        </button>
-        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/crm/leads")'>
-            <i class="bi bi-person-plus" aria-hidden="true"></i> Leads
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<div class="ls-factor-kpi pc-kpi-strip">
-    <div class="pc-kpi-card @(_factorFilter is null ? "pc-kpi-card--active" : "")" @onclick="() => SetFactorFilter(null)" title="Show all scoring factors">
-        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-sliders" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_rules.Count</div><div class="pc-kpi-label">Factors</div></div>
-    </div>
-    <div class="pc-kpi-card @(_factorFilter == "Active" ? "pc-kpi-card--active" : "")" @onclick='() => SetFactorFilter("Active")' title="Show active factors">
-        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_rules.Count(x => x.IsActive)</div><div class="pc-kpi-label">Active</div></div>
-    </div>
-    <div class="pc-kpi-card @(_factorFilter == "Inactive" ? "pc-kpi-card--active" : "")" @onclick='() => SetFactorFilter("Inactive")' title="Show inactive factors">
-        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-pause-circle" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_rules.Count(x => !x.IsActive)</div><div class="pc-kpi-label">Inactive</div></div>
-    </div>
-    <div class="pc-kpi-card @(_factorFilter == "Positive" ? "pc-kpi-card--active" : "")" @onclick='() => SetFactorFilter("Positive")' title="Show factors that add points">
-        <span class="pc-kpi-icon pc-kpi-icon--success"><i class="bi bi-plus-circle" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_rules.Count(x => x.PointValue > 0)</div><div class="pc-kpi-label">Positive</div></div>
-    </div>
-    <div class="pc-kpi-card @(_factorFilter == "Negative" ? "pc-kpi-card--active" : "")" @onclick='() => SetFactorFilter("Negative")' title="Show factors that subtract points">
-        <span class="pc-kpi-icon pc-kpi-icon--danger"><i class="bi bi-dash-circle" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_rules.Count(x => x.PointValue < 0)</div><div class="pc-kpi-label">Negative</div></div>
-    </div>
-</div>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-        <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i> @_loadError
+    <div class="ld-toast ld-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ld-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-<div class="ls-factor-layout row g-3 mb-3">
-    <div class="col-12 col-xl-8">
-        <div class="um-grid-card ls-panel ls-factor-panel h-100 position-relative">
-            @if (_loading)
-            {
-                <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
-            }
-            <div class="ls-panel-header">
-                <div class="ls-panel-title-wrap">
-                    <span class="ls-panel-icon"><i class="bi bi-sliders" aria-hidden="true"></i></span>
-                    <div>
-                        <h3>Scoring Factor Management</h3>
-                        <p>Create, edit, activate, deactivate, and delete factors used in lead scoring.</p>
-                    </div>
-                </div>
-                <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreateRule"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Factor</button>
-            </div>
-            @if (FilteredRules.Count == 0)
-            {
-                <div class="ls-empty-state">
-                    <i class="bi bi-sliders" aria-hidden="true"></i>
-                    <h4>No scoring factors match this view</h4>
-                    <p>Change the KPI filter or add a new factor to start configuring scoring logic.</p>
-                    <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreateRule"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Factor</button>
-                </div>
-            }
-            else
-            {
-                <div class="ls-rules-grid">
-                    @foreach (var rule in FilteredRules.OrderBy(r => r.SortOrder).ThenByDescending(r => r.PointValue))
+@if (_showConfirm && _confirmAction is not null)
+{
+    <div class="ls-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="ls-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="scoreConfirmTitle" @onclick:stopPropagation="true">
+            <div class="ls-confirm-icon ls-confirm-@_confirmAction.Kind"><i class="bi @_confirmAction.Icon" aria-hidden="true"></i></div>
+            <h2 id="scoreConfirmTitle">@_confirmAction.Title</h2>
+            <p>@_confirmAction.Message</p>
+            <div class="ls-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_busy">Cancel</button>
+                <button type="button" class="um-btn @_confirmAction.ButtonClass" @onclick="ExecuteConfirmedAsync" disabled="@_busy">
+                    @if (_busy)
                     {
-                        <div class="ls-rule-card">
-                            <div class="ls-rule-hdr">
-                                <div class="ls-rule-heading">
-                                    <span class="ls-rule-avatar @RuleAvatarClass(rule)"><i class="@RuleIcon(rule)" aria-hidden="true"></i></span>
-                                    <div>
-                                        <div class="ls-rule-title">@rule.RuleName</div>
-                                        <div class="ls-rule-subtitle">@FieldLabel(rule.Field)</div>
-                                    </div>
-                                </div>
-                                <div class="ls-rule-actions">
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditRule(rule)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ConfirmDeleteRule(rule)" title="Delete"><i class="bi bi-trash" aria-hidden="true"></i></button>
-                                </div>
-                            </div>
-                            <div class="ls-rule-meta">
-                                <span class="ls-status-pill @(rule.IsActive ? "ls-status-pill--active" : "ls-status-pill--inactive")">@(rule.IsActive ? "Active" : "Inactive")</span>
-                                <span class="ls-points-pill @PointsClass(rule.PointValue)">@FormatPoints(rule.PointValue)</span>
-                                <span class="ls-order-pill">Order @rule.SortOrder</span>
-                            </div>
-                            <div class="ls-rule-cond">
-                                <span>Condition</span>
-                                <strong>@RuleCondition(rule)</strong>
-                            </div>
-                            <div class="ls-rule-footer">
-                                <span><i class="bi bi-diagram-3" aria-hidden="true"></i> @rule.Operator</span>
-                                <span><i class="bi bi-database-check" aria-hidden="true"></i> Tenant scoped</span>
-                            </div>
-                        </div>
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
                     }
-                </div>
-            }
-        </div>
-    </div>
-    <div class="col-12 col-xl-4">
-        <div class="um-grid-card ls-panel ls-preview-panel h-100 position-relative">
-            <div class="ls-panel-header ls-panel-header--compact">
-                <div class="ls-panel-title-wrap">
-                    <span class="ls-panel-icon ls-panel-icon--preview"><i class="bi bi-people" aria-hidden="true"></i></span>
-                    <div>
-                        <h3>Scored Leads Preview</h3>
-                        <p>Review lead scores affected by configured factors.</p>
-                    </div>
-                </div>
-            </div>
-            <div class="ls-preview-toolbar">
-                <SfTextBox Placeholder="Search leads..." @bind-Value="_searchTerm" Width="100%"></SfTextBox>
-                <button class="um-btn um-btn-primary um-btn-sm" @onclick="LoadAsync"><i class="bi bi-search" aria-hidden="true"></i></button>
-            </div>
-            <div class="ls-preview-grid app-datagrid">
-            <SfGrid TValue="LeadScoreRow" DataSource="_filtered" AllowPaging="true" AllowSorting="true" Height="520px" EnableHover="true" RowHeight="52">
-                <GridPageSettings PageSize="10" PageSizes="@(new[] { 10, 25, 50 })"></GridPageSettings>
-                <GridColumns>
-                    <GridColumn Field="@nameof(LeadScoreRow.Rating)" HeaderText="Rating" Width="100">
-                        <Template>@{ var r = (LeadScoreRow)context; }<span class="badge @RatingClass(r.Rating)">@r.Rating</span></Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(LeadScoreRow.FullName)" HeaderText="Lead" Width="180">
-                        <Template>
-                            @{ var r = (LeadScoreRow)context; }
-                            <div class="fw-semibold">@r.FullName</div>
-                            <div class="text-muted small">@r.AccountName</div>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(LeadScoreRow.Score)" HeaderText="Score" Width="90" TextAlign="TextAlign.Right">
-                        <Template>@{ var r = (LeadScoreRow)context; }<strong>@r.Score</strong></Template>
-                    </GridColumn>
-                    <GridColumn HeaderText="" Width="70" TextAlign="TextAlign.Right">
-                        <Template>@{ var r = (LeadScoreRow)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo($"/crm/leads/{r.LeadId}")'><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template>
-                    </GridColumn>
-                </GridColumns>
-            </SfGrid>
+                    @_confirmAction.ButtonText
+                </button>
             </div>
         </div>
     </div>
-</div>
+}
 
 @if (_showRuleForm)
 {
-    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseRuleForm">
-        <div class="mt-modal ls-rule-modal" role="dialog" aria-modal="true" aria-labelledby="leadScoringRuleTitle" @onclick:stopPropagation="true">
-            <EditForm Model="_ruleForm" OnValidSubmit="SaveRuleAsync">
-                <DataAnnotationsValidator />
-                <div class="um-modal-header">
-                    <i class="bi bi-sliders" aria-hidden="true"></i>
-                    <span id="leadScoringRuleTitle">@(_editingRuleId == Guid.Empty ? "New Scoring Factor" : "Edit Scoring Factor")</span>
-                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseRuleForm" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+    <div class="ls-modal-backdrop" role="presentation" @onclick="CloseRuleForm">
+        <div class="ls-rule-modal" role="dialog" aria-modal="true" aria-labelledby="leadScoringRuleTitle" @onclick:stopPropagation="true">
+            <div class="ls-modal-header">
+                <div class="ls-modal-title">
+                    <span class="ls-modal-icon"><i class="bi bi-sliders" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 id="leadScoringRuleTitle">@(_editingRuleId == Guid.Empty ? "Create scoring factor" : "Edit scoring factor")</h2>
+                        <p>Configure tenant-scoped criteria that influence lead score, priority, and producer workflow.</p>
+                    </div>
                 </div>
-                <div class="um-modal-body">
-                    <div class="um-form-grid">
-                        <div class="um-field um-field--full">
-                            <label>Factor name <span class="text-danger">*</span></label>
-                            <InputText class="um-input" @bind-Value="_ruleForm.RuleName" />
-                            <ValidationMessage For="() => _ruleForm.RuleName" class="text-danger" />
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseRuleForm" disabled="@_savingRule" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_ruleForm" OnValidSubmit="SaveRuleAsync" OnInvalidSubmit="HandleInvalidRuleSubmitAsync">
+                <DataAnnotationsValidator />
+                <div class="ls-modal-body">
+                    <div class="ls-form-banner">
+                        <i class="bi bi-shield-check" aria-hidden="true"></i>
+                        <div>
+                            <strong>Enterprise scoring governance</strong>
+                            <span>Factors are tenant scoped, ordered, validated, and synchronized with the active CRM lead scoring workflow.</span>
                         </div>
-                        <div class="um-field">
-                            <label>Category <span class="text-danger">*</span></label>
-                            <InputSelect class="um-input" @bind-Value="_ruleForm.Field">
+                    </div>
+                    <div class="ls-form-grid">
+                        <div class="ls-field ls-field-wide">
+                            <label>Factor name <span>*</span></label>
+                            <InputText class="ls-input" @bind-Value="_ruleForm.RuleName" placeholder="Example: High annual revenue" />
+                            <ValidationMessage For="() => _ruleForm.RuleName" class="ls-validation" />
+                        </div>
+                        <div class="ls-field">
+                            <label>Category <span>*</span></label>
+                            <InputSelect class="ls-input" @bind-Value="_ruleForm.Field">
                                 @foreach (var item in _fieldOptions)
                                 {
                                     <option value="@item.Value">@item.Label</option>
                                 }
                             </InputSelect>
-                            <ValidationMessage For="() => _ruleForm.Field" class="text-danger" />
+                            <ValidationMessage For="() => _ruleForm.Field" class="ls-validation" />
                         </div>
-                        <div class="um-field">
-                            <label>Condition <span class="text-danger">*</span></label>
-                            <InputSelect class="um-input" @bind-Value="_ruleForm.Operator">
+                        <div class="ls-field">
+                            <label>Condition <span>*</span></label>
+                            <InputSelect class="ls-input" @bind-Value="_ruleForm.Operator">
                                 @foreach (var item in _operatorOptions)
                                 {
                                     <option value="@item.Value">@item.Label</option>
                                 }
                             </InputSelect>
-                            <ValidationMessage For="() => _ruleForm.Operator" class="text-danger" />
+                            <ValidationMessage For="() => _ruleForm.Operator" class="ls-validation" />
                         </div>
-                        <div class="um-field">
+                        <div class="ls-field ls-field-wide">
                             <label>Value</label>
-                            <InputText class="um-input" @bind-Value="_ruleForm.Value" placeholder="Example: 14, Opened, Enterprise" />
-                            <ValidationMessage For="() => _ruleForm.Value" class="text-danger" />
+                            <InputText class="ls-input" @bind-Value="_ruleForm.Value" placeholder="Example: 14, Opened, Referral, 100000" />
+                            <ValidationMessage For="() => _ruleForm.Value" class="ls-validation" />
                         </div>
-                        <div class="um-field">
-                            <label>Points <span class="text-danger">*</span></label>
-                            <InputNumber class="um-input" @bind-Value="_ruleForm.Points" />
-                            <ValidationMessage For="() => _ruleForm.Points" class="text-danger" />
+                        <div class="ls-field">
+                            <label>Points <span>*</span></label>
+                            <InputNumber class="ls-input" @bind-Value="_ruleForm.Points" />
+                            <ValidationMessage For="() => _ruleForm.Points" class="ls-validation" />
                         </div>
-                        <div class="um-field">
+                        <div class="ls-field">
                             <label>Sort order</label>
-                            <InputNumber class="um-input" @bind-Value="_ruleForm.SortOrder" />
-                            <ValidationMessage For="() => _ruleForm.SortOrder" class="text-danger" />
+                            <InputNumber class="ls-input" @bind-Value="_ruleForm.SortOrder" />
+                            <ValidationMessage For="() => _ruleForm.SortOrder" class="ls-validation" />
                         </div>
-                        <div class="um-field um-field--checkbox">
-                            <label><InputCheckbox @bind-Value="_ruleForm.IsActive" /> Active</label>
+                        <div class="ls-field ls-field-wide">
+                            <label class="ls-check"><InputCheckbox @bind-Value="_ruleForm.IsActive" /> Active scoring factor</label>
                         </div>
                     </div>
                 </div>
-                <div class="um-modal-footer">
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseRuleForm">Cancel</button>
+                <div class="ls-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseRuleForm" disabled="@_savingRule">Cancel</button>
                     <button type="submit" class="um-btn um-btn-primary" disabled="@_savingRule">
-                        <i class="bi bi-check-lg" aria-hidden="true"></i> Save Factor
+                        @if (_savingRule)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        @(_editingRuleId == Guid.Empty ? "Create factor" : "Save factor")
                     </button>
                 </div>
             </EditForm>
@@ -234,108 +131,245 @@
     </div>
 }
 
-@if (_deleteRule is not null)
-{
-    <div class="mt-modal-backdrop" role="presentation" @onclick="CancelDeleteRule">
-        <div class="mt-modal ls-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="deleteRuleTitle" @onclick:stopPropagation="true">
-            <div class="um-confirm-dialog">
-                <div class="um-modal-header">
-                    <i class="bi bi-trash" aria-hidden="true"></i>
-                    <span id="deleteRuleTitle">Delete Scoring Factor</span>
-                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CancelDeleteRule" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+<div class="ls-enterprise-page">
+    <section class="ls-hero">
+        <div class="ls-hero-left">
+            <span class="ls-hero-icon"><i class="bi bi-sliders" aria-hidden="true"></i></span>
+            <div>
+                <div class="ls-title-row">
+                    <h1>Enterprise Lead Scoring</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> Live CRM data</span>
+                    <span><i class="bi bi-broadcast" aria-hidden="true"></i> Realtime sync</span>
                 </div>
-                <div class="um-modal-body">
-                    <p>Delete <strong>@_deleteRule.RuleName</strong>? This removes the factor from future lead scoring.</p>
-                </div>
-                <div class="um-modal-footer">
-                    <button class="um-btn um-btn-ghost" @onclick="CancelDeleteRule">Cancel</button>
-                    <button class="um-btn um-btn-danger" @onclick="DeleteRuleAsync"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
-                </div>
+                <p>Design scoring factors, monitor lead priority, and keep sales workflow routing aligned with tenant-scoped CRM data.</p>
             </div>
         </div>
-    </div>
-}
+        <div class="ls-hero-actions">
+            <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh scoring data"><i class="bi @(_loading ? "bi-arrow-repeat ls-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button class="um-btn um-btn-ghost" @onclick="SyncScoresAsync" disabled="@_loading" title="Reload scored leads and rules"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Sync scores</button>
+            <button class="um-btn um-btn-ghost" @onclick="NavigateToLeads" title="Open enterprise leads"><i class="bi bi-person-lines-fill" aria-hidden="true"></i> Leads</button>
+            <button class="um-btn um-btn-primary" @onclick="OpenCreateRule" title="Create scoring factor"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Factor</button>
+        </div>
+    </section>
 
-<style>
-@@keyframes um-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }
-.ls-factor-kpi { margin-bottom: 1.25rem; }
-.ls-factor-kpi .pc-kpi-card { cursor: pointer; transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease; }
-.ls-factor-kpi .pc-kpi-card:hover { transform: translateY(-2px); box-shadow: 0 12px 30px rgba(15,23,42,.10); }
-.ls-factor-layout { align-items: stretch; }
-.ls-panel { padding: 0 !important; overflow: hidden; border: 1px solid rgba(148,163,184,.22); box-shadow: 0 18px 45px rgba(15,23,42,.07); }
-.ls-panel-header { display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; padding:1.15rem 1.25rem; border-bottom:1px solid rgba(148,163,184,.18); background:linear-gradient(135deg, rgba(248,250,252,.96), rgba(239,246,255,.72)); }
-.ls-panel-header--compact { padding-bottom: .95rem; }
-.ls-panel-title-wrap { display:flex; align-items:flex-start; gap:.8rem; min-width:0; }
-.ls-panel-icon { width:2.35rem; height:2.35rem; border-radius:.8rem; display:inline-flex; align-items:center; justify-content:center; color:#2563eb; background:linear-gradient(135deg,#dbeafe,#eff6ff); box-shadow:inset 0 0 0 1px rgba(37,99,235,.14); flex:0 0 auto; }
-.ls-panel-icon--preview { color:#7c3aed; background:linear-gradient(135deg,#ede9fe,#f5f3ff); box-shadow:inset 0 0 0 1px rgba(124,58,237,.14); }
-.ls-panel-title-wrap h3 { margin:0; font-size:1rem; font-weight:800; color:#0f172a; letter-spacing:-.01em; }
-.ls-panel-title-wrap p { margin:.15rem 0 0; color:#64748b; font-size:.82rem; line-height:1.35; }
-.ls-rules-grid { padding:1.25rem; display:grid; grid-template-columns:repeat(auto-fill, minmax(19rem, 1fr)); gap:1rem; }
-.ls-rule-card { position:relative; padding:1rem; border:1px solid rgba(148,163,184,.24); border-radius:1rem; background:linear-gradient(180deg,#fff,rgba(248,250,252,.96)); box-shadow:0 10px 25px rgba(15,23,42,.06); transition:transform .16s ease, box-shadow .16s ease, border-color .16s ease; }
-.ls-rule-card:hover { transform:translateY(-2px); border-color:rgba(37,99,235,.35); box-shadow:0 18px 38px rgba(15,23,42,.10); }
-.ls-rule-hdr { display:flex; align-items:flex-start; justify-content:space-between; gap:.75rem; margin-bottom:.85rem; }
-.ls-rule-heading { display:flex; align-items:center; gap:.7rem; min-width:0; }
-.ls-rule-avatar { width:2.45rem; height:2.45rem; border-radius:.85rem; display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; }
-.ls-rule-avatar--positive { color:#047857; background:#d1fae5; }
-.ls-rule-avatar--negative { color:#b91c1c; background:#fee2e2; }
-.ls-rule-avatar--neutral { color:#475569; background:#e2e8f0; }
-.ls-rule-title { font-weight:800; color:#0f172a; line-height:1.2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:14rem; }
-.ls-rule-subtitle { color:#64748b; font-size:.75rem; margin-top:.1rem; }
-.ls-rule-actions { display:flex; gap:.25rem; flex:0 0 auto; }
-.ls-rule-meta { display:flex; align-items:center; flex-wrap:wrap; gap:.4rem; margin-bottom:.8rem; }
-.ls-status-pill, .ls-points-pill, .ls-order-pill { display:inline-flex; align-items:center; border-radius:999px; padding:.22rem .55rem; font-size:.72rem; font-weight:800; line-height:1; }
-.ls-status-pill--active { color:#047857; background:#d1fae5; }
-.ls-status-pill--inactive { color:#475569; background:#e2e8f0; }
-.ls-points-pill--positive { color:#047857; background:#dcfce7; }
-.ls-points-pill--negative { color:#b91c1c; background:#fee2e2; }
-.ls-points-pill--neutral { color:#475569; background:#e2e8f0; }
-.ls-order-pill { color:#334155; background:#f1f5f9; }
-.ls-rule-cond { display:flex; flex-direction:column; gap:.25rem; padding:.75rem; border-radius:.8rem; background:#f8fafc; border:1px solid rgba(148,163,184,.20); }
-.ls-rule-cond span { color:#64748b; font-size:.7rem; text-transform:uppercase; font-weight:800; letter-spacing:.05em; }
-.ls-rule-cond strong { color:#0f172a; font-size:.86rem; line-height:1.35; }
-.ls-rule-footer { display:flex; align-items:center; justify-content:space-between; gap:.5rem; margin-top:.8rem; color:#64748b; font-size:.75rem; }
-.ls-rule-footer span { display:inline-flex; align-items:center; gap:.35rem; }
-.ls-empty-state { margin:1.25rem; min-height:22rem; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:2rem; border:1px dashed rgba(148,163,184,.45); border-radius:1rem; background:linear-gradient(180deg,#fff,#f8fafc); }
-.ls-empty-state i { font-size:2.4rem; color:#94a3b8; margin-bottom:.75rem; }
-.ls-empty-state h4 { margin:0; font-size:1rem; font-weight:800; color:#0f172a; }
-.ls-empty-state p { margin:.4rem 0 1rem; color:#64748b; max-width:28rem; }
-.ls-preview-toolbar { display:flex; align-items:center; gap:.5rem; padding:1rem 1rem .8rem; }
-.ls-preview-grid { padding:0 1rem 1rem; }
-.ls-rule-modal { width:min(56rem, calc(100vw - 2rem)) !important; }
-.ls-confirm-modal { width:min(32rem, calc(100vw - 2rem)) !important; }
-.ls-rule-modal .um-input { width:100%; padding:.55rem .75rem; border:1px solid var(--border-color); border-radius:var(--r-md); background:var(--surface-input); color:var(--text-primary); font:inherit; }
-.ls-rule-modal .um-input:focus { outline:none; border-color:var(--brand-500); box-shadow:var(--ring); }
-@@media (max-width: 768px) {
-    .ls-panel-header { flex-direction:column; }
-    .ls-rules-grid { grid-template-columns:1fr; padding:1rem; }
-    .ls-rule-title { max-width:11rem; }
-}
-</style>
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="ls-error-banner"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    <section class="ls-kpi-strip" aria-label="Lead scoring metrics">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricCardClass(metric)" @onclick="@(() => SetQuickFilter(metric.Filter))">
+                <span class="ls-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                <span><span class="ls-kpi-val">@metric.Value</span><span class="ls-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
+            </button>
+        }
+    </section>
+
+    <section class="ls-workflow-strip" aria-label="Scoring workflow actions">
+        <button class="ls-workflow-card" @onclick="OpenCreateRule"><i class="bi bi-plus-square" aria-hidden="true"></i><span><strong>Create factor</strong><span>Add scoring criteria.</span></span></button>
+        <button class="ls-workflow-card" @onclick="ActivateAllRules"><i class="bi bi-check2-circle" aria-hidden="true"></i><span><strong>Activate rules</strong><span>Enable all scoring factors.</span></span></button>
+        <button class="ls-workflow-card" @onclick="SeedDefaultRulesAsync"><i class="bi bi-stars" aria-hidden="true"></i><span><strong>Seed defaults</strong><span>Add enterprise defaults if empty.</span></span></button>
+        <button class="ls-workflow-card" @onclick="ShowAnalytics"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i><span><strong>Analyze score mix</strong><span>Review quality distribution.</span></span></button>
+    </section>
+
+    <section class="ls-search-panel">
+        <div class="ls-search-wrap">
+            <span class="ls-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="ls-search-body">
+                <label for="scoringSearchInput">Search scoring workspace</label>
+                <input id="scoringSearchInput" class="ls-search-input" value="@_searchTerm" @oninput="OnSearchChanged" placeholder="Search factors, conditions, leads, companies, source, service, or rating..." />
+                <span class="ls-search-hint">Enterprise search filters both scoring factors and scored lead preview records.</span>
+            </div>
+        </div>
+        <select class="ls-filter-select" value="@_factorFilter" @onchange="OnFactorFilterChanged">
+            <option value="">All factors</option>
+            <option value="Active">Active factors</option>
+            <option value="Inactive">Inactive factors</option>
+            <option value="Positive">Positive points</option>
+            <option value="Negative">Negative points</option>
+        </select>
+        <select class="ls-filter-select" value="@_ratingFilter" @onchange="OnRatingFilterChanged">
+            <option value="">All ratings</option>
+            <option value="Hot">Hot</option>
+            <option value="Warm">Warm</option>
+            <option value="Cold">Cold</option>
+        </select>
+        <select class="ls-filter-select" value="@_sourceFilter" @onchange="OnSourceFilterChanged">
+            <option value="">All sources</option>
+            @foreach (var source in SourceOptions)
+            {
+                <option value="@source">@source</option>
+            }
+        </select>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+        <div class="ls-search-result"><strong>@FilteredLeads.Count</strong><span>matches</span></div>
+    </section>
+
+    <section class="ls-view-tabs" aria-label="Lead scoring views">
+        @foreach (var view in _views)
+        {
+            <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label</button>
+        }
+    </section>
+
+    <section class="ls-content-layout">
+        <main class="ls-main-card">
+            @if (_loading)
+            {
+                <div class="ls-loading"><i class="bi bi-arrow-repeat ls-spin" aria-hidden="true"></i><strong>Loading enterprise scoring workspace...</strong></div>
+            }
+            else if (_view == "rules")
+            {
+                <div class="ls-section-head">
+                    <div><h2>Scoring factor management</h2><p>Create, edit, activate, deactivate, duplicate, and delete tenant-scoped scoring factors.</p></div>
+                    <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreateRule"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Factor</button>
+                </div>
+                @if (FilteredRules.Count == 0)
+                {
+                    <div class="ls-empty-state"><i class="bi bi-sliders" aria-hidden="true"></i><strong>No scoring factors match this view</strong><span>Adjust filters or add a new factor to start configuring scoring logic.</span><button class="um-btn um-btn-primary" @onclick="OpenCreateRule">Create factor</button></div>
+                }
+                else
+                {
+                    <div class="ls-rules-grid">
+                        @foreach (var rule in FilteredRules.OrderBy(r => r.SortOrder).ThenByDescending(r => r.PointValue))
+                        {
+                            <article class="ls-rule-card" @onclick="@(() => SelectRule(rule))">
+                                <div class="ls-rule-hdr">
+                                    <div class="ls-rule-heading">
+                                        <span class="ls-rule-avatar @RuleAvatarClass(rule)"><i class="@RuleIcon(rule)" aria-hidden="true"></i></span>
+                                        <div><strong>@rule.RuleName</strong><span>@FieldLabel(rule.Field)</span></div>
+                                    </div>
+                                    <div class="ls-rule-actions" @onclick:stopPropagation="true">
+                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => ToggleRuleActiveAsync(rule))" title="Toggle active state"><i class="bi @(rule.IsActive ? "bi-pause-circle" : "bi-play-circle")" aria-hidden="true"></i></button>
+                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenEditRule(rule))" title="Edit factor"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => DuplicateRuleAsync(rule))" title="Duplicate factor"><i class="bi bi-copy" aria-hidden="true"></i></button>
+                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => ConfirmDeleteRule(rule))" title="Delete factor"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                    </div>
+                                </div>
+                                <div class="ls-rule-meta">
+                                    <span class="ls-status-pill @(rule.IsActive ? "ls-status-pill-active" : "ls-status-pill-inactive")">@(rule.IsActive ? "Active" : "Inactive")</span>
+                                    <span class="ls-points-pill @PointsClass(rule.PointValue)">@FormatPoints(rule.PointValue) pts</span>
+                                    <span class="ls-order-pill">Order @rule.SortOrder</span>
+                                </div>
+                                <div class="ls-rule-cond"><span>Condition</span><strong>@RuleCondition(rule)</strong></div>
+                                <div class="ls-rule-footer"><span><i class="bi bi-diagram-3" aria-hidden="true"></i> @rule.Operator</span><span><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span></div>
+                            </article>
+                        }
+                    </div>
+                }
+            }
+            else if (_view == "leads")
+            {
+                <div class="ls-section-head">
+                    <div><h2>Scored leads preview</h2><p>Review lead score, rating, source, service interest, and CRM workflow readiness.</p></div>
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="NavigateToLeads"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Leads</button>
+                </div>
+                @if (FilteredLeads.Count == 0)
+                {
+                    <div class="ls-empty-state"><i class="bi bi-person-lines-fill" aria-hidden="true"></i><strong>No scored leads match this view</strong><span>Adjust search, rating, or source filters to view scored CRM records.</span><button class="um-btn um-btn-ghost" @onclick="ResetFilters">Reset filters</button></div>
+                }
+                else
+                {
+                    <div class="ls-table-scroll">
+                        <table class="ls-table">
+                            <thead><tr><th>Lead</th><th>Rating</th><th>Source</th><th>Stage</th><th class="ls-number">Score</th><th class="ls-number">Premium</th><th>Updated</th><th></th></tr></thead>
+                            <tbody>
+                                @foreach (var lead in FilteredLeads)
+                                {
+                                    <tr class="@LeadRowClass(lead)" @onclick="@(() => SelectLead(lead))">
+                                        <td><div class="ls-name-cell"><span class="ls-avatar @AvatarColor(lead.FullName)" aria-hidden="true">@Initials(lead.FullName)</span><span><strong>@lead.FullName</strong><small>@lead.AccountName · @lead.Email</small></span></div></td>
+                                        <td><span class="@RatingBadge(lead.Rating)">@lead.Rating</span></td>
+                                        <td><span class="ls-source-badge"><i class="bi @SourceIcon(lead.SourceCode)" aria-hidden="true"></i> @lead.SourceCode</span></td>
+                                        <td><span class="@StageBadge(lead.Stage)">@lead.Stage</span></td>
+                                        <td class="ls-number"><span class="ls-score-pill @ScoreTone(lead.Score)">@lead.Score</span></td>
+                                        <td class="ls-number">@lead.EstPremium.ToString("C0", CultureInfo.CurrentCulture)</td>
+                                        <td>@(lead.ModifiedDateUtc ?? lead.CreatedDateUtc).ToLocalTime().ToString("MMM d", CultureInfo.CurrentCulture)</td>
+                                        <td @onclick:stopPropagation="true"><button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenLeadInCrm(lead))" title="Find lead in CRM"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            }
+            else
+            {
+                <div class="ls-section-head"><div><h2>Scoring analytics</h2><p>Monitor lead quality distribution and source contribution against active scoring factors.</p></div><button class="um-btn um-btn-ghost um-btn-sm" @onclick="SyncScoresAsync"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Refresh analytics</button></div>
+                <div class="ls-analytics-grid">
+                    <section>
+                        <h3>Score distribution</h3>
+                        @foreach (var row in ScoreDistribution)
+                        {
+                            <div class="ls-stage-row"><span>@row.Label</span><div><i class="@row.Tone" style="width:@row.WidthPercent%"></i></div><strong>@row.Count</strong><small>@row.Percent.ToString("F0")%</small></div>
+                        }
+                    </section>
+                    <section>
+                        <h3>Source quality</h3>
+                        @foreach (var source in SourceBreakdown)
+                        {
+                            <button class="@SourceRowClass(source.Source)" @onclick="@(() => SelectSource(source.Source))"><span><i class="bi @SourceIcon(source.Source)" aria-hidden="true"></i> @source.Source</span><div><i style="width:@source.WidthPercent%"></i></div><strong>@source.AvgScore</strong><small>@source.Total leads</small></button>
+                        }
+                    </section>
+                </div>
+            }
+        </main>
+
+        <aside class="ls-detail-card">
+            @if (_selectedRule is not null)
+            {
+                <div class="ls-detail-head"><div><span class="ls-detail-eyebrow"><i class="@RuleIcon(_selectedRule)" aria-hidden="true"></i> @FieldLabel(_selectedRule.Field)</span><h2>@_selectedRule.RuleName</h2><p>@RuleCondition(_selectedRule)</p></div><span class="ls-points-pill @PointsClass(_selectedRule.PointValue)">@FormatPoints(_selectedRule.PointValue)</span></div>
+                <div class="ls-detail-body">
+                    <div class="ls-detail-summary"><div><span>Status</span><strong>@(_selectedRule.IsActive ? "Active" : "Inactive")</strong></div><div><span>Sort</span><strong>@_selectedRule.SortOrder</strong></div><div><span>Operator</span><strong>@_selectedRule.Operator</strong></div><div><span>Created</span><strong>@_selectedRule.CreatedDateUtc.ToLocalTime().ToString("MMM d", CultureInfo.CurrentCulture)</strong></div></div>
+                    <div class="ls-contact-card"><span><i class="bi bi-list-check" aria-hidden="true"></i> @RuleCondition(_selectedRule)</span><span><i class="bi bi-lightning-charge" aria-hidden="true"></i> @FormatPoints(_selectedRule.PointValue) points when matched</span><span><i class="bi bi-building-lock" aria-hidden="true"></i> Tenant-scoped CRM scoring rule</span></div>
+                    <div class="ls-detail-actions"><button class="um-btn um-btn-ghost" @onclick="@(() => OpenEditRule(_selectedRule))"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button class="um-btn um-btn-ghost" @onclick="@(() => ToggleRuleActiveAsync(_selectedRule))"><i class="bi bi-power" aria-hidden="true"></i> Toggle</button><button class="um-btn um-btn-danger" @onclick="@(() => ConfirmDeleteRule(_selectedRule))"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button></div>
+                </div>
+            }
+            else if (_selectedLead is not null)
+            {
+                <div class="ls-detail-head"><div><span class="ls-detail-eyebrow"><i class="bi @SourceIcon(_selectedLead.SourceCode)" aria-hidden="true"></i> @_selectedLead.SourceCode</span><h2>@_selectedLead.FullName</h2><p>@_selectedLead.AccountName</p></div><span class="@RatingBadge(_selectedLead.Rating)">@_selectedLead.Rating</span></div>
+                <div class="ls-detail-body">
+                    <div class="ls-detail-summary"><div><span>Score</span><strong>@_selectedLead.Score</strong></div><div><span>Stage</span><strong>@_selectedLead.Stage</strong></div><div><span>Pipeline</span><strong>@_selectedLead.EstPremium.ToString("C0")</strong></div><div><span>Created</span><strong>@_selectedLead.CreatedDateUtc.ToLocalTime().ToString("MMM d", CultureInfo.CurrentCulture)</strong></div></div>
+                    <div class="ls-contact-card"><span><i class="bi bi-envelope" aria-hidden="true"></i> @_selectedLead.Email</span><span><i class="bi bi-card-text" aria-hidden="true"></i> @_selectedLead.InterestedService</span><span><i class="bi bi-bar-chart" aria-hidden="true"></i> @_selectedLead.Rating priority from current CRM score</span></div>
+                    <div class="ls-detail-actions"><button class="um-btn um-btn-ghost" @onclick="@(() => OpenLeadInCrm(_selectedLead))"><i class="bi bi-person-lines-fill" aria-hidden="true"></i> Open Lead</button><button class="um-btn um-btn-primary" @onclick="OpenCreateRule"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add Factor</button></div>
+                </div>
+            }
+            else
+            {
+                <div class="ls-detail-empty"><i class="bi bi-sliders" aria-hidden="true"></i><strong>Select a factor or lead</strong><span>Review scoring factor intelligence, lead score details, and workflow actions.</span></div>
+            }
+        </aside>
+    </section>
+</div>
 
 @code {
     private Guid _tenantId;
-    private string? _searchTerm;
-    private string? _loadError;
-    private string? _activeFilter;
-    private string? _factorFilter;
     private bool _loading;
+    private bool _busy;
     private bool _showRuleForm;
+    private bool _showConfirm;
     private bool _savingRule;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "info";
+    private string _searchTerm = string.Empty;
+    private string _loadError = string.Empty;
+    private string _view = "rules";
+    private string _factorFilter = string.Empty;
+    private string _ratingFilter = string.Empty;
+    private string _sourceFilter = string.Empty;
+    private string _quickFilter = string.Empty;
     private Guid _editingRuleId = Guid.Empty;
+    private CancellationTokenSource? _toastCts;
+    private ConfirmAction? _confirmAction;
     private LeadScoringRuleForm _ruleForm = new();
-    private LeadScoringRuleDto? _deleteRule;
+    private LeadScoringRuleDto? _selectedRule;
+    private LeadScoreRow? _selectedLead;
     private List<LeadScoreRow> _leads = [];
-    private List<LeadScoreRow> _filtered = [];
     private List<LeadScoringRuleDto> _rules = [];
 
-    private List<LeadScoringRuleDto> FilteredRules => _factorFilter switch
-    {
-        "Active" => _rules.Where(x => x.IsActive).ToList(),
-        "Inactive" => _rules.Where(x => !x.IsActive).ToList(),
-        "Positive" => _rules.Where(x => x.PointValue > 0).ToList(),
-        "Negative" => _rules.Where(x => x.PointValue < 0).ToList(),
-        _ => [.. _rules]
-    };
+    private static readonly List<ViewDef> _views = [new("rules", "Factors", "bi-sliders"), new("leads", "Scored Leads", "bi-people"), new("analytics", "Analytics", "bi-graph-up-arrow")];
 
     private static readonly List<LabelValue> _fieldOptions =
     [
@@ -358,17 +392,101 @@
         new("OlderThanDays", "Older than days"),
     ];
 
+    private IEnumerable<KpiModel> Metrics =>
+    [
+        new("Factors", _rules.Count.ToString(), "Tenant rules", "bi-sliders", "ls-blue", ""),
+        new("Active", _rules.Count(x => x.IsActive).ToString(), "Enabled now", "bi-check-circle", "ls-green", "Active"),
+        new("Hot", _leads.Count(x => x.Rating == "Hot").ToString(), "High intent", "bi-fire", "ls-red", "Hot"),
+        new("Average", AverageScore.ToString("F0"), "Lead score", "bi-speedometer2", "ls-purple", ""),
+        new("Pipeline", _leads.Sum(x => x.EstPremium).ToString("C0"), "Scored premium", "bi-cash-coin", "ls-cyan", "")
+    ];
+
+    private List<LeadScoringRuleDto> FilteredRules
+    {
+        get
+        {
+            IEnumerable<LeadScoringRuleDto> query = _rules;
+            if (!string.IsNullOrWhiteSpace(_searchTerm))
+            {
+                var term = _searchTerm.Trim();
+                query = query.Where(x => Contains(x.RuleName, term) || Contains(x.Field, term) || Contains(x.Operator, term) || Contains(x.Value, term) || Contains(RuleCondition(x), term));
+            }
+            query = _factorFilter switch
+            {
+                "Active" => query.Where(x => x.IsActive),
+                "Inactive" => query.Where(x => !x.IsActive),
+                "Positive" => query.Where(x => x.PointValue > 0),
+                "Negative" => query.Where(x => x.PointValue < 0),
+                _ => query
+            };
+            if (_quickFilter == "Active") query = query.Where(x => x.IsActive);
+            return query.ToList();
+        }
+    }
+
+    private List<LeadScoreRow> FilteredLeads
+    {
+        get
+        {
+            IEnumerable<LeadScoreRow> query = _leads;
+            if (!string.IsNullOrWhiteSpace(_searchTerm))
+            {
+                var term = _searchTerm.Trim();
+                query = query.Where(x => Contains(x.FullName, term) || Contains(x.AccountName, term) || Contains(x.Email, term) || Contains(x.SourceCode, term) || Contains(x.InterestedService, term) || Contains(x.Rating, term) || Contains(x.Stage, term));
+            }
+            if (!string.IsNullOrWhiteSpace(_ratingFilter)) query = query.Where(x => x.Rating == _ratingFilter);
+            if (!string.IsNullOrWhiteSpace(_sourceFilter)) query = query.Where(x => x.SourceCode == _sourceFilter);
+            query = _quickFilter switch
+            {
+                "Hot" => query.Where(x => x.Rating == "Hot"),
+                _ => query
+            };
+            return query.OrderByDescending(x => x.Score).ThenByDescending(x => x.CreatedDateUtc).ToList();
+        }
+    }
+
+    private IEnumerable<string> SourceOptions => _leads.Select(x => x.SourceCode).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private double AverageScore => _leads.Count == 0 ? 0 : _leads.Average(x => x.Score);
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-octagon", "warning" => "bi-exclamation-triangle", "success" => "bi-check2-circle", _ => "bi-info-circle" };
+
+    private IEnumerable<DistributionRow> ScoreDistribution
+    {
+        get
+        {
+            var total = Math.Max(1, _leads.Count);
+            var rows = new[]
+            {
+                new DistributionRow("Hot", _leads.Count(x => x.Rating == "Hot"), 0, "ls-dist-hot"),
+                new DistributionRow("Warm", _leads.Count(x => x.Rating == "Warm"), 0, "ls-dist-warm"),
+                new DistributionRow("Cold", _leads.Count(x => x.Rating == "Cold"), 0, "ls-dist-cold")
+            };
+            var max = Math.Max(1, rows.Max(x => x.Count));
+            return rows.Select(x => x with { WidthPercent = (double)x.Count / max * 100, Percent = (double)x.Count / total * 100 });
+        }
+    }
+
+    private IEnumerable<SourceBreakdownRow> SourceBreakdown
+    {
+        get
+        {
+            var rows = _leads.GroupBy(x => x.SourceCode).Select(g => new SourceBreakdownRow(g.Key, g.Count(), (int)Math.Round(g.Average(x => x.Score)), 0)).ToList();
+            var max = Math.Max(1, rows.Select(x => x.AvgScore).DefaultIfEmpty(1).Max());
+            return rows.OrderByDescending(x => x.AvgScore).Select(x => x with { WidthPercent = max == 0 ? 0 : (double)x.AvgScore / max * 100 });
+        }
+    }
+
     protected override async Task OnInitializedAsync()
     {
         var context = await CurrentUser.RequireAsync();
         _tenantId = context.TenantId;
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Lead Scoring Factors", null));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Lead Scoring", "/crm/leads/scoring"));
         await LoadAsync();
         _ = StartLeadScoringRealtimeAsync();
     }
 
     private async Task OnLeadScoresChangedAsync(Guid tenantId)
     {
+        if (tenantId != _tenantId) return;
         await InvokeAsync(async () =>
         {
             await LoadAsync();
@@ -380,82 +498,82 @@
     {
         try
         {
-            if (_tenantId != Guid.Empty)
-            {
-                await LeadScoringRealtime.StartAsync(_tenantId, OnLeadScoresChangedAsync);
-            }
+            if (_tenantId != Guid.Empty) await LeadScoringRealtime.StartAsync(_tenantId, OnLeadScoresChangedAsync);
         }
         catch (Exception ex)
         {
-            _loadError = $"Real-time lead scoring updates are unavailable: {ex.Message}";
-            await InvokeAsync(StateHasChanged);
+            await ShowToastAsync($"Realtime unavailable: {ex.Message}", "warning");
         }
     }
 
-    public async ValueTask DisposeAsync() => await LeadScoringRealtime.DisposeAsync();
+    public async ValueTask DisposeAsync()
+    {
+        await LeadScoringRealtime.DisposeAsync();
+        _toastCts?.Cancel();
+        _toastCts?.Dispose();
+    }
 
     private async Task LoadAsync()
     {
         _loading = true;
-        _loadError = null;
+        _loadError = string.Empty;
         try
         {
-            if (_tenantId == Guid.Empty)
-            {
-                _tenantId = (await CurrentUser.RequireAsync()).TenantId;
-            }
+            if (_tenantId == Guid.Empty) _tenantId = (await CurrentUser.RequireAsync()).TenantId;
+            var leadsTask = Api.SearchLeadsAsync(_tenantId);
+            var rulesTask = Api.GetLeadScoringRulesAsync(_tenantId);
+            await Task.WhenAll(leadsTask, rulesTask);
 
-            var leadsResult = await Api.SearchLeadsAsync(_tenantId, _searchTerm);
-            var rules = await Api.GetLeadScoringRulesAsync(_tenantId);
-
-            _leads = (leadsResult?.Items ?? [])
+            _leads = (leadsTask.Result?.Items ?? [])
                 .Select(l => new LeadScoreRow(
                     l.LeadId,
                     $"{l.FirstName} {l.LastName}".Trim(),
                     l.AccountName ?? "—",
-                    l.SourceCode ?? "—",
-                    l.InterestedService ?? "—",
-                    l.Score ?? 0,
-                    Rating(l.Score ?? 0),
-                    l.CreatedDateUtc))
+                    l.Email ?? string.Empty,
+                    string.IsNullOrWhiteSpace(l.SourceCode) ? "Inbound" : l.SourceCode,
+                    string.IsNullOrWhiteSpace(l.InterestedService) ? "No service captured" : l.InterestedService,
+                    Math.Clamp(l.Score ?? 0, 0, 100),
+                    Rating(Math.Clamp(l.Score ?? 0, 0, 100)),
+                    NormalizeStage(l.NurturingStageCode, l.StatusCode),
+                    l.AnnualRevenue ?? 0,
+                    l.CreatedDateUtc,
+                    l.ModifiedDateUtc))
                 .OrderByDescending(l => l.Score)
                 .ToList();
-            _rules = rules?.ToList() ?? [];
-            ApplyFilter();
+
+            _rules = rulesTask.Result?.OrderBy(x => x.SortOrder).ThenBy(x => x.RuleName).ToList() ?? [];
+            _selectedRule = _selectedRule is null ? _rules.FirstOrDefault() : _rules.FirstOrDefault(x => x.LeadScoringRuleId == _selectedRule.LeadScoringRuleId) ?? _rules.FirstOrDefault();
+            _selectedLead = _selectedLead is null ? _leads.FirstOrDefault() : _leads.FirstOrDefault(x => x.LeadId == _selectedLead.LeadId) ?? _leads.FirstOrDefault();
         }
         catch (Exception ex)
         {
             _loadError = $"Failed to load lead scoring: {ex.Message}";
             _leads = [];
-            _filtered = [];
             _rules = [];
+            await ShowToastAsync("Unable to load lead scoring data.", "danger");
         }
         finally { _loading = false; }
     }
 
-    private void SetFilter(string? filter)
+    private async Task SyncScoresAsync()
     {
-        _activeFilter = filter;
-        ApplyFilter();
+        await LoadAsync();
+        await ShowToastAsync("Lead scoring data synchronized.", "success");
     }
 
-    private void SetFactorFilter(string? filter) => _factorFilter = filter;
-
-    private void ApplyFilter() => _filtered = _activeFilter switch
-    {
-        "Hot" => _leads.Where(x => x.Score >= 80).ToList(),
-        "Warm" => _leads.Where(x => x.Score is >= 50 and < 80).ToList(),
-        "Cold" => _leads.Where(x => x.Score < 50).ToList(),
-        _ => [.. _leads]
-    };
-
-    private static string Rating(int score) => score >= 80 ? "Hot" : score >= 50 ? "Warm" : "Cold";
-    private static string RatingClass(string rating) => rating switch
-    {
-        "Hot" => "bg-danger",
-        "Warm" => "bg-warning text-dark",
-        _ => "bg-secondary"
-    };
+    private void SetView(string view) => _view = view;
+    private void ShowAnalytics() => SetView("analytics");
+    private void NavigateToLeads() => Nav.NavigateTo("/crm/leads");
+    private void OpenLeadInCrm(LeadScoreRow lead) => Nav.NavigateTo($"/crm/leads?search={Uri.EscapeDataString(lead.Email)}");
+    private void SelectRule(LeadScoringRuleDto rule) { _selectedRule = rule; _selectedLead = null; }
+    private void SelectLead(LeadScoreRow lead) { _selectedLead = lead; _selectedRule = null; }
+    private void SelectSource(string source) { _sourceFilter = _sourceFilter == source ? string.Empty : source; _view = "leads"; }
+    private void SetQuickFilter(string filter) { _quickFilter = _quickFilter == filter ? string.Empty : filter; if (filter is "Hot") _view = "leads"; else _view = "rules"; }
+    private void ResetFilters() { _searchTerm = string.Empty; _factorFilter = string.Empty; _ratingFilter = string.Empty; _sourceFilter = string.Empty; _quickFilter = string.Empty; }
+    private void OnSearchChanged(BlazorChangeEventArgs e) => _searchTerm = e.Value?.ToString() ?? string.Empty;
+    private void OnFactorFilterChanged(BlazorChangeEventArgs e) { _factorFilter = e.Value?.ToString() ?? string.Empty; _quickFilter = string.Empty; }
+    private void OnRatingFilterChanged(BlazorChangeEventArgs e) { _ratingFilter = e.Value?.ToString() ?? string.Empty; _quickFilter = string.Empty; _view = "leads"; }
+    private void OnSourceFilterChanged(BlazorChangeEventArgs e) { _sourceFilter = e.Value?.ToString() ?? string.Empty; _view = "leads"; }
 
     private void OpenCreateRule()
     {
@@ -487,7 +605,8 @@
         _showRuleForm = true;
     }
 
-    private void CloseRuleForm() => _showRuleForm = false;
+    private void CloseRuleForm() { if (!_savingRule) _showRuleForm = false; }
+    private Task HandleInvalidRuleSubmitAsync(EditContext _) => ShowToastAsync("Fix validation errors.", "warning");
 
     private async Task SaveRuleAsync()
     {
@@ -496,118 +615,148 @@
         {
             if (_editingRuleId == Guid.Empty)
             {
-                await Api.CreateLeadScoringRuleAsync(new CreateLeadScoringRuleRequest
-                {
-                    TenantId = _tenantId,
-                    RuleName = _ruleForm.RuleName.Trim(),
-                    Field = _ruleForm.Field,
-                    Operator = _ruleForm.Operator,
-                    Value = _ruleForm.Value?.Trim() ?? string.Empty,
-                    Points = _ruleForm.Points,
-                    IsActive = _ruleForm.IsActive,
-                    SortOrder = _ruleForm.SortOrder
-                });
+                var id = await Api.CreateLeadScoringRuleAsync(new CreateLeadScoringRuleRequest { TenantId = _tenantId, RuleName = _ruleForm.RuleName.Trim(), Field = _ruleForm.Field, Operator = _ruleForm.Operator, Value = _ruleForm.Value?.Trim() ?? string.Empty, Points = _ruleForm.Points, IsActive = _ruleForm.IsActive, SortOrder = _ruleForm.SortOrder });
+                await ShowToastAsync("Scoring factor created.", "success");
+                _editingRuleId = id;
             }
             else
             {
-                await Api.UpdateLeadScoringRuleAsync(_editingRuleId, new UpdateLeadScoringRuleRequest
-                {
-                    ScoringRuleId = _editingRuleId,
-                    TenantId = _tenantId,
-                    RuleName = _ruleForm.RuleName.Trim(),
-                    Field = _ruleForm.Field,
-                    Operator = _ruleForm.Operator,
-                    Value = _ruleForm.Value?.Trim() ?? string.Empty,
-                    Points = _ruleForm.Points,
-                    IsActive = _ruleForm.IsActive,
-                    SortOrder = _ruleForm.SortOrder
-                });
+                await Api.UpdateLeadScoringRuleAsync(_editingRuleId, new UpdateLeadScoringRuleRequest { ScoringRuleId = _editingRuleId, TenantId = _tenantId, RuleName = _ruleForm.RuleName.Trim(), Field = _ruleForm.Field, Operator = _ruleForm.Operator, Value = _ruleForm.Value?.Trim() ?? string.Empty, Points = _ruleForm.Points, IsActive = _ruleForm.IsActive, SortOrder = _ruleForm.SortOrder });
+                await ShowToastAsync("Scoring factor saved.", "success");
             }
-
             _showRuleForm = false;
             await LoadAsync();
         }
         catch (Exception ex)
         {
             _loadError = $"Failed to save scoring factor: {ex.Message}";
+            await ShowToastAsync("Save failed.", "danger");
         }
-        finally
-        {
-            _savingRule = false;
-        }
+        finally { _savingRule = false; }
     }
 
-    private void ConfirmDeleteRule(LeadScoringRuleDto rule) => _deleteRule = rule;
-    private void CancelDeleteRule() => _deleteRule = null;
-
-    private async Task DeleteRuleAsync()
+    private async Task ToggleRuleActiveAsync(LeadScoringRuleDto rule)
     {
-        if (_deleteRule is null) return;
         try
         {
-            await Api.DeleteLeadScoringRuleAsync(_deleteRule.LeadScoringRuleId);
-            _deleteRule = null;
+            await Api.UpdateLeadScoringRuleAsync(rule.LeadScoringRuleId, new UpdateLeadScoringRuleRequest { ScoringRuleId = rule.LeadScoringRuleId, TenantId = _tenantId, RuleName = rule.RuleName, Field = rule.Field, Operator = rule.Operator, Value = rule.Value, Points = rule.PointValue, IsActive = !rule.IsActive, SortOrder = rule.SortOrder });
+            await ShowToastAsync(!rule.IsActive ? "Scoring factor activated." : "Scoring factor paused.", "success");
             await LoadAsync();
         }
-        catch (Exception ex)
+        catch (Exception ex) { await ShowToastAsync($"Toggle failed: {ex.Message}", "danger"); }
+    }
+
+    private async Task DuplicateRuleAsync(LeadScoringRuleDto rule)
+    {
+        try
         {
-            _loadError = $"Failed to delete scoring factor: {ex.Message}";
+            await Api.CreateLeadScoringRuleAsync(new CreateLeadScoringRuleRequest { TenantId = _tenantId, RuleName = $"{rule.RuleName} Copy", Field = rule.Field, Operator = rule.Operator, Value = rule.Value, Points = rule.PointValue, IsActive = false, SortOrder = _rules.Count == 0 ? 10 : _rules.Max(r => r.SortOrder) + 10 });
+            await ShowToastAsync("Scoring factor duplicated as inactive.", "success");
+            await LoadAsync();
         }
+        catch (Exception ex) { await ShowToastAsync($"Duplicate failed: {ex.Message}", "danger"); }
     }
 
-    private static string RuleCondition(LeadScoringRuleDto rule)
+    private void ConfirmDeleteRule(LeadScoringRuleDto rule) => OpenConfirm(new("Delete scoring factor", $"Delete {rule.RuleName}? This removes it from future lead scoring.", "Delete", "um-btn-danger", "bi-trash", "danger", () => DeleteRuleAsync(rule)));
+
+    private async Task DeleteRuleAsync(LeadScoringRuleDto rule)
     {
-        var field = _fieldOptions.FirstOrDefault(x => x.Value == rule.Field)?.Label ?? rule.Field;
-        var op = _operatorOptions.FirstOrDefault(x => x.Value == rule.Operator)?.Label ?? rule.Operator;
-        return string.IsNullOrWhiteSpace(rule.Value) ? $"{field} · {op}" : $"{field} · {op} · {rule.Value}";
+        await Api.DeleteLeadScoringRuleAsync(rule.LeadScoringRuleId);
+        if (_selectedRule?.LeadScoringRuleId == rule.LeadScoringRuleId) _selectedRule = null;
+        await ShowToastAsync("Scoring factor deleted.", "success");
+        await LoadAsync();
     }
 
+    private void ActivateAllRules()
+    {
+        if (_rules.Count == 0) { _ = ShowToastAsync("No scoring factors to activate.", "warning"); return; }
+        OpenConfirm(new("Activate scoring factors", $"Activate {_rules.Count(x => !x.IsActive)} inactive scoring factor(s)?", "Activate", "um-btn-primary", "bi-check2-circle", "warning", ActivateAllRulesAsync));
+    }
+
+    private async Task ActivateAllRulesAsync()
+    {
+        foreach (var rule in _rules.Where(x => !x.IsActive))
+        {
+            await Api.UpdateLeadScoringRuleAsync(rule.LeadScoringRuleId, new UpdateLeadScoringRuleRequest { ScoringRuleId = rule.LeadScoringRuleId, TenantId = _tenantId, RuleName = rule.RuleName, Field = rule.Field, Operator = rule.Operator, Value = rule.Value, Points = rule.PointValue, IsActive = true, SortOrder = rule.SortOrder });
+        }
+        await ShowToastAsync("Scoring factors activated.", "success");
+        await LoadAsync();
+    }
+
+    private async Task SeedDefaultRulesAsync()
+    {
+        if (_rules.Count > 0) { await ShowToastAsync("Default scoring data already exists.", "info"); return; }
+        OpenConfirm(new("Seed default scoring", "Create enterprise default lead scoring factors for this tenant?", "Seed defaults", "um-btn-primary", "bi-stars", "warning", CreateDefaultRulesAsync));
+    }
+
+    private async Task CreateDefaultRulesAsync()
+    {
+        var defaults = new[]
+        {
+            new LeadScoringRuleSeed("High annual revenue", "AnnualRevenue", "GreaterThan", "100000", 20, 10),
+            new LeadScoringRuleSeed("Referral source", "Source", "Equals", "Referral", 15, 20),
+            new LeadScoringRuleSeed("Website engagement", "WebsiteVisits", "GreaterThan", "3", 12, 30),
+            new LeadScoringRuleSeed("Opened nurture email", "EmailOpened", "Equals", "true", 8, 40),
+            new LeadScoringRuleSeed("Stale lead penalty", "StaleDays", "OlderThanDays", "30", -15, 50)
+        };
+        foreach (var rule in defaults)
+        {
+            await Api.CreateLeadScoringRuleAsync(new CreateLeadScoringRuleRequest { TenantId = _tenantId, RuleName = rule.RuleName, Field = rule.Field, Operator = rule.Operator, Value = rule.Value, Points = rule.Points, IsActive = true, SortOrder = rule.SortOrder });
+        }
+        await ShowToastAsync("Default scoring factors seeded.", "success");
+        await LoadAsync();
+    }
+
+    private void OpenConfirm(ConfirmAction action) { _confirmAction = action; _showConfirm = true; }
+    private void CancelConfirm() { if (!_busy) { _showConfirm = false; _confirmAction = null; } }
+    private async Task ExecuteConfirmedAsync() { if (_confirmAction is null) return; _busy = true; try { var action = _confirmAction; await action.ExecuteAsync(); _showConfirm = false; _confirmAction = null; } catch (Exception ex) { await ShowToastAsync($"Action failed: {ex.Message}", "danger"); } finally { _busy = false; } }
+
+    private async Task ShowToastAsync(string message, string kind = "info")
+    {
+        _toastCts?.Cancel(); _toastCts?.Dispose(); _toastCts = new CancellationTokenSource();
+        _toastMessage = message.Length <= 96 ? message : $"{message[..93]}..."; _toastKind = ToastKind(kind); _toastVisible = true; StateHasChanged();
+        try { await Task.Delay(_toastKind == "danger" ? 10400 : 8000, _toastCts.Token); _toastVisible = false; await InvokeAsync(StateHasChanged); } catch (TaskCanceledException) { }
+    }
+
+    private void HideToast() { _toastCts?.Cancel(); _toastVisible = false; }
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : value.Contains("success", StringComparison.OrdinalIgnoreCase) ? "success" : "info";
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static string Rating(int score) => score >= 80 ? "Hot" : score >= 50 ? "Warm" : "Cold";
+    private static string NormalizeStage(string? stage, int statusCode) => !string.IsNullOrWhiteSpace(stage) ? stage.Trim() switch { "Closed" => "Lost", "Won" => "Converted", var s => s } : statusCode switch { 2 => "Contacted", 3 => "Qualified", 4 => "Converted", 5 => "Lost", _ => "New" };
+    private static string RuleCondition(LeadScoringRuleDto rule) { var field = FieldLabel(rule.Field); var op = _operatorOptions.FirstOrDefault(x => x.Value == rule.Operator)?.Label ?? rule.Operator; return string.IsNullOrWhiteSpace(rule.Value) ? $"{field} · {op}" : $"{field} · {op} · {rule.Value}"; }
     private static string FieldLabel(string field) => _fieldOptions.FirstOrDefault(x => x.Value == field)?.Label ?? field;
-
-    private static string RuleIcon(LeadScoringRuleDto rule) => rule.Field switch
-    {
-        "EmailOpened" => "bi bi-envelope-check",
-        "WebsiteVisits" => "bi bi-globe2",
-        "Title" => "bi bi-person-badge",
-        "StaleDays" => "bi bi-hourglass-split",
-        "Source" => "bi bi-share",
-        "AnnualRevenue" => "bi bi-currency-dollar",
-        _ => "bi bi-building"
-    };
-
-    private static string RuleAvatarClass(LeadScoringRuleDto rule) => rule.PointValue switch
-    {
-        > 0 => "ls-rule-avatar--positive",
-        < 0 => "ls-rule-avatar--negative",
-        _ => "ls-rule-avatar--neutral"
-    };
-
+    private static string RuleIcon(LeadScoringRuleDto rule) => rule.Field switch { "EmailOpened" => "bi bi-envelope-check", "WebsiteVisits" => "bi bi-globe2", "Title" => "bi bi-person-badge", "StaleDays" => "bi bi-hourglass-split", "Source" => "bi bi-share", "AnnualRevenue" => "bi bi-currency-dollar", _ => "bi bi-building" };
+    private static string RuleAvatarClass(LeadScoringRuleDto rule) => rule.PointValue switch { > 0 => "ls-rule-avatar-positive", < 0 => "ls-rule-avatar-negative", _ => "ls-rule-avatar-neutral" };
     private static string FormatPoints(int points) => points > 0 ? $"+{points}" : points.ToString();
-    private static string PointsClass(int points) => points < 0 ? "ls-points-pill--negative" : points > 0 ? "ls-points-pill--positive" : "ls-points-pill--neutral";
+    private static string PointsClass(int points) => points < 0 ? "ls-points-negative" : points > 0 ? "ls-points-positive" : "ls-points-neutral";
+    private string MetricCardClass(KpiModel metric) => $"ls-kpi-card {metric.Tone} {(_quickFilter == metric.Filter && !string.IsNullOrWhiteSpace(metric.Filter) ? "ls-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewDef view) => _view == view.Id ? "ls-view-btn ls-view-btn-active" : "ls-view-btn";
+    private string LeadRowClass(LeadScoreRow lead) => lead.LeadId == _selectedLead?.LeadId ? "ls-row-selected" : string.Empty;
+    private string SourceRowClass(string source) => _sourceFilter == source ? "ls-funnel-row ls-active" : "ls-funnel-row";
+    private static string RatingBadge(string rating) => rating switch { "Hot" => "ls-rating ls-rating-hot", "Warm" => "ls-rating ls-rating-warm", _ => "ls-rating ls-rating-cold" };
+    private static string StageBadge(string stage) => $"ls-stage ls-stage-{stage.ToLowerInvariant().Replace(' ', '-')}";
+    private static string SourceIcon(string source) => source switch { "Referral" => "bi-share-fill", "Website" => "bi-globe", "Cold Call" => "bi-telephone-fill", "Social" => "bi-instagram", "Email" => "bi-envelope-fill", "Event" => "bi-calendar-event-fill", "Partner" => "bi-handshake-fill", _ => "bi-inbox-fill" };
+    private static string ScoreTone(int score) => score >= 80 ? "ls-score-hot" : score >= 50 ? "ls-score-warm" : "ls-score-cold";
+    private static string AvatarColor(string name) { var colors = new[] { "ls-av1", "ls-av2", "ls-av3", "ls-av4", "ls-av5", "ls-av6" }; return colors[Math.Abs(name.GetHashCode()) % colors.Length]; }
+    private static string Initials(string name) { var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length > 0 ? name[..1] : "?"; }
 
-    private sealed record LeadScoreRow(Guid LeadId, string FullName, string AccountName, string SourceCode, string InterestedService, int Score, string Rating, DateTime CreatedDateUtc);
+    private sealed record ViewDef(string Id, string Label, string Icon);
     private sealed record LabelValue(string Value, string Label);
+    private sealed record KpiModel(string Label, string Value, string Caption, string Icon, string Tone, string Filter);
+    private sealed record ConfirmAction(string Title, string Message, string ButtonText, string ButtonClass, string Icon, string Kind, Func<Task> ExecuteAsync);
+    private sealed record DistributionRow(string Label, int Count, double WidthPercent, string Tone) { public double Percent { get; init; } }
+    private sealed record SourceBreakdownRow(string Source, int Total, int AvgScore, double WidthPercent);
+    private sealed record LeadScoringRuleSeed(string RuleName, string Field, string Operator, string Value, int Points, int SortOrder);
+    private sealed record LeadScoreRow(Guid LeadId, string FullName, string AccountName, string Email, string SourceCode, string InterestedService, int Score, string Rating, string Stage, decimal EstPremium, DateTime CreatedDateUtc, DateTime? ModifiedDateUtc);
 
     private sealed class LeadScoringRuleForm
     {
-        [Required, StringLength(200)]
-        public string RuleName { get; set; } = string.Empty;
-
-        [Required, StringLength(100)]
-        public string Field { get; set; } = "CompanySize";
-
-        [Required, StringLength(50)]
-        public string Operator { get; set; } = "Equals";
-
-        [StringLength(500)]
-        public string? Value { get; set; }
-
-        [Range(-1000, 1000)]
-        public int Points { get; set; }
-
+        [Required, StringLength(200)] public string RuleName { get; set; } = string.Empty;
+        [Required, StringLength(100)] public string Field { get; set; } = "CompanySize";
+        [Required, StringLength(50)] public string Operator { get; set; } = "Equals";
+        [StringLength(500)] public string? Value { get; set; }
+        [Range(-1000, 1000)] public int Points { get; set; }
         public bool IsActive { get; set; } = true;
-
-        [Range(0, 100000)]
-        public int SortOrder { get; set; }
+        [Range(0, 100000)] public int SortOrder { get; set; }
     }
 }

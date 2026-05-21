@@ -1,106 +1,491 @@
 @page "/marketing/email"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
+@inject IJSRuntime Js
 
-<PageTitle>Email Blasts — AMS</PageTitle>
+<PageTitle>Email Blasts — AMS Enterprise</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<AppPageHeader Title="Email Blasts"
-               Subtitle="DB-backed email campaign sends, scheduling, engagement, and compliance health"
-               Icon="bi-envelope-paper">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/marketing/campaigns")'><i class="bi bi-megaphone"></i> Campaigns</button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
-    </Actions>
-</AppPageHeader>
-
-<div class="mkc-kpi-strip">
-    @Kpi(null, "bi-envelope-paper", "Total", _items.Count.ToString(), "mkc-ki-blue")
-    @Kpi("Sent", "bi-send-check", "Sent", _items.Count(x => x.Status == "Sent").ToString(), "mkc-ki-green")
-    @Kpi("Scheduled", "bi-calendar-check", "Scheduled", _items.Count(x => x.Status == "Scheduled").ToString(), "mkc-ki-amber")
-    @Kpi("Draft", "bi-file-earmark", "Drafts", _items.Count(x => x.Status == "Draft").ToString(), "mkc-ki-blue")
-    @Kpi("Paused", "bi-pause-circle", "Paused", _items.Count(x => x.Status == "Paused").ToString(), "mkc-ki-amber")
-    @Kpi("Engaged", "bi-cursor", "Open Rate", $"{OpenRate:N1}%", "mkc-ki-green")
-</div>
-
-<div class="mkc-filter-bar">
-    <div class="mkc-search-wrap">
-        <i class="bi bi-search mkc-si"></i>
-        <input class="mkc-search" placeholder="Search email blasts..." @bind="_search" @bind:event="oninput" @bind:after="ApplyFilter" />
-    </div>
-    <select class="mkc-sel" @bind="_statusFilter" @bind:after="ApplyFilter">
-        <option value="">All Status</option>
-        <option>Sent</option><option>Scheduled</option><option>Draft</option><option>Paused</option>
-    </select>
-    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i></button>
-    <span class="ms-auto" style="font-size:.75rem;color:var(--um-muted,#64748b)"><strong>@_filtered.Count</strong> blast(s)</span>
-</div>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    <div class="meb-toast meb-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="meb-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-<div class="mkc-grid-card app-datagrid position-relative">
-    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading email blasts…</span></div> }
-    <SfGrid CssClass="marketing-grid" TValue="MarketingEmailBlastDto" DataSource="_filtered" AllowPaging="true" AllowSorting="true" AllowTextWrap="true" EnableHover="true" RowHeight="64">
-        <GridTextWrapSettings WrapMode="WrapMode.Content" />
-        <GridEvents TValue="MarketingEmailBlastDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="20" PageSizes="@(new[] { 10, 20, 50 })" />
-        <GridColumns>
-            <GridColumn HeaderText="Email Blast" MinWidth="340" Field="@nameof(MarketingEmailBlastDto.Name)">
-                <Template>
-                    @{ var e = (MarketingEmailBlastDto)context; }
-                    <div class="mkc-name-cell"><div class="mkc-type-icon mkc-ti-email"><i class="bi bi-envelope-paper"></i></div><div><div class="mkc-item-name">@e.Name</div><div class="mkc-item-sub">@e.Subject</div></div></div>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(MarketingEmailBlastDto.Status)" HeaderText="Status" Width="120"><Template>@{ var e=(MarketingEmailBlastDto)context; }<span class="@StatusBadge(e.Status)">@e.Status</span></Template></GridColumn>
-            <GridColumn Field="@nameof(MarketingEmailBlastDto.AudienceSegment)" HeaderText="Audience" Width="190" />
-            <GridColumn HeaderText="Recipients" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"><Template>@{ var e=(MarketingEmailBlastDto)context; }<span class="mkc-mono">@e.RecipientCount.ToString("N0")</span></Template></GridColumn>
-            <GridColumn HeaderText="Open %" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"><Template>@{ var e=(MarketingEmailBlastDto)context; }<span class="mkc-mono mkc-bold">@Rate(e.OpenCount, e.SentCount).ToString("N1")%</span></Template></GridColumn>
-            <GridColumn HeaderText="Click %" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"><Template>@{ var e=(MarketingEmailBlastDto)context; }<span class="mkc-mono">@Rate(e.ClickCount, e.SentCount).ToString("N1")%</span></Template></GridColumn>
-            <GridColumn HeaderText="Send Date" Width="150"><Template>@{ var e=(MarketingEmailBlastDto)context; }@(e.SentDateUtc?.ToString("MMM d, yyyy") ?? e.ScheduledDateUtc?.ToString("MMM d, yyyy") ?? "—")</Template></GridColumn>
-            <GridColumn HeaderText="Actions" Width="170" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                <Template>
-                    @{ var e=(MarketingEmailBlastDto)context; }
-                    @if (e.Status is "Draft" or "Scheduled" or "Paused")
-                    { <button class="um-btn um-btn-primary um-btn-xs" @onclick:stopPropagation="true" @onclick="() => SendAsync(e)"><i class="bi bi-send"></i></button> }
-                    @if (e.Status == "Scheduled")
-                    { <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => PauseAsync(e)"><i class="bi bi-pause-circle"></i></button> }
-                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => Preview(e)"><i class="bi bi-eye"></i></button>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
+@if (_showForm)
+{
+    <div class="meb-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="meb-modal meb-action-modal" role="dialog" aria-modal="true" aria-labelledby="meb-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-envelope-plus" aria-hidden="true"></i>
+                <span id="meb-form-title">@(_editingId == Guid.Empty ? "Create Email Blast" : "Edit Email Blast")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="meb-modal-intro">
+                        <span><i class="bi bi-shield-check" aria-hidden="true"></i> Email workflow</span>
+                        <p>Define sender identity, audience, schedule, and operational metrics for tenant-scoped email campaign sends.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.Name" />
+                            <ValidationMessage For="() => _form.Name" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Status <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.Status">
+                                @foreach (var status in _statuses)
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.Status" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Subject <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.Subject" />
+                            <ValidationMessage For="() => _form.Subject" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Preview Text</label>
+                            <InputTextArea class="form-control" @bind-Value="_form.PreviewText" />
+                            <ValidationMessage For="() => _form.PreviewText" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Audience Segment <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.AudienceSegment" />
+                            <ValidationMessage For="() => _form.AudienceSegment" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Recipients <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_form.RecipientCount" />
+                            <ValidationMessage For="() => _form.RecipientCount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Sender Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.SenderName" />
+                            <ValidationMessage For="() => _form.SenderName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Sender Email <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.SenderEmail" />
+                            <ValidationMessage For="() => _form.SenderEmail" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Scheduled Date</label>
+                            <InputDate class="form-control" @bind-Value="_form.ScheduledDateUtc" />
+                            <ValidationMessage For="() => _form.ScheduledDateUtc" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Opens</label>
+                            <InputNumber class="form-control" @bind-Value="_form.OpenCount" />
+                            <ValidationMessage For="() => _form.OpenCount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Clicks</label>
+                            <InputNumber class="form-control" @bind-Value="_form.ClickCount" />
+                            <ValidationMessage For="() => _form.ClickCount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Bounces</label>
+                            <InputNumber class="form-control" @bind-Value="_form.BounceCount" />
+                            <ValidationMessage For="() => _form.BounceCount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Unsubscribes</label>
+                            <InputNumber class="form-control" @bind-Value="_form.UnsubscribeCount" />
+                            <ValidationMessage For="() => _form.UnsubscribeCount" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
+                        @if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        @(_editingId == Guid.Empty ? "Create Blast" : "Save Changes")
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showConfirm && _confirmTarget is not null)
+{
+    <div class="meb-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="meb-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="meb-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @ConfirmIconTone"><i class="bi @ConfirmIcon"></i></div>
+                <div class="um-confirm-title" id="meb-confirm-title">@ConfirmTitle</div>
+                <div class="um-confirm-body">@((MarkupString)ConfirmBody)</div>
+                <div class="meb-config-panel">
+                    <span class="meb-config-eyebrow"><i class="bi bi-sliders" aria-hidden="true"></i> Configuration required</span>
+                    @if (_confirmAction == ConfirmAction.Send)
+                    {
+                        <div class="meb-config-grid">
+                            <label><span>Execution mode</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="Immediate">Send immediately</option><option value="Scheduled">Honor scheduled date</option></select></label>
+                            <label><span>Audit note</span><input class="form-control" @bind="_actionConfig.Note" placeholder="Reason for send" /></label>
+                            <label class="meb-config-check"><input type="checkbox" @bind="_actionConfig.SuppressUnsubscribed" /> Suppress unsubscribed contacts</label>
+                            <label class="meb-config-check"><input type="checkbox" @bind="_actionConfig.RequireComplianceCheck" /> Confirm compliance review completed</label>
+                        </div>
+                    }
+                    else if (_confirmAction == ConfirmAction.Pause || _confirmAction == ConfirmAction.Archive)
+                    {
+                        <div class="meb-config-grid">
+                            <label class="meb-config-full"><span>Reason</span><input class="form-control" @bind="_actionConfig.Reason" placeholder="Document why this action is being executed" /></label>
+                            <label class="meb-config-check"><input type="checkbox" @bind="_actionConfig.NotifyStakeholders" /> Notify stakeholders</label>
+                            @if (_confirmAction == ConfirmAction.Archive)
+                            {
+                                <label class="meb-config-check"><input type="checkbox" @bind="_actionConfig.ExportBeforeArchive" /> Export current results before archiving</label>
+                            }
+                        </div>
+                    }
+                    else if (_confirmAction == ConfirmAction.Resume)
+                    {
+                        <div class="meb-config-grid">
+                            <label><span>Resume mode</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="Scheduled">Resume scheduled workflow</option><option value="Draft">Return to draft review</option></select></label>
+                            <label><span>Owner note</span><input class="form-control" @bind="_actionConfig.Note" placeholder="Optional resume note" /></label>
+                        </div>
+                    }
+                    else if (_confirmAction == ConfirmAction.Duplicate)
+                    {
+                        <div class="meb-config-grid">
+                            <label class="meb-config-full"><span>New blast label</span><input class="form-control" @bind="_actionConfig.NewName" placeholder="Used as the copy planning label" /></label>
+                            <label><span>Starting status</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="Draft">Draft</option><option value="Scheduled">Scheduled planning</option></select></label>
+                            <label class="meb-config-check"><input type="checkbox" @bind="_actionConfig.CopyMetrics" /> Copy planning metrics for reference</label>
+                        </div>
+                    }
+                    else if (_confirmAction == ConfirmAction.Sync)
+                    {
+                        <div class="meb-config-grid">
+                            <label><span>Seed mode</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="MissingOnly">Add missing seed data only</option><option value="RepairSchema">Repair schema and seed data</option></select></label>
+                            <label class="meb-config-check"><input type="checkbox" @bind="_actionConfig.RefreshAfterAction" /> Refresh the page after sync</label>
+                        </div>
+                    }
+                    else if (_confirmAction == ConfirmAction.Export)
+                    {
+                        <div class="meb-config-grid">
+                            <label><span>Export scope</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="Filtered">Current filtered results</option><option value="All">All active email blasts</option></select></label>
+                            <label class="meb-config-check"><input type="checkbox" @bind="_actionConfig.IncludeMetrics" /> Include engagement metrics</label>
+                        </div>
+                    }
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn @ConfirmButtonClass" @onclick="ExecuteConfirmAsync" disabled="@_busy">@ConfirmButtonText</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="meb-enterprise-page">
+    <section class="meb-header">
+        <div class="meb-header-left">
+            <div class="meb-lob-icon"><i class="bi bi-envelope-paper" aria-hidden="true"></i></div>
+            <div class="meb-header-info">
+                <div class="meb-title-row">
+                    <h1 class="meb-page-title">Email Blasts</h1>
+                    <span class="meb-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live marketing data</span>
+                    <span class="meb-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+                </div>
+                <div class="meb-sub-row">
+                    <span>Manage sends, scheduling, engagement, compliance health, and email campaign workflow.</span>
+                    <span class="meb-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span>
+                    <span class="meb-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span>
+                </div>
+            </div>
+        </div>
+        <div class="meb-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+                <i class="bi @(_loading ? "bi-arrow-repeat meb-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh
+            </button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ConfigureSync" disabled="@_busy"><i class="bi bi-cloud-arrow-down" aria-hidden="true"></i> Sync Seed</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ConfigureExport" disabled="@(!_filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Blast</button>
+        </div>
+    </section>
+
+    <section class="meb-kpi-strip" aria-label="Email blast metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="meb-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "meb-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)">
+                <span class="meb-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="meb-kpi-copy">
+                    <span class="meb-kpi-label">@kpi.Label</span>
+                    <span class="meb-kpi-value">@kpi.Value</span>
+                    <span class="meb-kpi-caption">@kpi.Caption</span>
+                </span>
+            </button>
+        }
+    </section>
+
+    <section class="meb-workflow-strip" aria-label="Marketing workflow shortcuts">
+        <button type="button" class="meb-workflow-card meb-wf-campaign" @onclick='() => Nav.NavigateTo("/marketing/campaigns")'>
+            <span class="meb-workflow-icon"><i class="bi bi-megaphone" aria-hidden="true"></i></span>
+            <span class="meb-workflow-content"><strong>1</strong><span>Campaigns</span><small>Plan tenant marketing initiatives.</small></span>
+        </button>
+        <button type="button" class="meb-workflow-card meb-wf-builder" @onclick='() => Nav.NavigateTo("/marketing/campaigns/new")'>
+            <span class="meb-workflow-icon"><i class="bi bi-magic" aria-hidden="true"></i></span>
+            <span class="meb-workflow-content"><strong>2</strong><span>Builder</span><small>Compose audience, content, and schedule.</small></span>
+        </button>
+        <button type="button" class="meb-workflow-card meb-wf-audience" @onclick='() => Nav.NavigateTo("/marketing/segments")'>
+            <span class="meb-workflow-icon"><i class="bi bi-people" aria-hidden="true"></i></span>
+            <span class="meb-workflow-content"><strong>3</strong><span>Audience</span><small>Sync dynamic segments.</small></span>
+        </button>
+        <button type="button" class="meb-workflow-card meb-wf-pages" @onclick='() => Nav.NavigateTo("/marketing/landing-pages")'>
+            <span class="meb-workflow-icon"><i class="bi bi-window-sidebar" aria-hidden="true"></i></span>
+            <span class="meb-workflow-content"><strong>4</strong><span>Pages</span><small>Review linked landing pages.</small></span>
+        </button>
+        <button type="button" class="meb-workflow-card meb-wf-review" @onclick='() => Nav.NavigateTo("/marketing/reviews")'>
+            <span class="meb-workflow-icon"><i class="bi bi-star" aria-hidden="true"></i></span>
+            <span class="meb-workflow-content"><strong>5</strong><span>Reviews</span><small>Activate review requests.</small></span>
+        </button>
+    </section>
+
+    <section class="meb-enterprise-search" aria-label="Email blast filters">
+        <div class="meb-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="meb-search-body">
+            <label for="meb-search">Search email blasts</label>
+            <input id="meb-search" class="meb-search-input" type="search" placeholder="Search name, subject, audience, sender..." @bind="SearchFilter" @bind:event="oninput" />
+            <span class="meb-search-hint">Filters apply instantly across synchronized marketing email data.</span>
+        </div>
+        <select class="meb-filter-select" @bind="StatusFilter" aria-label="Status filter">
+            <option value="">All statuses</option>
+            @foreach (var status in _statuses)
+            {
+                <option value="@status">@status</option>
+            }
+        </select>
+        <select class="meb-filter-select" @bind="AudienceFilter" aria-label="Audience filter">
+            <option value="">All audiences</option>
+            @foreach (var audience in AudienceOptions)
+            {
+                <option value="@audience">@audience</option>
+            }
+        </select>
+        <select class="meb-filter-select" @bind="EngagementFilter" aria-label="Engagement filter">
+            <option value="">Engagement: all</option>
+            <option value="high">Open rate: 25%+</option>
+            <option value="clicks">Has clicks</option>
+            <option value="risk">Compliance risk</option>
+        </select>
+        <div class="meb-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger meb-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+        </div>
+    }
+
+    <section class="meb-content-layout">
+        <div class="meb-grid-wrap">
+            <div class="meb-grid-toolbar">
+                <div>
+                    <strong>Email blast command center</strong>
+                    <span>@ActiveFilterText</span>
+                </div>
+                <div class="meb-toolbar-actions">
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/marketing/campaigns")'><i class="bi bi-megaphone" aria-hidden="true"></i> Campaigns</button>
+                    <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="meb-loading"><i class="bi bi-arrow-repeat meb-spin" aria-hidden="true"></i><strong>Loading email blasts...</strong><span>Syncing schema, seed data, campaign sends, and engagement metrics.</span></div>
+            }
+            else if (!_filtered.Any())
+            {
+                <div class="meb-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No email blasts found</strong><span>Adjust filters or create a DB-backed email blast.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">New Email Blast</button></div>
+            }
+            else
+            {
+                <div class="meb-table-scroll">
+                    <table class="meb-table">
+                        <thead>
+                            <tr>
+                                <th>Email Blast</th>
+                                <th>Status</th>
+                                <th>Audience</th>
+                                <th class="meb-number">Recipients</th>
+                                <th class="meb-number">Open</th>
+                                <th class="meb-number">Click</th>
+                                <th>Send Date</th>
+                                <th class="meb-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var blast in _paged)
+                            {
+                                <tr class="meb-table-row @(IsSelected(blast) ? "meb-table-row--selected" : null)" @onclick="() => SelectBlast(blast)">
+                                    <td>
+                                        <div class="meb-email-cell">
+                                            <span class="meb-email-icon @StatusIconClass(blast.Status)"><i class="bi bi-envelope-paper" aria-hidden="true"></i></span>
+                                            <div>
+                                                <strong>@blast.Name</strong>
+                                                <span>@blast.Subject</span>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td><span class="meb-status-chip @StatusCss(blast.Status)">@blast.Status</span></td>
+                                    <td>@blast.AudienceSegment</td>
+                                    <td class="meb-number">@blast.RecipientCount.ToString("N0")</td>
+                                    <td class="meb-number"><span class="@(OpenRate(blast) >= 25 ? "meb-rate-good" : "meb-rate-muted")">@OpenRate(blast).ToString("N1")%</span></td>
+                                    <td class="meb-number">@ClickRate(blast).ToString("N1")%</td>
+                                    <td>@DisplaySendDate(blast)</td>
+                                    <td>
+                                        <div class="meb-row-acts">
+                                            <button type="button" class="um-btn um-btn-primary um-btn-xs" @onclick="() => ConfirmSend(blast)" @onclick:stopPropagation="true" title="Send blast" disabled="@(blast.Status == "Sent")"><i class="bi bi-send" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(blast)" @onclick:stopPropagation="true" title="Edit blast"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfigureDuplicate(blast)" @onclick:stopPropagation="true" title="Duplicate blast"><i class="bi bi-copy" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfirmArchive(blast)" @onclick:stopPropagation="true" title="Archive blast"><i class="bi bi-archive" aria-hidden="true"></i></button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="meb-pager">
+                    <span>Page @_page of @TotalPages · @_filtered.Count records</span>
+                    <div>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Previous</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <aside class="meb-detail-panel">
+            @if (_selected is null)
+            {
+                <div class="meb-detail-empty"><i class="bi bi-layout-sidebar-inset" aria-hidden="true"></i><strong>Select an email blast</strong><span>Click any row to inspect schedule, sender, engagement, and workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="meb-detail-head">
+                    <div>
+                        <span class="meb-detail-eyebrow"><i class="bi bi-envelope-check" aria-hidden="true"></i> Blast detail</span>
+                        <h2>@_selected.Name</h2>
+                        <div class="meb-detail-meta"><span>@_selected.Status</span><span>@_selected.AudienceSegment</span><span>@DisplaySendDate(_selected)</span></div>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearSelection"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                </div>
+                <div class="meb-detail-body">
+                    <div class="meb-detail-summary">
+                        <div class="meb-meta-row"><span class="meb-meta-lbl">Recipients</span><span class="meb-meta-val">@_selected.RecipientCount.ToString("N0")</span></div>
+                        <div class="meb-meta-row"><span class="meb-meta-lbl">Sent</span><span class="meb-meta-val">@_selected.SentCount.ToString("N0")</span></div>
+                        <div class="meb-meta-row"><span class="meb-meta-lbl">Open rate</span><span class="meb-meta-val">@OpenRate(_selected).ToString("N1")%</span></div>
+                        <div class="meb-meta-row"><span class="meb-meta-lbl">Click rate</span><span class="meb-meta-val">@ClickRate(_selected).ToString("N1")%</span></div>
+                        <div class="meb-meta-row"><span class="meb-meta-lbl">Bounces</span><span class="meb-meta-val">@_selected.BounceCount.ToString("N0")</span></div>
+                        <div class="meb-meta-row"><span class="meb-meta-lbl">Unsubscribes</span><span class="meb-meta-val">@_selected.UnsubscribeCount.ToString("N0")</span></div>
+                    </div>
+                    <div class="meb-contact-card">
+                        <strong>Sender and content</strong>
+                        <span><i class="bi bi-person-badge" aria-hidden="true"></i> @_selected.SenderName</span>
+                        <span><i class="bi bi-envelope" aria-hidden="true"></i> @_selected.SenderEmail</span>
+                        <span><i class="bi bi-chat-quote" aria-hidden="true"></i> @_selected.Subject</span>
+                        <small>@(string.IsNullOrWhiteSpace(_selected.PreviewText) ? "No preview text configured." : _selected.PreviewText)</small>
+                    </div>
+                    <div class="meb-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => ConfirmSend(_selected)" disabled="@(_selected.Status == "Sent")"><i class="bi bi-send" aria-hidden="true"></i> Send</button>
+                        @if (_selected.Status == "Paused")
+                        {
+                            <button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureResume(_selected)"><i class="bi bi-play-circle" aria-hidden="true"></i> Resume</button>
+                        }
+                        else if (_selected.Status == "Scheduled")
+                        {
+                            <button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfirmPause(_selected)"><i class="bi bi-pause-circle" aria-hidden="true"></i> Pause</button>
+                        }
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureDuplicate(_selected)"><i class="bi bi-copy" aria-hidden="true"></i> Duplicate</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfirmArchive(_selected)"><i class="bi bi-archive" aria-hidden="true"></i> Archive</button>
+                    </div>
+                </div>
+            }
+        </aside>
+    </section>
 </div>
 
-<style>@@keyframes um-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }</style>
-
 @code {
+    private const int PageSize = 10;
     Guid TenantId { get; set; }
     Guid TenantAdminUserId { get; set; }
     Guid DevTenantId { get; set; }
     Guid DevUserId { get; set; }
     private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private SfToast? _toast;
-    private bool _loading;
-    private string? _loadError;
     private string _search = string.Empty;
     private string _statusFilter = string.Empty;
-    private string? _activeFilter;
+    private string _audienceFilter = string.Empty;
+    private string _engagementFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _loadError;
+    private string? _toastMessage;
+    private string _toastKind = "success";
+    private bool _toastVisible;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showConfirm;
+    private bool _saveAttempted;
+    private int _page = 1;
+    private Guid _editingId = Guid.Empty;
+    private ConfirmAction _confirmAction;
+    private MarketingEmailBlastDto? _selected;
+    private MarketingEmailBlastDto? _confirmTarget;
+    private EmailBlastForm _form = new();
+    private ActionConfiguration _actionConfig = new();
     private List<MarketingEmailBlastDto> _items = [];
     private List<MarketingEmailBlastDto> _filtered = [];
+    private List<MarketingEmailBlastDto> _paged = [];
 
-    private decimal OpenRate => Rate(_items.Sum(x => x.OpenCount), _items.Sum(x => x.SentCount));
+    private readonly string[] _statuses = ["Draft", "Scheduled", "Paused", "Sent"];
+
+    private string SearchFilter { get => _search; set { _search = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
+    private string AudienceFilter { get => _audienceFilter; set { _audienceFilter = value; ApplyFilters(resetPage: true); } }
+    private string EngagementFilter { get => _engagementFilter; set { _engagementFilter = value; ApplyFilters(resetPage: true); } }
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private IEnumerable<string> AudienceOptions => _items.Select(i => i.AudienceSegment).Where(a => !string.IsNullOrWhiteSpace(a)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(a => a);
+    private string ActiveFilterText => _filtered.Count == _items.Count ? "All synchronized email blasts" : $"Filtered to {_filtered.Count:N0} of {_items.Count:N0} email blasts";
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ConfirmTitle => _confirmAction switch { ConfirmAction.Send => "Configure Send", ConfirmAction.Pause => "Configure Pause", ConfirmAction.Archive => "Configure Archive", ConfirmAction.Resume => "Configure Resume", ConfirmAction.Duplicate => "Configure Duplicate", ConfirmAction.Sync => "Configure Seed Sync", ConfirmAction.Export => "Configure Export", _ => "Confirm Action" };
+    private string ConfirmBody => _confirmAction switch { ConfirmAction.Send when _confirmTarget is not null => $"Review send settings for <strong>{_confirmTarget.Name}</strong> before delivering to {_confirmTarget.RecipientCount:N0} recipients.", ConfirmAction.Pause when _confirmTarget is not null => $"Configure pause details for <strong>{_confirmTarget.Name}</strong> before execution.", ConfirmAction.Archive when _confirmTarget is not null => $"Configure archive settings for <strong>{_confirmTarget.Name}</strong>. It will be removed from active email blast views.", ConfirmAction.Resume when _confirmTarget is not null => $"Configure resume settings for <strong>{_confirmTarget.Name}</strong> before restarting workflow.", ConfirmAction.Duplicate when _confirmTarget is not null => $"Configure copy settings for <strong>{_confirmTarget.Name}</strong> before creating a duplicate.", ConfirmAction.Sync => "Configure seed synchronization before repairing schema or adding missing sample records.", ConfirmAction.Export => $"Configure export settings for {_filtered.Count:N0} current email blast matches.", _ => string.Empty };
+    private string ConfirmButtonText => _confirmAction switch { ConfirmAction.Send => "Execute Send", ConfirmAction.Pause => "Execute Pause", ConfirmAction.Archive => "Execute Archive", ConfirmAction.Resume => "Execute Resume", ConfirmAction.Duplicate => "Create Copy", ConfirmAction.Sync => "Run Sync", ConfirmAction.Export => "Export File", _ => "Execute" };
+    private string ConfirmButtonClass => _confirmAction == ConfirmAction.Archive ? "um-btn-danger" : "um-btn-primary";
+    private string ConfirmIcon => _confirmAction switch { ConfirmAction.Send => "bi-send-fill", ConfirmAction.Pause => "bi-pause-circle-fill", ConfirmAction.Archive => "bi-archive-fill", ConfirmAction.Resume => "bi-play-circle-fill", ConfirmAction.Duplicate => "bi-copy", ConfirmAction.Sync => "bi-cloud-arrow-down-fill", ConfirmAction.Export => "bi-download", _ => "bi-question-circle-fill" };
+    private string ConfirmIconTone => _confirmAction == ConfirmAction.Archive ? "um-confirm-icon--danger" : string.Empty;
+
+    private IEnumerable<KpiModel> Kpis =>
+    [
+        new("all", "Total", _items.Count.ToString("N0"), "All active blasts", "bi-envelope-paper", "meb-ki-blue"),
+        new("sent", "Sent", CountStatus("Sent").ToString("N0"), "Delivered campaigns", "bi-send-check", "meb-ki-green"),
+        new("scheduled", "Scheduled", CountStatus("Scheduled").ToString("N0"), "Queued sends", "bi-calendar-check", "meb-ki-amber"),
+        new("draft", "Drafts", CountStatus("Draft").ToString("N0"), "Needs review", "bi-file-earmark", "meb-ki-purple"),
+        new("engaged", "Open Rate", $"{PortfolioOpenRate:N1}%", "Portfolio average", "bi-cursor", "meb-ki-cyan"),
+        new("risk", "Risk", ComplianceRiskCount.ToString("N0"), "Bounce or unsubscribe flags", "bi-shield-exclamation", "meb-ki-red")
+    ];
+
+    private decimal PortfolioOpenRate => Rate(_items.Sum(x => x.OpenCount), _items.Sum(x => x.SentCount));
+    private int ComplianceRiskCount => _items.Count(x => x.BounceCount > 25 || x.UnsubscribeCount > 10);
 
     protected override async Task OnInitializedAsync()
     {
@@ -111,34 +496,303 @@
 
     private async Task LoadAsync()
     {
-        _loading = true; _loadError = null;
+        _loading = true;
+        _loadError = null;
         try
         {
             var result = await Api.SearchMarketingEmailBlastsAsync(_tenantId, _search);
             _items = result?.Items.ToList() ?? [];
-            ApplyFilter();
+            ApplyFilters();
+            EnsureSelectedStillVisible();
         }
-        catch (Exception ex) { _loadError = $"Failed to load email blasts: {ex.Message}"; _items = []; _filtered = []; }
-        finally { _loading = false; }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load email blasts: {ex.Message}";
+            _items = [];
+            _filtered = [];
+            _paged = [];
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    private void SetKpiFilter(string? filter) { _activeFilter = _activeFilter == filter ? null : filter; ApplyFilter(); }
-    private void ApplyFilter()
+    private void ApplyFilters(bool resetPage = false)
     {
-        var q = _items.AsEnumerable();
-        if (!string.IsNullOrWhiteSpace(_search)) q = q.Where(x => x.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Subject.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.AudienceSegment.Contains(_search, StringComparison.OrdinalIgnoreCase));
-        if (!string.IsNullOrWhiteSpace(_statusFilter)) q = q.Where(x => x.Status == _statusFilter);
-        q = _activeFilter switch { "Engaged" => q.Where(x => Rate(x.OpenCount, x.SentCount) >= 25), null => q, _ => q.Where(x => x.Status == _activeFilter) };
-        _filtered = q.ToList();
+        var query = _items.AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            query = query.Where(x => x.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Subject.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.AudienceSegment.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.SenderName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.SenderEmail.Contains(_search, StringComparison.OrdinalIgnoreCase));
+        }
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.Status == _statusFilter);
+        if (!string.IsNullOrWhiteSpace(_audienceFilter)) query = query.Where(x => x.AudienceSegment.Equals(_audienceFilter, StringComparison.OrdinalIgnoreCase));
+        query = _engagementFilter switch { "high" => query.Where(x => OpenRate(x) >= 25), "clicks" => query.Where(x => x.ClickCount > 0), "risk" => query.Where(x => x.BounceCount > 25 || x.UnsubscribeCount > 10), _ => query };
+        query = _kpiFilter switch { "sent" => query.Where(x => x.Status == "Sent"), "scheduled" => query.Where(x => x.Status == "Scheduled"), "draft" => query.Where(x => x.Status == "Draft"), "engaged" => query.Where(x => OpenRate(x) >= 25), "risk" => query.Where(x => x.BounceCount > 25 || x.UnsubscribeCount > 10), _ => query };
+        _filtered = query.OrderByDescending(x => x.SentDateUtc ?? x.ScheduledDateUtc ?? x.CreatedDateUtc).ToList();
+        if (resetPage) _page = 1;
+        if (_page > TotalPages) _page = TotalPages;
+        _paged = _filtered.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
     }
-    private void ResetFilters() { _search = string.Empty; _statusFilter = string.Empty; _activeFilter = null; ApplyFilter(); }
-    private void OnRowSelected(RowSelectEventArgs<MarketingEmailBlastDto> args) => Preview(args.Data);
-    private async Task SendAsync(MarketingEmailBlastDto e) { try { await Api.SendMarketingEmailBlastAsync(e.EmailBlastId); await LoadAsync(); if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Sent {e.Name}.", CssClass = "e-toast-success" }); } catch (Exception ex) { if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Send failed: {ex.Message}", CssClass = "e-toast-danger" }); } }
-    private async Task PauseAsync(MarketingEmailBlastDto e) { try { await Api.PauseMarketingEmailBlastAsync(e.EmailBlastId); await LoadAsync(); if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Paused {e.Name}.", CssClass = "e-toast-success" }); } catch (Exception ex) { if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Pause failed: {ex.Message}", CssClass = "e-toast-danger" }); } }
-    private async void Preview(MarketingEmailBlastDto e) { if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Preview: {e.Subject}", CssClass = "e-toast-info" }); }
+
+    private void SetKpiFilter(string filter)
+    {
+        _kpiFilter = _kpiFilter == filter ? "all" : filter;
+        ApplyFilters(resetPage: true);
+    }
+
+    private void ResetFilters()
+    {
+        _search = string.Empty;
+        _statusFilter = string.Empty;
+        _audienceFilter = string.Empty;
+        _engagementFilter = string.Empty;
+        _kpiFilter = "all";
+        ApplyFilters(resetPage: true);
+    }
+
+    private void PreviousPage() { if (_page <= 1) return; _page--; ApplyFilters(); }
+    private void NextPage() { if (_page >= TotalPages) return; _page++; ApplyFilters(); }
+    private void SelectBlast(MarketingEmailBlastDto item) => _selected = item;
+    private void ClearSelection() => _selected = null;
+    private bool IsSelected(MarketingEmailBlastDto item) => _selected?.EmailBlastId == item.EmailBlastId;
+
+    private void OpenCreate()
+    {
+        _editingId = Guid.Empty;
+        _saveAttempted = false;
+        _form = new EmailBlastForm { Status = "Draft", SenderName = "AgencyBinder Team", SenderEmail = "marketing@agencybinder.local", ScheduledDateUtc = DateTime.UtcNow.Date.AddDays(7), RecipientCount = 100 };
+        _showForm = true;
+    }
+
+    private void OpenEdit(MarketingEmailBlastDto item)
+    {
+        _editingId = item.EmailBlastId;
+        _saveAttempted = false;
+        _form = new()
+        {
+            Name = item.Name,
+            Subject = item.Subject,
+            PreviewText = item.PreviewText,
+            AudienceSegment = item.AudienceSegment,
+            SenderName = item.SenderName,
+            SenderEmail = item.SenderEmail,
+            Status = string.IsNullOrWhiteSpace(item.Status) ? "Draft" : item.Status,
+            ScheduledDateUtc = item.ScheduledDateUtc,
+            RecipientCount = item.RecipientCount,
+            OpenCount = item.OpenCount,
+            ClickCount = item.ClickCount,
+            BounceCount = item.BounceCount,
+            UnsubscribeCount = item.UnsubscribeCount
+        };
+        _showForm = true;
+    }
+
+    private void CloseForm()
+    {
+        if (_busy) return;
+        _showForm = false;
+        _editingId = Guid.Empty;
+        _saveAttempted = false;
+    }
+
+    private async Task SaveAsync()
+    {
+        _saveAttempted = true;
+        _busy = true;
+        try
+        {
+            var request = ToDto();
+            if (_editingId == Guid.Empty)
+            {
+                await Api.CreateMarketingEmailBlastAsync(request);
+                ShowToast("Email blast created.", "success");
+            }
+            else
+            {
+                await Api.UpdateMarketingEmailBlastAsync(_editingId, request);
+                ShowToast("Email blast saved.", "success");
+            }
+            _showForm = false;
+            _editingId = Guid.Empty;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task NotifyValidationAsync(EditContext _)
+    {
+        _saveAttempted = true;
+        ShowToast("Please correct the validation errors before saving.", "warning");
+        return Task.CompletedTask;
+    }
+
+    private MarketingEmailBlastDto ToDto()
+    {
+        var sentCount = _form.Status == "Sent" ? Math.Max(_form.RecipientCount, 0) : 0;
+        return new MarketingEmailBlastDto
+        {
+            EmailBlastId = _editingId,
+            TenantId = _tenantId,
+            Name = _form.Name.Trim(),
+            Subject = _form.Subject.Trim(),
+            PreviewText = _form.PreviewText.Trim(),
+            AudienceSegment = _form.AudienceSegment.Trim(),
+            SenderName = _form.SenderName.Trim(),
+            SenderEmail = _form.SenderEmail.Trim(),
+            Status = _form.Status,
+            ScheduledDateUtc = _form.Status is "Scheduled" or "Paused" ? _form.ScheduledDateUtc : null,
+            SentDateUtc = _form.Status == "Sent" ? DateTime.UtcNow : null,
+            RecipientCount = _form.RecipientCount,
+            SentCount = sentCount,
+            OpenCount = _form.OpenCount,
+            ClickCount = _form.ClickCount,
+            BounceCount = _form.BounceCount,
+            UnsubscribeCount = _form.UnsubscribeCount
+        };
+    }
+
+    private void ConfirmSend(MarketingEmailBlastDto item) => ShowConfirm(item, ConfirmAction.Send);
+    private void ConfirmPause(MarketingEmailBlastDto item) => ShowConfirm(item, ConfirmAction.Pause);
+    private void ConfirmArchive(MarketingEmailBlastDto item) => ShowConfirm(item, ConfirmAction.Archive);
+    private void ConfigureResume(MarketingEmailBlastDto item) => ShowConfirm(item, ConfirmAction.Resume);
+    private void ConfigureDuplicate(MarketingEmailBlastDto item) => ShowConfirm(item, ConfirmAction.Duplicate);
+    private void ConfigureSync() => ShowConfirm(null, ConfirmAction.Sync);
+    private void ConfigureExport()
+    {
+        if (!_filtered.Any())
+        {
+            ShowToast("No email blasts are available to export.", "warning");
+            return;
+        }
+
+        ShowConfirm(null, ConfirmAction.Export);
+    }
+
+    private void ShowConfirm(MarketingEmailBlastDto? item, ConfirmAction action)
+    {
+        _confirmTarget = item;
+        _confirmAction = action;
+        _actionConfig = CreateDefaultConfiguration(item, action);
+        _showConfirm = true;
+    }
+
+    private void CancelConfirm() { if (_busy) return; _showConfirm = false; _confirmTarget = null; }
+
+    private async Task ExecuteConfirmAsync()
+    {
+        if (_confirmTarget is null && _confirmAction is not (ConfirmAction.Sync or ConfirmAction.Export)) return;
+        _busy = true;
+        try
+        {
+            if (_confirmAction == ConfirmAction.Send)
+            {
+                await Api.SendMarketingEmailBlastAsync(_confirmTarget!.EmailBlastId);
+                ShowToast($"Sent {_confirmTarget.Name}.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.Pause)
+            {
+                await Api.PauseMarketingEmailBlastAsync(_confirmTarget!.EmailBlastId);
+                ShowToast($"Paused {_confirmTarget.Name}.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.Archive)
+            {
+                if (_actionConfig.ExportBeforeArchive)
+                {
+                    await ExportCoreAsync([_confirmTarget!]);
+                }
+                await Api.ArchiveMarketingEmailBlastAsync(_confirmTarget!.EmailBlastId);
+                ShowToast($"Archived {_confirmTarget.Name}.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.Resume)
+            {
+                await Api.ResumeMarketingEmailBlastAsync(_confirmTarget!.EmailBlastId);
+                ShowToast($"Resumed {_confirmTarget.Name}.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.Duplicate)
+            {
+                await Api.DuplicateMarketingEmailBlastAsync(_confirmTarget!.EmailBlastId);
+                ShowToast($"Duplicated {_confirmTarget.Name}.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.Sync)
+            {
+                await Api.EnsureMarketingEmailBlastSeedAsync(_tenantId);
+                ShowToast("Email blast seed data synchronized.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.Export)
+            {
+                var exportItems = _actionConfig.ExecutionMode == "All" ? _items : _filtered;
+                await ExportCoreAsync(exportItems);
+                ShowToast($"Exported {exportItems.Count:N0} email blasts.", "success");
+            }
+            _showConfirm = false;
+            _confirmTarget = null;
+            if (_confirmAction != ConfirmAction.Export && _actionConfig.RefreshAfterAction)
+            {
+                await LoadAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Action failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ExportCoreAsync(IReadOnlyCollection<MarketingEmailBlastDto> items)
+    {
+        if (!items.Any()) return;
+
+        var csv = new StringBuilder();
+        csv.AppendLine(_actionConfig.IncludeMetrics ? "Name,Subject,Audience,SenderName,SenderEmail,Status,Recipients,Sent,Opens,Clicks,Bounces,Unsubscribes,ScheduledDate,SentDate" : "Name,Subject,Audience,SenderName,SenderEmail,Status,Recipients,ScheduledDate,SentDate");
+        foreach (var item in items)
+        {
+            if (_actionConfig.IncludeMetrics)
+            {
+                csv.AppendLine(string.Join(',', Csv(item.Name), Csv(item.Subject), Csv(item.AudienceSegment), Csv(item.SenderName), Csv(item.SenderEmail), Csv(item.Status), item.RecipientCount, item.SentCount, item.OpenCount, item.ClickCount, item.BounceCount, item.UnsubscribeCount, Csv(item.ScheduledDateUtc?.ToString("yyyy-MM-dd") ?? string.Empty), Csv(item.SentDateUtc?.ToString("yyyy-MM-dd") ?? string.Empty)));
+            }
+            else
+            {
+                csv.AppendLine(string.Join(',', Csv(item.Name), Csv(item.Subject), Csv(item.AudienceSegment), Csv(item.SenderName), Csv(item.SenderEmail), Csv(item.Status), item.RecipientCount, Csv(item.ScheduledDateUtc?.ToString("yyyy-MM-dd") ?? string.Empty), Csv(item.SentDateUtc?.ToString("yyyy-MM-dd") ?? string.Empty)));
+            }
+        }
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"marketing-email-blasts-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+    }
+
+    private static ActionConfiguration CreateDefaultConfiguration(MarketingEmailBlastDto? item, ConfirmAction action) => action switch
+    {
+        ConfirmAction.Send => new() { ExecutionMode = item?.ScheduledDateUtc is null ? "Immediate" : "Scheduled", SuppressUnsubscribed = true, RequireComplianceCheck = true, RefreshAfterAction = true, Note = "Approved for marketing send" },
+        ConfirmAction.Pause => new() { NotifyStakeholders = true, RefreshAfterAction = true, Reason = "Schedule adjustment" },
+        ConfirmAction.Archive => new() { NotifyStakeholders = true, ExportBeforeArchive = false, RefreshAfterAction = true, Reason = "Campaign lifecycle complete" },
+        ConfirmAction.Resume => new() { ExecutionMode = item?.ScheduledDateUtc is null ? "Draft" : "Scheduled", RefreshAfterAction = true, Note = "Resume approved" },
+        ConfirmAction.Duplicate => new() { ExecutionMode = "Draft", NewName = item is null ? string.Empty : $"{item.Name} Copy", CopyMetrics = false, RefreshAfterAction = true },
+        ConfirmAction.Sync => new() { ExecutionMode = "MissingOnly", RefreshAfterAction = true },
+        ConfirmAction.Export => new() { ExecutionMode = "Filtered", IncludeMetrics = true, RefreshAfterAction = false },
+        _ => new()
+    };
+
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() { if (_selected is null) return; _selected = _items.FirstOrDefault(x => x.EmailBlastId == _selected.EmailBlastId); }
+    private int CountStatus(string status) => _items.Count(x => x.Status == status);
+    private static decimal OpenRate(MarketingEmailBlastDto item) => Rate(item.OpenCount, item.SentCount);
+    private static decimal ClickRate(MarketingEmailBlastDto item) => Rate(item.ClickCount, item.SentCount);
     private static decimal Rate(int numerator, int denominator) => denominator <= 0 ? 0 : Math.Round(numerator * 100m / denominator, 1);
-    private static string StatusBadge(string s) => s switch { "Sent" => "mkc-status mkc-st--completed", "Scheduled" => "mkc-status mkc-st--scheduled", "Paused" => "mkc-status mkc-st--paused", _ => "mkc-status mkc-st--draft" };
-    private RenderFragment Kpi(string? filter, string icon, string label, string value, string color) => @<button type="button" class="mkc-kpi-card @(_activeFilter == filter ? "pc-kpi-card--active" : "")" @onclick="() => SetKpiFilter(filter)"><i class="bi @icon mkc-ki @color"></i><div><div class="mkc-kv">@value</div><div class="mkc-kl">@label</div></div></button>;
+    private static string DisplaySendDate(MarketingEmailBlastDto item) => item.SentDateUtc?.ToString("MMM d, yyyy") ?? item.ScheduledDateUtc?.ToString("MMM d, yyyy") ?? "Not scheduled";
+    private static string StatusCss(string status) => $"meb-st-{status.ToLowerInvariant()}";
+    private static string StatusIconClass(string status) => status switch { "Sent" => "meb-di-green", "Scheduled" => "meb-di-amber", "Paused" => "meb-di-red", _ => "meb-di-blue" };
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
 
     async Task ResolveCurrentUserContextAsync()
     {
@@ -149,5 +803,68 @@
         _tenantAdminUserId = context.UserId;
         DevTenantId = context.TenantId;
         DevUserId = context.UserId;
+    }
+
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone)
+    {
+        public string Title => $"Filter by {Label}";
+    }
+
+    private enum ConfirmAction { Send, Pause, Archive, Resume, Duplicate, Sync, Export }
+
+    private sealed class ActionConfiguration
+    {
+        public string ExecutionMode { get; set; } = string.Empty;
+        public string Note { get; set; } = string.Empty;
+        public string Reason { get; set; } = string.Empty;
+        public string NewName { get; set; } = string.Empty;
+        public bool SuppressUnsubscribed { get; set; }
+        public bool RequireComplianceCheck { get; set; }
+        public bool NotifyStakeholders { get; set; }
+        public bool ExportBeforeArchive { get; set; }
+        public bool CopyMetrics { get; set; }
+        public bool IncludeMetrics { get; set; } = true;
+        public bool RefreshAfterAction { get; set; } = true;
+    }
+
+    private sealed class EmailBlastForm
+    {
+        [Required, StringLength(200)]
+        public string Name { get; set; } = string.Empty;
+
+        [Required, StringLength(300)]
+        public string Subject { get; set; } = string.Empty;
+
+        [StringLength(500)]
+        public string PreviewText { get; set; } = string.Empty;
+
+        [Required, StringLength(200)]
+        public string AudienceSegment { get; set; } = string.Empty;
+
+        [Required, StringLength(150)]
+        public string SenderName { get; set; } = string.Empty;
+
+        [Required, EmailAddress, StringLength(254)]
+        public string SenderEmail { get; set; } = string.Empty;
+
+        [Required, StringLength(50)]
+        public string Status { get; set; } = "Draft";
+
+        public DateTime? ScheduledDateUtc { get; set; }
+
+        [Range(0, int.MaxValue)]
+        public int RecipientCount { get; set; }
+
+        [Range(0, int.MaxValue)]
+        public int OpenCount { get; set; }
+
+        [Range(0, int.MaxValue)]
+        public int ClickCount { get; set; }
+
+        [Range(0, int.MaxValue)]
+        public int BounceCount { get; set; }
+
+        [Range(0, int.MaxValue)]
+        public int UnsubscribeCount { get; set; }
     }
 }

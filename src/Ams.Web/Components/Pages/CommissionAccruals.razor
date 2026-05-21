@@ -1,236 +1,264 @@
 @page "/commissions/accruals"
 @page "/commissions/forecast"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Commissions
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Commission Forecast &amp; Accruals — AMS</PageTitle>
+<PageTitle>Commission Accruals — AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="Commission Forecast &amp; Accruals"
-               Subtitle="Project earned commissions, manage accrual entries, and track period reversals across producers and plans"
-               Icon="bi-graph-up">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/planner")'>
-            <i class="bi bi-calculator" aria-hidden="true"></i> What-If Planner
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/statements")'>
-            <i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenPost">
-            <i class="bi bi-plus-circle" aria-hidden="true"></i> Post Accrual
-        </button>
-    </Actions>
-</AppPageHeader>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    <div class="ca-toast ca-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ca-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
 }
 
-<!-- Forecast summary tiles -->
-<div class="cf-forecast-strip">
-    <div class="cf-fc-card cf-fc-blue">
-        <div class="cf-fc-lbl">Projected This Month</div>
-        <div class="cf-fc-val">@Fmt(ProjectedThisMonth)</div>
-        <div class="cf-fc-sub">From current DB accruals</div>
+@if (_showStatusConfirm && _statusTarget is not null && !string.IsNullOrWhiteSpace(_pendingStatus))
+{
+    <div class="ca-modal-backdrop" role="presentation" @onclick="CancelStatusUpdate">
+        <div class="ca-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="ca-status-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingStatus == "Reversed" ? "um-confirm-icon--danger" : null)"><i class="bi @PendingStatusIcon" aria-hidden="true"></i></div>
+                <div class="um-confirm-title" id="ca-status-title">@PendingStatusTitle</div>
+                <div class="um-confirm-body">Update accrual entry <strong>@ShortId(_statusTarget.AccrualEntryId)</strong> for <strong>@_statusTarget.AccruedAmount.ToString("C2")</strong> to <strong>@_pendingStatus</strong>?</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelStatusUpdate" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn @(_pendingStatus == "Reversed" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteStatusUpdateAsync" disabled="@_busy">@PendingStatusAction</button>
+                </div>
+            </div>
+        </div>
     </div>
-    <div class="cf-fc-card cf-fc-green">
-        <div class="cf-fc-lbl">YTD Earned</div>
-        <div class="cf-fc-val">@Fmt(YtdEarned)</div>
-        <div class="cf-fc-sub">Posted and settled entries</div>
-    </div>
-    <div class="cf-fc-card cf-fc-amber">
-        <div class="cf-fc-lbl">Pending Accruals</div>
-        <div class="cf-fc-val">@Fmt(PendingAccruals)</div>
-        <div class="cf-fc-sub">@(_items?.Count(x=>x.StatusCode=="Pending") ?? 0) entries not yet reversed</div>
-    </div>
-    <div class="cf-fc-card cf-fc-purple">
-        <div class="cf-fc-lbl">New Biz vs Renewal</div>
-        <div class="cf-fc-val">@((_items?.Count ?? 0) == 0 ? "—" : "DB synced")</div>
-        <div class="cf-fc-sub">Based on commission transactions</div>
-    </div>
-    <div class="cf-fc-card cf-fc-red">
-        <div class="cf-fc-lbl">Clawback Risk</div>
-        <div class="cf-fc-val">@Fmt(ClawbackRisk)</div>
-        <div class="cf-fc-sub">Overdue reversal exposure</div>
-    </div>
-</div>
+}
 
-<!-- KPI strip -->
-<div class="cf-kpi-strip">
-    @CfKpi("bi-graph-up",          "Accrual Entries",  (_items?.Count ?? 0).ToString(),                                          "cf-ki-blue")
-    @CfKpi("bi-currency-dollar",   "Accrued",          Fmt(_items?.Sum(x=>x.AccruedAmount)),                                     "cf-ki-blue")
-    @CfKpi("bi-arrow-counterclockwise","Reversed",     Fmt(_items?.Sum(x=>x.ReversedAmount)),                                    "cf-ki-amber")
-    @CfKpi("bi-check-circle",      "Settled",          (_items?.Count(x=>x.StatusCode=="Settled") ?? 0).ToString(),              "cf-ki-green")
-    @CfKpi("bi-hourglass",         "Pending",          (_items?.Count(x=>x.StatusCode=="Pending") ?? 0).ToString(),              "cf-ki-amber")
-    @CfKpi("bi-calendar-x",        "Overdue Reversals",(_items?.Count(x=>x.ReversalDate!=null && x.ReversalDate<DateOnly.FromDateTime(DateTime.Today) && x.ReversedAmount==0) ?? 0).ToString(), "cf-ki-red")
-</div>
+@if (_showForecast)
+{
+    <div class="ca-modal-backdrop" role="presentation" @onclick="CloseForecast">
+        <div class="ca-modal ca-model-modal" role="dialog" aria-modal="true" aria-labelledby="ca-model-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-graph-up-arrow" aria-hidden="true"></i>
+                <span id="ca-model-title">Accrual Forecast Model</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForecast"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="um-modal-body">
+                <div class="ca-modal-intro">
+                    <span><i class="bi bi-diagram-3" aria-hidden="true"></i> Accrual runway</span>
+                    <p>Model open accrual exposure, expected reversals, posted activity, and settled balances from synchronized commission accrual data.</p>
+                </div>
+                <div class="ca-model-grid">
+                    <div class="ca-mg-row ca-mg-hdr"><span>Scenario</span><span>Entries</span><span>Accrued</span><span>Reversed</span><span>Workflow</span></div>
+                    <div class="ca-mg-row"><span>Pending runway</span><span>@PendingEntries</span><span>@PendingAmount.ToString("C0")</span><span>@PendingReversed.ToString("C0")</span><span>Review</span></div>
+                    <div class="ca-mg-row"><span>Posted ledger</span><span>@PostedEntries</span><span>@PostedAmount.ToString("C0")</span><span>@PostedReversed.ToString("C0")</span><span>Post</span></div>
+                    <div class="ca-mg-row"><span>Reversal queue</span><span>@ReversedEntries</span><span>@ReversedAmount.ToString("C0")</span><span>@ActualReversedAmount.ToString("C0")</span><span>Reverse</span></div>
+                    <div class="ca-mg-row"><span>Settled history</span><span>@SettledEntries</span><span>@SettledAmount.ToString("C0")</span><span>@SettledReversed.ToString("C0")</span><span>Archive</span></div>
+                </div>
+                <div class="ca-model-note">Forecast values are calculated from current accrual entries. Statement generation, payout batches, and ledger posting remain downstream workflows.</div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForecast">Close</button>
+                <button type="button" class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/commissions/planner")'>Open Planner</button>
+            </div>
+        </div>
+    </div>
+}
 
-<!-- Sub-nav -->
-<div class="cf-subnav">
-    <button class="cf-snav-btn cf-snav-active"><i class="bi bi-graph-up" aria-hidden="true"></i> Forecast &amp; Accruals</button>
-    <button class="cf-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/statements")'><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements</button>
-    <button class="cf-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/producer-ledger")'><i class="bi bi-journal-text" aria-hidden="true"></i> Producer Ledger</button>
-    <button class="cf-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/exceptions")'><i class="bi bi-exclamation-circle" aria-hidden="true"></i> Exceptions</button>
-    <button class="cf-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/clawbacks")'><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Clawbacks</button>
-    <button class="cf-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/planner")'><i class="bi bi-calculator" aria-hidden="true"></i> What-If Planner</button>
-</div>
-
-<!-- Toolbar -->
-<div class="cf-toolbar">
-    <SfTextBox Placeholder="Search…" @bind-Value="_searchTerm" Width="270px"></SfTextBox>
-    <select class="e-input cf-sel" @bind="_filterStatus">
-        <option value="">All Statuses</option>
-        <option value="Pending">Pending</option>
-        <option value="Posted">Posted</option>
-        <option value="Reversed">Reversed</option>
-        <option value="Settled">Settled</option>
-    </select>
-</div>
-
-<!-- Post Accrual Dialog -->
-<SfDialog Width="560px" IsModal="true" @bind-Visible="_showPost" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-graph-up" aria-hidden="true"></i><span>Post Accrual Entry</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="ClosePost"><i class="bi bi-x-lg"></i></button></div>
-            <EditForm EditContext="_postEditContext">
+@if (_showForm)
+{
+    <div class="ca-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="ca-modal ca-action-modal" role="dialog" aria-modal="true" aria-labelledby="ca-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-journal-plus" aria-hidden="true"></i>
+                <span id="ca-form-title">@(_editingId == Guid.Empty ? "Post Accrual Entry" : "Edit Accrual Entry")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
                 <DataAnnotationsValidator />
-                <div class="um-modal-body"><div class="um-form-grid">
-                    <div class="um-field"><label>Accrual Date <span class="text-danger">*</span></label><InputDate @bind-Value="_postForm.AccrualDate" class="um-input" /><ValidationMessage For="() => _postForm.AccrualDate" class="validation-message text-danger" /></div>
-                    <div class="um-field"><label>Accrued Amount <span class="text-danger">*</span></label><InputNumber @bind-Value="_postForm.AccruedAmount" class="um-input" /><ValidationMessage For="() => _postForm.AccruedAmount" class="validation-message text-danger" /></div>
-                    <div class="um-field"><label>Expected Reversal Date <span class="text-danger">*</span></label><InputDate @bind-Value="_postForm.ReversalDate" class="um-input" /><ValidationMessage For="() => _postForm.ReversalDate" class="validation-message text-danger" /></div>
-                    <div class="um-field um-field--full"><label>Notes</label><InputTextArea @bind-Value="_postForm.Notes" class="um-input" rows="3" /><ValidationMessage For="() => _postForm.Notes" class="validation-message text-danger" /></div>
-                    @if (!string.IsNullOrWhiteSpace(_postFormError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_postFormError</div> }
-                </div></div>
+                <div class="um-modal-body">
+                    <div class="ca-modal-intro">
+                        <span><i class="bi bi-shield-check" aria-hidden="true"></i> Accrual workflow</span>
+                        <p>Post accrual entries, track expected reversal timing, and move records through pending, posted, reversed, and settled states.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Accrual Date <span class="text-danger">*</span></label><InputDate class="form-control" @bind-Value="_form.AccrualDate" /><ValidationMessage For="() => _form.AccrualDate" class="text-danger" /></div>
+                        <div class="um-field"><label>Accrued Amount <span class="text-danger">*</span></label><InputNumber class="form-control" @bind-Value="_form.AccruedAmount" /><ValidationMessage For="() => _form.AccruedAmount" class="text-danger" /></div>
+                        <div class="um-field"><label>Expected Reversal Date</label><InputDate class="form-control" @bind-Value="_form.ReversalDate" /><ValidationMessage For="() => _form.ReversalDate" class="text-danger" /></div>
+                        <div class="um-field"><label>Reversed Amount</label><InputNumber class="form-control" @bind-Value="_form.ReversedAmount" /><ValidationMessage For="() => _form.ReversedAmount" class="text-danger" /></div>
+                        <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.StatusCode">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                        <div class="um-field"><label>GL Account Id</label><InputText class="form-control" @bind-Value="_form.GLAccountIdText" /><ValidationMessage For="() => _form.GLAccountIdText" class="text-danger" /></div>
+                        <div class="um-field um-field--full ca-entry-preview"><span>Accrual preview</span><strong>@_form.AccruedAmount.ToString("C2")</strong><small>@_form.StatusCode · reversal @(_form.ReversalDate?.ToString("MMM d, yyyy") ?? "not scheduled")</small></div>
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editingId == Guid.Empty ? "Post Accrual" : "Save Changes")</button>
+                </div>
             </EditForm>
-            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="ClosePost">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="PostAccrual">Post</button></div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+    </div>
+}
 
-@if (_items is null)
-{
-    <div style="padding:2rem"><SfSpinner Visible="true" /></div>
-}
-else
-{
-<div class="cf-grid-wrap">
-    <SfGrid DataSource="FilteredItems" AllowPaging="true" AllowSorting="true" Height="480px">
-        <GridPageSettings PageSize="15"></GridPageSettings>
-        <GridColumns>
-            <GridColumn Field="@nameof(CommissionAccrualEntryDto.AccrualDate)" HeaderText="Accrual Date" Type="ColumnType.Date" Format="d" Width="120"></GridColumn>
-            <GridColumn Field="@nameof(CommissionAccrualEntryDto.AccruedAmount)" HeaderText="Accrued" Format="C2" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
-            <GridColumn Field="@nameof(CommissionAccrualEntryDto.ReversalDate)" HeaderText="Reversal Date" Type="ColumnType.Date" Format="d" Width="120">
-                <Template>
-                    @{ var a = (CommissionAccrualEntryDto)context; }
-                    @if (a.ReversalDate.HasValue)
-                    {
-                        var overdue = a.ReversalDate.Value < DateOnly.FromDateTime(DateTime.Today) && a.ReversedAmount == 0;
-                        <span class="@(overdue?"cf-overdue":"")">@a.ReversalDate.Value.ToString("MMM d, yyyy")</span>
-                    }
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(CommissionAccrualEntryDto.ReversedAmount)" HeaderText="Reversed" Format="C2" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
-            <GridColumn HeaderText="Status" Width="110">
-                <Template>
-                    @{ var a2 = (CommissionAccrualEntryDto)context; }
-                    <span class="cf-status-chip cf-st-@a2.StatusCode.ToLower()">@a2.StatusCode</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(CommissionAccrualEntryDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="d" Width="110"></GridColumn>
-        </GridColumns>
-    </SfGrid>
+<div class="ca-enterprise-page">
+    <section class="ca-header">
+        <div class="ca-header-left">
+            <div class="ca-lob-icon"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></div>
+            <div class="ca-header-info">
+                <div class="ca-title-row"><h1 class="ca-page-title">Commission Accruals</h1><span class="ca-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live accrual data</span><span class="ca-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span></div>
+                <div class="ca-sub-row"><span>Post, forecast, reverse, settle, and export commission accrual entries.</span><span class="ca-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span><span class="ca-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span></div>
+            </div>
+        </div>
+        <div class="ca-header-actions"><button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions2")'><i class="bi bi-cash-coin" aria-hidden="true"></i> Commissions</button><button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat ca-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button><button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Post Accrual</button></div>
+    </section>
+
+    <section class="ca-kpi-strip" aria-label="Accrual metrics">@foreach (var kpi in Kpis) { <button type="button" class="@KpiClass(kpi)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)"><span class="ca-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span><span class="ca-kpi-copy"><span class="ca-kpi-label">@kpi.Label</span><span class="ca-kpi-value">@kpi.Value</span><span class="ca-kpi-caption">@kpi.Caption</span></span></button> }</section>
+
+    <section class="ca-workflow-strip" aria-label="Accrual workflow shortcuts"><button type="button" class="ca-workflow-card ca-wf-post" @onclick="OpenCreate"><span class="ca-workflow-icon"><i class="bi bi-plus-circle" aria-hidden="true"></i></span><span class="ca-workflow-content"><strong>1</strong><span>Post</span><small>Create accrual.</small></span></button><button type="button" class="ca-workflow-card ca-wf-model" @onclick="OpenForecast"><span class="ca-workflow-icon"><i class="bi bi-graph-up" aria-hidden="true"></i></span><span class="ca-workflow-content"><strong>2</strong><span>Forecast</span><small>Model exposure.</small></span></button><button type="button" class="ca-workflow-card ca-wf-ledger" @onclick='() => Nav.NavigateTo("/finance/general-ledger")'><span class="ca-workflow-icon"><i class="bi bi-journal-text" aria-hidden="true"></i></span><span class="ca-workflow-content"><strong>3</strong><span>Ledger</span><small>Review GL.</small></span></button><button type="button" class="ca-workflow-card ca-wf-statements" @onclick='() => Nav.NavigateTo("/commissions/statements")'><span class="ca-workflow-icon"><i class="bi bi-file-earmark-text" aria-hidden="true"></i></span><span class="ca-workflow-content"><strong>4</strong><span>Statements</span><small>Issue docs.</small></span></button><button type="button" class="ca-workflow-card ca-wf-clawbacks" @onclick='() => Nav.NavigateTo("/commissions/clawbacks")'><span class="ca-workflow-icon"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i></span><span class="ca-workflow-content"><strong>5</strong><span>Clawbacks</span><small>Offset risk.</small></span></button><button type="button" class="ca-workflow-card ca-wf-planner" @onclick='() => Nav.NavigateTo("/commissions/planner")'><span class="ca-workflow-icon"><i class="bi bi-calculator" aria-hidden="true"></i></span><span class="ca-workflow-content"><strong>6</strong><span>Planner</span><small>What-if plan.</small></span></button></section>
+
+    <section class="ca-enterprise-search" aria-label="Accrual filters"><div class="ca-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div><div class="ca-search-body"><label for="ca-search">Search accrual entries</label><input id="ca-search" class="ca-search-input" type="search" placeholder="Search status or entry id..." @bind="SearchFilter" @bind:event="oninput" /><span class="ca-search-hint">Filters apply instantly across synchronized accrual data.</span></div><select class="ca-filter-select" @bind="StatusFilter" aria-label="Status filter"><option value="">All statuses</option>@foreach (var status in _statuses) { <option value="@status">@status</option> }</select><div class="ca-search-result"><strong>@_filtered.Count</strong><span>matches</span></div></section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger ca-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    }
+
+    <section class="ca-content-layout">
+        <div class="ca-grid-wrap">
+            <div class="ca-grid-toolbar"><div><strong>Accrual entry register</strong><span>@ActiveFilterText</span></div><div class="ca-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PostSelected" disabled="@(!CanPostSelected)"><i class="bi bi-journal-check" aria-hidden="true"></i> Post</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ReverseSelected" disabled="@(!CanReverseSelected)"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reverse</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button></div></div>
+            @if (_loading)
+            {
+                <div class="ca-loading"><i class="bi bi-arrow-repeat ca-spin" aria-hidden="true"></i><strong>Loading accrual entries...</strong><span>Syncing schema, seed data, and commission accrual register.</span></div>
+            }
+            else if (!_filtered.Any())
+            {
+                <div class="ca-empty-state"><i class="bi bi-journal-plus" aria-hidden="true"></i><strong>No accrual entries found</strong><span>Adjust filters or post a new accrual entry.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">Post Accrual</button></div>
+            }
+            else
+            {
+                <div class="ca-table-scroll"><table class="ca-table"><thead><tr><th>Accrual</th><th>Reversal</th><th class="ca-number">Accrued</th><th class="ca-number">Reversed</th><th>Status</th><th>Created</th><th class="ca-actions-col">Actions</th></tr></thead><tbody>@foreach (var item in PagedItems) { <tr class="@RowClass(item)" @onclick="() => SelectEntry(item)"><td><div class="ca-entry-cell"><span class="ca-entry-icon"><i class="bi bi-journal-text" aria-hidden="true"></i></span><span><strong>@ShortId(item.AccrualEntryId)</strong><small>@item.AccrualDate.ToString("MMM d, yyyy")</small></span></div></td><td><div class="ca-reversal-cell"><strong class="@(IsOverdue(item) ? "ca-overdue" : string.Empty)">@(item.ReversalDate?.ToString("MMM d, yyyy") ?? "Not scheduled")</strong><span>@ReversalTiming(item)</span></div></td><td class="ca-number ca-net">@item.AccruedAmount.ToString("C0")</td><td class="ca-number">@((item.ReversedAmount ?? 0).ToString("C0"))</td><td><span class="ca-status-chip @StatusCss(item.StatusCode)">@item.StatusCode</span></td><td>@item.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</td><td><div class="ca-row-acts"><button type="button" class="um-btn um-btn-primary um-btn-xs" title="Inspect" @onclick:stopPropagation="true" @onclick="() => SelectEntry(item)"><i class="bi bi-layout-sidebar-inset" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Post" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Posted")' disabled="@(!CanPost(item))"><i class="bi bi-journal-check" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Reverse" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Reversed")' disabled="@(!CanReverse(item))"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i></button></div></td></tr> }</tbody></table></div>
+                <div class="ca-pager"><span>Showing @PageStart-@PageEnd of @_filtered.Count</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button><span>Page @_page of @TotalPages</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button></div></div>
+            }
+        </div>
+        <aside class="ca-detail-panel" aria-label="Selected accrual entry detail">
+            @if (_selected is null)
+            {
+                <div class="ca-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select an accrual entry</strong><span>Choose a row to inspect accrual date, reversal exposure, status, and downstream workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="ca-detail-head"><div><span class="ca-detail-eyebrow"><i class="bi bi-journal-text" aria-hidden="true"></i> Accrual detail</span><h2>@ShortId(_selected.AccrualEntryId)</h2><div class="ca-detail-meta"><span>@_selected.AccrualDate.ToString("MMM d, yyyy")</span><span class="ca-status-chip @StatusCss(_selected.StatusCode)">@_selected.StatusCode</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div>
+                <div class="ca-detail-body"><div class="ca-impact-card"><span>Open accrual exposure</span><strong>@OpenExposure(_selected).ToString("C2")</strong><small>@_selected.AccruedAmount.ToString("C0") accrued · @((_selected.ReversedAmount ?? 0).ToString("C0")) reversed</small></div><div class="ca-detail-summary"><div class="ca-meta-row"><span class="ca-meta-lbl">Accrual Date</span><span class="ca-meta-val">@_selected.AccrualDate.ToString("MMM d, yyyy")</span></div><div class="ca-meta-row"><span class="ca-meta-lbl">Reversal Date</span><span class="ca-meta-val">@(_selected.ReversalDate?.ToString("MMM d, yyyy") ?? "Not scheduled")</span></div><div class="ca-meta-row"><span class="ca-meta-lbl">Transaction</span><span class="ca-meta-val">@ShortId(_selected.TransactionId)</span></div><div class="ca-meta-row"><span class="ca-meta-lbl">Created</span><span class="ca-meta-val">@_selected.CreatedDateUtc.ToLocalTime().ToString("g")</span></div></div><div class="ca-note-card"><span><i class="bi bi-diagram-3" aria-hidden="true"></i> Workflow note</span><p>@AccrualWorkflowNote(_selected)</p></div><div class="ca-detail-actions"><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenForecast"><i class="bi bi-graph-up" aria-hidden="true"></i> Forecast</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, "Posted")' disabled="@(!CanPost(_selected))"><i class="bi bi-journal-check" aria-hidden="true"></i> Post</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, "Reversed")' disabled="@(!CanReverse(_selected))"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reverse</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/commissions/statements")'><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements</button></div></div>
+            }
+        </aside>
+    </section>
 </div>
-}
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
+    private const int PageSize = 12;
     private Guid _tenantId;
-    private string? _searchTerm;
-    private string? _loadError;
-    private string _filterStatus = "";
-    private bool _showPost;
-    private PostAccrualForm _postForm = new();
-    private EditContext _postEditContext = default!;
-    private string? _postFormError;
-    private List<CommissionAccrualEntryDto>? _items;
-    private decimal ProjectedThisMonth => (_items ?? []).Where(x => x.AccrualDate.Month == DateTime.Today.Month && x.AccrualDate.Year == DateTime.Today.Year).Sum(x => x.AccruedAmount);
-    private decimal YtdEarned => (_items ?? []).Where(x => x.AccrualDate.Year == DateTime.Today.Year && x.StatusCode is "Posted" or "Settled" or "Reversed").Sum(x => x.AccruedAmount);
-    private decimal PendingAccruals => (_items ?? []).Where(x => x.StatusCode == "Pending").Sum(x => x.AccruedAmount);
-    private decimal ClawbackRisk => (_items ?? []).Where(x => x.ReversalDate != null && x.ReversalDate < DateOnly.FromDateTime(DateTime.Today) && (x.ReversedAmount ?? 0) == 0).Sum(x => x.AccruedAmount);
+    private Guid _tenantAdminUserId;
+    private List<CommissionAccrualEntryDto> _items = [];
+    private List<CommissionAccrualEntryDto> _filtered = [];
+    private CommissionAccrualEntryDto? _selected;
+    private CommissionAccrualEntryDto? _statusTarget;
+    private AccrualForm _form = new();
+    private Guid _editingId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _pendingStatus;
+    private int _page = 1;
+    private bool _loading, _busy, _showForm, _showForecast, _showStatusConfirm, _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError, _formError;
+    private readonly List<string> _statuses = ["Pending", "Posted", "Reversed", "Settled"];
 
-    private IEnumerable<CommissionAccrualEntryDto> FilteredItems => (_items ?? []).Where(x =>
-        string.IsNullOrEmpty(_filterStatus) || x.StatusCode == _filterStatus);
+    private IEnumerable<CommissionAccrualEntryDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private int PendingEntries => _items.Count(x => x.StatusCode == "Pending");
+    private int PostedEntries => _items.Count(x => x.StatusCode == "Posted");
+    private int ReversedEntries => _items.Count(x => x.StatusCode == "Reversed");
+    private int SettledEntries => _items.Count(x => x.StatusCode == "Settled");
+    private int OverdueEntries => _items.Count(IsOverdue);
+    private decimal PendingAmount => _items.Where(x => x.StatusCode == "Pending").Sum(x => x.AccruedAmount);
+    private decimal PostedAmount => _items.Where(x => x.StatusCode == "Posted").Sum(x => x.AccruedAmount);
+    private decimal ReversedAmount => _items.Where(x => x.StatusCode == "Reversed").Sum(x => x.AccruedAmount);
+    private decimal SettledAmount => _items.Where(x => x.StatusCode == "Settled").Sum(x => x.AccruedAmount);
+    private decimal PendingReversed => _items.Where(x => x.StatusCode == "Pending").Sum(x => x.ReversedAmount ?? 0);
+    private decimal PostedReversed => _items.Where(x => x.StatusCode == "Posted").Sum(x => x.ReversedAmount ?? 0);
+    private decimal SettledReversed => _items.Where(x => x.StatusCode == "Settled").Sum(x => x.ReversedAmount ?? 0);
+    private decimal ActualReversedAmount => _items.Where(x => x.StatusCode == "Reversed").Sum(x => x.ReversedAmount ?? 0);
+    private decimal TotalAccrued => _items.Sum(x => x.AccruedAmount);
+    private decimal TotalReversed => _items.Sum(x => x.ReversedAmount ?? 0);
+    private decimal OpenExposureTotal => _items.Sum(OpenExposure);
+    private bool CanPostSelected => _selected is not null && _selected.StatusCode is not "Posted" and not "Reversed" and not "Settled";
+    private bool CanReverseSelected => _selected is not null && _selected.StatusCode is not "Reversed" and not "Settled";
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All accrual entries" : $"Filtered by {_kpiFilter}";
+    private string PendingStatusIcon => _pendingStatus switch { "Posted" => "bi-journal-check", "Reversed" => "bi-arrow-counterclockwise", "Settled" => "bi-check2-circle", _ => "bi-arrow-repeat" };
+    private string PendingStatusTitle => _pendingStatus switch { "Posted" => "Post Accrual Entry", "Reversed" => "Reverse Accrual Entry", "Settled" => "Settle Accrual Entry", _ => "Update Accrual Entry" };
+    private string PendingStatusAction => _pendingStatus switch { "Posted" => "Post", "Reversed" => "Reverse", "Settled" => "Settle", _ => "Update" };
+    private IReadOnlyList<KpiModel> Kpis => [new("all", "Entries", _items.Count.ToString("N0"), "All records", "bi-journal-text", "ca-ki-blue"), new("Pending", "Pending", PendingEntries.ToString("N0"), PendingAmount.ToString("C0"), "bi-hourglass", "ca-ki-amber"), new("Posted", "Posted", PostedEntries.ToString("N0"), PostedAmount.ToString("C0"), "bi-journal-check", "ca-ki-purple"), new("Reversed", "Reversed", ReversedEntries.ToString("N0"), ActualReversedAmount.ToString("C0"), "bi-arrow-counterclockwise", "ca-ki-cyan"), new("Settled", "Settled", SettledEntries.ToString("N0"), SettledAmount.ToString("C0"), "bi-check2-circle", "ca-ki-green"), new("overdue", "Overdue", OverdueEntries.ToString("N0"), OpenExposureTotal.ToString("C0"), "bi-calendar-x", "ca-ki-red")];
+    private string SearchFilter { get => _searchTerm; set { _searchTerm = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
 
-    protected override async Task OnInitializedAsync()
-    {
-        await ResolveCurrentUserContextAsync();
-        _postEditContext = new(_postForm);
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Commissions","/commissions"), new("Forecast & Accruals",""));
-        await LoadAsync();
-    }
-
-    private void OpenPost() { _postForm = new(); _postEditContext = new(_postForm); _postFormError = null; _showPost = true; }
-    private void ClosePost() => _showPost = false;
-
-    private void PostAccrual()
-    {
-        _postFormError = null;
-        if (!_postEditContext.Validate()) return;
-        if (_postForm.ReversalDate < _postForm.AccrualDate)
-        {
-            _postFormError = "Expected Reversal Date must be on or after Accrual Date.";
-            return;
-        }
-        _showPost = false;
-    }
-
-    private async Task LoadAsync()
-    {
-        try
-        {
-            _loadError = null;
-            var result = await Api.SearchCommissionAccrualEntriesAsync(_tenantId, _searchTerm);
-            _items = result?.Items.ToList() ?? [];
-        }
-        catch (Exception ex)
-        {
-            _loadError = ex.Message;
-            _items = [];
-        }
-    }
-
-    static string Fmt(decimal? v) => v.HasValue ? v.Value.ToString("C0") : "$0";
-
-    RenderFragment CfKpi(string icon, string label, string val, string color) => __builder =>
-    {
-        <div class="cf-kpi-card @color">
-            <i class="bi @icon cf-kpi-icon" aria-hidden="true"></i>
-            <div><div class="cf-kpi-val">@val</div><div class="cf-kpi-lbl">@label</div></div>
-        </div>
-    };
-
-    private sealed class PostAccrualForm
-    {
-        [Required] public DateTime AccrualDate { get; set; } = DateTime.Today;
-        [Range(0.01, 100000000)] public decimal AccruedAmount { get; set; }
-        [Required] public DateTime ReversalDate { get; set; } = DateTime.Today.AddMonths(1);
-        [StringLength(1000)] public string? Notes { get; set; }
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
-    }
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Commissions", "/commissions2"), new("Accruals", "/commissions/accruals")); await LoadAsync(); }
+    private async Task LoadAsync() { _loading = true; _loadError = null; try { await Api.EnsureCommissionSeedAsync(_tenantId, _tenantAdminUserId); await Api.EnsureCommissionAccrualEntriesSeedAsync(_tenantId); var entries = await Api.SearchCommissionAccrualEntriesAsync(_tenantId, string.Empty); _items = entries?.Items.OrderBy(x => StatusSort(x.StatusCode)).ThenByDescending(x => x.AccrualDate).ToList() ?? []; ApplyFilters(resetPage: true); EnsureSelectedStillVisible(); } catch (Exception ex) { _loadError = $"Commission accruals failed to load: {ex.Message}"; ShowToast(_loadError, "danger"); _items = []; _filtered = []; } finally { _loading = false; } }
+    private void ApplyFilters(bool resetPage) { IEnumerable<CommissionAccrualEntryDto> query = _items; if (!string.IsNullOrWhiteSpace(_searchTerm)) { var term = _searchTerm.Trim(); query = query.Where(x => Contains(x.StatusCode, term) || Contains(x.AccrualEntryId.ToString(), term) || Contains(x.TransactionId.ToString(), term)); } if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.StatusCode == _statusFilter); query = _kpiFilter switch { "Pending" => query.Where(x => x.StatusCode == "Pending"), "Posted" => query.Where(x => x.StatusCode == "Posted"), "Reversed" => query.Where(x => x.StatusCode == "Reversed"), "Settled" => query.Where(x => x.StatusCode == "Settled"), "overdue" => query.Where(IsOverdue), _ => query }; _filtered = query.OrderBy(x => StatusSort(x.StatusCode)).ThenByDescending(x => x.AccrualDate).ToList(); if (resetPage) _page = 1; if (_page > TotalPages) _page = TotalPages; }
+    private void SetKpiFilter(string filter) { _kpiFilter = _kpiFilter == filter && filter != "all" ? "all" : filter; if (_kpiFilter != "overdue") _statusFilter = _statuses.Contains(_kpiFilter) ? _kpiFilter : string.Empty; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _searchTerm = string.Empty; _statusFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); ShowToast("Accrual filters reset.", "info"); }
+    private void SelectEntry(CommissionAccrualEntryDto item) => _selected = item;
+    private void OpenCreate() { _editingId = Guid.Empty; _formError = null; _form = new AccrualForm { AccrualDate = DateTime.Today, ReversalDate = DateTime.Today.AddMonths(1), AccruedAmount = Math.Max(1000, PendingAmount == 0 ? 2400 : PendingAmount), ReversedAmount = 0, StatusCode = "Pending" }; _showForm = true; }
+    private void OpenEdit(CommissionAccrualEntryDto item) { _editingId = item.AccrualEntryId; _formError = null; _form = new AccrualForm { AccrualDate = item.AccrualDate.ToDateTime(TimeOnly.MinValue), ReversalDate = item.ReversalDate?.ToDateTime(TimeOnly.MinValue), AccruedAmount = item.AccruedAmount, ReversedAmount = item.ReversedAmount ?? 0, StatusCode = item.StatusCode, GLAccountIdText = item.GLAccountId?.ToString() ?? string.Empty }; _showForm = true; }
+    private void CloseForm() { if (_busy) return; _showForm = false; }
+    private void OpenForecast() => _showForecast = true;
+    private void CloseForecast() => _showForecast = false;
+    private async Task SaveAsync() { if (!ValidateForm()) return; _busy = true; _formError = null; var savedId = _editingId; try { if (_editingId == Guid.Empty) { savedId = await Api.CreateCommissionAccrualEntryAsync(ToCreateRequest()); ShowToast("Accrual entry posted.", "success"); } else { await Api.UpdateCommissionAccrualEntryAsync(_editingId, ToUpdateRequest()); ShowToast("Accrual entry updated.", "success"); } _showForm = false; await LoadAsync(); _selected = _items.FirstOrDefault(x => x.AccrualEntryId == savedId) ?? _selected; } catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; ShowToast(_formError, "danger"); } finally { _busy = false; } }
+    private Task NotifyValidationAsync(EditContext _) { ShowToast("Please correct validation errors before saving.", "warning"); return Task.CompletedTask; }
+    private CreateCommissionAccrualEntryRequest ToCreateRequest() => new() { TenantId = _tenantId, GLAccountId = ParseOptionalGuid(_form.GLAccountIdText), AccrualDate = DateOnly.FromDateTime(_form.AccrualDate), AccruedAmount = _form.AccruedAmount, ReversalDate = _form.ReversalDate.HasValue ? DateOnly.FromDateTime(_form.ReversalDate.Value) : null, ReversedAmount = _form.ReversedAmount, StatusCode = _form.StatusCode, CreatedByUserId = _tenantAdminUserId };
+    private UpdateCommissionAccrualEntryRequest ToUpdateRequest() => new() { TenantId = _tenantId, AccrualEntryId = _editingId, GLAccountId = ParseOptionalGuid(_form.GLAccountIdText), AccrualDate = DateOnly.FromDateTime(_form.AccrualDate), AccruedAmount = _form.AccruedAmount, ReversalDate = _form.ReversalDate.HasValue ? DateOnly.FromDateTime(_form.ReversalDate.Value) : null, ReversedAmount = _form.ReversedAmount, StatusCode = _form.StatusCode, ModifiedByUserId = _tenantAdminUserId };
+    private void PostSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Posted"); }
+    private void ReverseSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Reversed"); }
+    private void ConfirmStatusUpdate(CommissionAccrualEntryDto item, string status) { _statusTarget = item; _pendingStatus = status; _showStatusConfirm = true; }
+    private void CancelStatusUpdate() { if (_busy) return; _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; }
+    private async Task ExecuteStatusUpdateAsync() { if (_statusTarget is null || string.IsNullOrWhiteSpace(_pendingStatus)) return; _busy = true; var selectedId = _statusTarget.AccrualEntryId; try { await Api.UpdateCommissionAccrualEntryAsync(_statusTarget.AccrualEntryId, new UpdateCommissionAccrualEntryRequest { TenantId = _tenantId, AccrualEntryId = _statusTarget.AccrualEntryId, TransactionId = _statusTarget.TransactionId, GLAccountId = _statusTarget.GLAccountId, AccrualDate = _statusTarget.AccrualDate, AccruedAmount = _statusTarget.AccruedAmount, ReversalDate = _statusTarget.ReversalDate ?? DateOnly.FromDateTime(DateTime.Today), ReversedAmount = _pendingStatus == "Reversed" ? _statusTarget.AccruedAmount : _statusTarget.ReversedAmount, JournalEntryId = _statusTarget.JournalEntryId, StatusCode = _pendingStatus, ModifiedByUserId = _tenantAdminUserId }); ShowToast($"Accrual entry marked {_pendingStatus.ToLowerInvariant()}.", "success"); _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; await LoadAsync(); _selected = _items.FirstOrDefault(x => x.AccrualEntryId == selectedId) ?? _selected; } catch (Exception ex) { ShowToast($"Update failed: {ex.Message}", "danger"); } finally { _busy = false; } }
+    private async Task ExportAsync() { if (!_filtered.Any()) { ShowToast("No accrual entries are available to export.", "warning"); return; } var csv = new StringBuilder(); csv.AppendLine("AccrualEntryId,TransactionId,AccrualDate,AccruedAmount,ReversalDate,ReversedAmount,Status,CreatedDate"); foreach (var item in _filtered) csv.AppendLine(string.Join(',', Csv(item.AccrualEntryId.ToString()), Csv(item.TransactionId.ToString()), Csv(item.AccrualDate.ToString("yyyy-MM-dd")), item.AccruedAmount, Csv(item.ReversalDate?.ToString("yyyy-MM-dd") ?? string.Empty), item.ReversedAmount ?? 0, Csv(item.StatusCode), Csv(item.CreatedDateUtc.ToString("O")))); var bytes = Encoding.UTF8.GetBytes(csv.ToString()); await Js.InvokeVoidAsync("amsShell.downloadBase64", $"commission-accruals-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes)); ShowToast($"Exported {_filtered.Count:N0} accrual entries.", "success"); }
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() => _selected = _selected is null ? _filtered.FirstOrDefault() : _items.FirstOrDefault(x => x.AccrualEntryId == _selected.AccrualEntryId) ?? _filtered.FirstOrDefault();
+    private bool ValidateForm() { if (_form.AccruedAmount <= 0) { _formError = "Accrued Amount must be greater than zero."; ShowToast(_formError, "warning"); return false; } if (_form.ReversalDate.HasValue && _form.ReversalDate.Value < _form.AccrualDate) { _formError = "Expected Reversal Date must be on or after Accrual Date."; ShowToast(_formError, "warning"); return false; } if (!string.IsNullOrWhiteSpace(_form.GLAccountIdText) && !Guid.TryParse(_form.GLAccountIdText, out _)) { _formError = "GL Account Id must be a valid GUID."; ShowToast(_formError, "warning"); return false; } return true; }
+    private static Guid? ParseOptionalGuid(string? value) => Guid.TryParse(value, out var id) ? id : null;
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static int StatusSort(string status) => status switch { "Pending" => 0, "Posted" => 1, "Reversed" => 2, "Settled" => 3, _ => 4 };
+    private static string StatusCss(string status) => $"ca-st-{status.ToLowerInvariant()}";
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private string KpiClass(KpiModel kpi) => $"ca-kpi-card {kpi.Tone} {(_kpiFilter == kpi.Filter || (_kpiFilter == "all" && kpi.Filter == "all") ? "ca-kpi-active" : string.Empty)}";
+    private string RowClass(CommissionAccrualEntryDto item) => $"ca-table-row {(_selected?.AccrualEntryId == item.AccrualEntryId ? "ca-table-row--selected" : string.Empty)}";
+    private static bool CanPost(CommissionAccrualEntryDto item) => item.StatusCode is not "Posted" and not "Reversed" and not "Settled";
+    private static bool CanReverse(CommissionAccrualEntryDto item) => item.StatusCode is not "Reversed" and not "Settled";
+    private static decimal OpenExposure(CommissionAccrualEntryDto item) => Math.Max(0, item.AccruedAmount - (item.ReversedAmount ?? 0));
+    private static bool IsOverdue(CommissionAccrualEntryDto item) => item.ReversalDate.HasValue && item.ReversalDate.Value < DateOnly.FromDateTime(DateTime.Today) && OpenExposure(item) > 0;
+    private static string ShortId(Guid id) => id == Guid.Empty ? "—" : id.ToString("N")[..8].ToUpperInvariant();
+    private static string ReversalTiming(CommissionAccrualEntryDto item) => item.ReversalDate is null ? "No reversal date" : IsOverdue(item) ? "Overdue reversal" : item.ReversalDate.Value == DateOnly.FromDateTime(DateTime.Today) ? "Due today" : item.ReversalDate.Value > DateOnly.FromDateTime(DateTime.Today) ? "Upcoming reversal" : "Reversal complete";
+    private static string AccrualWorkflowNote(CommissionAccrualEntryDto item) => item.StatusCode switch { "Pending" => "Pending accruals are ready for review before ledger posting.", "Posted" => "Posted accruals are recognized and should be monitored for expected reversal timing.", "Reversed" => "Reversed accruals have offset the original accrued amount and are ready for reconciliation.", "Settled" => "Settled accruals are complete and retained for audit and commission history.", _ => "Review this accrual entry before taking downstream workflow action." };
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter accrual entries by {Label}"; }
+    private sealed class AccrualForm { [Required] public DateTime AccrualDate { get; set; } = DateTime.Today; public DateTime? ReversalDate { get; set; } = DateTime.Today.AddMonths(1); [Range(0.01, 100000000)] public decimal AccruedAmount { get; set; } [Range(0, 100000000)] public decimal? ReversedAmount { get; set; } = 0; [Required, StringLength(50)] public string StatusCode { get; set; } = "Pending"; [StringLength(36)] public string? GLAccountIdText { get; set; } }
 }

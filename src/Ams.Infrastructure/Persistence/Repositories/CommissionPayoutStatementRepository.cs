@@ -24,15 +24,25 @@ public sealed class CommissionPayoutStatementRepository : ICommissionPayoutState
             new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
     }
 
-    public async Task<PagedResult<CommissionPayoutStatementDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+    public async Task<PagedResult<CommissionPayoutStatementDto>> SearchAsync(Guid tenantId, string? searchTerm, string? statusCode = null, Guid? payeeId = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         await EnsureSchemaAndSeedAsync(tenantId, cancellationToken);
-        var sql = RepositorySql.BuildPagedSearchSql(
-            "Commission.CommissionPayoutStatement",
-            "StatementId, TenantId, PayeeId, PayoutBatchId, StatementDate, GrossEarnings, TotalClawbacks, NetPayout, CurrencyCode, StatusCode, IssuedDateUtc, CreatedDateUtc",
-            "StatusCode LIKE '%' + @SearchTerm + '%'",
-            "CreatedDateUtc DESC",
-            true);
+        const string sql = SelectSql + @"
+WHERE TenantId = @TenantId
+  AND IsDeleted = 0
+  AND (@SearchTerm IS NULL OR @SearchTerm = N'' OR StatusCode LIKE N'%' + @SearchTerm + N'%' OR CurrencyCode LIKE N'%' + @SearchTerm + N'%' OR CONVERT(nvarchar(36), StatementId) LIKE N'%' + @SearchTerm + N'%')
+  AND (@StatusCode IS NULL OR @StatusCode = N'' OR StatusCode = @StatusCode)
+  AND (@PayeeId IS NULL OR PayeeId = @PayeeId)
+ORDER BY StatementDate DESC, CreatedDateUtc DESC
+OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+
+SELECT COUNT(1)
+FROM Commission.CommissionPayoutStatement
+WHERE TenantId = @TenantId
+  AND IsDeleted = 0
+  AND (@SearchTerm IS NULL OR @SearchTerm = N'' OR StatusCode LIKE N'%' + @SearchTerm + N'%' OR CurrencyCode LIKE N'%' + @SearchTerm + N'%' OR CONVERT(nvarchar(36), StatementId) LIKE N'%' + @SearchTerm + N'%')
+  AND (@StatusCode IS NULL OR @StatusCode = N'' OR StatusCode = @StatusCode)
+  AND (@PayeeId IS NULL OR PayeeId = @PayeeId);";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         using var multi = await cn.QueryMultipleAsync(
@@ -40,6 +50,8 @@ public sealed class CommissionPayoutStatementRepository : ICommissionPayoutState
             {
                 TenantId = tenantId,
                 SearchTerm = searchTerm,
+                StatusCode = statusCode,
+                PayeeId = payeeId,
                 Offset = (Math.Max(pageNumber, 1) - 1) * Math.Max(pageSize, 1),
                 PageSize = Math.Max(pageSize, 1)
             }, cancellationToken: cancellationToken));
@@ -55,6 +67,9 @@ public sealed class CommissionPayoutStatementRepository : ICommissionPayoutState
             PageSize = pageSize
         };
     }
+
+    public Task EnsureSeedAsync(Guid tenantId, Guid? createdByUserId = null, CancellationToken cancellationToken = default)
+        => EnsureSchemaAndSeedAsync(tenantId, cancellationToken);
 
     public async Task<Guid> CreateAsync(CreateCommissionPayoutStatementRequest request, CancellationToken cancellationToken = default)
     {
@@ -388,4 +403,19 @@ END;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken));
     }
+
+    private const string SelectSql = @"
+SELECT StatementId,
+       TenantId,
+       PayeeId,
+       PayoutBatchId,
+       StatementDate,
+       GrossEarnings,
+       TotalClawbacks,
+       NetPayout,
+       CurrencyCode,
+       StatusCode,
+       IssuedDateUtc,
+       CreatedDateUtc
+FROM Commission.CommissionPayoutStatement";
 }

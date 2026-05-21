@@ -1,337 +1,579 @@
 @page "/commissions/planner"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Commissions
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>What-If Compensation Planner — AMS</PageTitle>
+<PageTitle>What-If Compensation Planner — AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="What-If Compensation Planner"
-               Subtitle="Model new/renewal splits, multi-producer sharing, branch overrides, house account rules, and clawback impact before committing to a compensation structure"
-               Icon="bi-calculator">
-    <Actions>
-        <button class="wp-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/plans")'>
-            <i class="bi bi-clipboard-check" aria-hidden="true"></i> Comp Plans
-        </button>
-        <button class="wp-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/splits")'>
-            <i class="bi bi-scissors" aria-hidden="true"></i> Split Rules
-        </button>
-        <button class="wp-btn-primary" @onclick="RunScenario">
-            <i class="bi bi-play-fill" aria-hidden="true"></i> Run Scenario
-        </button>
-    </Actions>
-</AppPageHeader>
+@if (_toastVisible)
+{
+    <div class="wp-toast wp-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="wp-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
 
-<!-- Sub-nav -->
-<div class="wp-subnav">
-    <button class="wp-snav-btn wp-snav-active"><i class="bi bi-calculator" aria-hidden="true"></i> What-If Planner</button>
-    <button class="wp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/plans")'><i class="bi bi-clipboard-check" aria-hidden="true"></i> Plans</button>
-    <button class="wp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/splits")'><i class="bi bi-scissors" aria-hidden="true"></i> Splits</button>
-    <button class="wp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/statements")'><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements</button>
-    <button class="wp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/forecast")'><i class="bi bi-graph-up" aria-hidden="true"></i> Forecast</button>
-    <button class="wp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/clawbacks")'><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Clawbacks</button>
-</div>
-
-<div class="wp-layout">
-<EditForm EditContext="_plannerEditContext">
-<DataAnnotationsValidator />
-    <!-- ══ INPUTS PANEL ══ -->
-    <div class="wp-inputs">
-        <div class="wp-panel-hdr"><i class="bi bi-sliders" aria-hidden="true"></i> Scenario Inputs</div>
-
-        <!-- Premium / Book -->
-        <div class="wp-section">
-            <div class="wp-section-title">Book of Business</div>
-            <div class="wp-field"><label class="wp-lbl">New Business Premium</label>
-                <InputNumber @bind-Value="_plannerForm.NewBusinessPremium" class="um-input" />
-                <ValidationMessage For="() => _plannerForm.NewBusinessPremium" class="validation-message text-danger" />
-            </div>
-            <div class="wp-field"><label class="wp-lbl">Renewal Premium</label>
-                <InputNumber @bind-Value="_plannerForm.RenewalPremium" class="um-input" />
-                <ValidationMessage For="() => _plannerForm.RenewalPremium" class="validation-message text-danger" />
-            </div>
-            <div class="wp-field"><label class="wp-lbl">Policy Count</label>
-                <InputNumber @bind-Value="_plannerForm.PolicyCount" class="um-input" />
-                <ValidationMessage For="() => _plannerForm.PolicyCount" class="validation-message text-danger" />
+@if (_showStatusConfirm && _statusTarget is not null && !string.IsNullOrWhiteSpace(_pendingStatus))
+{
+    <div class="wp-modal-backdrop" role="presentation" @onclick="CancelStatusUpdate">
+        <div class="wp-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="wp-status-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingStatus == "Archived" ? "um-confirm-icon--danger" : null)"><i class="bi @PendingStatusIcon" aria-hidden="true"></i></div>
+                <div class="um-confirm-title" id="wp-status-title">@PendingStatusTitle</div>
+                <div class="um-confirm-body">Update planner scenario <strong>@_statusTarget.ScenarioNumber</strong> to <strong>@_pendingStatus</strong>?</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelStatusUpdate" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn @(_pendingStatus == "Archived" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteStatusUpdateAsync" disabled="@_busy">@PendingStatusAction</button>
+                </div>
             </div>
         </div>
+    </div>
+}
 
-        <!-- Rates -->
-        <div class="wp-section">
-            <div class="wp-section-title">Commission Rates</div>
-            <div class="wp-field"><label class="wp-lbl">New Business Rate %</label>
-                <InputNumber @bind-Value="_plannerForm.NewBusinessRate" class="um-input" />
-                <ValidationMessage For="() => _plannerForm.NewBusinessRate" class="validation-message text-danger" />
+@if (_showForm)
+{
+    <div class="wp-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="wp-modal wp-action-modal" role="dialog" aria-modal="true" aria-labelledby="wp-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-calculator" aria-hidden="true"></i>
+                <span id="wp-form-title">@(_editingId == Guid.Empty ? "New What-If Scenario" : "Edit What-If Scenario")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
             </div>
-            <div class="wp-field"><label class="wp-lbl">Renewal Rate %</label>
-                <InputNumber @bind-Value="_plannerForm.RenewalRate" class="um-input" />
-                <ValidationMessage For="() => _plannerForm.RenewalRate" class="validation-message text-danger" />
-            </div>
-            <div class="wp-field"><label class="wp-lbl">Override / Bonus %</label>
-                <InputNumber @bind-Value="_plannerForm.OverrideRate" class="um-input" />
-                <ValidationMessage For="() => _plannerForm.OverrideRate" class="validation-message text-danger" />
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="wp-modal-intro">
+                        <span><i class="bi bi-shield-check" aria-hidden="true"></i> Compensation workflow</span>
+                        <p>Model producer splits, branch overrides, house account treatment, and clawback exposure before committing rules or payout workflows.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Scenario Number <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.ScenarioNumber" /><ValidationMessage For="() => _form.ScenarioNumber" class="text-danger" /></div>
+                        <div class="um-field"><label>Scenario Type <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.ScenarioTypeCode">@foreach (var type in _scenarioTypes) { <option value="@type">@type</option> }</InputSelect><ValidationMessage For="() => _form.ScenarioTypeCode" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Scenario Name <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.ScenarioName" /><ValidationMessage For="() => _form.ScenarioName" class="text-danger" /></div>
+                        <div class="um-field"><label>Plan</label><InputSelect class="form-select" @bind-Value="_form.CommissionPlanId"><option value="">Unassigned plan</option>@foreach (var plan in _plans) { <option value="@plan.CommissionPlanId">@plan.PlanName</option> }</InputSelect></div>
+                        <div class="um-field"><label>Payee</label><InputSelect class="form-select" @bind-Value="_form.PayeeId"><option value="">All payees</option>@foreach (var payee in _payees) { <option value="@payee.PayeeId">@PayeeLabel(payee)</option> }</InputSelect></div>
+                        <div class="um-field"><label>New Business Premium <span class="text-danger">*</span></label><InputNumber class="form-control" @bind-Value="_form.NewBusinessPremium" /><ValidationMessage For="() => _form.NewBusinessPremium" class="text-danger" /></div>
+                        <div class="um-field"><label>Renewal Premium <span class="text-danger">*</span></label><InputNumber class="form-control" @bind-Value="_form.RenewalPremium" /><ValidationMessage For="() => _form.RenewalPremium" class="text-danger" /></div>
+                        <div class="um-field"><label>Policy Count <span class="text-danger">*</span></label><InputNumber class="form-control" @bind-Value="_form.PolicyCount" /><ValidationMessage For="() => _form.PolicyCount" class="text-danger" /></div>
+                        <div class="um-field"><label>New Business Rate % <span class="text-danger">*</span></label><InputNumber class="form-control" @bind-Value="_form.NewBusinessRatePct" /><ValidationMessage For="() => _form.NewBusinessRatePct" class="text-danger" /></div>
+                        <div class="um-field"><label>Renewal Rate % <span class="text-danger">*</span></label><InputNumber class="form-control" @bind-Value="_form.RenewalRatePct" /><ValidationMessage For="() => _form.RenewalRatePct" class="text-danger" /></div>
+                        <div class="um-field"><label>Override / Bonus % <span class="text-danger">*</span></label><InputNumber class="form-control" @bind-Value="_form.OverrideRatePct" /><ValidationMessage For="() => _form.OverrideRatePct" class="text-danger" /></div>
+                        <div class="um-field"><label>Split Type <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.SplitTypeCode" @bind-Value:after="ApplySplitTypeDefaults">@foreach (var split in _splitTypes) { <option value="@split">@split</option> }</InputSelect><ValidationMessage For="() => _form.SplitTypeCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Primary Split % <span class="text-danger">*</span></label><InputNumber class="form-control" @bind-Value="_form.PrimarySplitPct" @bind-Value:after="UpdateSecondarySplit" /><ValidationMessage For="() => _form.PrimarySplitPct" class="text-danger" /></div>
+                        <div class="um-field"><label>Secondary Split % <span class="text-danger">*</span></label><InputNumber class="form-control" @bind-Value="_form.SecondarySplitPct" /><ValidationMessage For="() => _form.SecondarySplitPct" class="text-danger" /></div>
+                        <div class="um-field"><label>Cancellation Rate % <span class="text-danger">*</span></label><InputNumber class="form-control" @bind-Value="_form.CancellationRatePct" /><ValidationMessage For="() => _form.CancellationRatePct" class="text-danger" /></div>
+                        <div class="um-field"><label>NSF / Chargeback Rate % <span class="text-danger">*</span></label><InputNumber class="form-control" @bind-Value="_form.NsfRatePct" /><ValidationMessage For="() => _form.NsfRatePct" class="text-danger" /></div>
+                        <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.StatusCode">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.BranchOverride" /> Branch override applies</label></div>
+                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.HouseAccount" /> House account treatment</label></div>
+                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.SharedClawbacks" /> Share clawbacks proportionally</label></div>
+                        <div class="um-field um-field--full"><label>Notes</label><InputTextArea class="form-control" rows="3" @bind-Value="_form.Notes" /><ValidationMessage For="() => _form.Notes" class="text-danger" /></div>
+                        <div class="um-field um-field--full wp-scenario-preview"><span>Scenario preview</span><strong>@_form.NetPayout.ToString("C2")</strong><small>@_form.TotalCommission.ToString("C2") gross · @_form.ProjectedClawbacks.ToString("C2") projected clawbacks</small><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CalculateForm">Calculate</button></div>
+                        @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="RunFormScenario" disabled="@_busy"><i class="bi bi-play-fill" aria-hidden="true"></i> Run</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editingId == Guid.Empty ? "Save Scenario" : "Save Changes")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="wp-enterprise-page">
+    <section class="wp-header">
+        <div class="wp-header-left">
+            <div class="wp-lob-icon"><i class="bi bi-calculator" aria-hidden="true"></i></div>
+            <div class="wp-header-info">
+                <div class="wp-title-row"><h1 class="wp-page-title">What-If Compensation Planner</h1><span class="wp-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live planner data</span><span class="wp-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span></div>
+                <div class="wp-sub-row"><span>Model split rules, producer payout, branch overrides, house accounts, and clawback exposure.</span><span class="wp-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span><span class="wp-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span></div>
             </div>
         </div>
+        <div class="wp-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions2")'><i class="bi bi-cash-coin" aria-hidden="true"></i> Commissions</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat wp-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Scenario</button>
+        </div>
+    </section>
 
-        <!-- Split -->
-        <div class="wp-section">
-            <div class="wp-section-title">Split Arrangement</div>
-            <div class="wp-field"><label class="wp-lbl">Split Type</label>
-                <InputSelect @bind-Value="_plannerForm.SplitType" class="um-input"><option>No Split</option><option>60/40</option><option>50/50</option><option>70/30</option><option>Custom</option><option>Branch Override</option><option>House Account</option></InputSelect>
-                <ValidationMessage For="() => _plannerForm.SplitType" class="validation-message text-danger" />
-            </div>
-            @if (_plannerForm.SplitType == "Custom")
+    <section class="wp-kpi-strip" aria-label="Planner metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="@KpiClass(kpi)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)"><span class="wp-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span><span class="wp-kpi-copy"><span class="wp-kpi-label">@kpi.Label</span><span class="wp-kpi-value">@kpi.Value</span><span class="wp-kpi-caption">@kpi.Caption</span></span></button>
+        }
+    </section>
+
+    <section class="wp-workflow-strip" aria-label="Planner workflow shortcuts">
+        <button type="button" class="wp-workflow-card wp-wf-create" @onclick="OpenCreate"><span class="wp-workflow-icon"><i class="bi bi-plus-circle" aria-hidden="true"></i></span><span class="wp-workflow-content"><strong>1</strong><span>Model</span><small>Create scenario.</small></span></button>
+        <button type="button" class="wp-workflow-card wp-wf-run" @onclick="RunSelectedScenario" disabled="@(_selected is null)"><span class="wp-workflow-icon"><i class="bi bi-play-fill" aria-hidden="true"></i></span><span class="wp-workflow-content"><strong>2</strong><span>Run</span><small>Calculate payout.</small></span></button>
+        <button type="button" class="wp-workflow-card wp-wf-plans" @onclick='() => Nav.NavigateTo("/commissions/plans")'><span class="wp-workflow-icon"><i class="bi bi-clipboard-check" aria-hidden="true"></i></span><span class="wp-workflow-content"><strong>3</strong><span>Plans</span><small>Review rates.</small></span></button>
+        <button type="button" class="wp-workflow-card wp-wf-splits" @onclick='() => Nav.NavigateTo("/commissions/splits")'><span class="wp-workflow-icon"><i class="bi bi-scissors" aria-hidden="true"></i></span><span class="wp-workflow-content"><strong>4</strong><span>Splits</span><small>Create rule.</small></span></button>
+        <button type="button" class="wp-workflow-card wp-wf-forecast" @onclick='() => Nav.NavigateTo("/commissions/forecast2")'><span class="wp-workflow-icon"><i class="bi bi-graph-up" aria-hidden="true"></i></span><span class="wp-workflow-content"><strong>5</strong><span>Forecast</span><small>Compare forecast.</small></span></button>
+        <button type="button" class="wp-workflow-card wp-wf-statements" @onclick='() => Nav.NavigateTo("/commissions/statements")'><span class="wp-workflow-icon"><i class="bi bi-file-earmark-text" aria-hidden="true"></i></span><span class="wp-workflow-content"><strong>6</strong><span>Statements</span><small>Reconcile payout.</small></span></button>
+    </section>
+
+    <section class="wp-enterprise-search" aria-label="Planner filters">
+        <div class="wp-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="wp-search-body"><label for="wp-search">Search planner scenarios</label><input id="wp-search" class="wp-search-input" type="search" placeholder="Search scenario, split type, status, payee, plan, notes..." @bind="SearchFilter" @bind:event="oninput" /><span class="wp-search-hint">Filters apply instantly across synchronized what-if planner data.</span></div>
+        <select class="wp-filter-select" @bind="TypeFilter" aria-label="Scenario type filter"><option value="">All scenario types</option>@foreach (var type in _scenarioTypes) { <option value="@type">@type</option> }</select>
+        <select class="wp-filter-select" @bind="StatusFilter" aria-label="Status filter"><option value="">All statuses</option>@foreach (var status in _statuses) { <option value="@status">@status</option> }</select>
+        <div class="wp-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError)) { <div class="alert alert-danger wp-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div> }
+
+    <section class="wp-content-layout">
+        <div class="wp-grid-wrap">
+            <div class="wp-grid-toolbar"><div><strong>Scenario register</strong><span>@ActiveFilterText</span></div><div class="wp-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="RunSelectedScenario" disabled="@(_selected is null)"><i class="bi bi-play-fill" aria-hidden="true"></i> Run</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloneSelected" disabled="@(_selected is null)"><i class="bi bi-copy" aria-hidden="true"></i> Clone</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button></div></div>
+            @if (_loading) { <div class="wp-loading"><i class="bi bi-arrow-repeat wp-spin" aria-hidden="true"></i><strong>Loading compensation planner...</strong><span>Syncing schema, seed scenarios, plans, payees, and forecast context.</span></div> }
+            else if (!_filtered.Any()) { <div class="wp-empty-state"><i class="bi bi-calculator" aria-hidden="true"></i><strong>No planner scenarios found</strong><span>Adjust filters or create a new compensation what-if scenario.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">New Scenario</button></div> }
+            else
             {
-                <div class="wp-field"><label class="wp-lbl">Primary Producer %</label>
-                    <InputNumber @bind-Value="_plannerForm.PrimaryPct" class="um-input" />
-                    <ValidationMessage For="() => _plannerForm.PrimaryPct" class="validation-message text-danger" />
+                <div class="wp-table-scroll">
+                    <table class="wp-table">
+                        <thead>
+                            <tr>
+                                <th>Scenario</th>
+                                <th>Type</th>
+                                <th>Split</th>
+                                <th>Plan</th>
+                                <th class="wp-number">Premium</th>
+                                <th class="wp-number">Gross</th>
+                                <th class="wp-number">Clawbacks</th>
+                                <th class="wp-number">Net</th>
+                                <th>Status</th>
+                                <th class="wp-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in PagedItems)
+                            {
+                                <tr class="@RowClass(item)" @onclick="() => SelectScenario(item)">
+                                    <td><div class="wp-entry-cell"><span class="wp-entry-icon @ScenarioIconTone(item.ScenarioTypeCode)"><i class="bi bi-calculator" aria-hidden="true"></i></span><span><strong>@item.ScenarioName</strong><span>@item.ScenarioNumber · @item.PayeeName</span></span></div></td>
+                                    <td><span class="wp-type-chip @TypeCss(item.ScenarioTypeCode)">@item.ScenarioTypeCode</span></td>
+                                    <td>@SplitLabel(item)</td>
+                                    <td>@item.PlanName</td>
+                                    <td class="wp-number">@((item.NewBusinessPremium + item.RenewalPremium).ToString("C0"))</td>
+                                    <td class="wp-number">@item.TotalCommission.ToString("C0")</td>
+                                    <td class="wp-number wp-risk">@item.ProjectedClawbacks.ToString("C0")</td>
+                                    <td class="wp-number wp-net">@item.NetPayout.ToString("C0")</td>
+                                    <td><span class="wp-status-chip @StatusCss(item.StatusCode)">@item.StatusCode</span></td>
+                                    <td>
+                                        <div class="wp-row-acts">
+                                            <button type="button" class="um-btn um-btn-primary um-btn-xs" title="Inspect" @onclick:stopPropagation="true" @onclick="() => SelectScenario(item)"><i class="bi bi-layout-sidebar-inset" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Run" @onclick:stopPropagation="true" @onclick="() => RunScenario(item)"><i class="bi bi-play-fill" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Activate" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Active")' disabled="@(item.StatusCode == "Active")"><i class="bi bi-check2-circle" aria-hidden="true"></i></button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="wp-pager"><span>Showing @PageStart-@PageEnd of @_filtered.Count</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button><span>Page @_page of @TotalPages</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button></div></div>
+            }
+        </div>
+        <aside class="wp-detail-panel" aria-label="Selected scenario detail">
+            @if (_selected is null)
+            {
+                <div class="wp-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a scenario</strong><span>Choose a row to inspect assumptions, payout breakdown, comparison, clawback risk, and workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="wp-detail-head"><div><span class="wp-detail-eyebrow"><i class="bi bi-calculator" aria-hidden="true"></i> Scenario detail</span><h2>@_selected.ScenarioName</h2><div class="wp-detail-meta"><span>@_selected.ScenarioNumber</span><span class="wp-type-chip @TypeCss(_selected.ScenarioTypeCode)">@_selected.ScenarioTypeCode</span><span class="wp-status-chip @StatusCss(_selected.StatusCode)">@_selected.StatusCode</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div>
+                <div class="wp-detail-body">
+                    <div class="wp-result-kpis"><div class="wp-rk-card wp-rk-green"><i class="bi bi-currency-dollar wp-rk-icon" aria-hidden="true"></i><div><div class="wp-rk-val">@_selected.NetPayout.ToString("C0")</div><div class="wp-rk-lbl">Net Payout</div></div></div><div class="wp-rk-card wp-rk-blue"><i class="bi bi-arrow-up-circle wp-rk-icon" aria-hidden="true"></i><div><div class="wp-rk-val">@_selected.NewBusinessCommission.ToString("C0")</div><div class="wp-rk-lbl">New Biz</div></div></div><div class="wp-rk-card wp-rk-amber"><i class="bi bi-building wp-rk-icon" aria-hidden="true"></i><div><div class="wp-rk-val">@_selected.OverrideCommission.ToString("C0")</div><div class="wp-rk-lbl">Override</div></div></div><div class="wp-rk-card wp-rk-red"><i class="bi bi-arrow-counterclockwise wp-rk-icon" aria-hidden="true"></i><div><div class="wp-rk-val">@_selected.ProjectedClawbacks.ToString("C0")</div><div class="wp-rk-lbl">Clawbacks</div></div></div></div>
+                    <div class="wp-breakdown-hdr">Payout breakdown</div>
+                    <div class="wp-breakdown-table">
+                        <div class="wp-bt-row wp-bt-hdr"><span>Party</span><span>Role</span><span>Split</span><span>Gross</span><span>Clawback</span><span>Net</span></div>
+                        @foreach (var row in DetailRows)
+                        {
+                            <div class="wp-bt-row"><span class="wp-bt-name">@row.Name</span><span><span class="wp-role-chip @RoleCss(row.Role)">@row.Role</span></span><span class="wp-bt-pct">@row.SplitPct.ToString("N0")%</span><span class="wp-bt-amount">@row.GrossShare.ToString("C2")</span><span class="wp-bt-cw">@(row.ClawbackShare > 0 ? row.ClawbackShare.ToString("C2") : "—")</span><span class="wp-bt-net">@row.NetShare.ToString("C2")</span></div>
+                        }
+                    </div>
+                    <div class="wp-breakdown-hdr">Split comparison</div>
+                    <div class="wp-compare-grid">
+                        @foreach (var c in Comparisons)
+                        {
+                            <div class="wp-compare-card @(_selected.SplitTypeCode == c.Label ? "wp-compare-active" : null)">
+                                <div class="wp-cc-title">@c.Label</div>
+                                <div class="wp-cc-gross">@c.PrimaryNet.ToString("C0")<span class="wp-cc-sub"> primary</span></div>
+                                @if (c.SecondaryNet > 0)
+                                {
+                                    <div class="wp-cc-sec">@c.SecondaryNet.ToString("C0")<span class="wp-cc-sub"> secondary</span></div>
+                                }
+                                <div class="wp-cc-net">Net total: <strong>@c.TotalNet.ToString("C0")</strong></div>
+                                @if (_selected.SplitTypeCode == c.Label)
+                                {
+                                    <span class="wp-cc-badge">Current scenario</span>
+                                }
+                            </div>
+                        }
+                    </div>
+                    <div class="wp-note-card"><span><i class="bi bi-card-text" aria-hidden="true"></i> Workflow context</span><p>@(string.IsNullOrWhiteSpace(_selected.Notes) ? "No planner notes have been captured." : _selected.Notes)</p></div>
+                    <div class="wp-detail-actions"><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="RunSelectedScenario"><i class="bi bi-play-fill" aria-hidden="true"></i> Run</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloneSelected"><i class="bi bi-copy" aria-hidden="true"></i> Clone</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, "Active")' disabled="@(_selected.StatusCode == "Active")"><i class="bi bi-check2-circle" aria-hidden="true"></i> Activate</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, "Archived")' disabled="@(_selected.StatusCode == "Archived")"><i class="bi bi-archive" aria-hidden="true"></i> Archive</button></div>
                 </div>
             }
-            <div class="wp-field">
-                <label><InputCheckbox @bind-Value="_plannerForm.BranchOverride" /> Branch override applies (+rate on top)</label>
-            </div>
-            <div class="wp-field">
-                <label><InputCheckbox @bind-Value="_plannerForm.HouseAccount" /> House account rules (no split)</label>
-            </div>
-        </div>
-
-        <!-- Clawbacks -->
-        <div class="wp-section">
-            <div class="wp-section-title">Clawback Modeling</div>
-            <div class="wp-field"><label class="wp-lbl">Expected Cancellation Rate %</label>
-                <InputNumber @bind-Value="_plannerForm.CancelRate" class="um-input" />
-                <ValidationMessage For="() => _plannerForm.CancelRate" class="validation-message text-danger" />
-            </div>
-            <div class="wp-field"><label class="wp-lbl">NSF / Chargeback Rate %</label>
-                <InputNumber @bind-Value="_plannerForm.NsfRate" class="um-input" />
-                <ValidationMessage For="() => _plannerForm.NsfRate" class="validation-message text-danger" />
-            </div>
-            <div class="wp-field">
-                <label><InputCheckbox @bind-Value="_plannerForm.SharedClawbacks" /> Clawbacks shared proportionally</label>
-            </div>
-            @if (!string.IsNullOrWhiteSpace(_plannerFormError)) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_plannerFormError</div> }
-        </div>
-    </div>
-</EditForm>
-
-    <!-- ══ RESULTS PANEL ══ -->
-    <div class="wp-results">
-        <div class="wp-panel-hdr"><i class="bi bi-graph-up" aria-hidden="true"></i> Scenario Results</div>
-
-        @if (!_ran)
-        {
-            <div class="wp-results-empty">
-                <i class="bi bi-play-circle wp-re-icon" aria-hidden="true"></i>
-                <p>Configure your scenario inputs and click <strong>Run Scenario</strong> to see projections.</p>
-            </div>
-        }
-        else
-        {
-            <!-- Summary KPIs -->
-            <div class="wp-result-kpis">
-                @WpKpi("bi-currency-dollar",       "Total Commission",      _result.TotalCommission.ToString("C0"),   "wp-rk-green")
-                @WpKpi("bi-arrow-up-circle",        "New Biz Earned",        _result.NewBizEarned.ToString("C0"),      "wp-rk-blue")
-                @WpKpi("bi-arrow-repeat",           "Renewal Earned",        _result.RenewalEarned.ToString("C0"),     "wp-rk-blue")
-                @WpKpi("bi-building",               "Override / Bonus",      _result.OverrideEarned.ToString("C0"),   "wp-rk-amber")
-                @WpKpi("bi-arrow-counterclockwise", "Projected Clawbacks",  _result.ProjectedClawbacks.ToString("C0"),"wp-rk-red")
-                @WpKpi("bi-cash-stack",             "Net After Clawbacks",   _result.NetPayout.ToString("C0"),         "wp-rk-green")
-            </div>
-
-            <!-- Producer breakdown table -->
-            <div class="wp-breakdown-hdr">Producer Payout Breakdown</div>
-            <div class="wp-breakdown-table">
-                <div class="wp-bt-row wp-bt-hdr">
-                    <span>Producer</span><span>Role</span><span>Split %</span>
-                    <span>Gross Share</span><span>Clawback</span><span>Net Share</span>
-                </div>
-                @foreach (var row in _result.ProducerRows)
-                {
-                    <div class="wp-bt-row">
-                        <span class="wp-bt-name">@row.Name</span>
-                        <span><span class="wp-role-chip wp-r-@row.Role.ToLower().Replace(" ","-")">@row.Role</span></span>
-                        <span class="wp-bt-pct">@row.SplitPct.ToString("N0")%</span>
-                        <span class="wp-bt-amount">@row.GrossShare.ToString("C2")</span>
-                        <span class="wp-bt-cw">@(row.ClawbackShare > 0 ? "(" + row.ClawbackShare.ToString("C2") + ")" : "—")</span>
-                        <span class="wp-bt-net">@row.NetShare.ToString("C2")</span>
-                    </div>
-                }
-            </div>
-
-            <!-- Scenario comparison (compare 3 split variants side by side) -->
-            <div class="wp-breakdown-hdr" style="margin-top:1.25rem">Split Comparison — Same Book</div>
-            <div class="wp-compare-grid">
-                @foreach (var c in _comparisons)
-                {
-                    <div class="wp-compare-card">
-                        <div class="wp-cc-title">@c.Label</div>
-                        <div class="wp-cc-gross">@c.PrimaryNet.ToString("C0")<span class="wp-cc-sub"> primary</span></div>
-                        @if (c.SecondaryNet > 0)
-                        {
-                            <div class="wp-cc-sec">@c.SecondaryNet.ToString("C0")<span class="wp-cc-sub"> secondary</span></div>
-                        }
-                        <div class="wp-cc-net">Net total: <strong>@c.TotalNet.ToString("C0")</strong></div>
-                        @if (c.IsSelected) { <span class="wp-cc-badge">Current scenario</span> }
-                    </div>
-                }
-            </div>
-
-            <!-- Clawback risk timeline -->
-            <div class="wp-breakdown-hdr" style="margin-top:1.25rem">Projected Clawback Risk by Quarter</div>
-            <div class="wp-cw-timeline">
-                @foreach (var q in _result.ClawbackQuarters)
-                {
-                    <div class="wp-cwq-col">
-                        <div class="wp-cwq-bar-wrap">
-                            <div class="wp-cwq-bar" style="height:@(Math.Min(100,q.Amount/_result.ProjectedClawbacks*80))px"></div>
-                        </div>
-                        <div class="wp-cwq-val">@q.Amount.ToString("C0")</div>
-                        <div class="wp-cwq-lbl">@q.Label</div>
-                    </div>
-                }
-            </div>
-
-            <!-- Action buttons -->
-            <div class="wp-actions-row">
-                <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/plans")'>
-                    <i class="bi bi-clipboard-check" aria-hidden="true"></i> Save as Plan
-                </button>
-                <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/splits")'>
-                    <i class="bi bi-scissors" aria-hidden="true"></i> Create Split Rule
-                </button>
-                <button class="um-btn um-btn-ghost" @onclick="Reset">
-                    <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset
-                </button>
-            </div>
-        }
-    </div>
+        </aside>
+    </section>
 </div>
 
 @code {
-    private PlannerForm _plannerForm = new();
-    private EditContext _plannerEditContext = default!;
-    private string? _plannerFormError;
+    private const int PageSize = 12;
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private List<CommissionPlannerScenarioDto> _items = [];
+    private List<CommissionPlannerScenarioDto> _filtered = [];
+    private List<CommissionPlanDto> _plans = [];
+    private List<CommissionPayeeDto> _payees = [];
+    private List<CommissionForecastDto> _forecasts = [];
+    private CommissionPlannerScenarioDto? _selected;
+    private CommissionPlannerScenarioDto? _statusTarget;
+    private PlannerForm _form = new();
+    private Guid _editingId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _typeFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _pendingStatus;
+    private int _page = 1;
+    private bool _loading, _busy, _showForm, _showStatusConfirm, _toastVisible, _saveAttempted;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError, _formError;
+    private readonly List<string> _scenarioTypes = ["What-If", "Branch Override", "House Account", "Risk Model", "Upside", "Renewal"];
+    private readonly List<string> _splitTypes = ["No Split", "60/40", "50/50", "70/30", "Custom", "Branch Override", "House Account"];
+    private readonly List<string> _statuses = ["Draft", "Active", "Approved", "Archived"];
 
-    private bool _ran;
-    private ScenarioResult _result = new();
+    private IEnumerable<CommissionPlannerScenarioDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All planner scenarios" : $"Filtered by {_kpiFilter}";
+    private string PendingStatusIcon => _pendingStatus switch { "Active" => "bi-check2-circle", "Approved" => "bi-patch-check", "Archived" => "bi-archive-fill", _ => "bi-arrow-repeat" };
+    private string PendingStatusTitle => _pendingStatus switch { "Active" => "Activate Scenario", "Approved" => "Approve Scenario", "Archived" => "Archive Scenario", _ => "Update Scenario" };
+    private string PendingStatusAction => _pendingStatus switch { "Active" => "Activate", "Approved" => "Approve", "Archived" => "Archive", _ => "Update" };
+    private IReadOnlyList<KpiModel> Kpis => [new("all", "Scenarios", _items.Count.ToString("N0"), "All models", "bi-calculator", "wp-ki-blue"), new("active", "Active", _items.Count(x => x.StatusCode == "Active").ToString("N0"), "In workflow", "bi-check2-circle", "wp-ki-green"), new("risk", "Risk", _items.Count(x => x.ScenarioTypeCode == "Risk Model" || x.ProjectedClawbacks > 5000).ToString("N0"), "Clawback exposure", "bi-exclamation-triangle", "wp-ki-amber"), new("override", "Overrides", _items.Count(x => x.BranchOverride).ToString("N0"), "Branch models", "bi-building", "wp-ki-purple"), new("net", "Net Payout", _items.Sum(x => x.NetPayout).ToString("C0"), "Total projected", "bi-currency-dollar", "wp-ki-cyan"), new("forecast", "Forecasts", _forecasts.Count.ToString("N0"), "Synced context", "bi-graph-up", "wp-ki-blue")];
+    private string SearchFilter { get => _searchTerm; set { _searchTerm = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
+    private string TypeFilter { get => _typeFilter; set { _typeFilter = value; ApplyFilters(resetPage: true); } }
+    private IReadOnlyList<ProducerRow> DetailRows => _selected is null ? [] : BuildRows(_selected);
+    private IReadOnlyList<ComparisonRow> Comparisons => _selected is null ? [] : BuildComparisons(_selected);
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
-        _plannerEditContext = new(_plannerForm);
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Commissions","/commissions"), new("What-If Planner",""));
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Commissions", "/commissions2"), new("What-If Planner", "/commissions/planner"));
+        await LoadAsync();
     }
 
-    void OnSplitTypeChanged(string v)
+    private async Task LoadAsync()
     {
-        _plannerForm.SplitType = v;
-        _plannerForm.PrimaryPct = v switch { "60/40" => 60m, "50/50" => 50m, "70/30" => 70m, _ => 60m };
-    }
-
-    void RunScenario()
-    {
-        _plannerFormError = null;
-        if (!_plannerEditContext.Validate()) return;
-        var (primary, secondary) = ResolveSplit();
-        var newBizComm    = _plannerForm.NewBusinessPremium * _plannerForm.NewBusinessRate / 100m;
-        var renewalComm   = _plannerForm.RenewalPremium * _plannerForm.RenewalRate / 100m;
-        var overrideBonus = (_plannerForm.NewBusinessPremium + _plannerForm.RenewalPremium) * _plannerForm.OverrideRate / 100m;
-        if (!_plannerForm.BranchOverride) overrideBonus = 0m;
-        var total   = newBizComm + renewalComm + overrideBonus;
-        var clawCancelation = total * _plannerForm.CancelRate / 100m;
-        var clawNsf         = total * _plannerForm.NsfRate / 100m;
-        var totalClaw       = clawCancelation + clawNsf;
-        var net = total - totalClaw;
-
-        var pRows = new List<ProducerRow>();
-        if (_plannerForm.HouseAccount)
+        _loading = true;
+        _loadError = null;
+        try
         {
-            pRows.Add(new("House Account","House Account",100m, total, totalClaw, net));
+            await Api.EnsureCommissionSeedAsync(_tenantId, _tenantAdminUserId);
+            await Api.EnsureCommissionForecastsSeedAsync(_tenantId);
+            await Api.EnsureCommissionPlannerScenariosSeedAsync(_tenantId);
+            var scenarios = await Api.SearchCommissionPlannerScenariosAsync(_tenantId, string.Empty);
+            var plans = await Api.SearchCommissionPlansAsync(_tenantId, string.Empty);
+            var payees = await Api.SearchCommissionPayeesAsync(_tenantId, string.Empty);
+            var forecasts = await Api.SearchCommissionForecastsAsync(_tenantId, string.Empty);
+            _items = scenarios?.Items.OrderBy(x => StatusSort(x.StatusCode)).ThenByDescending(x => x.CreatedDateUtc).ToList() ?? [];
+            _plans = plans?.Items.OrderBy(x => x.PlanName).ToList() ?? [];
+            _payees = payees?.Items.OrderBy(x => x.PayeeTypeCode).ToList() ?? [];
+            _forecasts = forecasts?.Items.ToList() ?? [];
+            ApplyFilters(resetPage: true);
+            EnsureSelectedStillVisible();
         }
-        else
+        catch (Exception ex)
         {
-            pRows.Add(new("Primary Producer","Primary", primary, total*primary/100m, _plannerForm.SharedClawbacks? totalClaw*primary/100m:totalClaw, total*primary/100m - (_plannerForm.SharedClawbacks?totalClaw*primary/100m:totalClaw)));
-            if (secondary > 0)
-                pRows.Add(new("Secondary Producer","Secondary", secondary, total*secondary/100m, _plannerForm.SharedClawbacks?totalClaw*secondary/100m:0m, total*secondary/100m - (_plannerForm.SharedClawbacks?totalClaw*secondary/100m:0m)));
-            if (_plannerForm.BranchOverride)
-                pRows.Add(new("Branch Office","Branch Manager", 0m, overrideBonus, 0m, overrideBonus));
+            _loadError = $"Compensation planner failed to load: {ex.Message}";
+            ShowToast(_loadError, "danger");
+            _items = [];
+            _filtered = [];
         }
-
-        var quarters = new List<(string Label, decimal Amount)>
+        finally
         {
-            ("Q1 2025", totalClaw * .20m),
-            ("Q2 2025", totalClaw * .35m),
-            ("Q3 2025", totalClaw * .25m),
-            ("Q4 2025", totalClaw * .20m),
-        };
-
-        var comparisons = new List<ComparisonRow>
-        {
-            new("No Split (100%)",  net,            0m, net,            _plannerForm.SplitType == "No Split"),
-            new("60/40 Split",      net*.60m, net*.40m,  net,           _plannerForm.SplitType == "60/40"),
-            new("50/50 Split",      net*.50m, net*.50m,  net,           _plannerForm.SplitType == "50/50"),
-            new("70/30 Split",      net*.70m, net*.30m,  net,           _plannerForm.SplitType == "70/30"),
-        };
-
-        _result = new ScenarioResult
-        {
-            TotalCommission    = total,
-            NewBizEarned       = newBizComm,
-            RenewalEarned      = renewalComm,
-            OverrideEarned     = overrideBonus,
-            ProjectedClawbacks = totalClaw,
-            NetPayout          = net,
-            ProducerRows       = pRows,
-            ClawbackQuarters   = quarters.Select(q => new QuarterRow(q.Label, q.Amount)).ToList(),
-        };
-        _comparisons = comparisons;
-        _ran = true;
+            _loading = false;
+        }
     }
 
-    private (decimal primary, decimal secondary) ResolveSplit() => _plannerForm.SplitType switch
+    private void ApplyFilters(bool resetPage)
     {
-        "No Split"       => (100m, 0m),
-        "60/40"          => (60m,  40m),
-        "50/50"          => (50m,  50m),
-        "70/30"          => (70m,  30m),
-        "Custom"         => (_plannerForm.PrimaryPct, 100m - _plannerForm.PrimaryPct),
-        "Branch Override"=> (70m,  20m),
-        "House Account"  => (100m, 0m),
-        _                => (60m,  40m),
-    };
-
-    void Reset() { _ran = false; _result = new(); }
-
-    private List<ComparisonRow> _comparisons = [];
-
-    RenderFragment WpKpi(string icon, string label, string val, string color) => __builder =>
-    {
-        <div class="wp-rk-card @color">
-            <i class="bi @icon wp-rk-icon" aria-hidden="true"></i>
-            <div><div class="wp-rk-val">@val</div><div class="wp-rk-lbl">@label</div></div>
-        </div>
-    };
-
-    class ScenarioResult
-    {
-        public decimal TotalCommission, NewBizEarned, RenewalEarned, OverrideEarned, ProjectedClawbacks, NetPayout;
-        public List<ProducerRow> ProducerRows = [];
-        public List<QuarterRow> ClawbackQuarters = [];
+        IEnumerable<CommissionPlannerScenarioDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm))
+        {
+            var term = _searchTerm.Trim();
+            query = query.Where(x => Contains(x.ScenarioNumber, term) || Contains(x.ScenarioName, term) || Contains(x.ScenarioTypeCode, term) || Contains(x.SplitTypeCode, term) || Contains(x.StatusCode, term) || Contains(x.Notes, term) || Contains(x.PayeeName, term) || Contains(x.PlanName, term));
+        }
+        if (!string.IsNullOrWhiteSpace(_typeFilter)) query = query.Where(x => x.ScenarioTypeCode == _typeFilter);
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.StatusCode == _statusFilter);
+        query = _kpiFilter switch { "active" => query.Where(x => x.StatusCode == "Active"), "risk" => query.Where(x => x.ScenarioTypeCode == "Risk Model" || x.ProjectedClawbacks > 5000), "override" => query.Where(x => x.BranchOverride), "net" => query.Where(x => x.NetPayout > 0), "forecast" => query, _ => query };
+        _filtered = query.OrderBy(x => StatusSort(x.StatusCode)).ThenByDescending(x => x.CreatedDateUtc).ToList();
+        if (resetPage) _page = 1;
+        if (_page > TotalPages) _page = TotalPages;
     }
-    record ProducerRow(string Name, string Role, decimal SplitPct, decimal GrossShare, decimal ClawbackShare, decimal NetShare);
-    record QuarterRow(string Label, decimal Amount);
-    record ComparisonRow(string Label, decimal PrimaryNet, decimal SecondaryNet, decimal TotalNet, bool IsSelected);
 
+    private void SetKpiFilter(string filter) { _kpiFilter = _kpiFilter == filter && filter != "all" ? "all" : filter; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _searchTerm = string.Empty; _statusFilter = string.Empty; _typeFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); ShowToast("Planner filters reset.", "info"); }
+    private void SelectScenario(CommissionPlannerScenarioDto item) => _selected = item;
+
+    private void OpenCreate()
+    {
+        _editingId = Guid.Empty;
+        _saveAttempted = false;
+        _formError = null;
+        _form = new PlannerForm { ScenarioNumber = $"WP-{DateTime.UtcNow:yyyyMM}-{(_items.Count + 1):000}", ScenarioName = "New Compensation Scenario", ScenarioTypeCode = "What-If", CommissionPlanId = _plans.FirstOrDefault()?.CommissionPlanId, PayeeId = _payees.FirstOrDefault()?.PayeeId, NewBusinessPremium = 500000, RenewalPremium = 300000, PolicyCount = 120, NewBusinessRatePct = 10, RenewalRatePct = 8, OverrideRatePct = 0, SplitTypeCode = "60/40", PrimarySplitPct = 60, SecondarySplitPct = 40, SharedClawbacks = true, CancellationRatePct = 3, NsfRatePct = .5m, StatusCode = "Draft" };
+        CalculateForm();
+        _showForm = true;
+    }
+
+    private void OpenEdit(CommissionPlannerScenarioDto item)
+    {
+        _editingId = item.ScenarioId;
+        _saveAttempted = false;
+        _formError = null;
+        _form = new PlannerForm { CommissionPlanId = item.CommissionPlanId, PayeeId = item.PayeeId, ScenarioNumber = item.ScenarioNumber, ScenarioName = item.ScenarioName, ScenarioTypeCode = item.ScenarioTypeCode, NewBusinessPremium = item.NewBusinessPremium, RenewalPremium = item.RenewalPremium, PolicyCount = item.PolicyCount, NewBusinessRatePct = item.NewBusinessRatePct, RenewalRatePct = item.RenewalRatePct, OverrideRatePct = item.OverrideRatePct, SplitTypeCode = item.SplitTypeCode, PrimarySplitPct = item.PrimarySplitPct, SecondarySplitPct = item.SecondarySplitPct, BranchOverride = item.BranchOverride, HouseAccount = item.HouseAccount, SharedClawbacks = item.SharedClawbacks, CancellationRatePct = item.CancellationRatePct, NsfRatePct = item.NsfRatePct, NewBusinessCommission = item.NewBusinessCommission, RenewalCommission = item.RenewalCommission, OverrideCommission = item.OverrideCommission, TotalCommission = item.TotalCommission, ProjectedClawbacks = item.ProjectedClawbacks, NetPayout = item.NetPayout, PrimaryNetPayout = item.PrimaryNetPayout, SecondaryNetPayout = item.SecondaryNetPayout, BranchNetPayout = item.BranchNetPayout, StatusCode = item.StatusCode, Notes = item.Notes };
+        _showForm = true;
+    }
+
+    private void CloseForm() { if (_busy) return; _showForm = false; _saveAttempted = false; }
+    private void RunFormScenario() { CalculateForm(); ShowToast("Scenario calculated. Save to persist the model.", "info"); }
+    private void RunSelectedScenario() { if (_selected is not null) RunScenario(_selected); }
+    private void RunScenario(CommissionPlannerScenarioDto item) { _selected = item; ShowToast($"Scenario run complete: {item.NetPayout:C0} net payout projected.", "success"); }
+
+    private async Task SaveAsync()
+    {
+        _saveAttempted = true;
+        CalculateForm();
+        if (!ValidateForm()) return;
+        _busy = true;
+        _formError = null;
+        var savedId = _editingId;
+        try
+        {
+            if (_editingId == Guid.Empty)
+            {
+                savedId = await Api.CreateCommissionPlannerScenarioAsync(ToCreateRequest());
+                ShowToast("Planner scenario saved.", "success");
+            }
+            else
+            {
+                await Api.UpdateCommissionPlannerScenarioAsync(_editingId, ToUpdateRequest());
+                ShowToast("Planner scenario updated.", "success");
+            }
+            _showForm = false;
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.ScenarioId == savedId) ?? _selected;
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast(_formError, "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void CalculateForm()
+    {
+        if (_form.SplitTypeCode != "Custom") ApplySplitTypeDefaults();
+        var newBiz = Math.Round(_form.NewBusinessPremium * _form.NewBusinessRatePct / 100m, 2);
+        var renewal = Math.Round(_form.RenewalPremium * _form.RenewalRatePct / 100m, 2);
+        var overrideAmount = _form.BranchOverride ? Math.Round((_form.NewBusinessPremium + _form.RenewalPremium) * _form.OverrideRatePct / 100m, 2) : 0m;
+        var total = newBiz + renewal + overrideAmount;
+        var clawbacks = Math.Round(total * ((_form.CancellationRatePct + _form.NsfRatePct) / 100m), 2);
+        var net = total - clawbacks;
+        _form.NewBusinessCommission = newBiz;
+        _form.RenewalCommission = renewal;
+        _form.OverrideCommission = overrideAmount;
+        _form.TotalCommission = total;
+        _form.ProjectedClawbacks = clawbacks;
+        _form.NetPayout = net;
+        if (_form.HouseAccount)
+        {
+            _form.PrimaryNetPayout = net;
+            _form.SecondaryNetPayout = 0;
+            _form.BranchNetPayout = 0;
+            return;
+        }
+        var baseNet = net - overrideAmount;
+        _form.PrimaryNetPayout = Math.Round(baseNet * _form.PrimarySplitPct / 100m, 2);
+        _form.SecondaryNetPayout = Math.Round(baseNet * _form.SecondarySplitPct / 100m, 2);
+        _form.BranchNetPayout = overrideAmount;
+    }
+
+    private void ApplySplitTypeDefaults()
+    {
+        (_form.PrimarySplitPct, _form.SecondarySplitPct, _form.BranchOverride, _form.HouseAccount) = _form.SplitTypeCode switch
+        {
+            "No Split" => (100m, 0m, false, false),
+            "50/50" => (50m, 50m, false, false),
+            "70/30" => (70m, 30m, false, false),
+            "Branch Override" => (70m, 20m, true, false),
+            "House Account" => (100m, 0m, false, true),
+            "Custom" => (_form.PrimarySplitPct, 100m - _form.PrimarySplitPct, _form.BranchOverride, _form.HouseAccount),
+            _ => (60m, 40m, false, false)
+        };
+    }
+
+    private void UpdateSecondarySplit() { if (_form.SplitTypeCode == "Custom") _form.SecondarySplitPct = Math.Max(0, 100m - _form.PrimarySplitPct); }
+    private async Task NotifyValidationAsync(EditContext _) { _saveAttempted = true; ShowToast("Please correct validation errors before saving.", "warning"); await Task.CompletedTask; }
+
+    private void CloneSelected()
+    {
+        if (_selected is null) return;
+        OpenEdit(_selected);
+        _editingId = Guid.Empty;
+        _form.ScenarioNumber = $"WP-{DateTime.UtcNow:yyyyMM}-{(_items.Count + 1):000}";
+        _form.ScenarioName = $"Copy of {_selected.ScenarioName}";
+        _form.StatusCode = "Draft";
+        ShowToast("Scenario cloned. Review and save the copy.", "info");
+    }
+
+    private void ConfirmStatusUpdate(CommissionPlannerScenarioDto item, string status) { _statusTarget = item; _pendingStatus = status; _showStatusConfirm = true; }
+    private void CancelStatusUpdate() { if (_busy) return; _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; }
+
+    private async Task ExecuteStatusUpdateAsync()
+    {
+        if (_statusTarget is null || string.IsNullOrWhiteSpace(_pendingStatus)) return;
+        _busy = true;
+        var selectedId = _statusTarget.ScenarioId;
+        try
+        {
+            var request = ToUpdateRequest(_statusTarget, _pendingStatus);
+            await Api.UpdateCommissionPlannerScenarioAsync(_statusTarget.ScenarioId, request);
+            ShowToast($"Scenario marked {_pendingStatus.ToLowerInvariant()}.", "success");
+            _showStatusConfirm = false;
+            _statusTarget = null;
+            _pendingStatus = null;
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.ScenarioId == selectedId) ?? _selected;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ExportAsync()
+    {
+        if (!_filtered.Any()) { ShowToast("No planner scenarios are available to export.", "warning"); return; }
+        var csv = new StringBuilder();
+        csv.AppendLine("ScenarioId,ScenarioNumber,ScenarioName,ScenarioType,Status,Plan,Payee,NewBusinessPremium,RenewalPremium,PolicyCount,SplitType,PrimarySplit,SecondarySplit,TotalCommission,ProjectedClawbacks,NetPayout,Notes");
+        foreach (var item in _filtered)
+        {
+            csv.AppendLine(string.Join(',', Csv(item.ScenarioId.ToString()), Csv(item.ScenarioNumber), Csv(item.ScenarioName), Csv(item.ScenarioTypeCode), Csv(item.StatusCode), Csv(item.PlanName), Csv(item.PayeeName), item.NewBusinessPremium, item.RenewalPremium, item.PolicyCount, Csv(item.SplitTypeCode), item.PrimarySplitPct, item.SecondarySplitPct, item.TotalCommission, item.ProjectedClawbacks, item.NetPayout, Csv(item.Notes)));
+        }
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"commission-planner-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+        ShowToast($"Exported {_filtered.Count:N0} planner scenarios.", "success");
+    }
+
+    private CreateCommissionPlannerScenarioRequest ToCreateRequest() => new() { TenantId = _tenantId, CommissionPlanId = _form.CommissionPlanId, PayeeId = _form.PayeeId, ScenarioNumber = _form.ScenarioNumber.Trim(), ScenarioName = _form.ScenarioName.Trim(), ScenarioTypeCode = _form.ScenarioTypeCode, NewBusinessPremium = _form.NewBusinessPremium, RenewalPremium = _form.RenewalPremium, PolicyCount = _form.PolicyCount, NewBusinessRatePct = _form.NewBusinessRatePct, RenewalRatePct = _form.RenewalRatePct, OverrideRatePct = _form.OverrideRatePct, SplitTypeCode = _form.SplitTypeCode, PrimarySplitPct = _form.PrimarySplitPct, SecondarySplitPct = _form.SecondarySplitPct, BranchOverride = _form.BranchOverride, HouseAccount = _form.HouseAccount, SharedClawbacks = _form.SharedClawbacks, CancellationRatePct = _form.CancellationRatePct, NsfRatePct = _form.NsfRatePct, NewBusinessCommission = _form.NewBusinessCommission, RenewalCommission = _form.RenewalCommission, OverrideCommission = _form.OverrideCommission, TotalCommission = _form.TotalCommission, ProjectedClawbacks = _form.ProjectedClawbacks, NetPayout = _form.NetPayout, PrimaryNetPayout = _form.PrimaryNetPayout, SecondaryNetPayout = _form.SecondaryNetPayout, BranchNetPayout = _form.BranchNetPayout, StatusCode = _form.StatusCode, Notes = _form.Notes, CreatedByUserId = _tenantAdminUserId };
+    private UpdateCommissionPlannerScenarioRequest ToUpdateRequest() => new() { TenantId = _tenantId, ScenarioId = _editingId, CommissionPlanId = _form.CommissionPlanId, PayeeId = _form.PayeeId, ScenarioNumber = _form.ScenarioNumber.Trim(), ScenarioName = _form.ScenarioName.Trim(), ScenarioTypeCode = _form.ScenarioTypeCode, NewBusinessPremium = _form.NewBusinessPremium, RenewalPremium = _form.RenewalPremium, PolicyCount = _form.PolicyCount, NewBusinessRatePct = _form.NewBusinessRatePct, RenewalRatePct = _form.RenewalRatePct, OverrideRatePct = _form.OverrideRatePct, SplitTypeCode = _form.SplitTypeCode, PrimarySplitPct = _form.PrimarySplitPct, SecondarySplitPct = _form.SecondarySplitPct, BranchOverride = _form.BranchOverride, HouseAccount = _form.HouseAccount, SharedClawbacks = _form.SharedClawbacks, CancellationRatePct = _form.CancellationRatePct, NsfRatePct = _form.NsfRatePct, NewBusinessCommission = _form.NewBusinessCommission, RenewalCommission = _form.RenewalCommission, OverrideCommission = _form.OverrideCommission, TotalCommission = _form.TotalCommission, ProjectedClawbacks = _form.ProjectedClawbacks, NetPayout = _form.NetPayout, PrimaryNetPayout = _form.PrimaryNetPayout, SecondaryNetPayout = _form.SecondaryNetPayout, BranchNetPayout = _form.BranchNetPayout, StatusCode = _form.StatusCode, Notes = _form.Notes, ModifiedByUserId = _tenantAdminUserId };
+    private UpdateCommissionPlannerScenarioRequest ToUpdateRequest(CommissionPlannerScenarioDto item, string status) => new() { TenantId = _tenantId, ScenarioId = item.ScenarioId, CommissionPlanId = item.CommissionPlanId, PayeeId = item.PayeeId, ScenarioNumber = item.ScenarioNumber, ScenarioName = item.ScenarioName, ScenarioTypeCode = item.ScenarioTypeCode, NewBusinessPremium = item.NewBusinessPremium, RenewalPremium = item.RenewalPremium, PolicyCount = item.PolicyCount, NewBusinessRatePct = item.NewBusinessRatePct, RenewalRatePct = item.RenewalRatePct, OverrideRatePct = item.OverrideRatePct, SplitTypeCode = item.SplitTypeCode, PrimarySplitPct = item.PrimarySplitPct, SecondarySplitPct = item.SecondarySplitPct, BranchOverride = item.BranchOverride, HouseAccount = item.HouseAccount, SharedClawbacks = item.SharedClawbacks, CancellationRatePct = item.CancellationRatePct, NsfRatePct = item.NsfRatePct, NewBusinessCommission = item.NewBusinessCommission, RenewalCommission = item.RenewalCommission, OverrideCommission = item.OverrideCommission, TotalCommission = item.TotalCommission, ProjectedClawbacks = item.ProjectedClawbacks, NetPayout = item.NetPayout, PrimaryNetPayout = item.PrimaryNetPayout, SecondaryNetPayout = item.SecondaryNetPayout, BranchNetPayout = item.BranchNetPayout, StatusCode = status, Notes = item.Notes, ModifiedByUserId = _tenantAdminUserId };
+
+    private bool ValidateForm()
+    {
+        if (string.IsNullOrWhiteSpace(_form.ScenarioNumber)) { _formError = "Scenario Number is required."; ShowToast(_formError, "warning"); return false; }
+        if (string.IsNullOrWhiteSpace(_form.ScenarioName)) { _formError = "Scenario Name is required."; ShowToast(_formError, "warning"); return false; }
+        if (_form.PrimarySplitPct + _form.SecondarySplitPct > 100m && !_form.BranchOverride) { _formError = "Primary and secondary splits cannot exceed 100%."; ShowToast(_formError, "warning"); return false; }
+        return true;
+    }
+
+    private IReadOnlyList<ProducerRow> BuildRows(CommissionPlannerScenarioDto item)
+    {
+        if (item.HouseAccount) return [new("House Account", "House Account", 100, item.TotalCommission, item.ProjectedClawbacks, item.NetPayout)];
+        var totalWithoutOverride = item.TotalCommission - item.OverrideCommission;
+        var clawPrimary = item.SharedClawbacks ? item.ProjectedClawbacks * item.PrimarySplitPct / 100m : item.ProjectedClawbacks;
+        var clawSecondary = item.SharedClawbacks ? item.ProjectedClawbacks * item.SecondarySplitPct / 100m : 0m;
+        var rows = new List<ProducerRow> { new("Primary Producer", "Primary", item.PrimarySplitPct, totalWithoutOverride * item.PrimarySplitPct / 100m, clawPrimary, item.PrimaryNetPayout) };
+        if (item.SecondarySplitPct > 0) rows.Add(new("Secondary Producer", "Secondary", item.SecondarySplitPct, totalWithoutOverride * item.SecondarySplitPct / 100m, clawSecondary, item.SecondaryNetPayout));
+        if (item.BranchOverride) rows.Add(new("Branch Office", "Branch Manager", 0, item.OverrideCommission, 0, item.BranchNetPayout));
+        return rows;
+    }
+
+    private IReadOnlyList<ComparisonRow> BuildComparisons(CommissionPlannerScenarioDto item)
+    {
+        var net = item.NetPayout;
+        return [new("No Split", net, 0, net), new("60/40", net * .60m, net * .40m, net), new("50/50", net * .50m, net * .50m, net), new("70/30", net * .70m, net * .30m, net)];
+    }
+
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() => _selected = _selected is null ? _filtered.FirstOrDefault() : _items.FirstOrDefault(x => x.ScenarioId == _selected.ScenarioId) ?? _filtered.FirstOrDefault();
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+    private string PayeeLabel(CommissionPayeeDto payee) => $"{payee.PayeeTypeCode} · {payee.SplitPercentage:N2}%";
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static int StatusSort(string status) => status switch { "Active" => 0, "Approved" => 1, "Draft" => 2, "Archived" => 3, _ => 4 };
+    private static string StatusCss(string status) => $"wp-st-{status.ToLowerInvariant()}";
+    private static string TypeCss(string type) => $"wp-ty-{type.ToLowerInvariant().Replace(" ", "-")}";
+    private static string ScenarioIconTone(string type) => type switch { "Branch Override" => "wp-di-purple", "House Account" => "wp-di-green", "Risk Model" => "wp-di-amber", "Upside" => "wp-di-cyan", _ => "wp-di-blue" };
+    private static string SplitLabel(CommissionPlannerScenarioDto item) => $"{item.SplitTypeCode} · {item.PrimarySplitPct:N0}/{item.SecondarySplitPct:N0}";
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private static string RoleCss(string role) => $"wp-r-{role.ToLowerInvariant().Replace(" ", "-")}";
+    private string KpiClass(KpiModel kpi) => $"wp-kpi-card {kpi.Tone} {(_kpiFilter == kpi.Filter ? "wp-kpi-active" : string.Empty)}";
+    private string RowClass(CommissionPlannerScenarioDto item) => $"wp-table-row {(_selected?.ScenarioId == item.ScenarioId ? "wp-table-row--selected" : string.Empty)}";
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter planner scenarios by {Label}"; }
+    private sealed record ProducerRow(string Name, string Role, decimal SplitPct, decimal GrossShare, decimal ClawbackShare, decimal NetShare);
+    private sealed record ComparisonRow(string Label, decimal PrimaryNet, decimal SecondaryNet, decimal TotalNet);
     private sealed class PlannerForm
     {
-        [Range(0, 100000000)] public decimal NewBusinessPremium { get; set; } = 500_000m;
-        [Range(0, 100000000)] public decimal RenewalPremium { get; set; } = 300_000m;
-        [Range(0, 1000000)] public int PolicyCount { get; set; } = 120;
-        [Range(0, 100)] public decimal NewBusinessRate { get; set; } = 10m;
-        [Range(0, 100)] public decimal RenewalRate { get; set; } = 8m;
-        [Range(0, 100)] public decimal OverrideRate { get; set; } = 2m;
-        [Required, StringLength(50)] public string SplitType { get; set; } = "60/40";
-        [Range(0, 100)] public decimal PrimaryPct { get; set; } = 60m;
+        public Guid? CommissionPlanId { get; set; }
+        public Guid? PayeeId { get; set; }
+        [Required, StringLength(80)] public string ScenarioNumber { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string ScenarioName { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string ScenarioTypeCode { get; set; } = "What-If";
+        [Range(0, 100000000)] public decimal NewBusinessPremium { get; set; }
+        [Range(0, 100000000)] public decimal RenewalPremium { get; set; }
+        [Range(0, 1000000)] public int PolicyCount { get; set; }
+        [Range(0, 100)] public decimal NewBusinessRatePct { get; set; }
+        [Range(0, 100)] public decimal RenewalRatePct { get; set; }
+        [Range(0, 100)] public decimal OverrideRatePct { get; set; }
+        [Required, StringLength(50)] public string SplitTypeCode { get; set; } = "60/40";
+        [Range(0, 100)] public decimal PrimarySplitPct { get; set; }
+        [Range(0, 100)] public decimal SecondarySplitPct { get; set; }
         public bool BranchOverride { get; set; }
         public bool HouseAccount { get; set; }
         public bool SharedClawbacks { get; set; } = true;
-        [Range(0, 100)] public decimal CancelRate { get; set; } = 3m;
-        [Range(0, 100)] public decimal NsfRate { get; set; } = 0.5m;
+        [Range(0, 100)] public decimal CancellationRatePct { get; set; }
+        [Range(0, 100)] public decimal NsfRatePct { get; set; }
+        public decimal NewBusinessCommission { get; set; }
+        public decimal RenewalCommission { get; set; }
+        public decimal OverrideCommission { get; set; }
+        public decimal TotalCommission { get; set; }
+        public decimal ProjectedClawbacks { get; set; }
+        public decimal NetPayout { get; set; }
+        public decimal PrimaryNetPayout { get; set; }
+        public decimal SecondaryNetPayout { get; set; }
+        public decimal BranchNetPayout { get; set; }
+        [Required, StringLength(50)] public string StatusCode { get; set; } = "Draft";
+        [StringLength(1000)] public string? Notes { get; set; }
     }
 }

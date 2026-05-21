@@ -19,6 +19,26 @@ public class CreateCommissionPlanRequest
     public Guid? CreatedByUserId { get; set; }
 }
 
+public class CreateCommissionAccrualEntryRequest
+{
+    [Required] public Guid TenantId { get; set; }
+    public Guid? TransactionId { get; set; }
+    public Guid? GLAccountId { get; set; }
+    [Required] public DateOnly AccrualDate { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow);
+    [Range(0.01, 100000000)] public decimal AccruedAmount { get; set; }
+    public DateOnly? ReversalDate { get; set; }
+    [Range(0, 100000000)] public decimal? ReversedAmount { get; set; }
+    public Guid? JournalEntryId { get; set; }
+    [Required, StringLength(50)] public string StatusCode { get; set; } = "Pending";
+    public Guid? CreatedByUserId { get; set; }
+}
+
+public sealed class UpdateCommissionAccrualEntryRequest : CreateCommissionAccrualEntryRequest
+{
+    [Required] public Guid AccrualEntryId { get; set; }
+    public Guid? ModifiedByUserId { get; set; }
+}
+
 public sealed class UpdateCommissionPlanRequest : CreateCommissionPlanRequest
 {
     [Required] public Guid CommissionPlanId { get; set; }
@@ -51,6 +71,7 @@ public class CreateCommissionClawbackRequest
 {
     [Required] public Guid TenantId { get; set; }
     public Guid? PayeeId { get; set; }
+    public Guid? CommissionResultId { get; set; }
     public Guid? OriginalTransactionId { get; set; }
     [Required] public DateOnly ClawbackDate { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow);
     [Range(0.01, 100000000)] public decimal Amount { get; set; }
@@ -198,4 +219,102 @@ public class GenerateCommissionPayoutStatementsRequest
     [Required, StringLength(50)] public string StatusCode { get; set; } = "Draft";
     public bool IssueImmediately { get; set; }
     public Guid? CreatedByUserId { get; set; }
+}
+
+public class CreateCommissionExceptionRequest
+{
+    [Required] public Guid TenantId { get; set; }
+    public Guid? PayeeId { get; set; }
+    public Guid? CommissionPlanId { get; set; }
+    public Guid? TransactionId { get; set; }
+    public Guid? PayoutBatchId { get; set; }
+    [Required, StringLength(80)] public string ExceptionNumber { get; set; } = string.Empty;
+    [Required, StringLength(80)] public string ExceptionTypeCode { get; set; } = "Missing Payee";
+    [Required, StringLength(50)] public string SeverityCode { get; set; } = "Medium";
+    [Required, StringLength(80)] public string SourceCode { get; set; } = "Commission Run";
+    [Required, StringLength(1000)] public string Description { get; set; } = string.Empty;
+    [Range(0, 100000000)] public decimal ImpactAmount { get; set; }
+    [Required, StringLength(3)] public string CurrencyCode { get; set; } = "USD";
+    [Required, StringLength(50)] public string StatusCode { get; set; } = "Open";
+    [StringLength(1000)] public string? ResolutionNotes { get; set; }
+    public Guid? AssignedToUserId { get; set; }
+    public DateTime? DueDateUtc { get; set; }
+    public Guid? ResolvedByUserId { get; set; }
+    public DateTime? ResolvedDateUtc { get; set; }
+    public Guid? CreatedByUserId { get; set; }
+}
+
+public sealed class UpdateCommissionExceptionRequest : CreateCommissionExceptionRequest
+{
+    [Required] public Guid ExceptionId { get; set; }
+    public Guid? ModifiedByUserId { get; set; }
+}
+
+public class CreateCommissionForecastRequest
+{
+    [Required] public Guid TenantId { get; set; }
+    public Guid? CommissionPlanId { get; set; }
+    public Guid? PayeeId { get; set; }
+    [Required, StringLength(80)] public string ForecastNumber { get; set; } = string.Empty;
+    [Required, StringLength(200)] public string ForecastName { get; set; } = string.Empty;
+    [Required] public DateOnly PeriodStart { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+    [Required] public DateOnly PeriodEnd { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow.Date.AddMonths(1));
+    [Range(0, 100000000)] public decimal PipelinePremium { get; set; }
+    [Range(0, 100000000)] public decimal WeightedPremium { get; set; }
+    [Range(0, 100000000)] public decimal ExpectedRevenue { get; set; }
+    [Range(0, 100000000)] public decimal ForecastCommission { get; set; }
+    [Range(0, 100)] public decimal ConfidencePct { get; set; } = 75;
+    [Range(0, 100000000)] public decimal ActualCommission { get; set; }
+    [Required, StringLength(50)] public string ScenarioCode { get; set; } = "Base";
+    [Required, StringLength(50)] public string StatusCode { get; set; } = "Draft";
+    [StringLength(1000)] public string? Notes { get; set; }
+    public Guid? CreatedByUserId { get; set; }
+}
+
+public sealed class UpdateCommissionForecastRequest : CreateCommissionForecastRequest
+{
+    [Required] public Guid ForecastId { get; set; }
+    public Guid? ModifiedByUserId { get; set; }
+}
+
+public class CreateCommissionPlannerScenarioRequest
+{
+    [Required] public Guid TenantId { get; set; }
+    public Guid? CommissionPlanId { get; set; }
+    public Guid? PayeeId { get; set; }
+    [Required, StringLength(80)] public string ScenarioNumber { get; set; } = string.Empty;
+    [Required, StringLength(200)] public string ScenarioName { get; set; } = string.Empty;
+    [Required, StringLength(50)] public string ScenarioTypeCode { get; set; } = "What-If";
+    [Range(0, 100000000)] public decimal NewBusinessPremium { get; set; }
+    [Range(0, 100000000)] public decimal RenewalPremium { get; set; }
+    [Range(0, 1000000)] public int PolicyCount { get; set; }
+    [Range(0, 100)] public decimal NewBusinessRatePct { get; set; }
+    [Range(0, 100)] public decimal RenewalRatePct { get; set; }
+    [Range(0, 100)] public decimal OverrideRatePct { get; set; }
+    [Required, StringLength(50)] public string SplitTypeCode { get; set; } = "60/40";
+    [Range(0, 100)] public decimal PrimarySplitPct { get; set; }
+    [Range(0, 100)] public decimal SecondarySplitPct { get; set; }
+    public bool BranchOverride { get; set; }
+    public bool HouseAccount { get; set; }
+    public bool SharedClawbacks { get; set; } = true;
+    [Range(0, 100)] public decimal CancellationRatePct { get; set; }
+    [Range(0, 100)] public decimal NsfRatePct { get; set; }
+    [Range(0, 100000000)] public decimal NewBusinessCommission { get; set; }
+    [Range(0, 100000000)] public decimal RenewalCommission { get; set; }
+    [Range(0, 100000000)] public decimal OverrideCommission { get; set; }
+    [Range(0, 100000000)] public decimal TotalCommission { get; set; }
+    [Range(0, 100000000)] public decimal ProjectedClawbacks { get; set; }
+    [Range(-100000000, 100000000)] public decimal NetPayout { get; set; }
+    [Range(-100000000, 100000000)] public decimal PrimaryNetPayout { get; set; }
+    [Range(-100000000, 100000000)] public decimal SecondaryNetPayout { get; set; }
+    [Range(-100000000, 100000000)] public decimal BranchNetPayout { get; set; }
+    [Required, StringLength(50)] public string StatusCode { get; set; } = "Draft";
+    [StringLength(1000)] public string? Notes { get; set; }
+    public Guid? CreatedByUserId { get; set; }
+}
+
+public sealed class UpdateCommissionPlannerScenarioRequest : CreateCommissionPlannerScenarioRequest
+{
+    [Required] public Guid ScenarioId { get; set; }
+    public Guid? ModifiedByUserId { get; set; }
 }

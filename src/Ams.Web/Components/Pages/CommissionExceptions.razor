@@ -1,0 +1,261 @@
+@page "/commissions/exceptions2"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Commissions
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
+
+<PageTitle>Commission Exceptions — AMS Enterprise</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="ce-toast ce-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ce-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showStatusConfirm && _statusTarget is not null && !string.IsNullOrWhiteSpace(_pendingStatus))
+{
+    <div class="ce-modal-backdrop" role="presentation" @onclick="CancelStatusUpdate">
+        <div class="ce-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="ce-status-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingStatus == "Deferred" ? "um-confirm-icon--danger" : null)"><i class="bi @PendingStatusIcon" aria-hidden="true"></i></div>
+                <div class="um-confirm-title" id="ce-status-title">@PendingStatusTitle</div>
+                <div class="um-confirm-body">Mark exception <strong>@_statusTarget.ExceptionNumber</strong> as <strong>@_pendingStatus</strong>? @PendingStatusBody</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelStatusUpdate" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn @(_pendingStatus == "Deferred" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteStatusUpdateAsync" disabled="@_busy">@PendingStatusAction</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="ce-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="ce-modal ce-action-modal" role="dialog" aria-modal="true" aria-labelledby="ce-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-exclamation-octagon" aria-hidden="true"></i>
+                <span id="ce-form-title">@(_editingId == Guid.Empty ? "New Commission Exception" : "Edit Commission Exception")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="ce-modal-intro"><span><i class="bi bi-shield-check" aria-hidden="true"></i> Exception workflow</span><p>Capture commission calculation, split, payee, payout, and statement issues before payout approval.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Exception Number <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.ExceptionNumber" />
+                            <ValidationMessage For="() => _form.ExceptionNumber" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Type <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.ExceptionTypeCode">@foreach (var type in _types) { <option value="@type">@type</option> }</InputSelect>
+                            <ValidationMessage For="() => _form.ExceptionTypeCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Severity <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.SeverityCode">@foreach (var severity in _severities) { <option value="@severity">@severity</option> }</InputSelect>
+                            <ValidationMessage For="() => _form.SeverityCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Status <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.StatusCode">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect>
+                            <ValidationMessage For="() => _form.StatusCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Source <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.SourceCode">@foreach (var source in _sources) { <option value="@source">@source</option> }</InputSelect>
+                            <ValidationMessage For="() => _form.SourceCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Impact Amount <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_form.ImpactAmount" />
+                            <ValidationMessage For="() => _form.ImpactAmount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Currency <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.CurrencyCode" maxlength="3" />
+                            <ValidationMessage For="() => _form.CurrencyCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Due Date</label>
+                            <InputDate class="form-control" @bind-Value="_form.DueDate" />
+                        </div>
+                        <div class="um-field">
+                            <label>Plan</label>
+                            <InputSelect class="form-select" @bind-Value="_form.CommissionPlanId"><option value="">Unassigned plan</option>@foreach (var plan in _plans) { <option value="@plan.CommissionPlanId">@plan.PlanName</option> }</InputSelect>
+                        </div>
+                        <div class="um-field">
+                            <label>Payee</label>
+                            <InputSelect class="form-select" @bind-Value="_form.PayeeId"><option value="">Unassigned payee</option>@foreach (var payee in _payees) { <option value="@payee.PayeeId">@PayeeLabel(payee)</option> }</InputSelect>
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Description <span class="text-danger">*</span></label>
+                            <InputTextArea class="form-control" @bind-Value="_form.Description" rows="3" />
+                            <ValidationMessage For="() => _form.Description" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Resolution Notes</label>
+                            <InputTextArea class="form-control" @bind-Value="_form.ResolutionNotes" rows="3" />
+                            <ValidationMessage For="() => _form.ResolutionNotes" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full ce-impact-preview"><span>Resolution preview</span><strong>@_form.ImpactAmount.ToString("C2")</strong><small>@_form.SeverityCode severity · @_form.StatusCode status</small></div>
+                        @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editingId == Guid.Empty ? "Create Exception" : "Save Changes")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="ce-enterprise-page">
+    <section class="ce-header">
+        <div class="ce-header-left"><div class="ce-lob-icon"><i class="bi bi-exclamation-octagon" aria-hidden="true"></i></div><div class="ce-header-info"><div class="ce-title-row"><h1 class="ce-page-title">Commission Exceptions</h1><span class="ce-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live exception data</span><span class="ce-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span></div><div class="ce-sub-row"><span>Review, triage, resolve, and defer commission payout blockers before statements are issued.</span><span class="ce-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span><span class="ce-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span></div></div></div>
+        <div class="ce-header-actions"><button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions2")'><i class="bi bi-cash-coin" aria-hidden="true"></i> Commissions</button><button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="@RefreshIconClass" aria-hidden="true"></i> Refresh</button><button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Exception</button></div>
+    </section>
+
+    <section class="ce-kpi-strip" aria-label="Commission exception metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="@KpiClass(kpi)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)"><span class="ce-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span><span class="ce-kpi-copy"><span class="ce-kpi-label">@kpi.Label</span><span class="ce-kpi-value">@kpi.Value</span><span class="ce-kpi-caption">@kpi.Caption</span></span></button>
+        }
+    </section>
+
+    <section class="ce-workflow-strip" aria-label="Commission exception workflow shortcuts"><button type="button" class="ce-workflow-card ce-wf-create" @onclick="OpenCreate"><span class="ce-workflow-icon"><i class="bi bi-plus-circle" aria-hidden="true"></i></span><span class="ce-workflow-content"><strong>1</strong><span>Capture</span><small>Log blockers.</small></span></button><button type="button" class="ce-workflow-card ce-wf-splits" @onclick='() => Nav.NavigateTo("/commissions/splits")'><span class="ce-workflow-icon"><i class="bi bi-scissors" aria-hidden="true"></i></span><span class="ce-workflow-content"><strong>2</strong><span>Splits</span><small>Fix allocations.</small></span></button><button type="button" class="ce-workflow-card ce-wf-ledger" @onclick='() => Nav.NavigateTo("/commissions/producer-ledger")'><span class="ce-workflow-icon"><i class="bi bi-journal-text" aria-hidden="true"></i></span><span class="ce-workflow-content"><strong>3</strong><span>Ledger</span><small>Audit entries.</small></span></button><button type="button" class="ce-workflow-card ce-wf-statements" @onclick='() => Nav.NavigateTo("/commissions/statements")'><span class="ce-workflow-icon"><i class="bi bi-file-earmark-text" aria-hidden="true"></i></span><span class="ce-workflow-content"><strong>4</strong><span>Statements</span><small>Review payouts.</small></span></button><button type="button" class="ce-workflow-card ce-wf-batches" @onclick='() => Nav.NavigateTo("/commissions/payout-batches")'><span class="ce-workflow-icon"><i class="bi bi-box-seam" aria-hidden="true"></i></span><span class="ce-workflow-content"><strong>5</strong><span>Batches</span><small>Hold runs.</small></span></button><button type="button" class="ce-workflow-card ce-wf-resolve" @onclick="ResolveSelected" disabled="@(!CanResolveSelected)"><span class="ce-workflow-icon"><i class="bi bi-check2-circle" aria-hidden="true"></i></span><span class="ce-workflow-content"><strong>6</strong><span>Resolve</span><small>Clear selected.</small></span></button></section>
+
+    <section class="ce-enterprise-search" aria-label="Commission exception filters"><div class="ce-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div><div class="ce-search-body"><label for="ce-search">Search exceptions</label><input id="ce-search" class="ce-search-input" type="search" placeholder="Search exception number, type, source, payee, plan, description..." @bind="SearchFilter" @bind:event="oninput" /><span class="ce-search-hint">Filters apply instantly across synchronized commission exception data.</span></div><select class="ce-filter-select" @bind="TypeFilter" aria-label="Type filter"><option value="">All types</option>@foreach (var type in _types) { <option value="@type">@type</option> }</select><select class="ce-filter-select" @bind="SeverityFilter" aria-label="Severity filter"><option value="">All severities</option>@foreach (var severity in _severities) { <option value="@severity">@severity</option> }</select><select class="ce-filter-select" @bind="StatusFilter" aria-label="Status filter"><option value="">All statuses</option>@foreach (var status in _statuses) { <option value="@status">@status</option> }</select><div class="ce-search-result"><strong>@_filtered.Count</strong><span>matches</span></div></section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger ce-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    }
+
+    <section class="ce-content-layout"><div class="ce-grid-wrap"><div class="ce-grid-toolbar"><div><strong>Exception queue</strong><span>@ActiveFilterText</span></div><div class="ce-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ReviewSelected" disabled="@(!CanReviewSelected)"><i class="bi bi-eye" aria-hidden="true"></i> Review</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResolveSelected" disabled="@(!CanResolveSelected)"><i class="bi bi-check2-circle" aria-hidden="true"></i> Resolve</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button></div></div>
+        @if (_loading)
+        {
+            <div class="ce-loading"><i class="bi bi-arrow-repeat ce-spin" aria-hidden="true"></i><strong>Loading commission exceptions...</strong><span>Syncing schema, seed data, payees, plans, payout batches, and exception queue.</span></div>
+        }
+        else if (!_filtered.Any())
+        {
+            <div class="ce-empty-state"><i class="bi bi-check2-circle" aria-hidden="true"></i><strong>No exceptions found</strong><span>Adjust filters or add a commission exception for payout review.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">New Exception</button></div>
+        }
+        else
+        {
+            <div class="ce-table-scroll"><table class="ce-table"><thead><tr><th>Exception</th><th>Type</th><th>Severity</th><th>Source</th><th>Payee</th><th class="ce-number">Impact</th><th>Due</th><th>Status</th><th class="ce-actions-col">Actions</th></tr></thead><tbody>@foreach (var item in PagedItems) { <tr class="@RowClass(item)" @onclick="() => SelectException(item)"><td><div class="ce-entry-cell"><span class="ce-entry-icon @SeverityIconTone(item.SeverityCode)"><i class="bi bi-exclamation-octagon" aria-hidden="true"></i></span><span><strong>@item.ExceptionNumber</strong><span>@item.Description</span></span></div></td><td><span class="ce-type-chip @TypeCss(item.ExceptionTypeCode)">@item.ExceptionTypeCode</span></td><td><span class="ce-severity-chip @SeverityCss(item.SeverityCode)">@item.SeverityCode</span></td><td>@item.SourceCode</td><td>@item.PayeeName</td><td class="ce-number ce-impact">@item.ImpactAmount.ToString("C0")</td><td>@DueLabel(item)</td><td><span class="ce-status-chip @StatusCss(item.StatusCode)">@item.StatusCode</span></td><td><div class="ce-row-acts"><button type="button" class="um-btn um-btn-primary um-btn-xs" title="Inspect" @onclick:stopPropagation="true" @onclick="() => SelectException(item)"><i class="bi bi-layout-sidebar-inset" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Resolve" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Resolved")' disabled="@(item.StatusCode == "Resolved")"><i class="bi bi-check2-circle" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Statement workflow" @onclick:stopPropagation="true" @onclick='() => Nav.NavigateTo("/commissions/statements")'><i class="bi bi-file-earmark-text" aria-hidden="true"></i></button></div></td></tr> }</tbody></table></div>
+            <div class="ce-pager"><span>Showing @PageStart-@PageEnd of @_filtered.Count</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button><span>Page @_page of @TotalPages</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button></div></div>
+        }
+    </div><aside class="ce-detail-panel" aria-label="Selected exception detail">@if (_selected is null) { <div class="ce-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select an exception</strong><span>Choose a row to inspect severity, payout impact, related payee, plan, and resolution workflow.</span></div> } else { <div class="ce-detail-head"><div><span class="ce-detail-eyebrow"><i class="bi bi-exclamation-octagon" aria-hidden="true"></i> Exception detail</span><h2>@_selected.ExceptionNumber</h2><div class="ce-detail-meta"><span>@_selected.ExceptionTypeCode</span><span class="ce-severity-chip @SeverityCss(_selected.SeverityCode)">@_selected.SeverityCode</span><span class="ce-status-chip @StatusCss(_selected.StatusCode)">@_selected.StatusCode</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div><div class="ce-detail-body"><div class="ce-impact-card"><div><span>Financial impact</span><strong>@_selected.ImpactAmount.ToString("C2")</strong></div><div class="ce-impact-track"><span style="width:@ImpactPercent(_selected)%"></span></div></div><div class="ce-detail-summary"><div class="ce-meta-row"><span class="ce-meta-lbl">Payee</span><span class="ce-meta-val">@_selected.PayeeName</span></div><div class="ce-meta-row"><span class="ce-meta-lbl">Plan</span><span class="ce-meta-val">@_selected.PlanName</span></div><div class="ce-meta-row"><span class="ce-meta-lbl">Source</span><span class="ce-meta-val">@_selected.SourceCode</span></div><div class="ce-meta-row"><span class="ce-meta-lbl">Due</span><span class="ce-meta-val">@DueLabel(_selected)</span></div><div class="ce-meta-row"><span class="ce-meta-lbl">Created</span><span class="ce-meta-val">@_selected.CreatedDateUtc.ToLocalTime().ToString("g")</span></div><div class="ce-meta-row"><span class="ce-meta-lbl">Resolved</span><span class="ce-meta-val">@(_selected.ResolvedDateUtc?.ToLocalTime().ToString("g") ?? "Not resolved")</span></div></div><div class="ce-note-card"><span><i class="bi bi-card-text" aria-hidden="true"></i> Description</span><p>@_selected.Description</p>@if (!string.IsNullOrWhiteSpace(_selected.ResolutionNotes)) { <span><i class="bi bi-check2-square" aria-hidden="true"></i> Resolution</span><p>@_selected.ResolutionNotes</p> }</div><div class="ce-detail-actions"><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, "In Review")' disabled="@(_selected.StatusCode == "In Review")"><i class="bi bi-eye" aria-hidden="true"></i> Review</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, "Resolved")' disabled="@(_selected.StatusCode == "Resolved")"><i class="bi bi-check2-circle" aria-hidden="true"></i> Resolve</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, "Deferred")' disabled="@(_selected.StatusCode == "Deferred")"><i class="bi bi-pause-circle" aria-hidden="true"></i> Defer</button></div></div> }</aside></section>
+</div>
+
+@code {
+    private const int PageSize = 12;
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private List<CommissionExceptionDto> _items = [];
+    private List<CommissionExceptionDto> _filtered = [];
+    private List<CommissionPlanDto> _plans = [];
+    private List<CommissionPayeeDto> _payees = [];
+    private CommissionExceptionDto? _selected;
+    private CommissionExceptionDto? _statusTarget;
+    private ExceptionForm _form = new();
+    private Guid _editingId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _typeFilter = string.Empty;
+    private string _severityFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _pendingStatus;
+    private int _page = 1;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showStatusConfirm;
+    private bool _toastVisible;
+    private bool _saveAttempted;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private readonly List<string> _types = ["Missing Payee", "Split Mismatch", "Negative Payout", "Rate Variance", "Duplicate Transaction", "Statement Hold"];
+    private readonly List<string> _severities = ["Critical", "High", "Medium", "Low"];
+    private readonly List<string> _statuses = ["Open", "In Review", "Deferred", "Resolved", "Closed"];
+    private readonly List<string> _sources = ["Commission Run", "Split Rules", "Payout Batch", "Plan Audit", "Statement Generation", "Producer Ledger"];
+
+    private IEnumerable<CommissionExceptionDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private bool CanReviewSelected => _selected is not null && _selected.StatusCode != "In Review" && _selected.StatusCode != "Resolved";
+    private bool CanResolveSelected => _selected is not null && _selected.StatusCode != "Resolved";
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All commission exceptions" : $"Filtered by {_kpiFilter}";
+    private string PendingStatusIcon => _pendingStatus switch { "Resolved" => "bi-check2-circle", "In Review" => "bi-eye", "Deferred" => "bi-pause-circle", _ => "bi-arrow-repeat" };
+    private string PendingStatusTitle => _pendingStatus switch { "Resolved" => "Resolve Exception", "In Review" => "Start Review", "Deferred" => "Defer Exception", _ => "Update Exception" };
+    private string PendingStatusAction => _pendingStatus switch { "Resolved" => "Resolve", "In Review" => "Review", "Deferred" => "Defer", _ => "Update" };
+    private string PendingStatusBody => _pendingStatus == "Resolved" ? "Resolution notes will be preserved and the item will leave the active exception queue." : string.Empty;
+    private string RefreshIconClass => _loading ? "bi bi-arrow-repeat ce-spin" : "bi bi-arrow-clockwise";
+    private IReadOnlyList<KpiModel> Kpis => [new("all", "Exceptions", _items.Count.ToString("N0"), "All records", "bi-exclamation-octagon", "ce-ki-blue"), new("open", "Open", _items.Count(x => x.StatusCode == "Open").ToString("N0"), "Needs triage", "bi-exclamation-circle", "ce-ki-red"), new("critical", "Critical", _items.Count(x => x.SeverityCode == "Critical" || x.SeverityCode == "High").ToString("N0"), "High urgency", "bi-lightning-charge", "ce-ki-amber"), new("review", "In Review", _items.Count(x => x.StatusCode == "In Review").ToString("N0"), "Being worked", "bi-eye", "ce-ki-purple"), new("resolved", "Resolved", _items.Count(x => x.StatusCode == "Resolved" || x.StatusCode == "Closed").ToString("N0"), "Cleared", "bi-check2-circle", "ce-ki-green"), new("impact", "Impact", _items.Sum(x => x.ImpactAmount).ToString("C0"), "Total exposure", "bi-currency-dollar", "ce-ki-cyan")];
+    private string SearchFilter { get => _searchTerm; set { _searchTerm = value; ApplyFilters(resetPage: true); } }
+    private string TypeFilter { get => _typeFilter; set { _typeFilter = value; ApplyFilters(resetPage: true); } }
+    private string SeverityFilter { get => _severityFilter; set { _severityFilter = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
+
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Commissions", "/commissions2"), new("Exceptions", "/commissions/exceptions")); await LoadAsync(); }
+    private async Task LoadAsync() { _loading = true; _loadError = null; try { await Api.EnsureCommissionSeedAsync(_tenantId, _tenantAdminUserId); await Api.EnsureCommissionExceptionsSeedAsync(_tenantId); var exceptions = await Api.SearchCommissionExceptionsAsync(_tenantId, string.Empty); var plans = await Api.SearchCommissionPlansAsync(_tenantId, string.Empty); var payees = await Api.SearchCommissionPayeesAsync(_tenantId, string.Empty); _items = exceptions?.Items.OrderBy(x => SeveritySort(x.SeverityCode)).ThenBy(x => StatusSort(x.StatusCode)).ThenByDescending(x => x.CreatedDateUtc).ToList() ?? []; _plans = plans?.Items.OrderBy(x => x.PlanName).ToList() ?? []; _payees = payees?.Items.OrderBy(x => x.PayeeTypeCode).ToList() ?? []; ApplyFilters(resetPage: true); EnsureSelectedStillVisible(); } catch (Exception ex) { _loadError = $"Commission exceptions failed to load: {ex.Message}"; ShowToast(_loadError, "danger"); _items = []; _filtered = []; } finally { _loading = false; } }
+    private void ApplyFilters(bool resetPage) { IEnumerable<CommissionExceptionDto> query = _items; if (!string.IsNullOrWhiteSpace(_searchTerm)) { var term = _searchTerm.Trim(); query = query.Where(x => Contains(x.ExceptionNumber, term) || Contains(x.ExceptionTypeCode, term) || Contains(x.SeverityCode, term) || Contains(x.StatusCode, term) || Contains(x.SourceCode, term) || Contains(x.Description, term) || Contains(x.PayeeName, term) || Contains(x.PlanName, term)); } if (!string.IsNullOrWhiteSpace(_typeFilter)) query = query.Where(x => x.ExceptionTypeCode == _typeFilter); if (!string.IsNullOrWhiteSpace(_severityFilter)) query = query.Where(x => x.SeverityCode == _severityFilter); if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.StatusCode == _statusFilter); query = _kpiFilter switch { "open" => query.Where(x => x.StatusCode == "Open"), "critical" => query.Where(x => x.SeverityCode is "Critical" or "High"), "review" => query.Where(x => x.StatusCode == "In Review"), "resolved" => query.Where(x => x.StatusCode is "Resolved" or "Closed"), "impact" => query.Where(x => x.ImpactAmount > 0), _ => query }; _filtered = query.OrderBy(x => SeveritySort(x.SeverityCode)).ThenBy(x => StatusSort(x.StatusCode)).ThenByDescending(x => x.CreatedDateUtc).ToList(); if (resetPage) _page = 1; if (_page > TotalPages) _page = TotalPages; }
+    private void SetKpiFilter(string filter) { _kpiFilter = _kpiFilter == filter && filter != "all" ? "all" : filter; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _searchTerm = string.Empty; _typeFilter = string.Empty; _severityFilter = string.Empty; _statusFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); ShowToast("Exception filters reset.", "info"); }
+    private void SelectException(CommissionExceptionDto item) => _selected = item;
+    private void OpenCreate() { _editingId = Guid.Empty; _saveAttempted = false; _formError = null; _form = new ExceptionForm { ExceptionNumber = $"CEX-{DateTime.UtcNow:yyyyMM}-{(_items.Count + 1):000}", ExceptionTypeCode = "Missing Payee", SeverityCode = "Medium", SourceCode = "Commission Run", Description = string.Empty, ImpactAmount = 0, CurrencyCode = "USD", StatusCode = "Open", DueDate = DateTime.Today.AddDays(2), PayeeId = _payees.FirstOrDefault()?.PayeeId, CommissionPlanId = _plans.FirstOrDefault()?.CommissionPlanId }; _showForm = true; }
+    private void OpenEdit(CommissionExceptionDto item) { _editingId = item.ExceptionId; _saveAttempted = false; _formError = null; _form = new ExceptionForm { PayeeId = item.PayeeId, CommissionPlanId = item.CommissionPlanId, TransactionId = item.TransactionId, PayoutBatchId = item.PayoutBatchId, ExceptionNumber = item.ExceptionNumber, ExceptionTypeCode = item.ExceptionTypeCode, SeverityCode = item.SeverityCode, SourceCode = item.SourceCode, Description = item.Description, ImpactAmount = item.ImpactAmount, CurrencyCode = item.CurrencyCode, StatusCode = item.StatusCode, ResolutionNotes = item.ResolutionNotes, DueDate = item.DueDateUtc?.ToLocalTime(), ResolvedDateUtc = item.ResolvedDateUtc }; _showForm = true; }
+    private void CloseForm() { if (_busy) return; _showForm = false; _saveAttempted = false; }
+    private async Task SaveAsync() { _saveAttempted = true; if (!ValidateForm()) return; _busy = true; _formError = null; var savedId = _editingId; try { if (_editingId == Guid.Empty) { savedId = await Api.CreateCommissionExceptionAsync(ToCreateRequest()); ShowToast("Commission exception created.", "success"); } else { await Api.UpdateCommissionExceptionAsync(_editingId, ToUpdateRequest()); ShowToast("Commission exception updated.", "success"); } _showForm = false; await LoadAsync(); _selected = _items.FirstOrDefault(x => x.ExceptionId == savedId) ?? _selected; } catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; ShowToast(_formError, "danger"); } finally { _busy = false; } }
+    private CreateCommissionExceptionRequest ToCreateRequest() => new() { TenantId = _tenantId, PayeeId = _form.PayeeId, CommissionPlanId = _form.CommissionPlanId, TransactionId = _form.TransactionId, PayoutBatchId = _form.PayoutBatchId, ExceptionNumber = _form.ExceptionNumber.Trim(), ExceptionTypeCode = _form.ExceptionTypeCode, SeverityCode = _form.SeverityCode, SourceCode = _form.SourceCode, Description = _form.Description.Trim(), ImpactAmount = _form.ImpactAmount, CurrencyCode = _form.CurrencyCode.Trim().ToUpperInvariant(), StatusCode = _form.StatusCode, ResolutionNotes = _form.ResolutionNotes, DueDateUtc = _form.DueDate?.ToUniversalTime(), ResolvedByUserId = IsResolved(_form.StatusCode) ? _tenantAdminUserId : null, ResolvedDateUtc = IsResolved(_form.StatusCode) ? DateTime.UtcNow : null, CreatedByUserId = _tenantAdminUserId };
+    private UpdateCommissionExceptionRequest ToUpdateRequest() => new() { TenantId = _tenantId, ExceptionId = _editingId, PayeeId = _form.PayeeId, CommissionPlanId = _form.CommissionPlanId, TransactionId = _form.TransactionId, PayoutBatchId = _form.PayoutBatchId, ExceptionNumber = _form.ExceptionNumber.Trim(), ExceptionTypeCode = _form.ExceptionTypeCode, SeverityCode = _form.SeverityCode, SourceCode = _form.SourceCode, Description = _form.Description.Trim(), ImpactAmount = _form.ImpactAmount, CurrencyCode = _form.CurrencyCode.Trim().ToUpperInvariant(), StatusCode = _form.StatusCode, ResolutionNotes = _form.ResolutionNotes, DueDateUtc = _form.DueDate?.ToUniversalTime(), ResolvedByUserId = IsResolved(_form.StatusCode) ? _tenantAdminUserId : null, ResolvedDateUtc = IsResolved(_form.StatusCode) ? (_form.ResolvedDateUtc ?? DateTime.UtcNow) : null, ModifiedByUserId = _tenantAdminUserId };
+    private void ReviewSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "In Review"); }
+    private void ResolveSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Resolved"); }
+    private void ConfirmStatusUpdate(CommissionExceptionDto item, string status) { _statusTarget = item; _pendingStatus = status; _showStatusConfirm = true; }
+    private void CancelStatusUpdate() { if (_busy) return; _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; }
+    private async Task ExecuteStatusUpdateAsync() { if (_statusTarget is null || string.IsNullOrWhiteSpace(_pendingStatus)) return; _busy = true; var selectedId = _statusTarget.ExceptionId; try { await Api.UpdateCommissionExceptionAsync(_statusTarget.ExceptionId, new UpdateCommissionExceptionRequest { TenantId = _tenantId, ExceptionId = _statusTarget.ExceptionId, PayeeId = _statusTarget.PayeeId, CommissionPlanId = _statusTarget.CommissionPlanId, TransactionId = _statusTarget.TransactionId, PayoutBatchId = _statusTarget.PayoutBatchId, ExceptionNumber = _statusTarget.ExceptionNumber, ExceptionTypeCode = _statusTarget.ExceptionTypeCode, SeverityCode = _statusTarget.SeverityCode, SourceCode = _statusTarget.SourceCode, Description = _statusTarget.Description, ImpactAmount = _statusTarget.ImpactAmount, CurrencyCode = _statusTarget.CurrencyCode, StatusCode = _pendingStatus, ResolutionNotes = string.IsNullOrWhiteSpace(_statusTarget.ResolutionNotes) && _pendingStatus == "Resolved" ? $"Resolved from exception queue on {DateTime.UtcNow:u}." : _statusTarget.ResolutionNotes, AssignedToUserId = _statusTarget.AssignedToUserId, DueDateUtc = _statusTarget.DueDateUtc, ResolvedByUserId = _pendingStatus == "Resolved" ? _tenantAdminUserId : null, ResolvedDateUtc = _pendingStatus == "Resolved" ? DateTime.UtcNow : null, ModifiedByUserId = _tenantAdminUserId }); ShowToast($"Exception marked {_pendingStatus.ToLowerInvariant()}.", "success"); _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; await LoadAsync(); _selected = _items.FirstOrDefault(x => x.ExceptionId == selectedId) ?? _selected; } catch (Exception ex) { ShowToast($"Update failed: {ex.Message}", "danger"); } finally { _busy = false; } }
+    private Task NotifyValidationAsync(EditContext _) { _saveAttempted = true; ShowToast("Please correct validation errors before saving.", "warning"); return Task.CompletedTask; }
+    private async Task ExportAsync() { if (!_filtered.Any()) { ShowToast("No exceptions are available to export.", "warning"); return; } var csv = new StringBuilder(); csv.AppendLine("ExceptionId,ExceptionNumber,Type,Severity,Source,Payee,Plan,Impact,Currency,Status,DueDate,CreatedDate,Description,ResolutionNotes"); foreach (var item in _filtered) csv.AppendLine(string.Join(',', Csv(item.ExceptionId.ToString()), Csv(item.ExceptionNumber), Csv(item.ExceptionTypeCode), Csv(item.SeverityCode), Csv(item.SourceCode), Csv(item.PayeeName), Csv(item.PlanName), item.ImpactAmount, Csv(item.CurrencyCode), Csv(item.StatusCode), Csv(item.DueDateUtc?.ToString("yyyy-MM-dd") ?? string.Empty), Csv(item.CreatedDateUtc.ToString("u")), Csv(item.Description), Csv(item.ResolutionNotes))); var bytes = Encoding.UTF8.GetBytes(csv.ToString()); await Js.InvokeVoidAsync("amsShell.downloadBase64", $"commission-exceptions-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes)); ShowToast($"Exported {_filtered.Count:N0} exceptions.", "success"); }
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() => _selected = _selected is null ? _filtered.FirstOrDefault() : _items.FirstOrDefault(x => x.ExceptionId == _selected.ExceptionId) ?? _filtered.FirstOrDefault();
+    private string PayeeLabel(CommissionPayeeDto payee) => $"{payee.PayeeTypeCode} · {payee.SplitPercentage:N2}%";
+    private bool ValidateForm() { if (string.IsNullOrWhiteSpace(_form.ExceptionNumber)) { _formError = "Exception Number is required."; ShowToast(_formError, "warning"); return false; } if (string.IsNullOrWhiteSpace(_form.Description)) { _formError = "Description is required."; ShowToast(_formError, "warning"); return false; } if (_form.ImpactAmount < 0) { _formError = "Impact Amount cannot be negative."; ShowToast(_formError, "warning"); return false; } if (string.IsNullOrWhiteSpace(_form.CurrencyCode) || _form.CurrencyCode.Trim().Length != 3) { _formError = "Currency must be a three-letter code."; ShowToast(_formError, "warning"); return false; } return true; }
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static bool IsResolved(string status) => status is "Resolved" or "Closed";
+    private static int SeveritySort(string severity) => severity switch { "Critical" => 0, "High" => 1, "Medium" => 2, "Low" => 3, _ => 4 };
+    private static int StatusSort(string status) => status switch { "Open" => 0, "In Review" => 1, "Deferred" => 2, "Resolved" => 3, "Closed" => 4, _ => 5 };
+    private static int ImpactPercent(CommissionExceptionDto item) => (int)Math.Clamp(item.ImpactAmount / 5000m * 100m, 8m, 100m);
+    private static string DueLabel(CommissionExceptionDto item) => item.DueDateUtc.HasValue ? item.DueDateUtc.Value.ToLocalTime().ToString("MMM d, yyyy") : "No due date";
+    private static string StatusCss(string status) => $"ce-st-{status.ToLowerInvariant().Replace(" ", "-")}";
+    private static string SeverityCss(string severity) => $"ce-sv-{severity.ToLowerInvariant()}";
+    private static string TypeCss(string type) => $"ce-t-{type.ToLowerInvariant().Replace(" ", "-")}";
+    private static string SeverityIconTone(string severity) => severity switch { "Critical" => "ce-di-red", "High" => "ce-di-amber", "Medium" => "ce-di-blue", "Low" => "ce-di-green", _ => "ce-di-blue" };
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private string KpiClass(KpiModel kpi) => $"ce-kpi-card {kpi.Tone} {(_kpiFilter == kpi.Filter ? "ce-kpi-active" : string.Empty)}";
+    private string RowClass(CommissionExceptionDto item) => $"ce-table-row {(_selected?.ExceptionId == item.ExceptionId ? "ce-table-row--selected" : string.Empty)}";
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter exceptions by {Label}"; }
+    private sealed class ExceptionForm { public Guid? PayeeId { get; set; } public Guid? CommissionPlanId { get; set; } public Guid? TransactionId { get; set; } public Guid? PayoutBatchId { get; set; } [Required, StringLength(80)] public string ExceptionNumber { get; set; } = string.Empty; [Required, StringLength(80)] public string ExceptionTypeCode { get; set; } = "Missing Payee"; [Required, StringLength(50)] public string SeverityCode { get; set; } = "Medium"; [Required, StringLength(80)] public string SourceCode { get; set; } = "Commission Run"; [Required, StringLength(1000)] public string Description { get; set; } = string.Empty; [Range(0, 100000000)] public decimal ImpactAmount { get; set; } [Required, StringLength(3, MinimumLength = 3)] public string CurrencyCode { get; set; } = "USD"; [Required, StringLength(50)] public string StatusCode { get; set; } = "Open"; [StringLength(1000)] public string? ResolutionNotes { get; set; } public DateTime? DueDate { get; set; } public DateTime? ResolvedDateUtc { get; set; } }
+}

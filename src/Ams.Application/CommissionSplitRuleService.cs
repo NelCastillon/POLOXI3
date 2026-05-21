@@ -18,6 +18,11 @@ public sealed class CommissionSplitRuleService : ICommissionSplitRuleService
     public Task<PagedResult<CommissionSplitRuleDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _repository.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
 
+    public async Task EnsureSeedAsync(Guid tenantId, Guid? createdByUserId = null, CancellationToken cancellationToken = default)
+    {
+        await _repository.SearchAsync(tenantId, null, 1, 50, cancellationToken);
+    }
+
     public Task<Guid> CreateAsync(CreateCommissionSplitRuleRequest request, CancellationToken cancellationToken = default)
         => _repository.CreateAsync(request, cancellationToken);
 

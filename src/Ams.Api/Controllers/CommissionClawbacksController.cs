@@ -23,9 +23,9 @@ public sealed class CommissionClawbacksController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> Search([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 25, CancellationToken cancellationToken = default)
+    public async Task<IActionResult> Search([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, [FromQuery] string? statusCode, [FromQuery] string? reasonCode, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 25, CancellationToken cancellationToken = default)
     {
-        var result = await _service.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
+        var result = await _service.SearchAsync(tenantId, searchTerm, statusCode, reasonCode, pageNumber, pageSize, cancellationToken);
         return Ok(result);
     }
 
@@ -37,6 +37,13 @@ public sealed class CommissionClawbacksController : ControllerBase
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateCommissionClawbackRequest request, CancellationToken cancellationToken)
     {
         await _service.UpdateAsync(id, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPost("seed")]
+    public async Task<IActionResult> EnsureSeed([FromQuery] Guid tenantId, CancellationToken cancellationToken)
+    {
+        await _service.EnsureSeedAsync(tenantId, cancellationToken);
         return NoContent();
     }
 }

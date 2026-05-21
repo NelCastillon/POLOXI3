@@ -1,124 +1,429 @@
 @page "/marketing/analytics"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Campaign Performance — AMS</PageTitle>
+<PageTitle>Marketing Analytics — AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="Campaign Performance"
-               Subtitle="Revenue attribution, engagement analytics, and ROI reporting across all marketing channels"
-               Icon="bi-bar-chart-line-fill">
-    <Actions>
-        <select class="mkа-period-sel" @bind="_period">
-            <option value="30">Last 30 Days</option>
-            <option value="90">Last 90 Days</option>
-            <option value="ytd">Year to Date</option>
-            <option value="12m">Last 12 Months</option>
-        </select>
-        <button class="um-btn um-btn-ghost">
-            <i class="bi bi-download" aria-hidden="true"></i> Export
-        </button>
-    </Actions>
-</AppPageHeader>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    <div class="mka-toast mka-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="mka-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
 }
 
-<!-- KPI strip -->
-<div class="mka-kpi-strip">
-    <div class="mka-kpi-card">
-        <div class="mka-kpi-icon mka-ki-blue"><i class="bi bi-people" aria-hidden="true"></i></div>
-        <div><div class="mka-kv">@_totalReached.ToString("N0")</div><div class="mka-kl">Total Reached</div><div class="mka-delta mka-dpos">↑ 12% vs prior</div></div>
-    </div>
-    <div class="mka-kpi-card">
-        <div class="mka-kpi-icon mka-ki-amber"><i class="bi bi-cursor" aria-hidden="true"></i></div>
-        <div><div class="mka-kv">@_avgOpenRate.ToString("N1")%</div><div class="mka-kl">Avg. Open Rate</div><div class="mka-delta mka-dpos">↑ 3.2pp vs prior</div></div>
-    </div>
-    <div class="mka-kpi-card">
-        <div class="mka-kpi-icon mka-ki-green"><i class="bi bi-trophy" aria-hidden="true"></i></div>
-        <div><div class="mka-kv">@_totalConversions.ToString("N0")</div><div class="mka-kl">Conversions</div><div class="mka-delta mka-dpos">↑ 28% vs prior</div></div>
-    </div>
-    <div class="mka-kpi-card">
-        <div class="mka-kpi-icon mka-ki-green"><i class="bi bi-cash-coin" aria-hidden="true"></i></div>
-        <div><div class="mka-kv">@_totalRevenue.ToString("C0")</div><div class="mka-kl">Revenue Attributed</div><div class="mka-delta mka-dpos">↑ 19% vs prior</div></div>
-    </div>
-    <div class="mka-kpi-card">
-        <div class="mka-kpi-icon mka-ki-blue"><i class="bi bi-currency-dollar" aria-hidden="true"></i></div>
-        <div><div class="mka-kv">@(_totalRevenue / Math.Max(_totalSpend, 1)).ToString("N1")x</div><div class="mka-kl">ROAS</div><div class="mka-delta mka-dpos">↑ 0.4x vs prior</div></div>
-    </div>
-    <div class="mka-kpi-card">
-        <div class="mka-kpi-icon mka-ki-amber"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></div>
-        <div><div class="mka-kv">@_unsubRate.ToString("N2")%</div><div class="mka-kl">Unsubscribe Rate</div><div class="mka-delta mka-dneg">↑ 0.1pp vs prior</div></div>
-    </div>
-</div>
-
-<!-- Channel breakdown -->
-<div class="mka-row">
-    <div class="mka-card mka-card-lg">
-        <div class="mka-card-hdr">Performance by Campaign</div>
-        @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading analytics…</span></div> }
-        <SfGrid TValue="CampPerfRow" DataSource="_rows" AllowSorting="true" EnableHover="true" RowHeight="50">
-            <GridColumns>
-                <GridColumn Field="@nameof(CampPerfRow.Name)" HeaderText="Campaign" MinWidth="200" />
-                <GridColumn Field="@nameof(CampPerfRow.Type)" HeaderText="Type" Width="120" />
-                <GridColumn Field="@nameof(CampPerfRow.Reached)" HeaderText="Reached" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                    <Template>@{ var r = (CampPerfRow)context; }<span class="mka-mono">@r.Reached.ToString("N0")</span></Template>
-                </GridColumn>
-                <GridColumn Field="@nameof(CampPerfRow.OpenRate)" HeaderText="Open %" Width="90" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                    <Template>@{ var r = (CampPerfRow)context; }<span class="mka-mono">@r.OpenRate.ToString("N1")%</span></Template>
-                </GridColumn>
-                <GridColumn Field="@nameof(CampPerfRow.ClickRate)" HeaderText="Click %" Width="90" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                    <Template>@{ var r = (CampPerfRow)context; }<span class="mka-mono">@r.ClickRate.ToString("N1")%</span></Template>
-                </GridColumn>
-                <GridColumn Field="@nameof(CampPerfRow.Conversions)" HeaderText="Conv." Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                    <Template>@{ var r = (CampPerfRow)context; }<span class="mka-mono mka-bold">@r.Conversions</span></Template>
-                </GridColumn>
-                <GridColumn Field="@nameof(CampPerfRow.Revenue)" HeaderText="Revenue" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                    <Template>@{ var r = (CampPerfRow)context; }<span class="mka-mono mka-bold">@r.Revenue.ToString("C0")</span></Template>
-                </GridColumn>
-                <GridColumn Field="@nameof(CampPerfRow.Roas)" HeaderText="ROAS" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                    <Template>@{ var r = (CampPerfRow)context; }<span class="mka-mono @(r.Roas >= 4m ? "mka-good" : r.Roas >= 2m ? "mka-ok" : "mka-bad")">@r.Roas.ToString("N1")x</span></Template>
-                </GridColumn>
-            </GridColumns>
-        </SfGrid>
-    </div>
-
-    <div class="mka-col">
-        <!-- Channel mix -->
-        <div class="mka-card">
-            <div class="mka-card-hdr">Channel Mix</div>
-            <div class="mka-ch-list">
-                @foreach (var ch in _channels)
-                {
-                    <div class="mka-ch-row">
-                        <span class="mka-ch-lbl">@ch.Name</span>
-                        <div class="mka-ch-bar-wrap">
-                            <div class="mka-ch-bar @ch.Css" style="width:@(ch.Pct)%"></div>
+@if (_showEditor)
+{
+    <div class="mka-modal-backdrop" role="presentation" @onclick="CloseEditor">
+        <div class="mka-modal mka-action-modal" role="dialog" aria-modal="true" aria-labelledby="mka-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-bar-chart-line-fill" aria-hidden="true"></i>
+                <span id="mka-form-title">@(_editingId == Guid.Empty ? "Create Analytics Metric" : "Edit Analytics Metric")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseEditor" disabled="@_busy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveMetricAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="mka-modal-intro">
+                        <span><i class="bi bi-database-check" aria-hidden="true"></i> Marketing performance metric</span>
+                        <p>Maintain campaign attribution, channel performance, ROI, and conversion metrics synchronized with the marketing workflow.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Campaign Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.CampaignName" />
+                            <ValidationMessage For="() => _form.CampaignName" class="text-danger" />
                         </div>
-                        <span class="mka-ch-pct">@ch.Pct%</span>
+                        <div class="um-field">
+                            <label>Channel <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.Channel">
+                                @foreach (var channel in _channels)
+                                {
+                                    <option value="@channel">@channel</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.Channel" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Campaign Type <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.CampaignType">
+                                @foreach (var type in _campaignTypes)
+                                {
+                                    <option value="@type">@type</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.CampaignType" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Segment <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.SegmentName" />
+                            <ValidationMessage For="() => _form.SegmentName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Goal <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.Goal">
+                                @foreach (var goal in _goals)
+                                {
+                                    <option value="@goal">@goal</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.Goal" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Period</label>
+                            <InputSelect class="form-select" @bind-Value="_form.PeriodCode">
+                                @foreach (var period in _periodOptions)
+                                {
+                                    <option value="@period.Value">@period.Label</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="um-field">
+                            <label>Status</label>
+                            <InputSelect class="form-select" @bind-Value="_form.Status">
+                                @foreach (var status in _statuses)
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="um-field">
+                            <label>Period Start</label>
+                            <InputDate class="form-control" @bind-Value="_form.PeriodStartDate" />
+                        </div>
+                        <div class="um-field">
+                            <label>Period End</label>
+                            <InputDate class="form-control" @bind-Value="_form.PeriodEndDate" />
+                        </div>
+                        <div class="um-field">
+                            <label>Reached</label>
+                            <InputNumber class="form-control" @bind-Value="_form.Reached" />
+                            <ValidationMessage For="() => _form.Reached" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Conversions</label>
+                            <InputNumber class="form-control" @bind-Value="_form.Conversions" />
+                            <ValidationMessage For="() => _form.Conversions" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Open Rate %</label>
+                            <InputNumber class="form-control" @bind-Value="_form.OpenRate" />
+                            <ValidationMessage For="() => _form.OpenRate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Click Rate %</label>
+                            <InputNumber class="form-control" @bind-Value="_form.ClickRate" />
+                            <ValidationMessage For="() => _form.ClickRate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Revenue</label>
+                            <InputNumber class="form-control" @bind-Value="_form.Revenue" />
+                            <ValidationMessage For="() => _form.Revenue" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Spend</label>
+                            <InputNumber class="form-control" @bind-Value="_form.Spend" />
+                            <ValidationMessage For="() => _form.Spend" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Unsubscribe Rate %</label>
+                            <InputNumber class="form-control" @bind-Value="_form.UnsubscribeRate" />
+                            <ValidationMessage For="() => _form.UnsubscribeRate" class="text-danger" />
+                        </div>
                     </div>
-                }
-            </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseEditor" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
+                        @if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        @(_editingId == Guid.Empty ? "Create Metric" : "Save Changes")
+                    </button>
+                </div>
+            </EditForm>
         </div>
-        <!-- Top opportunity types -->
-        <div class="mka-card">
-            <div class="mka-card-hdr">Top Opportunity Types</div>
-            <div class="mka-opp-list">
-                @foreach (var opp in _oppTypes)
-                {
-                    <div class="mka-opp-row">
-                        <span class="mka-opp-name">@opp.Name</span>
-                        <span class="mka-opp-conv">@opp.Conversions conv.</span>
-                        <span class="mka-opp-rev">@opp.Revenue.ToString("C0")</span>
-                    </div>
-                }
+    </div>
+}
+
+@if (_showArchiveConfirm && _archiveTarget is not null)
+{
+    <div class="mka-modal-backdrop" role="presentation" @onclick="CancelArchive">
+        <div class="mka-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="mka-archive-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-archive-fill" aria-hidden="true"></i></div>
+                <div class="um-confirm-title" id="mka-archive-title">Archive Analytics Metric</div>
+                <div class="um-confirm-body">Archive <strong>@_archiveTarget.CampaignName</strong>? It will be removed from active marketing analytics views.</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelArchive" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteArchiveAsync" disabled="@_busy">Archive Metric</button>
+                </div>
             </div>
         </div>
     </div>
+}
+
+@if (_showDirectConfirm && _directConfirm is not null)
+{
+    <div class="mka-modal-backdrop" role="presentation" @onclick="CancelDirectExecution">
+        <div class="mka-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="mka-direct-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @_directConfirm.IconClass"><i class="bi @_directConfirm.Icon" aria-hidden="true"></i></div>
+                <div class="um-confirm-title" id="mka-direct-title">@_directConfirm.Title</div>
+                <div class="um-confirm-body">@((MarkupString)_directConfirm.Body)</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelDirectExecution" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn @_directConfirm.ButtonClass" @onclick="ExecuteDirectConfirmedAsync" disabled="@_busy">@_directConfirm.ButtonText</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="mka-enterprise-page">
+    <section class="mka-header">
+        <div class="mka-header-left">
+            <div class="mka-lob-icon"><i class="bi bi-bar-chart-line-fill" aria-hidden="true"></i></div>
+            <div class="mka-header-info">
+                <div class="mka-title-row">
+                    <h1 class="mka-page-title">Marketing Analytics</h1>
+                    <span class="mka-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live analytics data</span>
+                    <span class="mka-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+                </div>
+                <div class="mka-sub-row">
+                    <span>Measure campaign reach, engagement, conversions, revenue attribution, and ROAS.</span>
+                    <span class="mka-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span>
+                    <span class="mka-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span>
+                </div>
+            </div>
+        </div>
+        <div class="mka-header-actions">
+            <select class="mka-period-select" @bind="PeriodFilter" aria-label="Analytics period">
+                @foreach (var period in _periodOptions)
+                {
+                    <option value="@period.Value">@period.Label</option>
+                }
+            </select>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+                <i class="bi @(_loading ? "bi-arrow-repeat mka-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh
+            </button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ConfirmExport" disabled="@(!_filtered.Any())">
+                <i class="bi bi-download" aria-hidden="true"></i> Export
+            </button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">
+                <i class="bi bi-plus-circle" aria-hidden="true"></i> New Metric
+            </button>
+        </div>
+    </section>
+
+    <section class="mka-kpi-strip" aria-label="Marketing analytics metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="mka-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "mka-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)">
+                <span class="mka-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="mka-kpi-copy">
+                    <span class="mka-kpi-label">@kpi.Label</span>
+                    <span class="mka-kpi-value">@kpi.Value</span>
+                    <span class="mka-kpi-caption">@kpi.Caption</span>
+                </span>
+            </button>
+        }
+    </section>
+
+    <section class="mka-workflow-strip" aria-label="Marketing workflow shortcuts">
+        <button type="button" class="mka-workflow-card mka-wf-campaigns" @onclick='() => Nav.NavigateTo("/marketing/campaigns")'>
+            <span class="mka-workflow-icon"><i class="bi bi-megaphone" aria-hidden="true"></i></span>
+            <span class="mka-workflow-content"><strong>1</strong><span>Campaigns</span><small>Plan and activate campaigns.</small></span>
+        </button>
+        <button type="button" class="mka-workflow-card mka-wf-email" @onclick='() => Nav.NavigateTo("/marketing/email-blasts")'>
+            <span class="mka-workflow-icon"><i class="bi bi-envelope-paper" aria-hidden="true"></i></span>
+            <span class="mka-workflow-content"><strong>2</strong><span>Outreach</span><small>Send email and SMS journeys.</small></span>
+        </button>
+        <button type="button" class="mka-workflow-card mka-wf-segments" @onclick='() => Nav.NavigateTo("/marketing/segments")'>
+            <span class="mka-workflow-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span>
+            <span class="mka-workflow-content"><strong>3</strong><span>Segments</span><small>Target audiences and lists.</small></span>
+        </button>
+        <button type="button" class="mka-workflow-card mka-wf-cross" @onclick='() => Nav.NavigateTo("/marketing/cross-sell")'>
+            <span class="mka-workflow-icon"><i class="bi bi-bullseye" aria-hidden="true"></i></span>
+            <span class="mka-workflow-content"><strong>4</strong><span>Convert</span><small>Prioritize revenue opportunities.</small></span>
+        </button>
+        <button type="button" class="mka-workflow-card mka-wf-pages" @onclick='() => Nav.NavigateTo("/marketing/landing-pages")'>
+            <span class="mka-workflow-icon"><i class="bi bi-window-sidebar" aria-hidden="true"></i></span>
+            <span class="mka-workflow-content"><strong>5</strong><span>Pages</span><small>Measure landing-page actions.</small></span>
+        </button>
+    </section>
+
+    <section class="mka-enterprise-search" aria-label="Marketing analytics filters">
+        <div class="mka-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="mka-search-body">
+            <label for="mka-search">Search marketing analytics</label>
+            <input id="mka-search" class="mka-search-input" type="search" placeholder="Search campaign, channel, type, segment, goal..." @bind="SearchFilter" @bind:event="oninput" />
+            <span class="mka-search-hint">Filters apply instantly across the synchronized analytics register.</span>
+        </div>
+        <select class="mka-filter-select" @bind="ChannelFilter" aria-label="Channel filter">
+            <option value="">All channels</option>
+            @foreach (var channel in ChannelOptions)
+            {
+                <option value="@channel">@channel</option>
+            }
+        </select>
+        <select class="mka-filter-select" @bind="GoalFilter" aria-label="Goal filter">
+            <option value="">All goals</option>
+            @foreach (var goal in GoalOptions)
+            {
+                <option value="@goal">@goal</option>
+            }
+        </select>
+        <select class="mka-filter-select" @bind="StatusFilter" aria-label="Status filter">
+            <option value="">All statuses</option>
+            @foreach (var status in _statuses)
+            {
+                <option value="@status">@status</option>
+            }
+        </select>
+        <div class="mka-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger mka-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+    }
+
+    <section class="mka-content-layout">
+        <div class="mka-grid-wrap">
+            <div class="mka-grid-toolbar">
+                <div>
+                    <strong>Marketing performance register</strong>
+                    <span>@ActiveFilterText</span>
+                </div>
+                <div class="mka-toolbar-actions">
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/marketing/reports")'><i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i> Reports</button>
+                    <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="mka-loading"><i class="bi bi-arrow-repeat mka-spin" aria-hidden="true"></i><strong>Loading marketing analytics...</strong><span>Syncing schema, seed data, campaign metrics, and attribution rollups.</span></div>
+            }
+            else if (!_filtered.Any())
+            {
+                <div class="mka-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No analytics metrics found</strong><span>Adjust filters or create a metric for the selected period.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">New Metric</button></div>
+            }
+            else
+            {
+                <div class="mka-table-scroll">
+                    <table class="mka-table">
+                        <thead>
+                            <tr>
+                                <th>Campaign</th>
+                                <th>Channel</th>
+                                <th>Goal</th>
+                                <th class="mka-number">Reached</th>
+                                <th class="mka-number">Open</th>
+                                <th class="mka-number">Click</th>
+                                <th class="mka-number">Conv.</th>
+                                <th class="mka-number">Revenue</th>
+                                <th class="mka-number">ROAS</th>
+                                <th>Status</th>
+                                <th class="mka-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var metric in _paged)
+                            {
+                                <tr class="mka-table-row @(IsSelected(metric) ? "mka-table-row--selected" : null)" @onclick="() => SelectMetric(metric)">
+                                    <td>
+                                        <div class="mka-campaign-cell">
+                                            <span class="mka-campaign-icon @ChannelIconClass(metric.Channel)"><i class="bi @ChannelIcon(metric.Channel)" aria-hidden="true"></i></span>
+                                            <div>
+                                                <strong>@metric.CampaignName</strong>
+                                                <span>@metric.CampaignType · @metric.SegmentName</span>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td><span class="mka-channel-chip @ChannelCss(metric.Channel)">@metric.Channel</span></td>
+                                    <td>@metric.Goal</td>
+                                    <td class="mka-number">@metric.Reached.ToString("N0")</td>
+                                    <td class="mka-number">@metric.OpenRate.ToString("N1")%</td>
+                                    <td class="mka-number">@metric.ClickRate.ToString("N1")%</td>
+                                    <td class="mka-number mka-strong">@metric.Conversions.ToString("N0")</td>
+                                    <td class="mka-number mka-strong">@metric.Revenue.ToString("C0")</td>
+                                    <td class="mka-number"><span class="@RoasCss(metric.Roas)">@metric.Roas.ToString("N1")x</span></td>
+                                    <td><span class="mka-status-chip @StatusCss(metric.Status)">@metric.Status</span></td>
+                                    <td>
+                                        <div class="mka-row-acts">
+                                            <button type="button" class="um-btn um-btn-primary um-btn-xs" @onclick="() => ConfirmRecalculate(metric)" @onclick:stopPropagation="true" title="Recalculate"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(metric)" @onclick:stopPropagation="true" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfirmDuplicate(metric)" @onclick:stopPropagation="true" title="Duplicate"><i class="bi bi-copy" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfirmArchive(metric)" @onclick:stopPropagation="true" title="Archive"><i class="bi bi-archive" aria-hidden="true"></i></button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="mka-pager">
+                    <span>Page @_page of @TotalPages · @_filtered.Count records</span>
+                    <div>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Previous</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <aside class="mka-detail-panel">
+            @if (_selected is null)
+            {
+                <div class="mka-detail-empty"><i class="bi bi-layout-sidebar-inset" aria-hidden="true"></i><strong>Select a metric</strong><span>Click any row to inspect campaign attribution, period, engagement, and workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="mka-detail-head">
+                    <div>
+                        <span class="mka-detail-eyebrow"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i> Metric detail</span>
+                        <h2>@_selected.CampaignName</h2>
+                        <div class="mka-detail-meta"><span>@_selected.Channel</span><span>@_selected.Goal</span><span>@_selected.Status</span></div>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearSelection"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                </div>
+                <div class="mka-detail-body">
+                    <div class="mka-detail-summary">
+                        <div class="mka-meta-row"><span class="mka-meta-lbl">Revenue</span><span class="mka-meta-val">@_selected.Revenue.ToString("C0")</span></div>
+                        <div class="mka-meta-row"><span class="mka-meta-lbl">Spend</span><span class="mka-meta-val">@_selected.Spend.ToString("C0")</span></div>
+                        <div class="mka-meta-row"><span class="mka-meta-lbl">ROAS</span><span class="mka-meta-val @RoasCss(_selected.Roas)">@_selected.Roas.ToString("N1")x</span></div>
+                        <div class="mka-meta-row"><span class="mka-meta-lbl">Conversions</span><span class="mka-meta-val">@_selected.Conversions.ToString("N0")</span></div>
+                        <div class="mka-meta-row"><span class="mka-meta-lbl">Open rate</span><span class="mka-meta-val">@_selected.OpenRate.ToString("N1")%</span></div>
+                        <div class="mka-meta-row"><span class="mka-meta-lbl">Click rate</span><span class="mka-meta-val">@_selected.ClickRate.ToString("N1")%</span></div>
+                    </div>
+                    <div class="mka-insight-card">
+                        <strong>Attribution window</strong>
+                        <span><i class="bi bi-calendar-range" aria-hidden="true"></i> @_selected.PeriodStartDate.ToString("MMM d, yyyy") – @_selected.PeriodEndDate.ToString("MMM d, yyyy")</span>
+                        <span><i class="bi bi-people" aria-hidden="true"></i> @_selected.Reached.ToString("N0") reached in @_selected.SegmentName</span>
+                        <span><i class="bi bi-bell-slash" aria-hidden="true"></i> @_selected.UnsubscribeRate.ToString("N2")% unsubscribe rate</span>
+                    </div>
+                    <div class="mka-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => ConfirmRecalculate(_selected)"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Recalculate</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfirmDuplicate(_selected)"><i class="bi bi-copy" aria-hidden="true"></i> Duplicate</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/marketing/campaigns")'><i class="bi bi-megaphone" aria-hidden="true"></i> Campaigns</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfirmArchive(_selected)"><i class="bi bi-archive" aria-hidden="true"></i> Archive</button>
+                    </div>
+                </div>
+            }
+        </aside>
+    </section>
 </div>
 
 @code {
@@ -126,67 +431,578 @@
     Guid TenantAdminUserId { get; set; }
     Guid DevTenantId { get; set; }
     Guid DevUserId { get; set; }
+
     private Guid _tenantAdminUserId;
     private Guid _tenantId;
     private string _period = "90";
-    private bool _loading;
+    private string _search = string.Empty;
+    private string _filterChannel = string.Empty;
+    private string _filterGoal = string.Empty;
+    private string _filterStatus = string.Empty;
+    private string _kpiFilter = "all";
     private string? _loadError;
+    private string? _toastMessage;
+    private string _toastKind = "success";
+    private int _toastVersion;
+    private bool _toastVisible;
+    private bool _loading;
+    private bool _busy;
+    private bool _showEditor;
+    private bool _showArchiveConfirm;
+    private bool _showDirectConfirm;
+    private Guid _editingId = Guid.Empty;
+    private int _page = 1;
+    private const int PageSize = 10;
+    private MarketingAnalyticsMetricDto? _selected;
+    private MarketingAnalyticsMetricDto? _archiveTarget;
+    private DirectExecutionConfirm? _directConfirm;
+    private MarketingMetricForm _form = new();
 
-    private List<CampPerfRow> _rows = [];
-    private decimal _totalReached, _avgOpenRate, _totalConversions, _totalRevenue, _totalSpend;
-    private decimal _unsubRate = 0.18m;
+    private readonly List<string> _channels = ["Email", "SMS", "Multi-Channel", "Direct Mail", "Social", "Web"];
+    private readonly List<string> _campaignTypes = ["Email", "SMS", "Multi-Channel", "Direct Mail", "Social", "Landing Page"];
+    private readonly List<string> _goals = ["Cross-Sell", "Win-Back", "Reviews", "Referrals", "Engagement", "Retention"];
+    private readonly List<string> _statuses = ["Active", "Draft", "Paused", "Archived"];
+    private readonly List<PeriodOption> _periodOptions = [new("30", "Last 30 Days"), new("90", "Last 90 Days"), new("ytd", "Year to Date"), new("12m", "Last 12 Months")];
 
-    private List<(string Name, int Pct, string Css)> _channels = [];
-    private List<(string Name, int Conversions, decimal Revenue)> _oppTypes = [];
+    private List<MarketingAnalyticsMetricDto> _metrics = [];
+    private List<MarketingAnalyticsMetricDto> _filtered = [];
+    private List<MarketingAnalyticsMetricDto> _paged = [];
+    private List<MarketingAnalyticsChannelSummaryDto> _channelSummaries = [];
+    private List<MarketingAnalyticsOpportunitySummaryDto> _opportunitySummaries = [];
+
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? $"{PeriodLabel(_period)} analytics" : $"Filtered by {_kpiFilter} · {PeriodLabel(_period)}";
+    private IEnumerable<string> ChannelOptions => _metrics.Select(m => m.Channel).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().OrderBy(s => s);
+    private IEnumerable<string> GoalOptions => _metrics.Select(m => m.Goal).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().OrderBy(s => s);
+    private decimal TotalReached => _metrics.Sum(m => m.Reached);
+    private decimal TotalRevenue => _metrics.Sum(m => m.Revenue);
+    private decimal TotalSpend => _metrics.Sum(m => m.Spend);
+    private int TotalConversions => _metrics.Sum(m => m.Conversions);
+    private decimal AvgOpenRate => _metrics.Any() ? _metrics.Average(m => m.OpenRate) : 0;
+    private decimal AvgClickRate => _metrics.Any() ? _metrics.Average(m => m.ClickRate) : 0;
+    private decimal AvgUnsubscribeRate => _metrics.Any() ? _metrics.Average(m => m.UnsubscribeRate) : 0;
+    private decimal Roas => TotalSpend > 0 ? TotalRevenue / TotalSpend : 0;
+
+    private IReadOnlyList<KpiModel> Kpis =>
+    [
+        new("all", "Total Reached", TotalReached.ToString("N0"), "All active campaigns", "bi-people", "mka-ki-blue"),
+        new("open", "Avg Open Rate", $"{AvgOpenRate:N1}%", "Audience engagement", "bi-envelope-open", "mka-ki-cyan"),
+        new("click", "Avg Click Rate", $"{AvgClickRate:N1}%", "CTA performance", "bi-cursor", "mka-ki-purple"),
+        new("conversions", "Conversions", TotalConversions.ToString("N0"), "Bound opportunities", "bi-trophy", "mka-ki-green"),
+        new("revenue", "Revenue", TotalRevenue.ToString("C0"), "Attributed premium", "bi-cash-coin", "mka-ki-green"),
+        new("roas", "ROAS", $"{Roas:N1}x", "Return on spend", "bi-graph-up-arrow", "mka-ki-blue"),
+        new("spend", "Spend", TotalSpend.ToString("C0"), "Campaign investment", "bi-credit-card", "mka-ki-amber"),
+        new("risk", "Unsub Rate", $"{AvgUnsubscribeRate:N2}%", "Suppression watch", "bi-bell-slash", "mka-ki-red")
+    ];
+
+    private string SearchFilter
+    {
+        get => _search;
+        set { _search = value; ApplyFilters(resetPage: true); }
+    }
+
+    private string ChannelFilter
+    {
+        get => _filterChannel;
+        set { _filterChannel = value; ApplyFilters(resetPage: true); }
+    }
+
+    private string GoalFilter
+    {
+        get => _filterGoal;
+        set { _filterGoal = value; ApplyFilters(resetPage: true); }
+    }
+
+    private string StatusFilter
+    {
+        get => _filterStatus;
+        set { _filterStatus = value; ApplyFilters(resetPage: true); }
+    }
+
+    private string PeriodFilter
+    {
+        get => _period;
+        set
+        {
+            if (_period == value) return;
+            _period = value;
+            _ = InvokeAsync(async () =>
+            {
+                await LoadAsync();
+                StateHasChanged();
+            });
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Marketing","/marketing/campaigns"), new("Analytics",""));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Marketing", "/marketing/campaigns"), new("Analytics", ""));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
-        _loading = true; _loadError = null;
+        _loading = true;
+        _loadError = null;
         try
         {
-            var campaigns = await Api.SearchCommunicationCampaignsAsync(_tenantId);
-            _rows = campaigns?.Items.Select(c => new CampPerfRow(c.Name, c.Type, c.Reached, c.OpenRate, EstimateClickRate(c.OpenRate), c.Conversions, c.Revenue, EstimateSpend(c.Type, c.Reached))).ToList() ?? [];
-            SyncBreakdowns();
+            await Api.EnsureMarketingAnalyticsSeedAsync(_tenantId);
+            var result = await Api.SearchMarketingAnalyticsAsync(_tenantId, _period, null);
+            _metrics = result?.Items?.ToList() ?? [];
+            _channelSummaries = result?.Channels?.ToList() ?? [];
+            _opportunitySummaries = result?.Opportunities?.ToList() ?? [];
+            ApplyFilters(resetPage: true);
+            EnsureSelectedStillVisible();
         }
-        catch (Exception ex) { _loadError = $"Failed to load analytics: {ex.Message}"; _rows = []; }
-
-        _totalReached    = _rows.Sum(r => r.Reached);
-        _avgOpenRate     = _rows.Any() ? _rows.Average(r => r.OpenRate) : 0;
-        _totalConversions= _rows.Sum(r => r.Conversions);
-        _totalRevenue    = _rows.Sum(r => r.Revenue);
-        _totalSpend      = _rows.Sum(r => r.Spend);
-        _loading = false;
+        catch (Exception ex)
+        {
+            _loadError = $"Marketing analytics failed to load: {ex.Message}";
+            _metrics = [];
+            _channelSummaries = [];
+            _opportunitySummaries = [];
+            ApplyFilters(resetPage: true);
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    private void SyncBreakdowns()
+    private void ApplyFilters(bool resetPage = false)
     {
-        var reachedTotal = Math.Max(_rows.Sum(r => r.Reached), 1);
-        _channels = _rows.GroupBy(r => r.Type).Select(g => (g.Key, (int)Math.Round(g.Sum(r => r.Reached) * 100m / reachedTotal), ChannelCss(g.Key))).ToList();
-        _oppTypes = _rows.OrderByDescending(r => r.Revenue).Take(5).Select(r => (r.Name, r.Conversions, r.Revenue)).ToList();
+        IEnumerable<MarketingAnalyticsMetricDto> query = _metrics;
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var search = _search.Trim();
+            query = query.Where(m =>
+                m.CampaignName.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                m.Channel.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                m.CampaignType.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                m.SegmentName.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                m.Goal.Contains(search, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_filterChannel)) query = query.Where(m => m.Channel == _filterChannel);
+        if (!string.IsNullOrWhiteSpace(_filterGoal)) query = query.Where(m => m.Goal == _filterGoal);
+        if (!string.IsNullOrWhiteSpace(_filterStatus)) query = query.Where(m => m.Status == _filterStatus);
+        query = _kpiFilter switch
+        {
+            "open" => query.Where(m => m.OpenRate >= AvgOpenRate),
+            "click" => query.Where(m => m.ClickRate >= AvgClickRate),
+            "conversions" => query.Where(m => m.Conversions > 0),
+            "revenue" => query.Where(m => m.Revenue > 0),
+            "roas" => query.Where(m => m.Roas >= 3),
+            "spend" => query.Where(m => m.Spend > 0),
+            "risk" => query.Where(m => m.UnsubscribeRate >= AvgUnsubscribeRate),
+            _ => query
+        };
+
+        _filtered = query.OrderByDescending(m => m.Revenue).ThenByDescending(m => m.Conversions).ToList();
+        if (resetPage) _page = 1;
+        if (_page > TotalPages) _page = TotalPages;
+        _paged = _filtered.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
     }
 
-    private static string ChannelCss(string type) => type switch
+    private void SetKpiFilter(string filter)
     {
-        "Email" => "mka-ch-blue",
-        "SMS" => "mka-ch-green",
-        "Multi-Channel" => "mka-ch-purple",
-        "Direct Mail" => "mka-ch-amber",
-        _ => "mka-ch-blue",
-    };
+        _kpiFilter = _kpiFilter == filter ? "all" : filter;
+        ApplyFilters(resetPage: true);
+    }
 
-    private static decimal EstimateClickRate(decimal openRate) => Math.Round(openRate * 0.22m, 1);
-    private static decimal EstimateSpend(string type, int reached) => Math.Max(500m, reached * (type == "Direct Mail" ? 1.15m : type == "SMS" ? 0.18m : 0.42m));
-
-    private sealed record CampPerfRow(string Name, string Type, int Reached, decimal OpenRate, decimal ClickRate, int Conversions, decimal Revenue, decimal Spend)
+    private void ResetFilters()
     {
-        public decimal Roas => Spend > 0 ? Revenue / Spend : 0;
+        _search = string.Empty;
+        _filterChannel = string.Empty;
+        _filterGoal = string.Empty;
+        _filterStatus = string.Empty;
+        _kpiFilter = "all";
+        ApplyFilters(resetPage: true);
+    }
+
+    private void PreviousPage()
+    {
+        if (_page <= 1) return;
+        _page--;
+        ApplyFilters();
+    }
+
+    private void NextPage()
+    {
+        if (_page >= TotalPages) return;
+        _page++;
+        ApplyFilters();
+    }
+
+    private void SelectMetric(MarketingAnalyticsMetricDto item) => _selected = item;
+    private void ClearSelection() => _selected = null;
+    private bool IsSelected(MarketingAnalyticsMetricDto item) => _selected?.AnalyticsMetricId == item.AnalyticsMetricId;
+
+    private void OpenCreate()
+    {
+        _editingId = Guid.Empty;
+        var end = DateTime.UtcNow.Date;
+        _form = new()
+        {
+            PeriodCode = _period,
+            PeriodStartDate = end.AddDays(PeriodDays(_period) * -1),
+            PeriodEndDate = end
+        };
+        _showEditor = true;
+    }
+
+    private void OpenEdit(MarketingAnalyticsMetricDto item)
+    {
+        _editingId = item.AnalyticsMetricId;
+        _form = new()
+        {
+            CampaignName = item.CampaignName,
+            Channel = item.Channel,
+            CampaignType = item.CampaignType,
+            SegmentName = item.SegmentName,
+            Goal = item.Goal,
+            PeriodCode = item.PeriodCode,
+            PeriodStartDate = item.PeriodStartDate,
+            PeriodEndDate = item.PeriodEndDate,
+            Reached = item.Reached,
+            OpenRate = item.OpenRate,
+            ClickRate = item.ClickRate,
+            Conversions = item.Conversions,
+            Revenue = item.Revenue,
+            Spend = item.Spend,
+            UnsubscribeRate = item.UnsubscribeRate,
+            Status = item.Status
+        };
+        _showEditor = true;
+    }
+
+    private void CloseEditor()
+    {
+        if (_busy) return;
+        _showEditor = false;
+        _editingId = Guid.Empty;
+    }
+
+    private async Task SaveMetricAsync()
+    {
+        _busy = true;
+        try
+        {
+            var request = _form.ToDto(_tenantId);
+            if (_editingId == Guid.Empty)
+            {
+                await Api.CreateMarketingAnalyticsMetricAsync(request);
+                ShowToast("Metric created.", "success");
+            }
+            else
+            {
+                await Api.UpdateMarketingAnalyticsMetricAsync(_editingId, request);
+                ShowToast("Metric saved.", "success");
+            }
+
+            _showEditor = false;
+            _editingId = Guid.Empty;
+            _period = request.PeriodCode;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task NotifyValidationAsync(EditContext _)
+    {
+        ShowToast("Fix validation errors.", "warning");
+        return Task.CompletedTask;
+    }
+
+    private void ConfirmDuplicate(MarketingAnalyticsMetricDto item)
+    {
+        _directConfirm = new(
+            "Duplicate Analytics Metric",
+            $"Create a copy of <strong>{item.CampaignName}</strong>? The duplicate will be saved as a draft metric for review.",
+            "Duplicate Metric",
+            "um-btn-primary",
+            "um-confirm-icon--info",
+            "bi-copy",
+            () => DuplicateMetricAsync(item));
+        _showDirectConfirm = true;
+    }
+
+    private void ConfirmRecalculate(MarketingAnalyticsMetricDto item)
+    {
+        _directConfirm = new(
+            "Recalculate Analytics Metric",
+            $"Recalculate performance values for <strong>{item.CampaignName}</strong>? This will update reach, engagement, conversion, and revenue metrics.",
+            "Recalculate",
+            "um-btn-primary",
+            "um-confirm-icon--warning",
+            "bi-arrow-repeat",
+            () => RecalculateMetricAsync(item));
+        _showDirectConfirm = true;
+    }
+
+    private void ConfirmExport()
+    {
+        _directConfirm = new(
+            "Export Marketing Analytics",
+            $"Export <strong>{_filtered.Count:N0}</strong> filtered analytics records to CSV?",
+            "Export CSV",
+            "um-btn-primary",
+            "um-confirm-icon--info",
+            "bi-download",
+            ExportAsync);
+        _showDirectConfirm = true;
+    }
+
+    private void CancelDirectExecution()
+    {
+        if (_busy) return;
+        _showDirectConfirm = false;
+        _directConfirm = null;
+    }
+
+    private async Task ExecuteDirectConfirmedAsync()
+    {
+        if (_directConfirm is null) return;
+        var action = _directConfirm.ExecuteAsync;
+        _showDirectConfirm = false;
+        _directConfirm = null;
+        await action();
+    }
+
+    private async Task DuplicateMetricAsync(MarketingAnalyticsMetricDto item)
+    {
+        _busy = true;
+        try
+        {
+            await Api.DuplicateMarketingAnalyticsMetricAsync(item.AnalyticsMetricId);
+            ShowToast("Metric duplicated.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Duplicate failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RecalculateMetricAsync(MarketingAnalyticsMetricDto item)
+    {
+        _busy = true;
+        try
+        {
+            await Api.RecalculateMarketingAnalyticsMetricAsync(item.AnalyticsMetricId);
+            ShowToast("Metric recalculated.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Recalculate failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void ConfirmArchive(MarketingAnalyticsMetricDto item)
+    {
+        _archiveTarget = item;
+        _showArchiveConfirm = true;
+    }
+
+    private void CancelArchive()
+    {
+        if (_busy) return;
+        _archiveTarget = null;
+        _showArchiveConfirm = false;
+    }
+
+    private async Task ExecuteArchiveAsync()
+    {
+        if (_archiveTarget is null) return;
+        _busy = true;
+        try
+        {
+            await Api.ArchiveMarketingAnalyticsMetricAsync(_archiveTarget.AnalyticsMetricId);
+            ShowToast("Metric archived.", "success");
+            _archiveTarget = null;
+            _showArchiveConfirm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Archive failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ExportAsync()
+    {
+        if (!_filtered.Any())
+        {
+            ShowToast("Nothing to export.", "warning");
+            return;
+        }
+
+        var csv = new StringBuilder();
+        csv.AppendLine("CampaignName,Channel,CampaignType,Segment,Goal,Period,PeriodStart,PeriodEnd,Reached,OpenRate,ClickRate,Conversions,Revenue,Spend,ROAS,UnsubscribeRate,Status,UpdatedUtc");
+        foreach (var item in _filtered)
+        {
+            csv.AppendLine(string.Join(',',
+                Csv(item.CampaignName),
+                Csv(item.Channel),
+                Csv(item.CampaignType),
+                Csv(item.SegmentName),
+                Csv(item.Goal),
+                Csv(item.PeriodCode),
+                Csv(item.PeriodStartDate.ToString("yyyy-MM-dd")),
+                Csv(item.PeriodEndDate.ToString("yyyy-MM-dd")),
+                item.Reached,
+                item.OpenRate.ToString("0.00"),
+                item.ClickRate.ToString("0.00"),
+                item.Conversions,
+                item.Revenue.ToString("0.00"),
+                item.Spend.ToString("0.00"),
+                item.Roas.ToString("0.00"),
+                item.UnsubscribeRate.ToString("0.00"),
+                Csv(item.Status),
+                Csv(item.UpdatedDateUtc.ToString("O"))));
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"marketing-analytics-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+        ShowToast($"Exported {_filtered.Count:N0} records.", "success");
+    }
+
+    private void HideToast() => _toastVisible = false;
+
+    private void ShowToast(string message, string kind)
+    {
+        var version = ++_toastVersion;
+        _toastMessage = SingleLine(message);
+        _toastKind = kind;
+        _toastVisible = true;
+        _ = HideToastAfterDelayAsync(version, ToastDelay(kind));
+    }
+
+    private async Task HideToastAfterDelayAsync(int version, int delayMs)
+    {
+        await Task.Delay(delayMs);
+        if (version != _toastVersion) return;
+        await InvokeAsync(() =>
+        {
+            if (version != _toastVersion) return;
+            _toastVisible = false;
+            StateHasChanged();
+        });
+    }
+
+    private static int ToastDelay(string kind) => kind == "danger" ? 4800 : kind == "warning" ? 3800 : 2800;
+
+    private static string SingleLine(string message)
+    {
+        var value = string.Join(' ', (message ?? string.Empty).Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)).Trim();
+        return value.Length <= 92 ? value : string.Concat(value.AsSpan(0, 89), "...");
+    }
+
+    private void EnsureSelectedStillVisible()
+    {
+        if (_selected is null) return;
+        _selected = _metrics.FirstOrDefault(m => m.AnalyticsMetricId == _selected.AnalyticsMetricId);
+    }
+
+    private static string Csv(string value)
+    {
+        var quote = Convert.ToChar(34).ToString();
+        return string.Concat(quote, value.Replace(quote, quote + quote), quote);
+    }
+
+    private static string PeriodLabel(string value) => value switch { "30" => "Last 30 days", "ytd" => "Year to date", "12m" => "Last 12 months", _ => "Last 90 days" };
+    private static int PeriodDays(string value) => value switch { "30" => 30, "ytd" => Math.Max(1, DateTime.UtcNow.DayOfYear), "12m" => 365, _ => 90 };
+    private static string ChannelCss(string channel) => $"mka-ch-{Slug(channel)}";
+    private static string StatusCss(string status) => $"mka-st-{Slug(status)}";
+    private static string ChannelIconClass(string channel) => channel switch { "SMS" => "mka-di-green", "Multi-Channel" => "mka-di-purple", "Direct Mail" => "mka-di-amber", "Social" => "mka-di-pink", "Web" => "mka-di-cyan", _ => "mka-di-blue" };
+    private static string ChannelIcon(string channel) => channel switch { "SMS" => "bi-chat-dots", "Multi-Channel" => "bi-broadcast", "Direct Mail" => "bi-mailbox", "Social" => "bi-share", "Web" => "bi-window", _ => "bi-envelope" };
+    private static string RoasCss(decimal roas) => roas >= 4m ? "mka-roas-good" : roas >= 2m ? "mka-roas-ok" : "mka-roas-bad";
+    private static string Slug(string value) => value.ToLowerInvariant().Replace(" ", "-");
+
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone)
+    {
+        public string Title => $"Filter by {Label}";
+    }
+
+    private sealed record PeriodOption(string Value, string Label);
+
+    private sealed record DirectExecutionConfirm(string Title, string Body, string ButtonText, string ButtonClass, string IconClass, string Icon, Func<Task> ExecuteAsync);
+
+    private sealed class MarketingMetricForm
+    {
+        [Required, StringLength(200)]
+        public string CampaignName { get; set; } = string.Empty;
+        [Required, StringLength(80)]
+        public string Channel { get; set; } = "Email";
+        [Required, StringLength(80)]
+        public string CampaignType { get; set; } = "Email";
+        [Required, StringLength(200)]
+        public string SegmentName { get; set; } = "All Marketing Contacts";
+        [Required, StringLength(150)]
+        public string Goal { get; set; } = "Engagement";
+        [Required, StringLength(20)]
+        public string PeriodCode { get; set; } = "90";
+        public DateTime PeriodStartDate { get; set; } = DateTime.UtcNow.Date.AddDays(-90);
+        public DateTime PeriodEndDate { get; set; } = DateTime.UtcNow.Date;
+        [Range(0, int.MaxValue)]
+        public int Reached { get; set; }
+        [Range(0, 100)]
+        public decimal OpenRate { get; set; }
+        [Range(0, 100)]
+        public decimal ClickRate { get; set; }
+        [Range(0, int.MaxValue)]
+        public int Conversions { get; set; }
+        [Range(0, 999999999999)]
+        public decimal Revenue { get; set; }
+        [Range(0, 999999999999)]
+        public decimal Spend { get; set; }
+        [Range(0, 100)]
+        public decimal UnsubscribeRate { get; set; }
+        [Required, StringLength(50)]
+        public string Status { get; set; } = "Active";
+
+        public MarketingAnalyticsMetricDto ToDto(Guid tenantId) => new()
+        {
+            TenantId = tenantId,
+            CampaignName = CampaignName,
+            Channel = Channel,
+            CampaignType = CampaignType,
+            SegmentName = SegmentName,
+            Goal = Goal,
+            PeriodCode = PeriodCode,
+            PeriodStartDate = PeriodStartDate,
+            PeriodEndDate = PeriodEndDate,
+            Reached = Reached,
+            OpenRate = OpenRate,
+            ClickRate = ClickRate,
+            Conversions = Conversions,
+            Revenue = Revenue,
+            Spend = Spend,
+            UnsubscribeRate = UnsubscribeRate,
+            Status = Status
+        };
     }
 
     async Task ResolveCurrentUserContextAsync()

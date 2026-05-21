@@ -1,171 +1,387 @@
 @page "/marketing/cross-sell"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
-@inject ConfirmationDialogService Confirmations
+@inject IJSRuntime Js
 
-<PageTitle>Cross-Sell Opportunities — AMS</PageTitle>
+<PageTitle>Cross-Sell Opportunities — AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="Cross-Sell Opportunities"
-               Subtitle="AI-scored opportunities to expand coverage and grow revenue across your book of business"
-               Icon="bi-arrows-expand">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/marketing/rules-engine")'>
-            <i class="bi bi-lightning-charge" aria-hidden="true"></i> Rules Engine
-        </button>
-        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/marketing/campaigns/new")'>
-            <i class="bi bi-megaphone" aria-hidden="true"></i> Launch Campaign
-        </button>
-    </Actions>
-</AppPageHeader>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    <div class="mkx-toast mkx-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="mkx-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
 }
 
-<!-- KPI -->
-<div class="mkx-kpi-strip">
-    <div class="mkx-kpi-card mkx-kpi-blue">
-        <i class="bi bi-arrows-expand" aria-hidden="true"></i>
-        <div><div class="mkx-kv">@_opportunities.Count</div><div class="mkx-kl">Open Opportunities</div></div>
+@if (_showForm)
+{
+    <div class="mkx-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="mkx-modal mkx-action-modal" role="dialog" aria-modal="true" aria-labelledby="mkx-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-arrows-expand" aria-hidden="true"></i>
+                <span id="mkx-form-title">@(_editingId == Guid.Empty ? "Create Cross-Sell Opportunity" : "Edit Cross-Sell Opportunity")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="mkx-modal-intro"><span><i class="bi bi-shield-check" aria-hidden="true"></i> Opportunity configuration</span><p>Define account, producer, opportunity type, score, premium estimate, trigger signal, contact date, and workflow status for DB-backed cross-sell opportunities.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Account name <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.AccountName" /><ValidationMessage For="() => _form.AccountName" class="text-danger" /></div>
+                        <div class="um-field"><label>Account type <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.AccountType">@foreach (var type in _accountTypes) { <option value="@type">@type</option> }</InputSelect><ValidationMessage For="() => _form.AccountType" class="text-danger" /></div>
+                        <div class="um-field"><label>Producer <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.Producer" /><ValidationMessage For="() => _form.Producer" class="text-danger" /></div>
+                        <div class="um-field"><label>Opportunity type <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.OpportunityType">@foreach (var type in _opportunityTypes) { <option value="@type">@type</option> }</InputSelect><ValidationMessage For="() => _form.OpportunityType" class="text-danger" /></div>
+                        <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.StatusCode">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Last contact</label><InputDate class="form-control" @bind-Value="_form.LastContactDate" /></div>
+                        <div class="um-field"><label>Score</label><InputNumber class="form-control" @bind-Value="_form.Score" /><ValidationMessage For="() => _form.Score" class="text-danger" /></div>
+                        <div class="um-field"><label>Estimated premium</label><InputNumber class="form-control" @bind-Value="_form.EstimatedPremium" /><ValidationMessage For="() => _form.EstimatedPremium" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Trigger signal</label><InputTextArea class="form-control" rows="3" @bind-Value="_form.TriggerSignal" /><ValidationMessage For="() => _form.TriggerSignal" class="text-danger" /></div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@(_editingId == Guid.Empty ? "Create Opportunity" : "Save Changes")</button>
+                </div>
+            </EditForm>
+        </div>
     </div>
-    <div class="mkx-kpi-card mkx-kpi-green">
-        <i class="bi bi-cash-stack" aria-hidden="true"></i>
-        <div><div class="mkx-kv">@_opportunities.Sum(o => o.EstimatedPremium).ToString("C0")</div><div class="mkx-kl">Est. Premium Pipeline</div></div>
-    </div>
-    <div class="mkx-kpi-card mkx-kpi-amber">
-        <i class="bi bi-bullseye" aria-hidden="true"></i>
-        <div><div class="mkx-kv">@(_opportunities.Any() ? _opportunities.Average(o => o.Score).ToString("N0") : "0")</div><div class="mkx-kl">Avg. Propensity Score</div></div>
-    </div>
-    <div class="mkx-kpi-card mkx-kpi-green">
-        <i class="bi bi-trophy" aria-hidden="true"></i>
-        <div><div class="mkx-kv">@_opportunities.Count(o => o.Score >= 80)</div><div class="mkx-kl">High Priority</div></div>
-    </div>
-</div>
+}
 
-<!-- Opportunity table -->
-<div class="mkx-grid-card app-datagrid">
-    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading cross-sell opportunities…</span></div> }
-    <SfGrid CssClass="marketing-grid" TValue="XsellOpp" DataSource="_opportunities" AllowPaging="true" AllowSorting="true" AllowFiltering="true"
-            AllowTextWrap="true" EnableHover="true" RowHeight="64">
-        <GridTextWrapSettings WrapMode="WrapMode.Content" />
-        <GridEvents TValue="XsellOpp" RowSelected="OnRowSelected" />
-        <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
-        <GridPageSettings PageSize="20" />
-        <GridColumns>
-            <GridColumn HeaderText="Account" MinWidth="320" Field="@nameof(XsellOpp.AccountName)">
-                <Template>
-                    @{ var o = (XsellOpp)context; }
-                    <div class="mkx-name-cell">
-                        <div class="mkx-av">@Initials(o.AccountName)</div>
-                        <div>
-                            <div class="mkx-item-name">@o.AccountName</div>
-                            <div class="mkx-item-sub">@o.AccountType · @o.Producer</div>
-                        </div>
+@if (_showConfirm)
+{
+    <div class="mkx-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="mkx-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="mkx-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @ConfirmIconTone"><i class="bi @ConfirmIcon"></i></div>
+                <div class="um-confirm-title" id="mkx-confirm-title">@ConfirmTitle</div>
+                <div class="um-confirm-body">@((MarkupString)ConfirmBody)</div>
+                <div class="mkx-config-panel">
+                    <span class="mkx-config-eyebrow"><i class="bi bi-sliders" aria-hidden="true"></i> Configuration required</span>
+                    <div class="mkx-config-grid">
+                        @if (_confirmAction == ConfirmAction.Contact)
+                        {
+                            <label><span>Campaign route</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="CampaignBuilder">Campaign builder</option><option value="DirectCall">Mark direct call</option><option value="EmailSequence">Email sequence</option></select></label>
+                            <label><span>Next status</span><select class="form-select" @bind="_actionConfig.NextStatus"><option value="Contacted">Contacted</option><option value="Working">Working</option><option value="Open">Open</option></select></label>
+                            <label class="mkx-config-check"><input type="checkbox" @bind="_actionConfig.RefreshAfterAction" /> Refresh opportunity data after route</label>
+                            <label class="mkx-config-check"><input type="checkbox" @bind="_actionConfig.NotifyProducer" /> Notify assigned producer</label>
+                        }
+                        else if (_confirmAction == ConfirmAction.Rescore)
+                        {
+                            <label><span>Score model</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="Propensity">Propensity scoring</option><option value="PremiumWeighted">Premium-weighted scoring</option></select></label>
+                            <label class="mkx-config-check"><input type="checkbox" @bind="_actionConfig.RefreshAfterAction" /> Refresh after rescore</label>
+                        }
+                        else if (_confirmAction == ConfirmAction.Duplicate)
+                        {
+                            <label class="mkx-config-full"><span>Copy label</span><input class="form-control" @bind="_actionConfig.NewName" /></label>
+                            <label><span>Starting status</span><select class="form-select" @bind="_actionConfig.NextStatus"><option value="Open">Open</option><option value="Working">Working review</option></select></label>
+                        }
+                        else if (_confirmAction == ConfirmAction.Dismiss)
+                        {
+                            <label class="mkx-config-full"><span>Reason</span><input class="form-control" @bind="_actionConfig.Reason" placeholder="Document why this opportunity is being dismissed" /></label>
+                            <label class="mkx-config-check"><input type="checkbox" @bind="_actionConfig.NotifyProducer" /> Notify assigned producer</label>
+                        }
+                        else if (_confirmAction == ConfirmAction.Sync)
+                        {
+                            <label><span>Seed mode</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="MissingOnly">Add missing seed data only</option><option value="RepairSchema">Repair schema and seed data</option></select></label>
+                            <label class="mkx-config-check"><input type="checkbox" @bind="_actionConfig.RefreshAfterAction" /> Refresh after sync</label>
+                        }
+                        else if (_confirmAction == ConfirmAction.Export)
+                        {
+                            <label><span>Export scope</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="Filtered">Current filtered results</option><option value="All">All open opportunities</option></select></label>
+                            <label class="mkx-config-check"><input type="checkbox" @bind="_actionConfig.IncludeTrigger" /> Include trigger signal</label>
+                        }
                     </div>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(XsellOpp.OpportunityType)" HeaderText="Opportunity" Width="180">
-                <Template>@{ var o = (XsellOpp)context; }<span class="mkx-opp-type @OppCss(o.OpportunityType)">@o.OpportunityType</span></Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(XsellOpp.Score)" HeaderText="Score" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                <Template>
-                    @{ var o = (XsellOpp)context; }
-                    <div class="mkx-score-wrap">
-                        <div class="mkx-score-bar" style="width:@(o.Score)%"></div>
-                        <span class="mkx-score-val @ScoreCss(o.Score)">@o.Score</span>
-                    </div>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(XsellOpp.EstimatedPremium)" HeaderText="Est. Premium" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                <Template>@{ var o = (XsellOpp)context; }<span class="mkx-mono mkx-bold">@o.EstimatedPremium.ToString("C0")</span></Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(XsellOpp.Trigger)" HeaderText="Trigger Signal" Width="240" />
-            <GridColumn Field="@nameof(XsellOpp.LastContact)" HeaderText="Last Contact" Width="120" Type="ColumnType.Date" Format="MMM d, yyyy" />
-            <GridColumn HeaderText="Action" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                <Template>
-                    @{ var o = (XsellOpp)context; }
-                    <div style="display:flex;gap:.3rem;justify-content:flex-end">
-                        <button class="um-btn um-btn-primary um-btn-xs" title="Contact" @onclick:stopPropagation="true" @onclick="() => LaunchCampaign(o)">
-                            <i class="bi bi-telephone" aria-hidden="true"></i>
-                        </button>
-                        <button class="um-btn um-btn-ghost um-btn-xs" title="Dismiss" @onclick:stopPropagation="true" @onclick="() => DismissOpportunityAsync(o)">
-                            <i class="bi bi-x" aria-hidden="true"></i>
-                        </button>
-                    </div>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
+                </div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_busy">Cancel</button><button type="button" class="um-btn @ConfirmButtonClass" @onclick="ExecuteConfirmAsync" disabled="@_busy">@ConfirmButtonText</button></div>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="mkx-enterprise-page">
+    <section class="mkx-header">
+        <div class="mkx-header-left"><div class="mkx-lob-icon"><i class="bi bi-arrows-expand" aria-hidden="true"></i></div><div class="mkx-header-info"><div class="mkx-title-row"><h1 class="mkx-page-title">Cross-Sell Opportunities</h1><span class="mkx-status-pill"><i class="bi bi-database-check"></i> Live marketing data</span><span class="mkx-status-pill"><i class="bi bi-shield-lock"></i> Tenant scoped</span></div><div class="mkx-sub-row"><span>Prioritize AI-scored expansion opportunities, route producers, and launch campaign workflows.</span><span class="mkx-sub-chip"><i class="bi bi-arrow-repeat"></i> Seed sync enabled</span><span class="mkx-sub-chip"><i class="bi bi-check2-circle"></i> @_filtered.Count active matches</span></div></div></div>
+        <div class="mkx-header-actions"><button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat mkx-spin" : "bi-arrow-clockwise")"></i> Refresh</button><button type="button" class="um-btn um-btn-ghost" @onclick="ConfigureSync" disabled="@_busy"><i class="bi bi-cloud-arrow-down"></i> Sync Seed</button><button type="button" class="um-btn um-btn-ghost" @onclick="ConfigureExport" disabled="@(!_filtered.Any())"><i class="bi bi-download"></i> Export</button><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle"></i> New Opportunity</button></div>
+    </section>
+
+    <section class="mkx-kpi-strip" aria-label="Cross-sell metrics">@foreach (var kpi in Kpis) { <button type="button" class="mkx-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "mkx-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)"><span class="mkx-kpi-icon"><i class="bi @kpi.Icon"></i></span><span class="mkx-kpi-copy"><span class="mkx-kpi-label">@kpi.Label</span><span class="mkx-kpi-value">@kpi.Value</span><span class="mkx-kpi-caption">@kpi.Caption</span></span></button> }</section>
+
+    <section class="mkx-workflow-strip" aria-label="Marketing workflow shortcuts">
+        <button type="button" class="mkx-workflow-card mkx-wf-rules" @onclick='() => Nav.NavigateTo("/marketing/rules-engine")'><span class="mkx-workflow-icon"><i class="bi bi-lightning-charge"></i></span><span class="mkx-workflow-content"><strong>1</strong><span>Rules</span><small>Tune triggers.</small></span></button>
+        <button type="button" class="mkx-workflow-card mkx-wf-segments" @onclick='() => Nav.NavigateTo("/marketing/segments")'><span class="mkx-workflow-icon"><i class="bi bi-pie-chart"></i></span><span class="mkx-workflow-content"><strong>2</strong><span>Segments</span><small>Target accounts.</small></span></button>
+        <button type="button" class="mkx-workflow-card mkx-wf-builder" @onclick='() => Nav.NavigateTo("/marketing/campaigns/new")'><span class="mkx-workflow-icon"><i class="bi bi-magic"></i></span><span class="mkx-workflow-content"><strong>3</strong><span>Builder</span><small>Launch outreach.</small></span></button>
+        <button type="button" class="mkx-workflow-card mkx-wf-email" @onclick='() => Nav.NavigateTo("/marketing/email")'><span class="mkx-workflow-icon"><i class="bi bi-envelope-paper"></i></span><span class="mkx-workflow-content"><strong>4</strong><span>Email</span><small>Nurture pipeline.</small></span></button>
+        <button type="button" class="mkx-workflow-card mkx-wf-pages" @onclick='() => Nav.NavigateTo("/marketing/landing-pages")'><span class="mkx-workflow-icon"><i class="bi bi-layout-text-window"></i></span><span class="mkx-workflow-content"><strong>5</strong><span>Pages</span><small>Capture demand.</small></span></button>
+    </section>
+
+    <section class="mkx-enterprise-search" aria-label="Cross-sell filters">
+        <div class="mkx-search-icon"><i class="bi bi-search"></i></div>
+        <div class="mkx-search-body">
+            <label for="mkx-search">Search opportunities</label>
+            <input id="mkx-search" class="mkx-search-input" type="search" placeholder="Search account, producer, opportunity, trigger..." @bind="SearchFilter" @bind:event="oninput" />
+            <span class="mkx-search-hint">Filters apply instantly across synchronized opportunity data.</span>
+        </div>
+        <select class="mkx-filter-select" @bind="TypeFilter"><option value="">All opportunity types</option>@foreach (var type in OpportunityOptions) { <option value="@type">@type</option> }</select>
+        <select class="mkx-filter-select" @bind="ProducerFilter"><option value="">All producers</option>@foreach (var producer in ProducerOptions) { <option value="@producer">@producer</option> }</select>
+        <select class="mkx-filter-select" @bind="ScoreFilter"><option value="">Score: all</option><option value="high">High priority</option><option value="medium">Medium</option><option value="low">Low</option></select>
+        <div class="mkx-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError)) { <div class="alert alert-danger mkx-load-error" style="border-left:4px solid #dc3545; animation:um-shake .3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div> }
+
+    <section class="mkx-content-layout">
+        <div class="mkx-grid-wrap"><div class="mkx-grid-toolbar"><div><strong>Opportunity command center</strong><span>@ActiveFilterText</span></div><div class="mkx-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/marketing/rules-engine")'><i class="bi bi-lightning-charge"></i> Rules</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle"></i> Add</button></div></div>
+            @if (_loading) { <div class="mkx-loading"><i class="bi bi-arrow-repeat mkx-spin"></i><strong>Loading cross-sell opportunities...</strong><span>Syncing schema, seed data, producer assignments, trigger signals, and propensity scores.</span></div> }
+            else if (!_filtered.Any()) { <div class="mkx-empty-state"><i class="bi bi-inbox"></i><strong>No cross-sell opportunities found</strong><span>Adjust filters or create a DB-backed opportunity.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">New Opportunity</button></div> }
+            else
+            {
+                <div class="mkx-table-scroll">
+                    <table class="mkx-table">
+                        <thead><tr><th>Account</th><th>Opportunity</th><th>Status</th><th class="mkx-number">Score</th><th class="mkx-number">Est. Premium</th><th>Trigger</th><th>Last Contact</th><th class="mkx-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var item in _paged)
+                            {
+                                <tr class="mkx-table-row @(IsSelected(item) ? "mkx-table-row--selected" : null)" @onclick="() => SelectOpportunity(item)">
+                                    <td><div class="mkx-account-cell"><span class="mkx-avatar">@Initials(item.AccountName)</span><div><strong>@item.AccountName</strong><span>@item.AccountType · @item.Producer</span></div></div></td>
+                                    <td><span class="mkx-opp-type @OppCss(item.OpportunityType)">@item.OpportunityType</span></td>
+                                    <td><span class="mkx-status-chip @StatusCss(item.StatusCode)">@item.StatusCode</span></td>
+                                    <td class="mkx-number"><span class="mkx-score-pill @ScoreCss(item.Score)">@item.Score</span></td>
+                                    <td class="mkx-number">@item.EstimatedPremium.ToString("C0")</td>
+                                    <td><span class="mkx-trigger-text">@item.TriggerSignal</span></td>
+                                    <td>@item.LastContactDate.ToString("MMM d, yyyy")</td>
+                                    <td><div class="mkx-row-acts"><button type="button" class="um-btn um-btn-primary um-btn-xs" @onclick="() => ConfigureContact(item)" @onclick:stopPropagation="true" title="Contact"><i class="bi bi-telephone"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(item)" @onclick:stopPropagation="true" title="Edit"><i class="bi bi-pencil"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfigureRescore(item)" @onclick:stopPropagation="true" title="Rescore"><i class="bi bi-graph-up-arrow"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfigureDuplicate(item)" @onclick:stopPropagation="true" title="Duplicate"><i class="bi bi-copy"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfigureDismiss(item)" @onclick:stopPropagation="true" title="Dismiss"><i class="bi bi-x-lg"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="mkx-pager"><span>Page @_page of @TotalPages · @_filtered.Count records</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left"></i> Previous</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right"></i></button></div></div>
+            }
+        </div>
+        <aside class="mkx-detail-panel">
+            @if (_selected is null)
+            {
+                <div class="mkx-detail-empty"><i class="bi bi-layout-sidebar-inset"></i><strong>Select an opportunity</strong><span>Click any row to inspect score, trigger signals, producer ownership, and workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="mkx-detail-head"><div><span class="mkx-detail-eyebrow"><i class="bi bi-window-sidebar"></i> Opportunity detail</span><h2>@_selected.AccountName</h2><div class="mkx-detail-meta"><span>@_selected.AccountType</span><span>@_selected.Producer</span><span>@_selected.StatusCode</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearSelection"><i class="bi bi-x-lg"></i></button></div>
+                <div class="mkx-detail-body"><div class="mkx-detail-summary"><div class="mkx-meta-row"><span class="mkx-meta-lbl">Score</span><span class="mkx-meta-val">@_selected.Score</span></div><div class="mkx-meta-row"><span class="mkx-meta-lbl">Premium</span><span class="mkx-meta-val">@_selected.EstimatedPremium.ToString("C0")</span></div><div class="mkx-meta-row"><span class="mkx-meta-lbl">Opportunity</span><span class="mkx-meta-val">@_selected.OpportunityType</span></div><div class="mkx-meta-row"><span class="mkx-meta-lbl">Last contact</span><span class="mkx-meta-val">@_selected.LastContactDate.ToString("MMM d, yyyy")</span></div></div><div class="mkx-contact-card"><strong>Trigger and routing</strong><span><i class="bi bi-broadcast"></i>@_selected.TriggerSignal</span><span><i class="bi bi-person-badge"></i>@_selected.Producer</span><span><i class="bi bi-flag"></i>@_selected.StatusCode</span></div><div class="mkx-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="() => ConfigureContact(_selected)"><i class="bi bi-telephone"></i> Contact</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil"></i> Edit</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureRescore(_selected)"><i class="bi bi-graph-up-arrow"></i> Rescore</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureDuplicate(_selected)"><i class="bi bi-copy"></i> Duplicate</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureDismiss(_selected)"><i class="bi bi-x-lg"></i> Dismiss</button></div></div>
+            }
+        </aside>
+    </section>
 </div>
 
 @code {
+    private const int PageSize = 10;
     Guid TenantId { get; set; }
     Guid TenantAdminUserId { get; set; }
     Guid DevTenantId { get; set; }
     Guid DevUserId { get; set; }
     private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private bool _loading;
+    private string _search = string.Empty;
+    private string _typeFilter = string.Empty;
+    private string _producerFilter = string.Empty;
+    private string _scoreFilter = string.Empty;
+    private string _kpiFilter = "all";
     private string? _loadError;
-    private List<XsellOpp> _opportunities = [];
+    private string? _toastMessage;
+    private string _toastKind = "success";
+    private bool _toastVisible;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showConfirm;
+    private int _page = 1;
+    private Guid _editingId = Guid.Empty;
+    private ConfirmAction _confirmAction;
+    private MarketingCrossSellOpportunityDto? _selected;
+    private MarketingCrossSellOpportunityDto? _confirmTarget;
+    private OpportunityForm _form = new();
+    private ActionConfiguration _actionConfig = new();
+    private List<MarketingCrossSellOpportunityDto> _items = [];
+    private List<MarketingCrossSellOpportunityDto> _filtered = [];
+    private List<MarketingCrossSellOpportunityDto> _paged = [];
+    private readonly string[] _accountTypes = ["Commercial", "Personal", "Benefits", "Life", "Specialty"];
+    private readonly string[] _opportunityTypes = ["Missing Umbrella", "Home + Auto Bundle", "Workers Comp Expansion", "Teen Driver Add-On", "Business Package Expansion", "Benefits Upsell", "Cyber Coverage", "Life Insurance Review"];
+    private readonly string[] _statuses = ["Open", "Working", "Contacted", "Quoted", "Won", "Dismissed"];
 
-    protected override async Task OnInitializedAsync()
+    private string SearchFilter { get => _search; set { _search = value; ApplyFilters(resetPage: true); } }
+    private string TypeFilter { get => _typeFilter; set { _typeFilter = value; ApplyFilters(resetPage: true); } }
+    private string ProducerFilter { get => _producerFilter; set { _producerFilter = value; ApplyFilters(resetPage: true); } }
+    private string ScoreFilter { get => _scoreFilter; set { _scoreFilter = value; ApplyFilters(resetPage: true); } }
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private IEnumerable<string> OpportunityOptions => _items.Select(i => i.OpportunityType).Where(t => !string.IsNullOrWhiteSpace(t)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(t => t);
+    private IEnumerable<string> ProducerOptions => _items.Select(i => i.Producer).Where(t => !string.IsNullOrWhiteSpace(t)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(t => t);
+    private string ActiveFilterText => _filtered.Count == _items.Count ? "All synchronized opportunities" : $"Filtered to {_filtered.Count:N0} of {_items.Count:N0} opportunities";
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ConfirmTitle => _confirmAction switch
     {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Marketing","/marketing/campaigns"), new("Cross-Sell",""));
-        await LoadAsync();
-    }
+        ConfirmAction.Contact => "Configure Contact",
+        ConfirmAction.Rescore => "Configure Rescore",
+        ConfirmAction.Duplicate => "Configure Duplicate",
+        ConfirmAction.Dismiss => "Configure Dismiss",
+        ConfirmAction.Sync => "Configure Seed Sync",
+        ConfirmAction.Export => "Configure Export",
+        _ => "Confirm Action"
+    };
 
-    private async Task LoadAsync()
+    private string ConfirmBody => _confirmAction switch
     {
-        _loading = true; _loadError = null;
+        ConfirmAction.Contact when _confirmTarget is not null => $"Configure route and status updates before contacting {Bold(_confirmTarget.AccountName)}.",
+        ConfirmAction.Rescore when _confirmTarget is not null => $"Recalculate cross-sell propensity and premium estimate for {Bold(_confirmTarget.AccountName)}.",
+        ConfirmAction.Duplicate when _confirmTarget is not null => $"Create a working copy of {Bold(_confirmTarget.AccountName)}.",
+        ConfirmAction.Dismiss when _confirmTarget is not null => $"Dismiss the {Bold(_confirmTarget.OpportunityType)} opportunity for {Bold(_confirmTarget.AccountName)}.",
+        ConfirmAction.Sync => "Configure seed synchronization before repairing schema or adding missing records.",
+        ConfirmAction.Export => $"Configure export settings for {_filtered.Count:N0} current opportunity matches.",
+        _ => string.Empty
+    };
+
+    private string ConfirmButtonText => _confirmAction switch
+    {
+        ConfirmAction.Contact => "Route Contact",
+        ConfirmAction.Rescore => "Run Rescore",
+        ConfirmAction.Duplicate => "Create Copy",
+        ConfirmAction.Dismiss => "Dismiss",
+        ConfirmAction.Sync => "Run Sync",
+        ConfirmAction.Export => "Export File",
+        _ => "Execute"
+    };
+    private string ConfirmButtonClass => _confirmAction == ConfirmAction.Dismiss ? "um-btn-danger" : "um-btn-primary";
+    private string ConfirmIcon => _confirmAction switch
+    {
+        ConfirmAction.Contact => "bi-telephone-fill",
+        ConfirmAction.Rescore => "bi-graph-up-arrow",
+        ConfirmAction.Duplicate => "bi-copy",
+        ConfirmAction.Dismiss => "bi-x-octagon-fill",
+        ConfirmAction.Sync => "bi-cloud-arrow-down-fill",
+        ConfirmAction.Export => "bi-download",
+        _ => "bi-question-circle-fill"
+    };
+    private string ConfirmIconTone => _confirmAction == ConfirmAction.Dismiss ? "um-confirm-icon--danger" : string.Empty;
+    private IEnumerable<KpiModel> Kpis => [new("all", "Open", _items.Count.ToString("N0"), "Active opportunities", "bi-arrows-expand", "mkx-ki-blue"), new("pipeline", "Pipeline", _items.Sum(x => x.EstimatedPremium).ToString("C0"), "Est. premium", "bi-cash-stack", "mkx-ki-green"), new("score", "Avg. Score", (_items.Any() ? _items.Average(x => x.Score) : 0).ToString("N0"), "Propensity", "bi-bullseye", "mkx-ki-amber"), new("high", "High Priority", _items.Count(x => x.Score >= 80).ToString("N0"), "Score 80+", "bi-trophy", "mkx-ki-purple"), new("contacted", "Contacted", _items.Count(x => x.StatusCode == "Contacted" || x.StatusCode == "Working").ToString("N0"), "In motion", "bi-telephone", "mkx-ki-cyan"), new("won", "Won", _items.Count(x => x.StatusCode == "Won").ToString("N0"), "Converted", "bi-check2-circle", "mkx-ki-red")];
+
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Marketing", "/marketing/campaigns"), new("Cross-Sell", null)); await LoadAsync(); }
+    private async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchMarketingCrossSellAsync(_tenantId); _items = result?.Items.ToList() ?? []; ApplyFilters(); EnsureSelectedStillVisible(); } catch (Exception ex) { _loadError = $"Failed to load cross-sell opportunities: {ex.Message}"; _items = []; _filtered = []; _paged = []; } finally { _loading = false; } }
+    private void ApplyFilters(bool resetPage = false) { var query = _items.AsEnumerable(); if (!string.IsNullOrWhiteSpace(_search)) query = query.Where(x => x.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.AccountType.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Producer.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.OpportunityType.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.TriggerSignal.Contains(_search, StringComparison.OrdinalIgnoreCase)); if (!string.IsNullOrWhiteSpace(_typeFilter)) query = query.Where(x => x.OpportunityType.Equals(_typeFilter, StringComparison.OrdinalIgnoreCase)); if (!string.IsNullOrWhiteSpace(_producerFilter)) query = query.Where(x => x.Producer.Equals(_producerFilter, StringComparison.OrdinalIgnoreCase)); query = _scoreFilter switch { "high" => query.Where(x => x.Score >= 80), "medium" => query.Where(x => x.Score >= 60 && x.Score < 80), "low" => query.Where(x => x.Score < 60), _ => query }; query = _kpiFilter switch { "pipeline" => query.Where(x => x.EstimatedPremium > 0), "score" => query.Where(x => x.Score >= 60), "high" => query.Where(x => x.Score >= 80), "contacted" => query.Where(x => x.StatusCode == "Contacted" || x.StatusCode == "Working"), "won" => query.Where(x => x.StatusCode == "Won"), _ => query }; _filtered = query.OrderByDescending(x => x.Score).ThenByDescending(x => x.EstimatedPremium).ToList(); if (resetPage) _page = 1; if (_page > TotalPages) _page = TotalPages; _paged = _filtered.Skip((_page - 1) * PageSize).Take(PageSize).ToList(); }
+    private void SetKpiFilter(string filter) { _kpiFilter = _kpiFilter == filter ? "all" : filter; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _search = string.Empty; _typeFilter = string.Empty; _producerFilter = string.Empty; _scoreFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); }
+    private void PreviousPage() { if (_page <= 1) return; _page--; ApplyFilters(); }
+    private void NextPage() { if (_page >= TotalPages) return; _page++; ApplyFilters(); }
+    private void SelectOpportunity(MarketingCrossSellOpportunityDto item) => _selected = item;
+    private void ClearSelection() => _selected = null;
+    private bool IsSelected(MarketingCrossSellOpportunityDto item) => _selected?.OpportunityId == item.OpportunityId;
+    private void OpenCreate() { _editingId = Guid.Empty; _form = new OpportunityForm { AccountType = "Commercial", OpportunityType = "Missing Umbrella", Producer = "Unassigned", StatusCode = "Open", Score = 75, EstimatedPremium = 2500, LastContactDate = DateTime.Today }; _showForm = true; }
+    private void OpenEdit(MarketingCrossSellOpportunityDto item) { _editingId = item.OpportunityId; _form = new() { AccountName = item.AccountName, AccountType = item.AccountType, Producer = item.Producer, OpportunityType = item.OpportunityType, Score = item.Score, EstimatedPremium = item.EstimatedPremium, TriggerSignal = item.TriggerSignal, LastContactDate = item.LastContactDate, StatusCode = item.StatusCode }; _showForm = true; }
+    private void CloseForm() { if (_busy) return; _showForm = false; _editingId = Guid.Empty; }
+    private async Task SaveAsync() { _busy = true; try { var request = ToDto(); if (_editingId == Guid.Empty) { await Api.CreateMarketingCrossSellAsync(request); ShowToast("Cross-sell opportunity created.", "success"); } else { await Api.UpdateMarketingCrossSellAsync(_editingId, request); ShowToast("Cross-sell opportunity saved.", "success"); } _showForm = false; _editingId = Guid.Empty; await LoadAsync(); } catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", "danger"); } finally { _busy = false; } }
+    private Task NotifyValidationAsync(EditContext _) { ShowToast("Please correct the validation errors before saving.", "warning"); return Task.CompletedTask; }
+    private MarketingCrossSellOpportunityDto ToDto() => new() { OpportunityId = _editingId, TenantId = _tenantId, AccountName = _form.AccountName.Trim(), AccountType = _form.AccountType, Producer = _form.Producer.Trim(), OpportunityType = _form.OpportunityType, Score = Math.Clamp(_form.Score, 0, 100), EstimatedPremium = _form.EstimatedPremium, TriggerSignal = _form.TriggerSignal.Trim(), LastContactDate = _form.LastContactDate ?? DateTime.UtcNow, StatusCode = _form.StatusCode };
+    private void ConfigureContact(MarketingCrossSellOpportunityDto item) => ShowConfirm(item, ConfirmAction.Contact);
+    private void ConfigureRescore(MarketingCrossSellOpportunityDto item) => ShowConfirm(item, ConfirmAction.Rescore);
+    private void ConfigureDuplicate(MarketingCrossSellOpportunityDto item) => ShowConfirm(item, ConfirmAction.Duplicate);
+    private void ConfigureDismiss(MarketingCrossSellOpportunityDto item) => ShowConfirm(item, ConfirmAction.Dismiss);
+    private void ConfigureSync() => ShowConfirm(null, ConfirmAction.Sync);
+    private void ConfigureExport() { if (!_filtered.Any()) { ShowToast("No opportunities are available to export.", "warning"); return; } ShowConfirm(null, ConfirmAction.Export); }
+    private void ShowConfirm(MarketingCrossSellOpportunityDto? item, ConfirmAction action) { _confirmTarget = item; _confirmAction = action; _actionConfig = CreateDefaultConfiguration(item, action); _showConfirm = true; }
+    private void CancelConfirm() { if (_busy) return; _showConfirm = false; _confirmTarget = null; }
+    private async Task ExecuteConfirmAsync()
+    {
+        if (_confirmTarget is null && _confirmAction is not (ConfirmAction.Sync or ConfirmAction.Export))
+        {
+            return;
+        }
+
+        _busy = true;
         try
         {
-            var result = await Api.SearchMarketingCrossSellAsync(_tenantId);
-            _opportunities = result?.Items.Select(x => new XsellOpp(x.OpportunityId, x.AccountName, x.AccountType, x.Producer, x.OpportunityType, x.Score, x.EstimatedPremium, x.TriggerSignal, x.LastContactDate)).ToList() ?? [];
+            if (_confirmAction == ConfirmAction.Contact)
+            {
+                await Api.UpdateMarketingCrossSellStatusAsync(_confirmTarget!.OpportunityId, _actionConfig.NextStatus);
+                ShowToast($"Routed {_confirmTarget.AccountName} to {_actionConfig.ExecutionMode}.", "success");
+                if (_actionConfig.ExecutionMode == "CampaignBuilder")
+                {
+                    Nav.NavigateTo($"/marketing/campaigns/new?goal=Cross-Sell&account={Uri.EscapeDataString(_confirmTarget.AccountName)}");
+                }
+            }
+            else if (_confirmAction == ConfirmAction.Rescore)
+            {
+                await Api.RescoreMarketingCrossSellAsync(_confirmTarget!.OpportunityId);
+                ShowToast($"Rescored {_confirmTarget.AccountName}.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.Duplicate)
+            {
+                await Api.DuplicateMarketingCrossSellAsync(_confirmTarget!.OpportunityId);
+                ShowToast($"Duplicated {_confirmTarget.AccountName}.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.Dismiss)
+            {
+                await Api.DismissMarketingCrossSellAsync(_confirmTarget!.OpportunityId);
+                ShowToast($"Dismissed {_confirmTarget.AccountName}.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.Sync)
+            {
+                await Api.EnsureMarketingCrossSellSeedAsync(_tenantId);
+                ShowToast("Cross-sell seed data synchronized.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.Export)
+            {
+                var exportItems = _actionConfig.ExecutionMode == "All" ? _items : _filtered;
+                await ExportCoreAsync(exportItems);
+                ShowToast($"Exported {exportItems.Count:N0} opportunities.", "success");
+            }
+
+            _showConfirm = false;
+            _confirmTarget = null;
+            if (_confirmAction != ConfirmAction.Export && _actionConfig.RefreshAfterAction)
+            {
+                await LoadAsync();
+            }
         }
-        catch (Exception ex) { _loadError = $"Failed to load cross-sell opportunities: {ex.Message}"; _opportunities = []; }
-        finally { _loading = false; }
+        catch (Exception ex)
+        {
+            ShowToast($"Action failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
+    private async Task ExportCoreAsync(IReadOnlyCollection<MarketingCrossSellOpportunityDto> items) { if (!items.Any()) return; var csv = new StringBuilder(); csv.AppendLine(_actionConfig.IncludeTrigger ? "AccountName,AccountType,Producer,OpportunityType,Status,Score,EstimatedPremium,TriggerSignal,LastContact" : "AccountName,AccountType,Producer,OpportunityType,Status,Score,EstimatedPremium,LastContact"); foreach (var item in items) { if (_actionConfig.IncludeTrigger) csv.AppendLine(string.Join(',', Csv(item.AccountName), Csv(item.AccountType), Csv(item.Producer), Csv(item.OpportunityType), Csv(item.StatusCode), item.Score, item.EstimatedPremium.ToString("0.00"), Csv(item.TriggerSignal), Csv(item.LastContactDate.ToString("yyyy-MM-dd")))); else csv.AppendLine(string.Join(',', Csv(item.AccountName), Csv(item.AccountType), Csv(item.Producer), Csv(item.OpportunityType), Csv(item.StatusCode), item.Score, item.EstimatedPremium.ToString("0.00"), Csv(item.LastContactDate.ToString("yyyy-MM-dd")))); } var bytes = Encoding.UTF8.GetBytes(csv.ToString()); await Js.InvokeVoidAsync("amsShell.downloadBase64", $"marketing-cross-sell-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes)); }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() { if (_selected is null) return; _selected = _items.FirstOrDefault(x => x.OpportunityId == _selected.OpportunityId); }
+    private static string Initials(string n) { var parts = n.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant() : n.Length > 0 ? n[..1].ToUpperInvariant() : "?"; }
+    private static string OppCss(string t) => t switch { "Missing Umbrella" => "mkx-ot--umbrella", "Home + Auto Bundle" => "mkx-ot--bundle", "Workers Comp Expansion" => "mkx-ot--wc", "Teen Driver Add-On" => "mkx-ot--teen", "Business Package Expansion" => "mkx-ot--bop", "Benefits Upsell" => "mkx-ot--benefits", "Cyber Coverage" => "mkx-ot--cyber", _ => "mkx-ot--default" };
+    private static string ScoreCss(int score) => score >= 80 ? "mkx-score--high" : score >= 60 ? "mkx-score--med" : "mkx-score--low";
+    private static string StatusCss(string status) => $"mkx-st-{status.ToLowerInvariant()}";
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private static string Bold(string value) => $"<strong>{value}</strong>";
 
-    private static string Initials(string n) { var p = n.Trim().Split(' '); return p.Length >= 2 ? $"{p[0][0]}{p[^1][0]}" : n.Length > 0 ? n[..1] : "?"; }
-    private static string OppCss(string t) => t switch
+    private static ActionConfiguration CreateDefaultConfiguration(MarketingCrossSellOpportunityDto? item, ConfirmAction action) => action switch
     {
-        "Missing Umbrella"         => "mkx-ot mkx-ot--umbrella",
-        "Home + Auto Bundle"       => "mkx-ot mkx-ot--bundle",
-        "Workers Comp Expansion"   => "mkx-ot mkx-ot--wc",
-        "Teen Driver Add-On"       => "mkx-ot mkx-ot--teen",
-        "Business Package Expansion" => "mkx-ot mkx-ot--bop",
-        "Benefits Upsell"          => "mkx-ot mkx-ot--benefits",
-        _                          => "mkx-ot",
+        ConfirmAction.Contact => new() { ExecutionMode = "CampaignBuilder", NextStatus = "Contacted", NotifyProducer = true, RefreshAfterAction = true },
+        ConfirmAction.Rescore => new() { ExecutionMode = "Propensity", RefreshAfterAction = true },
+        ConfirmAction.Duplicate => new() { NewName = item is null ? string.Empty : $"{item.AccountName} Copy", NextStatus = "Open", RefreshAfterAction = true },
+        ConfirmAction.Dismiss => new() { Reason = "Not actionable this cycle", NotifyProducer = true, RefreshAfterAction = true },
+        ConfirmAction.Sync => new() { ExecutionMode = "MissingOnly", RefreshAfterAction = true },
+        ConfirmAction.Export => new() { ExecutionMode = "Filtered", IncludeTrigger = true, RefreshAfterAction = false },
+        _ => new()
     };
-    private static string ScoreCss(int s) => s >= 80 ? "mkx-score--high" : s >= 60 ? "mkx-score--med" : "mkx-score--low";
+    async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); TenantId = context.TenantId; TenantAdminUserId = context.UserId; _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; DevTenantId = context.TenantId; DevUserId = context.UserId; }
 
-    private async Task DismissOpportunityAsync(XsellOpp opportunity)
-    {
-        if (!await Confirmations.ConfirmAsync("Dismiss opportunity", $"Dismiss the {opportunity.OpportunityType} opportunity for {opportunity.AccountName}?", "Dismiss")) return;
-        await Api.DismissMarketingCrossSellAsync(opportunity.Id);
-        await LoadAsync();
-    }
-
-    private void OnRowSelected(RowSelectEventArgs<XsellOpp> args) => LaunchCampaign(args.Data);
-    private void LaunchCampaign(XsellOpp opportunity) => Nav.NavigateTo($"/marketing/campaigns/new?goal=Cross-Sell&account={Uri.EscapeDataString(opportunity.AccountName)}");
-
-    private sealed record XsellOpp(Guid Id, string AccountName, string AccountType, string Producer, string OpportunityType,
-        int Score, decimal EstimatedPremium, string Trigger, DateTime LastContact);
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
-    }
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter by {Label}"; }
+    private enum ConfirmAction { Contact, Rescore, Duplicate, Dismiss, Sync, Export }
+    private sealed class ActionConfiguration { public string ExecutionMode { get; set; } = string.Empty; public string Reason { get; set; } = string.Empty; public string NewName { get; set; } = string.Empty; public string NextStatus { get; set; } = string.Empty; public bool NotifyProducer { get; set; } public bool IncludeTrigger { get; set; } = true; public bool RefreshAfterAction { get; set; } = true; }
+    private sealed class OpportunityForm { [Required, StringLength(200)] public string AccountName { get; set; } = string.Empty; [Required, StringLength(80)] public string AccountType { get; set; } = "Commercial"; [Required, StringLength(150)] public string Producer { get; set; } = string.Empty; [Required, StringLength(150)] public string OpportunityType { get; set; } = "Missing Umbrella"; [Range(0, 100)] public int Score { get; set; } [Range(typeof(decimal), "0", "999999999")] public decimal EstimatedPremium { get; set; } [StringLength(500)] public string TriggerSignal { get; set; } = string.Empty; public DateTime? LastContactDate { get; set; } [Required, StringLength(50)] public string StatusCode { get; set; } = "Open"; }
 }

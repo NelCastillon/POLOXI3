@@ -1,163 +1,407 @@
 @page "/marketing/win-back"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Win-Back Campaigns — AMS</PageTitle>
+<PageTitle>Win-Back Campaigns — AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="Win-Back Campaigns"
-               Subtitle="Recover lapsed policyholders with targeted reactivation outreach and competitive offers"
-               Icon="bi-arrow-repeat">
-    <Actions>
-        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/marketing/campaigns/new")'>
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Win-Back Campaign
-        </button>
-    </Actions>
-</AppPageHeader>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    <div class="mkw-toast mkw-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="mkw-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
 }
 
-<!-- KPI -->
-<div class="mkw-kpi-strip">
-    <div class="mkw-kpi-card"><i class="bi bi-arrow-repeat mkw-ki mkw-ki-blue"></i><div><div class="mkw-kv">@_lapsed.Count</div><div class="mkw-kl">Lapsed Accounts</div></div></div>
-    <div class="mkw-kpi-card"><i class="bi bi-cash-stack mkw-ki mkw-ki-green"></i><div><div class="mkw-kv">@_lapsed.Sum(l => l.LastPremium).ToString("C0")</div><div class="mkw-kl">Lost Premium</div></div></div>
-    <div class="mkw-kpi-card"><i class="bi bi-trophy mkw-ki mkw-ki-green"></i><div><div class="mkw-kv">@_lapsed.Count(l => l.Status == "Reactivated")</div><div class="mkw-kl">Reactivated</div></div></div>
-    <div class="mkw-kpi-card"><i class="bi bi-envelope-check mkw-ki mkw-ki-amber"></i><div><div class="mkw-kv">@_lapsed.Count(l => l.Status == "Contacted")</div><div class="mkw-kl">Contacted</div></div></div>
-    <div class="mkw-kpi-card"><i class="bi bi-percent mkw-ki mkw-ki-blue"></i><div><div class="mkw-kv">@(_lapsed.Any() ? (_lapsed.Count(l => l.Status == "Reactivated") * 100m / _lapsed.Count).ToString("N1") : "0.0")%</div><div class="mkw-kl">Recovery Rate</div></div></div>
-</div>
-
-<!-- Filters -->
-<div class="mkw-filter-bar">
-    <select class="mkw-sel" @bind="_filterWindow">
-        <option value="">All Lapse Periods</option>
-        <option value="30–60">30–60 Days</option>
-        <option value="60–90">60–90 Days</option>
-        <option value="90–180">90–180 Days</option>
-        <option value="180+">180+ Days</option>
-    </select>
-    <select class="mkw-sel" @bind="_filterStatus">
-        <option value="">All Statuses</option>
-        <option value="New">New</option>
-        <option value="Contacted">Contacted</option>
-        <option value="Interested">Interested</option>
-        <option value="Reactivated">Reactivated</option>
-        <option value="Lost">Lost</option>
-    </select>
-</div>
-
-<!-- Grid -->
-<div class="mkw-grid-card app-datagrid">
-    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading win-back accounts…</span></div> }
-    <SfGrid CssClass="marketing-grid" TValue="LapsedRow" DataSource="Filtered" AllowPaging="true" AllowSorting="true" AllowFiltering="true"
-            AllowTextWrap="true" EnableHover="true" RowHeight="64">
-        <GridTextWrapSettings WrapMode="WrapMode.Content" />
-        <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
-        <GridPageSettings PageSize="20" />
-        <GridColumns>
-            <GridColumn HeaderText="Account" MinWidth="320" Field="@nameof(LapsedRow.AccountName)">
-                <Template>
-                    @{ var l = (LapsedRow)context; }
-                    <div class="mkw-name-cell">
-                        <div class="mkw-av">@l.AccountName[0]</div>
-                        <div>
-                            <div class="mkw-item-name">@l.AccountName</div>
-                            <div class="mkw-item-sub">@l.PolicyType</div>
-                        </div>
+@if (_showForm)
+{
+    <div class="mkw-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="mkw-modal mkw-action-modal" role="dialog" aria-modal="true" aria-labelledby="mkw-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                <span id="mkw-form-title">@(_editingId == Guid.Empty ? "Create Win-Back Account" : "Edit Win-Back Account")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="mkw-modal-intro"><span><i class="bi bi-shield-check" aria-hidden="true"></i> Reactivation configuration</span><p>Define lapsed account, policy, lost premium, lapse window, reason, and reactivation workflow status for DB-backed win-back data.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Account name <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.AccountName" /><ValidationMessage For="() => _form.AccountName" class="text-danger" /></div>
+                        <div class="um-field"><label>Policy type <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.PolicyType" /><ValidationMessage For="() => _form.PolicyType" class="text-danger" /></div>
+                        <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.StatusCode">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Lapse window <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.LapseWindow">@foreach (var window in _lapseWindows) { <option value="@window">@window</option> }</InputSelect><ValidationMessage For="() => _form.LapseWindow" class="text-danger" /></div>
+                        <div class="um-field"><label>Lapse date</label><InputDate class="form-control" @bind-Value="_form.LapseDate" /></div>
+                        <div class="um-field"><label>Days lapsed</label><InputNumber class="form-control" @bind-Value="_form.DaysLapsed" /><ValidationMessage For="() => _form.DaysLapsed" class="text-danger" /></div>
+                        <div class="um-field"><label>Last premium</label><InputNumber class="form-control" @bind-Value="_form.LastPremium" /><ValidationMessage For="() => _form.LastPremium" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Lapse reason</label><InputTextArea class="form-control" rows="3" @bind-Value="_form.LapseReason" /><ValidationMessage For="() => _form.LapseReason" class="text-danger" /></div>
                     </div>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(LapsedRow.LapseDate)" HeaderText="Lapsed" Width="120" Type="ColumnType.Date" Format="MMM d, yyyy" />
-            <GridColumn Field="@nameof(LapsedRow.DaysLapsed)" HeaderText="Days" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
-            <GridColumn Field="@nameof(LapsedRow.LastPremium)" HeaderText="Last Premium" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                <Template>@{ var l = (LapsedRow)context; }<span class="mkw-mono">@l.LastPremium.ToString("C0")</span></Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(LapsedRow.Status)" HeaderText="Status" Width="120">
-                <Template>@{ var l = (LapsedRow)context; }<span class="@WbStatusBadge(l.Status)">@l.Status</span></Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(LapsedRow.LapseReason)" HeaderText="Reason" Width="190" />
-            <GridColumn HeaderText="Actions" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                <Template>
-                    @{ var l = (LapsedRow)context; }
-                    <div style="display:flex;gap:.3rem;justify-content:flex-end">
-                        <button class="um-btn um-btn-primary um-btn-xs" @onclick:stopPropagation="true" @onclick='() => UpdateStatusAsync(l, "Contacted")'><i class="bi bi-telephone" aria-hidden="true"></i></button>
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick='() => Nav.NavigateTo("/marketing/campaigns/new?goal=Win-Back")'><i class="bi bi-envelope" aria-hidden="true"></i></button>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@(_editingId == Guid.Empty ? "Create Account" : "Save Changes")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showConfirm)
+{
+    <div class="mkw-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="mkw-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="mkw-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @ConfirmIconTone"><i class="bi @ConfirmIcon"></i></div>
+                <div class="um-confirm-title" id="mkw-confirm-title">@ConfirmTitle</div>
+                <div class="um-confirm-body">@((MarkupString)ConfirmBody)</div>
+                <div class="mkw-config-panel">
+                    <span class="mkw-config-eyebrow"><i class="bi bi-sliders" aria-hidden="true"></i> Configuration required</span>
+                    <div class="mkw-config-grid">
+                        @if (_confirmAction == ConfirmAction.Contact || _confirmAction == ConfirmAction.Reactivate || _confirmAction == ConfirmAction.Lost)
+                        {
+                            <label><span>Next status</span><select class="form-select" @bind="_actionConfig.NextStatus"><option value="Contacted">Contacted</option><option value="Interested">Interested</option><option value="Reactivated">Reactivated</option><option value="Lost">Lost</option></select></label>
+                            <label><span>Workflow route</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="PhoneCall">Phone call</option><option value="EmailCampaign">Email campaign</option><option value="CampaignBuilder">Campaign builder</option></select></label>
+                            <label class="mkw-config-check"><input type="checkbox" @bind="_actionConfig.NotifyProducer" /> Notify assigned producer</label>
+                            <label class="mkw-config-check"><input type="checkbox" @bind="_actionConfig.RefreshAfterAction" /> Refresh after update</label>
+                        }
+                        else if (_confirmAction == ConfirmAction.Duplicate)
+                        {
+                            <label class="mkw-config-full"><span>Copy label</span><input class="form-control" @bind="_actionConfig.NewName" /></label>
+                            <label><span>Starting status</span><select class="form-select" @bind="_actionConfig.NextStatus"><option value="New">New</option><option value="Contacted">Contacted review</option></select></label>
+                        }
+                        else if (_confirmAction == ConfirmAction.Archive)
+                        {
+                            <label class="mkw-config-full"><span>Reason</span><input class="form-control" @bind="_actionConfig.Reason" placeholder="Document why this lapsed account is being archived" /></label>
+                            <label class="mkw-config-check"><input type="checkbox" @bind="_actionConfig.ExportBeforeAction" /> Export account snapshot before archiving</label>
+                        }
+                        else if (_confirmAction == ConfirmAction.Sync)
+                        {
+                            <label><span>Seed mode</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="MissingOnly">Add missing seed data only</option><option value="RepairSchema">Repair schema and seed data</option></select></label>
+                            <label class="mkw-config-check"><input type="checkbox" @bind="_actionConfig.RefreshAfterAction" /> Refresh after sync</label>
+                        }
+                        else if (_confirmAction == ConfirmAction.Export)
+                        {
+                            <label><span>Export scope</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="Filtered">Current filtered results</option><option value="All">All active win-back accounts</option></select></label>
+                            <label class="mkw-config-check"><input type="checkbox" @bind="_actionConfig.IncludeReason" /> Include lapse reason</label>
+                        }
                     </div>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
+                </div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_busy">Cancel</button><button type="button" class="um-btn @ConfirmButtonClass" @onclick="ExecuteConfirmAsync" disabled="@_busy">@ConfirmButtonText</button></div>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="mkw-enterprise-page">
+    <section class="mkw-header">
+        <div class="mkw-header-left"><div class="mkw-lob-icon"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></div><div class="mkw-header-info"><div class="mkw-title-row"><h1 class="mkw-page-title">Win-Back Campaigns</h1><span class="mkw-status-pill"><i class="bi bi-database-check"></i> Live marketing data</span><span class="mkw-status-pill"><i class="bi bi-shield-lock"></i> Tenant scoped</span></div><div class="mkw-sub-row"><span>Recover lapsed policyholders with targeted reactivation outreach, offers, and producer workflows.</span><span class="mkw-sub-chip"><i class="bi bi-arrow-repeat"></i> Seed sync enabled</span><span class="mkw-sub-chip"><i class="bi bi-check2-circle"></i> @_filtered.Count active matches</span></div></div></div>
+        <div class="mkw-header-actions"><button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat mkw-spin" : "bi-arrow-clockwise")"></i> Refresh</button><button type="button" class="um-btn um-btn-ghost" @onclick="ConfigureSync" disabled="@_busy"><i class="bi bi-cloud-arrow-down"></i> Sync Seed</button><button type="button" class="um-btn um-btn-ghost" @onclick="ConfigureExport" disabled="@(!_filtered.Any())"><i class="bi bi-download"></i> Export</button><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle"></i> New Account</button></div>
+    </section>
+
+    <section class="mkw-kpi-strip" aria-label="Win-back metrics">@foreach (var kpi in Kpis) { <button type="button" class="mkw-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "mkw-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)"><span class="mkw-kpi-icon"><i class="bi @kpi.Icon"></i></span><span class="mkw-kpi-copy"><span class="mkw-kpi-label">@kpi.Label</span><span class="mkw-kpi-value">@kpi.Value</span><span class="mkw-kpi-caption">@kpi.Caption</span></span></button> }</section>
+
+    <section class="mkw-workflow-strip" aria-label="Marketing workflow shortcuts">
+        <button type="button" class="mkw-workflow-card mkw-wf-rules" @onclick='() => Nav.NavigateTo("/marketing/rules-engine")'><span class="mkw-workflow-icon"><i class="bi bi-lightning-charge"></i></span><span class="mkw-workflow-content"><strong>1</strong><span>Rules</span><small>Win-back triggers.</small></span></button>
+        <button type="button" class="mkw-workflow-card mkw-wf-segments" @onclick='() => Nav.NavigateTo("/marketing/segments")'><span class="mkw-workflow-icon"><i class="bi bi-pie-chart"></i></span><span class="mkw-workflow-content"><strong>2</strong><span>Segments</span><small>Lapsed groups.</small></span></button>
+        <button type="button" class="mkw-workflow-card mkw-wf-builder" @onclick='() => Nav.NavigateTo("/marketing/campaigns/new?goal=Win-Back")'><span class="mkw-workflow-icon"><i class="bi bi-magic"></i></span><span class="mkw-workflow-content"><strong>3</strong><span>Builder</span><small>Launch reactivation.</small></span></button>
+        <button type="button" class="mkw-workflow-card mkw-wf-email" @onclick='() => Nav.NavigateTo("/marketing/email")'><span class="mkw-workflow-icon"><i class="bi bi-envelope-paper"></i></span><span class="mkw-workflow-content"><strong>4</strong><span>Email</span><small>Automate outreach.</small></span></button>
+        <button type="button" class="mkw-workflow-card mkw-wf-pages" @onclick='() => Nav.NavigateTo("/marketing/landing-pages")'><span class="mkw-workflow-icon"><i class="bi bi-layout-text-window"></i></span><span class="mkw-workflow-content"><strong>5</strong><span>Pages</span><small>Capture interest.</small></span></button>
+    </section>
+
+    <section class="mkw-enterprise-search" aria-label="Win-back filters">
+        <div class="mkw-search-icon"><i class="bi bi-search"></i></div>
+        <div class="mkw-search-body">
+            <label for="mkw-search">Search win-back accounts</label>
+            <input id="mkw-search" class="mkw-search-input" type="search" placeholder="Search account, policy, reason, status..." @bind="SearchFilter" @bind:event="oninput" />
+            <span class="mkw-search-hint">Filters apply instantly across synchronized lapsed-account data.</span>
+        </div>
+        <select class="mkw-filter-select" @bind="WindowFilter"><option value="">All lapse windows</option>@foreach (var window in _lapseWindows) { <option value="@window">@window</option> }</select>
+        <select class="mkw-filter-select" @bind="StatusFilter"><option value="">All statuses</option>@foreach (var status in _statuses) { <option value="@status">@status</option> }</select>
+        <select class="mkw-filter-select" @bind="PremiumFilter"><option value="">Premium: all</option><option value="high">High value</option><option value="medium">Mid value</option><option value="low">Low value</option></select>
+        <div class="mkw-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError)) { <div class="alert alert-danger mkw-load-error" style="border-left:4px solid #dc3545; animation:um-shake .3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div> }
+
+    <section class="mkw-content-layout">
+        <div class="mkw-grid-wrap"><div class="mkw-grid-toolbar"><div><strong>Win-back command center</strong><span>@ActiveFilterText</span></div><div class="mkw-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/marketing/campaigns/new?goal=Win-Back")'><i class="bi bi-megaphone"></i> Campaign</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle"></i> Add</button></div></div>
+            @if (_loading) { <div class="mkw-loading"><i class="bi bi-arrow-repeat mkw-spin"></i><strong>Loading win-back accounts...</strong><span>Syncing schema, seed data, lapse windows, reactivation state, and lost premium.</span></div> }
+            else if (!_filtered.Any()) { <div class="mkw-empty-state"><i class="bi bi-inbox"></i><strong>No win-back accounts found</strong><span>Adjust filters or create a DB-backed win-back account.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">New Account</button></div> }
+            else
+            {
+                <div class="mkw-table-scroll">
+                    <table class="mkw-table">
+                        <thead><tr><th>Account</th><th>Status</th><th>Lapsed</th><th class="mkw-number">Days</th><th class="mkw-number">Premium</th><th>Window</th><th>Reason</th><th class="mkw-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var item in _paged)
+                            {
+                                <tr class="mkw-table-row @(IsSelected(item) ? "mkw-table-row--selected" : null)" @onclick="() => SelectAccount(item)">
+                                    <td><div class="mkw-account-cell"><span class="mkw-avatar">@Initials(item.AccountName)</span><div><strong>@item.AccountName</strong><span>@item.PolicyType</span></div></div></td>
+                                    <td><span class="mkw-status-chip @StatusCss(item.StatusCode)">@item.StatusCode</span></td>
+                                    <td>@item.LapseDate.ToString("MMM d, yyyy")</td>
+                                    <td class="mkw-number">@item.DaysLapsed.ToString("N0")</td>
+                                    <td class="mkw-number">@item.LastPremium.ToString("C0")</td>
+                                    <td><span class="mkw-window-chip">@item.LapseWindow</span></td>
+                                    <td><span class="mkw-reason-text">@DisplayReason(item)</span></td>
+                                    <td><div class="mkw-row-acts"><button type="button" class="um-btn um-btn-primary um-btn-xs" @onclick="() => ConfigureContact(item)" @onclick:stopPropagation="true" title="Contact"><i class="bi bi-telephone"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(item)" @onclick:stopPropagation="true" title="Edit"><i class="bi bi-pencil"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfigureReactivate(item)" @onclick:stopPropagation="true" title="Reactivate"><i class="bi bi-trophy"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfigureDuplicate(item)" @onclick:stopPropagation="true" title="Duplicate"><i class="bi bi-copy"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfigureArchive(item)" @onclick:stopPropagation="true" title="Archive"><i class="bi bi-archive"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="mkw-pager"><span>Page @_page of @TotalPages · @_filtered.Count records</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left"></i> Previous</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right"></i></button></div></div>
+            }
+        </div>
+        <aside class="mkw-detail-panel">
+            @if (_selected is null)
+            {
+                <div class="mkw-detail-empty"><i class="bi bi-layout-sidebar-inset"></i><strong>Select a win-back account</strong><span>Click any row to inspect lapse details, lost premium, reason, and reactivation actions.</span></div>
+            }
+            else
+            {
+                <div class="mkw-detail-head"><div><span class="mkw-detail-eyebrow"><i class="bi bi-window-sidebar"></i> Account detail</span><h2>@_selected.AccountName</h2><div class="mkw-detail-meta"><span>@_selected.PolicyType</span><span>@_selected.LapseWindow</span><span>@_selected.StatusCode</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearSelection"><i class="bi bi-x-lg"></i></button></div>
+                <div class="mkw-detail-body"><div class="mkw-detail-summary"><div class="mkw-meta-row"><span class="mkw-meta-lbl">Lost premium</span><span class="mkw-meta-val">@_selected.LastPremium.ToString("C0")</span></div><div class="mkw-meta-row"><span class="mkw-meta-lbl">Days lapsed</span><span class="mkw-meta-val">@_selected.DaysLapsed.ToString("N0")</span></div><div class="mkw-meta-row"><span class="mkw-meta-lbl">Lapsed</span><span class="mkw-meta-val">@_selected.LapseDate.ToString("MMM d, yyyy")</span></div><div class="mkw-meta-row"><span class="mkw-meta-lbl">Status</span><span class="mkw-meta-val">@_selected.StatusCode</span></div></div><div class="mkw-contact-card"><strong>Lapse and routing</strong><span><i class="bi bi-exclamation-circle"></i>@DisplayReason(_selected)</span><span><i class="bi bi-calendar-x"></i>@_selected.LapseWindow</span><span><i class="bi bi-shield-check"></i>@_selected.PolicyType</span></div><div class="mkw-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="() => ConfigureContact(_selected)"><i class="bi bi-telephone"></i> Contact</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil"></i> Edit</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureReactivate(_selected)"><i class="bi bi-trophy"></i> Reactivate</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureLost(_selected)"><i class="bi bi-x-circle"></i> Mark Lost</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureDuplicate(_selected)"><i class="bi bi-copy"></i> Duplicate</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureArchive(_selected)"><i class="bi bi-archive"></i> Archive</button></div></div>
+            }
+        </aside>
+    </section>
 </div>
 
 @code {
+    private const int PageSize = 10;
     Guid TenantId { get; set; }
     Guid TenantAdminUserId { get; set; }
     Guid DevTenantId { get; set; }
     Guid DevUserId { get; set; }
     private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private string _filterWindow = "", _filterStatus = "";
-    private bool _loading;
+    private string _search = string.Empty;
+    private string _windowFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _premiumFilter = string.Empty;
+    private string _kpiFilter = "all";
     private string? _loadError;
-    private List<LapsedRow> _lapsed = [];
+    private string? _toastMessage;
+    private string _toastKind = "success";
+    private bool _toastVisible;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showConfirm;
+    private int _page = 1;
+    private Guid _editingId = Guid.Empty;
+    private ConfirmAction _confirmAction;
+    private MarketingWinBackDto? _selected;
+    private MarketingWinBackDto? _confirmTarget;
+    private WinBackForm _form = new();
+    private ActionConfiguration _actionConfig = new();
+    private List<MarketingWinBackDto> _items = [];
+    private List<MarketingWinBackDto> _filtered = [];
+    private List<MarketingWinBackDto> _paged = [];
+    private readonly string[] _statuses = ["New", "Contacted", "Interested", "Reactivated", "Lost"];
+    private readonly string[] _lapseWindows = ["30–60", "60–90", "90–180", "180+"];
 
-    private IEnumerable<LapsedRow> Filtered => _lapsed.Where(l =>
-        (string.IsNullOrEmpty(_filterStatus) || l.Status == _filterStatus) &&
-        (string.IsNullOrEmpty(_filterWindow) || l.LapseWindow == _filterWindow));
-
-    protected override async Task OnInitializedAsync()
+    private string SearchFilter { get => _search; set { _search = value; ApplyFilters(resetPage: true); } }
+    private string WindowFilter { get => _windowFilter; set { _windowFilter = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
+    private string PremiumFilter { get => _premiumFilter; set { _premiumFilter = value; ApplyFilters(resetPage: true); } }
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private string ActiveFilterText => _filtered.Count == _items.Count ? "All synchronized win-back accounts" : $"Filtered to {_filtered.Count:N0} of {_items.Count:N0} accounts";
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ConfirmTitle => _confirmAction switch
     {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Marketing","/marketing/campaigns"), new("Win-Back",""));
-        await LoadAsync();
-    }
-
-    private async Task LoadAsync()
-    {
-        _loading = true; _loadError = null;
-        try
-        {
-            var result = await Api.SearchMarketingWinBackAsync(_tenantId);
-            _lapsed = result?.Items.Select(x => new LapsedRow(x.WinBackId, x.AccountName, x.PolicyType, x.LapseDate, x.DaysLapsed, x.LastPremium, x.LapseReason, x.StatusCode, x.LapseWindow)).ToList() ?? [];
-        }
-        catch (Exception ex) { _loadError = $"Failed to load win-back data: {ex.Message}"; _lapsed = []; }
-        finally { _loading = false; }
-    }
-
-    private static string WbStatusBadge(string s) => s switch
-    {
-        "Reactivated" => "mkw-status mkw-st--react",
-        "Interested"  => "mkw-status mkw-st--int",
-        "Contacted"   => "mkw-status mkw-st--cont",
-        "Lost"        => "mkw-status mkw-st--lost",
-        _             => "mkw-status mkw-st--new",
+        ConfirmAction.Contact => "Configure Contact",
+        ConfirmAction.Reactivate => "Configure Reactivation",
+        ConfirmAction.Lost => "Configure Lost Status",
+        ConfirmAction.Duplicate => "Configure Duplicate",
+        ConfirmAction.Archive => "Configure Archive",
+        ConfirmAction.Sync => "Configure Seed Sync",
+        ConfirmAction.Export => "Configure Export",
+        _ => "Confirm Action"
     };
 
-    private async Task UpdateStatusAsync(LapsedRow row, string status)
+    private string ConfirmBody => _confirmAction switch
     {
+        ConfirmAction.Contact when _confirmTarget is not null => $"Configure outreach before contacting {Bold(_confirmTarget.AccountName)}.",
+        ConfirmAction.Reactivate when _confirmTarget is not null => $"Configure reactivation workflow for {Bold(_confirmTarget.AccountName)}.",
+        ConfirmAction.Lost when _confirmTarget is not null => $"Configure lost status for {Bold(_confirmTarget.AccountName)}.",
+        ConfirmAction.Duplicate when _confirmTarget is not null => $"Create a working copy of {Bold(_confirmTarget.AccountName)}.",
+        ConfirmAction.Archive when _confirmTarget is not null => $"Archive {Bold(_confirmTarget.AccountName)} and remove it from active win-back views.",
+        ConfirmAction.Sync => "Configure seed synchronization before repairing schema or adding missing records.",
+        ConfirmAction.Export => $"Configure export settings for {_filtered.Count:N0} current win-back matches.",
+        _ => string.Empty
+    };
+
+    private string ConfirmButtonText => _confirmAction switch
+    {
+        ConfirmAction.Contact => "Update Outreach",
+        ConfirmAction.Reactivate => "Mark Reactivated",
+        ConfirmAction.Lost => "Mark Lost",
+        ConfirmAction.Duplicate => "Create Copy",
+        ConfirmAction.Archive => "Archive",
+        ConfirmAction.Sync => "Run Sync",
+        ConfirmAction.Export => "Export File",
+        _ => "Execute"
+    };
+    private string ConfirmButtonClass => _confirmAction is ConfirmAction.Archive or ConfirmAction.Lost ? "um-btn-danger" : "um-btn-primary";
+    private string ConfirmIcon => _confirmAction switch
+    {
+        ConfirmAction.Contact => "bi-telephone-fill",
+        ConfirmAction.Reactivate => "bi-trophy-fill",
+        ConfirmAction.Lost => "bi-x-octagon-fill",
+        ConfirmAction.Duplicate => "bi-copy",
+        ConfirmAction.Archive => "bi-archive-fill",
+        ConfirmAction.Sync => "bi-cloud-arrow-down-fill",
+        ConfirmAction.Export => "bi-download",
+        _ => "bi-question-circle-fill"
+    };
+    private string ConfirmIconTone => _confirmAction is ConfirmAction.Archive or ConfirmAction.Lost ? "um-confirm-icon--danger" : string.Empty;
+    private IEnumerable<KpiModel> Kpis => [new("all", "Lapsed", _items.Count.ToString("N0"), "Active accounts", "bi-arrow-repeat", "mkw-ki-blue"), new("premium", "Lost Premium", _items.Sum(x => x.LastPremium).ToString("C0"), "Pipeline to recover", "bi-cash-stack", "mkw-ki-green"), new("reactivated", "Reactivated", _items.Count(x => x.StatusCode == "Reactivated").ToString("N0"), "Recovered", "bi-trophy", "mkw-ki-purple"), new("contacted", "Contacted", _items.Count(x => x.StatusCode == "Contacted" || x.StatusCode == "Interested").ToString("N0"), "In motion", "bi-envelope-check", "mkw-ki-cyan"), new("old", "90+ Days", _items.Count(x => x.DaysLapsed >= 90).ToString("N0"), "Urgent follow-up", "bi-calendar-x", "mkw-ki-amber"), new("rate", "Recovery", $"{RecoveryRate:N1}%", "Portfolio rate", "bi-percent", "mkw-ki-red")];
+    private decimal RecoveryRate => _items.Count == 0 ? 0 : Math.Round(_items.Count(x => x.StatusCode == "Reactivated") * 100m / _items.Count, 1);
+
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Marketing", "/marketing/campaigns"), new("Win-Back", null)); await LoadAsync(); }
+    private async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchMarketingWinBackAsync(_tenantId); _items = result?.Items.ToList() ?? []; ApplyFilters(); EnsureSelectedStillVisible(); } catch (Exception ex) { _loadError = $"Failed to load win-back accounts: {ex.Message}"; _items = []; _filtered = []; _paged = []; } finally { _loading = false; } }
+    private void ApplyFilters(bool resetPage = false) { var query = _items.AsEnumerable(); if (!string.IsNullOrWhiteSpace(_search)) query = query.Where(x => x.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.PolicyType.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.LapseReason.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.StatusCode.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.LapseWindow.Contains(_search, StringComparison.OrdinalIgnoreCase)); if (!string.IsNullOrWhiteSpace(_windowFilter)) query = query.Where(x => x.LapseWindow == _windowFilter); if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.StatusCode == _statusFilter); query = _premiumFilter switch { "high" => query.Where(x => x.LastPremium >= 5000), "medium" => query.Where(x => x.LastPremium >= 2000 && x.LastPremium < 5000), "low" => query.Where(x => x.LastPremium < 2000), _ => query }; query = _kpiFilter switch { "premium" => query.Where(x => x.LastPremium > 0), "reactivated" => query.Where(x => x.StatusCode == "Reactivated"), "contacted" => query.Where(x => x.StatusCode == "Contacted" || x.StatusCode == "Interested"), "old" => query.Where(x => x.DaysLapsed >= 90), "rate" => query.Where(x => x.StatusCode == "Reactivated" || x.StatusCode == "Interested"), _ => query }; _filtered = query.OrderByDescending(x => x.DaysLapsed).ThenByDescending(x => x.LastPremium).ToList(); if (resetPage) _page = 1; if (_page > TotalPages) _page = TotalPages; _paged = _filtered.Skip((_page - 1) * PageSize).Take(PageSize).ToList(); }
+    private void SetKpiFilter(string filter) { _kpiFilter = _kpiFilter == filter ? "all" : filter; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _search = string.Empty; _windowFilter = string.Empty; _statusFilter = string.Empty; _premiumFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); }
+    private void PreviousPage() { if (_page <= 1) return; _page--; ApplyFilters(); }
+    private void NextPage() { if (_page >= TotalPages) return; _page++; ApplyFilters(); }
+    private void SelectAccount(MarketingWinBackDto item) => _selected = item;
+    private void ClearSelection() => _selected = null;
+    private bool IsSelected(MarketingWinBackDto item) => _selected?.WinBackId == item.WinBackId;
+    private void OpenCreate() { _editingId = Guid.Empty; _form = new WinBackForm { PolicyType = "Personal Auto", StatusCode = "New", LapseWindow = "30–60", LapseDate = DateTime.Today.AddDays(-45), DaysLapsed = 45, LastPremium = 1800, LapseReason = "Price" }; _showForm = true; }
+    private void OpenEdit(MarketingWinBackDto item) { _editingId = item.WinBackId; _form = new() { AccountName = item.AccountName, PolicyType = item.PolicyType, LapseDate = item.LapseDate, DaysLapsed = item.DaysLapsed, LastPremium = item.LastPremium, LapseReason = item.LapseReason, StatusCode = item.StatusCode, LapseWindow = item.LapseWindow }; _showForm = true; }
+    private void CloseForm() { if (_busy) return; _showForm = false; _editingId = Guid.Empty; }
+    private async Task SaveAsync() { _busy = true; try { var request = ToDto(); if (_editingId == Guid.Empty) { await Api.CreateMarketingWinBackAsync(request); ShowToast("Win-back account created.", "success"); } else { await Api.UpdateMarketingWinBackAsync(_editingId, request); ShowToast("Win-back account saved.", "success"); } _showForm = false; _editingId = Guid.Empty; await LoadAsync(); } catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", "danger"); } finally { _busy = false; } }
+    private Task NotifyValidationAsync(EditContext _) { ShowToast("Please correct the validation errors before saving.", "warning"); return Task.CompletedTask; }
+    private MarketingWinBackDto ToDto() => new() { WinBackId = _editingId, TenantId = _tenantId, AccountName = _form.AccountName.Trim(), PolicyType = _form.PolicyType.Trim(), LapseDate = _form.LapseDate ?? DateTime.UtcNow.AddDays(-Math.Max(_form.DaysLapsed, 30)), DaysLapsed = _form.DaysLapsed, LastPremium = _form.LastPremium, LapseReason = _form.LapseReason.Trim(), StatusCode = _form.StatusCode, LapseWindow = _form.LapseWindow };
+    private void ConfigureContact(MarketingWinBackDto item) => ShowConfirm(item, ConfirmAction.Contact);
+    private void ConfigureReactivate(MarketingWinBackDto item) => ShowConfirm(item, ConfirmAction.Reactivate);
+    private void ConfigureLost(MarketingWinBackDto item) => ShowConfirm(item, ConfirmAction.Lost);
+    private void ConfigureDuplicate(MarketingWinBackDto item) => ShowConfirm(item, ConfirmAction.Duplicate);
+    private void ConfigureArchive(MarketingWinBackDto item) => ShowConfirm(item, ConfirmAction.Archive);
+    private void ConfigureSync() => ShowConfirm(null, ConfirmAction.Sync);
+    private void ConfigureExport() { if (!_filtered.Any()) { ShowToast("No win-back accounts are available to export.", "warning"); return; } ShowConfirm(null, ConfirmAction.Export); }
+    private void ShowConfirm(MarketingWinBackDto? item, ConfirmAction action) { _confirmTarget = item; _confirmAction = action; _actionConfig = CreateDefaultConfiguration(item, action); _showConfirm = true; }
+    private void CancelConfirm() { if (_busy) return; _showConfirm = false; _confirmTarget = null; }
+    private async Task ExecuteConfirmAsync()
+    {
+        if (_confirmTarget is null && _confirmAction is not (ConfirmAction.Sync or ConfirmAction.Export))
+        {
+            return;
+        }
+
+        _busy = true;
         try
         {
-            await Api.UpdateMarketingWinBackStatusAsync(row.Id, status);
-            await LoadAsync();
+            if (_confirmAction == ConfirmAction.Contact || _confirmAction == ConfirmAction.Reactivate || _confirmAction == ConfirmAction.Lost)
+            {
+                await Api.UpdateMarketingWinBackStatusAsync(_confirmTarget!.WinBackId, _actionConfig.NextStatus);
+                ShowToast($"Updated {_confirmTarget.AccountName} to {_actionConfig.NextStatus}.", "success");
+                if (_actionConfig.ExecutionMode == "CampaignBuilder")
+                {
+                    Nav.NavigateTo($"/marketing/campaigns/new?goal=Win-Back&account={Uri.EscapeDataString(_confirmTarget.AccountName)}");
+                }
+            }
+            else if (_confirmAction == ConfirmAction.Duplicate)
+            {
+                await Api.DuplicateMarketingWinBackAsync(_confirmTarget!.WinBackId);
+                ShowToast($"Duplicated {_confirmTarget.AccountName}.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.Archive)
+            {
+                if (_actionConfig.ExportBeforeAction)
+                {
+                    await ExportCoreAsync(new[] { _confirmTarget! });
+                }
+
+                await Api.ArchiveMarketingWinBackAsync(_confirmTarget!.WinBackId);
+                ShowToast($"Archived {_confirmTarget.AccountName}.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.Sync)
+            {
+                await Api.EnsureMarketingWinBackSeedAsync(_tenantId);
+                ShowToast("Win-back seed data synchronized.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.Export)
+            {
+                var exportItems = _actionConfig.ExecutionMode == "All" ? _items : _filtered;
+                await ExportCoreAsync(exportItems);
+                ShowToast($"Exported {exportItems.Count:N0} win-back accounts.", "success");
+            }
+
+            _showConfirm = false;
+            _confirmTarget = null;
+            if (_confirmAction != ConfirmAction.Export && _actionConfig.RefreshAfterAction)
+            {
+                await LoadAsync();
+            }
         }
-        catch (Exception ex) { _loadError = $"Update failed: {ex.Message}"; }
+        catch (Exception ex)
+        {
+            ShowToast($"Action failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
-    private sealed record LapsedRow(Guid Id, string AccountName, string PolicyType, DateTime LapseDate, int DaysLapsed,
-        decimal LastPremium, string LapseReason, string Status, string LapseWindow);
-
-    async Task ResolveCurrentUserContextAsync()
+    private async Task ExportCoreAsync(IReadOnlyCollection<MarketingWinBackDto> items)
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        if (!items.Any())
+        {
+            return;
+        }
+
+        var csv = new StringBuilder();
+        csv.AppendLine(_actionConfig.IncludeReason ? "AccountName,PolicyType,Status,LapseDate,DaysLapsed,LastPremium,LapseWindow,LapseReason" : "AccountName,PolicyType,Status,LapseDate,DaysLapsed,LastPremium,LapseWindow");
+        foreach (var item in items)
+        {
+            if (_actionConfig.IncludeReason)
+            {
+                csv.AppendLine(string.Join(',', Csv(item.AccountName), Csv(item.PolicyType), Csv(item.StatusCode), Csv(item.LapseDate.ToString("yyyy-MM-dd")), item.DaysLapsed, item.LastPremium.ToString("0.00"), Csv(item.LapseWindow), Csv(item.LapseReason)));
+            }
+            else
+            {
+                csv.AppendLine(string.Join(',', Csv(item.AccountName), Csv(item.PolicyType), Csv(item.StatusCode), Csv(item.LapseDate.ToString("yyyy-MM-dd")), item.DaysLapsed, item.LastPremium.ToString("0.00"), Csv(item.LapseWindow)));
+            }
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"marketing-win-back-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
     }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() { if (_selected is null) return; _selected = _items.FirstOrDefault(x => x.WinBackId == _selected.WinBackId); }
+    private static string DisplayReason(MarketingWinBackDto item) => string.IsNullOrWhiteSpace(item.LapseReason) ? "No reason captured" : item.LapseReason;
+    private static string Initials(string n) { var parts = n.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant() : n.Length > 0 ? n[..1].ToUpperInvariant() : "?"; }
+    private static string StatusCss(string status) => $"mkw-st-{status.ToLowerInvariant()}";
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private static string Bold(string value) => $"<strong>{value}</strong>";
+    private static ActionConfiguration CreateDefaultConfiguration(MarketingWinBackDto? item, ConfirmAction action) => action switch
+    {
+        ConfirmAction.Contact => new() { ExecutionMode = "PhoneCall", NextStatus = "Contacted", NotifyProducer = true, RefreshAfterAction = true },
+        ConfirmAction.Reactivate => new() { ExecutionMode = "PhoneCall", NextStatus = "Reactivated", NotifyProducer = true, RefreshAfterAction = true },
+        ConfirmAction.Lost => new() { ExecutionMode = "PhoneCall", NextStatus = "Lost", NotifyProducer = true, RefreshAfterAction = true },
+        ConfirmAction.Duplicate => new() { NewName = item is null ? string.Empty : $"{item.AccountName} Copy", NextStatus = "New", RefreshAfterAction = true },
+        ConfirmAction.Archive => new() { Reason = "No longer actionable", ExportBeforeAction = false, RefreshAfterAction = true },
+        ConfirmAction.Sync => new() { ExecutionMode = "MissingOnly", RefreshAfterAction = true },
+        ConfirmAction.Export => new() { ExecutionMode = "Filtered", IncludeReason = true, RefreshAfterAction = false },
+        _ => new()
+    };
+    async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); TenantId = context.TenantId; TenantAdminUserId = context.UserId; _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; DevTenantId = context.TenantId; DevUserId = context.UserId; }
+
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter by {Label}"; }
+    private enum ConfirmAction { Contact, Reactivate, Lost, Duplicate, Archive, Sync, Export }
+    private sealed class ActionConfiguration { public string ExecutionMode { get; set; } = string.Empty; public string Reason { get; set; } = string.Empty; public string NewName { get; set; } = string.Empty; public string NextStatus { get; set; } = string.Empty; public bool NotifyProducer { get; set; } public bool IncludeReason { get; set; } = true; public bool ExportBeforeAction { get; set; } public bool RefreshAfterAction { get; set; } = true; }
+    private sealed class WinBackForm { [Required, StringLength(200)] public string AccountName { get; set; } = string.Empty; [Required, StringLength(150)] public string PolicyType { get; set; } = string.Empty; public DateTime? LapseDate { get; set; } [Range(0, 10000)] public int DaysLapsed { get; set; } [Range(typeof(decimal), "0", "999999999")] public decimal LastPremium { get; set; } [StringLength(200)] public string LapseReason { get; set; } = string.Empty; [Required, StringLength(50)] public string StatusCode { get; set; } = "New"; [Required, StringLength(50)] public string LapseWindow { get; set; } = "30–60"; }
 }

@@ -15,12 +15,15 @@ public sealed class CommissionPayoutBatchService : ICommissionPayoutBatchService
     public Task<CommissionPayoutBatchDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
         => _repository.GetByIdAsync(id, cancellationToken);
 
-    public Task<PagedResult<CommissionPayoutBatchDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
-        => _repository.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
+    public Task<PagedResult<CommissionPayoutBatchDto>> SearchAsync(Guid tenantId, string? searchTerm, string? statusCode = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _repository.SearchAsync(tenantId, searchTerm, statusCode, pageNumber, pageSize, cancellationToken);
 
     public Task<Guid> CreateAsync(CreateCommissionPayoutBatchRequest request, CancellationToken cancellationToken = default)
         => _repository.CreateAsync(request, cancellationToken);
 
     public Task UpdateAsync(Guid id, UpdateCommissionPayoutBatchRequest request, CancellationToken cancellationToken = default)
         => _repository.UpdateAsync(id, request, cancellationToken);
+
+    public Task EnsureSeedAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.EnsureSeedAsync(tenantId, cancellationToken);
 }

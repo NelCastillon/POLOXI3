@@ -1,546 +1,338 @@
 ﻿@page "/marketing/campaigns"
 @page "/communications/campaigns"
 @namespace Ams.Web.Components.Pages
-@using System.ComponentModel.DataAnnotations
 @using Ams.Application.Common.Dtos
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Communications Campaigns — AMS</PageTitle>
+<PageTitle>Marketing Campaigns — AMS Enterprise</PageTitle>
 
 @if (_toastVisible)
 {
     <div class="mkc-toast mkc-toast-@_toastKind" role="status" aria-live="polite">
-        <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : _toastKind == "info" ? "bi-info-circle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
-        <div>
-            <strong>@_toastTitle</strong>
-            <span>@_toastMessage</span>
-        </div>
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
         <button type="button" class="mkc-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-@if (_showScheduleDialog && _selected is not null)
+@if (_showStatusConfirm && _statusTarget is not null && !string.IsNullOrWhiteSpace(_pendingStatus))
 {
-    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseScheduleDialog">
-        <div class="mt-modal mkc-schedule-modal" role="dialog" aria-modal="true" aria-labelledby="mkc-schedule-title" @onclick:stopPropagation="true">
-            <div class="um-modal-header">
-                <i class="bi bi-calendar-check" aria-hidden="true"></i>
-                <span id="mkc-schedule-title">Schedule campaign</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseScheduleDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    <div class="mkc-modal-backdrop" role="presentation" @onclick="CancelStatusUpdate">
+        <div class="mkc-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="mkc-status-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingStatus == "Paused" ? "um-confirm-icon--danger" : null)"><i class="bi @PendingStatusIcon" aria-hidden="true"></i></div>
+                <div class="um-confirm-title" id="mkc-status-title">@PendingStatusTitle</div>
+                <div class="um-confirm-body">Update campaign <strong>@_statusTarget.Name</strong> to <strong>@_pendingStatus</strong>?</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelStatusUpdate" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn @(_pendingStatus == "Paused" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteStatusUpdateAsync" disabled="@_busy">@PendingStatusAction</button>
+                </div>
             </div>
-            <EditForm Model="_schedule" OnValidSubmit="ConfirmScheduleAsync">
+        </div>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="mkc-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="mkc-modal mkc-action-modal" role="dialog" aria-modal="true" aria-labelledby="mkc-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-megaphone" aria-hidden="true"></i>
+                <span id="mkc-form-title">@(_editingId == Guid.Empty ? "New Marketing Campaign" : "Edit Marketing Campaign")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
                 <DataAnnotationsValidator />
                 <div class="um-modal-body">
                     <div class="mkc-modal-intro">
-                        <span class="mkc-modal-chip"><i class="bi bi-megaphone" aria-hidden="true"></i> @_selected.Name</span>
-                        <p>Choose the launch window and owner for this campaign schedule. This opens a campaign scheduling workflow without changing the current KPI filter.</p>
+                        <span><i class="bi bi-shield-check" aria-hidden="true"></i> Campaign workflow</span>
+                        <p>Create or update campaign strategy, audience, schedule, channel, attribution metrics, and compliance controls.</p>
                     </div>
                     <div class="um-form-grid">
-                        <div class="um-field">
-                            <label>Launch Date <span class="text-danger">*</span></label>
-                            <InputDate class="form-control" @bind-Value="_schedule.LaunchDate" />
-                            <ValidationMessage For="() => _schedule.LaunchDate" class="text-danger" />
-                        </div>
-                        <div class="um-field">
-                            <label>Launch Time <span class="text-danger">*</span></label>
-                            <InputText class="form-control" @bind-Value="_schedule.LaunchTime" placeholder="09:00 AM" />
-                            <ValidationMessage For="() => _schedule.LaunchTime" class="text-danger" />
-                        </div>
-                        <div class="um-field">
-                            <label>Owner <span class="text-danger">*</span></label>
-                            <InputText class="form-control" @bind-Value="_schedule.Owner" />
-                            <ValidationMessage For="() => _schedule.Owner" class="text-danger" />
-                        </div>
-                        <div class="um-field">
-                            <label>Channel</label>
-                            <InputSelect class="form-select" @bind-Value="_schedule.Channel">
-                                <option>Email</option>
-                                <option>SMS</option>
-                                <option>Direct Mail</option>
-                                <option>Multi-Channel</option>
-                            </InputSelect>
-                            <ValidationMessage For="() => _schedule.Channel" class="text-danger" />
-                        </div>
-                        <div class="um-field um-field--full">
-                            <label>Schedule Notes</label>
-                            <InputTextArea class="form-control" @bind-Value="_schedule.Notes" rows="4" placeholder="Launch checklist, approval notes, or timing instructions…" />
-                            <ValidationMessage For="() => _schedule.Notes" class="text-danger" />
-                        </div>
+                        <div class="um-field um-field--full"><label>Campaign Name <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.Name" /><ValidationMessage For="() => _form.Name" class="text-danger" /></div>
+                        <div class="um-field"><label>Type <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.Type">@foreach (var type in _types) { <option value="@type">@type</option> }</InputSelect><ValidationMessage For="() => _form.Type" class="text-danger" /></div>
+                        <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.Status">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect><ValidationMessage For="() => _form.Status" class="text-danger" /></div>
+                        <div class="um-field"><label>Segment <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.Segment" /><ValidationMessage For="() => _form.Segment" class="text-danger" /></div>
+                        <div class="um-field"><label>Goal <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.Goal" /><ValidationMessage For="() => _form.Goal" class="text-danger" /></div>
+                        <div class="um-field"><label>Start Date <span class="text-danger">*</span></label><InputDate class="form-control" @bind-Value="_form.StartDate" /><ValidationMessage For="() => _form.StartDate" class="text-danger" /></div>
+                        <div class="um-field"><label>End Date</label><InputDate class="form-control" @bind-Value="_form.EndDate" /><ValidationMessage For="() => _form.EndDate" class="text-danger" /></div>
+                        <div class="um-field"><label>Scheduled Date</label><InputDate class="form-control" @bind-Value="_form.ScheduledDateUtc" /><ValidationMessage For="() => _form.ScheduledDateUtc" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Description</label><InputTextArea class="form-control" rows="3" @bind-Value="_form.Description" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
+                        <div class="um-field"><label>Subject</label><InputText class="form-control" @bind-Value="_form.Subject" /><ValidationMessage For="() => _form.Subject" class="text-danger" /></div>
+                        <div class="um-field"><label>Template</label><InputText class="form-control" @bind-Value="_form.TemplateName" /><ValidationMessage For="() => _form.TemplateName" class="text-danger" /></div>
+                        <div class="um-field"><label>Sender Name</label><InputText class="form-control" @bind-Value="_form.SenderName" /><ValidationMessage For="() => _form.SenderName" class="text-danger" /></div>
+                        <div class="um-field"><label>Reply-To Email</label><InputText class="form-control" @bind-Value="_form.ReplyToEmail" /><ValidationMessage For="() => _form.ReplyToEmail" class="text-danger" /></div>
+                        <div class="um-field"><label>CTA Label</label><InputText class="form-control" @bind-Value="_form.CtaLabel" /><ValidationMessage For="() => _form.CtaLabel" class="text-danger" /></div>
+                        <div class="um-field"><label>Send Mode</label><InputSelect class="form-select" @bind-Value="_form.SendMode"><option>Scheduled</option><option>Immediate</option><option>Triggered</option><option>Drip</option></InputSelect><ValidationMessage For="() => _form.SendMode" class="text-danger" /></div>
+                        <div class="um-field"><label>Timezone</label><InputText class="form-control" @bind-Value="_form.Timezone" /><ValidationMessage For="() => _form.Timezone" class="text-danger" /></div>
+                        <div class="um-field"><label>Follow-up Days</label><InputNumber class="form-control" @bind-Value="_form.FollowUpDays" /><ValidationMessage For="() => _form.FollowUpDays" class="text-danger" /></div>
+                        <div class="um-field"><label>Reached</label><InputNumber class="form-control" @bind-Value="_form.Reached" /><ValidationMessage For="() => _form.Reached" class="text-danger" /></div>
+                        <div class="um-field"><label>Open Rate %</label><InputNumber class="form-control" @bind-Value="_form.OpenRate" /><ValidationMessage For="() => _form.OpenRate" class="text-danger" /></div>
+                        <div class="um-field"><label>Conversions</label><InputNumber class="form-control" @bind-Value="_form.Conversions" /><ValidationMessage For="() => _form.Conversions" class="text-danger" /></div>
+                        <div class="um-field"><label>Revenue</label><InputNumber class="form-control" @bind-Value="_form.Revenue" /><ValidationMessage For="() => _form.Revenue" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Landing Page URL</label><InputText class="form-control" @bind-Value="_form.LandingPageUrl" /><ValidationMessage For="() => _form.LandingPageUrl" class="text-danger" /></div>
+                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.SendFollowUp" /> Send follow-up</label></div>
+                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.SuppressRecentContacts" /> Suppress recent contacts</label></div>
+                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.SuppressOptOut" /> Honor opt-outs</label></div>
+                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.AbTestSubject" /> A/B test subject</label></div>
+                        <div class="um-field um-field--full mkc-campaign-preview"><span>Campaign preview</span><strong>@_form.Name</strong><small>@_form.Type · @_form.Status · @_form.Segment · @_form.Revenue.ToString("C0") attribution</small></div>
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
+                        }
                     </div>
                 </div>
                 <div class="um-modal-footer">
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseScheduleDialog">Cancel</button>
-                    <button type="submit" class="um-btn um-btn-primary"><i class="bi bi-calendar-check" aria-hidden="true"></i> Confirm Schedule</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editingId == Guid.Empty ? "Create Campaign" : "Save Changes")</button>
                 </div>
             </EditForm>
         </div>
     </div>
 }
 
-<section class="mkc-enterprise-page">
-    <div class="mkc-hero">
-        <div class="mkc-hero-left">
-            <div class="mkc-hero-icon"><i class="bi bi-megaphone-fill" aria-hidden="true"></i></div>
-            <div class="mkc-hero-info">
-                <div class="mkc-eyebrow">Tenant Administration · Communications Campaigns</div>
-                <div class="mkc-title-row">
-                    <h1>Tenant Campaign Control Center</h1>
-                    <span class="mkc-status-pill">@Filtered.Count() campaigns</span>
-                    @if (HasFilters)
-                    {
-                        <span class="mkc-filter-pill">Filtered</span>
-                    }
-                </div>
-                <p>Administer tenant-wide communication campaigns, segments, launch status, channel mix, engagement performance, conversions, and compliance readiness.</p>
+<div class="mkc-enterprise-page">
+    <section class="mkc-header">
+        <div class="mkc-header-left">
+            <div class="mkc-lob-icon"><i class="bi bi-megaphone-fill" aria-hidden="true"></i></div>
+            <div class="mkc-header-info">
+                <div class="mkc-title-row"><h1 class="mkc-page-title">Marketing Campaigns</h1><span class="mkc-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live campaign data</span><span class="mkc-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span></div>
+                <div class="mkc-sub-row"><span>Create, schedule, launch, pause, complete, and export tenant marketing campaigns.</span><span class="mkc-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span><span class="mkc-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span></div>
             </div>
         </div>
-        <div class="mkc-hero-actions">
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="Refresh"><i class="bi bi-arrow-clockwise @(_loading ? "mkc-spin" : "")" aria-hidden="true"></i> Refresh</button>
-            <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="NewCampaign"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Campaign</button>
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/communications/inbox")'><i class="bi bi-inbox" aria-hidden="true"></i> Inbox</button>
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/communications/templates")'><i class="bi bi-layout-text-sidebar" aria-hidden="true"></i> Templates</button>
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/communications/outreach")'><i class="bi bi-telephone-outbound" aria-hidden="true"></i> Outreach Queue</button>
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/communications/notifications")'><i class="bi bi-bell" aria-hidden="true"></i> Notifications</button>
-        </div>
-    </div>
+        <div class="mkc-header-actions"><button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat mkc-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button><button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Campaign</button></div>
+    </section>
+
+    <section class="mkc-kpi-strip" aria-label="Campaign metrics">@foreach (var kpi in Kpis) { <button type="button" class="@KpiClass(kpi)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)"><span class="mkc-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span><span class="mkc-kpi-copy"><span class="mkc-kpi-label">@kpi.Label</span><span class="mkc-kpi-value">@kpi.Value</span><span class="mkc-kpi-caption">@kpi.Caption</span></span></button> }</section>
+
+    <section class="mkc-workflow-strip" aria-label="Campaign workflow shortcuts"><button type="button" class="mkc-workflow-card mkc-wf-create" @onclick="OpenCreate"><span class="mkc-workflow-icon"><i class="bi bi-plus-circle" aria-hidden="true"></i></span><span class="mkc-workflow-content"><strong>1</strong><span>Create</span><small>Build campaign.</small></span></button><button type="button" class="mkc-workflow-card mkc-wf-segment" @onclick='() => Nav.NavigateTo("/marketing/segments")'><span class="mkc-workflow-icon"><i class="bi bi-pie-chart" aria-hidden="true"></i></span><span class="mkc-workflow-content"><strong>2</strong><span>Segment</span><small>Select audience.</small></span></button><button type="button" class="mkc-workflow-card mkc-wf-template" @onclick='() => Nav.NavigateTo("/communications/templates")'><span class="mkc-workflow-icon"><i class="bi bi-layout-text-sidebar" aria-hidden="true"></i></span><span class="mkc-workflow-content"><strong>3</strong><span>Template</span><small>Prepare content.</small></span></button><button type="button" class="mkc-workflow-card mkc-wf-schedule" @onclick="ScheduleSelected" disabled="@(_selected is null)"><span class="mkc-workflow-icon"><i class="bi bi-calendar-check" aria-hidden="true"></i></span><span class="mkc-workflow-content"><strong>4</strong><span>Schedule</span><small>Queue launch.</small></span></button><button type="button" class="mkc-workflow-card mkc-wf-launch" @onclick="ActivateSelected" disabled="@(!CanActivateSelected)"><span class="mkc-workflow-icon"><i class="bi bi-play-circle" aria-hidden="true"></i></span><span class="mkc-workflow-content"><strong>5</strong><span>Launch</span><small>Activate.</small></span></button><button type="button" class="mkc-workflow-card mkc-wf-outreach" @onclick='() => Nav.NavigateTo("/communications/outreach")'><span class="mkc-workflow-icon"><i class="bi bi-telephone-outbound" aria-hidden="true"></i></span><span class="mkc-workflow-content"><strong>6</strong><span>Outreach</span><small>Follow up.</small></span></button></section>
+
+    <section class="mkc-enterprise-search" aria-label="Campaign filters"><div class="mkc-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div><div class="mkc-search-body"><label for="mkc-search">Search campaigns</label><input id="mkc-search" class="mkc-search-input" type="search" placeholder="Search campaign, segment, status, type, goal..." @bind="SearchFilter" @bind:event="oninput" /><span class="mkc-search-hint">Filters apply instantly across synchronized marketing campaign data.</span></div><select class="mkc-filter-select" @bind="StatusFilter" aria-label="Status filter"><option value="">All statuses</option>@foreach (var status in _statuses) { <option value="@status">@status</option> }</select><select class="mkc-filter-select" @bind="TypeFilter" aria-label="Type filter"><option value="">All types</option>@foreach (var type in _types) { <option value="@type">@type</option> }</select><div class="mkc-search-result"><strong>@_filtered.Count</strong><span>matches</span></div></section>
 
     @if (!string.IsNullOrWhiteSpace(_loadError))
     {
-        <div class="alert alert-danger mkc-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
-        </div>
+        <div class="alert alert-danger mkc-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
     }
 
-    <div class="mkc-subnav" aria-label="Campaign modules">
-        <button class="mkc-snav-btn mkc-snav-active" type="button"><i class="bi bi-megaphone" aria-hidden="true"></i> Campaigns</button>
-        <button class="mkc-snav-btn" type="button" @onclick='() => Nav.NavigateTo("/marketing/segments")'><i class="bi bi-pie-chart" aria-hidden="true"></i> Segments</button>
-        <button class="mkc-snav-btn" type="button" @onclick='() => Nav.NavigateTo("/marketing/cross-sell")'><i class="bi bi-arrows-expand" aria-hidden="true"></i> Cross-Sell</button>
-        <button class="mkc-snav-btn" type="button" @onclick='() => Nav.NavigateTo("/marketing/win-back")'><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Win-Back</button>
-        <button class="mkc-snav-btn" type="button" @onclick='() => Nav.NavigateTo("/marketing/referrals")'><i class="bi bi-person-plus" aria-hidden="true"></i> Referrals</button>
-        <button class="mkc-snav-btn" type="button" @onclick='() => Nav.NavigateTo("/marketing/reviews")'><i class="bi bi-star" aria-hidden="true"></i> Reviews</button>
-        <button class="mkc-snav-btn" type="button" @onclick='() => Nav.NavigateTo("/marketing/rules-engine")'><i class="bi bi-lightning-charge" aria-hidden="true"></i> Rules Engine</button>
-    </div>
-
-    <div class="mkc-kpi-strip">
-        @KpiCard("bi-megaphone", "Total Campaigns", _campaigns.Count.ToString(), "mkc-ki-blue", "all")
-        @KpiCard("bi-play-circle", "Active", _campaigns.Count(c => c.Status == "Active").ToString(), "mkc-ki-green", "Active")
-        @KpiCard("bi-calendar-check", "Scheduled", _campaigns.Count(c => c.Status == "Scheduled").ToString(), "mkc-ki-blue", "Scheduled")
-        @KpiCard("bi-pause-circle", "Paused", _campaigns.Count(c => c.Status == "Paused").ToString(), "mkc-ki-amber", "Paused")
-        @KpiCard("bi-trophy", "Conversions", _campaigns.Sum(c => c.Conversions).ToString("N0"), "mkc-ki-green", "converting")
-        @KpiCard("bi-cash-coin", "Revenue", _campaigns.Sum(c => c.Revenue).ToString("C0"), "mkc-ki-green", "revenue")
-    </div>
-
-    <div class="mkc-enterprise-search" role="search" aria-label="Search campaigns">
-        <div class="mkc-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
-        <div class="mkc-search-body">
-            <label for="mkc-search-input">Enterprise search</label>
-            <input id="mkc-search-input" class="mkc-search" type="search" placeholder="Search campaigns, segment, type, status, performance…" @bind="SearchText" @bind:event="oninput" />
-            <div class="mkc-search-hint">Searches campaign name, segment, status, type, dates, reach, conversions, revenue, and campaign IDs.</div>
-        </div>
-        <select class="mkc-sel" @bind="_filterStatus" @bind:after="ApplyFilters" aria-label="Filter by status">
-            <option value="">All Statuses</option>
-            <option value="Draft">Draft</option>
-            <option value="Scheduled">Scheduled</option>
-            <option value="Active">Active</option>
-            <option value="Paused">Paused</option>
-            <option value="Completed">Completed</option>
-        </select>
-        <select class="mkc-sel" @bind="_filterType" @bind:after="ApplyFilters" aria-label="Filter by type">
-            <option value="">All Types</option>
-            <option value="Email">Email</option>
-            <option value="SMS">SMS</option>
-            <option value="Direct Mail">Direct Mail</option>
-            <option value="Multi-Channel">Multi-Channel</option>
-        </select>
-        <div class="mkc-search-result"><strong>@Filtered.Count()</strong><span>matches</span></div>
-        <button type="button" class="um-btn um-btn-ghost um-btn-sm mkc-search-clear" @onclick="ResetFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
-    </div>
-
-    <div class="mkc-layout">
-        <div class="mkc-list-pane">
-            <div class="mkc-grid-toolbar">
-                <div>
-                    <strong>@Filtered.Count()</strong> campaigns
-                    @if (HasFilters)
-                    {
-                        <span class="mkc-filter-note">filtered</span>
-                    }
-                </div>
-                <div class="mkc-grid-tools">
-                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ExportAsync" disabled="@(!Filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
-                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
-                </div>
-            </div>
-
+    <section class="mkc-content-layout">
+        <div class="mkc-grid-wrap">
+            <div class="mkc-grid-toolbar"><div><strong>Campaign register</strong><span>@ActiveFilterText</span></div><div class="mkc-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ActivateSelected" disabled="@(!CanActivateSelected)"><i class="bi bi-play-circle" aria-hidden="true"></i> Launch</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PauseSelected" disabled="@(!CanPauseSelected)"><i class="bi bi-pause-circle" aria-hidden="true"></i> Pause</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button></div></div>
             @if (_loading)
             {
-                <div class="mkc-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading campaigns…</span></div>
+                <div class="mkc-loading"><i class="bi bi-arrow-repeat mkc-spin" aria-hidden="true"></i><strong>Loading campaigns...</strong><span>Syncing schema, seed data, and campaign register.</span></div>
+            }
+            else if (!_filtered.Any())
+            {
+                <div class="mkc-empty-state"><i class="bi bi-megaphone" aria-hidden="true"></i><strong>No campaigns found</strong><span>Adjust filters or create a new marketing campaign.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">New Campaign</button></div>
             }
             else
             {
                 <div class="mkc-table-scroll">
-                    <table class="mkc-table" aria-label="Communications campaigns">
+                    <table class="mkc-table">
                         <thead>
                             <tr>
                                 <th>Campaign</th>
-                                <th>Status</th>
+                                <th>Audience</th>
                                 <th>Start</th>
-                                <th class="mkc-num">Reached</th>
-                                <th class="mkc-num">Open %</th>
-                                <th class="mkc-num">Conv.</th>
-                                <th class="mkc-num">Revenue</th>
-                                <th class="mkc-actions-col"><span class="visually-hidden">Details</span></th>
+                                <th class="mkc-number">Reached</th>
+                                <th class="mkc-number">Open %</th>
+                                <th class="mkc-number">Revenue</th>
+                                <th>Status</th>
+                                <th class="mkc-actions-col">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
-                            @if (!Filtered.Any())
+                            @foreach (var item in PagedItems)
                             {
-                                <tr>
-                                    <td colspan="8">
-                                        <div class="mkc-empty-state">
-                                            <i class="bi bi-megaphone" aria-hidden="true"></i>
-                                            <strong>No campaigns found</strong>
-                                            <span>Adjust KPI, status, type, or search criteria.</span>
+                                <tr class="@RowClass(item)" @onclick="() => SelectCampaign(item)">
+                                    <td>
+                                        <div class="mkc-campaign-cell">
+                                            <span class="mkc-type-icon @TypeIconCss(item.Type)"><i class="bi @TypeIcon(item.Type)" aria-hidden="true"></i></span>
+                                            <span><strong>@item.Name</strong><small>@item.Type · @item.Goal</small></span>
+                                        </div>
+                                    </td>
+                                    <td><span class="mkc-audience">@item.Segment</span></td>
+                                    <td>@item.StartDate.ToString("MMM d, yyyy")</td>
+                                    <td class="mkc-number">@item.Reached.ToString("N0")</td>
+                                    <td class="mkc-number">@item.OpenRate.ToString("N1")%</td>
+                                    <td class="mkc-number mkc-revenue">@item.Revenue.ToString("C0")</td>
+                                    <td><span class="mkc-status-chip @StatusCss(item.Status)">@item.Status</span></td>
+                                    <td>
+                                        <div class="mkc-row-acts">
+                                            <button type="button" class="um-btn um-btn-primary um-btn-xs" title="Inspect" @onclick:stopPropagation="true" @onclick="() => SelectCampaign(item)"><i class="bi bi-layout-sidebar-inset" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Duplicate" @onclick:stopPropagation="true" @onclick="() => DuplicateCampaignAsync(item)"><i class="bi bi-files" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Launch" @onclick:stopPropagation="true" @onclick="() => ConfirmStatusUpdate(item, ActiveStatus)" disabled="@(!CanActivate(item))"><i class="bi bi-play-circle" aria-hidden="true"></i></button>
                                         </div>
                                     </td>
                                 </tr>
                             }
-                            else
-                            {
-                                @foreach (var campaign in Filtered)
-                                {
-                                    <tr class="mkc-table-row @(_selected?.Id == campaign.Id ? "mkc-table-row--selected" : "")" @onclick="() => SelectCampaign(campaign)">
-                                        <td>@CampaignCell(campaign)</td>
-                                        <td><span class="@StatusBadge(campaign.Status)">@campaign.Status</span></td>
-                                        <td>@campaign.StartDate.ToString("MMM d, yyyy")</td>
-                                        <td class="mkc-num mkc-mono">@campaign.Reached.ToString("N0")</td>
-                                        <td class="mkc-num mkc-mono">@campaign.OpenRate.ToString("N1")%</td>
-                                        <td class="mkc-num mkc-mono mkc-bold">@campaign.Conversions.ToString("N0")</td>
-                                        <td class="mkc-num mkc-mono mkc-bold mkc-revenue">@campaign.Revenue.ToString("C0")</td>
-                                        <td class="mkc-actions-col">
-                                            <button type="button" class="um-btn um-btn-ghost um-btn-sm mkc-arrow-btn" title="Open details" @onclick:stopPropagation="true" @onclick="() => SelectCampaign(campaign)">
-                                                <i class="bi bi-arrow-right" aria-hidden="true"></i>
-                                            </button>
-                                        </td>
-                                    </tr>
-                                }
-                            }
                         </tbody>
                     </table>
                 </div>
+                <div class="mkc-pager"><span>Showing @PageStart-@PageEnd of @_filtered.Count</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button><span>Page @_page of @TotalPages</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button></div></div>
             }
         </div>
-
-        <aside class="mkc-detail-pane @(_selected is null ? "mkc-detail-empty" : "")" aria-label="Campaign details">
+        <aside class="mkc-detail-panel" aria-label="Selected campaign detail">
             @if (_selected is null)
             {
-                <div class="mkc-detail-placeholder">
-                    <i class="bi bi-arrow-right-circle mkc-dp-icon" aria-hidden="true"></i>
-                    <h3>Select a campaign</h3>
-                    <p>Use the row arrow to inspect campaign readiness, channel performance, revenue, and workflow actions.</p>
-                </div>
+                <div class="mkc-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a campaign</strong><span>Choose a row to inspect readiness, engagement metrics, attribution, and workflow actions.</span></div>
             }
             else
             {
-                <div class="mkc-detail-header">
-                    <div class="mkc-dh-left">
-                        <div class="mkc-type-icon @TypeIconCss(_selected.Type)"><i class="bi @TypeIcon(_selected.Type)" aria-hidden="true"></i></div>
-                        <div>
-                            <div class="mkc-dh-title">@_selected.Name</div>
-                            <div class="mkc-dh-meta">@_selected.Type · @_selected.Segment · @_selected.StartDate.ToString("MMM d, yyyy")</div>
-                        </div>
-                    </div>
-                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _selected = null" aria-label="Close details"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
-                </div>
-
+                <div class="mkc-detail-head"><div><span class="mkc-detail-eyebrow"><i class="bi bi-megaphone" aria-hidden="true"></i> Campaign detail</span><h2>@_selected.Name</h2><div class="mkc-detail-meta"><span>@_selected.Type · @_selected.Segment</span><span class="mkc-status-chip @StatusCss(_selected.Status)">@_selected.Status</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div>
                 <div class="mkc-detail-body">
-                    <span class="@StatusBadge(_selected.Status)">@_selected.Status</span>
-                    <div class="mkc-detail-grid">
-                        <div><span>Reached</span><strong>@_selected.Reached.ToString("N0")</strong></div>
-                        <div><span>Open Rate</span><strong>@_selected.OpenRate.ToString("N1")%</strong></div>
-                        <div><span>Conversions</span><strong>@_selected.Conversions.ToString("N0")</strong></div>
-                        <div><span>Revenue</span><strong>@_selected.Revenue.ToString("C0")</strong></div>
+                    <div class="mkc-impact-card">
+                        <span>Attributed revenue</span>
+                        <strong>@_selected.Revenue.ToString("C2")</strong>
+                        <small>@_selected.Conversions.ToString("N0") conversions · @_selected.OpenRate.ToString("N1")% open rate</small>
                     </div>
-
-                    <div class="mkc-policy-card">
-                        <strong>Campaign controls</strong>
-                        <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Opt-out and consent policy required</span>
-                        <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Template governance and channel readiness tracked</span>
-                        <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Revenue and conversion attribution monitored</span>
+                    <div class="mkc-detail-summary">
+                        <div class="mkc-meta-row"><span class="mkc-meta-lbl">Start Date</span><span class="mkc-meta-val">@_selected.StartDate.ToString("MMM d, yyyy")</span></div>
+                        <div class="mkc-meta-row"><span class="mkc-meta-lbl">Scheduled</span><span class="mkc-meta-val">@(_selected.ScheduledDateUtc?.ToLocalTime().ToString("MMM d, yyyy") ?? "Not scheduled")</span></div>
+                        <div class="mkc-meta-row"><span class="mkc-meta-lbl">Reached</span><span class="mkc-meta-val">@_selected.Reached.ToString("N0")</span></div>
+                        <div class="mkc-meta-row"><span class="mkc-meta-lbl">Template</span><span class="mkc-meta-val">@Blank(_selected.TemplateName)</span></div>
                     </div>
-
+                    <div class="mkc-policy-card"><span><i class="bi bi-shield-check" aria-hidden="true"></i> Governance controls</span><p>Opt-out suppression, recent-contact suppression, template readiness, and attribution tracking are synchronized with the campaign workflow.</p></div>
                     <div class="mkc-detail-actions">
-                        <button type="button" class="um-btn um-btn-primary" @onclick="OpenCampaign"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Campaign</button>
-                        <button type="button" class="um-btn um-btn-ghost" @onclick="OpenMessaging"><i class="bi bi-chat-dots" aria-hidden="true"></i> Messaging</button>
-                        <button type="button" class="um-btn um-btn-ghost" @onclick="DuplicateCampaign"><i class="bi bi-files" aria-hidden="true"></i> Duplicate</button>
-                        <button type="button" class="um-btn um-btn-ghost" @onclick="ScheduleCampaign"><i class="bi bi-calendar-check" aria-hidden="true"></i> Schedule</button>
+                        <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => DuplicateCampaignAsync(_selected)"><i class="bi bi-files" aria-hidden="true"></i> Duplicate</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ScheduleSelected"><i class="bi bi-calendar-check" aria-hidden="true"></i> Schedule</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ActivateSelected" disabled="@(!CanActivateSelected)"><i class="bi bi-play-circle" aria-hidden="true"></i> Launch</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PauseSelected" disabled="@(!CanPauseSelected)"><i class="bi bi-pause-circle" aria-hidden="true"></i> Pause</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenBuilder"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Builder</button>
                     </div>
                 </div>
             }
         </aside>
-    </div>
-</section>
+    </section>
+</div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
+    private const int PageSize = 12;
+    private const string ActiveStatus = "Active";
     private Guid _tenantId;
-    private string _search = string.Empty;
-    private string _filterStatus = string.Empty;
-    private string _filterType = string.Empty;
-    private string? _activeKpi;
-    private string? _loadError;
-    private bool _loading;
-    private bool _toastVisible;
-    private bool _showScheduleDialog;
-    private string _toastTitle = string.Empty;
+    private Guid _tenantAdminUserId;
+    private List<CommunicationCampaignDto> _items = [];
+    private List<CommunicationCampaignDto> _filtered = [];
+    private CommunicationCampaignDto? _selected;
+    private CommunicationCampaignDto? _statusTarget;
+    private CampaignForm _form = new();
+    private Guid _editingId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _typeFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _pendingStatus;
+    private int _page = 1;
+    private bool _loading, _busy, _showForm, _showStatusConfirm, _toastVisible;
     private string _toastMessage = string.Empty;
     private string _toastKind = "success";
-    private CampaignScheduleForm _schedule = new();
+    private string? _loadError, _formError;
+    private readonly List<string> _statuses = ["Draft", "Scheduled", "Active", "Paused", "Completed"];
+    private readonly List<string> _types = ["Email", "SMS", "Direct Mail", "Multi-Channel"];
 
-    private List<CampaignRow> _campaigns = [];
-    private CampaignRow? _selected;
+    private IEnumerable<CommunicationCampaignDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private int ActiveCount => _items.Count(x => x.Status == "Active");
+    private int ScheduledCount => _items.Count(x => x.Status == "Scheduled");
+    private int PausedCount => _items.Count(x => x.Status == "Paused");
+    private int DraftCount => _items.Count(x => x.Status == "Draft");
+    private int TotalConversions => _items.Sum(x => x.Conversions);
+    private decimal TotalRevenue => _items.Sum(x => x.Revenue);
+    private bool CanActivateSelected => _selected is not null && CanActivate(_selected);
+    private bool CanPauseSelected => _selected is not null && _selected.Status == "Active";
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All marketing campaigns" : $"Filtered by {_kpiFilter}";
+    private string PendingStatusIcon => _pendingStatus switch { "Active" => "bi-play-circle", "Paused" => "bi-pause-circle", "Completed" => "bi-check2-circle", "Scheduled" => "bi-calendar-check", _ => "bi-arrow-repeat" };
+    private string PendingStatusTitle => _pendingStatus switch { "Active" => "Launch Campaign", "Paused" => "Pause Campaign", "Completed" => "Complete Campaign", "Scheduled" => "Schedule Campaign", _ => "Update Campaign" };
+    private string PendingStatusAction => _pendingStatus switch { "Active" => "Launch", "Paused" => "Pause", "Completed" => "Complete", "Scheduled" => "Schedule", _ => "Update" };
+    private IReadOnlyList<KpiModel> Kpis => [new("all", "Campaigns", _items.Count.ToString("N0"), "All records", "bi-megaphone", "mkc-ki-blue"), new("Active", "Active", ActiveCount.ToString("N0"), "Live now", "bi-play-circle", "mkc-ki-green"), new("Scheduled", "Scheduled", ScheduledCount.ToString("N0"), "Queued", "bi-calendar-check", "mkc-ki-blue"), new("Paused", "Paused", PausedCount.ToString("N0"), "On hold", "bi-pause-circle", "mkc-ki-amber"), new("converting", "Conversions", TotalConversions.ToString("N0"), "Attributed wins", "bi-trophy", "mkc-ki-purple"), new("revenue", "Revenue", TotalRevenue.ToString("C0"), "Pipeline value", "bi-cash-coin", "mkc-ki-green")];
+    private string SearchFilter { get => _searchTerm; set { _searchTerm = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
+    private string TypeFilter { get => _typeFilter; set { _typeFilter = value; ApplyFilters(resetPage: true); } }
 
-    IEnumerable<CampaignRow> Filtered => _campaigns.Where(MatchesFilters);
-    bool HasFilters => !string.IsNullOrWhiteSpace(_search) || !string.IsNullOrWhiteSpace(_filterStatus) || !string.IsNullOrWhiteSpace(_filterType) || _activeKpi is not null;
-
-    string SearchText
-    {
-        get => _search;
-        set => _search = value ?? string.Empty;
-    }
-
-    protected override async Task OnInitializedAsync()
-    {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Communications", "/communications/inbox"), new("Campaigns", ""));
-        await LoadAsync();
-    }
-
-    private async Task LoadAsync()
-    {
-        _loading = true;
-        _loadError = null;
-        try
-        {
-            var result = await Api.SearchCommunicationCampaignsAsync(_tenantId, _search);
-            _campaigns = result?.Items.Select(c => new CampaignRow(c.CampaignId, c.Name, c.Type, c.Status, c.Segment, c.StartDate, c.Reached, c.OpenRate, c.Conversions, c.Revenue)).ToList() ?? [];
-            _selected = _selected is null ? null : _campaigns.FirstOrDefault(c => c.Id == _selected.Id);
-        }
-        catch (Exception ex)
-        {
-            _loadError = $"Failed to load campaigns: {ex.Message}";
-            ShowToast("Campaigns unavailable", $"Failed to load campaigns: {ex.Message}", "danger");
-            _campaigns = [];
-            _selected = null;
-        }
-        finally
-        {
-            _loading = false;
-        }
-    }
-
-    private bool MatchesFilters(CampaignRow c)
-    {
-        if (!string.IsNullOrEmpty(_filterStatus) && c.Status != _filterStatus) return false;
-        if (!string.IsNullOrEmpty(_filterType) && c.Type != _filterType) return false;
-        if (_activeKpi is not null && !MatchesKpi(c)) return false;
-        if (string.IsNullOrWhiteSpace(_search)) return true;
-
-        var term = _search.Trim();
-        return Contains(c.Name, term)
-            || Contains(c.Segment, term)
-            || Contains(c.Type, term)
-            || Contains(c.Status, term)
-            || Contains(c.Id.ToString(), term)
-            || Contains(c.StartDate.ToString("MMM d, yyyy"), term)
-            || Contains(c.StartDate.ToString("yyyy-MM-dd"), term)
-            || Contains(c.Reached.ToString(), term)
-            || Contains(c.Conversions.ToString(), term)
-            || Contains(c.Revenue.ToString("C0"), term);
-    }
-
-    private bool MatchesKpi(CampaignRow c) => _activeKpi switch
-    {
-        "Active" => c.Status == "Active",
-        "Scheduled" => c.Status == "Scheduled",
-        "Paused" => c.Status == "Paused",
-        "converting" => c.Conversions > 0,
-        "revenue" => c.Revenue > 0,
-        null or "all" => true,
-        _ => true
-    };
-
-    private static bool Contains(string? source, string term) => !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
-
-    private void ApplyFilters() => _selected = _selected is null || Filtered.Any(c => c.Id == _selected.Id) ? _selected : null;
-
-    private void SetKpiFilter(string key)
-    {
-        _activeKpi = _activeKpi == key || key == "all" ? null : key;
-        if (key is "Active" or "Scheduled" or "Paused")
-        {
-            _filterStatus = _activeKpi == key ? key : string.Empty;
-        }
-        else
-        {
-            _filterStatus = string.Empty;
-        }
-        ApplyFilters();
-    }
-
-    private void ResetFilters()
-    {
-        _search = string.Empty;
-        _filterStatus = string.Empty;
-        _filterType = string.Empty;
-        _activeKpi = null;
-        _selected = null;
-    }
-
-    private async Task Refresh() => await LoadAsync();
-    private void SelectCampaign(CampaignRow campaign) => _selected = campaign;
-    private void NewCampaign() => Nav.NavigateTo("/marketing/campaigns/new");
-    private void OpenCampaign() { if (_selected is not null) Nav.NavigateTo($"/marketing/campaigns/new?campaignId={_selected.Id}&mode=edit"); }
-    private void OpenMessaging() { if (_selected is not null) Nav.NavigateTo($"/communications/campaigns2?campaignId={_selected.Id}"); }
-    private void ScheduleCampaign()
-    {
-        if (_selected is null) return;
-        _schedule = new CampaignScheduleForm
-        {
-            LaunchDate = _selected.StartDate.Date < DateTime.Today ? DateTime.Today : _selected.StartDate.Date,
-            LaunchTime = "09:00 AM",
-            Owner = "Tenant Admin",
-            Channel = _selected.Type,
-            Notes = $"Schedule launch workflow for {_selected.Name}."
-        };
-        _showScheduleDialog = true;
-    }
-
-    private void CloseScheduleDialog() => _showScheduleDialog = false;
-
-    private Task ConfirmScheduleAsync()
-    {
-        if (_selected is null) return Task.CompletedTask;
-        _showScheduleDialog = false;
-        ShowToast("Schedule confirmed", $"{_selected.Name} schedule prepared for {_schedule.LaunchDate:MMM d, yyyy} at {_schedule.LaunchTime}.", "success");
-        return Task.CompletedTask;
-    }
-
-    private void DuplicateCampaign()
-    {
-        if (_selected is null) return;
-        Nav.NavigateTo($"/marketing/campaigns/new?sourceCampaignId={_selected.Id}&mode=duplicate");
-    }
-
-    private Task ExportAsync()
-    {
-        var csv = new System.Text.StringBuilder();
-        csv.AppendLine("Campaign,Type,Status,Segment,Start,Reached,Open Rate,Conversions,Revenue");
-        foreach (var c in Filtered)
-        {
-            csv.AppendLine(string.Join(',', Csv(c.Name), Csv(c.Type), Csv(c.Status), Csv(c.Segment), Csv(c.StartDate.ToString("yyyy-MM-dd")), Csv(c.Reached.ToString()), Csv(c.OpenRate.ToString("N1")), Csv(c.Conversions.ToString()), Csv(c.Revenue.ToString("F2"))));
-        }
-        Nav.NavigateTo("data:text/csv;charset=utf-8," + Uri.EscapeDataString(csv.ToString()), forceLoad: true);
-        ShowToast("Export generated", "Campaign export generated.", "success");
-        return Task.CompletedTask;
-    }
-
-    private static string Csv(string? value)
-    {
-        var text = value ?? string.Empty;
-        return string.Concat("\"", text.Replace("\"", "\"\""), "\"");
-    }
-
-    private void ShowToast(string title, string message, string kind = "success")
-    {
-        _toastTitle = title;
-        _toastMessage = message;
-        _toastKind = kind;
-        _toastVisible = true;
-    }
-
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Marketing", "/marketing/campaigns"), new("Campaigns", "/marketing/campaigns")); await LoadAsync(); }
+    private async Task LoadAsync() { _loading = true; _loadError = null; try { await Api.EnsureCommunicationCampaignSeedAsync(_tenantId); var result = await Api.SearchCommunicationCampaignsAsync(_tenantId, string.Empty); _items = result?.Items.OrderBy(x => StatusSort(x.Status)).ThenByDescending(x => x.StartDate).ToList() ?? []; ApplyFilters(resetPage: true); EnsureSelectedStillVisible(); } catch (Exception ex) { _loadError = $"Marketing campaigns failed to load: {ex.Message}"; ShowToast(_loadError, "danger"); _items = []; _filtered = []; _selected = null; } finally { _loading = false; } }
+    private void ApplyFilters(bool resetPage) { IEnumerable<CommunicationCampaignDto> query = _items; if (!string.IsNullOrWhiteSpace(_searchTerm)) { var term = _searchTerm.Trim(); query = query.Where(x => Contains(x.Name, term) || Contains(x.Segment, term) || Contains(x.Type, term) || Contains(x.Status, term) || Contains(x.Goal, term) || Contains(x.Subject, term) || Contains(x.CampaignId.ToString(), term)); } if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.Status == _statusFilter); if (!string.IsNullOrWhiteSpace(_typeFilter)) query = query.Where(x => x.Type == _typeFilter); query = _kpiFilter switch { "Active" => query.Where(x => x.Status == "Active"), "Scheduled" => query.Where(x => x.Status == "Scheduled"), "Paused" => query.Where(x => x.Status == "Paused"), "converting" => query.Where(x => x.Conversions > 0), "revenue" => query.Where(x => x.Revenue > 0), _ => query }; _filtered = query.OrderBy(x => StatusSort(x.Status)).ThenByDescending(x => x.StartDate).ToList(); if (resetPage) _page = 1; if (_page > TotalPages) _page = TotalPages; }
+    private void SetKpiFilter(string filter) { _kpiFilter = _kpiFilter == filter && filter != "all" ? "all" : filter; if (_statuses.Contains(_kpiFilter)) _statusFilter = _kpiFilter; else if (_kpiFilter != "all") _statusFilter = string.Empty; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _searchTerm = string.Empty; _statusFilter = string.Empty; _typeFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); ShowToast("Campaign filters reset.", "info"); }
+    private void SelectCampaign(CommunicationCampaignDto item) => _selected = item;
+    private void OpenCreate() { _editingId = Guid.Empty; _formError = null; _form = new CampaignForm { Name = $"Campaign {DateTime.UtcNow:MMM yyyy}", Type = "Email", Status = "Draft", Segment = "Active Commercial Clients", Goal = "Cross-Sell", Description = "Targeted campaign for tenant marketing workflow.", Subject = "Coverage opportunities for your business", SenderName = "AgencyBinder Team", ReplyToEmail = "marketing@agencybinder.local", TemplateName = "Insurance Benefit Card", CtaLabel = "Get a Quote", SendMode = "Scheduled", Timezone = "Eastern", StartDate = DateTime.Today.AddDays(7), EndDate = DateTime.Today.AddDays(21), ScheduledDateUtc = DateTime.Today.AddDays(7), FollowUpDays = 7, SendFollowUp = true, SuppressRecentContacts = true, SuppressOptOut = true }; _showForm = true; }
+    private void OpenEdit(CommunicationCampaignDto item) { _editingId = item.CampaignId; _formError = null; _form = CampaignForm.FromDto(item); _showForm = true; }
+    private void CloseForm() { if (_busy) return; _showForm = false; }
+    private async Task SaveAsync() { if (!ValidateForm()) return; _busy = true; _formError = null; var savedId = _editingId; try { if (_editingId == Guid.Empty) { savedId = await Api.CreateCommunicationCampaignAsync(ToDto(Guid.Empty)); ShowToast("Marketing campaign created.", "success"); } else { await Api.UpdateCommunicationCampaignAsync(_editingId, ToDto(_editingId)); ShowToast("Marketing campaign updated.", "success"); } _showForm = false; await LoadAsync(); _selected = _items.FirstOrDefault(x => x.CampaignId == savedId) ?? _selected; } catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; ShowToast(_formError, "danger"); } finally { _busy = false; } }
+    private Task NotifyValidationAsync(EditContext _) { ShowToast("Please correct validation errors before saving.", "warning"); return Task.CompletedTask; }
+    private CommunicationCampaignDto ToDto(Guid id) => new() { CampaignId = id, TenantId = _tenantId, Name = _form.Name, Type = _form.Type, Status = _form.Status, Segment = _form.Segment, Goal = _form.Goal, Description = _form.Description ?? string.Empty, Subject = _form.Subject ?? string.Empty, SenderName = _form.SenderName ?? string.Empty, ReplyToEmail = _form.ReplyToEmail ?? string.Empty, TemplateName = _form.TemplateName ?? string.Empty, CtaLabel = _form.CtaLabel ?? string.Empty, SendMode = _form.SendMode ?? string.Empty, Timezone = _form.Timezone ?? string.Empty, FollowUpDays = _form.FollowUpDays, SendFollowUp = _form.SendFollowUp, SuppressRecentContacts = _form.SuppressRecentContacts, SuppressOptOut = _form.SuppressOptOut, AbTestSubject = _form.AbTestSubject, EndDate = _form.EndDate, ScheduledDateUtc = _form.ScheduledDateUtc, LandingPageSlug = Slug(_form.Name), LandingPageUrl = _form.LandingPageUrl ?? string.Empty, StartDate = _form.StartDate, Reached = _form.Reached, OpenRate = _form.OpenRate, Conversions = _form.Conversions, Revenue = _form.Revenue };
+    private void ActivateSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Active"); }
+    private void PauseSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Paused"); }
+    private void ScheduleSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Scheduled"); }
+    private void OpenBuilder() { if (_selected is not null) Nav.NavigateTo($"/marketing/campaigns/new?campaignId={_selected.CampaignId}&mode=edit"); }
+    private void ConfirmStatusUpdate(CommunicationCampaignDto item, string status) { _statusTarget = item; _pendingStatus = status; _showStatusConfirm = true; }
+    private void CancelStatusUpdate() { if (_busy) return; _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; }
+    private async Task ExecuteStatusUpdateAsync() { if (_statusTarget is null || string.IsNullOrWhiteSpace(_pendingStatus)) return; _busy = true; var selectedId = _statusTarget.CampaignId; try { var updated = CloneCampaign(_statusTarget); updated.Status = _pendingStatus; if (_pendingStatus == "Scheduled") updated.ScheduledDateUtc = updated.ScheduledDateUtc ?? DateTime.UtcNow.AddDays(1); if (_pendingStatus == "Active") updated.StartDate = DateTime.Today; await Api.UpdateCommunicationCampaignAsync(updated.CampaignId, updated); ShowToast($"Campaign marked {_pendingStatus.ToLowerInvariant()}.", "success"); _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; await LoadAsync(); _selected = _items.FirstOrDefault(x => x.CampaignId == selectedId) ?? _selected; } catch (Exception ex) { ShowToast($"Update failed: {ex.Message}", "danger"); } finally { _busy = false; } }
+    private async Task DuplicateCampaignAsync(CommunicationCampaignDto item) { _busy = true; try { var copy = CloneCampaign(item); copy.CampaignId = Guid.Empty; copy.Name = $"{item.Name} Copy"; copy.Status = "Draft"; copy.StartDate = DateTime.Today.AddDays(7); copy.ScheduledDateUtc = null; var id = await Api.CreateCommunicationCampaignAsync(copy); ShowToast("Campaign duplicated.", "success"); await LoadAsync(); _selected = _items.FirstOrDefault(x => x.CampaignId == id) ?? _selected; } catch (Exception ex) { ShowToast($"Duplicate failed: {ex.Message}", "danger"); } finally { _busy = false; } }
+    private async Task ExportAsync() { if (!_filtered.Any()) { ShowToast("No campaigns are available to export.", "warning"); return; } var csv = new StringBuilder(); csv.AppendLine("CampaignId,Name,Type,Status,Segment,Goal,StartDate,Reached,OpenRate,Conversions,Revenue"); foreach (var item in _filtered) csv.AppendLine(string.Join(',', Csv(item.CampaignId.ToString()), Csv(item.Name), Csv(item.Type), Csv(item.Status), Csv(item.Segment), Csv(item.Goal), Csv(item.StartDate.ToString("yyyy-MM-dd")), item.Reached, item.OpenRate, item.Conversions, item.Revenue)); var bytes = Encoding.UTF8.GetBytes(csv.ToString()); await Js.InvokeVoidAsync("amsShell.downloadBase64", $"marketing-campaigns-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes)); ShowToast($"Exported {_filtered.Count:N0} campaigns.", "success"); }
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
     private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() => _selected = _selected is null ? _filtered.FirstOrDefault() : _items.FirstOrDefault(x => x.CampaignId == _selected.CampaignId) ?? _filtered.FirstOrDefault();
+    private bool ValidateForm() { if (_form.EndDate.HasValue && _form.EndDate.Value < _form.StartDate) { _formError = "End Date must be on or after Start Date."; ShowToast(_formError, "warning"); return false; } if (_form.ScheduledDateUtc.HasValue && _form.ScheduledDateUtc.Value.Date < DateTime.Today.AddYears(-1)) { _formError = "Scheduled Date is outside the allowed campaign window."; ShowToast(_formError, "warning"); return false; } return true; }
+    private static CommunicationCampaignDto CloneCampaign(CommunicationCampaignDto item) => new() { CampaignId = item.CampaignId, TenantId = item.TenantId, Name = item.Name, Type = item.Type, Status = item.Status, Segment = item.Segment, Goal = item.Goal, Description = item.Description, Subject = item.Subject, SenderName = item.SenderName, ReplyToEmail = item.ReplyToEmail, TemplateName = item.TemplateName, CtaLabel = item.CtaLabel, SendMode = item.SendMode, Timezone = item.Timezone, FollowUpDays = item.FollowUpDays, SendFollowUp = item.SendFollowUp, SuppressRecentContacts = item.SuppressRecentContacts, SuppressOptOut = item.SuppressOptOut, AbTestSubject = item.AbTestSubject, EndDate = item.EndDate, ScheduledDateUtc = item.ScheduledDateUtc, LandingPageSlug = item.LandingPageSlug, LandingPageUrl = item.LandingPageUrl, StartDate = item.StartDate, Reached = item.Reached, OpenRate = item.OpenRate, Conversions = item.Conversions, Revenue = item.Revenue };
+    private static bool CanActivate(CommunicationCampaignDto item) => item.Status is "Draft" or "Scheduled" or "Paused";
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static int StatusSort(string status) => status switch { "Active" => 0, "Scheduled" => 1, "Draft" => 2, "Paused" => 3, "Completed" => 4, _ => 5 };
+    private static string StatusCss(string status) => $"mkc-st-{status.ToLowerInvariant()}";
+    private static string TypeIconCss(string type) => type switch { "Email" => "mkc-ti-email", "SMS" => "mkc-ti-sms", "Direct Mail" => "mkc-ti-dm", _ => "mkc-ti-multi" };
+    private static string TypeIcon(string type) => type switch { "Email" => "bi-envelope", "SMS" => "bi-phone", "Direct Mail" => "bi-mailbox", _ => "bi-diagram-3" };
+    private static string Blank(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private static string Slug(string value) => string.Join('-', value.ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    private string KpiClass(KpiModel kpi) => $"mkc-kpi-card {kpi.Tone} {(_kpiFilter == kpi.Filter || (_kpiFilter == "all" && kpi.Filter == "all") ? "mkc-kpi-active" : string.Empty)}";
+    private string RowClass(CommunicationCampaignDto item) => $"mkc-table-row {(_selected?.CampaignId == item.CampaignId ? "mkc-table-row--selected" : string.Empty)}";
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter marketing campaigns by {Label}"; }
 
-    private static string StatusBadge(string s) => s switch
+    private sealed class CampaignForm
     {
-        "Active" => "mkc-status mkc-st--active",
-        "Scheduled" => "mkc-status mkc-st--scheduled",
-        "Paused" => "mkc-status mkc-st--paused",
-        "Completed" => "mkc-status mkc-st--completed",
-        _ => "mkc-status mkc-st--draft",
-    };
+        [Required, StringLength(200)] public string Name { get; set; } = string.Empty;
+        [Required, StringLength(80)] public string Type { get; set; } = "Email";
+        [Required, StringLength(50)] public string Status { get; set; } = "Draft";
+        [Required, StringLength(200)] public string Segment { get; set; } = string.Empty;
+        [Required, StringLength(100)] public string Goal { get; set; } = "Cross-Sell";
+        [StringLength(1000)] public string? Description { get; set; }
+        [StringLength(300)] public string? Subject { get; set; }
+        [StringLength(150)] public string? SenderName { get; set; }
+        [StringLength(254), EmailAddress] public string? ReplyToEmail { get; set; }
+        [StringLength(150)] public string? TemplateName { get; set; }
+        [StringLength(150)] public string? CtaLabel { get; set; }
+        [StringLength(50)] public string? SendMode { get; set; } = "Scheduled";
+        [StringLength(80)] public string? Timezone { get; set; } = "Eastern";
+        [Range(0, 365)] public int FollowUpDays { get; set; } = 7;
+        public bool SendFollowUp { get; set; } = true;
+        public bool SuppressRecentContacts { get; set; } = true;
+        public bool SuppressOptOut { get; set; } = true;
+        public bool AbTestSubject { get; set; }
+        public DateTime? EndDate { get; set; }
+        public DateTime? ScheduledDateUtc { get; set; }
+        [StringLength(500)] public string? LandingPageUrl { get; set; }
+        [Required] public DateTime StartDate { get; set; } = DateTime.Today;
+        [Range(0, 100000000)] public int Reached { get; set; }
+        [Range(0, 100)] public decimal OpenRate { get; set; }
+        [Range(0, 100000000)] public int Conversions { get; set; }
+        [Range(0, 100000000)] public decimal Revenue { get; set; }
 
-    private static string TypeIconCss(string t) => t switch
-    {
-        "Email" => "mkc-ti-email",
-        "SMS" => "mkc-ti-sms",
-        "Direct Mail" => "mkc-ti-dm",
-        _ => "mkc-ti-multi",
-    };
-
-    private static string TypeIcon(string t) => t switch
-    {
-        "Email" => "bi-envelope",
-        "SMS" => "bi-phone",
-        "Direct Mail" => "bi-mailbox",
-        _ => "bi-diagram-3",
-    };
-
-    RenderFragment CampaignCell(CampaignRow campaign) => @<div class="mkc-name-cell">
-        <div class="mkc-type-icon @TypeIconCss(campaign.Type)"><i class="bi @TypeIcon(campaign.Type)" aria-hidden="true"></i></div>
-        <div>
-            <div class="mkc-item-name">@campaign.Name</div>
-            <div class="mkc-item-sub">@campaign.Type · @campaign.Segment</div>
-        </div>
-    </div>;
-
-    RenderFragment KpiCard(string icon, string label, string val, string color, string key)
-    {
-        var isActive = _activeKpi == key || (key == "all" && _activeKpi is null && !HasFilters);
-        return @<button type="button" class="mkc-kpi-card @color @(isActive ? "mkc-kpi-active" : "")" @onclick="() => SetKpiFilter(key)" title="@(isActive ? "Clear filter" : $"Filter by {label}")">
-            <i class="bi @icon mkc-kpi-icon" aria-hidden="true"></i>
-            <div><div class="mkc-kv">@val</div><div class="mkc-kl">@label</div></div>
-        </button>;
-    }
-
-    private sealed record CampaignRow(Guid Id, string Name, string Type, string Status, string Segment,
-        DateTime StartDate, int Reached, decimal OpenRate, int Conversions, decimal Revenue);
-
-    private sealed class CampaignScheduleForm
-    {
-        [Required(ErrorMessage = "Launch Date is required.")]
-        public DateTime LaunchDate { get; set; } = DateTime.Today;
-
-        [Required(ErrorMessage = "Launch Time is required.")]
-        [StringLength(20, ErrorMessage = "Launch Time cannot exceed 20 characters.")]
-        public string LaunchTime { get; set; } = "09:00 AM";
-
-        [Required(ErrorMessage = "Owner is required.")]
-        [StringLength(120, ErrorMessage = "Owner cannot exceed 120 characters.")]
-        public string Owner { get; set; } = "Tenant Admin";
-
-        [StringLength(50, ErrorMessage = "Channel cannot exceed 50 characters.")]
-        public string Channel { get; set; } = "Email";
-
-        [StringLength(500, ErrorMessage = "Schedule Notes cannot exceed 500 characters.")]
-        public string? Notes { get; set; }
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        public static CampaignForm FromDto(CommunicationCampaignDto item) => new() { Name = item.Name, Type = item.Type, Status = item.Status, Segment = item.Segment, Goal = item.Goal, Description = item.Description, Subject = item.Subject, SenderName = item.SenderName, ReplyToEmail = item.ReplyToEmail, TemplateName = item.TemplateName, CtaLabel = item.CtaLabel, SendMode = item.SendMode, Timezone = item.Timezone, FollowUpDays = item.FollowUpDays, SendFollowUp = item.SendFollowUp, SuppressRecentContacts = item.SuppressRecentContacts, SuppressOptOut = item.SuppressOptOut, AbTestSubject = item.AbTestSubject, EndDate = item.EndDate, ScheduledDateUtc = item.ScheduledDateUtc, LandingPageUrl = item.LandingPageUrl, StartDate = item.StartDate, Reached = item.Reached, OpenRate = item.OpenRate, Conversions = item.Conversions, Revenue = item.Revenue };
     }
 }

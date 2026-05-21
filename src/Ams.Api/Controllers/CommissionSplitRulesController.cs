@@ -29,6 +29,13 @@ public sealed class CommissionSplitRulesController : ControllerBase
         return Ok(result);
     }
 
+    [HttpPost("seed")]
+    public async Task<IActionResult> EnsureSeed([FromQuery] Guid tenantId, [FromQuery] Guid? createdByUserId = null, CancellationToken cancellationToken = default)
+    {
+        await _service.EnsureSeedAsync(tenantId, createdByUserId, cancellationToken);
+        return NoContent();
+    }
+
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateCommissionSplitRuleRequest request, CancellationToken cancellationToken)
         => Ok(await _service.CreateAsync(request, cancellationToken));

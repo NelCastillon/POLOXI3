@@ -1,151 +1,289 @@
 @page "/marketing/landing-pages"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
+@inject IJSRuntime Js
 
-<PageTitle>Landing Pages — AMS</PageTitle>
+<PageTitle>Landing Pages — AMS Enterprise</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<AppPageHeader Title="Landing Pages"
-               Subtitle="DB-backed marketing landing pages, publication status, traffic, and conversion performance"
-               Icon="bi-layout-text-window">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/marketing/campaigns")'><i class="bi bi-megaphone"></i> Campaigns</button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
-    </Actions>
-</AppPageHeader>
-
-<div class="mkc-kpi-strip">
-    @Kpi(null, "bi-layout-text-window", "Total", _items.Count.ToString(), "mkc-ki-blue")
-    @Kpi("Published", "bi-globe2", "Published", _items.Count(x => x.Status == "Published").ToString(), "mkc-ki-green")
-    @Kpi("Draft", "bi-file-earmark", "Drafts", _items.Count(x => x.Status == "Draft").ToString(), "mkc-ki-blue")
-    @Kpi("Archived", "bi-archive", "Archived", _items.Count(x => x.Status == "Archived").ToString(), "mkc-ki-gray")
-    @Kpi("Converting", "bi-bullseye", "Conversions", _items.Sum(x => x.ConversionCount).ToString("N0"), "mkc-ki-amber")
-    @Kpi("HighTraffic", "bi-eye", "Views", _items.Sum(x => x.ViewCount).ToString("N0"), "mkc-ki-green")
-</div>
-
-<div class="mkc-filter-bar">
-    <div class="mkc-search-wrap">
-        <i class="bi bi-search mkc-si"></i>
-        <input class="mkc-search" placeholder="Search landing pages..." @bind="_search" @bind:event="oninput" @bind:after="ApplyFilter" />
-    </div>
-    <select class="mkc-sel" @bind="_statusFilter" @bind:after="ApplyFilter">
-        <option value="">All Status</option>
-        <option>Published</option><option>Draft</option><option>Archived</option>
-    </select>
-    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i></button>
-    <span class="ms-auto" style="font-size:.75rem;color:var(--um-muted,#64748b)"><strong>@_filtered.Count</strong> page(s)</span>
-</div>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    <div class="mlp-toast mlp-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="mlp-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-<div class="mkc-grid-card app-datagrid position-relative">
-    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading landing pages…</span></div> }
-    <SfGrid CssClass="marketing-grid" TValue="MarketingLandingPageDto" DataSource="_filtered" AllowPaging="true" AllowSorting="true" AllowTextWrap="true" EnableHover="true" RowHeight="64">
-        <GridTextWrapSettings WrapMode="WrapMode.Content" />
-        <GridEvents TValue="MarketingLandingPageDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="20" PageSizes="@(new[] { 10, 20, 50 })" />
-        <GridColumns>
-            <GridColumn HeaderText="Landing Page" MinWidth="340" Field="@nameof(MarketingLandingPageDto.Name)">
-                <Template>
-                    @{ var p = (MarketingLandingPageDto)context; }
-                    <div class="mkc-name-cell"><div class="mkc-type-icon mkc-ti-page"><i class="bi bi-layout-text-window"></i></div><div><div class="mkc-item-name">@p.Name</div><div class="mkc-item-sub">/@p.Slug</div></div></div>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(MarketingLandingPageDto.Status)" HeaderText="Status" Width="120"><Template>@{ var p=(MarketingLandingPageDto)context; }<span class="@StatusBadge(p.Status)">@p.Status</span></Template></GridColumn>
-            <GridColumn Field="@nameof(MarketingLandingPageDto.TemplateName)" HeaderText="Template" Width="170" />
-            <GridColumn Field="@nameof(MarketingLandingPageDto.CampaignName)" HeaderText="Campaign" Width="220" />
-            <GridColumn HeaderText="Views" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"><Template>@{ var p=(MarketingLandingPageDto)context; }<span class="mkc-mono">@p.ViewCount.ToString("N0")</span></Template></GridColumn>
-            <GridColumn HeaderText="Conv." Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"><Template>@{ var p=(MarketingLandingPageDto)context; }<span class="mkc-mono">@p.ConversionCount.ToString("N0")</span></Template></GridColumn>
-            <GridColumn HeaderText="Rate" Width="90" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"><Template>@{ var p=(MarketingLandingPageDto)context; }<span class="mkc-mono mkc-bold">@p.ConversionRate.ToString("N2")%</span></Template></GridColumn>
-            <GridColumn HeaderText="Published" Width="140"><Template>@{ var p=(MarketingLandingPageDto)context; }@(p.LastPublishedDateUtc?.ToString("MMM d, yyyy") ?? "—")</Template></GridColumn>
-            <GridColumn HeaderText="Actions" Width="170" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                <Template>
-                    @{ var p=(MarketingLandingPageDto)context; }
-                    @if (p.Status != "Published")
-                    { <button class="um-btn um-btn-primary um-btn-xs" @onclick:stopPropagation="true" @onclick="() => PublishAsync(p)"><i class="bi bi-globe2"></i></button> }
-                    @if (p.Status != "Archived")
-                    { <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => ArchiveAsync(p)"><i class="bi bi-archive"></i></button> }
-                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => Preview(p)"><i class="bi bi-eye"></i></button>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
+@if (_showForm)
+{
+    <div class="mlp-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="mlp-modal mlp-action-modal" role="dialog" aria-modal="true" aria-labelledby="mlp-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-layout-text-window" aria-hidden="true"></i>
+                <span id="mlp-form-title">@(_editingId == Guid.Empty ? "Create Landing Page" : "Edit Landing Page")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="mlp-modal-intro"><span><i class="bi bi-shield-check" aria-hidden="true"></i> Page configuration</span><p>Define page identity, template, CTA, publication URL, and performance metrics for DB-backed marketing landing pages.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Name <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.Name" /><ValidationMessage For="() => _form.Name" class="text-danger" /></div>
+                        <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.Status">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect><ValidationMessage For="() => _form.Status" class="text-danger" /></div>
+                        <div class="um-field"><label>Slug <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.Slug" /><ValidationMessage For="() => _form.Slug" class="text-danger" /></div>
+                        <div class="um-field"><label>Template <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.TemplateName" /><ValidationMessage For="() => _form.TemplateName" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Published URL</label><InputText class="form-control" @bind-Value="_form.PublishedUrl" /><ValidationMessage For="() => _form.PublishedUrl" class="text-danger" /></div>
+                        <div class="um-field"><label>Primary CTA</label><InputText class="form-control" @bind-Value="_form.PrimaryCta" /><ValidationMessage For="() => _form.PrimaryCta" class="text-danger" /></div>
+                        <div class="um-field"><label>Last Published</label><InputDate class="form-control" @bind-Value="_form.LastPublishedDateUtc" /></div>
+                        <div class="um-field"><label>Views</label><InputNumber class="form-control" @bind-Value="_form.ViewCount" /><ValidationMessage For="() => _form.ViewCount" class="text-danger" /></div>
+                        <div class="um-field"><label>Conversions</label><InputNumber class="form-control" @bind-Value="_form.ConversionCount" /><ValidationMessage For="() => _form.ConversionCount" class="text-danger" /></div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@(_editingId == Guid.Empty ? "Create Page" : "Save Changes")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showConfirm)
+{
+    <div class="mlp-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="mlp-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="mlp-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @ConfirmIconTone"><i class="bi @ConfirmIcon"></i></div>
+                <div class="um-confirm-title" id="mlp-confirm-title">@ConfirmTitle</div>
+                <div class="um-confirm-body">@((MarkupString)ConfirmBody)</div>
+                <div class="mlp-config-panel">
+                    <span class="mlp-config-eyebrow"><i class="bi bi-sliders" aria-hidden="true"></i> Configuration required</span>
+                    <div class="mlp-config-grid">
+                        @if (_confirmAction == ConfirmAction.Publish)
+                        {
+                            <label><span>Publish mode</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="Immediate">Publish immediately</option><option value="Scheduled">Honor scheduled window</option></select></label>
+                            <label><span>Final URL</span><input class="form-control" @bind="_actionConfig.UrlOverride" placeholder="Optional URL override" /></label>
+                            <label class="mlp-config-check"><input type="checkbox" @bind="_actionConfig.RequireQA" /> Confirm QA review completed</label>
+                            <label class="mlp-config-check"><input type="checkbox" @bind="_actionConfig.NotifyStakeholders" /> Notify campaign stakeholders</label>
+                        }
+                        else if (_confirmAction == ConfirmAction.Archive || _confirmAction == ConfirmAction.Unpublish)
+                        {
+                            <label class="mlp-config-full"><span>Reason</span><input class="form-control" @bind="_actionConfig.Reason" placeholder="Document why this action is being executed" /></label>
+                            <label class="mlp-config-check"><input type="checkbox" @bind="_actionConfig.NotifyStakeholders" /> Notify stakeholders</label>
+                            @if (_confirmAction == ConfirmAction.Archive) { <label class="mlp-config-check"><input type="checkbox" @bind="_actionConfig.ExportBeforeAction" /> Export page snapshot before archiving</label> }
+                        }
+                        else if (_confirmAction == ConfirmAction.Duplicate)
+                        {
+                            <label class="mlp-config-full"><span>New page label</span><input class="form-control" @bind="_actionConfig.NewName" /></label>
+                            <label><span>Starting status</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="Draft">Draft</option><option value="Published">Published review</option></select></label>
+                            <label class="mlp-config-check"><input type="checkbox" @bind="_actionConfig.CopyMetrics" /> Copy metrics for planning reference</label>
+                        }
+                        else if (_confirmAction == ConfirmAction.Sync)
+                        {
+                            <label><span>Seed mode</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="MissingOnly">Add missing seed data only</option><option value="RepairSchema">Repair schema and seed data</option></select></label>
+                            <label class="mlp-config-check"><input type="checkbox" @bind="_actionConfig.RefreshAfterAction" /> Refresh after sync</label>
+                        }
+                        else if (_confirmAction == ConfirmAction.Export)
+                        {
+                            <label><span>Export scope</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="Filtered">Current filtered results</option><option value="All">All active landing pages</option></select></label>
+                            <label class="mlp-config-check"><input type="checkbox" @bind="_actionConfig.IncludeMetrics" /> Include performance metrics</label>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_busy">Cancel</button><button type="button" class="um-btn @ConfirmButtonClass" @onclick="ExecuteConfirmAsync" disabled="@_busy">@ConfirmButtonText</button></div>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="mlp-enterprise-page">
+    <section class="mlp-header">
+        <div class="mlp-header-left"><div class="mlp-lob-icon"><i class="bi bi-layout-text-window" aria-hidden="true"></i></div><div class="mlp-header-info"><div class="mlp-title-row"><h1 class="mlp-page-title">Landing Pages</h1><span class="mlp-status-pill"><i class="bi bi-database-check"></i> Live marketing data</span><span class="mlp-status-pill"><i class="bi bi-shield-lock"></i> Tenant scoped</span></div><div class="mlp-sub-row"><span>Manage publication workflow, landing page conversion performance, CTA routing, and campaign destinations.</span><span class="mlp-sub-chip"><i class="bi bi-arrow-repeat"></i> Seed sync enabled</span><span class="mlp-sub-chip"><i class="bi bi-check2-circle"></i> @_filtered.Count active matches</span></div></div></div>
+        <div class="mlp-header-actions"><button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat mlp-spin" : "bi-arrow-clockwise")"></i> Refresh</button><button type="button" class="um-btn um-btn-ghost" @onclick="ConfigureSync" disabled="@_busy"><i class="bi bi-cloud-arrow-down"></i> Sync Seed</button><button type="button" class="um-btn um-btn-ghost" @onclick="ConfigureExport" disabled="@(!_filtered.Any())"><i class="bi bi-download"></i> Export</button><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle"></i> New Page</button></div>
+    </section>
+
+    <section class="mlp-kpi-strip" aria-label="Landing page metrics">@foreach (var kpi in Kpis) { <button type="button" class="mlp-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "mlp-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)"><span class="mlp-kpi-icon"><i class="bi @kpi.Icon"></i></span><span class="mlp-kpi-copy"><span class="mlp-kpi-label">@kpi.Label</span><span class="mlp-kpi-value">@kpi.Value</span><span class="mlp-kpi-caption">@kpi.Caption</span></span></button> }</section>
+
+    <section class="mlp-workflow-strip" aria-label="Marketing workflow shortcuts">
+        <button type="button" class="mlp-workflow-card mlp-wf-campaign" @onclick='() => Nav.NavigateTo("/marketing/campaigns")'><span class="mlp-workflow-icon"><i class="bi bi-megaphone"></i></span><span class="mlp-workflow-content"><strong>1</strong><span>Campaigns</span><small>Plan initiatives.</small></span></button>
+        <button type="button" class="mlp-workflow-card mlp-wf-builder" @onclick='() => Nav.NavigateTo("/marketing/campaigns/new")'><span class="mlp-workflow-icon"><i class="bi bi-magic"></i></span><span class="mlp-workflow-content"><strong>2</strong><span>Builder</span><small>Compose journeys.</small></span></button>
+        <button type="button" class="mlp-workflow-card mlp-wf-email" @onclick='() => Nav.NavigateTo("/marketing/email")'><span class="mlp-workflow-icon"><i class="bi bi-envelope-paper"></i></span><span class="mlp-workflow-content"><strong>3</strong><span>Email</span><small>Drive traffic.</small></span></button>
+        <button type="button" class="mlp-workflow-card mlp-wf-audience" @onclick='() => Nav.NavigateTo("/marketing/segments")'><span class="mlp-workflow-icon"><i class="bi bi-people"></i></span><span class="mlp-workflow-content"><strong>4</strong><span>Audience</span><small>Target segments.</small></span></button>
+        <button type="button" class="mlp-workflow-card mlp-wf-review" @onclick='() => Nav.NavigateTo("/marketing/reviews")'><span class="mlp-workflow-icon"><i class="bi bi-star"></i></span><span class="mlp-workflow-content"><strong>5</strong><span>Reviews</span><small>Social proof.</small></span></button>
+    </section>
+
+    <section class="mlp-enterprise-search" aria-label="Landing page filters">
+        <div class="mlp-search-icon"><i class="bi bi-search"></i></div>
+        <div class="mlp-search-body">
+            <label for="mlp-search">Search landing pages</label>
+            <input id="mlp-search" class="mlp-search-input" type="search" placeholder="Search name, slug, template, CTA..." @bind="SearchFilter" @bind:event="oninput" />
+            <span class="mlp-search-hint">Filters apply instantly across synchronized landing page data.</span>
+        </div>
+        <select class="mlp-filter-select" @bind="StatusFilter">
+            <option value="">All statuses</option>
+            @foreach (var status in _statuses)
+            {
+                <option value="@status">@status</option>
+            }
+        </select>
+        <select class="mlp-filter-select" @bind="TemplateFilter">
+            <option value="">All templates</option>
+            @foreach (var template in TemplateOptions)
+            {
+                <option value="@template">@template</option>
+            }
+        </select>
+        <select class="mlp-filter-select" @bind="PerformanceFilter"><option value="">Performance: all</option><option value="converting">Has conversions</option><option value="high">High traffic</option><option value="low">Low conversion</option></select>
+        <div class="mlp-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError)) { <div class="alert alert-danger mlp-load-error" style="border-left:4px solid #dc3545; animation:um-shake .3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div> }
+
+    <section class="mlp-content-layout">
+        <div class="mlp-grid-wrap"><div class="mlp-grid-toolbar"><div><strong>Landing page command center</strong><span>@ActiveFilterText</span></div><div class="mlp-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/marketing/email")'><i class="bi bi-envelope-paper"></i> Email</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle"></i> Add</button></div></div>
+            @if (_loading) { <div class="mlp-loading"><i class="bi bi-arrow-repeat mlp-spin"></i><strong>Loading landing pages...</strong><span>Syncing schema, seed data, publication state, and conversion metrics.</span></div> }
+            else if (!_filtered.Any()) { <div class="mlp-empty-state"><i class="bi bi-inbox"></i><strong>No landing pages found</strong><span>Adjust filters or create a DB-backed landing page.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">New Landing Page</button></div> }
+            else
+            {
+                <div class="mlp-table-scroll">
+                    <table class="mlp-table">
+                        <thead><tr><th>Landing Page</th><th>Status</th><th>Template</th><th>CTA</th><th class="mlp-number">Views</th><th class="mlp-number">Conv.</th><th class="mlp-number">Rate</th><th>Published</th><th class="mlp-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var item in _paged)
+                            {
+                                <tr class="mlp-table-row @(IsSelected(item) ? "mlp-table-row--selected" : null)" @onclick="() => SelectPage(item)">
+                                    <td><div class="mlp-page-cell"><span class="mlp-page-icon @StatusIconClass(item.Status)"><i class="bi bi-layout-text-window"></i></span><div><strong>@item.Name</strong><span>/@item.Slug</span></div></div></td>
+                                    <td><span class="mlp-status-chip @StatusCss(item.Status)">@item.Status</span></td>
+                                    <td>@item.TemplateName</td>
+                                    <td>@DisplayCta(item)</td>
+                                    <td class="mlp-number">@item.ViewCount.ToString("N0")</td>
+                                    <td class="mlp-number">@item.ConversionCount.ToString("N0")</td>
+                                    <td class="mlp-number"><span class="@(item.ConversionRate >= 7 ? "mlp-rate-good" : "mlp-rate-muted")">@item.ConversionRate.ToString("N2")%</span></td>
+                                    <td>@(item.LastPublishedDateUtc?.ToString("MMM d, yyyy") ?? "—")</td>
+                                    <td><div class="mlp-row-acts"><button type="button" class="um-btn um-btn-primary um-btn-xs" @onclick="() => ConfigurePublish(item)" @onclick:stopPropagation="true" title="Publish" disabled="@(item.Status == "Published")"><i class="bi bi-globe2"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(item)" @onclick:stopPropagation="true" title="Edit"><i class="bi bi-pencil"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfigureDuplicate(item)" @onclick:stopPropagation="true" title="Duplicate"><i class="bi bi-copy"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => SelectPage(item)" @onclick:stopPropagation="true" title="Preview"><i class="bi bi-eye"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfigureArchive(item)" @onclick:stopPropagation="true" title="Archive"><i class="bi bi-archive"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="mlp-pager"><span>Page @_page of @TotalPages · @_filtered.Count records</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left"></i> Previous</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right"></i></button></div></div>
+            }
+        </div>
+        <aside class="mlp-detail-panel">
+            @if (_selected is null)
+            {
+                <div class="mlp-detail-empty"><i class="bi bi-layout-sidebar-inset"></i><strong>Select a landing page</strong><span>Click any row to inspect page settings, traffic, conversions, and workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="mlp-detail-head"><div><span class="mlp-detail-eyebrow"><i class="bi bi-window-sidebar"></i> Page detail</span><h2>@_selected.Name</h2><div class="mlp-detail-meta"><span>@_selected.Status</span><span>@_selected.TemplateName</span><span>/@_selected.Slug</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearSelection"><i class="bi bi-x-lg"></i></button></div>
+                <div class="mlp-detail-body"><div class="mlp-detail-summary"><div class="mlp-meta-row"><span class="mlp-meta-lbl">Views</span><span class="mlp-meta-val">@_selected.ViewCount.ToString("N0")</span></div><div class="mlp-meta-row"><span class="mlp-meta-lbl">Conversions</span><span class="mlp-meta-val">@_selected.ConversionCount.ToString("N0")</span></div><div class="mlp-meta-row"><span class="mlp-meta-lbl">Rate</span><span class="mlp-meta-val">@_selected.ConversionRate.ToString("N2")%</span></div><div class="mlp-meta-row"><span class="mlp-meta-lbl">Published</span><span class="mlp-meta-val">@(_selected.LastPublishedDateUtc?.ToString("MMM d, yyyy") ?? "Not published")</span></div></div><div class="mlp-contact-card"><strong>Destination and CTA</strong><span><i class="bi bi-link-45deg"></i>@(string.IsNullOrWhiteSpace(_selected.PublishedUrl) ? "No published URL" : _selected.PublishedUrl)</span><span><i class="bi bi-cursor"></i>@DisplayCta(_selected)</span><span><i class="bi bi-megaphone"></i>@(string.IsNullOrWhiteSpace(_selected.CampaignName) ? "No linked campaign" : _selected.CampaignName)</span></div><div class="mlp-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="() => ConfigurePublish(_selected)" disabled="@(_selected.Status == "Published")"><i class="bi bi-globe2"></i> Publish</button>@if (_selected.Status == "Published") { <button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureUnpublish(_selected)"><i class="bi bi-cloud-slash"></i> Unpublish</button> }<button type="button" class="um-btn um-btn-ghost" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil"></i> Edit</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureDuplicate(_selected)"><i class="bi bi-copy"></i> Duplicate</button><button type="button" class="um-btn um-btn-ghost" @onclick="PreviewSelected"><i class="bi bi-eye"></i> Preview</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureArchive(_selected)"><i class="bi bi-archive"></i> Archive</button></div></div>
+            }
+        </aside>
+    </section>
 </div>
 
-<style>@@keyframes um-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }</style>
-
 @code {
+    private const int PageSize = 10;
     Guid TenantId { get; set; }
     Guid TenantAdminUserId { get; set; }
     Guid DevTenantId { get; set; }
     Guid DevUserId { get; set; }
     private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private SfToast? _toast;
-    private bool _loading;
-    private string? _loadError;
     private string _search = string.Empty;
     private string _statusFilter = string.Empty;
-    private string? _activeFilter;
+    private string _templateFilter = string.Empty;
+    private string _performanceFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _loadError;
+    private string? _toastMessage;
+    private string _toastKind = "success";
+    private bool _toastVisible;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showConfirm;
+    private bool _saveAttempted;
+    private int _page = 1;
+    private Guid _editingId = Guid.Empty;
+    private ConfirmAction _confirmAction;
+    private MarketingLandingPageDto? _selected;
+    private MarketingLandingPageDto? _confirmTarget;
+    private LandingPageForm _form = new();
+    private ActionConfiguration _actionConfig = new();
     private List<MarketingLandingPageDto> _items = [];
     private List<MarketingLandingPageDto> _filtered = [];
+    private List<MarketingLandingPageDto> _paged = [];
+    private readonly string[] _statuses = ["Draft", "Published", "Archived"];
 
-    protected override async Task OnInitializedAsync()
-    {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Marketing", "/marketing/campaigns"), new("Landing Pages", null));
-        await LoadAsync();
-    }
+    private string SearchFilter { get => _search; set { _search = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
+    private string TemplateFilter { get => _templateFilter; set { _templateFilter = value; ApplyFilters(resetPage: true); } }
+    private string PerformanceFilter { get => _performanceFilter; set { _performanceFilter = value; ApplyFilters(resetPage: true); } }
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private IEnumerable<string> TemplateOptions => _items.Select(i => i.TemplateName).Where(t => !string.IsNullOrWhiteSpace(t)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(t => t);
+    private string ActiveFilterText => _filtered.Count == _items.Count ? "All synchronized landing pages" : $"Filtered to {_filtered.Count:N0} of {_items.Count:N0} landing pages";
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ConfirmTitle => _confirmAction switch { ConfirmAction.Publish => "Configure Publish", ConfirmAction.Unpublish => "Configure Unpublish", ConfirmAction.Archive => "Configure Archive", ConfirmAction.Duplicate => "Configure Duplicate", ConfirmAction.Sync => "Configure Seed Sync", ConfirmAction.Export => "Configure Export", _ => "Confirm Action" };
+    private string ConfirmBody => _confirmAction switch { ConfirmAction.Publish when _confirmTarget is not null => $"Review publication settings for <strong>{_confirmTarget.Name}</strong> before execution.", ConfirmAction.Unpublish when _confirmTarget is not null => $"Configure unpublish settings for <strong>{_confirmTarget.Name}</strong>.", ConfirmAction.Archive when _confirmTarget is not null => $"Configure archive settings for <strong>{_confirmTarget.Name}</strong>. It will be removed from active landing page views.", ConfirmAction.Duplicate when _confirmTarget is not null => $"Configure copy settings for <strong>{_confirmTarget.Name}</strong>.", ConfirmAction.Sync => "Configure seed synchronization before repairing schema or adding missing records.", ConfirmAction.Export => $"Configure export settings for {_filtered.Count:N0} current landing page matches.", _ => string.Empty };
+    private string ConfirmButtonText => _confirmAction switch { ConfirmAction.Publish => "Execute Publish", ConfirmAction.Unpublish => "Execute Unpublish", ConfirmAction.Archive => "Execute Archive", ConfirmAction.Duplicate => "Create Copy", ConfirmAction.Sync => "Run Sync", ConfirmAction.Export => "Export File", _ => "Execute" };
+    private string ConfirmButtonClass => _confirmAction == ConfirmAction.Archive ? "um-btn-danger" : "um-btn-primary";
+    private string ConfirmIcon => _confirmAction switch { ConfirmAction.Publish => "bi-globe2", ConfirmAction.Unpublish => "bi-cloud-slash", ConfirmAction.Archive => "bi-archive-fill", ConfirmAction.Duplicate => "bi-copy", ConfirmAction.Sync => "bi-cloud-arrow-down-fill", ConfirmAction.Export => "bi-download", _ => "bi-question-circle-fill" };
+    private string ConfirmIconTone => _confirmAction == ConfirmAction.Archive ? "um-confirm-icon--danger" : string.Empty;
+    private IEnumerable<KpiModel> Kpis => [new("all", "Total", _items.Count.ToString("N0"), "All active pages", "bi-layout-text-window", "mlp-ki-blue"), new("published", "Published", CountStatus("Published").ToString("N0"), "Live destinations", "bi-globe2", "mlp-ki-green"), new("draft", "Drafts", CountStatus("Draft").ToString("N0"), "Needs review", "bi-file-earmark", "mlp-ki-purple"), new("views", "Views", _items.Sum(x => x.ViewCount).ToString("N0"), "Total traffic", "bi-eye", "mlp-ki-cyan"), new("conversions", "Conversions", _items.Sum(x => x.ConversionCount).ToString("N0"), "Total outcomes", "bi-bullseye", "mlp-ki-amber"), new("rate", "Conv. Rate", $"{PortfolioConversionRate:N2}%", "Portfolio average", "bi-graph-up", "mlp-ki-red")];
+    private decimal PortfolioConversionRate => _items.Sum(x => x.ViewCount) <= 0 ? 0 : Math.Round(_items.Sum(x => x.ConversionCount) * 100m / _items.Sum(x => x.ViewCount), 2);
 
-    private async Task LoadAsync()
-    {
-        _loading = true; _loadError = null;
-        try
-        {
-            var result = await Api.SearchMarketingLandingPagesAsync(_tenantId, _search);
-            _items = result?.Items.ToList() ?? [];
-            ApplyFilter();
-        }
-        catch (Exception ex) { _loadError = $"Failed to load landing pages: {ex.Message}"; _items = []; _filtered = []; }
-        finally { _loading = false; }
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Marketing", "/marketing/campaigns"), new("Landing Pages", null)); await LoadAsync(); }
+    private async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchMarketingLandingPagesAsync(_tenantId, _search); _items = result?.Items.ToList() ?? []; ApplyFilters(); EnsureSelectedStillVisible(); } catch (Exception ex) { _loadError = $"Failed to load landing pages: {ex.Message}"; _items = []; _filtered = []; _paged = []; } finally { _loading = false; } }
+    private void ApplyFilters(bool resetPage = false) { var query = _items.AsEnumerable(); if (!string.IsNullOrWhiteSpace(_search)) query = query.Where(x => x.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Slug.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.TemplateName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.PrimaryCta.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.PublishedUrl.Contains(_search, StringComparison.OrdinalIgnoreCase)); if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.Status == _statusFilter); if (!string.IsNullOrWhiteSpace(_templateFilter)) query = query.Where(x => x.TemplateName.Equals(_templateFilter, StringComparison.OrdinalIgnoreCase)); query = _performanceFilter switch { "converting" => query.Where(x => x.ConversionCount > 0), "high" => query.Where(x => x.ViewCount >= 3000), "low" => query.Where(x => x.ViewCount > 0 && x.ConversionRate < 3), _ => query }; query = _kpiFilter switch { "published" => query.Where(x => x.Status == "Published"), "draft" => query.Where(x => x.Status == "Draft"), "views" => query.Where(x => x.ViewCount >= 3000), "conversions" => query.Where(x => x.ConversionCount > 0), "rate" => query.Where(x => x.ConversionRate >= 7), _ => query }; _filtered = query.OrderByDescending(x => x.LastPublishedDateUtc ?? x.CreatedDateUtc).ToList(); if (resetPage) _page = 1; if (_page > TotalPages) _page = TotalPages; _paged = _filtered.Skip((_page - 1) * PageSize).Take(PageSize).ToList(); }
+    private void SetKpiFilter(string filter) { _kpiFilter = _kpiFilter == filter ? "all" : filter; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _search = string.Empty; _statusFilter = string.Empty; _templateFilter = string.Empty; _performanceFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); }
+    private void PreviousPage() { if (_page <= 1) return; _page--; ApplyFilters(); }
+    private void NextPage() { if (_page >= TotalPages) return; _page++; ApplyFilters(); }
+    private void SelectPage(MarketingLandingPageDto item) => _selected = item;
+    private void ClearSelection() => _selected = null;
+    private bool IsSelected(MarketingLandingPageDto item) => _selected?.LandingPageId == item.LandingPageId;
+    private void OpenCreate() { _editingId = Guid.Empty; _saveAttempted = false; _form = new LandingPageForm { Status = "Draft", TemplateName = "Modern Promo", PrimaryCta = "Get Started" }; _showForm = true; }
+    private void OpenEdit(MarketingLandingPageDto item) { _editingId = item.LandingPageId; _saveAttempted = false; _form = new() { Name = item.Name, Slug = item.Slug, TemplateName = item.TemplateName, Status = item.Status, PublishedUrl = item.PublishedUrl, PrimaryCta = item.PrimaryCta, ViewCount = item.ViewCount, ConversionCount = item.ConversionCount, LastPublishedDateUtc = item.LastPublishedDateUtc }; _showForm = true; }
+    private void CloseForm() { if (_busy) return; _showForm = false; _editingId = Guid.Empty; _saveAttempted = false; }
+    private async Task SaveAsync() { _saveAttempted = true; _busy = true; try { var request = ToDto(); if (_editingId == Guid.Empty) { await Api.CreateMarketingLandingPageAsync(request); ShowToast("Landing page created.", "success"); } else { await Api.UpdateMarketingLandingPageAsync(_editingId, request); ShowToast("Landing page saved.", "success"); } _showForm = false; _editingId = Guid.Empty; await LoadAsync(); } catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", "danger"); } finally { _busy = false; }
     }
+    private Task NotifyValidationAsync(EditContext _) { _saveAttempted = true; ShowToast("Please correct the validation errors before saving.", "warning"); return Task.CompletedTask; }
+    private MarketingLandingPageDto ToDto() => new() { LandingPageId = _editingId, TenantId = _tenantId, Name = _form.Name.Trim(), Slug = NormalizeSlug(_form.Slug), TemplateName = _form.TemplateName.Trim(), Status = _form.Status, PublishedUrl = _form.PublishedUrl.Trim(), PrimaryCta = _form.PrimaryCta.Trim(), ViewCount = _form.ViewCount, ConversionCount = _form.ConversionCount, ConversionRate = _form.ViewCount <= 0 ? 0 : Math.Round(_form.ConversionCount * 100m / _form.ViewCount, 2), LastPublishedDateUtc = _form.Status == "Published" ? _form.LastPublishedDateUtc ?? DateTime.UtcNow : _form.LastPublishedDateUtc };
+    private void ConfigurePublish(MarketingLandingPageDto item) => ShowConfirm(item, ConfirmAction.Publish);
+    private void ConfigureUnpublish(MarketingLandingPageDto item) => ShowConfirm(item, ConfirmAction.Unpublish);
+    private void ConfigureArchive(MarketingLandingPageDto item) => ShowConfirm(item, ConfirmAction.Archive);
+    private void ConfigureDuplicate(MarketingLandingPageDto item) => ShowConfirm(item, ConfirmAction.Duplicate);
+    private void ConfigureSync() => ShowConfirm(null, ConfirmAction.Sync);
+    private void ConfigureExport() { if (!_filtered.Any()) { ShowToast("No landing pages are available to export.", "warning"); return; } ShowConfirm(null, ConfirmAction.Export); }
+    private void ShowConfirm(MarketingLandingPageDto? item, ConfirmAction action) { _confirmTarget = item; _confirmAction = action; _actionConfig = CreateDefaultConfiguration(item, action); _showConfirm = true; }
+    private void CancelConfirm() { if (_busy) return; _showConfirm = false; _confirmTarget = null; }
+    private async Task ExecuteConfirmAsync() { if (_confirmTarget is null && _confirmAction is not (ConfirmAction.Sync or ConfirmAction.Export)) return; _busy = true; try { if (_confirmAction == ConfirmAction.Publish) { await Api.PublishMarketingLandingPageAsync(_confirmTarget!.LandingPageId); ShowToast($"Published {_confirmTarget.Name}.", "success"); } else if (_confirmAction == ConfirmAction.Unpublish) { await Api.UnpublishMarketingLandingPageAsync(_confirmTarget!.LandingPageId); ShowToast($"Unpublished {_confirmTarget.Name}.", "success"); } else if (_confirmAction == ConfirmAction.Archive) { if (_actionConfig.ExportBeforeAction) await ExportCoreAsync([_confirmTarget!]); await Api.ArchiveMarketingLandingPageAsync(_confirmTarget!.LandingPageId); ShowToast($"Archived {_confirmTarget.Name}.", "success"); } else if (_confirmAction == ConfirmAction.Duplicate) { await Api.DuplicateMarketingLandingPageAsync(_confirmTarget!.LandingPageId); ShowToast($"Duplicated {_confirmTarget.Name}.", "success"); } else if (_confirmAction == ConfirmAction.Sync) { await Api.EnsureMarketingLandingPageSeedAsync(_tenantId); ShowToast("Landing page seed data synchronized.", "success"); } else if (_confirmAction == ConfirmAction.Export) { var exportItems = _actionConfig.ExecutionMode == "All" ? _items : _filtered; await ExportCoreAsync(exportItems); ShowToast($"Exported {exportItems.Count:N0} landing pages.", "success"); } _showConfirm = false; _confirmTarget = null; if (_confirmAction != ConfirmAction.Export && _actionConfig.RefreshAfterAction) await LoadAsync(); } catch (Exception ex) { ShowToast($"Action failed: {ex.Message}", "danger"); } finally { _busy = false; } }
+    private async Task ExportCoreAsync(IReadOnlyCollection<MarketingLandingPageDto> items) { if (!items.Any()) return; var csv = new StringBuilder(); csv.AppendLine(_actionConfig.IncludeMetrics ? "Name,Slug,Template,Status,PublishedUrl,PrimaryCta,Views,Conversions,ConversionRate,LastPublished" : "Name,Slug,Template,Status,PublishedUrl,PrimaryCta,LastPublished"); foreach (var item in items) { if (_actionConfig.IncludeMetrics) csv.AppendLine(string.Join(',', Csv(item.Name), Csv(item.Slug), Csv(item.TemplateName), Csv(item.Status), Csv(item.PublishedUrl), Csv(item.PrimaryCta), item.ViewCount, item.ConversionCount, item.ConversionRate.ToString("0.00"), Csv(item.LastPublishedDateUtc?.ToString("yyyy-MM-dd") ?? string.Empty))); else csv.AppendLine(string.Join(',', Csv(item.Name), Csv(item.Slug), Csv(item.TemplateName), Csv(item.Status), Csv(item.PublishedUrl), Csv(item.PrimaryCta), Csv(item.LastPublishedDateUtc?.ToString("yyyy-MM-dd") ?? string.Empty))); } var bytes = Encoding.UTF8.GetBytes(csv.ToString()); await Js.InvokeVoidAsync("amsShell.downloadBase64", $"marketing-landing-pages-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes)); }
+    private void PreviewSelected() { if (_selected is null) return; ShowToast(string.IsNullOrWhiteSpace(_selected.PublishedUrl) ? "No published URL configured for preview." : $"Preview URL: {_selected.PublishedUrl}", "info"); }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() { if (_selected is null) return; _selected = _items.FirstOrDefault(x => x.LandingPageId == _selected.LandingPageId); }
+    private int CountStatus(string status) => _items.Count(x => x.Status == status);
+    private static string DisplayCta(MarketingLandingPageDto item) => string.IsNullOrWhiteSpace(item.PrimaryCta) ? "No CTA" : item.PrimaryCta;
+    private static string StatusCss(string status) => $"mlp-st-{status.ToLowerInvariant()}";
+    private static string StatusIconClass(string status) => status switch { "Published" => "mlp-di-green", "Archived" => "mlp-di-red", _ => "mlp-di-blue" };
+    private static string NormalizeSlug(string value) => value.Trim().Trim('/').ToLowerInvariant().Replace(' ', '-');
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private static ActionConfiguration CreateDefaultConfiguration(MarketingLandingPageDto? item, ConfirmAction action) => action switch { ConfirmAction.Publish => new() { ExecutionMode = "Immediate", UrlOverride = item?.PublishedUrl ?? string.Empty, RequireQA = true, NotifyStakeholders = true, RefreshAfterAction = true }, ConfirmAction.Unpublish => new() { Reason = "Campaign destination update", NotifyStakeholders = true, RefreshAfterAction = true }, ConfirmAction.Archive => new() { Reason = "Page lifecycle complete", NotifyStakeholders = true, RefreshAfterAction = true }, ConfirmAction.Duplicate => new() { ExecutionMode = "Draft", NewName = item is null ? string.Empty : $"{item.Name} Copy", RefreshAfterAction = true }, ConfirmAction.Sync => new() { ExecutionMode = "MissingOnly", RefreshAfterAction = true }, ConfirmAction.Export => new() { ExecutionMode = "Filtered", IncludeMetrics = true, RefreshAfterAction = false }, _ => new() };
+    async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); TenantId = context.TenantId; TenantAdminUserId = context.UserId; _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; DevTenantId = context.TenantId; DevUserId = context.UserId; }
 
-    private void SetKpiFilter(string? filter) { _activeFilter = _activeFilter == filter ? null : filter; ApplyFilter(); }
-    private void ApplyFilter()
-    {
-        var q = _items.AsEnumerable();
-        if (!string.IsNullOrWhiteSpace(_search)) q = q.Where(x => x.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Slug.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.TemplateName.Contains(_search, StringComparison.OrdinalIgnoreCase));
-        if (!string.IsNullOrWhiteSpace(_statusFilter)) q = q.Where(x => x.Status == _statusFilter);
-        q = _activeFilter switch { "Converting" => q.Where(x => x.ConversionCount > 0), "HighTraffic" => q.Where(x => x.ViewCount >= 3000), null => q, _ => q.Where(x => x.Status == _activeFilter) };
-        _filtered = q.ToList();
-    }
-    private void ResetFilters() { _search = string.Empty; _statusFilter = string.Empty; _activeFilter = null; ApplyFilter(); }
-    private void OnRowSelected(RowSelectEventArgs<MarketingLandingPageDto> args) => Preview(args.Data);
-    private async Task PublishAsync(MarketingLandingPageDto p) { try { await Api.PublishMarketingLandingPageAsync(p.LandingPageId); await LoadAsync(); if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Published {p.Name}.", CssClass = "e-toast-success" }); } catch (Exception ex) { if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Publish failed: {ex.Message}", CssClass = "e-toast-danger" }); } }
-    private async Task ArchiveAsync(MarketingLandingPageDto p) { try { await Api.ArchiveMarketingLandingPageAsync(p.LandingPageId); await LoadAsync(); if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Archived {p.Name}.", CssClass = "e-toast-success" }); } catch (Exception ex) { if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Archive failed: {ex.Message}", CssClass = "e-toast-danger" }); } }
-    private async void Preview(MarketingLandingPageDto p) { if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Preview: {p.PublishedUrl}", CssClass = "e-toast-info" }); }
-    private static string StatusBadge(string s) => s switch { "Published" => "mkc-status mkc-st--completed", "Archived" => "mkc-status mkc-st--paused", _ => "mkc-status mkc-st--draft" };
-    private RenderFragment Kpi(string? filter, string icon, string label, string value, string color) => @<button type="button" class="mkc-kpi-card @(_activeFilter == filter ? "pc-kpi-card--active" : "")" @onclick="() => SetKpiFilter(filter)"><i class="bi @icon mkc-ki @color"></i><div><div class="mkc-kv">@value</div><div class="mkc-kl">@label</div></div></button>;
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
-    }
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter by {Label}"; }
+    private enum ConfirmAction { Publish, Unpublish, Archive, Duplicate, Sync, Export }
+    private sealed class ActionConfiguration { public string ExecutionMode { get; set; } = string.Empty; public string Reason { get; set; } = string.Empty; public string NewName { get; set; } = string.Empty; public string UrlOverride { get; set; } = string.Empty; public bool RequireQA { get; set; } public bool NotifyStakeholders { get; set; } public bool ExportBeforeAction { get; set; } public bool CopyMetrics { get; set; } public bool IncludeMetrics { get; set; } = true; public bool RefreshAfterAction { get; set; } = true; }
+    private sealed class LandingPageForm { [Required, StringLength(200)] public string Name { get; set; } = string.Empty; [Required, StringLength(200)] public string Slug { get; set; } = string.Empty; [Required, StringLength(150)] public string TemplateName { get; set; } = string.Empty; [Required, StringLength(50)] public string Status { get; set; } = "Draft"; [StringLength(500)] public string PublishedUrl { get; set; } = string.Empty; [StringLength(150)] public string PrimaryCta { get; set; } = string.Empty; public DateTime? LastPublishedDateUtc { get; set; } [Range(0, int.MaxValue)] public int ViewCount { get; set; } [Range(0, int.MaxValue)] public int ConversionCount { get; set; } }
 }

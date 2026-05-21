@@ -336,6 +336,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICommissionCalculationResultRepository, CommissionCalculationResultRepository>();
         services.AddScoped<ICommissionClawbackRepository, CommissionClawbackRepository>();
         services.AddScoped<ICommissionPayoutBatchRepository, CommissionPayoutBatchRepository>();
+        services.AddScoped<ICommissionExceptionRepository, CommissionExceptionRepository>();
+        services.AddScoped<ICommissionForecastRepository, CommissionForecastRepository>();
+        services.AddScoped<ICommissionPlannerScenarioRepository, CommissionPlannerScenarioRepository>();
         services.AddScoped<ICommissionDisputeRepository, CommissionDisputeRepository>();
         services.AddScoped<ICommissionPayoutStatementRepository, CommissionPayoutStatementRepository>();
         services.AddScoped<ICommissionAccrualEntryRepository, CommissionAccrualEntryRepository>();
@@ -345,6 +348,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICommissionCalculationResultService, CommissionCalculationResultService>();
         services.AddScoped<ICommissionClawbackService, CommissionClawbackService>();
         services.AddScoped<ICommissionPayoutBatchService, CommissionPayoutBatchService>();
+        services.AddScoped<ICommissionExceptionService, CommissionExceptionService>();
+        services.AddScoped<ICommissionForecastService, CommissionForecastService>();
+        services.AddScoped<ICommissionPlannerScenarioService, CommissionPlannerScenarioService>();
         services.AddScoped<ICommissionDisputeService, CommissionDisputeService>();
         services.AddScoped<ICommissionPayoutStatementService, CommissionPayoutStatementService>();
         services.AddScoped<ICommissionAccrualEntryService, CommissionAccrualEntryService>();

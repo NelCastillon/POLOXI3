@@ -1,197 +1,416 @@
 @page "/marketing/referrals"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Referral Pipeline — AMS</PageTitle>
+<PageTitle>Referral Pipeline — AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="Referral Pipeline"
-               Subtitle="Track and grow referrals from clients, partners, and producers across all lines of business"
-               Icon="bi-person-plus-fill">
-    <Actions>
-        <button class="um-btn um-btn-primary" @onclick="OpenAdd">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> Log Referral
-        </button>
-    </Actions>
-</AppPageHeader>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    <div class="mkr-toast mkr-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="mkr-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
 }
 
-<!-- KPI -->
-<div class="mkr-kpi-strip">
-    <div class="mkr-kpi-card"><i class="bi bi-person-plus mkr-ki mkr-ki-blue"></i><div><div class="mkr-kv">@_referrals.Count</div><div class="mkr-kl">Total Referrals</div></div></div>
-    <div class="mkr-kpi-card"><i class="bi bi-hourglass mkr-ki mkr-ki-amber"></i><div><div class="mkr-kv">@_referrals.Count(r => r.Status == "Pending")</div><div class="mkr-kl">Pending</div></div></div>
-    <div class="mkr-kpi-card"><i class="bi bi-check-circle mkr-ki mkr-ki-green"></i><div><div class="mkr-kv">@_referrals.Count(r => r.Status == "Converted")</div><div class="mkr-kl">Converted</div></div></div>
-    <div class="mkr-kpi-card"><i class="bi bi-percent mkr-ki mkr-ki-green"></i><div><div class="mkr-kv">@(_referrals.Any() ? (_referrals.Count(r => r.Status == "Converted") * 100m / _referrals.Count).ToString("N1") : "0")%</div><div class="mkr-kl">Conversion Rate</div></div></div>
-    <div class="mkr-kpi-card"><i class="bi bi-cash-coin mkr-ki mkr-ki-green"></i><div><div class="mkr-kv">@_referrals.Where(r => r.Status == "Converted").Sum(r => r.EstimatedPremium).ToString("C0")</div><div class="mkr-kl">Premium Won</div></div></div>
-</div>
-
-<!-- Referral grid -->
-<div class="mkr-grid-card app-datagrid">
-    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading referrals…</span></div> }
-    <SfGrid CssClass="marketing-grid" TValue="ReferralRow" DataSource="_referrals" AllowPaging="true" AllowSorting="true" AllowFiltering="true"
-            AllowTextWrap="true" EnableHover="true" RowHeight="64">
-        <GridTextWrapSettings WrapMode="WrapMode.Content" />
-        <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
-        <GridPageSettings PageSize="20" />
-        <GridColumns>
-            <GridColumn HeaderText="Prospect" MinWidth="320" Field="@nameof(ReferralRow.ProspectName)">
-                <Template>
-                    @{ var r = (ReferralRow)context; }
-                    <div class="mkr-name-cell">
-                        <div class="mkr-av">@(r.ProspectName.Length > 0 ? r.ProspectName[0] : '?')</div>
-                        <div>
-                            <div class="mkr-item-name">@r.ProspectName</div>
-                            <div class="mkr-item-sub">@r.PolicyInterest</div>
-                        </div>
-                    </div>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(ReferralRow.ReferredBy)" HeaderText="Referred By" Width="200" />
-            <GridColumn Field="@nameof(ReferralRow.ReferralType)" HeaderText="Source" Width="120">
-                <Template>@{ var r = (ReferralRow)context; }<span class="mkr-src-badge @SrcCss(r.ReferralType)">@r.ReferralType</span></Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(ReferralRow.ReceivedDate)" HeaderText="Received" Width="120" Type="ColumnType.Date" Format="MMM d, yyyy" />
-            <GridColumn Field="@nameof(ReferralRow.Status)" HeaderText="Status" Width="120">
-                <Template>@{ var r = (ReferralRow)context; }<span class="@RefStatusBadge(r.Status)">@r.Status</span></Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(ReferralRow.EstimatedPremium)" HeaderText="Est. Premium" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                <Template>@{ var r = (ReferralRow)context; }<span class="mkr-mono">@r.EstimatedPremium.ToString("C0")</span></Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(ReferralRow.Producer)" HeaderText="Producer" Width="170" />
-            <GridColumn HeaderText="" Width="70" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                <Template>
-                    @{ var r = (ReferralRow)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => AdvanceAsync(r)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
-
-<!-- Log referral dialog -->
-<SfDialog @bind-Visible="_showAdd" Width="580px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-person-plus" aria-hidden="true"></i><span>Log Referral</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseAdd"><i class="bi bi-x-lg"></i></button></div>
-            <EditForm EditContext="_addEditContext">
+@if (_showForm)
+{
+    <div class="mkr-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="mkr-modal mkr-action-modal" role="dialog" aria-modal="true" aria-labelledby="mkr-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-person-plus" aria-hidden="true"></i>
+                <span id="mkr-form-title">@(_editingId == Guid.Empty ? "Log Referral" : "Edit Referral")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
                 <DataAnnotationsValidator />
-                <div class="um-modal-body"><div class="um-form-grid">
-                    <div class="um-field"><label>Prospect Name <span class="text-danger">*</span></label><InputText @bind-Value="_addForm.ProspectName" class="um-input" placeholder="Full name or business name" /><ValidationMessage For="() => _addForm.ProspectName" class="validation-message text-danger" /></div>
-                    <div class="um-field"><label>Referred By <span class="text-danger">*</span></label><InputText @bind-Value="_addForm.ReferredBy" class="um-input" placeholder="Client or partner name" /><ValidationMessage For="() => _addForm.ReferredBy" class="validation-message text-danger" /></div>
-                    <div class="um-field"><label>Referral Source</label><InputSelect @bind-Value="_addForm.ReferralType" class="um-input"><option>Client</option><option>Partner</option><option>Producer</option><option>Online</option><option>Other</option></InputSelect><ValidationMessage For="() => _addForm.ReferralType" class="validation-message text-danger" /></div>
-                    <div class="um-field"><label>Policy Interest</label><InputText @bind-Value="_addForm.PolicyInterest" class="um-input" placeholder="e.g. Home + Auto, BOP" /><ValidationMessage For="() => _addForm.PolicyInterest" class="validation-message text-danger" /></div>
-                    <div class="um-field"><label>Est. Premium</label><InputNumber @bind-Value="_addForm.EstimatedPremium" class="um-input" /><ValidationMessage For="() => _addForm.EstimatedPremium" class="validation-message text-danger" /></div>
-                    @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
-                </div></div>
+                <div class="um-modal-body">
+                    <div class="mkr-modal-intro"><span><i class="bi bi-diagram-3" aria-hidden="true"></i> Referral intake workflow</span><p>Capture prospect, source, producer, policy interest, premium potential, status, and received date for DB-backed referral tracking.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Prospect name <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.ProspectName" /><ValidationMessage For="() => _form.ProspectName" class="text-danger" /></div>
+                        <div class="um-field"><label>Referred by <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.ReferredBy" /><ValidationMessage For="() => _form.ReferredBy" class="text-danger" /></div>
+                        <div class="um-field"><label>Referral source <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.ReferralType">@foreach (var source in _sources) { <option value="@source">@source</option> }</InputSelect><ValidationMessage For="() => _form.ReferralType" class="text-danger" /></div>
+                        <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.StatusCode">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Received date</label><InputDate class="form-control" @bind-Value="_form.ReceivedDate" /></div>
+                        <div class="um-field"><label>Estimated premium</label><InputNumber class="form-control" @bind-Value="_form.EstimatedPremium" /><ValidationMessage For="() => _form.EstimatedPremium" class="text-danger" /></div>
+                        <div class="um-field"><label>Producer</label><InputText class="form-control" @bind-Value="_form.Producer" /><ValidationMessage For="() => _form.Producer" class="text-danger" /></div>
+                        <div class="um-field"><label>Policy interest</label><InputText class="form-control" @bind-Value="_form.PolicyInterest" /><ValidationMessage For="() => _form.PolicyInterest" class="text-danger" /></div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@(_editingId == Guid.Empty ? "Log Referral" : "Save Changes")</button>
+                </div>
             </EditForm>
-            <div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="CloseAdd">Cancel</button><button class="um-btn um-btn-primary" @onclick="CommitAddAsync" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Save</button></div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+    </div>
+}
+
+@if (_showConfirm)
+{
+    <div class="mkr-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="mkr-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="mkr-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @ConfirmIconTone"><i class="bi @ConfirmIcon"></i></div>
+                <div class="um-confirm-title" id="mkr-confirm-title">@ConfirmTitle</div>
+                <div class="um-confirm-body">@ConfirmBody</div>
+                <div class="mkr-config-panel">
+                    <span class="mkr-config-eyebrow"><i class="bi bi-sliders" aria-hidden="true"></i> Configuration required</span>
+                    <div class="mkr-config-grid">
+                        @if (_confirmAction == ConfirmAction.Advance || _confirmAction == ConfirmAction.Contact || _confirmAction == ConfirmAction.Convert || _confirmAction == ConfirmAction.Lost)
+                        {
+                            <label><span>Next status</span><select class="form-select" @bind="_actionConfig.NextStatus"><option value="Pending">Pending</option><option value="Contacted">Contacted</option><option value="Quoted">Quoted</option><option value="Converted">Converted</option><option value="Lost">Lost</option></select></label>
+                            <label><span>Workflow route</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="PhoneCall">Phone call</option><option value="EmailCampaign">Email campaign</option><option value="QuoteWorkflow">Quote workflow</option><option value="CampaignBuilder">Campaign builder</option></select></label>
+                            <label class="mkr-config-check"><input type="checkbox" @bind="_actionConfig.NotifyProducer" /> Notify assigned producer</label>
+                            <label class="mkr-config-check"><input type="checkbox" @bind="_actionConfig.RefreshAfterAction" /> Refresh after update</label>
+                        }
+                        else if (_confirmAction == ConfirmAction.Duplicate)
+                        {
+                            <label class="mkr-config-full"><span>Copy label</span><input class="form-control" @bind="_actionConfig.NewName" /></label>
+                            <label><span>Starting status</span><select class="form-select" @bind="_actionConfig.NextStatus"><option value="Pending">Pending</option><option value="Contacted">Contacted review</option></select></label>
+                        }
+                        else if (_confirmAction == ConfirmAction.Archive)
+                        {
+                            <label class="mkr-config-full"><span>Reason</span><input class="form-control" @bind="_actionConfig.Reason" placeholder="Document why this referral is being archived" /></label>
+                            <label class="mkr-config-check"><input type="checkbox" @bind="_actionConfig.ExportBeforeAction" /> Export referral snapshot before archiving</label>
+                        }
+                        else if (_confirmAction == ConfirmAction.Sync)
+                        {
+                            <label><span>Seed mode</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="MissingOnly">Add missing seed data only</option><option value="RepairSchema">Repair schema and seed data</option></select></label>
+                            <label class="mkr-config-check"><input type="checkbox" @bind="_actionConfig.RefreshAfterAction" /> Refresh after sync</label>
+                        }
+                        else if (_confirmAction == ConfirmAction.Export)
+                        {
+                            <label><span>Export scope</span><select class="form-select" @bind="_actionConfig.ExecutionMode"><option value="Filtered">Current filtered results</option><option value="All">All active referrals</option></select></label>
+                            <label class="mkr-config-check"><input type="checkbox" @bind="_actionConfig.IncludeProducer" /> Include producer column</label>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_busy">Cancel</button><button type="button" class="um-btn @ConfirmButtonClass" @onclick="ExecuteConfirmAsync" disabled="@_busy">@ConfirmButtonText</button></div>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="mkr-enterprise-page">
+    <section class="mkr-header">
+        <div class="mkr-header-left"><div class="mkr-lob-icon"><i class="bi bi-person-plus-fill" aria-hidden="true"></i></div><div class="mkr-header-info"><div class="mkr-title-row"><h1 class="mkr-page-title">Referral Pipeline</h1><span class="mkr-status-pill"><i class="bi bi-database-check"></i> Live referral data</span><span class="mkr-status-pill"><i class="bi bi-shield-lock"></i> Tenant scoped</span></div><div class="mkr-sub-row"><span>Track client, partner, producer, and online referrals from intake through conversion.</span><span class="mkr-sub-chip"><i class="bi bi-diagram-3"></i> Workflow enabled</span><span class="mkr-sub-chip"><i class="bi bi-check2-circle"></i> @_filtered.Count active matches</span></div></div></div>
+        <div class="mkr-header-actions"><button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat mkr-spin" : "bi-arrow-clockwise")"></i> Refresh</button><button type="button" class="um-btn um-btn-ghost" @onclick="ConfigureSync" disabled="@_busy"><i class="bi bi-cloud-arrow-down"></i> Sync Seed</button><button type="button" class="um-btn um-btn-ghost" @onclick="ConfigureExport" disabled="@(!_filtered.Any())"><i class="bi bi-download"></i> Export</button><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle"></i> Log Referral</button></div>
+    </section>
+
+    <section class="mkr-kpi-strip" aria-label="Referral metrics">@foreach (var kpi in Kpis) { <button type="button" class="mkr-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "mkr-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)"><span class="mkr-kpi-icon"><i class="bi @kpi.Icon"></i></span><span class="mkr-kpi-copy"><span class="mkr-kpi-label">@kpi.Label</span><span class="mkr-kpi-value">@kpi.Value</span><span class="mkr-kpi-caption">@kpi.Caption</span></span></button> }</section>
+
+    <section class="mkr-workflow-strip" aria-label="Referral workflow shortcuts">
+        <button type="button" class="mkr-workflow-card mkr-wf-rules" @onclick='() => Nav.NavigateTo("/tenant/config/marketing/referral-rules")'><span class="mkr-workflow-icon"><i class="bi bi-sliders"></i></span><span class="mkr-workflow-content"><strong>1</strong><span>Rules</span><small>Referral routing.</small></span></button>
+        <button type="button" class="mkr-workflow-card mkr-wf-segments" @onclick='() => Nav.NavigateTo("/marketing/segments")'><span class="mkr-workflow-icon"><i class="bi bi-pie-chart"></i></span><span class="mkr-workflow-content"><strong>2</strong><span>Segments</span><small>Promoter groups.</small></span></button>
+        <button type="button" class="mkr-workflow-card mkr-wf-builder" @onclick='() => Nav.NavigateTo("/marketing/campaigns/new?goal=Referral")'><span class="mkr-workflow-icon"><i class="bi bi-magic"></i></span><span class="mkr-workflow-content"><strong>3</strong><span>Builder</span><small>Launch request.</small></span></button>
+        <button type="button" class="mkr-workflow-card mkr-wf-email" @onclick='() => Nav.NavigateTo("/marketing/email")'><span class="mkr-workflow-icon"><i class="bi bi-envelope-paper"></i></span><span class="mkr-workflow-content"><strong>4</strong><span>Email</span><small>Nurture leads.</small></span></button>
+        <button type="button" class="mkr-workflow-card mkr-wf-pages" @onclick='() => Nav.NavigateTo("/marketing/landing-pages")'><span class="mkr-workflow-icon"><i class="bi bi-layout-text-window"></i></span><span class="mkr-workflow-content"><strong>5</strong><span>Pages</span><small>Capture referrals.</small></span></button>
+    </section>
+
+    <section class="mkr-enterprise-search" aria-label="Referral filters">
+        <div class="mkr-search-icon"><i class="bi bi-search"></i></div>
+        <div class="mkr-search-body">
+            <label for="mkr-search">Search referrals</label>
+            <input id="mkr-search" class="mkr-search-input" type="search" placeholder="Search prospect, source, producer, policy, status..." @bind="SearchFilter" @bind:event="oninput" />
+            <span class="mkr-search-hint">Filters apply instantly across synchronized referral pipeline data.</span>
+        </div>
+        <select class="mkr-filter-select" @bind="SourceFilter"><option value="">All sources</option>@foreach (var source in _sources) { <option value="@source">@source</option> }</select>
+        <select class="mkr-filter-select" @bind="StatusFilter"><option value="">All statuses</option>@foreach (var status in _statuses) { <option value="@status">@status</option> }</select>
+        <select class="mkr-filter-select" @bind="PremiumFilter"><option value="">Premium: all</option><option value="high">High value</option><option value="medium">Mid value</option><option value="low">Low value</option></select>
+        <div class="mkr-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError)) { <div class="alert alert-danger mkr-load-error" style="border-left:4px solid #dc3545; animation:um-shake .3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div> }
+
+    <section class="mkr-content-layout">
+        <div class="mkr-grid-wrap"><div class="mkr-grid-toolbar"><div><strong>Referral command center</strong><span>@ActiveFilterText</span></div><div class="mkr-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/marketing/campaigns/new?goal=Referral")'><i class="bi bi-megaphone"></i> Campaign</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle"></i> Add</button></div></div>
+            @if (_loading) { <div class="mkr-loading"><i class="bi bi-arrow-repeat mkr-spin"></i><strong>Loading referrals...</strong><span>Syncing schema, seed data, statuses, sources, producers, and premium potential.</span></div> }
+            else if (!_filtered.Any()) { <div class="mkr-empty-state"><i class="bi bi-inbox"></i><strong>No referrals found</strong><span>Adjust filters or log a DB-backed referral.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">Log Referral</button></div> }
+            else
+            {
+                <div class="mkr-table-scroll">
+                    <table class="mkr-table">
+                        <thead><tr><th>Prospect</th><th>Source</th><th>Referred By</th><th>Received</th><th>Status</th><th class="mkr-number">Premium</th><th>Producer</th><th class="mkr-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var item in _paged)
+                            {
+                                <tr class="@RowCss(item)" @onclick="() => SelectReferral(item)">
+                                    <td><div class="mkr-account-cell"><span class="mkr-avatar">@Initials(item.ProspectName)</span><div><strong>@item.ProspectName</strong><span>@item.PolicyInterest</span></div></div></td>
+                                    <td><span class="mkr-source-chip @SourceCss(item.ReferralType)">@item.ReferralType</span></td>
+                                    <td>@item.ReferredBy</td>
+                                    <td>@item.ReceivedDate.ToString("MMM d, yyyy")</td>
+                                    <td><span class="mkr-status-chip @StatusCss(item.StatusCode)">@item.StatusCode</span></td>
+                                    <td class="mkr-number">@item.EstimatedPremium.ToString("C0")</td>
+                                    <td>@item.Producer</td>
+                                    <td><div class="mkr-row-acts"><button type="button" class="um-btn um-btn-primary um-btn-xs" @onclick="() => ConfigureAdvance(item)" @onclick:stopPropagation="true" title="Advance"><i class="bi bi-arrow-right"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(item)" @onclick:stopPropagation="true" title="Edit"><i class="bi bi-pencil"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfigureConvert(item)" @onclick:stopPropagation="true" title="Convert"><i class="bi bi-check-circle"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfigureDuplicate(item)" @onclick:stopPropagation="true" title="Duplicate"><i class="bi bi-copy"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfigureArchive(item)" @onclick:stopPropagation="true" title="Archive"><i class="bi bi-archive"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="mkr-pager"><span>Page @_page of @TotalPages · @_filtered.Count records</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left"></i> Previous</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right"></i></button></div></div>
+            }
+        </div>
+        <aside class="mkr-detail-panel">
+            @if (_selected is null)
+            {
+                <div class="mkr-detail-empty"><i class="bi bi-layout-sidebar-inset"></i><strong>Select a referral</strong><span>Click any row to inspect source, producer, premium potential, and workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="mkr-detail-head"><div><span class="mkr-detail-eyebrow"><i class="bi bi-window-sidebar"></i> Referral detail</span><h2>@_selected.ProspectName</h2><div class="mkr-detail-meta"><span>@_selected.ReferralType</span><span>@_selected.PolicyInterest</span><span>@_selected.StatusCode</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearSelection"><i class="bi bi-x-lg"></i></button></div>
+                <div class="mkr-detail-body"><div class="mkr-detail-summary"><div class="mkr-meta-row"><span class="mkr-meta-lbl">Estimated premium</span><span class="mkr-meta-val">@_selected.EstimatedPremium.ToString("C0")</span></div><div class="mkr-meta-row"><span class="mkr-meta-lbl">Received</span><span class="mkr-meta-val">@_selected.ReceivedDate.ToString("MMM d, yyyy")</span></div><div class="mkr-meta-row"><span class="mkr-meta-lbl">Referred by</span><span class="mkr-meta-val">@_selected.ReferredBy</span></div><div class="mkr-meta-row"><span class="mkr-meta-lbl">Producer</span><span class="mkr-meta-val">@_selected.Producer</span></div></div><div class="mkr-contact-card"><strong>Referral routing</strong><span><i class="bi bi-person-heart"></i>@_selected.ReferredBy</span><span><i class="bi bi-tag"></i>@_selected.ReferralType</span><span><i class="bi bi-shield-check"></i>@DisplayPolicy(_selected)</span></div><div class="mkr-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="() => ConfigureContact(_selected)"><i class="bi bi-telephone"></i> Contact</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil"></i> Edit</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureConvert(_selected)"><i class="bi bi-check-circle"></i> Convert</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureLost(_selected)"><i class="bi bi-x-circle"></i> Mark Lost</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureDuplicate(_selected)"><i class="bi bi-copy"></i> Duplicate</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfigureArchive(_selected)"><i class="bi bi-archive"></i> Archive</button></div></div>
+            }
+        </aside>
+    </section>
+</div>
 
 @code {
+    private const int PageSize = 10;
     Guid TenantId { get; set; }
     Guid TenantAdminUserId { get; set; }
     Guid DevTenantId { get; set; }
     Guid DevUserId { get; set; }
     private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private bool _showAdd, _loading, _saving;
-    private string? _loadError, _formError;
-    private ReferralForm _addForm = new();
-    private EditContext _addEditContext = default!;
-    private List<ReferralRow> _referrals = [];
+    private string _search = string.Empty;
+    private string _sourceFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _premiumFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _loadError;
+    private string? _toastMessage;
+    private string _toastKind = "success";
+    private bool _toastVisible;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showConfirm;
+    private int _page = 1;
+    private Guid _editingId = Guid.Empty;
+    private ConfirmAction _confirmAction;
+    private MarketingReferralDto? _selected;
+    private MarketingReferralDto? _confirmTarget;
+    private ReferralForm _form = new();
+    private ActionConfiguration _actionConfig = new();
+    private List<MarketingReferralDto> _items = [];
+    private List<MarketingReferralDto> _filtered = [];
+    private List<MarketingReferralDto> _paged = [];
+    private readonly string[] _statuses = ["Pending", "Contacted", "Quoted", "Converted", "Lost"];
+    private readonly string[] _sources = ["Client", "Partner", "Producer", "Online", "Other"];
 
-    protected override async Task OnInitializedAsync()
+    private string SearchFilter { get => _search; set { _search = value; ApplyFilters(resetPage: true); } }
+    private string SourceFilter { get => _sourceFilter; set { _sourceFilter = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
+    private string PremiumFilter { get => _premiumFilter; set { _premiumFilter = value; ApplyFilters(resetPage: true); } }
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private string ActiveFilterText => _filtered.Count == _items.Count ? "All synchronized referrals" : $"Filtered to {_filtered.Count:N0} of {_items.Count:N0} referrals";
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ConfirmTitle => _confirmAction switch
     {
-        await ResolveCurrentUserContextAsync();
-        _addEditContext = new(_addForm);
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Marketing","/marketing/campaigns"), new("Referrals",""));
-        await LoadAsync();
-    }
-
-    private async Task LoadAsync()
-    {
-        _loading = true; _loadError = null;
-        try
-        {
-            var result = await Api.SearchMarketingReferralsAsync(_tenantId);
-            _referrals = result?.Items.Select(x => new ReferralRow(x.ReferralId, x.ProspectName, x.ReferredBy, x.ReferralType, x.ReceivedDate, x.StatusCode, x.PolicyInterest, x.EstimatedPremium, x.Producer)).ToList() ?? [];
-        }
-        catch (Exception ex) { _loadError = $"Failed to load referrals: {ex.Message}"; _referrals = []; }
-        finally { _loading = false; }
-    }
-
-    private void OpenAdd() { _addForm = new(); _addEditContext = new(_addForm); _formError = null; _showAdd = true; }
-    private void CloseAdd() => _showAdd = false;
-
-    private async Task CommitAddAsync()
-    {
-        _formError = null;
-        if (!_addEditContext.Validate()) return;
-        _saving = true;
-        try
-        {
-            await Api.CreateMarketingReferralAsync(new MarketingReferralDto { TenantId = _tenantId, ProspectName = _addForm.ProspectName, ReferredBy = _addForm.ReferredBy, ReferralType = _addForm.ReferralType, PolicyInterest = _addForm.PolicyInterest ?? string.Empty, EstimatedPremium = _addForm.EstimatedPremium, Producer = "Unassigned" });
-            _showAdd = false;
-            await LoadAsync();
-        }
-        catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; }
-        finally { _saving = false; }
-    }
-
-    private static string SrcCss(string s) => s switch
-    {
-        "Client"  => "mkr-src mkr-src--client",
-        "Partner" => "mkr-src mkr-src--partner",
-        "Online"  => "mkr-src mkr-src--online",
-        _         => "mkr-src",
-    };
-    private static string RefStatusBadge(string s) => s switch
-    {
-        "Converted" => "mkr-status mkr-st--conv",
-        "Contacted" => "mkr-status mkr-st--cont",
-        "Lost"      => "mkr-status mkr-st--lost",
-        _           => "mkr-status mkr-st--pend",
+        ConfirmAction.Advance => "Configure Status Advance",
+        ConfirmAction.Contact => "Configure Contact",
+        ConfirmAction.Convert => "Configure Conversion",
+        ConfirmAction.Lost => "Configure Lost Status",
+        ConfirmAction.Duplicate => "Configure Duplicate",
+        ConfirmAction.Archive => "Configure Archive",
+        ConfirmAction.Sync => "Configure Seed Sync",
+        ConfirmAction.Export => "Configure Export",
+        _ => "Confirm Action"
     };
 
-    private async Task AdvanceAsync(ReferralRow row)
+    private string ConfirmBody => _confirmAction switch
     {
-        var next = row.Status switch { "Pending" => "Contacted", "Contacted" => "Converted", _ => row.Status };
+        ConfirmAction.Advance when _confirmTarget is not null => $"Configure the next workflow step for {_confirmTarget.ProspectName}.",
+        ConfirmAction.Contact when _confirmTarget is not null => $"Configure outreach before contacting {_confirmTarget.ProspectName}.",
+        ConfirmAction.Convert when _confirmTarget is not null => $"Configure conversion workflow for {_confirmTarget.ProspectName}.",
+        ConfirmAction.Lost when _confirmTarget is not null => $"Configure lost status for {_confirmTarget.ProspectName}.",
+        ConfirmAction.Duplicate when _confirmTarget is not null => $"Create a working copy of {_confirmTarget.ProspectName}.",
+        ConfirmAction.Archive when _confirmTarget is not null => $"Archive {_confirmTarget.ProspectName} and remove it from active referral views.",
+        ConfirmAction.Sync => "Configure seed synchronization before repairing schema or adding missing referral records.",
+        ConfirmAction.Export => $"Configure export settings for {_filtered.Count:N0} current referral matches.",
+        _ => string.Empty
+    };
+
+    private string ConfirmButtonText => _confirmAction switch
+    {
+        ConfirmAction.Advance => "Update Status",
+        ConfirmAction.Contact => "Update Outreach",
+        ConfirmAction.Convert => "Mark Converted",
+        ConfirmAction.Lost => "Mark Lost",
+        ConfirmAction.Duplicate => "Create Copy",
+        ConfirmAction.Archive => "Archive",
+        ConfirmAction.Sync => "Run Sync",
+        ConfirmAction.Export => "Export File",
+        _ => "Execute"
+    };
+    private string ConfirmButtonClass => _confirmAction is ConfirmAction.Archive or ConfirmAction.Lost ? "um-btn-danger" : "um-btn-primary";
+    private string ConfirmIcon => _confirmAction switch
+    {
+        ConfirmAction.Advance => "bi-arrow-right-circle-fill",
+        ConfirmAction.Contact => "bi-telephone-fill",
+        ConfirmAction.Convert => "bi-check-circle-fill",
+        ConfirmAction.Lost => "bi-x-octagon-fill",
+        ConfirmAction.Duplicate => "bi-copy",
+        ConfirmAction.Archive => "bi-archive-fill",
+        ConfirmAction.Sync => "bi-cloud-arrow-down-fill",
+        ConfirmAction.Export => "bi-download",
+        _ => "bi-question-circle-fill"
+    };
+    private string ConfirmIconTone => _confirmAction is ConfirmAction.Archive or ConfirmAction.Lost ? "um-confirm-icon--danger" : string.Empty;
+    private IEnumerable<KpiModel> Kpis => [new("all", "Referrals", _items.Count.ToString("N0"), "Active records", "bi-person-plus", "mkr-ki-blue"), new("pending", "Pending", _items.Count(x => x.StatusCode == "Pending").ToString("N0"), "Awaiting outreach", "bi-hourglass", "mkr-ki-amber"), new("contacted", "Contacted", _items.Count(x => x.StatusCode == "Contacted" || x.StatusCode == "Quoted").ToString("N0"), "In motion", "bi-telephone", "mkr-ki-cyan"), new("converted", "Converted", _items.Count(x => x.StatusCode == "Converted").ToString("N0"), "Won referrals", "bi-check-circle", "mkr-ki-green"), new("premium", "Premium", _items.Sum(x => x.EstimatedPremium).ToString("C0"), "Pipeline value", "bi-cash-stack", "mkr-ki-purple"), new("rate", "Conversion", $"{ConversionRate:N1}%", "Portfolio rate", "bi-percent", "mkr-ki-red")];
+    private decimal ConversionRate => _items.Count == 0 ? 0 : Math.Round(_items.Count(x => x.StatusCode == "Converted") * 100m / _items.Count, 1);
+
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Marketing", "/marketing/campaigns"), new("Referrals", null)); await LoadAsync(); }
+    private async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchMarketingReferralsAsync(_tenantId); _items = result?.Items.ToList() ?? []; ApplyFilters(); EnsureSelectedStillVisible(); } catch (Exception ex) { _loadError = $"Failed to load referrals: {ex.Message}"; _items = []; _filtered = []; _paged = []; } finally { _loading = false; } }
+    private void ApplyFilters(bool resetPage = false) { var query = _items.AsEnumerable(); if (!string.IsNullOrWhiteSpace(_search)) query = query.Where(x => x.ProspectName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.ReferredBy.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.ReferralType.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.PolicyInterest.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Producer.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.StatusCode.Contains(_search, StringComparison.OrdinalIgnoreCase)); if (!string.IsNullOrWhiteSpace(_sourceFilter)) query = query.Where(x => x.ReferralType == _sourceFilter); if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.StatusCode == _statusFilter); query = _premiumFilter switch { "high" => query.Where(x => x.EstimatedPremium >= 5000), "medium" => query.Where(x => x.EstimatedPremium >= 2000 && x.EstimatedPremium < 5000), "low" => query.Where(x => x.EstimatedPremium < 2000), _ => query }; query = _kpiFilter switch { "pending" => query.Where(x => x.StatusCode == "Pending"), "contacted" => query.Where(x => x.StatusCode == "Contacted" || x.StatusCode == "Quoted"), "converted" => query.Where(x => x.StatusCode == "Converted"), "premium" => query.Where(x => x.EstimatedPremium > 0), "rate" => query.Where(x => x.StatusCode == "Converted" || x.StatusCode == "Lost"), _ => query }; _filtered = query.OrderByDescending(x => x.ReceivedDate).ThenByDescending(x => x.EstimatedPremium).ToList(); if (resetPage) _page = 1; if (_page > TotalPages) _page = TotalPages; _paged = _filtered.Skip((_page - 1) * PageSize).Take(PageSize).ToList(); }
+    private void SetKpiFilter(string filter) { _kpiFilter = _kpiFilter == filter ? "all" : filter; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _search = string.Empty; _sourceFilter = string.Empty; _statusFilter = string.Empty; _premiumFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); }
+    private void PreviousPage() { if (_page <= 1) return; _page--; ApplyFilters(); }
+    private void NextPage() { if (_page >= TotalPages) return; _page++; ApplyFilters(); }
+    private void SelectReferral(MarketingReferralDto item) => _selected = item;
+    private void ClearSelection() => _selected = null;
+    private bool IsSelected(MarketingReferralDto item) => _selected?.ReferralId == item.ReferralId;
+    private string RowCss(MarketingReferralDto item) => IsSelected(item) ? "mkr-table-row mkr-table-row--selected" : "mkr-table-row";
+    private void OpenCreate() { _editingId = Guid.Empty; _form = new ReferralForm { ReferralType = "Client", StatusCode = "Pending", ReceivedDate = DateTime.Today, PolicyInterest = "Home + Auto", EstimatedPremium = 2400, Producer = "Unassigned" }; _showForm = true; }
+    private void OpenEdit(MarketingReferralDto item) { _editingId = item.ReferralId; _form = new() { ProspectName = item.ProspectName, ReferredBy = item.ReferredBy, ReferralType = item.ReferralType, ReceivedDate = item.ReceivedDate, StatusCode = item.StatusCode, PolicyInterest = item.PolicyInterest, EstimatedPremium = item.EstimatedPremium, Producer = item.Producer }; _showForm = true; }
+    private void CloseForm() { if (_busy) return; _showForm = false; _editingId = Guid.Empty; }
+    private async Task SaveAsync() { _busy = true; try { var request = ToDto(); if (_editingId == Guid.Empty) { await Api.CreateMarketingReferralAsync(request); ShowToast("Referral logged.", "success"); } else { await Api.UpdateMarketingReferralAsync(_editingId, request); ShowToast("Referral saved.", "success"); } _showForm = false; _editingId = Guid.Empty; await LoadAsync(); } catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", "danger"); } finally { _busy = false; }
+    }
+    private Task NotifyValidationAsync(EditContext _) { ShowToast("Please correct the validation errors before saving.", "warning"); return Task.CompletedTask; }
+    private MarketingReferralDto ToDto() => new() { ReferralId = _editingId, TenantId = _tenantId, ProspectName = _form.ProspectName.Trim(), ReferredBy = _form.ReferredBy.Trim(), ReferralType = _form.ReferralType, ReceivedDate = _form.ReceivedDate ?? DateTime.UtcNow, StatusCode = _form.StatusCode, PolicyInterest = _form.PolicyInterest.Trim(), EstimatedPremium = _form.EstimatedPremium, Producer = string.IsNullOrWhiteSpace(_form.Producer) ? "Unassigned" : _form.Producer.Trim() };
+    private void ConfigureAdvance(MarketingReferralDto item) => ShowConfirm(item, ConfirmAction.Advance);
+    private void ConfigureContact(MarketingReferralDto item) => ShowConfirm(item, ConfirmAction.Contact);
+    private void ConfigureConvert(MarketingReferralDto item) => ShowConfirm(item, ConfirmAction.Convert);
+    private void ConfigureLost(MarketingReferralDto item) => ShowConfirm(item, ConfirmAction.Lost);
+    private void ConfigureDuplicate(MarketingReferralDto item) => ShowConfirm(item, ConfirmAction.Duplicate);
+    private void ConfigureArchive(MarketingReferralDto item) => ShowConfirm(item, ConfirmAction.Archive);
+    private void ConfigureSync() => ShowConfirm(null, ConfirmAction.Sync);
+    private void ConfigureExport() { if (!_filtered.Any()) { ShowToast("No referrals are available to export.", "warning"); return; } ShowConfirm(null, ConfirmAction.Export); }
+    private void ShowConfirm(MarketingReferralDto? item, ConfirmAction action) { _confirmTarget = item; _confirmAction = action; _actionConfig = CreateDefaultConfiguration(item, action); _showConfirm = true; }
+    private void CancelConfirm() { if (_busy) return; _showConfirm = false; _confirmTarget = null; }
+    private async Task ExecuteConfirmAsync()
+    {
+        if (_confirmTarget is null && _confirmAction is not (ConfirmAction.Sync or ConfirmAction.Export))
+        {
+            return;
+        }
+
+        _busy = true;
         try
         {
-            await Api.UpdateMarketingReferralStatusAsync(row.Id, next);
-            await LoadAsync();
+            if (_confirmAction == ConfirmAction.Advance || _confirmAction == ConfirmAction.Contact || _confirmAction == ConfirmAction.Convert || _confirmAction == ConfirmAction.Lost)
+            {
+                await Api.UpdateMarketingReferralStatusAsync(_confirmTarget!.ReferralId, _actionConfig.NextStatus);
+                ShowToast($"Updated {_confirmTarget.ProspectName} to {_actionConfig.NextStatus}.", "success");
+                if (_actionConfig.ExecutionMode == "CampaignBuilder")
+                {
+                    Nav.NavigateTo($"/marketing/campaigns/new?goal=Referral&prospect={Uri.EscapeDataString(_confirmTarget.ProspectName)}");
+                }
+            }
+            else if (_confirmAction == ConfirmAction.Duplicate)
+            {
+                await Api.DuplicateMarketingReferralAsync(_confirmTarget!.ReferralId);
+                ShowToast($"Duplicated {_confirmTarget.ProspectName}.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.Archive)
+            {
+                if (_actionConfig.ExportBeforeAction)
+                {
+                    await ExportCoreAsync(new[] { _confirmTarget! });
+                }
+
+                await Api.ArchiveMarketingReferralAsync(_confirmTarget!.ReferralId);
+                ShowToast($"Archived {_confirmTarget.ProspectName}.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.Sync)
+            {
+                await Api.EnsureMarketingReferralSeedAsync(_tenantId);
+                ShowToast("Referral seed data synchronized.", "success");
+            }
+            else if (_confirmAction == ConfirmAction.Export)
+            {
+                var exportItems = _actionConfig.ExecutionMode == "All" ? _items : _filtered;
+                await ExportCoreAsync(exportItems);
+                ShowToast($"Exported {exportItems.Count:N0} referrals.", "success");
+            }
+
+            _showConfirm = false;
+            _confirmTarget = null;
+            if (_confirmAction != ConfirmAction.Export && _actionConfig.RefreshAfterAction)
+            {
+                await LoadAsync();
+            }
         }
-        catch (Exception ex) { _loadError = $"Update failed: {ex.Message}"; }
+        catch (Exception ex)
+        {
+            ShowToast($"Action failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
-    private sealed record ReferralRow(Guid Id, string ProspectName, string ReferredBy, string ReferralType,
-        DateTime ReceivedDate, string Status, string PolicyInterest, decimal EstimatedPremium, string Producer);
-
-    private sealed class ReferralForm
+    private async Task ExportCoreAsync(IReadOnlyCollection<MarketingReferralDto> items)
     {
-        [Required, StringLength(200)] public string ProspectName { get; set; } = string.Empty;
-        [Required, StringLength(200)] public string ReferredBy { get; set; } = string.Empty;
-        [Required, StringLength(80)] public string ReferralType { get; set; } = "Client";
-        [StringLength(200)] public string? PolicyInterest { get; set; }
-        [Range(0, 100000000)] public decimal EstimatedPremium { get; set; }
-    }
+        if (!items.Any())
+        {
+            return;
+        }
 
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        var csv = new StringBuilder();
+        csv.AppendLine(_actionConfig.IncludeProducer ? "ProspectName,ReferredBy,ReferralType,ReceivedDate,Status,PolicyInterest,EstimatedPremium,Producer" : "ProspectName,ReferredBy,ReferralType,ReceivedDate,Status,PolicyInterest,EstimatedPremium");
+        foreach (var item in items)
+        {
+            if (_actionConfig.IncludeProducer)
+            {
+                csv.AppendLine(string.Join(',', Csv(item.ProspectName), Csv(item.ReferredBy), Csv(item.ReferralType), Csv(item.ReceivedDate.ToString("yyyy-MM-dd")), Csv(item.StatusCode), Csv(item.PolicyInterest), item.EstimatedPremium.ToString("0.00"), Csv(item.Producer)));
+            }
+            else
+            {
+                csv.AppendLine(string.Join(',', Csv(item.ProspectName), Csv(item.ReferredBy), Csv(item.ReferralType), Csv(item.ReceivedDate.ToString("yyyy-MM-dd")), Csv(item.StatusCode), Csv(item.PolicyInterest), item.EstimatedPremium.ToString("0.00")));
+            }
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"marketing-referrals-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
     }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() { if (_selected is null) return; _selected = _items.FirstOrDefault(x => x.ReferralId == _selected.ReferralId); }
+    private static string DisplayPolicy(MarketingReferralDto item) => string.IsNullOrWhiteSpace(item.PolicyInterest) ? "No policy interest captured" : item.PolicyInterest;
+    private static string Initials(string n) { var parts = n.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant() : n.Length > 0 ? n[..1].ToUpperInvariant() : "?"; }
+    private static string StatusCss(string status) => $"mkr-st-{status.ToLowerInvariant()}";
+    private static string SourceCss(string source) => $"mkr-src-{source.ToLowerInvariant()}";
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private static ActionConfiguration CreateDefaultConfiguration(MarketingReferralDto? item, ConfirmAction action) => action switch
+    {
+        ConfirmAction.Advance => new() { ExecutionMode = "PhoneCall", NextStatus = NextStatus(item?.StatusCode), NotifyProducer = true, RefreshAfterAction = true },
+        ConfirmAction.Contact => new() { ExecutionMode = "PhoneCall", NextStatus = "Contacted", NotifyProducer = true, RefreshAfterAction = true },
+        ConfirmAction.Convert => new() { ExecutionMode = "QuoteWorkflow", NextStatus = "Converted", NotifyProducer = true, RefreshAfterAction = true },
+        ConfirmAction.Lost => new() { ExecutionMode = "PhoneCall", NextStatus = "Lost", NotifyProducer = true, RefreshAfterAction = true },
+        ConfirmAction.Duplicate => new() { NewName = item is null ? string.Empty : $"{item.ProspectName} Copy", NextStatus = "Pending", RefreshAfterAction = true },
+        ConfirmAction.Archive => new() { Reason = "No longer actionable", ExportBeforeAction = false, RefreshAfterAction = true },
+        ConfirmAction.Sync => new() { ExecutionMode = "MissingOnly", RefreshAfterAction = true },
+        ConfirmAction.Export => new() { ExecutionMode = "Filtered", IncludeProducer = true, RefreshAfterAction = false },
+        _ => new()
+    };
+    private static string NextStatus(string? status) => status switch { "Pending" => "Contacted", "Contacted" => "Quoted", "Quoted" => "Converted", _ => status ?? "Pending" };
+    async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); TenantId = context.TenantId; TenantAdminUserId = context.UserId; _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; DevTenantId = context.TenantId; DevUserId = context.UserId; }
+
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter by {Label}"; }
+    private enum ConfirmAction { Advance, Contact, Convert, Lost, Duplicate, Archive, Sync, Export }
+    private sealed class ActionConfiguration { public string ExecutionMode { get; set; } = string.Empty; public string Reason { get; set; } = string.Empty; public string NewName { get; set; } = string.Empty; public string NextStatus { get; set; } = string.Empty; public bool NotifyProducer { get; set; } public bool IncludeProducer { get; set; } = true; public bool ExportBeforeAction { get; set; } public bool RefreshAfterAction { get; set; } = true; }
+    private sealed class ReferralForm { [Required, StringLength(200)] public string ProspectName { get; set; } = string.Empty; [Required, StringLength(200)] public string ReferredBy { get; set; } = string.Empty; [Required, StringLength(80)] public string ReferralType { get; set; } = "Client"; public DateTime? ReceivedDate { get; set; } = DateTime.Today; [Required, StringLength(50)] public string StatusCode { get; set; } = "Pending"; [StringLength(200)] public string PolicyInterest { get; set; } = string.Empty; [Range(typeof(decimal), "0", "100000000")] public decimal EstimatedPremium { get; set; } [StringLength(150)] public string Producer { get; set; } = "Unassigned"; }
 }
