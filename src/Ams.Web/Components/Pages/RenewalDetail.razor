@@ -1,1090 +1,425 @@
 @page "/renewals/{RenewalId:guid}"
 @namespace Ams.Web.Components.Pages
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>@(_renewal is null ? "Renewal" : _renewal.AccountName) — Renewal Detail</PageTitle>
+<PageTitle>@(_renewal is null ? "Renewal" : _renewal.AccountName) — Enterprise Renewal Detail</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-@if (_loading)
+@if (_toastVisible)
 {
-    <div class="rd-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading renewal…</span></div>
-}
-else if (_renewal is null)
-{
-    <div class="rd-not-found">
-        <i class="bi bi-arrow-repeat rd-nf-icon" aria-hidden="true"></i>
-        <h2>Renewal not found</h2>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/renewals")'>
-            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Renewals
-        </button>
+    <div class="rdf-toast rdf-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="rdf-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
-else
-{
-    <!-- ── HEADER ──────────────────────────────────────────────────── -->
-    <div class="rd-header">
-        <div class="rd-header-left">
-            <div class="rd-lob-icon rd-lob-@LobKey(_renewal.Lob)">
-                <i class="bi @LobIcon(_renewal.Lob)" aria-hidden="true"></i>
-            </div>
-            <div class="rd-header-info">
-                <div class="rd-title-row">
-                    <h1 class="rd-acct-name">@_renewal.AccountName</h1>
-                    <span class="rd-stage rd-st-@StageCss(_renewal.Stage)">@_renewal.Stage</span>
-                    <span class="rd-lob-badge">@_renewal.Lob</span>
-                    <span class="rd-risk-badge rd-risk-@RiskCss(_renewal.RetentionRiskScore)"
-                          title="Retention Risk Score">
-                        <i class="bi bi-shield-exclamation" aria-hidden="true"></i> Risk @_renewal.RetentionRiskScore
-                    </span>
+
+<div class="rdf-enterprise-page">
+    @if (_loading)
+    {
+        <section class="rdf-loading-state">
+            <i class="bi bi-arrow-repeat rdf-spin" aria-hidden="true"></i>
+            <strong>Loading renewal detail...</strong>
+            <span>Syncing policy, retention, quote, risk, and task workflow.</span>
+        </section>
+    }
+    else if (_renewal is null)
+    {
+        <section class="rdf-empty-state">
+            <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+            <h1>Renewal not found</h1>
+            <p>The renewal record could not be loaded from the workflow source.</p>
+            <button type="button" class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/renewals")'><i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Renewals</button>
+        </section>
+    }
+    else
+    {
+        <section class="rdf-hero">
+            <div class="rdf-hero-left">
+                <span class="rdf-hero-icon rdf-lob-@LobKey(_renewal.Lob)"><i class="bi @LobIcon(_renewal.Lob)" aria-hidden="true"></i></span>
+                <div class="rdf-hero-copy">
+                    <div class="rdf-title-row">
+                        <h1>@_renewal.AccountName</h1>
+                        <span class="rdf-stage rdf-st-@StageCss(_renewal.Stage)">@_renewal.Stage</span>
+                        <span><i class="bi bi-shield-check" aria-hidden="true"></i> @_renewal.PolicyNumber</span>
+                        <span><i class="bi bi-layers" aria-hidden="true"></i> @_renewal.Lob</span>
+                    </div>
+                    <p>Enterprise renewal command page for premium protection, carrier marketing, risk changes, retention playbooks, tasks, communications, and quote decisions.</p>
+                    <div class="rdf-sub-row">
+                        <button type="button" @onclick='() => Nav.NavigateTo($"/policies/{_renewal.PolicyId}")'><i class="bi bi-shield" aria-hidden="true"></i> Policy</button>
+                        <span><i class="bi bi-building-fill" aria-hidden="true"></i> @_renewal.Carrier</span>
+                        <span class="rdf-exp-chip rdf-exp-@ExpChipCss(_renewal.DaysToExpiry)"><i class="bi bi-clock" aria-hidden="true"></i> @DaysLabel(_renewal.DaysToExpiry)</span>
+                        <span><i class="bi bi-person-badge" aria-hidden="true"></i> @_renewal.Producer</span>
+                        <span><i class="bi bi-geo-alt" aria-hidden="true"></i> @_renewal.Branch</span>
+                    </div>
                 </div>
-                <div class="rd-sub-row">
-                    <button class="rd-policy-link" @onclick='() => Nav.NavigateTo($"/policies/{_renewal.PolicyId}")'>
-                        <i class="bi bi-shield" aria-hidden="true"></i> @_renewal.PolicyNumber
-                    </button>
-                    <span class="rd-sub-chip"><i class="bi bi-building-fill" aria-hidden="true"></i>@_renewal.Carrier</span>
-                    <span class="rd-sub-chip"><i class="bi bi-calendar" aria-hidden="true"></i>Expires @_renewal.ExpiryDate.ToString("MM/dd/yyyy")</span>
-                    <span class="rd-sub-chip rd-exp-chip-@ExpChipCss(_renewal.DaysToExpiry)">
-                        <i class="bi bi-clock" aria-hidden="true"></i>@DaysLabel(_renewal.DaysToExpiry)
-                    </span>
-                    <span class="rd-sub-chip"><i class="bi bi-person-badge" aria-hidden="true"></i>@_renewal.Producer</span>
-                </div>
             </div>
-        </div>
-        <div class="rd-header-actions">
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetStage("In Progress")'
-                    disabled="@(_renewal.Stage == "In Progress")">
-                <i class="bi bi-play-circle" aria-hidden="true"></i> Start Renewal
-            </button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenRemarket">
-                <i class="bi bi-arrow-left-right" aria-hidden="true"></i> Remarket
-            </button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => _tab = 8'>
-                <i class="bi bi-quote" aria-hidden="true"></i> View Quotes
-            </button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LogActivity">
-                <i class="bi bi-lightning" aria-hidden="true"></i> Log Activity
-            </button>
-            <button class="um-btn um-btn-primary um-btn-sm" @onclick='() => SetStage("Renewed")'
-                    disabled="@(_renewal.Stage == "Renewed")">
-                <i class="bi bi-check-circle" aria-hidden="true"></i> Mark Renewed
-            </button>
-        </div>
-    </div>
+            <div class="rdf-hero-actions">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="Refresh" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat rdf-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+                <button type="button" class="um-btn um-btn-ghost" @onclick='() => SetStage("In Progress")' disabled='@(_renewal.Stage == "In Progress")'><i class="bi bi-play-circle" aria-hidden="true"></i> Start Renewal</button>
+                <button type="button" class="um-btn um-btn-ghost" @onclick="OpenRemarket"><i class="bi bi-arrow-left-right" aria-hidden="true"></i> Remarket</button>
+                <button type="button" class="um-btn um-btn-ghost" @onclick='() => SetTab("quotes")'><i class="bi bi-quote" aria-hidden="true"></i> Quotes</button>
+                <button type="button" class="um-btn um-btn-primary" @onclick='() => SetStage("Renewed")' disabled='@(_renewal.Stage == "Renewed")'><i class="bi bi-check-circle" aria-hidden="true"></i> Mark Renewed</button>
+            </div>
+        </section>
 
-    <!-- ── KPI BAR ─────────────────────────────────────────────────── -->
-    <div class="rd-kpi-bar">
-        @RdKpi("Current Premium",    _renewal.CurrentPremium.ToString("C0"),         "bi-cash-stack",         "rd-ki-blue")
-        @RdKpi("Projected Premium",  _renewal.ProjectedPremium.HasValue ? _renewal.ProjectedPremium.Value.ToString("C0") : "Pending",  "bi-calculator",    _renewal.ProjectedPremium > _renewal.CurrentPremium ? "rd-ki-red" : "rd-ki-green")
-        @RdKpi("Premium Δ",          PremiumDelta,                                   "bi-graph-up",           PremiumDeltaCss)
-        @RdKpi("Days to Expiry",     DaysLabel(_renewal.DaysToExpiry),               "bi-clock",              _renewal.DaysToExpiry <= 30 ? "rd-ki-red" : _renewal.DaysToExpiry <= 60 ? "rd-ki-amber" : "rd-ki-blue")
-        @RdKpi("Loss Ratio",         _renewal.LossRatio.ToString("F0") + "%",        "bi-percent",            _renewal.LossRatio >= 70 ? "rd-ki-red" : _renewal.LossRatio >= 40 ? "rd-ki-amber" : "rd-ki-green")
-        @RdKpi("Open Tasks",         _tasks.Count(t => !t.Complete).ToString(),      "bi-list-check",         _tasks.Any(t => !t.Complete && t.IsDue) ? "rd-ki-red" : "rd-ki-gray")
-        @RdKpi("Risk Score",         _renewal.RetentionRiskScore + "/100",           "bi-shield-exclamation", RiskCss(_renewal.RetentionRiskScore) == "high" ? "rd-ki-red" : RiskCss(_renewal.RetentionRiskScore) == "med" ? "rd-ki-amber" : "rd-ki-green")
-        @RdKpi("Quotes Received",    _quotes.Count(q => q.Status == "Quoted").ToString(), "bi-quote",         "rd-ki-purple")
-    </div>
+        @if (_loadError is not null)
+        {
+            <div class="alert alert-danger rdf-error-banner" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+        }
 
-    <!-- ── 9-TAB BODY ──────────────────────────────────────────────── -->
-    <AppDetailTabs SelectedTab="_tab" SelectedTabChanged="t => _tab = t">
-        <Tabs>
+        <section class="rdf-kpi-strip" aria-label="Renewal detail KPI cards">
+            @foreach (var metric in Metrics)
+            {
+                <button type="button" class="@MetricClass(metric)" title="@metric.Caption" @onclick='() => SetTab(metric.Tab)'>
+                    <span class="rdf-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                    <span><span class="rdf-kpi-val">@metric.Value</span><span class="rdf-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
+                </button>
+            }
+        </section>
 
-            <!-- 0 ── POLICY SNAPSHOT ──────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Policy Snapshot" IconCss="bi bi-clipboard-data" /></ChildContent>
-                <ContentTemplate>
-                    <div class="rd-tab-body">
-                        <div class="rd-summary-grid">
-                            <div class="rd-info-card">
-                                <h3 class="rd-card-hdr">Policy Identity</h3>
-                                <div class="rd-field-grid">
-                                    @F("Policy Number",    _renewal.PolicyNumber)
-                                    @F("Line of Business", _renewal.Lob)
-                                    @F("Carrier",          _renewal.Carrier)
-                                    @F("Program",          _renewal.Program)
-                                    @F("Policy Status",    _renewal.PolicyStatus)
-                                    @F("Policy Type",      _renewal.PolicyType)
-                                </div>
-                            </div>
-                            <div class="rd-info-card">
-                                <h3 class="rd-card-hdr">Current Term Dates</h3>
-                                <div class="rd-field-grid">
-                                    @F("Effective Date",  _renewal.EffDate.ToString("MM/dd/yyyy"))
-                                    @F("Expiration Date", _renewal.ExpiryDate.ToString("MM/dd/yyyy"))
-                                    @F("Days Remaining",  DaysLabel(_renewal.DaysToExpiry))
-                                    @F("Term Length",     _renewal.TermMonths + " months")
-                                    @F("Renewal Notice",  _renewal.RenewalNoticeDate?.ToString("MM/dd/yyyy") ?? "Not sent")
-                                    @F("Quote Due Date",  _renewal.QuoteDueDate?.ToString("MM/dd/yyyy") ?? "Not set")
-                                </div>
-                            </div>
-                            <div class="rd-info-card">
-                                <h3 class="rd-card-hdr">Premium Summary</h3>
-                                <div class="rd-field-grid">
-                                    @F("Current Written Prem.",    _renewal.CurrentPremium.ToString("C2"))
-                                    @F("Prior Year Premium",       _renewal.PriorPremium?.ToString("C2") ?? "—")
-                                    @F("Year-Over-Year Change",    _renewal.PriorPremium.HasValue ? ((_renewal.CurrentPremium - _renewal.PriorPremium.Value) / _renewal.PriorPremium.Value * 100m).ToString("F1") + "%" : "—")
-                                    @F("Projected Renewal Prem.", _renewal.ProjectedPremium?.ToString("C2") ?? "Pending")
-                                    @F("Min. Acceptable Prem.",    _renewal.MinAcceptablePremium?.ToString("C2") ?? "Not set")
-                                    @F("Agency Fee",               _renewal.AgencyFee.ToString("C2"))
-                                </div>
-                            </div>
-                            <div class="rd-info-card">
-                                <h3 class="rd-card-hdr">Named Insured</h3>
-                                <div class="rd-field-grid">
-                                    @F("Insured Name",   _renewal.PrimaryInsured)
-                                    @F("Address",        _renewal.InsuredAddress)
-                                    @F("City / State",   $"{_renewal.InsuredCity}, {_renewal.InsuredState} {_renewal.InsuredZip}")
-                                    @F("Entity Type",    _renewal.EntityType ?? "—")
-                                    @F("SIC Code",       _renewal.SicCode ?? "—")
-                                    @F("FEIN",           _renewal.Fein ?? "—")
-                                </div>
-                            </div>
-                            <div class="rd-info-card">
-                                <h3 class="rd-card-hdr">Service Team</h3>
-                                <div class="rd-field-grid">
-                                    @F("Producer",        _renewal.Producer)
-                                    @F("CSR",             _renewal.Csr)
-                                    @F("Account Manager", _renewal.AccountManager ?? "—")
-                                    @F("Underwriter",     _renewal.Underwriter ?? "—")
-                                    @F("UW Phone",        _renewal.UwPhone ?? "—")
-                                    @F("Branch",          _renewal.Branch)
-                                </div>
-                            </div>
-                            <div class="rd-info-card">
-                                <h3 class="rd-card-hdr">Coverage Highlights</h3>
-                                <div class="rd-field-grid">
-                                    @foreach (var cov in _policyCoverages)
-                                    {
-                                        @F(cov.Label, cov.Value)
-                                    }
-                                </div>
-                            </div>
+        <section class="rdf-workflow-strip" aria-label="Renewal workflow actions">
+            <button type="button" class="rdf-workflow-card" @onclick='() => SetTab("risk")'><i class="bi bi-shield-exclamation" aria-hidden="true"></i><span><strong>Protect retention</strong><span>@RetentionProb% probability with @RiskLabel(_renewal.RetentionRiskScore).ToLowerInvariant() signal.</span></span></button>
+            <button type="button" class="rdf-workflow-card" @onclick='() => SetTab("marketing")'><i class="bi bi-send" aria-hidden="true"></i><span><strong>Market renewal</strong><span>@_marketActions.Count market actions and @_quotes.Count(q => q.Status == "Quoted") quote(s).</span></span></button>
+            <button type="button" class="rdf-workflow-card rdf-workflow-warning" @onclick='() => SetTab("tasks")'><i class="bi bi-list-check" aria-hidden="true"></i><span><strong>Clear tasks</strong><span>@OpenTaskCount open task(s), @OverdueTaskCount overdue.</span></span></button>
+            <button type="button" class="rdf-workflow-card" @onclick='() => SetTab("communications")'><i class="bi bi-envelope" aria-hidden="true"></i><span><strong>Client contact</strong><span>@_comms.Count touchpoint(s), last @LastTouchLabel.</span></span></button>
+        </section>
+
+        <section class="rdf-content-layout">
+            <main class="rdf-main-card">
+                <nav class="rdf-tabs" aria-label="Renewal detail tabs">
+                    @foreach (var tab in _tabs)
+                    {
+                        <button type="button" class="@TabClass(tab.Id)" @onclick="() => SetTab(tab.Id)"><i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label <span>@TabBadge(tab.Id)</span></button>
+                    }
+                </nav>
+
+                @if (_tab == "snapshot")
+                {
+                    <section class="rdf-tab-body">
+                        <div class="rdf-section-head"><div><h2>Policy snapshot</h2><p>Most important identity, premium, team, term, and coverage information for renewal execution.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo($"/policies/{_renewal.PolicyId}")'>Open Policy</button></div>
+                        <div class="rdf-summary-grid">
+                            @InfoCard("Policy Identity", "bi-clipboard-data", new[] { Field("Policy Number", _renewal.PolicyNumber), Field("Line of Business", _renewal.Lob), Field("Carrier", _renewal.Carrier), Field("Program", _renewal.Program), Field("Policy Status", _renewal.PolicyStatus), Field("Policy Type", _renewal.PolicyType) })
+                            @InfoCard("Term Dates", "bi-calendar-range", new[] { Field("Effective Date", DateText(_renewal.EffDate)), Field("Expiration Date", DateText(_renewal.ExpiryDate)), Field("Days Remaining", DaysLabel(_renewal.DaysToExpiry)), Field("Term Length", $"{_renewal.TermMonths} months"), Field("Renewal Notice", _renewal.RenewalNoticeDate?.ToString("MM/dd/yyyy", CultureInfo.CurrentCulture) ?? "Not sent"), Field("Quote Due", _renewal.QuoteDueDate?.ToString("MM/dd/yyyy", CultureInfo.CurrentCulture) ?? "Not set") })
+                            @InfoCard("Premium Summary", "bi-cash-stack", new[] { Field("Current Premium", Money(_renewal.CurrentPremium)), Field("Prior Premium", _renewal.PriorPremium.HasValue ? Money(_renewal.PriorPremium.Value) : "—"), Field("Projected Premium", _renewal.ProjectedPremium.HasValue ? Money(_renewal.ProjectedPremium.Value) : "Pending"), Field("Premium Change", PremiumDelta), Field("Minimum Acceptable", _renewal.MinAcceptablePremium.HasValue ? Money(_renewal.MinAcceptablePremium.Value) : "Not set"), Field("Agency Fee", Money(_renewal.AgencyFee)) })
+                            @InfoCard("Named Insured", "bi-building", new[] { Field("Insured Name", _renewal.PrimaryInsured), Field("Address", _renewal.InsuredAddress), Field("City / State", $"{_renewal.InsuredCity}, {_renewal.InsuredState} {_renewal.InsuredZip}"), Field("Entity Type", _renewal.EntityType ?? "—"), Field("SIC", _renewal.SicCode ?? "—"), Field("FEIN", _renewal.Fein ?? "—") })
+                            @InfoCard("Service Team", "bi-people", new[] { Field("Producer", _renewal.Producer), Field("CSR", _renewal.Csr), Field("Account Manager", _renewal.AccountManager ?? "—"), Field("Underwriter", _renewal.Underwriter ?? "—"), Field("UW Phone", _renewal.UwPhone ?? "—"), Field("Branch", _renewal.Branch) })
+                            @InfoCard("Coverage Highlights", "bi-shield-plus", _policyCoverages.Select(c => Field(c.Label, c.Value)).ToArray())
                         </div>
-                    </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 1 ── RISK CHANGES ─────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Risk Changes" IconCss="bi bi-exclamation-triangle" /></ChildContent>
-                <ContentTemplate>
-                    <div class="rd-tab-body">
-                        <div class="rd-tab-toolbar">
-                            <span class="rd-tab-count">
-                                @_riskChanges.Count change(s) ·
-                                <span class="rd-tc-warn">@_riskChanges.Count(c => c.Severity == "Material") material</span>
-                            </span>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="AddRiskChange">
-                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Change
-                            </button>
-                        </div>
-                        <SfGrid TValue="RiskChangeRow" DataSource="_riskChanges"
-                                AllowSorting="true" EnableHover="true" RowHeight="56" CssClass="rd-data-grid">
-                            <GridColumns>
-                                <GridColumn Field="@nameof(RiskChangeRow.Area)"        HeaderText="Risk Area"     Width="160" />
-                                <GridColumn Field="@nameof(RiskChangeRow.Description)" HeaderText="Description"   MinWidth="220" />
-                                <GridColumn Field="@nameof(RiskChangeRow.PriorValue)"  HeaderText="Prior"         Width="150" />
-                                <GridColumn Field="@nameof(RiskChangeRow.CurrentValue)" HeaderText="Current"      Width="150" />
-                                <GridColumn Field="@nameof(RiskChangeRow.Severity)"    HeaderText="Severity"      Width="125" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
-                                    <Template>
-                                        @{ var rc = (RiskChangeRow)context; }
-                                        <span class="rd-severity rd-sev-@rc.Severity.ToLower().Replace(" ","")">@rc.Severity</span>
-                                    </Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(RiskChangeRow.UwImplication)" HeaderText="UW Implication" MinWidth="180" />
-                                <GridColumn Field="@nameof(RiskChangeRow.ReviewedBy)"  HeaderText="Reviewed By"  Width="140" />
-                                <GridColumn Field="@nameof(RiskChangeRow.IsResolved)"  HeaderText="Resolved"     Width="95" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
-                                    <Template>
-                                        @{ var rc = (RiskChangeRow)context; }
-                                        <i class="bi @(rc.IsResolved ? "bi-check-circle-fill pd-chk-yes" : "bi-clock rd-pending-icon")"
-                                           aria-hidden="true"></i>
-                                    </Template>
-                                </GridColumn>
-                            </GridColumns>
-                        </SfGrid>
-                    </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 2 ── PREMIUM HISTORY ──────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Premium History" IconCss="bi bi-graph-up" /></ChildContent>
-                <ContentTemplate>
-                    <div class="rd-tab-body">
-                        <!-- Premium trend visual -->
-                        <div class="rd-prem-chart">
-                            <h3 class="rd-chart-title">5-Year Premium Trend</h3>
-                            <div class="rd-bar-chart">
-                                @{
-                                    var maxP = _premHistory.Any() ? _premHistory.Max(h => h.Premium) : 1;
-                                }
-                                @foreach (var h in _premHistory.OrderBy(h => h.Year))
-                                {
-                                    var pct = (double)h.Premium / (double)maxP * 100;
-                                    var isCurrentCycle = h.Year == _premHistory.Max(x => x.Year);
-                                    <div class="rd-bar-col">
-                                        <div class="rd-bar-prem-lbl">@h.Premium.ToString("C0")</div>
-                                        <div class="rd-bar-wrap">
-                                            <div class="rd-bar-fill @(isCurrentCycle ? "rd-bar-current" : "")"
-                                                 style="height:@pct.ToString("F0")%"></div>
-                                        </div>
-                                        <div class="rd-bar-year @(isCurrentCycle ? "rd-bar-year-cur" : "")">@h.Year</div>
-                                        @if (h.CarrierChanged)
-                                        {
-                                            <div class="rd-bar-carrier-changed" title="Carrier changed this year">
-                                                <i class="bi bi-arrow-left-right" aria-hidden="true"></i>
-                                            </div>
-                                        }
-                                    </div>
-                                }
-                            </div>
-                        </div>
-
-                        <!-- Premium history table -->
-                        <SfGrid TValue="PremHistoryRow" DataSource="_premHistory" AllowSorting="true" EnableHover="true" RowHeight="54" CssClass="rd-data-grid">
-                            <GridColumns>
-                                <GridColumn Field="@nameof(PremHistoryRow.Year)"          HeaderText="Policy Year"  Width="120" />
-                                <GridColumn Field="@nameof(PremHistoryRow.Carrier)"       HeaderText="Carrier"      Width="175" />
-                                <GridColumn Field="@nameof(PremHistoryRow.Premium)"       HeaderText="Written Prem." Width="140" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                    <Template>@{ var h = (PremHistoryRow)context; }<span class="pd-mono">@h.Premium.ToString("C2")</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(PremHistoryRow.PremiumChange)" HeaderText="Change ($)"   Width="135" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                    <Template>
-                                        @{ var h = (PremHistoryRow)context; }
-                                        <span class="pd-mono @(h.PremiumChange > 0 ? "pd-prem-up" : h.PremiumChange < 0 ? "pd-prem-dn" : "")">
-                                            @(h.PremiumChange == 0 ? "—" : (h.PremiumChange > 0 ? "+" : "") + h.PremiumChange.ToString("C0"))
-                                        </span>
-                                    </Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(PremHistoryRow.PremiumChangePct)" HeaderText="Change (%)" Width="125" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                    <Template>
-                                        @{ var h = (PremHistoryRow)context; }
-                                        <span class="@(h.PremiumChangePct > 5 ? "pd-prem-up" : h.PremiumChangePct < 0 ? "pd-prem-dn" : "")">
-                                            @(h.PremiumChangePct == 0 ? "—" : (h.PremiumChangePct > 0 ? "+" : "") + h.PremiumChangePct.ToString("F1") + "%")
-                                        </span>
-                                    </Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(PremHistoryRow.LossRatio)"     HeaderText="Loss Ratio"  Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                    <Template>@{ var h = (PremHistoryRow)context; }<span class="@(h.LossRatio >= 70 ? "pd-viol-warn" : h.LossRatio >= 40 ? "rd-lr-warn" : "")">@h.LossRatio.ToString("F1")%</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(PremHistoryRow.CarrierChanged)" HeaderText="Carrier Chg." Width="115" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
-                                    <Template>@{ var h = (PremHistoryRow)context; }<i class="bi @(h.CarrierChanged ? "bi-check-circle-fill pd-chk-yes" : "bi-dash")" aria-hidden="true"></i></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(PremHistoryRow.Notes)"         HeaderText="Notes"        MinWidth="180" />
-                            </GridColumns>
-                        </SfGrid>
-                    </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 3 ── CLAIMS / LOSSES ──────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Claims / Losses" IconCss="bi bi-exclamation-circle" /></ChildContent>
-                <ContentTemplate>
-                    <div class="rd-tab-body">
-                        <!-- Loss summary KPIs -->
-                        <div class="rd-loss-kpis">
-                            <div class="rd-loss-kpi">
-                                <div class="rd-lk-val">@_claims.Count</div>
-                                <div class="rd-lk-lbl">Total Claims (5yr)</div>
-                            </div>
-                            <div class="rd-loss-kpi">
-                                <div class="rd-lk-val rd-lk-open">@_claims.Count(c => c.Status == "Open")</div>
-                                <div class="rd-lk-lbl">Open Claims</div>
-                            </div>
-                            <div class="rd-loss-kpi">
-                                <div class="rd-lk-val rd-lk-prem">@_claims.Sum(c => c.TotalIncurred).ToString("C0")</div>
-                                <div class="rd-lk-lbl">Total Incurred</div>
-                            </div>
-                            <div class="rd-loss-kpi">
-                                <div class="rd-lk-val rd-lk-paid">@_claims.Sum(c => c.Paid).ToString("C0")</div>
-                                <div class="rd-lk-lbl">Total Paid</div>
-                            </div>
-                            <div class="rd-loss-kpi">
-                                <div class="rd-lk-val @(_renewal.LossRatio >= 70 ? "rd-lk-open" : _renewal.LossRatio >= 40 ? "rd-lk-warn" : "rd-lk-ok")">
-                                    @_renewal.LossRatio.ToString("F1")%
-                                </div>
-                                <div class="rd-lk-lbl">Loss Ratio (current yr)</div>
-                            </div>
-                            <div class="rd-loss-kpi">
-                                <div class="rd-lk-val">@_claims.Sum(c => c.Reserve).ToString("C0")</div>
-                                <div class="rd-lk-lbl">Outstanding Reserve</div>
-                            </div>
-                        </div>
-
-                        <SfGrid TValue="ClaimHistRow" DataSource="_claims"
-                                AllowSorting="true" AllowFiltering="true" EnableHover="true" RowHeight="56" CssClass="rd-data-grid">
-                            <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
-                            <GridColumns>
-                                <GridColumn Field="@nameof(ClaimHistRow.ClaimNum)"    HeaderText="Claim #"      Width="140" />
-                                <GridColumn Field="@nameof(ClaimHistRow.PolicyYear)"  HeaderText="Policy Yr."   Width="105" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center" />
-                                <GridColumn Field="@nameof(ClaimHistRow.LossDate)"    HeaderText="Loss Date"    Width="115">
-                                    <Template>@{ var c = (ClaimHistRow)context; }<span class="pd-mono">@c.LossDate.ToString("MM/dd/yyyy")</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(ClaimHistRow.LossType)"    HeaderText="Loss Type"    Width="155" />
-                                <GridColumn Field="@nameof(ClaimHistRow.Description)" HeaderText="Description"  MinWidth="200" />
-                                <GridColumn Field="@nameof(ClaimHistRow.Status)"      HeaderText="Status"       Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
-                                    <Template>@{ var c = (ClaimHistRow)context; }<span class="pd-claim-status pd-cs-@c.Status.ToLower()">@c.Status</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(ClaimHistRow.TotalIncurred)" HeaderText="Incurred"   Width="125" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                    <Template>@{ var c = (ClaimHistRow)context; }<span class="pd-mono">@c.TotalIncurred.ToString("C0")</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(ClaimHistRow.Paid)"        HeaderText="Paid"         Width="115" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                    <Template>@{ var c = (ClaimHistRow)context; }<span class="pd-mono">@c.Paid.ToString("C0")</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(ClaimHistRow.Reserve)"     HeaderText="Reserve"      Width="115" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                    <Template>@{ var c = (ClaimHistRow)context; }<span class="pd-mono">@c.Reserve.ToString("C0")</span></Template>
-                                </GridColumn>
-                            </GridColumns>
-                        </SfGrid>
-                    </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 4 ── MARKETING ACTIONS ────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Marketing Actions" IconCss="bi bi-send" /></ChildContent>
-                <ContentTemplate>
-                    <div class="rd-tab-body">
-                        <div class="rd-tab-toolbar">
-                            <span class="rd-tab-count">
-                                @_marketActions.Count market(s) contacted ·
-                                @_marketActions.Count(m => m.Status == "Quoted") quoted
-                            </span>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="AddMarket">
-                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Market
-                            </button>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo($"/quotes/compare/{_renewal.PolicyId}")'>
-                                <i class="bi bi-layout-split" aria-hidden="true"></i> Compare Quotes
-                            </button>
-                        </div>
-                        <SfGrid TValue="MarketActionRow" DataSource="_marketActions"
-                                AllowSorting="true" EnableHover="true" RowHeight="58" CssClass="rd-data-grid">
-                            <GridColumns>
-                                <GridColumn Field="@nameof(MarketActionRow.Carrier)"       HeaderText="Carrier"         Width="175" />
-                                <GridColumn Field="@nameof(MarketActionRow.Program)"       HeaderText="Program"         Width="165" />
-                                <GridColumn Field="@nameof(MarketActionRow.ContactedDate)" HeaderText="Submitted"       Width="120">
-                                    <Template>@{ var m = (MarketActionRow)context; }<span class="pd-mono">@(m.ContactedDate.HasValue ? m.ContactedDate.Value.ToString("MM/dd/yyyy") : "—")</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(MarketActionRow.Status)"        HeaderText="Status"          Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
-                                    <Template>
-                                        @{ var m = (MarketActionRow)context; }
-                                        <span class="rd-mkt-status rd-mkt-@m.Status.ToLower().Replace(" ","")">@m.Status</span>
-                                    </Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(MarketActionRow.QuotedPremium)" HeaderText="Quoted Premium"  Width="145" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                    <Template>
-                                        @{ var m = (MarketActionRow)context; }
-                                        @if (m.QuotedPremium.HasValue)
-                                        {
-                                            <div class="rd-mkt-prem-cell">
-                                                <span class="pd-mono">@m.QuotedPremium.Value.ToString("C0")</span>
-                                                @{
-                                                    var delta = m.QuotedPremium.Value - _renewal.CurrentPremium;
-                                                }
-                                                <span class="rd-mkt-delta @(delta > 0 ? "rdb-delta-up" : "rdb-delta-dn")">
-                                                    @(delta >= 0 ? "+" : "")@delta.ToString("C0")
-                                                </span>
-                                            </div>
-                                        }
-                                        else { <span class="rdb-no-quote">—</span> }
-                                    </Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(MarketActionRow.QuoteExpiry)"   HeaderText="Quote Expires"   Width="130">
-                                    <Template>@{ var m = (MarketActionRow)context; }<span class="pd-mono">@(m.QuoteExpiry.HasValue ? m.QuoteExpiry.Value.ToString("MM/dd/yyyy") : "—")</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(MarketActionRow.Underwriter)"   HeaderText="Underwriter"     Width="145" />
-                                <GridColumn Field="@nameof(MarketActionRow.Notes)"         HeaderText="Notes"           MinWidth="180" />
-                                <GridColumn HeaderText="Action"                            Width="120" AllowSorting="false" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
-                                    <Template>
-                                        @{ var m = (MarketActionRow)context; }
-                                        @if (m.QuotedPremium.HasValue && m.Status == "Quoted")
-                                        {
-                                            <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => SelectQuote(m)">
-                                                <i class="bi bi-check-circle" aria-hidden="true"></i> Select
-                                            </button>
-                                        }
-                                    </Template>
-                                </GridColumn>
-                            </GridColumns>
-                        </SfGrid>
-                    </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 5 ── RETENTION RISK ───────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Retention Risk" IconCss="bi bi-shield-exclamation" /></ChildContent>
-                <ContentTemplate>
-                    <div class="rd-tab-body">
-                        <!-- Risk score overview -->
-                        <div class="rd-risk-overview">
-                            <div class="rd-risk-gauge rd-risk-gauge-@RiskCss(_renewal.RetentionRiskScore)">
-                                <div class="rd-rg-val">@_renewal.RetentionRiskScore</div>
-                                <div class="rd-rg-lbl">Retention Risk Score</div>
-                                <div class="rd-rg-band">@RiskLabel(_renewal.RetentionRiskScore)</div>
-                            </div>
-                            <div class="rd-risk-summary">
-                                <div class="rd-rs-title">Risk Assessment</div>
-                                <div class="rd-rs-prob">
-                                    Estimated Retention Probability:
-                                    <strong class="@(RetentionProb >= 75 ? "rd-prob-high" : RetentionProb >= 50 ? "rd-prob-med" : "rd-prob-low")">
-                                        @RetentionProb%
-                                    </strong>
-                                </div>
-                                <div class="rd-rs-body">@_renewal.RiskAssessmentNotes</div>
-                            </div>
-                        </div>
-
-                        <!-- Risk factor breakdown -->
-                        <h3 class="rd-section-hdr">Risk Factor Breakdown</h3>
-                        <div class="rd-risk-factors">
-                            @foreach (var rf in _riskFactors)
+                    </section>
+                }
+                else if (_tab == "riskchanges")
+                {
+                    <section class="rdf-tab-body">
+                        <div class="rdf-section-head"><div><h2>Risk changes</h2><p>@_riskChanges.Count change(s), @_riskChanges.Count(c => c.Severity == "Material") material, @_riskChanges.Count(c => !c.IsResolved) unresolved.</p></div><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="AddRiskChange"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Change</button></div>
+                        <div class="rdf-table-wrap"><table class="rdf-table"><thead><tr><th>Risk Area</th><th>Description</th><th>Prior</th><th>Current</th><th>Severity</th><th>UW Implication</th><th>Reviewed</th><th>Status</th></tr></thead><tbody>@foreach (var item in _riskChanges) { <tr><td><strong>@item.Area</strong></td><td>@item.Description</td><td>@item.PriorValue</td><td>@item.CurrentValue</td><td><span class="rdf-severity rdf-sev-@Slug(item.Severity)">@item.Severity</span></td><td>@item.UwImplication</td><td>@(string.IsNullOrWhiteSpace(item.ReviewedBy) ? "Pending" : item.ReviewedBy)</td><td><button type="button" class="rdf-icon-toggle @(item.IsResolved ? "rdf-toggle-on" : string.Empty)" @onclick="() => ToggleRiskChange(item)"><i class="bi @(item.IsResolved ? "bi-check-circle-fill" : "bi-clock")" aria-hidden="true"></i> @(item.IsResolved ? "Resolved" : "Open")</button></td></tr> }</tbody></table></div>
+                    </section>
+                }
+                else if (_tab == "premium")
+                {
+                    <section class="rdf-tab-body">
+                        <div class="rdf-section-head"><div><h2>Premium history</h2><p>Five-year premium trend, carrier movement, and loss ratio context.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetTab("quotes")'>View Quotes</button></div>
+                        <div class="rdf-bar-chart">
+                            @{ var maxPremium = _premHistory.Any() ? _premHistory.Max(h => h.Premium) : 1m; }
+                            @foreach (var h in _premHistory.OrderBy(h => h.Year))
                             {
-                                <div class="rd-rf-card rd-rf-@rf.Impact.ToLower()">
-                                    <div class="rd-rf-head">
-                                        <i class="bi @rf.Icon rd-rf-icon" aria-hidden="true"></i>
-                                        <div class="rd-rf-label">@rf.Factor</div>
-                                        <span class="rd-rf-impact rd-rf-imp-@rf.Impact.ToLower()">@rf.Impact</span>
-                                    </div>
-                                    <div class="rd-rf-score-row">
-                                        <div class="rd-rf-bar-wrap">
-                                            <div class="rd-rf-bar rd-rf-@rf.Impact.ToLower()" style="width:@rf.Score%"></div>
-                                        </div>
-                                        <span class="rd-rf-score">@rf.Score/100</span>
-                                    </div>
-                                    <div class="rd-rf-detail">@rf.Detail</div>
-                                </div>
+                                var pct = Math.Max(4, (double)(h.Premium / maxPremium * 100));
+                                <div class="rdf-bar-col"><div class="rdf-bar-value">@MoneyShort(h.Premium)</div><div class="rdf-bar-wrap"><div class="rdf-bar-fill" style="height:@pct.ToString("F0", CultureInfo.InvariantCulture)%"></div></div><div class="rdf-bar-year">@h.Year</div>@if (h.CarrierChanged) { <i class="bi bi-arrow-left-right rdf-carrier-change" title="Carrier changed" aria-hidden="true"></i> }</div>
                             }
                         </div>
+                        <div class="rdf-table-wrap"><table class="rdf-table"><thead><tr><th>Policy Year</th><th>Carrier</th><th class="rdf-num">Premium</th><th class="rdf-num">Change</th><th class="rdf-num">Change %</th><th class="rdf-num">Loss Ratio</th><th>Notes</th></tr></thead><tbody>@foreach (var h in _premHistory) { <tr><td><strong>@h.Year</strong></td><td>@h.Carrier</td><td class="rdf-num">@Money(h.Premium)</td><td class="rdf-num @DeltaClass(h.PremiumChange)">@(h.PremiumChange == 0 ? "—" : SignedMoney(h.PremiumChange))</td><td class="rdf-num @DeltaClass(h.PremiumChangePct)">@(h.PremiumChangePct == 0 ? "—" : SignedPct(h.PremiumChangePct))</td><td class="rdf-num @LossClass(h.LossRatio)">@h.LossRatio.ToString("F1", CultureInfo.CurrentCulture)%</td><td>@h.Notes</td></tr> }</tbody></table></div>
+                    </section>
+                }
+                else if (_tab == "claims")
+                {
+                    <section class="rdf-tab-body">
+                        <div class="rdf-section-head"><div><h2>Claims / losses</h2><p>Loss activity that may influence underwriting, premium, and retention risk.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="LogClaimReview"><i class="bi bi-clipboard-check" aria-hidden="true"></i> Log Review</button></div>
+                        <div class="rdf-mini-kpis"><div><strong>@_claims.Count</strong><span>Total Claims</span></div><div><strong class="rdf-red">@_claims.Count(c => c.Status == "Open")</strong><span>Open</span></div><div><strong>@MoneyShort(_claims.Sum(c => c.TotalIncurred))</strong><span>Incurred</span></div><div><strong>@MoneyShort(_claims.Sum(c => c.Reserve))</strong><span>Reserve</span></div><div><strong class="@LossClass(_renewal.LossRatio)">@_renewal.LossRatio.ToString("F1", CultureInfo.CurrentCulture)%</strong><span>Loss Ratio</span></div></div>
+                        <div class="rdf-table-wrap"><table class="rdf-table"><thead><tr><th>Claim #</th><th>Year</th><th>Loss Date</th><th>Type</th><th>Description</th><th>Status</th><th class="rdf-num">Incurred</th><th class="rdf-num">Paid</th><th class="rdf-num">Reserve</th></tr></thead><tbody>@foreach (var c in _claims) { <tr><td><strong>@c.ClaimNum</strong></td><td>@c.PolicyYear</td><td>@DateText(c.LossDate)</td><td>@c.LossType</td><td>@c.Description</td><td><span class="rdf-status rdf-status-@Slug(c.Status)">@c.Status</span></td><td class="rdf-num">@Money(c.TotalIncurred)</td><td class="rdf-num">@Money(c.Paid)</td><td class="rdf-num">@Money(c.Reserve)</td></tr> }</tbody></table></div>
+                    </section>
+                }
+                else if (_tab == "marketing")
+                {
+                    <section class="rdf-tab-body">
+                        <div class="rdf-section-head"><div><h2>Marketing actions</h2><p>@_marketActions.Count market(s) contacted and @_marketActions.Count(m => m.Status == "Quoted") quoted.</p></div><div class="rdf-head-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="AddMarket"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Market</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo($"/quotes/compare/{_renewal.PolicyId}")'>Compare Quotes</button></div></div>
+                        <div class="rdf-table-wrap"><table class="rdf-table"><thead><tr><th>Carrier</th><th>Program</th><th>Submitted</th><th>Status</th><th class="rdf-num">Quoted Premium</th><th>Quote Expires</th><th>Underwriter</th><th>Action</th></tr></thead><tbody>@foreach (var m in _marketActions) { <tr><td><strong>@m.Carrier</strong><small>@m.Notes</small></td><td>@m.Program</td><td>@(m.ContactedDate?.ToString("MM/dd/yyyy", CultureInfo.CurrentCulture) ?? "—")</td><td><span class="rdf-status rdf-status-@Slug(m.Status)">@m.Status</span></td><td class="rdf-num">@(m.QuotedPremium.HasValue ? Money(m.QuotedPremium.Value) : "—")</td><td>@(m.QuoteExpiry?.ToString("MM/dd/yyyy", CultureInfo.CurrentCulture) ?? "—")</td><td>@m.Underwriter</td><td>@if (m.QuotedPremium.HasValue && m.Status == "Quoted") { <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => SelectQuote(m)">Select</button> }</td></tr> }</tbody></table></div>
+                    </section>
+                }
+                else if (_tab == "risk")
+                {
+                    <section class="rdf-tab-body">
+                        <div class="rdf-section-head"><div><h2>Retention risk</h2><p>Risk score, drivers, probability, and recommended retention actions.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CompletePriorityActions">Complete Priority</button></div>
+                        <div class="rdf-risk-layout"><div class="rdf-risk-gauge rdf-risk-@RiskCss(_renewal.RetentionRiskScore)"><strong>@_renewal.RetentionRiskScore</strong><span>Risk Score</span><small>@RiskLabel(_renewal.RetentionRiskScore)</small></div><div class="rdf-risk-summary"><h3>Risk Assessment</h3><p>Estimated retention probability: <strong class="@(RetentionProb >= 75 ? "rdf-green" : RetentionProb >= 50 ? "rdf-amber" : "rdf-red")">@RetentionProb%</strong></p><p>@_renewal.RiskAssessmentNotes</p></div></div>
+                        <div class="rdf-risk-factors">@foreach (var rf in _riskFactors) { <article class="rdf-risk-factor rdf-impact-@rf.Impact.ToLowerInvariant()"><div><i class="bi @rf.Icon" aria-hidden="true"></i><strong>@rf.Factor</strong><span>@rf.Impact</span></div><div class="rdf-progress"><i style="width:@rf.Score%"></i></div><p>@rf.Detail</p></article> }</div>
+                        <div class="rdf-action-list">@foreach (var action in _retentionActions) { <label class="rdf-action-item @(action.IsComplete ? "rdf-action-done" : action.IsPriority ? "rdf-action-priority" : string.Empty)"><input type="checkbox" @bind="action.IsComplete" /><span><strong>@action.Action</strong><small>@action.Type · @action.Owner · @action.DueDesc</small></span>@if (action.IsPriority && !action.IsComplete) { <i class="bi bi-star-fill" aria-hidden="true"></i> }</label> }</div>
+                    </section>
+                }
+                else if (_tab == "tasks")
+                {
+                    <section class="rdf-tab-body">
+                        <div class="rdf-section-head"><div><h2>Tasks</h2><p>@CompletedTaskCount/@_tasks.Count complete, @OpenTaskCount open, @OverdueTaskCount overdue.</p></div><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="AddTask"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Task</button></div>
+                        <div class="rdf-task-progress"><span>Renewal progress</span><div><i style="width:@TaskProgress%"></i></div><strong>@TaskProgress%</strong></div>
+                        <div class="rdf-task-list">@foreach (var task in _tasks.OrderBy(t => t.SortOrder)) { <label class="rdf-task-item @(task.Complete ? "rdf-task-done" : task.IsDue ? "rdf-task-overdue" : string.Empty)"><input type="checkbox" @bind="task.Complete" /><span class="rdf-task-step">@task.SortOrder</span><span class="rdf-task-body"><strong>@task.Title</strong><small>@task.Category · @(task.DueDate.HasValue ? $"Due {task.DueDate.Value:MM/dd/yyyy}" : "No due date") · @(task.AssignedTo ?? "Unassigned")</small>@if (!string.IsNullOrWhiteSpace(task.Notes)) { <em>@task.Notes</em> }</span>@if (task.IsDue) { <span class="rdf-due-badge">Overdue</span> }</label> }</div>
+                    </section>
+                }
+                else if (_tab == "communications")
+                {
+                    <section class="rdf-tab-body">
+                        <div class="rdf-section-head"><div><h2>Communication log</h2><p>@_comms.Count client, carrier, and internal renewal touchpoint(s).</p></div><div class="rdf-head-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NewMessage">New Message</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="LogCall">Log Call</button></div></div>
+                        <div class="rdf-timeline">@foreach (var c in _comms.OrderByDescending(c => c.SentAt)) { <article class="rdf-timeline-item"><span class="rdf-timeline-dot rdf-comm-@Slug(c.Channel)"><i class="bi @CommIcon(c.Channel)" aria-hidden="true"></i></span><div><header><strong>@c.Subject</strong><span>@c.SentAt.ToString("MM/dd/yyyy hh:mm tt", CultureInfo.CurrentCulture)</span></header><p><span class="rdf-status rdf-status-@Slug(c.Channel)">@c.Channel</span> <span class="rdf-status rdf-status-@Slug(c.Direction)">@c.Direction</span> <span class="rdf-status rdf-status-@Slug(c.Status)">@c.Status</span></p><small>From @c.From to @c.To · by @c.CreatedBy</small>@if (!string.IsNullOrWhiteSpace(c.Notes)) { <p>@c.Notes</p> }</div></article> }</div>
+                    </section>
+                }
+                else
+                {
+                    <section class="rdf-tab-body">
+                        <div class="rdf-section-head"><div><h2>Quote options</h2><p>@_quotes.Count(q => q.Status == "Quoted") quote(s) received. Select the best option for proposal or binding.</p></div><div class="rdf-head-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo($"/quotes/proposal/{_renewal.PolicyId}")'>Build Proposal</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/quotes/bind")'>Bind</button></div></div>
+                        <div class="rdf-quote-grid">@foreach (var q in _quotes) { <article class="rdf-quote-card @(q.IsRecommended ? "rdf-quote-rec" : string.Empty) @(q.IsSelected ? "rdf-quote-selected" : string.Empty)">@if (q.IsRecommended) { <span class="rdf-rec-badge"><i class="bi bi-trophy-fill" aria-hidden="true"></i> Recommended</span> }<header><strong>@q.Carrier</strong><span class="rdf-status rdf-status-@Slug(q.Status)">@q.Status</span></header><div class="rdf-quote-prem">@(q.QuotedPremium.HasValue ? Money(q.QuotedPremium.Value) : "Pending")</div>@if (q.QuotedPremium.HasValue) { var d = q.QuotedPremium.Value - _renewal.CurrentPremium; <p class="@DeltaClass(d)">@SignedMoney(d) vs current (@SignedPct(d / _renewal.CurrentPremium * 100m))</p> }<div class="rdf-quote-meta">@if (!string.IsNullOrWhiteSpace(q.QuoteNumber)) { <span>@q.QuoteNumber</span> }@if (q.ExpiryDate.HasValue) { <span>Exp @q.ExpiryDate.Value.ToString("MM/dd/yy", CultureInfo.CurrentCulture)</span> }</div><div class="rdf-chip-row">@foreach (var feat in q.Features) { <span>@feat</span> }</div><p>@q.Notes</p><footer><button type="button" class="um-btn @(q.IsSelected ? "um-btn-success" : "um-btn-ghost") um-btn-sm" @onclick="() => SelectRenewalQuote(q)"><i class="bi @(q.IsSelected ? "bi-check-circle-fill" : "bi-circle")" aria-hidden="true"></i> @(q.IsSelected ? "Selected" : "Select")</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/quotes/bind")'>Bind</button></footer></article> }</div>
+                    </section>
+                }
+            </main>
 
-                        <!-- Retention recommendations -->
-                        <h3 class="rd-section-hdr">Recommended Retention Actions</h3>
-                        <div class="rd-retention-actions">
-                            @foreach (var ra in _retentionActions)
-                            {
-                                <div class="rd-ra-item @(ra.IsComplete ? "rd-ra-done" : ra.IsPriority ? "rd-ra-priority" : "")">
-                                    <div class="rd-ra-checkbox">
-                                        <SfCheckBox @bind-Checked="ra.IsComplete" />
-                                    </div>
-                                    <div class="rd-ra-body">
-                                        <div class="rd-ra-title @(ra.IsComplete ? "rd-ra-title-done" : "")">
-                                            @if (ra.IsPriority && !ra.IsComplete)
-                                            {
-                                                <i class="bi bi-star-fill rd-ra-priority-icon" aria-hidden="true"></i>
-                                            }
-                                            @ra.Action
-                                        </div>
-                                        <div class="rd-ra-meta">@ra.Owner · @ra.DueDesc</div>
-                                    </div>
-                                    <span class="rd-ra-type rd-ra-t-@ra.Type.ToLower().Replace(" ","")">@ra.Type</span>
-                                </div>
-                            }
-                        </div>
+            <aside class="rdf-side-panel">
+                <section class="rdf-side-card">
+                    <h2>Executive summary</h2>
+                    <div class="rdf-side-grid">
+                        <div><span>Premium</span><strong>@Money(_renewal.CurrentPremium)</strong></div>
+                        <div><span>Projected</span><strong>@(_renewal.ProjectedPremium.HasValue ? Money(_renewal.ProjectedPremium.Value) : "Pending")</strong></div>
+                        <div><span>Risk</span><strong class="@RiskTone(_renewal.RetentionRiskScore)">@_renewal.RetentionRiskScore/100</strong></div>
+                        <div><span>Retention</span><strong>@RetentionProb%</strong></div>
+                        <div><span>Open Tasks</span><strong>@OpenTaskCount</strong></div>
+                        <div><span>Quotes</span><strong>@_quotes.Count(q => q.Status == "Quoted")</strong></div>
                     </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 6 ── TASKS ────────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Tasks" IconCss="bi bi-list-check" /></ChildContent>
-                <ContentTemplate>
-                    <div class="rd-tab-body">
-                        <div class="rd-tab-toolbar">
-                            <span class="rd-tab-count">
-                                @_tasks.Count(t => t.Complete)/@_tasks.Count complete ·
-                                @{ var overdue = _tasks.Count(t => !t.Complete && t.IsDue); }
-                                @if (overdue > 0) { <span class="rd-tc-warn">@overdue overdue</span> }
-                            </span>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="AddTask">
-                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Task
-                            </button>
-                        </div>
-
-                        <!-- Progress track -->
-                        <div class="rd-task-progress">
-                            <div class="rd-tp-label">Renewal Pipeline Progress</div>
-                            <div class="rd-tp-bar-wrap">
-                                <div class="rd-tp-bar"
-                                     style="width:@(_tasks.Any() ? (_tasks.Count(t=>t.Complete)*100/_tasks.Count) : 0)%"></div>
-                            </div>
-                            <span class="rd-tp-pct">@(_tasks.Any() ? (_tasks.Count(t=>t.Complete)*100/_tasks.Count) : 0)%</span>
-                        </div>
-
-                        <div class="rd-task-list">
-                            @foreach (var task in _tasks.OrderBy(t => t.SortOrder))
-                            {
-                                <div class="rd-task-item @(task.Complete ? "rd-task-done" : task.IsDue ? "rd-task-overdue" : "")">
-                                    <div class="rd-task-check">
-                                        <SfCheckBox @bind-Checked="task.Complete" />
-                                    </div>
-                                    <div class="rd-task-step">@task.SortOrder</div>
-                                    <div class="rd-task-body">
-                                        <div class="rd-task-title @(task.Complete ? "rd-task-title-done" : "")">@task.Title</div>
-                                        <div class="rd-task-meta">
-                                            <span>@task.Category</span>
-                                            @if (task.DueDate.HasValue)
-                                            {
-                                                <span class="@(task.IsDue && !task.Complete ? "rd-tc-warn" : "")">
-                                                    Due @task.DueDate.Value.ToString("MM/dd/yyyy")
-                                                </span>
-                                            }
-                                            @if (!string.IsNullOrEmpty(task.AssignedTo)) { <span>@task.AssignedTo</span> }
-                                        </div>
-                                        @if (!string.IsNullOrEmpty(task.Notes))
-                                        {
-                                            <div class="rd-task-notes">@task.Notes</div>
-                                        }
-                                    </div>
-                                    @if (task.IsDue && !task.Complete)
-                                    {
-                                        <span class="rd-task-due-badge">Overdue</span>
-                                    }
-                                </div>
-                            }
-                        </div>
+                </section>
+                <section class="rdf-side-card">
+                    <h2>Stage workflow</h2>
+                    <div class="rdf-stage-actions">
+                        @foreach (var stage in _stageOptions)
+                        {
+                            <button type="button" class="@(stage == _renewal.Stage ? "rdf-stage-active" : string.Empty)" @onclick="() => SetStage(stage)">@stage</button>
+                        }
                     </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 7 ── COMMUNICATION LOG ────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Communication Log" IconCss="bi bi-envelope" /></ChildContent>
-                <ContentTemplate>
-                    <div class="rd-tab-body">
-                        <div class="rd-tab-toolbar">
-                            <span class="rd-tab-count">@_comms.Count message(s)</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="NewMessage">
-                                <i class="bi bi-plus-lg" aria-hidden="true"></i> New Message
-                            </button>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LogCall">
-                                <i class="bi bi-telephone" aria-hidden="true"></i> Log Call
-                            </button>
-                        </div>
-                        <div class="pd-timeline">
-                            @foreach (var c in _comms.OrderByDescending(c => c.SentAt))
-                            {
-                                <div class="pd-tl-item">
-                                    <div class="pd-tl-dot pd-tl-@c.Channel.ToLower()">
-                                        <i class="bi @CommIcon(c.Channel)" aria-hidden="true"></i>
-                                    </div>
-                                    <div class="pd-tl-line"></div>
-                                    <div class="pd-tl-body">
-                                        <div class="pd-tl-header">
-                                            <span class="pd-tl-title">@c.Subject</span>
-                                            <span class="pd-comm-chip pd-comm-@c.Channel.ToLower()">@c.Channel</span>
-                                            <span class="pd-dir-chip @(c.Direction=="Inbound"?"pd-dir-in":"pd-dir-out")">@c.Direction</span>
-                                            <span class="pd-comm-status pd-cstat-@c.Status.ToLower()">@c.Status</span>
-                                            <span class="pd-tl-date">@c.SentAt.ToString("MM/dd/yyyy hh:mm tt")</span>
-                                        </div>
-                                        <div class="pd-tl-meta">
-                                            <span>From: @c.From</span>
-                                            <span>To: @c.To</span>
-                                            <span>by @c.CreatedBy</span>
-                                        </div>
-                                        @if (!string.IsNullOrEmpty(c.Notes))
-                                        {
-                                            <div class="pd-tl-notes">@c.Notes</div>
-                                        }
-                                    </div>
-                                </div>
-                            }
-                        </div>
+                </section>
+                <section class="rdf-side-card">
+                    <h2>Next best action</h2>
+                    <p>@NextBestAction</p>
+                    <div class="rdf-side-actions">
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetTab("tasks")'>Tasks</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetTab("communications")'>Contact</button>
+                        <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => SetTab("quotes")'>Quote</button>
                     </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 8 ── QUOTE OPTIONS ────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Quote Options" IconCss="bi bi-quote" /></ChildContent>
-                <ContentTemplate>
-                    <div class="rd-tab-body">
-                        <div class="rd-tab-toolbar">
-                            <span class="rd-tab-count">@_quotes.Count(q => q.Status == "Quoted") quote(s) received</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo($"/quotes/compare/{_renewal.PolicyId}")'>
-                                <i class="bi bi-layout-split" aria-hidden="true"></i> Full Comparison
-                            </button>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo($"/quotes/proposal/{_renewal.PolicyId}")'>
-                                <i class="bi bi-file-earmark-richtext" aria-hidden="true"></i> Build Proposal
-                            </button>
-                            <button class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/quotes/bind")'>
-                                <i class="bi bi-shield-check" aria-hidden="true"></i> Bind
-                            </button>
-                        </div>
-
-                        <!-- Quote cards -->
-                        <div class="rd-quote-cards">
-                            @foreach (var q in _quotes)
-                            {
-                                <div class="rd-quote-card @(q.IsRecommended ? "rd-qc-rec" : "") @(q.IsSelected ? "rd-qc-selected" : "")">
-                                    @if (q.IsRecommended)
-                                    {
-                                        <div class="rd-qc-rec-badge">
-                                            <i class="bi bi-trophy-fill" aria-hidden="true"></i> Recommended
-                                        </div>
-                                    }
-                                    <div class="rd-qc-head">
-                                        <div class="rd-qc-carrier">@q.Carrier</div>
-                                        <span class="rd-mkt-status rd-mkt-@q.Status.ToLower().Replace(" ","")">@q.Status</span>
-                                    </div>
-                                    @if (q.QuotedPremium.HasValue)
-                                    {
-                                        <div class="rd-qc-prem">@q.QuotedPremium.Value.ToString("C0")</div>
-                                        <div class="rd-qc-delta">
-                                            @{
-                                                var d = q.QuotedPremium.Value - _renewal.CurrentPremium;
-                                            }
-                                            <span class="@(d > 0 ? "rdb-delta-up" : "rdb-delta-dn")">
-                                                @(d >= 0 ? "+" : "")@d.ToString("C0")
-                                                (@(d >= 0 ? "+" : "")@((d / _renewal.CurrentPremium * 100).ToString("F1"))%)
-                                            </span>
-                                            vs. current
-                                        </div>
-                                    }
-                                    else
-                                    {
-                                        <div class="rd-qc-prem rd-qc-pend">Pending</div>
-                                    }
-                                    <div class="rd-qc-meta">
-                                        @if (!string.IsNullOrEmpty(q.QuoteNumber)) { <span>@q.QuoteNumber</span> }
-                                        @if (q.ExpiryDate.HasValue) { <span>Exp @q.ExpiryDate.Value.ToString("MM/dd/yy")</span> }
-                                    </div>
-                                    <div class="rd-qc-chips">
-                                        @foreach (var feat in q.Features) { <span class="rd-qc-feat">@feat</span> }
-                                    </div>
-                                    @if (!string.IsNullOrEmpty(q.Notes))
-                                    {
-                                        <div class="rd-qc-notes">@q.Notes</div>
-                                    }
-                                    <div class="rd-qc-actions">
-                                        <button class="um-btn @(q.IsSelected ? "um-btn-success" : "um-btn-ghost") um-btn-sm"
-                                                @onclick="() => SelectRenewalQuote(q)">
-                                            <i class="bi @(q.IsSelected ? "bi-check-circle-fill" : "bi-circle")" aria-hidden="true"></i>
-                                            @(q.IsSelected ? "Selected" : "Select")
-                                        </button>
-                                        <button class="um-btn um-btn-primary um-btn-sm"
-                                                @onclick='() => Nav.NavigateTo("/quotes/bind")'>
-                                            <i class="bi bi-shield-check" aria-hidden="true"></i> Bind
-                                        </button>
-                                    </div>
-                                </div>
-                            }
-                        </div>
-                    </div>
-                </ContentTemplate>
-            </TabItem>
-
-        </Tabs>
-    </AppDetailTabs>
-}
+                </section>
+            </aside>
+        </section>
+    }
+</div>
 
 @code {
     [Parameter] public Guid RenewalId { get; set; }
 
-    SfToast _toast = default!;
+    private Guid _tenantId;
+    private Guid _userId;
+    private bool _loading = true;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string _tab = "snapshot";
+    private string? _loadError;
 
-    bool _loading = true;
-    int  _tab     = 0;
+    private RenewalModel? _renewal;
+    private readonly List<RiskChangeRow> _riskChanges = [];
+    private readonly List<PremHistoryRow> _premHistory = [];
+    private readonly List<ClaimHistRow> _claims = [];
+    private readonly List<MarketActionRow> _marketActions = [];
+    private readonly List<RiskFactor> _riskFactors = [];
+    private readonly List<RetentionAction> _retentionActions = [];
+    private readonly List<RenewalTask> _tasks = [];
+    private readonly List<CommRow> _comms = [];
+    private readonly List<QuoteOption> _quotes = [];
+    private readonly List<CovHighlight> _policyCoverages = [];
 
-    // ── Data model ────────────────────────────────────────────────
-    sealed class RenewalModel
-    {
-        public Guid     RenewalId            { get; set; }
-        public Guid     PolicyId             { get; set; }
-        public string   AccountName          { get; set; } = "";
-        public string   PolicyNumber         { get; set; } = "";
-        public string   PolicyStatus         { get; set; } = "";
-        public string   PolicyType           { get; set; } = "";
-        public string   Lob                  { get; set; } = "";
-        public string   Carrier              { get; set; } = "";
-        public string   Program              { get; set; } = "";
-        public DateTime EffDate              { get; set; }
-        public DateTime ExpiryDate           { get; set; }
-        public int      DaysToExpiry         { get; set; }
-        public int      TermMonths           { get; set; }
-        public string   Stage                { get; set; } = "";
-        public int      RetentionRiskScore   { get; set; }
-        public decimal  CurrentPremium       { get; set; }
-        public decimal? PriorPremium         { get; set; }
-        public decimal? ProjectedPremium     { get; set; }
-        public decimal? MinAcceptablePremium { get; set; }
-        public decimal  AgencyFee            { get; set; }
-        public decimal  LossRatio            { get; set; }
-        public string   PrimaryInsured       { get; set; } = "";
-        public string   InsuredAddress       { get; set; } = "";
-        public string   InsuredCity          { get; set; } = "";
-        public string   InsuredState         { get; set; } = "";
-        public string   InsuredZip           { get; set; } = "";
-        public string?  EntityType           { get; set; }
-        public string?  SicCode              { get; set; }
-        public string?  Fein                 { get; set; }
-        public string   Producer             { get; set; } = "";
-        public string   Csr                  { get; set; } = "";
-        public string?  AccountManager       { get; set; }
-        public string?  Underwriter          { get; set; }
-        public string?  UwPhone              { get; set; }
-        public string   Branch               { get; set; } = "";
-        public DateTime? RenewalNoticeDate   { get; set; }
-        public DateTime? QuoteDueDate        { get; set; }
-        public string   RiskAssessmentNotes  { get; set; } = "";
-    }
+    private readonly TabOption[] _tabs = [new("snapshot", "Snapshot", "bi-clipboard-data"), new("riskchanges", "Risk Changes", "bi-exclamation-triangle"), new("premium", "Premium", "bi-graph-up"), new("claims", "Claims", "bi-exclamation-circle"), new("marketing", "Marketing", "bi-send"), new("risk", "Retention", "bi-shield-exclamation"), new("tasks", "Tasks", "bi-list-check"), new("communications", "Comms", "bi-envelope"), new("quotes", "Quotes", "bi-quote")];
+    private readonly string[] _stageOptions = ["Not Started", "In Progress", "Quoted", "Renewed", "Lost", "Non-Renewed"];
 
-    sealed class RiskChangeRow
-    {
-        public string Area          { get; set; } = "";
-        public string Description   { get; set; } = "";
-        public string PriorValue    { get; set; } = "";
-        public string CurrentValue  { get; set; } = "";
-        public string Severity      { get; set; } = "";     // Minor / Moderate / Material
-        public string UwImplication { get; set; } = "";
-        public string ReviewedBy    { get; set; } = "";
-        public bool   IsResolved    { get; set; }
-    }
+    private int RetentionProb => _renewal is null ? 0 : Math.Clamp(100 - _renewal.RetentionRiskScore, 0, 100);
+    private int OpenTaskCount => _tasks.Count(t => !t.Complete);
+    private int CompletedTaskCount => _tasks.Count(t => t.Complete);
+    private int OverdueTaskCount => _tasks.Count(t => t.IsDue);
+    private int TaskProgress => _tasks.Count == 0 ? 0 : CompletedTaskCount * 100 / _tasks.Count;
+    private string ToastIcon => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
+    private string LastTouchLabel => _comms.Count == 0 ? "none" : _comms.Max(c => c.SentAt).ToString("MMM d", CultureInfo.CurrentCulture);
+    private string PremiumDelta => _renewal?.ProjectedPremium.HasValue == true ? SignedMoney(_renewal.ProjectedPremium.Value - _renewal.CurrentPremium) : "—";
+    private string NextBestAction => OverdueTaskCount > 0 ? "Clear overdue renewal tasks before proposal delivery." : _renewal?.RetentionRiskScore >= 70 ? "Schedule executive retention outreach and compare competitive coverage." : _quotes.Any(q => q.IsRecommended) ? "Review the recommended quote and build the client proposal." : "Continue monitoring carrier responses and client sentiment.";
 
-    sealed class PremHistoryRow
-    {
-        public string  Year             { get; set; } = "";
-        public string  Carrier          { get; set; } = "";
-        public decimal Premium          { get; set; }
-        public decimal PremiumChange    { get; set; }
-        public decimal PremiumChangePct { get; set; }
-        public decimal LossRatio        { get; set; }
-        public bool    CarrierChanged   { get; set; }
-        public string  Notes            { get; set; } = "";
-    }
-
-    sealed class ClaimHistRow
-    {
-        public string   ClaimNum      { get; set; } = "";
-        public string   PolicyYear    { get; set; } = "";
-        public DateTime LossDate      { get; set; }
-        public string   LossType      { get; set; } = "";
-        public string   Description   { get; set; } = "";
-        public string   Status        { get; set; } = "";
-        public decimal  TotalIncurred { get; set; }
-        public decimal  Paid          { get; set; }
-        public decimal  Reserve       { get; set; }
-    }
-
-    sealed class MarketActionRow
-    {
-        public string    Carrier        { get; set; } = "";
-        public string    Program        { get; set; } = "";
-        public DateTime? ContactedDate  { get; set; }
-        public string    Status         { get; set; } = "";   // Submitted / Quoted / Declined / Pending
-        public decimal?  QuotedPremium  { get; set; }
-        public DateTime? QuoteExpiry    { get; set; }
-        public string    Underwriter    { get; set; } = "";
-        public string    Notes          { get; set; } = "";
-    }
-
-    sealed class RiskFactor
-    {
-        public string Icon   { get; set; } = "";
-        public string Factor { get; set; } = "";
-        public string Impact { get; set; } = "";    // High / Medium / Low
-        public int    Score  { get; set; }
-        public string Detail { get; set; } = "";
-    }
-
-    sealed class RetentionAction
-    {
-        public string Action     { get; set; } = "";
-        public string Type       { get; set; } = "";
-        public string Owner      { get; set; } = "";
-        public string DueDesc    { get; set; } = "";
-        public bool   IsPriority { get; set; }
-        public bool   IsComplete { get; set; }
-    }
-
-    sealed class RenewalTask
-    {
-        public int      SortOrder  { get; set; }
-        public string   Title      { get; set; } = "";
-        public string   Category   { get; set; } = "";
-        public string?  AssignedTo { get; set; }
-        public DateTime? DueDate   { get; set; }
-        public bool     Complete   { get; set; }
-        public bool     IsDue      => DueDate.HasValue && DueDate.Value < DateTime.Today && !Complete;
-        public string   Notes      { get; set; } = "";
-    }
-
-    sealed class CommRow
-    {
-        public string   Channel   { get; set; } = "";
-        public string   Direction { get; set; } = "";
-        public string   Subject   { get; set; } = "";
-        public string   From      { get; set; } = "";
-        public string   To        { get; set; } = "";
-        public string   Status    { get; set; } = "";
-        public DateTime SentAt    { get; set; }
-        public string   CreatedBy { get; set; } = "";
-        public string   Notes     { get; set; } = "";
-    }
-
-    sealed class QuoteOption
-    {
-        public string    Carrier        { get; set; } = "";
-        public string    QuoteNumber    { get; set; } = "";
-        public string    Status         { get; set; } = "";
-        public decimal?  QuotedPremium  { get; set; }
-        public DateTime? ExpiryDate     { get; set; }
-        public bool      IsRecommended  { get; set; }
-        public bool      IsSelected     { get; set; }
-        public string    Notes          { get; set; } = "";
-        public List<string> Features    { get; set; } = new();
-    }
-
-    sealed class CovHighlight { public string Label { get; set; } = ""; public string Value { get; set; } = ""; }
-
-    RenewalModel? _renewal = null;
-    List<RiskChangeRow>    _riskChanges      = new();
-    List<PremHistoryRow>   _premHistory      = new();
-    List<ClaimHistRow>     _claims           = new();
-    List<MarketActionRow>  _marketActions    = new();
-    List<RiskFactor>       _riskFactors      = new();
-    List<RetentionAction>  _retentionActions = new();
-    List<RenewalTask>      _tasks            = new();
-    List<CommRow>          _comms            = new();
-    List<QuoteOption>      _quotes           = new();
-    List<CovHighlight>     _policyCoverages  = new();
-
-    int RetentionProb => 100 - _renewal!.RetentionRiskScore;
-    string PremiumDelta => _renewal?.ProjectedPremium.HasValue == true
-        ? ((_renewal.ProjectedPremium.Value - _renewal.CurrentPremium) >= 0 ? "+" : "") +
-          (_renewal.ProjectedPremium.Value - _renewal.CurrentPremium).ToString("C0")
-        : "—";
-    string PremiumDeltaCss => _renewal?.ProjectedPremium.HasValue == true
-        ? _renewal.ProjectedPremium.Value > _renewal.CurrentPremium ? "rd-ki-red" : "rd-ki-green"
-        : "rd-ki-gray";
+    private IReadOnlyList<Metric> Metrics => _renewal is null ? [] :
+    [
+        new("snapshot", MoneyShort(_renewal.CurrentPremium), "Current Premium", "In-force written premium", "bi-cash-stack", "rdf-kpi-blue"),
+        new("premium", _renewal.ProjectedPremium.HasValue ? MoneyShort(_renewal.ProjectedPremium.Value) : "Pending", "Projected", "Projected renewal premium", "bi-calculator", _renewal.ProjectedPremium > _renewal.CurrentPremium ? "rdf-kpi-red" : "rdf-kpi-green"),
+        new("premium", PremiumDelta, "Premium Δ", "Change against current premium", "bi-graph-up", PremiumDelta.StartsWith('+') ? "rdf-kpi-red" : "rdf-kpi-green"),
+        new("snapshot", DaysLabel(_renewal.DaysToExpiry), "Expiry", "Days to expiration", "bi-clock", _renewal.DaysToExpiry <= 30 ? "rdf-kpi-red" : "rdf-kpi-blue"),
+        new("claims", _renewal.LossRatio.ToString("F0", CultureInfo.CurrentCulture) + "%", "Loss Ratio", "Current loss ratio", "bi-percent", _renewal.LossRatio >= 70 ? "rdf-kpi-red" : _renewal.LossRatio >= 40 ? "rdf-kpi-amber" : "rdf-kpi-green"),
+        new("tasks", OpenTaskCount.ToString("N0", CultureInfo.CurrentCulture), "Open Tasks", "Unfinished renewal tasks", "bi-list-check", OverdueTaskCount > 0 ? "rdf-kpi-red" : "rdf-kpi-gray"),
+        new("risk", _renewal.RetentionRiskScore + "/100", "Risk Score", "Retention risk score", "bi-shield-exclamation", _renewal.RetentionRiskScore >= 70 ? "rdf-kpi-red" : _renewal.RetentionRiskScore >= 40 ? "rdf-kpi-amber" : "rdf-kpi-green"),
+        new("quotes", _quotes.Count(q => q.Status == "Quoted").ToString("N0", CultureInfo.CurrentCulture), "Quotes", "Quotes received", "bi-quote", "rdf-kpi-purple")
+    ];
 
     protected override async Task OnInitializedAsync()
     {
-        Breadcrumbs.SetCrumbs(
-            new("Home","/"), new("Renewals","/renewals"),
-            new("Renewal Detail",$"/renewals/{RenewalId}"));
-        await Task.Delay(0);
-        BuildStub();
-        _loading = false;
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _userId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Renewals", "/renewals"), new("Renewal Detail", $"/renewals/{RenewalId}"));
+        await LoadAsync();
     }
 
-    void BuildStub()
+    private async Task Refresh() => await LoadAsync();
+
+    private async Task LoadAsync()
     {
-        _renewal = new RenewalModel
+        _loading = true;
+        _loadError = null;
+        try
         {
-            RenewalId=RenewalId, PolicyId=Guid.NewGuid(),
-            AccountName="Sullivan Mfg. LLC", PolicyNumber="TRV-GL-2024-00421",
-            PolicyStatus="Active", PolicyType="Commercial Lines",
-            Lob="General Liability", Carrier="Travelers Indemnity",
-            Program="Select Accounts GL",
-            EffDate=new DateTime(2024,7,1), ExpiryDate=DateTime.Today.AddDays(18),
-            DaysToExpiry=18, TermMonths=12, Stage="In Progress",
-            RetentionRiskScore=65, CurrentPremium=17_250m, PriorPremium=15_800m,
-            ProjectedPremium=18_800m, MinAcceptablePremium=17_000m, AgencyFee=250m,
-            LossRatio=28m,
-            PrimaryInsured="Sullivan Manufacturing, LLC",
-            InsuredAddress="1422 Industrial Pkwy", InsuredCity="Houston", InsuredState="TX", InsuredZip="77001",
-            EntityType="LLC", SicCode="3490 — Misc Fabricated Metal Products", Fein="75-1234567",
-            Producer="Maria Santos", Csr="Linda Webb", AccountManager="Tom Reyes",
-            Underwriter="Lisa Chen", UwPhone="(800) 555-0121", Branch="Houston South",
-            RenewalNoticeDate=DateTime.Today.AddDays(-45),
-            QuoteDueDate=DateTime.Today.AddDays(5),
-            RiskAssessmentNotes="Account has 65 risk score due to 9.2% premium increase projection, one open GL claim from 2023, and competition from Cincinnati Financial who approached the account directly. Relationship is strong (5-year account). Recommend direct contact, premium negotiation, and broad-form coverage presentation."
-        };
-
-        _policyCoverages = new()
+            BuildStub();
+            var detail = await Api.GetRenewalRetentionDetailAsync(RenewalId);
+            if (detail is not null && detail.Case.RetentionCaseId != Guid.Empty)
+            {
+                ApplyRetentionDetail(detail);
+                ShowToast("Renewal retention workflow synced successfully.", "success");
+            }
+            else
+            {
+                ShowToast("Renewal detail loaded from local workflow seed data.", "success");
+            }
+        }
+        catch (Exception ex)
         {
-            new(){ Label="Occ. Limit",          Value="$2,000,000" },
-            new(){ Label="Aggregate",            Value="$4,000,000" },
-            new(){ Label="Products / CO",        Value="$2,000,000" },
-            new(){ Label="HNOA",                 Value="Included" },
-            new(){ Label="Waiver of Subroga.",   Value="Included" },
-            new(){ Label="Additional Insured",   Value="Blanket" },
-            new(){ Label="P&NC",                 Value="Included" },
-            new(){ Label="XCU Exclusion",        Value="Waived" },
-        };
-
-        _riskChanges = new()
+            _loadError = $"Failed to sync renewal workflow: {ex.Message}";
+            if (_renewal is null) BuildStub();
+            ShowToast($"Renewal detail sync failed: {ex.Message}", "danger");
+        }
+        finally
         {
-            new(){ Area="Payroll",          Description="Annual payroll increased at renewal",            PriorValue="$2.4M",      CurrentValue="$2.9M",    Severity="Moderate", UwImplication="Base rate increase ~6%",          ReviewedBy="Maria Santos", IsResolved=true },
-            new(){ Area="Revenue",          Description="Gross revenue growth vs prior year",             PriorValue="$8.1M",      CurrentValue="$9.4M",    Severity="Minor",    UwImplication="Slight products/CO exposure incr.", ReviewedBy="Maria Santos", IsResolved=true },
-            new(){ Area="Operations",       Description="Added steel fabrication line",                   PriorValue="Stamping only", CurrentValue="Stamping + Fabrication", Severity="Material", UwImplication="May trigger XCU re-review; notify UW", ReviewedBy="",           IsResolved=false },
-            new(){ Area="Open Claim",       Description="GL claim from slip-and-fall (2023) still open", PriorValue="—",          CurrentValue="$42,000 reserve", Severity="Moderate", UwImplication="Carrier may apply claim surcharge",   ReviewedBy="Maria Santos", IsResolved=false },
-            new(){ Area="Locations",        Description="New warehouse added in Pasadena, TX",            PriorValue="1 location", CurrentValue="2 locations",    Severity="Minor",    UwImplication="Schedule endorsement needed",         ReviewedBy="Linda Webb",   IsResolved=true },
-        };
-
-        _premHistory = new()
-        {
-            new(){ Year="2020–21", Carrier="CNA Commercial",      Premium=12_200m, PremiumChange=0,       PremiumChangePct=0,    LossRatio=14.2m, CarrierChanged=false, Notes="First year with agency" },
-            new(){ Year="2021–22", Carrier="CNA Commercial",      Premium=13_100m, PremiumChange=900m,    PremiumChangePct=7.4m, LossRatio=8.5m,  CarrierChanged=false, Notes="" },
-            new(){ Year="2022–23", Carrier="Travelers Indemnity", Premium=14_400m, PremiumChange=1_300m,  PremiumChangePct=9.9m, LossRatio=22.1m, CarrierChanged=true,  Notes="Moved to Travelers for broader coverage" },
-            new(){ Year="2023–24", Carrier="Travelers Indemnity", Premium=15_800m, PremiumChange=1_400m,  PremiumChangePct=9.7m, LossRatio=28.0m, CarrierChanged=false, Notes="Open claim impacts ratio" },
-            new(){ Year="2024–25", Carrier="Travelers Indemnity", Premium=17_250m, PremiumChange=1_450m,  PremiumChangePct=9.2m, LossRatio=5.2m,  CarrierChanged=false, Notes="Current term" },
-        };
-
-        _claims = new()
-        {
-            new(){ ClaimNum="GL-2023-8841", PolicyYear="2023–24", LossDate=new DateTime(2023,9,12), LossType="GL — Slip & Fall", Description="Visitor slip-and-fall at main facility",   Status="Open",   TotalIncurred=42_000m, Paid=18_500m, Reserve=23_500m },
-            new(){ ClaimNum="GL-2022-5102", PolicyYear="2022–23", LossDate=new DateTime(2022,3,8),  LossType="Products/CO",      Description="Customer injury from defective stamped part", Status="Closed", TotalIncurred=11_200m, Paid=11_200m, Reserve=0m },
-            new(){ ClaimNum="GL-2021-2240", PolicyYear="2021–22", LossDate=new DateTime(2021,11,1), LossType="GL — Property Damage", Description="Delivery truck backed into fence",      Status="Closed", TotalIncurred=4_800m,  Paid=4_800m,  Reserve=0m },
-        };
-
-        _marketActions = new()
-        {
-            new(){ Carrier="Travelers Indemnity",  Program="Select Accounts GL",    ContactedDate=DateTime.Today.AddDays(-12), Status="Quoted",    QuotedPremium=18_800m, QuoteExpiry=DateTime.Today.AddDays(20), Underwriter="Lisa Chen",    Notes="9.2% increase; XCU waiver maintained" },
-            new(){ Carrier="Hartford Fire & Cas.", Program="Spectrum Commercial",   ContactedDate=DateTime.Today.AddDays(-10), Status="Quoted",    QuotedPremium=19_400m, QuoteExpiry=DateTime.Today.AddDays(15), Underwriter="Mike Rosario", Notes="Blanket AI not included; solid broad form" },
-            new(){ Carrier="Cincinnati Financial", Program="Commercial Lines",       ContactedDate=DateTime.Today.AddDays(-8),  Status="Pending",   QuotedPremium=null,    QuoteExpiry=null,                       Underwriter="Dan Torres",   Notes="Competitor — approached account directly" },
-            new(){ Carrier="Markel Corporation",   Program="Markel Specialty E&S",  ContactedDate=null,                        Status="Submitted", QuotedPremium=null,    QuoteExpiry=null,                       Underwriter="—",            Notes="Backup E&S option if admitted declines" },
-        };
-
-        _riskFactors = new()
-        {
-            new(){ Icon="bi-graph-up-arrow",       Factor="Premium Increase",         Impact="High",   Score=72, Detail="9.2% year-over-year increase exceeds client's stated 5% budget threshold." },
-            new(){ Icon="bi-exclamation-circle",   Factor="Open Claim",               Impact="Medium", Score=55, Detail="One open GL claim with $23,500 reserve may trigger underwriting surcharge." },
-            new(){ Icon="bi-building-x",           Factor="Competitor Activity",      Impact="High",   Score=68, Detail="Cincinnati Financial approached account with lower quoted indication." },
-            new(){ Icon="bi-emoji-smile",          Factor="Client Satisfaction",      Impact="Low",    Score=25, Detail="5-year account with no coverage gaps. Last contact rating: 4.8/5." },
-            new(){ Icon="bi-shield-check",         Factor="Coverage Breadth",         Impact="Low",    Score=18, Detail="Current policy includes XCU waiver, blanket AI — hard to replicate cheaply." },
-            new(){ Icon="bi-calendar-check",       Factor="Relationship Tenure",      Impact="Low",    Score=15, Detail="5-year agency relationship reduces switching likelihood significantly." },
-        };
-
-        _retentionActions = new()
-        {
-            new(){ Action="Schedule face-to-face renewal meeting with Robert Sullivan",           Type="Relationship", Owner="Maria Santos", DueDesc="Due in 3 days",  IsPriority=true,  IsComplete=false },
-            new(){ Action="Request competitive analysis vs. Cincinnati Financial's indication",    Type="Competitive",  Owner="Maria Santos", DueDesc="Due in 5 days",  IsPriority=true,  IsComplete=false },
-            new(){ Action="Present coverage comparison showing XCU waiver & blanket AI value",    Type="Coverage",     Owner="Maria Santos", DueDesc="Due in 5 days",  IsPriority=true,  IsComplete=false },
-            new(){ Action="Negotiate with Travelers UW for <8% increase given loss ratio <30%",   Type="Negotiation",  Owner="Lisa Chen",    DueDesc="Due in 7 days",  IsPriority=false, IsComplete=false },
-            new(){ Action="Send renewal proposal via portal with personalized cover letter",       Type="Proposal",     Owner="Linda Webb",   DueDesc="Due in 10 days", IsPriority=false, IsComplete=false },
-            new(){ Action="Gather updated ACORD 125 signed application with new location",        Type="Application",  Owner="Linda Webb",   DueDesc="Complete",       IsPriority=false, IsComplete=true  },
-            new(){ Action="Order 5-year loss runs from current carrier",                           Type="Underwriting", Owner="Linda Webb",   DueDesc="Complete",       IsPriority=false, IsComplete=true  },
-        };
-
-        _tasks = new()
-        {
-            new(){ SortOrder=1,  Title="Order 5-year loss runs from current carrier",       Category="Underwriting", AssignedTo="Linda Webb",   DueDate=DateTime.Today.AddDays(-30), Complete=true  },
-            new(){ SortOrder=2,  Title="Gather signed ACORD 125 application",               Category="Application",  AssignedTo="Linda Webb",   DueDate=DateTime.Today.AddDays(-20), Complete=true  },
-            new(){ SortOrder=3,  Title="Submit renewal to Tier 1 markets",                  Category="Marketing",    AssignedTo="Maria Santos", DueDate=DateTime.Today.AddDays(-12), Complete=true  },
-            new(){ SortOrder=4,  Title="Receive and review quotes from all markets",         Category="Quoting",      AssignedTo="Maria Santos", DueDate=DateTime.Today.AddDays(-5),  Complete=true  },
-            new(){ SortOrder=5,  Title="Prepare renewal proposal for client review",         Category="Proposal",     AssignedTo="Linda Webb",   DueDate=DateTime.Today.AddDays(2),   Complete=false },
-            new(){ SortOrder=6,  Title="Present renewal options to client",                  Category="Relationship", AssignedTo="Maria Santos", DueDate=DateTime.Today.AddDays(4),   Complete=false, Notes="Scheduled meeting: Friday 2pm" },
-            new(){ SortOrder=7,  Title="Obtain signed bind order / acceptance",              Category="Binding",      AssignedTo="Maria Santos", DueDate=DateTime.Today.AddDays(8),   Complete=false },
-            new(){ SortOrder=8,  Title="Issue renewal binder and certificates",              Category="Issuance",     AssignedTo="Linda Webb",   DueDate=DateTime.Today.AddDays(12),  Complete=false },
-            new(){ SortOrder=9,  Title="Confirm policy issued by carrier",                   Category="Policy Admin", AssignedTo="Linda Webb",   DueDate=DateTime.Today.AddDays(16),  Complete=false },
-            new(){ SortOrder=10, Title="Update account file and close renewal workflow",     Category="Admin",        AssignedTo="Linda Webb",   DueDate=DateTime.Today.AddDays(20),  Complete=false },
-        };
-
-        _comms = new()
-        {
-            new(){ Channel="Email",  Direction="Outbound", Subject="Renewal Notice — TRV-GL-2024-00421 expires 07/01/2025",             From="Maria Santos",        To="robert@sullivanmfg.com", Status="Delivered", SentAt=DateTime.Today.AddDays(-45), CreatedBy="System",      Notes="Automated renewal notice sent." },
-            new(){ Channel="Phone",  Direction="Outbound", Subject="Renewal discussion call — budget and coverage expectations",         From="Maria Santos",        To="Robert Sullivan",        Status="Completed", SentAt=DateTime.Today.AddDays(-30), CreatedBy="Maria Santos",Notes="Client confirmed $17K budget ceiling. Wants XCU waiver maintained." },
-            new(){ Channel="Email",  Direction="Outbound", Subject="ACORD 125 application for 2025–26 renewal — please sign and return", From="Linda Webb",          To="robert@sullivanmfg.com", Status="Read",      SentAt=DateTime.Today.AddDays(-22), CreatedBy="Linda Webb",  Notes="" },
-            new(){ Channel="Email",  Direction="Inbound",  Subject="RE: ACORD 125 — signed application attached",                       From="robert@sullivanmfg.com", To="Linda Webb",          Status="Received",  SentAt=DateTime.Today.AddDays(-20), CreatedBy="Linda Webb",  Notes="Signed app received. New Pasadena location included." },
-            new(){ Channel="Email",  Direction="Outbound", Subject="Market submission — Sullivan Mfg. GL renewal 07/01/2025",            From="Maria Santos",        To="lisa.chen@travelers.com", Status="Delivered", SentAt=DateTime.Today.AddDays(-12), CreatedBy="Maria Santos",Notes="Submitted to Travelers, Hartford, Cincinnati." },
-            new(){ Channel="Email",  Direction="Inbound",  Subject="Quote received — TRV-2025-88421 — GL renewal indication",            From="lisa.chen@travelers.com", To="Maria Santos",      Status="Read",      SentAt=DateTime.Today.AddDays(-5),  CreatedBy="Maria Santos",Notes="Travelers quoted $18,800. 9.2% increase." },
-        };
-
-        _quotes = new()
-        {
-            new(){ Carrier="Travelers Indemnity",  QuoteNumber="TRV-2025-88421", Status="Quoted",   QuotedPremium=18_800m, ExpiryDate=DateTime.Today.AddDays(20), IsRecommended=true,  Features=new(){"XCU Waiver","Blanket AI","P&NC Included","Full Limits"},          Notes="9.2% increase. Preferred carrier. Best coverage breadth." },
-            new(){ Carrier="Hartford Fire & Cas.", QuoteNumber="HFD-2025-14822", Status="Quoted",   QuotedPremium=19_400m, ExpiryDate=DateTime.Today.AddDays(15), IsRecommended=false, Features=new(){"Broad Form GL","Products/CO Incl.","No XCU Waiver","No Blanket AI"},Notes="12.5% increase. No XCU waiver — disadvantage for this class." },
-            new(){ Carrier="Cincinnati Financial", QuoteNumber="",               Status="Pending",  QuotedPremium=null,    ExpiryDate=null,                        IsRecommended=false, Features=new(){"Higher commission","Favorable limits"},                            Notes="Indication only — quote expected in 3 days." },
-            new(){ Carrier="Markel Corporation",   QuoteNumber="",               Status="Submitted",QuotedPremium=null,    ExpiryDate=null,                        IsRecommended=false, Features=new(){"E&S market","Backup option"},                                      Notes="E&S fallback. Submit only if admitted options fall through." },
-        };
+            _loading = false;
+        }
     }
 
-    void SetStage(string stage)
+    private void ApplyRetentionDetail(RenewalRetentionDetailDto detail)
+    {
+        var c = detail.Case;
+        _renewal ??= new RenewalModel();
+        _renewal.RenewalId = c.RetentionCaseId;
+        _renewal.PolicyId = c.PolicyId ?? c.RetentionCaseId;
+        _renewal.AccountName = c.AccountName;
+        _renewal.PolicyNumber = c.PolicyNumber;
+        _renewal.Lob = c.LineOfBusiness;
+        _renewal.Carrier = c.Carrier;
+        _renewal.Producer = c.Producer;
+        _renewal.Csr = c.Csr;
+        _renewal.ExpiryDate = c.ExpirationDate;
+        _renewal.DaysToExpiry = c.DaysToExpiration;
+        _renewal.CurrentPremium = c.CurrentPremium;
+        _renewal.ProjectedPremium = c.ProposedPremium;
+        _renewal.RetentionRiskScore = c.RiskScore;
+        _renewal.Stage = string.IsNullOrWhiteSpace(c.Stage) ? _renewal.Stage : c.Stage;
+        _renewal.RiskAssessmentNotes = c.RiskDrivers ?? c.NextBestAction ?? _renewal.RiskAssessmentNotes;
+
+        foreach (var activity in detail.Activities.OrderByDescending(a => a.ActivityDateUtc))
+        {
+            if (_comms.All(x => x.Subject != activity.Subject))
+            {
+                _comms.Add(new CommRow { Channel = activity.ActivityType, Direction = "Internal", Subject = activity.Subject, From = activity.CreatedByName, To = c.AccountName, Status = activity.Outcome, SentAt = activity.ActivityDateUtc.ToLocalTime(), CreatedBy = activity.CreatedByName, Notes = activity.Notes ?? string.Empty });
+            }
+        }
+
+        foreach (var offer in detail.Offers)
+        {
+            if (_quotes.All(q => q.QuoteNumber != offer.RetentionOfferId.ToString()))
+            {
+                _quotes.Add(new QuoteOption { Carrier = offer.OfferName, QuoteNumber = offer.RetentionOfferId.ToString()[..8].ToUpperInvariant(), Status = offer.Status, QuotedPremium = c.CurrentPremium + offer.PremiumImpact, ExpiryDate = offer.PresentedDateUtc?.AddDays(30), Notes = offer.Notes ?? offer.OfferType, Features = [offer.OfferType, $"Retention lift {offer.RetentionLift}%"] });
+            }
+        }
+    }
+
+    private void SetTab(string tab) => _tab = tab;
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+
+    private void SetStage(string stage)
     {
         if (_renewal is null) return;
         _renewal.Stage = stage;
+        ShowToast($"{_renewal.AccountName} moved to {stage}.", "success");
     }
 
-    void OpenRemarket()    => Nav.NavigateTo($"/submissions/{_renewal!.PolicyId}/markets");
-    void LogActivity()     { }
-    void AddRiskChange()   { }
-    void AddMarket()       { }
-    void AddTask()         { }
-    void NewMessage()      { }
-    void LogCall()         { }
+    private void OpenRemarket() => Nav.NavigateTo($"/submissions/{_renewal!.PolicyId}/markets");
+    private void LogClaimReview() => ShowToast("Claim review logged to renewal workflow.", "success");
+    private void AddRiskChange() { _riskChanges.Add(new RiskChangeRow { Area = "New Change", Description = "Document newly discovered renewal exposure.", PriorValue = "—", CurrentValue = "Pending review", Severity = "Moderate", UwImplication = "CSR review required", ReviewedBy = string.Empty }); ShowToast("Risk change added.", "success"); }
+    private void AddMarket() { _marketActions.Add(new MarketActionRow { Carrier = "New Market", Program = "Renewal Program", ContactedDate = DateTime.Today, Status = "Submitted", Underwriter = "Pending", Notes = "New market submission added." }); ShowToast("Market action added.", "success"); }
+    private void AddTask() { _tasks.Add(new RenewalTask { SortOrder = _tasks.Count + 1, Title = "New renewal follow-up", Category = "Workflow", AssignedTo = _renewal?.Producer, DueDate = DateTime.Today.AddDays(3) }); ShowToast("Task added.", "success"); }
+    private void NewMessage() { _comms.Add(new CommRow { Channel = "Email", Direction = "Outbound", Subject = "New renewal message", From = _renewal?.Producer ?? "Producer", To = _renewal?.AccountName ?? "Client", Status = "Draft", SentAt = DateTime.Now, CreatedBy = _renewal?.Producer ?? "Producer", Notes = "Draft renewal communication created." }); ShowToast("Message draft created.", "success"); }
+    private void LogCall() { _comms.Add(new CommRow { Channel = "Phone", Direction = "Outbound", Subject = "Renewal call logged", From = _renewal?.Producer ?? "Producer", To = _renewal?.AccountName ?? "Client", Status = "Completed", SentAt = DateTime.Now, CreatedBy = _renewal?.Producer ?? "Producer", Notes = "Call logged from renewal detail." }); ShowToast("Call logged.", "success"); }
+    private void ToggleRiskChange(RiskChangeRow row) { row.IsResolved = !row.IsResolved; ShowToast(row.IsResolved ? "Risk change resolved." : "Risk change reopened.", "success"); }
+    private void CompletePriorityActions() { foreach (var action in _retentionActions.Where(a => a.IsPriority)) action.IsComplete = true; ShowToast("Priority retention actions completed.", "success"); }
+    private void SelectQuote(MarketActionRow m) { ShowToast($"{m.Carrier} {m.QuotedPremium!.Value.ToString("C0", CultureInfo.CurrentCulture)} selected for binding.", "success"); SetTab("quotes"); }
+    private void SelectRenewalQuote(QuoteOption q) { foreach (var item in _quotes) item.IsSelected = false; q.IsSelected = true; ShowToast($"{q.Carrier} selected as renewal quote.", "success"); }
 
-    async Task SelectQuote(MarketActionRow m)
+    private string TabClass(string id) => $"rdf-tab-btn {(id == _tab ? "rdf-tab-active" : string.Empty)}";
+    private string MetricClass(Metric metric) => $"rdf-kpi-card {metric.Tone} {(metric.Tab == _tab ? "rdf-kpi-card-active" : string.Empty)}";
+    private string TabBadge(string id) => id switch { "riskchanges" => _riskChanges.Count.ToString(CultureInfo.CurrentCulture), "claims" => _claims.Count.ToString(CultureInfo.CurrentCulture), "marketing" => _marketActions.Count.ToString(CultureInfo.CurrentCulture), "tasks" => OpenTaskCount.ToString(CultureInfo.CurrentCulture), "communications" => _comms.Count.ToString(CultureInfo.CurrentCulture), "quotes" => _quotes.Count(q => q.Status == "Quoted").ToString(CultureInfo.CurrentCulture), _ => "" };
+
+    private RenderFragment InfoCard(string title, string icon, IReadOnlyList<FieldPair> fields) => @<article class="rdf-info-card"><h3><i class="bi @icon" aria-hidden="true"></i> @title</h3><div class="rdf-field-grid">@foreach (var field in fields) { <div class="rdf-field-row"><span>@field.Label</span><strong>@field.Value</strong></div> }</div></article>;
+
+    private static FieldPair Field(string label, string value) => new(label, value);
+    private static string Money(decimal value) => value.ToString("C2", CultureInfo.CurrentCulture);
+    private static string MoneyShort(decimal value) => value.ToString("C0", CultureInfo.CurrentCulture);
+    private static string SignedMoney(decimal value) => (value >= 0 ? "+" : string.Empty) + value.ToString("C0", CultureInfo.CurrentCulture);
+    private static string SignedPct(decimal value) => (value >= 0 ? "+" : string.Empty) + value.ToString("F1", CultureInfo.CurrentCulture) + "%";
+    private static string DateText(DateTime value) => value.ToString("MM/dd/yyyy", CultureInfo.CurrentCulture);
+    private static string DeltaClass(decimal value) => value > 0 ? "rdf-delta-up" : value < 0 ? "rdf-delta-down" : string.Empty;
+    private static string LossClass(decimal value) => value >= 70 ? "rdf-red" : value >= 40 ? "rdf-amber" : "rdf-green";
+    private static string RiskTone(int score) => score >= 70 ? "rdf-red" : score >= 40 ? "rdf-amber" : "rdf-green";
+    private static string RiskCss(int score) => score >= 70 ? "high" : score >= 40 ? "med" : "low";
+    private static string RiskLabel(int score) => score >= 70 ? "High Risk" : score >= 40 ? "Moderate Risk" : "Low Risk";
+    private static string StageCss(string stage) => stage switch { "Not Started" => "ns", "In Progress" => "ip", "Quoted" => "qt", "Renewed" => "rn", "Lost" => "lo", "Non-Renewed" => "nr", _ => "ns" };
+    private static string ExpChipCss(int days) => days <= 0 ? "expired" : days <= 30 ? "exp30" : days <= 60 ? "exp60" : "normal";
+    private static string DaysLabel(int days) => days <= 0 ? $"Expired {Math.Abs(days)}d ago" : days == 1 ? "1 day left" : $"{days} days left";
+    private static string Slug(string value) => value.ToLowerInvariant().Replace(" ", string.Empty).Replace("/", string.Empty).Replace("—", string.Empty);
+    private static string LobKey(string lob) => Slug(lob).Replace(".", string.Empty).Replace("&", string.Empty).Replace("-", string.Empty);
+    private static string CommIcon(string channel) => channel switch { "Email" => "bi-envelope", "Phone" => "bi-telephone", "SMS" => "bi-chat-dots", "Letter" => "bi-file-text", "Portal" => "bi-browser-chrome", _ => "bi-chat" };
+    private static string LobIcon(string lob) => lob switch { "General Liability" => "bi-shield-check", "Commercial Auto" => "bi-truck", "Commercial Property" => "bi-building", "Workers Comp" => "bi-person-fill-gear", "Umbrella" => "bi-umbrella", "Professional Liab." => "bi-briefcase", "Home/Dwelling" => "bi-house", "Personal Auto" => "bi-car-front", _ => "bi-shield-half" };
+
+    private void BuildStub()
     {
-        await _toast.ShowAsync(new ToastModel
-        {
-            Title    = "Quote Selected",
-            Content  = $"{m.Carrier} {m.QuotedPremium!.Value.ToString("C0")} selected for binding.",
-            CssClass = "e-toast-success"
-        });
+        _renewal = new RenewalModel { RenewalId = RenewalId, PolicyId = Guid.NewGuid(), AccountName = "Sullivan Mfg. LLC", PolicyNumber = "TRV-GL-2024-00421", PolicyStatus = "Active", PolicyType = "Commercial Lines", Lob = "General Liability", Carrier = "Travelers Indemnity", Program = "Select Accounts GL", EffDate = new DateTime(2024, 7, 1), ExpiryDate = DateTime.Today.AddDays(18), DaysToExpiry = 18, TermMonths = 12, Stage = "In Progress", RetentionRiskScore = 65, CurrentPremium = 17_250m, PriorPremium = 15_800m, ProjectedPremium = 18_800m, MinAcceptablePremium = 17_000m, AgencyFee = 250m, LossRatio = 28m, PrimaryInsured = "Sullivan Manufacturing, LLC", InsuredAddress = "1422 Industrial Pkwy", InsuredCity = "Houston", InsuredState = "TX", InsuredZip = "77001", EntityType = "LLC", SicCode = "3490 — Misc Fabricated Metal Products", Fein = "75-1234567", Producer = "Maria Santos", Csr = "Linda Webb", AccountManager = "Tom Reyes", Underwriter = "Lisa Chen", UwPhone = "(800) 555-0121", Branch = "Houston South", RenewalNoticeDate = DateTime.Today.AddDays(-45), QuoteDueDate = DateTime.Today.AddDays(5), RiskAssessmentNotes = "Account has elevated retention risk due to premium increase projection, one open GL claim, and competitor activity. Recommend executive contact, premium negotiation, and coverage-value presentation." };
+        _policyCoverages.Clear(); _policyCoverages.AddRange([new("Occ. Limit", "$2,000,000"), new("Aggregate", "$4,000,000"), new("Products / CO", "$2,000,000"), new("HNOA", "Included"), new("Waiver of Subroga.", "Included"), new("Additional Insured", "Blanket"), new("P&NC", "Included"), new("XCU Exclusion", "Waived")]);
+        _riskChanges.Clear(); _riskChanges.AddRange([new() { Area = "Payroll", Description = "Annual payroll increased at renewal", PriorValue = "$2.4M", CurrentValue = "$2.9M", Severity = "Moderate", UwImplication = "Base rate increase ~6%", ReviewedBy = "Maria Santos", IsResolved = true }, new() { Area = "Operations", Description = "Added steel fabrication line", PriorValue = "Stamping only", CurrentValue = "Stamping + Fabrication", Severity = "Material", UwImplication = "XCU re-review required", IsResolved = false }, new() { Area = "Open Claim", Description = "Slip-and-fall claim still open", PriorValue = "—", CurrentValue = "$42,000 reserve", Severity = "Moderate", UwImplication = "Carrier may surcharge", ReviewedBy = "Maria Santos" }]);
+        _premHistory.Clear(); _premHistory.AddRange([new() { Year = "2020–21", Carrier = "CNA Commercial", Premium = 12_200m, LossRatio = 14.2m, Notes = "First year with agency" }, new() { Year = "2021–22", Carrier = "CNA Commercial", Premium = 13_100m, PremiumChange = 900m, PremiumChangePct = 7.4m, LossRatio = 8.5m }, new() { Year = "2022–23", Carrier = "Travelers Indemnity", Premium = 14_400m, PremiumChange = 1_300m, PremiumChangePct = 9.9m, LossRatio = 22.1m, CarrierChanged = true, Notes = "Moved for broader coverage" }, new() { Year = "2023–24", Carrier = "Travelers Indemnity", Premium = 15_800m, PremiumChange = 1_400m, PremiumChangePct = 9.7m, LossRatio = 28.0m, Notes = "Open claim impacts ratio" }, new() { Year = "2024–25", Carrier = "Travelers Indemnity", Premium = 17_250m, PremiumChange = 1_450m, PremiumChangePct = 9.2m, LossRatio = 5.2m, Notes = "Current term" }]);
+        _claims.Clear(); _claims.AddRange([new() { ClaimNum = "GL-2023-8841", PolicyYear = "2023–24", LossDate = new DateTime(2023, 9, 12), LossType = "GL — Slip & Fall", Description = "Visitor slip-and-fall at main facility", Status = "Open", TotalIncurred = 42_000m, Paid = 18_500m, Reserve = 23_500m }, new() { ClaimNum = "GL-2022-5102", PolicyYear = "2022–23", LossDate = new DateTime(2022, 3, 8), LossType = "Products/CO", Description = "Customer injury from defective stamped part", Status = "Closed", TotalIncurred = 11_200m, Paid = 11_200m }, new() { ClaimNum = "GL-2021-2240", PolicyYear = "2021–22", LossDate = new DateTime(2021, 11, 1), LossType = "Property Damage", Description = "Truck backed into fence", Status = "Closed", TotalIncurred = 4_800m, Paid = 4_800m }]);
+        _marketActions.Clear(); _marketActions.AddRange([new() { Carrier = "Travelers Indemnity", Program = "Select Accounts GL", ContactedDate = DateTime.Today.AddDays(-12), Status = "Quoted", QuotedPremium = 18_800m, QuoteExpiry = DateTime.Today.AddDays(20), Underwriter = "Lisa Chen", Notes = "9.2% increase; XCU waiver maintained" }, new() { Carrier = "Hartford Fire & Cas.", Program = "Spectrum Commercial", ContactedDate = DateTime.Today.AddDays(-10), Status = "Quoted", QuotedPremium = 19_400m, QuoteExpiry = DateTime.Today.AddDays(15), Underwriter = "Mike Rosario", Notes = "No blanket AI" }, new() { Carrier = "Cincinnati Financial", Program = "Commercial Lines", ContactedDate = DateTime.Today.AddDays(-8), Status = "Pending", Underwriter = "Dan Torres", Notes = "Competitor approached account" }, new() { Carrier = "Markel Corporation", Program = "Markel Specialty E&S", Status = "Submitted", Underwriter = "—", Notes = "Backup E&S option" }]);
+        _riskFactors.Clear(); _riskFactors.AddRange([new() { Icon = "bi-graph-up-arrow", Factor = "Premium Increase", Impact = "High", Score = 72, Detail = "Increase exceeds client's stated budget threshold." }, new() { Icon = "bi-exclamation-circle", Factor = "Open Claim", Impact = "Medium", Score = 55, Detail = "Open GL claim may trigger underwriting surcharge." }, new() { Icon = "bi-building-x", Factor = "Competitor Activity", Impact = "High", Score = 68, Detail = "Competitor approached account with lower indication." }, new() { Icon = "bi-shield-check", Factor = "Coverage Breadth", Impact = "Low", Score = 18, Detail = "Current coverage breadth is difficult to replicate cheaply." }]);
+        _retentionActions.Clear(); _retentionActions.AddRange([new() { Action = "Schedule face-to-face renewal meeting", Type = "Relationship", Owner = "Maria Santos", DueDesc = "Due in 3 days", IsPriority = true }, new() { Action = "Request competitive analysis vs. Cincinnati", Type = "Competitive", Owner = "Maria Santos", DueDesc = "Due in 5 days", IsPriority = true }, new() { Action = "Present coverage comparison", Type = "Coverage", Owner = "Maria Santos", DueDesc = "Due in 5 days", IsPriority = true }, new() { Action = "Negotiate with Travelers UW", Type = "Negotiation", Owner = "Lisa Chen", DueDesc = "Due in 7 days" }, new() { Action = "Gather signed ACORD 125", Type = "Application", Owner = "Linda Webb", DueDesc = "Complete", IsComplete = true }]);
+        _tasks.Clear(); _tasks.AddRange([new() { SortOrder = 1, Title = "Order 5-year loss runs", Category = "Underwriting", AssignedTo = "Linda Webb", DueDate = DateTime.Today.AddDays(-30), Complete = true }, new() { SortOrder = 2, Title = "Gather signed ACORD 125 application", Category = "Application", AssignedTo = "Linda Webb", DueDate = DateTime.Today.AddDays(-20), Complete = true }, new() { SortOrder = 3, Title = "Submit renewal to Tier 1 markets", Category = "Marketing", AssignedTo = "Maria Santos", DueDate = DateTime.Today.AddDays(-12), Complete = true }, new() { SortOrder = 4, Title = "Prepare renewal proposal", Category = "Proposal", AssignedTo = "Linda Webb", DueDate = DateTime.Today.AddDays(2) }, new() { SortOrder = 5, Title = "Present renewal options to client", Category = "Relationship", AssignedTo = "Maria Santos", DueDate = DateTime.Today.AddDays(4), Notes = "Scheduled meeting: Friday 2pm" }, new() { SortOrder = 6, Title = "Obtain signed bind order", Category = "Binding", AssignedTo = "Maria Santos", DueDate = DateTime.Today.AddDays(8) }]);
+        _comms.Clear(); _comms.AddRange([new() { Channel = "Email", Direction = "Outbound", Subject = "Renewal Notice", From = "Maria Santos", To = "robert@sullivanmfg.com", Status = "Delivered", SentAt = DateTime.Today.AddDays(-45), CreatedBy = "System", Notes = "Automated renewal notice sent." }, new() { Channel = "Phone", Direction = "Outbound", Subject = "Renewal discussion call", From = "Maria Santos", To = "Robert Sullivan", Status = "Completed", SentAt = DateTime.Today.AddDays(-30), CreatedBy = "Maria Santos", Notes = "Client confirmed $17K budget ceiling." }, new() { Channel = "Email", Direction = "Inbound", Subject = "Signed application attached", From = "robert@sullivanmfg.com", To = "Linda Webb", Status = "Received", SentAt = DateTime.Today.AddDays(-20), CreatedBy = "Linda Webb", Notes = "Signed app received." }, new() { Channel = "Email", Direction = "Inbound", Subject = "Quote received", From = "lisa.chen@travelers.com", To = "Maria Santos", Status = "Read", SentAt = DateTime.Today.AddDays(-5), CreatedBy = "Maria Santos", Notes = "Travelers quoted $18,800." }]);
+        _quotes.Clear(); _quotes.AddRange([new() { Carrier = "Travelers Indemnity", QuoteNumber = "TRV-2025-88421", Status = "Quoted", QuotedPremium = 18_800m, ExpiryDate = DateTime.Today.AddDays(20), IsRecommended = true, Features = ["XCU Waiver", "Blanket AI", "P&NC Included", "Full Limits"], Notes = "Preferred carrier. Best coverage breadth." }, new() { Carrier = "Hartford Fire & Cas.", QuoteNumber = "HFD-2025-14822", Status = "Quoted", QuotedPremium = 19_400m, ExpiryDate = DateTime.Today.AddDays(15), Features = ["Broad Form GL", "Products/CO Incl.", "No XCU Waiver"], Notes = "No XCU waiver." }, new() { Carrier = "Cincinnati Financial", Status = "Pending", Features = ["Higher commission", "Favorable limits"], Notes = "Quote expected in 3 days." }, new() { Carrier = "Markel Corporation", Status = "Submitted", Features = ["E&S market", "Backup option"], Notes = "E&S fallback." }]);
     }
 
-    void SelectRenewalQuote(QuoteOption q)
-    {
-        foreach (var x in _quotes) x.IsSelected = false;
-        q.IsSelected = true;
-    }
+    private sealed record TabOption(string Id, string Label, string Icon);
+    private sealed record Metric(string Tab, string Value, string Label, string Caption, string Icon, string Tone);
+    private sealed record FieldPair(string Label, string Value);
+    private sealed record CovHighlight(string Label, string Value);
 
-    // ── Helpers ───────────────────────────────────────────────────
-    static string LobKey(string lob) => lob.ToLower()
-        .Replace(" ","").Replace("/","").Replace("&","").Replace(".","").Replace("-","");
-
-    static string LobIcon(string lob) => lob switch
-    {
-        "General Liability"   => "bi-shield-check",
-        "Commercial Auto"     => "bi-truck",
-        "Commercial Property" => "bi-building",
-        "Workers Comp"        => "bi-person-fill-gear",
-        "Umbrella"            => "bi-umbrella",
-        "Professional Liab."  => "bi-briefcase",
-        "Home/Dwelling"       => "bi-house",
-        "Personal Auto"       => "bi-car-front",
-        _                     => "bi-shield-half"
-    };
-
-    static string StageCss(string stage) => stage switch
-    {
-        "Not Started"  => "ns",
-        "In Progress"  => "ip",
-        "Quoted"       => "qt",
-        "Renewed"      => "rn",
-        "Lost"         => "lo",
-        "Non-Renewed"  => "nr",
-        _              => "ns"
-    };
-
-    static string RiskCss(int score)   => score >= 70 ? "high" : score >= 40 ? "med" : "low";
-    static string RiskLabel(int score) => score >= 70 ? "High Risk" : score >= 40 ? "Moderate Risk" : "Low Risk";
-
-    static string ExpChipCss(int days) =>
-        days <= 0 ? "expired" : days <= 30 ? "exp30" : days <= 60 ? "exp60" : "normal";
-
-    static string DaysLabel(int days) =>
-        days <= 0   ? $"Expired {Math.Abs(days)}d ago" :
-        days == 1   ? "1 day left" : $"{days} days left";
-
-    static string CommIcon(string channel) => channel switch
-    {
-        "Email"  => "bi-envelope",
-        "Phone"  => "bi-telephone",
-        "SMS"    => "bi-chat-dots",
-        "Letter" => "bi-file-text",
-        "Portal" => "bi-browser-chrome",
-        _        => "bi-chat"
-    };
-
-    // F() field row helper
-    RenderFragment F(string label, string value) =>
-        @<div class="rd-field-row">
-            <span class="rd-field-lbl">@label</span>
-            <span class="rd-field-val">@value</span>
-        </div>;
-
-    // KPI card helper
-    RenderFragment RdKpi(string label, string val, string icon, string css) =>
-        @<div class="rd-kpi-card @css">
-            <i class="bi @icon rd-kpi-icon" aria-hidden="true"></i>
-            <div>
-                <div class="rd-kpi-val">@val</div>
-                <div class="rd-kpi-lbl">@label</div>
-            </div>
-        </div>;
+    private sealed class RenewalModel { public Guid RenewalId { get; set; } public Guid PolicyId { get; set; } public string AccountName { get; set; } = string.Empty; public string PolicyNumber { get; set; } = string.Empty; public string PolicyStatus { get; set; } = string.Empty; public string PolicyType { get; set; } = string.Empty; public string Lob { get; set; } = string.Empty; public string Carrier { get; set; } = string.Empty; public string Program { get; set; } = string.Empty; public DateTime EffDate { get; set; } public DateTime ExpiryDate { get; set; } public int DaysToExpiry { get; set; } public int TermMonths { get; set; } public string Stage { get; set; } = string.Empty; public int RetentionRiskScore { get; set; } public decimal CurrentPremium { get; set; } public decimal? PriorPremium { get; set; } public decimal? ProjectedPremium { get; set; } public decimal? MinAcceptablePremium { get; set; } public decimal AgencyFee { get; set; } public decimal LossRatio { get; set; } public string PrimaryInsured { get; set; } = string.Empty; public string InsuredAddress { get; set; } = string.Empty; public string InsuredCity { get; set; } = string.Empty; public string InsuredState { get; set; } = string.Empty; public string InsuredZip { get; set; } = string.Empty; public string? EntityType { get; set; } public string? SicCode { get; set; } public string? Fein { get; set; } public string Producer { get; set; } = string.Empty; public string Csr { get; set; } = string.Empty; public string? AccountManager { get; set; } public string? Underwriter { get; set; } public string? UwPhone { get; set; } public string Branch { get; set; } = string.Empty; public DateTime? RenewalNoticeDate { get; set; } public DateTime? QuoteDueDate { get; set; } public string RiskAssessmentNotes { get; set; } = string.Empty; }
+    private sealed class RiskChangeRow { public string Area { get; set; } = string.Empty; public string Description { get; set; } = string.Empty; public string PriorValue { get; set; } = string.Empty; public string CurrentValue { get; set; } = string.Empty; public string Severity { get; set; } = string.Empty; public string UwImplication { get; set; } = string.Empty; public string ReviewedBy { get; set; } = string.Empty; public bool IsResolved { get; set; } }
+    private sealed class PremHistoryRow { public string Year { get; set; } = string.Empty; public string Carrier { get; set; } = string.Empty; public decimal Premium { get; set; } public decimal PremiumChange { get; set; } public decimal PremiumChangePct { get; set; } public decimal LossRatio { get; set; } public bool CarrierChanged { get; set; } public string Notes { get; set; } = string.Empty; }
+    private sealed class ClaimHistRow { public string ClaimNum { get; set; } = string.Empty; public string PolicyYear { get; set; } = string.Empty; public DateTime LossDate { get; set; } public string LossType { get; set; } = string.Empty; public string Description { get; set; } = string.Empty; public string Status { get; set; } = string.Empty; public decimal TotalIncurred { get; set; } public decimal Paid { get; set; } public decimal Reserve { get; set; } }
+    private sealed class MarketActionRow { public string Carrier { get; set; } = string.Empty; public string Program { get; set; } = string.Empty; public DateTime? ContactedDate { get; set; } public string Status { get; set; } = string.Empty; public decimal? QuotedPremium { get; set; } public DateTime? QuoteExpiry { get; set; } public string Underwriter { get; set; } = string.Empty; public string Notes { get; set; } = string.Empty; }
+    private sealed class RiskFactor { public string Icon { get; set; } = string.Empty; public string Factor { get; set; } = string.Empty; public string Impact { get; set; } = string.Empty; public int Score { get; set; } public string Detail { get; set; } = string.Empty; }
+    private sealed class RetentionAction { public string Action { get; set; } = string.Empty; public string Type { get; set; } = string.Empty; public string Owner { get; set; } = string.Empty; public string DueDesc { get; set; } = string.Empty; public bool IsPriority { get; set; } public bool IsComplete { get; set; } }
+    private sealed class RenewalTask { public int SortOrder { get; set; } public string Title { get; set; } = string.Empty; public string Category { get; set; } = string.Empty; public string? AssignedTo { get; set; } public DateTime? DueDate { get; set; } public bool Complete { get; set; } public bool IsDue => DueDate.HasValue && DueDate.Value < DateTime.Today && !Complete; public string Notes { get; set; } = string.Empty; }
+    private sealed class CommRow { public string Channel { get; set; } = string.Empty; public string Direction { get; set; } = string.Empty; public string Subject { get; set; } = string.Empty; public string From { get; set; } = string.Empty; public string To { get; set; } = string.Empty; public string Status { get; set; } = string.Empty; public DateTime SentAt { get; set; } public string CreatedBy { get; set; } = string.Empty; public string Notes { get; set; } = string.Empty; }
+    private sealed class QuoteOption { public string Carrier { get; set; } = string.Empty; public string QuoteNumber { get; set; } = string.Empty; public string Status { get; set; } = string.Empty; public decimal? QuotedPremium { get; set; } public DateTime? ExpiryDate { get; set; } public bool IsRecommended { get; set; } public bool IsSelected { get; set; } public string Notes { get; set; } = string.Empty; public List<string> Features { get; set; } = []; }
 }

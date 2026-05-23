@@ -1,188 +1,343 @@
 @page "/tenant/dashboard/renewal-pipeline"
 @namespace Ams.Web.Components.Pages.Tenant.Dashboard
+@using System.Globalization
+@using Ams.Application.Common.Dtos
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
 
-<PageTitle>Renewal Pipeline — Agency Dashboard</PageTitle>
+<PageTitle>Enterprise Renewal Pipeline — AMS</PageTitle>
 
-<AppPageHeader Title="Renewal Pipeline"
-               Subtitle="Upcoming renewals by due date — track at-risk policies and outstanding premium"
-               Icon="bi-arrow-clockwise">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise @(_loading ? "ad-spin" : "")" aria-hidden="true"></i> Refresh
-        </button>
-        <a class="um-btn um-btn-ghost" href="/renewals/pipeline">
-            <i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Full Pipeline
-        </a>
-    </Actions>
-</AppPageHeader>
-
-@if (_loading)
+@if (_toastVisible)
 {
-    <div class="ad-loading-banner" aria-live="polite">
-        <div class="um-spinner" aria-hidden="true"></div>
-        <span>Loading renewal pipeline…</span>
+    <div class="rp-toast rp-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="rp-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
-else if (!string.IsNullOrWhiteSpace(_loadError))
-{
-    <div class="alert alert-danger ad-alert-danger" role="alert"><i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i> @_loadError</div>
-}
-else if (_data is null)
-{
-    <div class="ad-empty"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i><span>No renewal data available.</span></div>
-}
-else
-{
-    <!-- ── KPI strip ─────────────────────────────────────────── -->
-    <div class="ad-kpi-strip">
-        <button type="button" class="ad-kpi-card ad-kpi--claims @KpiClass("overdue")" @onclick='() => SetFilter("overdue")' title="Show overdue renewals">
-            <div class="ad-kpi-icon"><i class="bi bi-exclamation-circle" aria-hidden="true"></i></div>
-            <div class="ad-kpi-body">
-                <div class="ad-kpi-val">@_data.Overdue</div>
-                <div class="ad-kpi-lbl">Overdue</div>
-                <div class="ad-kpi-sub">@_data.PremiumOverdue.ToString("C0") at risk</div>
+
+<div class="rp-enterprise-page">
+    <section class="rp-hero">
+        <div class="rp-hero-left">
+            <span class="rp-hero-icon"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></span>
+            <div>
+                <div class="rp-title-row">
+                    <h1>Renewal Pipeline Command Center</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> Live renewal data</span>
+                    <span><i class="bi bi-shield-check" aria-hidden="true"></i> Retention governed</span>
+                    <span><i class="bi bi-calendar-check" aria-hidden="true"></i> 90-day outlook</span>
+                </div>
+                <p>Protect retention and premium continuity with prioritized overdue, 30-day, 60-day, and 90-day renewal workflows across accounts, producers, branches, and policy premium.</p>
             </div>
-        </button>
-        <button type="button" class="ad-kpi-card ad-kpi--retention @KpiClass("30")" @onclick='() => SetFilter("30")' title="Show renewals due in 30 days">
-            <div class="ad-kpi-icon"><i class="bi bi-calendar-event" aria-hidden="true"></i></div>
-            <div class="ad-kpi-body">
-                <div class="ad-kpi-val">@_data.DueIn30Days</div>
-                <div class="ad-kpi-lbl">Due in 30 Days</div>
-                <div class="ad-kpi-sub">@_data.PremiumDueIn30Days.ToString("C0") premium</div>
-            </div>
-        </button>
-        <button type="button" class="ad-kpi-card ad-kpi--premium @KpiClass("60")" @onclick='() => SetFilter("60")' title="Show renewals due in 31-60 days">
-            <div class="ad-kpi-icon"><i class="bi bi-calendar2-range" aria-hidden="true"></i></div>
-            <div class="ad-kpi-body">
-                <div class="ad-kpi-val">@_data.DueIn60Days</div>
-                <div class="ad-kpi-lbl">Due in 31–60 Days</div>
-                <div class="ad-kpi-sub">@_data.PremiumDueIn60Days.ToString("C0") premium</div>
-            </div>
-        </button>
-        <button type="button" class="ad-kpi-card ad-kpi--policies @KpiClass("90")" @onclick='() => SetFilter("90")' title="Show renewals due in 61-90 days">
-            <div class="ad-kpi-icon"><i class="bi bi-calendar-check" aria-hidden="true"></i></div>
-            <div class="ad-kpi-body">
-                <div class="ad-kpi-val">@_data.DueIn90Days</div>
-                <div class="ad-kpi-lbl">Due in 61–90 Days</div>
-                <div class="ad-kpi-sub">@_data.PremiumDueIn90Days.ToString("C0") premium</div>
-            </div>
-        </button>
-    </div>
-    @if (_activeFilter != "all")
+        </div>
+        <div class="rp-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh renewal pipeline"><i class="bi @(_loading ? "bi-arrow-repeat rp-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => GoTo("/tenant/dashboard")'><i class="bi bi-speedometer2" aria-hidden="true"></i> Dashboard</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => GoTo("/tenant/dashboard/producer-performance")'><i class="bi bi-person-badge" aria-hidden="true"></i> Producers</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick='() => GoTo("/renewals/pipeline")'><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Full Pipeline</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
     {
-        <div class="ad-filter-bar"><span class="ad-filter-chip"><i class="bi bi-funnel" aria-hidden="true"></i> @FilterLabel(_activeFilter)</span><button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => SetFilter("all")'><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button></div>
+        <div class="alert alert-danger rp-error-banner" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
     }
 
-    <!-- ── Row detail ─────────────────────────────────────────── -->
-    <div class="ad-card">
-            <div class="ad-card-hd"><i class="bi bi-list-ul" aria-hidden="true"></i> Renewal Detail (@FilteredRows.Count)</div>
-        @if (FilteredRows.Count == 0)
-        {
-            <div class="ad-empty" style="padding:1.5rem"><span>No upcoming renewals found.</span></div>
-        }
-        else
-        {
-            <div class="ad-table-wrap">
-                <table class="ad-table">
-                    <thead>
-                        <tr>
-                            <th>Policy Number</th>
-                            <th>Account</th>
-                            <th>Producer</th>
-                            <th>Branch</th>
-                            <th>Renewal Date</th>
-                            <th class="ad-num">Current Premium</th>
-                            <th>Status</th>
-                            <th class="ad-num">Days</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var r in FilteredRows.OrderBy(r => r.DaysUntilRenewal))
-                        {
-                            <tr>
-                                <td style="font-weight:600;font-family:monospace;font-size:.82rem">@r.PolicyNumber</td>
-                                <td>@r.AccountName</td>
-                                <td style="font-size:.8rem;color:#6b7280">@(r.ProducerName ?? "—")</td>
-                                <td style="font-size:.8rem;color:#6b7280">@(r.BranchName ?? "—")</td>
-                                <td style="font-size:.82rem">@r.RenewalDate.ToString("MMM d, yyyy")</td>
-                                <td class="ad-num" style="font-weight:600">@r.CurrentPremium.ToString("C0")</td>
-                                <td>
-                                    <span class="ad-badge @StatusBadgeClass(r.StatusCode)">@r.StatusCode</span>
-                                </td>
-                                <td class="ad-num">
-                                    <span class="ad-days-chip @DaysChipClass(r.DaysUntilRenewal)">@r.DaysUntilRenewal</span>
-                                </td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
+    @if (_loading)
+    {
+        <section class="rp-loading-state"><i class="bi bi-arrow-repeat rp-spin" aria-hidden="true"></i><strong>Loading enterprise renewal pipeline...</strong><span>Syncing renewal due dates, accounts, producers, branches, statuses, and premium exposure.</span></section>
+    }
+    else if (_data is null)
+    {
+        <section class="rp-empty-state"><i class="bi bi-arrow-repeat" aria-hidden="true"></i><strong>Renewal data unavailable</strong><span>Refresh the pipeline or verify renewal data access.</span><button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync">Retry sync</button></section>
+    }
+    else
+    {
+        <section class="rp-kpi-strip" aria-label="Renewal KPI filters">
+            @foreach (var metric in Metrics)
+            {
+                <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="@(() => SetFilter(metric.Filter))">
+                    <span class="rp-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                    <span><span class="rp-kpi-val">@metric.Value</span><span class="rp-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
+                </button>
+            }
+        </section>
+
+        <section class="rp-workflow-strip" aria-label="Renewal workflow actions">
+            <button type="button" class="rp-workflow-card rp-workflow-danger" @onclick='() => SetFilter("overdue")'><i class="bi bi-exclamation-octagon" aria-hidden="true"></i><span><strong>Recover overdue</strong><span>Prioritize renewals already past due.</span></span></button>
+            <button type="button" class="rp-workflow-card" @onclick='() => SetFilter("30")'><i class="bi bi-calendar-event" aria-hidden="true"></i><span><strong>Protect 30-day book</strong><span>Focus immediate renewal exposure.</span></span></button>
+            <button type="button" class="rp-workflow-card" @onclick='() => SetView("forecast")'><i class="bi bi-bar-chart-line" aria-hidden="true"></i><span><strong>Forecast premium</strong><span>Review premium distribution by bucket.</span></span></button>
+            <button type="button" class="rp-workflow-card" @onclick='() => GoTo("/renewals/pipeline")'><i class="bi bi-kanban" aria-hidden="true"></i><span><strong>Open workflow</strong><span>Continue in the full renewal pipeline.</span></span></button>
+        </section>
+
+        <section class="rp-filter-panel">
+            <div class="rp-search-wrap">
+                <span class="rp-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+                <div class="rp-search-body">
+                    <label for="renewalSearchInput">Search renewals</label>
+                    <input id="renewalSearchInput" class="rp-search-input" value="@_searchTerm" @oninput="SearchChangedCallback" placeholder="Search policy, account, producer, branch, or status..." />
+                    <span>Filters renewal dashboard data immediately.</span>
+                </div>
             </div>
-        }
-    </div>
-}
+            <label class="rp-sort-field">Sort by
+                <select class="rp-filter-select" value="@_sort" @onchange="SortChangedCallback">
+                    <option value="due">Due date urgency</option>
+                    <option value="premium">Premium exposure</option>
+                    <option value="account">Account name</option>
+                    <option value="producer">Producer</option>
+                    <option value="status">Status</option>
+                </select>
+            </label>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-cloud-arrow-down" aria-hidden="true"></i> Sync</button>
+            <div class="rp-filter-result"><strong>@FilteredRows.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><span>shown</span></div>
+        </section>
+
+        <section class="rp-view-tabs" aria-label="Renewal pipeline views">
+            @foreach (var view in _views)
+            {
+                <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label <span>@ViewCount(view.Id)</span></button>
+            }
+        </section>
+
+        <section class="rp-content-layout">
+            <main class="rp-main-card">
+                @if (_view == "overview")
+                {
+                    <div class="rp-section-head"><div><h2>Executive renewal overview</h2><p>Most urgent renewal exposure by deadline, premium, producer, and branch.</p></div><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => SetView("table")'><i class="bi bi-table" aria-hidden="true"></i> Table View</button></div>
+                    <div class="rp-overview-grid">
+                        <section class="rp-spotlight-card"><span><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Highest priority renewal</span><strong>@(PriorityRenewal?.AccountName ?? "—")</strong><p>@PriorityCaption</p><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="SelectPriorityRenewal">Inspect renewal</button></section>
+                        <section class="rp-guidance-card"><h3><i class="bi bi-stars" aria-hidden="true"></i> Renewal guidance</h3><p>@GuidanceText</p><div class="rp-guidance-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("overdue")'>Overdue</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("30")'>30 Days</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetView("forecast")'>Forecast</button></div></section>
+                    </div>
+                    @RenewalTimelinePanel
+                }
+                else if (_view == "pipeline")
+                {
+                    <div class="rp-section-head"><div><h2>Renewal work queue</h2><p>Card view prioritized by renewal urgency and premium exposure.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => GoTo("/renewals/pipeline")'>Full Pipeline</button></div>
+                    <div class="rp-renewal-card-grid">
+                        @foreach (var renewal in FilteredRows)
+                        {
+                            @RenewalCard(renewal)
+                        }
+                    </div>
+                }
+                else if (_view == "forecast")
+                {
+                    <div class="rp-section-head"><div><h2>Premium forecast and risk</h2><p>Renewal premium exposure by time bucket, producer, and branch distribution.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => GoTo("/tenant/dashboard/kpis-performance")'>KPI Detail</button></div>
+                    <div class="rp-forecast-grid">
+                        @BucketPanel("Overdue", _data.Overdue, _data.PremiumOverdue, "overdue", "bi-exclamation-octagon", "rp-tone-red")
+                        @BucketPanel("Due in 30", _data.DueIn30Days, _data.PremiumDueIn30Days, "30", "bi-calendar-event", "rp-tone-amber")
+                        @BucketPanel("Due 31–60", _data.DueIn60Days, _data.PremiumDueIn60Days, "60", "bi-calendar2-range", "rp-tone-blue")
+                        @BucketPanel("Due 61–90", _data.DueIn90Days, _data.PremiumDueIn90Days, "90", "bi-calendar-check", "rp-tone-green")
+                    </div>
+                    @DistributionPanel
+                }
+                else
+                {
+                    <div class="rp-section-head"><div><h2>Renewal operating table</h2><p>Complete renewal pipeline synchronized from the agency dashboard API.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters">Reset</button></div>
+                    <div class="rp-table-wrap">
+                        <table class="rp-table">
+                            <thead>
+                                <tr>
+                                    <th>Policy</th>
+                                    <th>Account</th>
+                                    <th>Producer</th>
+                                    <th>Branch</th>
+                                    <th>Renewal Date</th>
+                                    <th class="rp-num">Premium</th>
+                                    <th>Status</th>
+                                    <th class="rp-num">Days</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var renewal in FilteredRows)
+                                {
+                                    <tr class="@(SelectedId == renewal.AgreementRenewalId ? "rp-row-selected" : string.Empty)" @onclick="@(() => SelectRenewal(renewal))">
+                                        <td><strong>@renewal.PolicyNumber</strong><small>@renewal.AgreementRenewalId.ToString("N")[..8]</small></td>
+                                        <td>@renewal.AccountName</td>
+                                        <td>@DisplayCode(renewal.ProducerName)</td>
+                                        <td>@DisplayCode(renewal.BranchName)</td>
+                                        <td>@renewal.RenewalDate.ToString("MMM d, yyyy", CultureInfo.CurrentCulture)</td>
+                                        <td class="rp-num"><strong>@renewal.CurrentPremium.ToString("C0", CultureInfo.CurrentCulture)</strong></td>
+                                        <td><span class="rp-badge @StatusTone(renewal.StatusCode)">@DisplayCode(renewal.StatusCode)</span></td>
+                                        <td class="rp-num"><span class="rp-days @DaysTone(renewal.DaysUntilRenewal)">@DaysLabel(renewal.DaysUntilRenewal)</span></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </main>
+
+            <aside class="rp-detail-panel">
+                @if (_selected is null)
+                {
+                    <div class="rp-detail-empty"><i class="bi bi-arrow-repeat" aria-hidden="true"></i><strong>Select a renewal</strong><span>Choose a renewal to inspect premium exposure, due date urgency, account, producer, branch, and workflow actions.</span></div>
+                }
+                else
+                {
+                    <div class="rp-detail-head"><div><span><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Renewal detail</span><h2>@_selected.AccountName</h2><p>@_selected.PolicyNumber · @DisplayCode(_selected.StatusCode)</p></div><span class="rp-days @DaysTone(_selected.DaysUntilRenewal)">@DaysLabel(_selected.DaysUntilRenewal)</span></div>
+                    <div class="rp-detail-summary">
+                        <div><span>Premium</span><strong>@_selected.CurrentPremium.ToString("C0", CultureInfo.CurrentCulture)</strong></div>
+                        <div><span>Renewal date</span><strong>@_selected.RenewalDate.ToString("MMM d, yyyy", CultureInfo.CurrentCulture)</strong></div>
+                        <div><span>Producer</span><strong>@DisplayCode(_selected.ProducerName)</strong></div>
+                        <div><span>Branch</span><strong>@DisplayCode(_selected.BranchName)</strong></div>
+                        <div><span>Status</span><strong>@DisplayCode(_selected.StatusCode)</strong></div>
+                        <div><span>Bucket</span><strong>@BucketLabel(_selected.DaysUntilRenewal)</strong></div>
+                        <div><span>Premium share</span><strong>@ShareLabel(_selected.CurrentPremium, TotalPremium)</strong></div>
+                        <div><span>Days</span><strong>@_selected.DaysUntilRenewal.ToString("N0", CultureInfo.CurrentCulture)</strong></div>
+                    </div>
+                    <div class="rp-detail-actions">
+                        <button type="button" class="um-btn um-btn-ghost" @onclick='() => GoTo("/renewals/pipeline")'><i class="bi bi-kanban" aria-hidden="true"></i> Pipeline</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick='() => GoTo("/tenant/dashboard/producer-performance")'><i class="bi bi-person-badge" aria-hidden="true"></i> Producer</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick='() => GoTo("/tenant/dashboard/branch-performance")'><i class="bi bi-diagram-3" aria-hidden="true"></i> Branch</button>
+                        <button type="button" class="um-btn um-btn-primary" @onclick='() => GoTo("/tenant/dashboard/kpis-performance")'><i class="bi bi-bar-chart-line" aria-hidden="true"></i> KPI</button>
+                    </div>
+                }
+            </aside>
+        </section>
+    }
+</div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
     private Guid _tenantId;
+    private Guid _tenantAdminUserId;
     private RenewalPipelineDto? _data;
-    private bool _loading;
+    private RenewalPipelineRowDto? _selected;
+    private bool _loading = true;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
     private string? _loadError;
     private string _activeFilter = "all";
-    private List<RenewalPipelineRowDto> FilteredRows => (_data?.Rows ?? []).Where(r => _activeFilter switch
-    {
-        "overdue" => r.DaysUntilRenewal < 0,
-        "30" => r.DaysUntilRenewal >= 0 && r.DaysUntilRenewal <= 30,
-        "60" => r.DaysUntilRenewal >= 31 && r.DaysUntilRenewal <= 60,
-        "90" => r.DaysUntilRenewal >= 61 && r.DaysUntilRenewal <= 90,
-        _ => true,
-    }).ToList();
+    private string _view = "overview";
+    private string _searchTerm = string.Empty;
+    private string _sort = "due";
+
+    private Microsoft.AspNetCore.Components.EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> SearchChangedCallback => Microsoft.AspNetCore.Components.EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, SearchChanged);
+    private Microsoft.AspNetCore.Components.EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> SortChangedCallback => Microsoft.AspNetCore.Components.EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, SortChanged);
+    private Guid? SelectedId => _selected?.AgreementRenewalId;
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
+    private IReadOnlyList<RenewalPipelineRowDto> Rows => _data?.Rows ?? [];
+    private decimal TotalPremium => Rows.Sum(r => r.CurrentPremium);
+    private int OverdueCount => _data?.Overdue ?? 0;
+    private decimal OverduePremium => _data?.PremiumOverdue ?? 0;
+    private RenewalPipelineRowDto? PriorityRenewal => Rows.OrderBy(r => r.DaysUntilRenewal < 0 ? 0 : 1).ThenBy(r => r.DaysUntilRenewal).ThenByDescending(r => r.CurrentPremium).FirstOrDefault();
+    private string PriorityCaption => PriorityRenewal is null ? "No renewal selected." : $"{PriorityRenewal.PolicyNumber} renews {PriorityRenewal.RenewalDate.ToString("MMM d", CultureInfo.CurrentCulture)} with {PriorityRenewal.CurrentPremium.ToString("C0", CultureInfo.CurrentCulture)} premium exposure.";
+    private string GuidanceText => OverdueCount > 0 ? $"{OverdueCount} overdue renewal(s) represent {OverduePremium.ToString("C0", CultureInfo.CurrentCulture)} at-risk premium. Recover these first." : (_data?.DueIn30Days ?? 0) > 0 ? $"{_data!.DueIn30Days} renewal(s) are due within 30 days. Prioritize producer follow-up and account outreach." : Rows.Count > 0 ? "Renewal pipeline is inside future windows. Monitor 60/90-day exposure and keep producer cadence active." : "No upcoming renewals are currently in the 90-day dashboard window.";
+
+    private readonly ViewOption[] _views = [new("overview", "Overview", "bi-speedometer2"), new("pipeline", "Pipeline", "bi-kanban"), new("forecast", "Forecast", "bi-bar-chart-line"), new("table", "Table", "bi-table")];
+
+    private IReadOnlyList<RenewalMetric> Metrics =>
+    [
+        new("all", Rows.Count.ToString("N0", CultureInfo.CurrentCulture), "Renewals", TotalPremium.ToString("C0", CultureInfo.CurrentCulture), "bi-arrow-repeat", "rp-kpi-all"),
+        new("overdue", (_data?.Overdue ?? 0).ToString("N0", CultureInfo.CurrentCulture), "Overdue", (_data?.PremiumOverdue ?? 0).ToString("C0", CultureInfo.CurrentCulture), "bi-exclamation-octagon", "rp-kpi-overdue"),
+        new("30", (_data?.DueIn30Days ?? 0).ToString("N0", CultureInfo.CurrentCulture), "Due in 30", (_data?.PremiumDueIn30Days ?? 0).ToString("C0", CultureInfo.CurrentCulture), "bi-calendar-event", "rp-kpi-30"),
+        new("60", (_data?.DueIn60Days ?? 0).ToString("N0", CultureInfo.CurrentCulture), "Due 31–60", (_data?.PremiumDueIn60Days ?? 0).ToString("C0", CultureInfo.CurrentCulture), "bi-calendar2-range", "rp-kpi-60"),
+        new("90", (_data?.DueIn90Days ?? 0).ToString("N0", CultureInfo.CurrentCulture), "Due 61–90", (_data?.PremiumDueIn90Days ?? 0).ToString("C0", CultureInfo.CurrentCulture), "bi-calendar-check", "rp-kpi-90"),
+        new("high", HighPremiumRows.Count.ToString("N0", CultureInfo.CurrentCulture), "High Premium", "Top exposure renewals", "bi-cash-coin", "rp-kpi-high")
+    ];
+
+    private IReadOnlyList<RenewalPipelineRowDto> FilteredRows => SortRows(Rows.Where(MatchesFilters)).ToList();
+    private IReadOnlyList<RenewalPipelineRowDto> HighPremiumRows => Rows.Where(r => r.CurrentPremium >= HighPremiumThreshold).OrderByDescending(r => r.CurrentPremium).ToList();
+    private decimal HighPremiumThreshold => Rows.Count == 0 ? 0 : Math.Max(10000, Rows.Average(r => r.CurrentPremium));
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Agency Dashboard", "/tenant/dashboard"), new("Renewal Pipeline"));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Tenant Dashboard", "/tenant/dashboard"), new("Renewal Pipeline", "/tenant/dashboard/renewal-pipeline"));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
-        _loading = true; _loadError = null;
-        try { _data = await Api.GetRenewalPipelineAsync(_tenantId); }
-        catch (Exception ex) { _loadError = $"Failed to load renewal pipeline: {ex.Message}"; _data = null; }
-        finally { _loading = false; }
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _data = await Api.GetRenewalPipelineAsync(_tenantId);
+            _selected = Rows.FirstOrDefault(r => r.AgreementRenewalId == SelectedId) ?? FilteredRows.FirstOrDefault();
+            ShowToast("Renewal pipeline synced successfully.", "success");
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load renewal pipeline: {ex.Message}";
+            _data = null;
+            _selected = null;
+            ShowToast($"Renewal pipeline load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    private void SetFilter(string filter) => _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter;
-    private string KpiClass(string filter) => _activeFilter == filter ? "ad-kpi-card--active" : string.Empty;
-    private static string FilterLabel(string filter) => filter switch { "overdue" => "Overdue renewals", "30" => "Due in 30 days", "60" => "Due in 31-60 days", "90" => "Due in 61-90 days", _ => "All renewals" };
-
-    private static string StatusBadgeClass(string status) => status.ToLower() switch
-    {
-        "renewed"   => "ad-badge--closed",
-        "pending"   => "ad-badge--pending",
-        "overdue"   => "ad-badge--overdue",
-        "at-risk"   => "ad-badge--warn",
-        _           => "ad-badge--info"
-    };
-
-    private static string DaysChipClass(int days) =>
-        days < 0 ? "ad-days--red" : days <= 30 ? "ad-days--warn" : "ad-days--ok";
-
-    async Task ResolveCurrentUserContextAsync()
+    private async Task ResolveCurrentUserContextAsync()
     {
         var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
         _tenantId = context.TenantId;
         _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
     }
+
+    private void SearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _searchTerm = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault(); }
+    private void SortChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) => _sort = e.Value?.ToString() ?? "due";
+    private void SetView(string view) => _view = view;
+    private void SetFilter(string filter) { _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter; _view = filter == "all" ? _view : "pipeline"; _selected = FilteredRows.FirstOrDefault(); }
+    private void ResetFilters() { _activeFilter = "all"; _searchTerm = string.Empty; _sort = "due"; _view = "overview"; _selected = FilteredRows.FirstOrDefault(); }
+    private void SelectRenewal(RenewalPipelineRowDto renewal) => _selected = renewal;
+    private void SelectPriorityRenewal() { if (PriorityRenewal is not null) { _selected = PriorityRenewal; _view = "pipeline"; } }
+    private void GoTo(string url) => Nav.NavigateTo(url);
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+
+    private bool MatchesFilters(RenewalPipelineRowDto renewal)
+    {
+        if (!string.IsNullOrWhiteSpace(_searchTerm) && !MatchesSearch(renewal.PolicyNumber, renewal.AccountName, renewal.ProducerName, renewal.BranchName, renewal.StatusCode)) return false;
+        return _activeFilter switch
+        {
+            "overdue" => renewal.DaysUntilRenewal < 0,
+            "30" => renewal.DaysUntilRenewal >= 0 && renewal.DaysUntilRenewal <= 30,
+            "60" => renewal.DaysUntilRenewal >= 31 && renewal.DaysUntilRenewal <= 60,
+            "90" => renewal.DaysUntilRenewal >= 61 && renewal.DaysUntilRenewal <= 90,
+            "high" => renewal.CurrentPremium >= HighPremiumThreshold,
+            _ => true
+        };
+    }
+
+    private IEnumerable<RenewalPipelineRowDto> SortRows(IEnumerable<RenewalPipelineRowDto> rows) => _sort switch
+    {
+        "premium" => rows.OrderByDescending(r => r.CurrentPremium).ThenBy(r => r.DaysUntilRenewal),
+        "account" => rows.OrderBy(r => r.AccountName).ThenBy(r => r.DaysUntilRenewal),
+        "producer" => rows.OrderBy(r => r.ProducerName).ThenBy(r => r.DaysUntilRenewal),
+        "status" => rows.OrderBy(r => r.StatusCode).ThenBy(r => r.DaysUntilRenewal),
+        _ => rows.OrderBy(r => r.DaysUntilRenewal).ThenByDescending(r => r.CurrentPremium)
+    };
+
+    private RenderFragment RenewalTimelinePanel => @<section class="rp-panel"><h3><i class="bi bi-calendar-week" aria-hidden="true"></i> Renewal urgency timeline</h3><div class="rp-timeline-stack">@foreach (var row in TimelineRows) { <button type="button" class="rp-timeline-row @row.Tone" @onclick="@(() => SetFilter(row.Filter))"><span>@row.Label</span><div><i style="width:@WidthPct(row.Premium, MaxBucketPremium)"></i></div><strong>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><small>@row.Premium.ToString("C0", CultureInfo.CurrentCulture)</small></button> }</div></section>;
+    private RenderFragment DistributionPanel => @<section class="rp-panel"><h3><i class="bi bi-diagram-3" aria-hidden="true"></i> Producer and branch exposure</h3><div class="rp-distribution-grid"><div><h4>By producer</h4>@foreach (var row in Distribution(Rows, r => r.ProducerName).Take(6)) { <button type="button" class="rp-dist-row"><span>@DisplayCode(row.Label)</span><strong>@row.Premium.ToString("C0", CultureInfo.CurrentCulture)</strong><small>@row.Count</small></button> }</div><div><h4>By branch</h4>@foreach (var row in Distribution(Rows, r => r.BranchName).Take(6)) { <button type="button" class="rp-dist-row"><span>@DisplayCode(row.Label)</span><strong>@row.Premium.ToString("C0", CultureInfo.CurrentCulture)</strong><small>@row.Count</small></button> }</div></div></section>;
+    private RenderFragment RenewalCard(RenewalPipelineRowDto renewal) => @<article class="@RenewalCardClass(renewal)" @onclick="@(() => SelectRenewal(renewal))"><div class="rp-renewal-top"><span class="rp-renewal-icon @DaysTone(renewal.DaysUntilRenewal)"><i class="bi bi-file-earmark-text" aria-hidden="true"></i></span><div><strong>@renewal.AccountName</strong><small>@renewal.PolicyNumber</small></div><button type="button" class="rp-card-open" title="Inspect renewal" @onclick="@(() => SelectRenewal(renewal))" @onclick:stopPropagation="true">↗</button></div><div class="rp-renewal-metrics"><div><span>Premium</span><strong>@renewal.CurrentPremium.ToString("C0", CultureInfo.CurrentCulture)</strong></div><div><span>Due</span><strong>@renewal.RenewalDate.ToString("MMM d", CultureInfo.CurrentCulture)</strong></div><div><span>Producer</span><strong>@DisplayCode(renewal.ProducerName)</strong></div><div><span>Branch</span><strong>@DisplayCode(renewal.BranchName)</strong></div></div><div class="rp-renewal-foot"><span class="rp-days @DaysTone(renewal.DaysUntilRenewal)">@DaysLabel(renewal.DaysUntilRenewal)</span><span class="rp-badge @StatusTone(renewal.StatusCode)">@DisplayCode(renewal.StatusCode)</span></div></article>;
+    private RenderFragment BucketPanel(string title, int count, decimal premium, string filter, string icon, string tone) => @<button type="button" class="rp-bucket-panel @tone" @onclick="@(() => SetFilter(filter))"><i class="bi @icon" aria-hidden="true"></i><span><strong>@count.ToString("N0", CultureInfo.CurrentCulture)</strong><em>@title</em><small>@premium.ToString("C0", CultureInfo.CurrentCulture) premium</small></span></button>;
+
+    private IReadOnlyList<TimelineRow> TimelineRows => _data is null ? [] : [new("Overdue", "overdue", _data.Overdue, _data.PremiumOverdue, "rp-timeline-red"), new("Due in 30", "30", _data.DueIn30Days, _data.PremiumDueIn30Days, "rp-timeline-amber"), new("Due 31–60", "60", _data.DueIn60Days, _data.PremiumDueIn60Days, "rp-timeline-blue"), new("Due 61–90", "90", _data.DueIn90Days, _data.PremiumDueIn90Days, "rp-timeline-green")];
+    private decimal MaxBucketPremium => Math.Max(1, TimelineRows.Max(r => r.Premium));
+    private string MetricCardClass(RenewalMetric metric) => $"rp-kpi-card {metric.Tone} {(metric.Filter == _activeFilter ? "rp-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewOption view) => $"rp-view-btn {(view.Id == _view ? "rp-view-btn-active" : string.Empty)}";
+    private string RenewalCardClass(RenewalPipelineRowDto renewal) => $"rp-renewal-card {(SelectedId == renewal.AgreementRenewalId ? "rp-renewal-card-selected" : string.Empty)}";
+    private int ViewCount(string view) => view switch { "pipeline" => FilteredRows.Count, "forecast" => TimelineRows.Count, "table" => FilteredRows.Count, _ => Rows.Count };
+    private bool MatchesSearch(params string?[] values) => values.Any(v => !string.IsNullOrWhiteSpace(v) && v.Contains(_searchTerm, StringComparison.OrdinalIgnoreCase));
+    private static string DisplayCode(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value.Replace("_", " ").Replace("-", " ");
+    private static string StatusTone(string? value) => value?.ToLowerInvariant() switch { "pending" => "rp-badge-warning", "overdue" => "rp-badge-danger", "at-risk" => "rp-badge-danger", "renewed" => "rp-badge-success", _ => "rp-badge-info" };
+    private static string DaysTone(int days) => days < 0 ? "rp-danger" : days <= 30 ? "rp-warning" : "rp-success";
+    private static string DaysLabel(int days) => days < 0 ? $"{Math.Abs(days)}d overdue" : days == 0 ? "Due today" : $"{days}d";
+    private static string BucketLabel(int days) => days < 0 ? "Overdue" : days <= 30 ? "Due in 30" : days <= 60 ? "Due 31–60" : "Due 61–90";
+    private static string ShareLabel(decimal value, decimal total) => total <= 0 ? "0%" : (value / total * 100).ToString("F1", CultureInfo.CurrentCulture) + "%";
+    private static string WidthPct(decimal value, decimal max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, (double)(value / max * 100)))).ToString("F1", CultureInfo.InvariantCulture) + "%";
+    private static IReadOnlyList<DistRow> Distribution(IEnumerable<RenewalPipelineRowDto> rows, Func<RenewalPipelineRowDto, string?> selector) => rows.GroupBy(r => string.IsNullOrWhiteSpace(selector(r)) ? "Unassigned" : selector(r)!, StringComparer.OrdinalIgnoreCase).Select(g => new DistRow(g.Key, g.Count(), g.Sum(r => r.CurrentPremium))).OrderByDescending(r => r.Premium).ToList();
+
+    private sealed record ViewOption(string Id, string Label, string Icon);
+    private sealed record RenewalMetric(string Filter, string Value, string Label, string Caption, string Icon, string Tone);
+    private sealed record TimelineRow(string Label, string Filter, int Count, decimal Premium, string Tone);
+    private sealed record DistRow(string Label, int Count, decimal Premium);
 }
