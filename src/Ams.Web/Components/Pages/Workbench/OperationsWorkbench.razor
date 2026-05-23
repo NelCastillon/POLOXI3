@@ -1,647 +1,583 @@
 @page "/workbench/operations"
 @namespace Ams.Web.Components.Pages.Workbench
+@using System.Globalization
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
+@inject ConfirmationDialogService ConfirmationDialog
 
 <PageTitle>Operations Workbench</PageTitle>
 
-<AppPageHeader Title="Operations Workbench"
-               Subtitle="Centralised view of every operational queue — tasks, endorsements, certificates, renewals, documents, downloads and automations"
-               Icon="bi-tools">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise @(_loading ? "ow-spin" : "")" aria-hidden="true"></i> Refresh
-        </button>
-        <SfDropDownList TValue="string" TItem="LabelValue"
-                        DataSource="_assigneeOptions"
-                        Placeholder="All Assignees"
-                        ShowClearButton="true"
-                        Width="160px"
-                        Value="_filterAssignee"
-                        ValueChanged="OnAssigneeChangedAsync">
-            <DropDownListFieldSettings Value="Value" Text="Label" />
-        </SfDropDownList>
-    </Actions>
-</AppPageHeader>
-
-<!-- ── Summary KPI strip ─────────────────────────────────────────────────── -->
-<div class="ow-kpi-strip">
-    <div class="@KpiClass(1)" @onclick="() => SetQueueFocus(1)" role="button" tabindex="0" aria-label="Filter: Overdue Tasks">
-        <span class="ow-kpi-icon ow-kpi-icon--overdue"><i class="bi bi-alarm-fill" aria-hidden="true"></i></span>
-        <div class="ow-kpi-body">
-            <div class="ow-kpi-value @(_counts.OverdueTasks > 0 ? "ow-kpi-value--alert" : "")">@_counts.OverdueTasks</div>
-            <div class="ow-kpi-label">Overdue Tasks</div>
-        </div>
-        @if (_queueFocus == 1) { <span class="ow-kpi-dot" aria-hidden="true"></span> }
-    </div>
-    <div class="@KpiClass(2)" @onclick="() => SetQueueFocus(2)" role="button" tabindex="0" aria-label="Filter: Pending Endorsements">
-        <span class="ow-kpi-icon ow-kpi-icon--endorse"><i class="bi bi-pen-fill" aria-hidden="true"></i></span>
-        <div class="ow-kpi-body">
-            <div class="ow-kpi-value">@_counts.PendingEndorsements</div>
-            <div class="ow-kpi-label">Endorsements</div>
-        </div>
-        @if (_queueFocus == 2) { <span class="ow-kpi-dot" aria-hidden="true"></span> }
-    </div>
-    <div class="@KpiClass(3)" @onclick="() => SetQueueFocus(3)" role="button" tabindex="0" aria-label="Filter: Certificate Requests">
-        <span class="ow-kpi-icon ow-kpi-icon--cert"><i class="bi bi-patch-check-fill" aria-hidden="true"></i></span>
-        <div class="ow-kpi-body">
-            <div class="ow-kpi-value">@_counts.CertificateRequests</div>
-            <div class="ow-kpi-label">Certificates</div>
-        </div>
-        @if (_queueFocus == 3) { <span class="ow-kpi-dot" aria-hidden="true"></span> }
-    </div>
-    <div class="@KpiClass(4)" @onclick="() => SetQueueFocus(4)" role="button" tabindex="0" aria-label="Filter: Renewal Follow-ups">
-        <span class="ow-kpi-icon ow-kpi-icon--renewal"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i></span>
-        <div class="ow-kpi-body">
-            <div class="ow-kpi-value">@_counts.RenewalFollowups</div>
-            <div class="ow-kpi-label">Renewal Follow-ups</div>
-        </div>
-        @if (_queueFocus == 4) { <span class="ow-kpi-dot" aria-hidden="true"></span> }
-    </div>
-    <div class="@KpiClass(5)" @onclick="() => SetQueueFocus(5)" role="button" tabindex="0" aria-label="Filter: Doc Indexing Exceptions">
-        <span class="ow-kpi-icon ow-kpi-icon--docex"><i class="bi bi-file-earmark-x-fill" aria-hidden="true"></i></span>
-        <div class="ow-kpi-body">
-            <div class="ow-kpi-value @(_counts.DocIndexingExceptions > 0 ? "ow-kpi-value--warn" : "")">@_counts.DocIndexingExceptions</div>
-            <div class="ow-kpi-label">Doc Exceptions</div>
-        </div>
-        @if (_queueFocus == 5) { <span class="ow-kpi-dot" aria-hidden="true"></span> }
-    </div>
-    <div class="@KpiClass(6)" @onclick="() => SetQueueFocus(6)" role="button" tabindex="0" aria-label="Filter: Failed Downloads">
-        <span class="ow-kpi-icon ow-kpi-icon--dlFail"><i class="bi bi-cloud-slash-fill" aria-hidden="true"></i></span>
-        <div class="ow-kpi-body">
-            <div class="ow-kpi-value @(_counts.FailedDownloads > 0 ? "ow-kpi-value--alert" : "")">@_counts.FailedDownloads</div>
-            <div class="ow-kpi-label">Failed Downloads</div>
-        </div>
-        @if (_queueFocus == 6) { <span class="ow-kpi-dot" aria-hidden="true"></span> }
-    </div>
-    <div class="@KpiClass(7)" @onclick="() => SetQueueFocus(7)" role="button" tabindex="0" aria-label="Filter: Failed Automations">
-        <span class="ow-kpi-icon ow-kpi-icon--autoFail"><i class="bi bi-lightning-charge-fill" aria-hidden="true"></i></span>
-        <div class="ow-kpi-body">
-            <div class="ow-kpi-value @(_counts.FailedAutomations > 0 ? "ow-kpi-value--alert" : "")">@_counts.FailedAutomations</div>
-            <div class="ow-kpi-label">Failed Automations</div>
-        </div>
-        @if (_queueFocus == 7) { <span class="ow-kpi-dot" aria-hidden="true"></span> }
-    </div>
-</div>
-
-<!-- ── Queue tab bar ──────────────────────────────────────────────────────── -->
-<div class="ow-queue-tabs" role="tablist" aria-label="Queue selector">
-    @foreach (var q in _queues)
+<div class="opw-enterprise-page">
+    @if (_toastVisible)
     {
-        <button class="ow-queue-tab @(q.Id == _activeQueue ? "ow-queue-tab--active" : "")"
-                role="tab"
-                aria-selected="@(q.Id == _activeQueue)"
-                @onclick="() => SetActiveQueue(q.Id)">
-            <i class="@q.Icon" aria-hidden="true"></i>
-            <span>@q.Label</span>
-            @if (q.Badge > 0)
-            {
-                <span class="ow-tab-badge @(q.IsAlert ? "ow-tab-badge--alert" : "")">@q.Badge</span>
-            }
-        </button>
-    }
-</div>
-
-<!-- ── Active queue panel ─────────────────────────────────────────────────── -->
-<div class="ow-queue-panel">
-
-    <!-- shared search + priority filter row -->
-    <div class="ow-filter-row">
-        <div class="ow-search-box">
-            <i class="bi bi-search ow-search-icon" aria-hidden="true"></i>
-            <input class="ow-search-input" type="text" placeholder="Search in queue…"
-                   value="@_search" @oninput="OnSearchInput" />
-        </div>
-        <SfDropDownList TValue="string" TItem="LabelValue"
-                        DataSource="_priorityOptions"
-                        Placeholder="All Priorities"
-                        ShowClearButton="true"
-                        Width="160px"
-                        Value="_filterPriority"
-                        ValueChanged="@((string v) => { _filterPriority = v; ApplyFilters(); })">
-            <DropDownListFieldSettings Value="Value" Text="Label" />
-        </SfDropDownList>
-        <SfDropDownList TValue="string" TItem="LabelValue"
-                        DataSource="_ageOptions"
-                        Placeholder="Any Age"
-                        ShowClearButton="true"
-                        Width="150px"
-                        Value="_filterAge"
-                        ValueChanged="@((string v) => { _filterAge = v; ApplyFilters(); })">
-            <DropDownListFieldSettings Value="Value" Text="Label" />
-        </SfDropDownList>
-        <label class="ow-toggle-label">
-            <input type="checkbox" @bind="_filterMyItems" @bind:after="ApplyFilters" />
-            My items only
-        </label>
-    </div>
-
-    @if (!string.IsNullOrWhiteSpace(_loadError))
-    {
-        <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i> @_loadError
-        </div>
-    }
-
-    @if (_loading)
-    {
-        <div class="ow-loading" aria-live="polite">
-            <div class="um-spinner" aria-hidden="true"></div>
-            <span>Loading queue…</span>
-        </div>
-    }
-    else
-    {
-        <!-- ── 1 · Overdue Tasks ──────────────────────────────────────────── -->
-        @if (_activeQueue == "overdue-tasks")
-        {
-            <div class="ow-grid-card app-datagrid">
-                <SfGrid TValue="OpsItem"
-                        DataSource="@FilteredItems(_overdueTasks)"
-                        AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-                    <GridPageSettings PageSize="20" PageSizes="@(new int[] { 10, 20, 50 })" />
-                    <GridColumns>
-                        <GridColumn HeaderText="Priority" Width="100">
-                            <Template>@{ var i = (OpsItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(OpsItem.Title)" HeaderText="Task" Width="260">
-                            <Template>
-                                @{ var i = (OpsItem)context; }
-                                <div class="ow-title-cell">
-                                    <span class="ow-item-title">@i.Title</span>
-                                    <span class="ow-item-ref ow-mono">@i.RefNumber</span>
-                                </div>
-                            </Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(OpsItem.AccountName)" HeaderText="Account" Width="180" />
-                        <GridColumn Field="@nameof(OpsItem.AssignedTo)" HeaderText="Assigned To" Width="150" />
-                        <GridColumn Field="@nameof(OpsItem.DueDate)" HeaderText="Due Date" Width="120">
-                            <Template>
-                                @{ var i = (OpsItem)context; }
-                                <span class="@(i.DueDate < DateTime.Today ? "ow-overdue-date" : "")">
-                                    @i.DueDate.ToString("d")
-                                </span>
-                            </Template>
-                        </GridColumn>
-                        <GridColumn HeaderText="Age" Width="90">
-                            <Template>@{ var i = (OpsItem)context; }<span class="ow-age-badge @AgeBadgeClass(i.AgeDays)">@i.AgeDays d</span></Template>
-                        </GridColumn>
-                        <GridColumn HeaderText="" Width="90" TextAlign="TextAlign.Right">
-                            <Template>@{ var i = (OpsItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenItem(i)" title="Open"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template>
-                        </GridColumn>
-                    </GridColumns>
-                </SfGrid>
-            </div>
-        }
-
-        <!-- ── 2 · Pending Endorsements ──────────────────────────────────── -->
-        @if (_activeQueue == "endorsements")
-        {
-            <div class="ow-grid-card app-datagrid">
-                <SfGrid TValue="OpsItem"
-                        DataSource="@FilteredItems(_pendingEndorsements)"
-                        AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-                    <GridPageSettings PageSize="20" PageSizes="@(new int[] { 10, 20, 50 })" />
-                    <GridColumns>
-                        <GridColumn HeaderText="Priority" Width="100">
-                            <Template>@{ var i = (OpsItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(OpsItem.Title)" HeaderText="Endorsement" Width="240">
-                            <Template>
-                                @{ var i = (OpsItem)context; }
-                                <div class="ow-title-cell">
-                                    <span class="ow-item-title">@i.Title</span>
-                                    <span class="ow-item-ref ow-mono">@i.RefNumber</span>
-                                </div>
-                            </Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(OpsItem.AccountName)" HeaderText="Account" Width="180" />
-                        <GridColumn Field="@nameof(OpsItem.PolicyNumber)" HeaderText="Policy #" Width="140">
-                            <Template>@{ var i = (OpsItem)context; }<span class="ow-mono">@i.PolicyNumber</span></Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(OpsItem.AssignedTo)" HeaderText="Assigned To" Width="140" />
-                        <GridColumn Field="@nameof(OpsItem.DueDate)" HeaderText="Needed By" Width="120">
-                            <Template>
-                                @{ var i = (OpsItem)context; }
-                                <span class="@(i.DueDate < DateTime.Today ? "ow-overdue-date" : "")">@i.DueDate.ToString("d")</span>
-                            </Template>
-                        </GridColumn>
-                        <GridColumn HeaderText="Age" Width="90">
-                            <Template>@{ var i = (OpsItem)context; }<span class="ow-age-badge @AgeBadgeClass(i.AgeDays)">@i.AgeDays d</span></Template>
-                        </GridColumn>
-                        <GridColumn HeaderText="" Width="90" TextAlign="TextAlign.Right">
-                            <Template>@{ var i = (OpsItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenItem(i)" title="Open"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template>
-                        </GridColumn>
-                    </GridColumns>
-                </SfGrid>
-            </div>
-        }
-
-        <!-- ── 3 · Certificate Requests ──────────────────────────────────── -->
-        @if (_activeQueue == "certificates")
-        {
-            <div class="ow-grid-card app-datagrid">
-                <SfGrid TValue="OpsItem"
-                        DataSource="@FilteredItems(_certRequests)"
-                        AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-                    <GridPageSettings PageSize="20" PageSizes="@(new int[] { 10, 20, 50 })" />
-                    <GridColumns>
-                        <GridColumn HeaderText="Priority" Width="100">
-                            <Template>@{ var i = (OpsItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(OpsItem.Title)" HeaderText="Certificate Type" Width="200">
-                            <Template>
-                                @{ var i = (OpsItem)context; }
-                                <div class="ow-title-cell">
-                                    <span class="ow-item-title">@i.Title</span>
-                                    <span class="ow-item-ref ow-mono">@i.RefNumber</span>
-                                </div>
-                            </Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(OpsItem.AccountName)" HeaderText="Account" Width="180" />
-                        <GridColumn Field="@nameof(OpsItem.CertHolder)" HeaderText="Certificate Holder" Width="200" />
-                        <GridColumn Field="@nameof(OpsItem.PolicyNumber)" HeaderText="Policy #" Width="140">
-                            <Template>@{ var i = (OpsItem)context; }<span class="ow-mono">@i.PolicyNumber</span></Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(OpsItem.AssignedTo)" HeaderText="Assigned To" Width="140" />
-                        <GridColumn Field="@nameof(OpsItem.DueDate)" HeaderText="Needed By" Width="120">
-                            <Template>
-                                @{ var i = (OpsItem)context; }
-                                <span class="@(i.DueDate < DateTime.Today ? "ow-overdue-date" : "")">@i.DueDate.ToString("d")</span>
-                            </Template>
-                        </GridColumn>
-                        <GridColumn HeaderText="Age" Width="90">
-                            <Template>@{ var i = (OpsItem)context; }<span class="ow-age-badge @AgeBadgeClass(i.AgeDays)">@i.AgeDays d</span></Template>
-                        </GridColumn>
-                        <GridColumn HeaderText="" Width="90" TextAlign="TextAlign.Right">
-                            <Template>@{ var i = (OpsItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenItem(i)" title="Open"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template>
-                        </GridColumn>
-                    </GridColumns>
-                </SfGrid>
-            </div>
-        }
-
-        <!-- ── 4 · Renewal Follow-ups ─────────────────────────────────────── -->
-        @if (_activeQueue == "renewal-followups")
-        {
-            <div class="ow-grid-card app-datagrid">
-                <SfGrid TValue="OpsItem"
-                        DataSource="@FilteredItems(_renewalFollowups)"
-                        AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-                    <GridPageSettings PageSize="20" PageSizes="@(new int[] { 10, 20, 50 })" />
-                    <GridColumns>
-                        <GridColumn HeaderText="Priority" Width="100">
-                            <Template>@{ var i = (OpsItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(OpsItem.Title)" HeaderText="Account / Policy" Width="240">
-                            <Template>
-                                @{ var i = (OpsItem)context; }
-                                <div class="ow-title-cell">
-                                    <span class="ow-item-title">@i.AccountName</span>
-                                    <span class="ow-item-ref ow-mono">@i.PolicyNumber · exp @i.DueDate.ToString("d")</span>
-                                </div>
-                            </Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(OpsItem.LobCode)" HeaderText="LoB" Width="90" />
-                        <GridColumn Field="@nameof(OpsItem.Premium)" HeaderText="Premium" Width="130" TextAlign="TextAlign.Right">
-                            <Template>@{ var i = (OpsItem)context; }<span class="ow-mono">@i.Premium.ToString("C0")</span></Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(OpsItem.AssignedTo)" HeaderText="Producer" Width="150" />
-                        <GridColumn Field="@nameof(OpsItem.FollowUpDate)" HeaderText="Follow-up Date" Width="140">
-                            <Template>
-                                @{ var i = (OpsItem)context; }
-                                <span class="@(i.FollowUpDate.HasValue && i.FollowUpDate.Value < DateTime.Today ? "ow-overdue-date" : "")">
-                                    @(i.FollowUpDate.HasValue ? i.FollowUpDate.Value.ToString("d") : "—")
-                                </span>
-                            </Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(OpsItem.RenewalStage)" HeaderText="Stage" Width="140">
-                            <Template>@{ var i = (OpsItem)context; }<span class="@StageBadge(i.RenewalStage)">@i.RenewalStage</span></Template>
-                        </GridColumn>
-                        <GridColumn HeaderText="" Width="90" TextAlign="TextAlign.Right">
-                            <Template>@{ var i = (OpsItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenItem(i)" title="Open"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template>
-                        </GridColumn>
-                    </GridColumns>
-                </SfGrid>
-            </div>
-        }
-
-        <!-- ── 5 · Document Indexing Exceptions ──────────────────────────── -->
-        @if (_activeQueue == "doc-exceptions")
-        {
-            <div class="ow-grid-card app-datagrid">
-                <SfGrid TValue="OpsItem"
-                        DataSource="@FilteredItems(_docExceptions)"
-                        AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-                    <GridPageSettings PageSize="20" PageSizes="@(new int[] { 10, 20, 50 })" />
-                    <GridColumns>
-                        <GridColumn HeaderText="Severity" Width="110">
-                            <Template>@{ var i = (OpsItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(OpsItem.Title)" HeaderText="Document / Exception" Width="280">
-                            <Template>
-                                @{ var i = (OpsItem)context; }
-                                <div class="ow-title-cell">
-                                    <span class="ow-item-title">@i.Title</span>
-                                    <span class="ow-item-ref ow-mono">@i.RefNumber</span>
-                                </div>
-                            </Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(OpsItem.AccountName)" HeaderText="Account" Width="170" />
-                        <GridColumn Field="@nameof(OpsItem.ErrorMessage)" HeaderText="Error" Width="260">
-                            <Template>
-                                @{ var i = (OpsItem)context; }
-                                <span class="ow-error-msg" title="@i.ErrorMessage">@i.ErrorMessage</span>
-                            </Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(OpsItem.RetryCount)" HeaderText="Retries" Width="90" TextAlign="TextAlign.Right" />
-                        <GridColumn Field="@nameof(OpsItem.CreatedAt)" HeaderText="Received" Width="130">
-                            <Template>@{ var i = (OpsItem)context; }<span>@i.CreatedAt.ToString("g")</span></Template>
-                        </GridColumn>
-                        <GridColumn HeaderText="" Width="120" TextAlign="TextAlign.Right">
-                            <Template>
-                                @{ var i = (OpsItem)context; }
-                                <div class="ow-row-actions">
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => RetryItemAsync(i)" title="Retry">
-                                        <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
-                                    </button>
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenItem(i)" title="Open">
-                                        <i class="bi bi-arrow-right" aria-hidden="true"></i>
-                                    </button>
-                                </div>
-                            </Template>
-                        </GridColumn>
-                    </GridColumns>
-                </SfGrid>
-            </div>
-        }
-
-        <!-- ── 6 · Failed Downloads ───────────────────────────────────────── -->
-        @if (_activeQueue == "failed-downloads")
-        {
-            <div class="ow-grid-card app-datagrid">
-                <SfGrid TValue="OpsItem"
-                        DataSource="@FilteredItems(_failedDownloads)"
-                        AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-                    <GridPageSettings PageSize="20" PageSizes="@(new int[] { 10, 20, 50 })" />
-                    <GridColumns>
-                        <GridColumn Field="@nameof(OpsItem.Title)" HeaderText="Feed / Mapping" Width="240">
-                            <Template>
-                                @{ var i = (OpsItem)context; }
-                                <div class="ow-title-cell">
-                                    <span class="ow-item-title">@i.Title</span>
-                                    <span class="ow-item-ref ow-mono">@i.RefNumber</span>
-                                </div>
-                            </Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(OpsItem.AccountName)" HeaderText="Carrier / Source" Width="180" />
-                        <GridColumn Field="@nameof(OpsItem.ErrorMessage)" HeaderText="Failure Reason" Width="280">
-                            <Template>
-                                @{ var i = (OpsItem)context; }
-                                <span class="ow-error-msg" title="@i.ErrorMessage">@i.ErrorMessage</span>
-                            </Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(OpsItem.RetryCount)" HeaderText="Retries" Width="90" TextAlign="TextAlign.Right" />
-                        <GridColumn Field="@nameof(OpsItem.CreatedAt)" HeaderText="Failed At" Width="140">
-                            <Template>@{ var i = (OpsItem)context; }<span>@i.CreatedAt.ToString("g")</span></Template>
-                        </GridColumn>
-                        <GridColumn HeaderText="" Width="120" TextAlign="TextAlign.Right">
-                            <Template>
-                                @{ var i = (OpsItem)context; }
-                                <div class="ow-row-actions">
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => RetryItemAsync(i)" title="Retry">
-                                        <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
-                                    </button>
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenItem(i)" title="Details">
-                                        <i class="bi bi-arrow-right" aria-hidden="true"></i>
-                                    </button>
-                                </div>
-                            </Template>
-                        </GridColumn>
-                    </GridColumns>
-                </SfGrid>
-            </div>
-        }
-
-        <!-- ── 7 · Failed Automations ─────────────────────────────────────── -->
-        @if (_activeQueue == "failed-automations")
-        {
-            <div class="ow-grid-card app-datagrid">
-                <SfGrid TValue="OpsItem"
-                        DataSource="@FilteredItems(_failedAutomations)"
-                        AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-                    <GridPageSettings PageSize="20" PageSizes="@(new int[] { 10, 20, 50 })" />
-                    <GridColumns>
-                        <GridColumn Field="@nameof(OpsItem.Title)" HeaderText="Automation / Rule" Width="240">
-                            <Template>
-                                @{ var i = (OpsItem)context; }
-                                <div class="ow-title-cell">
-                                    <span class="ow-item-title">@i.Title</span>
-                                    <span class="ow-item-ref ow-mono">@i.RefNumber</span>
-                                </div>
-                            </Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(OpsItem.AccountName)" HeaderText="Triggered By" Width="170" />
-                        <GridColumn Field="@nameof(OpsItem.ErrorMessage)" HeaderText="Error" Width="280">
-                            <Template>
-                                @{ var i = (OpsItem)context; }
-                                <span class="ow-error-msg" title="@i.ErrorMessage">@i.ErrorMessage</span>
-                            </Template>
-                        </GridColumn>
-                        <GridColumn Field="@nameof(OpsItem.RetryCount)" HeaderText="Retries" Width="90" TextAlign="TextAlign.Right" />
-                        <GridColumn Field="@nameof(OpsItem.AutomationStep)" HeaderText="Failed Step" Width="160" />
-                        <GridColumn Field="@nameof(OpsItem.CreatedAt)" HeaderText="Failed At" Width="140">
-                            <Template>@{ var i = (OpsItem)context; }<span>@i.CreatedAt.ToString("g")</span></Template>
-                        </GridColumn>
-                        <GridColumn HeaderText="" Width="140" TextAlign="TextAlign.Right">
-                            <Template>
-                                @{ var i = (OpsItem)context; }
-                                <div class="ow-row-actions">
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => RetryItemAsync(i)" title="Retry step">
-                                        <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
-                                    </button>
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => SkipStepAsync(i)" title="Skip step">
-                                        <i class="bi bi-skip-forward-fill" aria-hidden="true"></i>
-                                    </button>
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenItem(i)" title="Details">
-                                        <i class="bi bi-arrow-right" aria-hidden="true"></i>
-                                    </button>
-                                </div>
-                            </Template>
-                        </GridColumn>
-                    </GridColumns>
-                </SfGrid>
-            </div>
-        }
-    }
-</div>
-
-<!-- ── Item Detail Side Panel ────────────────────────────────────────────── -->
-@if (_selectedItem is not null)
-{
-    <div class="ow-detail-overlay" @onclick="CloseDetail" role="button" tabindex="-1" aria-label="Close detail panel"></div>
-    <div class="ow-detail-panel" role="complementary" aria-label="Item details">
-        <div class="ow-detail-header">
-            <span class="@PriBadge(_selectedItem.Priority)">@_selectedItem.Priority</span>
-            <h2 class="ow-detail-title">@_selectedItem.Title</h2>
-            <button class="um-btn um-btn-ghost um-btn-sm ow-detail-close" @onclick="CloseDetail" aria-label="Close">
+        <div class="opw-toast opw-toast-@_toastKind" role="status" aria-live="polite">
+            <i class="@ToastIcon" aria-hidden="true"></i>
+            <span>@_toastMessage</span>
+            <button type="button" class="opw-toast-close" @onclick="HideToast" aria-label="Dismiss notification">
                 <i class="bi bi-x-lg" aria-hidden="true"></i>
             </button>
         </div>
-        <div class="ow-detail-body">
-            <div class="ow-detail-row">
-                <span class="ow-detail-label">Ref</span>
-                <span class="ow-mono">@_selectedItem.RefNumber</span>
-            </div>
-            <div class="ow-detail-row">
-                <span class="ow-detail-label">Account</span>
-                <span>@_selectedItem.AccountName</span>
-            </div>
-            @if (!string.IsNullOrEmpty(_selectedItem.PolicyNumber))
-            {
-                <div class="ow-detail-row">
-                    <span class="ow-detail-label">Policy #</span>
-                    <span class="ow-mono">@_selectedItem.PolicyNumber</span>
+    }
+
+    <section class="opw-hero" aria-labelledby="operations-title">
+        <div class="opw-hero-left">
+            <span class="opw-hero-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span>
+            <div>
+                <div class="opw-title-row">
+                    <h1 id="operations-title">Operations Workbench</h1>
+                    <span><i class="bi bi-broadcast-pin" aria-hidden="true"></i> Live operations command center</span>
                 </div>
-            }
-            <div class="ow-detail-row">
-                <span class="ow-detail-label">Assigned To</span>
-                <span>@_selectedItem.AssignedTo</span>
+                <p>Coordinate agency service queues, endorsements, certificates, renewals, document exceptions, carrier downloads, and automation recovery from one full-width enterprise workspace.</p>
             </div>
-            <div class="ow-detail-row">
-                <span class="ow-detail-label">Due Date</span>
-                <span class="@(_selectedItem.DueDate < DateTime.Today ? "ow-overdue-date" : "")">
-                    @_selectedItem.DueDate.ToString("d")
-                </span>
-            </div>
-            <div class="ow-detail-row">
-                <span class="ow-detail-label">Age</span>
-                <span class="ow-age-badge @AgeBadgeClass(_selectedItem.AgeDays)">@_selectedItem.AgeDays d</span>
-            </div>
-            <div class="ow-detail-row">
-                <span class="ow-detail-label">Queue</span>
-                <span>@_selectedItem.QueueName</span>
-            </div>
-            @if (!string.IsNullOrEmpty(_selectedItem.ErrorMessage))
-            {
-                <div class="ow-detail-row ow-detail-row--col">
-                    <span class="ow-detail-label">Error</span>
-                    <pre class="ow-error-pre">@_selectedItem.ErrorMessage</pre>
-                </div>
-            }
-            @if (!string.IsNullOrEmpty(_selectedItem.Notes))
-            {
-                <div class="ow-detail-row ow-detail-row--col">
-                    <span class="ow-detail-label">Notes</span>
-                    <p class="ow-detail-notes">@_selectedItem.Notes</p>
-                </div>
-            }
         </div>
-        <div class="ow-detail-footer">
-            @if (_selectedItem.CanRetry)
-            {
-                <button class="um-btn um-btn-ghost" @onclick="() => RetryItemAsync(_selectedItem)">
-                    <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Retry
-                </button>
-            }
-            <button class="um-btn um-btn-primary" @onclick="() => Nav.NavigateTo(_selectedItem.DetailUrl)">
-                Open Full Record <i class="bi bi-arrow-right" aria-hidden="true"></i>
+        <div class="opw-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="SaveCurrentViewAsync">
+                <i class="bi bi-bookmark-plus" aria-hidden="true"></i> Save view
+            </button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync">
+                <i class="bi bi-download" aria-hidden="true"></i> Export
+            </button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading">
+                <i class="bi bi-arrow-clockwise @(_loading ? "opw-spin" : null)" aria-hidden="true"></i> Refresh
             </button>
         </div>
-    </div>
-}
+    </section>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+    <section class="opw-insight-strip" aria-label="Operations summary">
+        <article class="opw-insight-card opw-insight-primary">
+            <span class="opw-insight-icon"><i class="bi bi-exclamation-octagon" aria-hidden="true"></i></span>
+            <div><small>Operational risk</small><strong>@RiskScoreLabel</strong></div>
+        </article>
+        <article class="opw-insight-card">
+            <span class="opw-insight-icon opw-tone-info"><i class="bi bi-list-task" aria-hidden="true"></i></span>
+            <div><small>Open queue items</small><strong>@AllItems.Count()</strong></div>
+        </article>
+        <article class="opw-insight-card">
+            <span class="opw-insight-icon opw-tone-success"><i class="bi bi-person-check" aria-hidden="true"></i></span>
+            <div><small>Assigned to me</small><strong>@AllItems.Count(i => i.IsAssignedToMe)</strong></div>
+        </article>
+        <article class="opw-insight-card">
+            <span class="opw-insight-icon opw-tone-warning"><i class="bi bi-alarm" aria-hidden="true"></i></span>
+            <div><small>Past due</small><strong>@AllItems.Count(i => i.DueDate.Date < DateTime.Today)</strong></div>
+        </article>
+    </section>
+
+    <section class="opw-ops-strip" aria-label="Operations controls">
+        <div class="opw-scope-card">
+            <div class="opw-scope-head">
+                <span><i class="bi bi-funnel" aria-hidden="true"></i> Work scope</span>
+                <strong>@(string.IsNullOrWhiteSpace(_filterAssignee) ? "All assignees" : AssigneeLabel(_filterAssignee))</strong>
+            </div>
+            <div class="opw-scope-grid">
+                <label>
+                    Assignee
+                    <select class="opw-filter-select" value="@_filterAssignee" @onchange="@OnAssigneeSelectChangedAsync">
+                        <option value="">All assignees</option>
+                        @foreach (var option in _assigneeOptions)
+                        {
+                            <option value="@option.Value">@option.Label</option>
+                        }
+                    </select>
+                </label>
+                <label>
+                    Priority
+                    <select class="opw-filter-select" value="@_filterPriority" @onchange="@OnPrioritySelectChanged">
+                        <option value="">All priorities</option>
+                        @foreach (var option in _priorityOptions)
+                        {
+                            <option value="@option.Value">@option.Label</option>
+                        }
+                    </select>
+                </label>
+                <label>
+                    Age
+                    <select class="opw-filter-select" value="@_filterAge" @onchange="@OnAgeSelectChanged">
+                        <option value="">Any age</option>
+                        @foreach (var option in _ageOptions)
+                        {
+                            <option value="@option.Value">@option.Label</option>
+                        }
+                    </select>
+                </label>
+                <label class="opw-check-filter">
+                    <input type="checkbox" checked="@_filterMyItems" @onchange="@OnMyItemsChanged" />
+                    <span>My items only</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="opw-ai-card">
+            <div class="opw-ai-head">
+                <span><i class="bi bi-stars" aria-hidden="true"></i> Operations brief</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="GenerateOperationsBriefAsync">
+                    <i class="bi bi-magic" aria-hidden="true"></i> Generate
+                </button>
+            </div>
+            <p>@_operationsBrief</p>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger opw-error-banner" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span>@_loadError</span>
+        </div>
+    }
+
+    <section class="opw-kpi-strip" aria-label="Operations KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="@KpiClass(kpi.Id)" @onclick="() => SetQueueFocus(kpi.Id)" title="@kpi.Tooltip">
+                <span class="opw-kpi-icon @kpi.Tone"><i class="@kpi.Icon" aria-hidden="true"></i></span>
+                <span>
+                    <strong class="opw-kpi-val @kpi.ValueClass">@kpi.Value</strong>
+                    <span class="opw-kpi-lbl">@kpi.Label</span>
+                    <small>@kpi.Subtitle</small>
+                </span>
+            </button>
+        }
+    </section>
+
+    <section class="opw-workflow-strip" aria-label="Workflow shortcuts">
+        <button type="button" class="opw-workflow-card" @onclick="ShowRecoveryQueue">
+            <i class="bi bi-life-preserver" aria-hidden="true"></i>
+            <span><strong>Recovery queue</strong><span>@RecoveryItems.Count() retryable items</span></span>
+        </button>
+        <button type="button" class="opw-workflow-card" @onclick="ShowRenewals">
+            <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+            <span><strong>Renewal follow-up</strong><span>@_renewalFollowups.Count expiring workflows</span></span>
+        </button>
+        <button type="button" class="opw-workflow-card" @onclick="ShowClientService">
+            <i class="bi bi-people" aria-hidden="true"></i>
+            <span><strong>Client service</strong><span>@(_pendingEndorsements.Count + _certRequests.Count) service requests</span></span>
+        </button>
+        <button type="button" class="opw-workflow-card" @onclick="ClearFilters">
+            <i class="bi bi-eraser" aria-hidden="true"></i>
+            <span><strong>Clear filters</strong><span>Reset queue, search, priority, and age</span></span>
+        </button>
+    </section>
+
+    <section class="opw-search-panel" aria-label="Search and filter operations queue">
+        <div class="opw-search-wrap">
+            <span class="opw-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="opw-search-body">
+                <label for="operations-search">Search operations queue</label>
+                <input id="operations-search" class="opw-search-input" type="search" placeholder="Search title, account, reference, policy, assignee, or error…" value="@_search" @oninput="@OnSearchChanged" />
+                <span class="opw-search-hint">Results update across the active queue and detail panel.</span>
+            </div>
+        </div>
+        <div class="opw-search-result">
+            <strong>@ActiveItems.Count</strong>
+            <span>visible</span>
+        </div>
+    </section>
+
+    <section class="opw-view-tabs" role="tablist" aria-label="Operations queue tabs">
+        @foreach (var queue in Queues)
+        {
+            <button type="button" class="opw-view-btn @(queue.Id == _activeQueue ? "opw-view-btn-active" : null)" role="tab" aria-selected="@(queue.Id == _activeQueue)" @onclick="() => SetActiveQueue(queue.Id)">
+                <i class="@queue.Icon" aria-hidden="true"></i>
+                @queue.Label
+                @if (queue.Badge > 0)
+                {
+                    <span class="@(queue.IsAlert ? "opw-tab-alert" : null)">@queue.Badge</span>
+                }
+            </button>
+        }
+    </section>
+
+    <section class="opw-content-layout">
+        <main class="opw-main-card" aria-live="polite">
+            <div class="opw-section-head">
+                <div>
+                    <h2>@ActiveQueueTitle</h2>
+                    <p>@ActiveQueueSubtitle</p>
+                </div>
+                <span class="opw-status opw-status-open">@ActiveItems.Count active</span>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="opw-loading">
+                    <i class="bi bi-arrow-repeat opw-spin" aria-hidden="true"></i>
+                    <strong>Loading operations queue…</strong>
+                    <span>Synchronizing tasks, admin records, and recovery workflows.</span>
+                </div>
+            }
+            else if (_activeQueue == "analytics")
+            {
+                <div class="opw-analytics-grid">
+                    <section>
+                        <h3>Queue distribution</h3>
+                        @foreach (var item in QueueDistribution)
+                        {
+                            <button type="button" class="opw-analytics-row" @onclick="() => SetActiveQueue(item.QueueId)">
+                                <span>@item.Label</span>
+                                <div><i class="@item.Tone" style="@WidthStyle(item.Count, AllItems.Count())"></i></div>
+                                <strong>@item.Count</strong>
+                                <small>@PercentLabel(item.Count, AllItems.Count())</small>
+                            </button>
+                        }
+                    </section>
+                    <section>
+                        <h3>Priority mix</h3>
+                        @foreach (var item in PriorityDistribution)
+                        {
+                            <button type="button" class="opw-analytics-row" @onclick="() => FilterByPriority(item.Label)">
+                                <span>@item.Label</span>
+                                <div><i class="@item.Tone" style="@WidthStyle(item.Count, AllItems.Count())"></i></div>
+                                <strong>@item.Count</strong>
+                                <small>@PercentLabel(item.Count, AllItems.Count())</small>
+                            </button>
+                        }
+                    </section>
+                    <section>
+                        <h3>Age pressure</h3>
+                        @foreach (var item in AgeDistribution)
+                        {
+                            <button type="button" class="opw-analytics-row" @onclick="() => FilterByAge(item.Filter)">
+                                <span>@item.Label</span>
+                                <div><i class="@item.Tone" style="@WidthStyle(item.Count, AllItems.Count())"></i></div>
+                                <strong>@item.Count</strong>
+                                <small>@PercentLabel(item.Count, AllItems.Count())</small>
+                            </button>
+                        }
+                    </section>
+                    <section>
+                        <h3>Recovery readiness</h3>
+                        <div class="opw-stat-stack">
+                            <div><span>Retryable</span><strong>@RecoveryItems.Count()</strong></div>
+                            <div><span>Failed downloads</span><strong>@_failedDownloads.Count</strong></div>
+                            <div><span>Failed automations</span><strong>@_failedAutomations.Count</strong></div>
+                            <div><span>Doc exceptions</span><strong>@_docExceptions.Count</strong></div>
+                        </div>
+                    </section>
+                </div>
+            }
+            else if (ActiveItems.Count == 0)
+            {
+                <div class="opw-empty-state">
+                    <i class="bi bi-inbox" aria-hidden="true"></i>
+                    <strong>No operations items match this view</strong>
+                    <span>Try clearing filters or selecting another KPI queue.</span>
+                    <button type="button" class="um-btn um-btn-primary" @onclick="ClearFilters">
+                        <i class="bi bi-eraser" aria-hidden="true"></i> Clear filters
+                    </button>
+                </div>
+            }
+            else
+            {
+                <div class="opw-card-grid">
+                    @foreach (var item in ActiveItems)
+                    {
+                        <article class="opw-item-card @(ReferenceEquals(item, _selectedItem) ? "opw-item-selected" : null)" @onclick="() => OpenItem(item)">
+                            <div class="opw-item-top">
+                                <div class="opw-item-title-wrap">
+                                    <span class="opw-avatar @QueueTone(item.QueueCode)">@Initials(item)</span>
+                                    <div>
+                                        <strong>@ItemPrimaryTitle(item)</strong>
+                                        <span>@ItemSecondaryText(item)</span>
+                                    </div>
+                                </div>
+                                <span class="@PriBadge(item.Priority)">@item.Priority</span>
+                            </div>
+                            <div class="opw-item-meta">
+                                <span class="opw-status opw-status-open">@item.QueueName</span>
+                                <span class="opw-age @AgeBadgeClass(item.AgeDays)">@item.AgeDays d</span>
+                                @if (item.DueDate.Date < DateTime.Today)
+                                {
+                                    <span class="opw-sla opw-sla-breach">Overdue</span>
+                                }
+                                else
+                                {
+                                    <span class="opw-sla opw-sla-ok">On track</span>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(item.RenewalStage))
+                                {
+                                    <span class="@StageBadge(item.RenewalStage)">@item.RenewalStage</span>
+                                }
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(item.ErrorMessage))
+                            {
+                                <p class="opw-error-snippet"><i class="bi bi-bug" aria-hidden="true"></i> @item.ErrorMessage</p>
+                            }
+                            <div class="opw-item-footer">
+                                <div>
+                                    <strong>@item.AssignedTo</strong>
+                                    <span>@DueLabel(item)</span>
+                                </div>
+                                <div class="opw-item-actions">
+                                    @if (item.CanRetry)
+                                    {
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ConfirmRetryAsync(item)" @onclick:stopPropagation="true" title="Retry item">
+                                            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+                                        </button>
+                                    }
+                                    @if (item.QueueCode == "failed-automations")
+                                    {
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ConfirmSkipAsync(item)" @onclick:stopPropagation="true" title="Skip failed step">
+                                            <i class="bi bi-skip-forward" aria-hidden="true"></i>
+                                        </button>
+                                    }
+                                    <button type="button" class="opw-card-open" @onclick="() => OpenItem(item)" @onclick:stopPropagation="true" title="Open details" aria-label="Open details">
+                                        👁️
+                                    </button>
+                                </div>
+                            </div>
+                        </article>
+                    }
+                </div>
+            }
+        </main>
+
+        <aside class="opw-detail-card" aria-label="Operations item detail">
+            @if (_selectedItem is null)
+            {
+                <div class="opw-detail-empty">
+                    <i class="bi bi-layout-sidebar-inset-reverse" aria-hidden="true"></i>
+                    <strong>Select an operations item</strong>
+                    <span>Open any card to review assignment, SLA, notes, errors, and available workflow actions.</span>
+                </div>
+            }
+            else
+            {
+                <div class="opw-detail-head">
+                    <div>
+                        <span class="opw-detail-eyebrow"><i class="bi bi-crosshair" aria-hidden="true"></i> @_selectedItem.QueueName</span>
+                        <h2>@ItemPrimaryTitle(_selectedItem)</h2>
+                        <p>@ItemSecondaryText(_selectedItem)</p>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseDetail" aria-label="Close detail">
+                        <i class="bi bi-x-lg" aria-hidden="true"></i>
+                    </button>
+                </div>
+                <div class="opw-detail-body">
+                    <div class="opw-detail-summary">
+                        <div><span>Reference</span><strong>@_selectedItem.RefNumber</strong></div>
+                        <div><span>Priority</span><strong>@_selectedItem.Priority</strong></div>
+                        <div><span>Assigned to</span><strong>@_selectedItem.AssignedTo</strong></div>
+                        <div><span>Age</span><strong>@_selectedItem.AgeDays days</strong></div>
+                        <div><span>Due date</span><strong>@_selectedItem.DueDate.ToString("d", CultureInfo.CurrentCulture)</strong></div>
+                        <div><span>Retries</span><strong>@_selectedItem.RetryCount</strong></div>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(_selectedItem.PolicyNumber) || !string.IsNullOrWhiteSpace(_selectedItem.CertHolder) || _selectedItem.Premium > 0)
+                    {
+                        <div class="opw-detail-summary">
+                            @if (!string.IsNullOrWhiteSpace(_selectedItem.PolicyNumber))
+                            {
+                                <div><span>Policy</span><strong>@_selectedItem.PolicyNumber</strong></div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(_selectedItem.CertHolder))
+                            {
+                                <div><span>Certificate holder</span><strong>@_selectedItem.CertHolder</strong></div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(_selectedItem.LobCode))
+                            {
+                                <div><span>Line of business</span><strong>@_selectedItem.LobCode</strong></div>
+                            }
+                            @if (_selectedItem.Premium > 0)
+                            {
+                                <div><span>Premium</span><strong>@_selectedItem.Premium.ToString("C0", CultureInfo.CurrentCulture)</strong></div>
+                            }
+                        </div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_selectedItem.AutomationStep))
+                    {
+                        <p class="opw-detail-note"><strong>Failed step:</strong> @_selectedItem.AutomationStep</p>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_selectedItem.ErrorMessage))
+                    {
+                        <p class="opw-detail-note opw-detail-error"><strong>Error:</strong> @_selectedItem.ErrorMessage</p>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_selectedItem.Notes))
+                    {
+                        <p class="opw-detail-note"><strong>Notes:</strong> @_selectedItem.Notes</p>
+                    }
+                    <div class="opw-detail-actions">
+                        @if (_selectedItem.CanRetry)
+                        {
+                            <button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfirmRetryAsync(_selectedItem)">
+                                <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Retry
+                            </button>
+                        }
+                        @if (_selectedItem.QueueCode == "failed-automations")
+                        {
+                            <button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfirmSkipAsync(_selectedItem)">
+                                <i class="bi bi-skip-forward" aria-hidden="true"></i> Skip step
+                            </button>
+                        }
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => Nav.NavigateTo(_selectedItem.DetailUrl)">
+                            Open record <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </div>
+            }
+        </aside>
+    </section>
+
+    <section class="opw-saved-views" aria-label="Saved operations views">
+        <div class="opw-section-head">
+            <div>
+                <h2>Saved command views</h2>
+                <p>Quickly restore high-priority operational scopes for daily standups and recovery reviews.</p>
+            </div>
+        </div>
+        <div class="opw-source-grid">
+            @foreach (var view in _savedViews)
+            {
+                <article class="opw-view-card">
+                    <div>
+                        <strong>@view.Name</strong>
+                        <span>@view.Description</span>
+                        <small>@view.Summary</small>
+                    </div>
+                    <div class="opw-item-actions">
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => LoadView(view)">Load</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => DeleteView(view)"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                    </div>
+                </article>
+            }
+        </div>
+    </section>
+</div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private SfToast? _toast;
+    private Guid _tenantAdminUserId;
 
-    // ── State ─────────────────────────────────────────────────────────────────────
-    private bool    _loading        = false;
+    private bool _loading;
     private string? _loadError;
-    private string  _activeQueue    = "overdue-tasks";
-    private int     _queueFocus     = 0;
-    private OpsItem? _selectedItem  = null;
+    private string _activeQueue = "overdue-tasks";
+    private int _queueFocus;
+    private OpsItem? _selectedItem;
 
-    // ── Filters ───────────────────────────────────────────────────────────────────
-    private string _search          = string.Empty;
-    private string _filterPriority  = string.Empty;
-    private string _filterAge       = string.Empty;
-    private string _filterAssignee  = string.Empty;
-    private bool   _filterMyItems   = false;
+    private string _search = string.Empty;
+    private string _filterPriority = string.Empty;
+    private string _filterAge = string.Empty;
+    private string _filterAssignee = string.Empty;
+    private bool _filterMyItems;
 
-    // ── Counts ────────────────────────────────────────────────────────────────────
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string _operationsBrief = "Generate an operations brief to summarize queue pressure, recovery blockers, overdue work, and recommended next actions.";
+
     private QueueCounts _counts = new();
-
-    // ── Queue data ────────────────────────────────────────────────────────────────
-    private List<OpsItem> _overdueTasks        = [];
+    private List<OpsItem> _overdueTasks = [];
     private List<OpsItem> _pendingEndorsements = [];
-    private List<OpsItem> _certRequests        = [];
-    private List<OpsItem> _renewalFollowups    = [];
-    private List<OpsItem> _docExceptions       = [];
-    private List<OpsItem> _failedDownloads     = [];
-    private List<OpsItem> _failedAutomations   = [];
+    private List<OpsItem> _certRequests = [];
+    private List<OpsItem> _renewalFollowups = [];
+    private List<OpsItem> _docExceptions = [];
+    private List<OpsItem> _failedDownloads = [];
+    private List<OpsItem> _failedAutomations = [];
+    private List<SavedViewVm> _savedViews = [];
 
-    // ── Queue tab definitions ─────────────────────────────────────────────────────
-    private List<QueueTab> _queues => [
-        new("overdue-tasks",       "Overdue Tasks",         "bi bi-alarm-fill",             _counts.OverdueTasks,        _counts.OverdueTasks > 0),
-        new("endorsements",        "Endorsements",          "bi bi-pen-fill",                _counts.PendingEndorsements, false),
-        new("certificates",        "Certificates",          "bi bi-patch-check-fill",        _counts.CertificateRequests, false),
-        new("renewal-followups",   "Renewal Follow-ups",    "bi bi-arrow-clockwise",         _counts.RenewalFollowups,    false),
-        new("doc-exceptions",      "Doc Exceptions",        "bi bi-file-earmark-x-fill",     _counts.DocIndexingExceptions, _counts.DocIndexingExceptions > 0),
-        new("failed-downloads",    "Failed Downloads",      "bi bi-cloud-slash-fill",        _counts.FailedDownloads,     _counts.FailedDownloads > 0),
-        new("failed-automations",  "Failed Automations",    "bi bi-lightning-charge-fill",   _counts.FailedAutomations,   _counts.FailedAutomations > 0),
-    ];
+    private readonly List<LabelValue> _priorityOptions = [new("Critical", "Critical"), new("Urgent", "Urgent"), new("High", "High"), new("Normal", "Normal"), new("Low", "Low")];
+    private readonly List<LabelValue> _ageOptions = [new("1", "< 1 day"), new("3", "1–3 days"), new("7", "4–7 days"), new("30", "> 7 days")];
+    private readonly List<LabelValue> _assigneeOptions = [new("me", "Me"), new("team", "My Team")];
+    private static readonly string[] _distributionTones = ["opw-dist-blue", "opw-dist-amber", "opw-dist-green", "opw-dist-purple", "opw-dist-pink"];
 
-    // ── Static options ────────────────────────────────────────────────────────────
-    private static readonly List<LabelValue> _priorityOptions =
+    private IEnumerable<OpsItem> AllItems => _overdueTasks.Concat(_pendingEndorsements).Concat(_certRequests).Concat(_renewalFollowups).Concat(_docExceptions).Concat(_failedDownloads).Concat(_failedAutomations);
+    private IEnumerable<OpsItem> RecoveryItems => _docExceptions.Concat(_failedDownloads).Concat(_failedAutomations).Where(i => i.CanRetry);
+    private List<OpsItem> ActiveItems => _activeQueue switch
+    {
+        "overdue-tasks" => FilteredItems(_overdueTasks),
+        "endorsements" => FilteredItems(_pendingEndorsements),
+        "certificates" => FilteredItems(_certRequests),
+        "renewal-followups" => FilteredItems(_renewalFollowups),
+        "doc-exceptions" => FilteredItems(_docExceptions),
+        "failed-downloads" => FilteredItems(_failedDownloads),
+        "failed-automations" => FilteredItems(_failedAutomations),
+        _ => FilteredItems(AllItems.ToList()),
+    };
+
+    private Microsoft.AspNetCore.Components.EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> OnAssigneeSelectChangedAsync => Microsoft.AspNetCore.Components.EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, async e =>
+    {
+        _filterAssignee = e.Value?.ToString() ?? string.Empty;
+        await LoadAsync();
+    });
+
+    private Microsoft.AspNetCore.Components.EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> OnPrioritySelectChanged => Microsoft.AspNetCore.Components.EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, e =>
+    {
+        _filterPriority = e.Value?.ToString() ?? string.Empty;
+        ApplyFilters();
+    });
+
+    private Microsoft.AspNetCore.Components.EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> OnAgeSelectChanged => Microsoft.AspNetCore.Components.EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, e =>
+    {
+        _filterAge = e.Value?.ToString() ?? string.Empty;
+        ApplyFilters();
+    });
+
+    private Microsoft.AspNetCore.Components.EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> OnMyItemsChanged => Microsoft.AspNetCore.Components.EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, e =>
+    {
+        _filterMyItems = e.Value is bool selected && selected;
+        ApplyFilters();
+    });
+
+    private Microsoft.AspNetCore.Components.EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> OnSearchChanged => Microsoft.AspNetCore.Components.EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, e =>
+    {
+        _search = e.Value?.ToString() ?? string.Empty;
+        ApplyFilters();
+    });
+
+    private string ToastIcon => _toastKind switch { "danger" => "bi bi-exclamation-triangle-fill", "warning" => "bi bi-exclamation-circle-fill", _ => "bi bi-check-circle-fill" };
+    private string RiskScoreLabel => (_counts.OverdueTasks + _counts.FailedDownloads + _counts.FailedAutomations + _counts.DocIndexingExceptions) switch { >= 20 => "Critical", >= 10 => "Elevated", >= 1 => "Watch", _ => "Healthy" };
+    private string ActiveQueueTitle => Queues.FirstOrDefault(q => q.Id == _activeQueue)?.Label ?? "Operations analytics";
+    private string ActiveQueueSubtitle => _activeQueue switch
+    {
+        "overdue-tasks" => "Tasks past SLA or due date that need immediate triage.",
+        "endorsements" => "Pending endorsement requests requiring service follow-up.",
+        "certificates" => "Certificate requests waiting for processing or delivery.",
+        "renewal-followups" => "Renewal workflows that need outreach, quoting, or producer action.",
+        "doc-exceptions" => "Document indexing exceptions that need correction or retry.",
+        "failed-downloads" => "Carrier download failures and mapping issues for recovery.",
+        "failed-automations" => "Automation steps that failed and need retry or skip decisions.",
+        "analytics" => "Operational queue distribution, priority pressure, and recovery readiness.",
+        _ => "Operations queue",
+    };
+
+    private IEnumerable<KpiDef> Kpis =>
     [
-        new("Critical", "Critical"),
-        new("Urgent",   "Urgent"),
-        new("High",     "High"),
-        new("Normal",   "Normal"),
-        new("Low",      "Low"),
+        new(1, "Overdue Tasks", _counts.OverdueTasks, "Past-due tasks", "bi bi-alarm-fill", "opw-tone-danger", _counts.OverdueTasks > 0 ? "opw-kpi-alert" : string.Empty, "Filter overdue task queue"),
+        new(2, "Endorsements", _counts.PendingEndorsements, "Pending changes", "bi bi-pen-fill", "opw-tone-purple", string.Empty, "Filter endorsement queue"),
+        new(3, "Certificates", _counts.CertificateRequests, "COI requests", "bi bi-patch-check-fill", "opw-tone-success", string.Empty, "Filter certificate requests"),
+        new(4, "Renewals", _counts.RenewalFollowups, "Follow-ups", "bi bi-arrow-clockwise", "opw-tone-info", string.Empty, "Filter renewal follow-ups"),
+        new(5, "Doc Exceptions", _counts.DocIndexingExceptions, "Indexing errors", "bi bi-file-earmark-x-fill", "opw-tone-warning", _counts.DocIndexingExceptions > 0 ? "opw-kpi-warn" : string.Empty, "Filter document exceptions"),
+        new(6, "Downloads", _counts.FailedDownloads, "Failed feeds", "bi bi-cloud-slash-fill", "opw-tone-pink", _counts.FailedDownloads > 0 ? "opw-kpi-alert" : string.Empty, "Filter failed downloads"),
+        new(7, "Automations", _counts.FailedAutomations, "Failed steps", "bi bi-lightning-charge-fill", "opw-tone-danger", _counts.FailedAutomations > 0 ? "opw-kpi-alert" : string.Empty, "Filter failed automations"),
     ];
 
-    private static readonly List<LabelValue> _ageOptions =
+    private IEnumerable<QueueTab> Queues =>
     [
-        new("1",  "< 1 day"),
-        new("3",  "1–3 days"),
-        new("7",  "4–7 days"),
-        new("30", "> 7 days"),
+        new("overdue-tasks", "Overdue Tasks", "bi bi-alarm-fill", _counts.OverdueTasks, _counts.OverdueTasks > 0),
+        new("endorsements", "Endorsements", "bi bi-pen-fill", _counts.PendingEndorsements, false),
+        new("certificates", "Certificates", "bi bi-patch-check-fill", _counts.CertificateRequests, false),
+        new("renewal-followups", "Renewals", "bi bi-arrow-clockwise", _counts.RenewalFollowups, false),
+        new("doc-exceptions", "Doc Exceptions", "bi bi-file-earmark-x-fill", _counts.DocIndexingExceptions, _counts.DocIndexingExceptions > 0),
+        new("failed-downloads", "Downloads", "bi bi-cloud-slash-fill", _counts.FailedDownloads, _counts.FailedDownloads > 0),
+        new("failed-automations", "Automations", "bi bi-lightning-charge-fill", _counts.FailedAutomations, _counts.FailedAutomations > 0),
+        new("analytics", "Analytics", "bi bi-bar-chart-line", AllItems.Count(), false),
     ];
 
-    private static readonly List<LabelValue> _assigneeOptions =
-    [
-        new("me",   "Me"),
-        new("team", "My Team"),
-    ];
+    private IEnumerable<AnalyticsVm> QueueDistribution => Queues.Where(q => q.Id != "analytics").Select((q, index) => new AnalyticsVm(q.Label, q.Badge, q.Id, string.Empty, DistTone(index)));
+    private IEnumerable<AnalyticsVm> PriorityDistribution => AllItems.GroupBy(i => string.IsNullOrWhiteSpace(i.Priority) ? "Normal" : i.Priority).OrderByDescending(g => g.Count()).Select((g, index) => new AnalyticsVm(g.Key, g.Count(), string.Empty, string.Empty, DistTone(index)));
+    private IEnumerable<AnalyticsVm> AgeDistribution => [new("< 1 day", AllItems.Count(i => i.AgeDays < 1), string.Empty, "1", "opw-dist-green"), new("1–3 days", AllItems.Count(i => i.AgeDays >= 1 && i.AgeDays <= 3), string.Empty, "3", "opw-dist-blue"), new("4–7 days", AllItems.Count(i => i.AgeDays >= 4 && i.AgeDays <= 7), string.Empty, "7", "opw-dist-amber"), new("> 7 days", AllItems.Count(i => i.AgeDays > 7), string.Empty, "30", "opw-dist-pink")];
 
-    // ── Lifecycle ─────────────────────────────────────────────────────────────────
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(
-            new("Home",                  "/"),
-            new("Operations Workbench",  "/workbench/operations"));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Operations Workbench", "/workbench/operations"));
+        SeedSavedViews();
         await LoadAsync();
     }
 
-    // ── Loading ───────────────────────────────────────────────────────────────────
     private async Task LoadAsync()
     {
         _loading = true;
-        StateHasChanged();
         try
         {
             _loadError = null;
@@ -657,6 +593,7 @@
             _failedDownloads = result?.FailedDownloads.Select(ToOpsItem).ToList() ?? [];
             _failedAutomations = result?.FailedAutomations.Select(ToOpsItem).ToList() ?? [];
             _counts = ToCounts(result?.Counts);
+            _selectedItem = ActiveItems.FirstOrDefault();
         }
         catch (Exception ex)
         {
@@ -669,90 +606,108 @@
             _failedDownloads = [];
             _failedAutomations = [];
             RefreshCounts();
+            ShowToast($"Load failed: {ex.Message}", "danger");
         }
-        finally { _loading = false; }
-    }
-
-    private async Task OnAssigneeChangedAsync(string v)
-    {
-        _filterAssignee = v;
-        await LoadAsync();
-    }
-
-    // ── Filtering ─────────────────────────────────────────────────────────────────
-    private List<OpsItem> FilteredItems(List<OpsItem> source)
-    {
-        return source.Where(i =>
-            (string.IsNullOrEmpty(_filterPriority) || i.Priority == _filterPriority) &&
-            (string.IsNullOrEmpty(_filterAge)      || MatchAge(i.AgeDays, _filterAge)) &&
-            (!_filterMyItems || i.IsAssignedToMe) &&
-            (string.IsNullOrEmpty(_search) ||
-             i.Title.Contains(_search,       StringComparison.OrdinalIgnoreCase) ||
-             i.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             i.RefNumber.Contains(_search,   StringComparison.OrdinalIgnoreCase))
-        ).ToList();
-    }
-
-    private static bool MatchAge(int days, string bucket) => bucket switch
-    {
-        "1"  => days < 1,
-        "3"  => days >= 1  && days <= 3,
-        "7"  => days >= 4  && days <= 7,
-        "30" => days > 7,
-        _    => true,
-    };
-
-    private void ApplyFilters() => StateHasChanged();
-
-    private void OnSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
-    {
-        _search = e.Value?.ToString() ?? string.Empty;
-        StateHasChanged();
-    }
-
-    // ── Queue navigation ──────────────────────────────────────────────────────────
-    private void SetActiveQueue(string id)
-    {
-        _activeQueue = id;
-        _queueFocus  = 0;
-        _selectedItem = null;
-    }
-
-    private void SetQueueFocus(int n)
-    {
-        _queueFocus  = _queueFocus == n ? 0 : n;
-        _activeQueue = n switch
+        finally
         {
-            1 => "overdue-tasks",
-            2 => "endorsements",
-            3 => "certificates",
-            4 => "renewal-followups",
-            5 => "doc-exceptions",
-            6 => "failed-downloads",
-            7 => "failed-automations",
-            _ => _activeQueue,
-        };
-        _selectedItem = null;
+            _loading = false;
+        }
     }
 
-    private string KpiClass(int n) =>
-        "ow-kpi-card" + (_queueFocus == n || (_queueFocus == 0 && _activeQueue == QueueIdForKpi(n)) ? " ow-kpi-card--active" : "");
+    private void ApplyFilters() { if (_selectedItem is not null && !ActiveItems.Contains(_selectedItem)) _selectedItem = ActiveItems.FirstOrDefault(); StateHasChanged(); }
 
-    private static string QueueIdForKpi(int n) => n switch
-    {
-        1 => "overdue-tasks",
-        2 => "endorsements",
-        3 => "certificates",
-        4 => "renewal-followups",
-        5 => "doc-exceptions",
-        6 => "failed-downloads",
-        7 => "failed-automations",
-        _ => string.Empty,
-    };
+    private List<OpsItem> FilteredItems(List<OpsItem> source) => source.Where(i =>
+        (string.IsNullOrEmpty(_filterPriority) || string.Equals(i.Priority, _filterPriority, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrEmpty(_filterAge) || MatchAge(i.AgeDays, _filterAge)) &&
+        (!_filterMyItems || i.IsAssignedToMe) &&
+        (string.IsNullOrEmpty(_search) || MatchesSearch(i, _search))).ToList();
 
-    // ── Item actions ──────────────────────────────────────────────────────────────
+    private static bool MatchesSearch(OpsItem i, string search) =>
+        i.Title.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+        i.AccountName.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+        i.RefNumber.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+        i.PolicyNumber.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+        i.AssignedTo.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+        (i.ErrorMessage?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false);
+
+    private static bool MatchAge(int days, string bucket) => bucket switch { "1" => days < 1, "3" => days >= 1 && days <= 3, "7" => days >= 4 && days <= 7, "30" => days > 7, _ => true };
+
+    private void SetActiveQueue(string id) { _activeQueue = id; _queueFocus = 0; _selectedItem = ActiveItems.FirstOrDefault(); }
+    private void SetQueueFocus(int n) { _queueFocus = _queueFocus == n ? 0 : n; _activeQueue = QueueIdForKpi(n); _selectedItem = ActiveItems.FirstOrDefault(); }
     private void OpenItem(OpsItem item) => _selectedItem = item;
-    private void CloseDetail()           => _selectedItem = null;
+    private void CloseDetail() => _selectedItem = null;
+    private void ShowRecoveryQueue() { _filterPriority = string.Empty; _filterAge = string.Empty; SetActiveQueue(_failedAutomations.Count > 0 ? "failed-automations" : _failedDownloads.Count > 0 ? "failed-downloads" : "doc-exceptions"); }
+    private void ShowRenewals() { _filterPriority = string.Empty; SetActiveQueue("renewal-followups"); }
+    private void ShowClientService() { _filterPriority = string.Empty; SetActiveQueue(_pendingEndorsements.Count >= _certRequests.Count ? "endorsements" : "certificates"); }
+    private void FilterByPriority(string priority) { _filterPriority = priority; _activeQueue = "analytics"; ApplyFilters(); }
+    private void FilterByAge(string age) { _filterAge = age; _activeQueue = "analytics"; ApplyFilters(); }
+
+    private void ClearFilters()
+    {
+        _search = string.Empty;
+        _filterPriority = string.Empty;
+        _filterAge = string.Empty;
+        _filterAssignee = string.Empty;
+        _filterMyItems = false;
+        _queueFocus = 0;
+        _activeQueue = "overdue-tasks";
+        _selectedItem = ActiveItems.FirstOrDefault();
+    }
+
+    private Task ExportAsync()
+    {
+        ShowToast($"Export prepared for {AllItems.Count()} operations rows across {Queues.Count() - 1} queues.");
+        return Task.CompletedTask;
+    }
+
+    private Task SaveCurrentViewAsync()
+    {
+        var view = new SavedViewVm($"{ActiveQueueTitle} view", $"Saved {DateTime.Now:g}", $"{ActiveItems.Count} rows · {(_filterPriority.Length == 0 ? "all priorities" : _filterPriority)}", _activeQueue, _filterPriority, _filterAge, _search, _filterMyItems);
+        _savedViews.Insert(0, view);
+        ShowToast("Operations command view saved.");
+        return Task.CompletedTask;
+    }
+
+    private void LoadView(SavedViewVm view)
+    {
+        _activeQueue = view.QueueId;
+        _filterPriority = view.Priority;
+        _filterAge = view.Age;
+        _search = view.Search;
+        _filterMyItems = view.MyItemsOnly;
+        _selectedItem = ActiveItems.FirstOrDefault();
+        ShowToast($"Loaded view: {view.Name}");
+    }
+
+    private void DeleteView(SavedViewVm view)
+    {
+        _savedViews.Remove(view);
+        ShowToast($"Deleted view: {view.Name}", "warning");
+    }
+
+    private Task GenerateOperationsBriefAsync()
+    {
+        var riskItems = _counts.OverdueTasks + _counts.FailedDownloads + _counts.FailedAutomations + _counts.DocIndexingExceptions;
+        _operationsBrief = riskItems == 0
+            ? "Operations are healthy. No failed automation, download, or document recovery queues are currently pressuring the team. Keep monitoring renewal follow-ups and certificate demand."
+            : $"Focus today on {riskItems} risk items: {_counts.OverdueTasks} overdue tasks, {_counts.DocIndexingExceptions} document exceptions, {_counts.FailedDownloads} failed downloads, and {_counts.FailedAutomations} automation failures. Prioritize retryable recovery items first, then service requests by due date.";
+        ShowToast("Operations brief generated.");
+        return Task.CompletedTask;
+    }
+
+    private async Task ConfirmRetryAsync(OpsItem item)
+    {
+        var confirmed = await ConfirmationDialog.ConfirmAsync("Retry operations item", $"Queue a retry for '{item.Title}'?", "Retry", "Cancel");
+        if (!confirmed) return;
+        await RetryItemAsync(item);
+    }
+
+    private async Task ConfirmSkipAsync(OpsItem item)
+    {
+        var confirmed = await ConfirmationDialog.ConfirmAsync("Skip failed automation step", $"Skip the failed step for '{item.Title}'?", "Skip step", "Cancel");
+        if (!confirmed) return;
+        await SkipStepAsync(item);
+    }
 
     private async Task RetryItemAsync(OpsItem item)
     {
@@ -760,11 +715,11 @@
         {
             await Api.RetryOperationsWorkbenchItemAsync(_tenantId, item.ItemId);
             await LoadAsync();
-            await ShowToastAsync($"Retry queued: {item.Title}", "e-toast-success");
+            ShowToast($"Retry queued: {item.Title}");
         }
         catch (Exception ex)
         {
-            await ShowToastAsync($"Retry failed: {ex.Message}", "e-toast-danger");
+            ShowToast($"Retry failed: {ex.Message}", "danger");
         }
     }
 
@@ -774,144 +729,96 @@
         {
             await Api.SkipOperationsWorkbenchStepAsync(_tenantId, item.ItemId);
             await LoadAsync();
-            await ShowToastAsync($"Step skipped: {item.Title}", "e-toast-success");
+            ShowToast($"Step skipped: {item.Title}");
         }
         catch (Exception ex)
         {
-            await ShowToastAsync($"Skip failed: {ex.Message}", "e-toast-danger");
+            ShowToast($"Skip failed: {ex.Message}", "danger");
         }
     }
 
-    // ── Counts ────────────────────────────────────────────────────────────────────
-    private void RefreshCounts() => _counts = new QueueCounts
-    {
-        OverdueTasks         = _overdueTasks.Count,
-        PendingEndorsements  = _pendingEndorsements.Count,
-        CertificateRequests  = _certRequests.Count,
-        RenewalFollowups     = _renewalFollowups.Count,
-        DocIndexingExceptions= _docExceptions.Count,
-        FailedDownloads      = _failedDownloads.Count,
-        FailedAutomations    = _failedAutomations.Count,
-    };
+    private void RefreshCounts() => _counts = new QueueCounts { OverdueTasks = _overdueTasks.Count, PendingEndorsements = _pendingEndorsements.Count, CertificateRequests = _certRequests.Count, RenewalFollowups = _renewalFollowups.Count, DocIndexingExceptions = _docExceptions.Count, FailedDownloads = _failedDownloads.Count, FailedAutomations = _failedAutomations.Count };
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
 
-    // ── Toast ─────────────────────────────────────────────────────────────────────
-    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    private void SeedSavedViews()
     {
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+        _savedViews =
+        [
+            new("Recovery standup", "Failures and retryable automation work", "Downloads · automations · doc exceptions", "failed-automations", string.Empty, string.Empty, string.Empty, false),
+            new("High-priority service", "Critical and urgent operational work", "Priority filtered command view", "overdue-tasks", "Critical", string.Empty, string.Empty, false),
+            new("My renewal desk", "Renewals assigned to me", "Renewal follow-ups · my items", "renewal-followups", string.Empty, string.Empty, string.Empty, true),
+        ];
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────────
-    private static string PriBadge(string p) => p switch
+    private static string QueueIdForKpi(int n) => n switch { 1 => "overdue-tasks", 2 => "endorsements", 3 => "certificates", 4 => "renewal-followups", 5 => "doc-exceptions", 6 => "failed-downloads", 7 => "failed-automations", _ => "overdue-tasks" };
+    private string KpiClass(int n) => "opw-kpi-card" + (_queueFocus == n || (_queueFocus == 0 && _activeQueue == QueueIdForKpi(n)) ? " opw-kpi-card-active" : string.Empty);
+    private static string AssigneeLabel(string value) => value == "me" ? "Me" : value == "team" ? "My Team" : "All assignees";
+    private static decimal Percent(int value, int total) => total <= 0 ? 0 : Math.Min(100, Math.Round((decimal)value / total * 100, 1));
+    private static string WidthStyle(int value, int total) => $"width:{Percent(value, Math.Max(1, total)):0.#}{Convert.ToChar(37)}";
+    private static string PercentLabel(int value, int total) => $"{Percent(value, Math.Max(1, total)):0}{Convert.ToChar(37)}";
+    private static string DistTone(int index) => _distributionTones[Math.Abs(index) % _distributionTones.Length];
+    private static string ItemPrimaryTitle(OpsItem i) => !string.IsNullOrWhiteSpace(i.AccountName) && i.QueueCode == "renewal-followups" ? i.AccountName : i.Title;
+    private static string ItemSecondaryText(OpsItem i) => !string.IsNullOrWhiteSpace(i.PolicyNumber) ? $"{i.RefNumber} · {i.PolicyNumber}" : !string.IsNullOrWhiteSpace(i.AccountName) ? $"{i.RefNumber} · {i.AccountName}" : i.RefNumber;
+    private static string DueLabel(OpsItem i) => i.FollowUpDate.HasValue ? $"Follow-up {i.FollowUpDate.Value:d}" : i.DueDate.Date < DateTime.Today ? $"Due {i.DueDate:d}" : $"Due {i.DueDate:d}";
+    private static string Initials(OpsItem i) => string.Join(string.Empty, (string.IsNullOrWhiteSpace(i.AccountName) ? i.Title : i.AccountName).Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(s => s[0])).ToUpperInvariant();
+    private static string QueueTone(string queueCode) => queueCode switch { "overdue-tasks" => "opw-tone-danger", "endorsements" => "opw-tone-purple", "certificates" => "opw-tone-success", "renewal-followups" => "opw-tone-info", "doc-exceptions" => "opw-tone-warning", "failed-downloads" => "opw-tone-pink", "failed-automations" => "opw-tone-danger", _ => "opw-tone-muted" };
+    private static string PriBadge(string p) => p switch { "Critical" => "opw-pri opw-pri-critical", "Urgent" => "opw-pri opw-pri-urgent", "High" => "opw-pri opw-pri-high", "Normal" => "opw-pri opw-pri-normal", _ => "opw-pri opw-pri-low" };
+    private static string AgeBadgeClass(int days) => days > 7 ? "opw-age-old" : days > 3 ? "opw-age-mid" : "opw-age-fresh";
+    private static string StageBadge(string? stage) => stage switch { "Quoted" => "opw-stage opw-stage-quoted", "Presented" => "opw-stage opw-stage-presented", "Negotiating" => "opw-stage opw-stage-negotiating", "Won" => "opw-stage opw-stage-won", "Lost" => "opw-stage opw-stage-lost", _ => "opw-stage" };
+
+    private static QueueCounts ToCounts(OperationsWorkbenchCountsDto? c) => c is null ? new() : new() { OverdueTasks = c.OverdueTasks, PendingEndorsements = c.PendingEndorsements, CertificateRequests = c.CertificateRequests, RenewalFollowups = c.RenewalFollowups, DocIndexingExceptions = c.DocIndexingExceptions, FailedDownloads = c.FailedDownloads, FailedAutomations = c.FailedAutomations };
+    private static OpsItem ToOpsItem(OperationsWorkbenchItemDto i) => new() { ItemId = i.ItemId, QueueCode = i.QueueCode, QueueName = i.QueueName, Title = i.Title, RefNumber = i.RefNumber, AccountName = i.AccountName, PolicyNumber = i.PolicyNumber, CertHolder = i.CertHolder, LobCode = i.LobCode, AssignedTo = i.AssignedTo, Priority = i.Priority, DueDate = i.DueDate, FollowUpDate = i.FollowUpDate, CreatedAt = i.CreatedAt, AgeDays = i.AgeDays, Premium = i.Premium, ErrorMessage = i.ErrorMessage, RetryCount = i.RetryCount, AutomationStep = i.AutomationStep, RenewalStage = i.RenewalStage, Notes = i.Notes, CanRetry = i.CanRetry, IsAssignedToMe = i.IsAssignedToMe, DetailUrl = i.DetailUrl };
+
+    private async Task ResolveCurrentUserContextAsync()
     {
-        "Critical" => "ow-pri-badge ow-pri-badge--critical",
-        "Urgent"   => "ow-pri-badge ow-pri-badge--urgent",
-        "High"     => "ow-pri-badge ow-pri-badge--high",
-        "Normal"   => "ow-pri-badge ow-pri-badge--normal",
-        _          => "ow-pri-badge ow-pri-badge--low",
-    };
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+    }
 
-    private static string AgeBadgeClass(int days) =>
-        days > 7 ? "ow-age-badge--old" : days > 3 ? "ow-age-badge--mid" : "ow-age-badge--fresh";
-
-    private static string StageBadge(string? stage) => stage switch
-    {
-        "Quoted"     => "ow-stage-badge ow-stage-badge--quoted",
-        "Presented"  => "ow-stage-badge ow-stage-badge--presented",
-        "Negotiating"=> "ow-stage-badge ow-stage-badge--negotiating",
-        "Won"        => "ow-stage-badge ow-stage-badge--won",
-        "Lost"       => "ow-stage-badge ow-stage-badge--lost",
-        _            => "ow-stage-badge",
-    };
-
-    private static QueueCounts ToCounts(OperationsWorkbenchCountsDto? c) => c is null ? new() : new()
-    {
-        OverdueTasks = c.OverdueTasks,
-        PendingEndorsements = c.PendingEndorsements,
-        CertificateRequests = c.CertificateRequests,
-        RenewalFollowups = c.RenewalFollowups,
-        DocIndexingExceptions = c.DocIndexingExceptions,
-        FailedDownloads = c.FailedDownloads,
-        FailedAutomations = c.FailedAutomations,
-    };
-
-    private static OpsItem ToOpsItem(OperationsWorkbenchItemDto i) => new()
-    {
-        ItemId = i.ItemId,
-        QueueName = i.QueueName,
-        Title = i.Title,
-        RefNumber = i.RefNumber,
-        AccountName = i.AccountName,
-        PolicyNumber = i.PolicyNumber,
-        CertHolder = i.CertHolder,
-        LobCode = i.LobCode,
-        AssignedTo = i.AssignedTo,
-        Priority = i.Priority,
-        DueDate = i.DueDate,
-        FollowUpDate = i.FollowUpDate,
-        CreatedAt = i.CreatedAt,
-        AgeDays = i.AgeDays,
-        Premium = i.Premium,
-        ErrorMessage = i.ErrorMessage,
-        RetryCount = i.RetryCount,
-        AutomationStep = i.AutomationStep,
-        RenewalStage = i.RenewalStage,
-        Notes = i.Notes,
-        CanRetry = i.CanRetry,
-        IsAssignedToMe = i.IsAssignedToMe,
-        DetailUrl = i.DetailUrl,
-    };
-
-    // ── Models ────────────────────────────────────────────────────────────────────
     private sealed record LabelValue(string Value, string Label);
     private sealed record QueueTab(string Id, string Label, string Icon, int Badge, bool IsAlert);
+    private sealed record KpiDef(int Id, string Label, int Value, string Subtitle, string Icon, string Tone, string ValueClass, string Tooltip);
+    private sealed record AnalyticsVm(string Label, int Count, string QueueId, string Filter, string Tone);
+    private sealed record SavedViewVm(string Name, string Description, string Summary, string QueueId, string Priority, string Age, string Search, bool MyItemsOnly);
 
     private sealed class QueueCounts
     {
-        public int OverdueTasks          { get; set; }
-        public int PendingEndorsements   { get; set; }
-        public int CertificateRequests   { get; set; }
-        public int RenewalFollowups      { get; set; }
+        public int OverdueTasks { get; set; }
+        public int PendingEndorsements { get; set; }
+        public int CertificateRequests { get; set; }
+        public int RenewalFollowups { get; set; }
         public int DocIndexingExceptions { get; set; }
-        public int FailedDownloads       { get; set; }
-        public int FailedAutomations     { get; set; }
+        public int FailedDownloads { get; set; }
+        public int FailedAutomations { get; set; }
     }
 
     private sealed class OpsItem
     {
-        public Guid      ItemId         { get; set; } = Guid.NewGuid();
-        public string    QueueName      { get; set; } = string.Empty;
-        public string    Title          { get; set; } = string.Empty;
-        public string    RefNumber      { get; set; } = string.Empty;
-        public string    AccountName    { get; set; } = string.Empty;
-        public string    PolicyNumber   { get; set; } = string.Empty;
-        public string    CertHolder     { get; set; } = string.Empty;
-        public string    LobCode        { get; set; } = string.Empty;
-        public string    AssignedTo     { get; set; } = string.Empty;
-        public string    Priority       { get; set; } = "Normal";
-        public DateTime  DueDate        { get; set; } = DateTime.Today;
-        public DateTime? FollowUpDate   { get; set; }
-        public DateTime  CreatedAt      { get; set; } = DateTime.UtcNow;
-        public int       AgeDays        { get; set; }
-        public decimal   Premium        { get; set; }
-        public string?   ErrorMessage   { get; set; }
-        public int       RetryCount     { get; set; }
-        public string?   AutomationStep { get; set; }
-        public string?   RenewalStage   { get; set; }
-        public string?   Notes          { get; set; }
-        public bool      CanRetry       { get; set; }
-        public bool      IsAssignedToMe { get; set; }
-        public string    DetailUrl      { get; set; } = "/workbench/operations";
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        public Guid ItemId { get; set; } = Guid.NewGuid();
+        public string QueueCode { get; set; } = string.Empty;
+        public string QueueName { get; set; } = string.Empty;
+        public string Title { get; set; } = string.Empty;
+        public string RefNumber { get; set; } = string.Empty;
+        public string AccountName { get; set; } = string.Empty;
+        public string PolicyNumber { get; set; } = string.Empty;
+        public string CertHolder { get; set; } = string.Empty;
+        public string LobCode { get; set; } = string.Empty;
+        public string AssignedTo { get; set; } = string.Empty;
+        public string Priority { get; set; } = "Normal";
+        public DateTime DueDate { get; set; } = DateTime.Today;
+        public DateTime? FollowUpDate { get; set; }
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public int AgeDays { get; set; }
+        public decimal Premium { get; set; }
+        public string? ErrorMessage { get; set; }
+        public int RetryCount { get; set; }
+        public string? AutomationStep { get; set; }
+        public string? RenewalStage { get; set; }
+        public string? Notes { get; set; }
+        public bool CanRetry { get; set; }
+        public bool IsAssignedToMe { get; set; }
+        public string DetailUrl { get; set; } = "/workbench/operations";
     }
 }

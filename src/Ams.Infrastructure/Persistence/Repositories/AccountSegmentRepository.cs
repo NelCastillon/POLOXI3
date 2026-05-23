@@ -1,6 +1,7 @@
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
+using Ams.Application.Features.AccountSegments;
 using Dapper;
 
 namespace Ams.Infrastructure.Persistence.Repositories;
@@ -10,6 +11,95 @@ public sealed class AccountSegmentRepository : IAccountSegmentRepository
     private readonly ISqlConnectionFactory _connectionFactory;
 
     public AccountSegmentRepository(ISqlConnectionFactory connectionFactory) => _connectionFactory = connectionFactory;
+
+    public async Task<Guid> CreateAsync(CreateAccountSegmentRequest request, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(request.SegmentCode))
+        {
+            throw new InvalidOperationException("Segment code is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.SegmentName))
+        {
+            throw new InvalidOperationException("Segment name is required.");
+        }
+
+        const string sql = @"
+INSERT INTO Client.AccountSegment
+(
+    SegmentId, TenantId, SegmentCode, SegmentName, Description,
+    IsActive, CreatedDateUtc, IsDeleted
+)
+VALUES
+(
+    @SegmentId, @TenantId, @SegmentCode, @SegmentName, @Description,
+    @IsActive, SYSUTCDATETIME(), 0
+);";
+
+        var id = Guid.NewGuid();
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            SegmentId = id,
+            request.TenantId,
+            SegmentCode = request.SegmentCode.Trim(),
+            SegmentName = request.SegmentName.Trim(),
+            Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
+            request.IsActive
+        }, cancellationToken: cancellationToken));
+
+        return id;
+    }
+
+    public async Task UpdateAsync(UpdateAccountSegmentRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request.SegmentId == Guid.Empty)
+        {
+            throw new InvalidOperationException("Segment id is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.SegmentCode))
+        {
+            throw new InvalidOperationException("Segment code is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.SegmentName))
+        {
+            throw new InvalidOperationException("Segment name is required.");
+        }
+
+        const string sql = @"
+UPDATE Client.AccountSegment
+SET TenantId = @TenantId,
+    SegmentCode = @SegmentCode,
+    SegmentName = @SegmentName,
+    Description = @Description,
+    IsActive = @IsActive
+WHERE SegmentId = @SegmentId AND IsDeleted = 0;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            request.SegmentId,
+            request.TenantId,
+            SegmentCode = request.SegmentCode.Trim(),
+            SegmentName = request.SegmentName.Trim(),
+            Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
+            request.IsActive
+        }, cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE Client.AccountSegment
+SET IsDeleted = 1,
+    IsActive = 0
+WHERE SegmentId = @Id AND IsDeleted = 0;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
+    }
 
     public async Task<AccountSegmentDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {

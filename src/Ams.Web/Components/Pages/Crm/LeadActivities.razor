@@ -1,310 +1,358 @@
 @page "/crm/lead-activities"
 @namespace Ams.Web.Components.Pages.Crm
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.LeadActivities
+@using Ams.Application.Features.Leads
+@using Microsoft.AspNetCore.Components.Forms
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
-@inject NavigationManager Nav
-@using Ams.Application.Common.Dtos
-@using Ams.Application.Features.LeadActivities
-@using System.ComponentModel.DataAnnotations
 
 <PageTitle>Lead Activities — CRM</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<AppPageHeader Title="Lead Activities"
-               Subtitle="Log and track every call, meeting, email and task against your leads and opportunities"
-               Icon="bi-lightning-fill">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise @(_loading ? "la-spin" : "")" aria-hidden="true"></i>
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> Log Activity
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
-<div class="la-kpi-strip">
-    <div class="la-kpi-card">
-        <span class="la-ki la-ki1"><i class="bi bi-lightning-fill" aria-hidden="true"></i></span>
-        <div><div class="la-kv">@_items.Count</div><div class="la-kl">Total Activities</div></div>
-    </div>
-    <div class="la-kpi-card">
-        <span class="la-ki la-ki2"><i class="bi bi-check2-circle" aria-hidden="true"></i></span>
-        <div><div class="la-kv">@_items.Count(x => x.IsCompleted)</div><div class="la-kl">Completed</div></div>
-    </div>
-    <div class="la-kpi-card">
-        <span class="la-ki la-ki3"><i class="bi bi-hourglass-split" aria-hidden="true"></i></span>
-        <div><div class="la-kv">@_items.Count(x => !x.IsCompleted)</div><div class="la-kl">Open</div></div>
-    </div>
-    <div class="la-kpi-card">
-        <span class="la-ki la-ki4"><i class="bi bi-telephone" aria-hidden="true"></i></span>
-        <div><div class="la-kv">@_items.Count(x => x.ActivityTypeCode == "Call")</div><div class="la-kl">Calls</div></div>
-    </div>
-    <div class="la-kpi-card">
-        <span class="la-ki la-ki5"><i class="bi bi-clock" aria-hidden="true"></i></span>
-        <div><div class="la-kv">@(_items.Where(x => x.DurationMinutes.HasValue).Sum(x => x.DurationMinutes!.Value))</div><div class="la-kl">Total Minutes</div></div>
-    </div>
-</div>
-
-<!-- ── Filter bar ────────────────────────────────────────────────────────── -->
-<div class="la-filter-bar">
-    <div class="la-search-wrap">
-        <i class="bi bi-search la-si" aria-hidden="true"></i>
-        <input class="la-search" type="search" placeholder="Search activities…"
-               value="@_search"
-               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; ApplyFilters(); })" />
-    </div>
-    <SfDropDownList TValue="string" TItem="LV" DataSource="_typeOpts" Placeholder="All Types" ShowClearButton="true" Width="140px"
-                    Value="_filterType" ValueChanged="@((string v) => { _filterType = v; ApplyFilters(); })">
-        <DropDownListFieldSettings Value="Value" Text="Label" />
-    </SfDropDownList>
-    <SfDropDownList TValue="string" TItem="LV" DataSource="_outcomeOpts" Placeholder="All Outcomes" ShowClearButton="true" Width="150px"
-                    Value="_filterOutcome" ValueChanged="@((string v) => { _filterOutcome = v; ApplyFilters(); })">
-        <DropDownListFieldSettings Value="Value" Text="Label" />
-    </SfDropDownList>
-    <SfDropDownList TValue="string" TItem="LV" DataSource="_completedOpts" Placeholder="Any Status" ShowClearButton="true" Width="140px"
-                    Value="_filterCompleted" ValueChanged="@((string v) => { _filterCompleted = v; ApplyFilters(); })">
-        <DropDownListFieldSettings Value="Value" Text="Label" />
-    </SfDropDownList>
-</div>
-
-<!-- ── Grid ─────────────────────────────────────────────────────────────── -->
-@if (_loading)
+@if (_toastVisible)
 {
-    <div class="la-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading activities…</span></div>
+    <div class="la-toast la-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="la-toast-close" @onclick="HideToast" aria-label="Dismiss notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
 }
-else
+
+@if (_showForm)
 {
-    <div class="app-datagrid">
-        <SfGrid TValue="LeadActivityDto"
-                DataSource="_filtered"
-                AllowPaging="true"
-                AllowSorting="true"
-                AllowFiltering="true"
-                EnableHover="true"
-                RowHeight="52">
-            <GridEvents TValue="LeadActivityDto" RowSelected="OnRowSelected" />
-            <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
-            <GridPageSettings PageSize="25" PageSizes="@(new int[]{10,25,50,100})" />
-            <GridColumns>
-                <GridColumn HeaderText="Type" Width="120" Field="@nameof(LeadActivityDto.ActivityTypeCode)">
-                    <Template>
-                        @{ var r = (LeadActivityDto)context; }
-                        <span class="la-type-badge la-type-@r.ActivityTypeCode.ToLower()">
-                            <i class="bi @TypeIcon(r.ActivityTypeCode)" aria-hidden="true"></i> @r.ActivityTypeCode
-                        </span>
-                    </Template>
-                </GridColumn>
-                <GridColumn Field="@nameof(LeadActivityDto.Subject)" HeaderText="Subject" Width="240" />
-                <GridColumn Field="@nameof(LeadActivityDto.LeadName)" HeaderText="Lead" Width="180" />
-                <GridColumn Field="@nameof(LeadActivityDto.ProducerName)" HeaderText="Producer" Width="170">
-                    <Template>
-                        @{ var r = (LeadActivityDto)context; }
-                        <span>@(string.IsNullOrWhiteSpace(r.ProducerName) ? "Unassigned" : r.ProducerName)</span>
-                    </Template>
-                </GridColumn>
-                <GridColumn Field="@nameof(LeadActivityDto.ActivityDate)" HeaderText="Date" Width="140" Type="ColumnType.DateTime" Format="yMd" />
-                <GridColumn Field="@nameof(LeadActivityDto.DurationMinutes)" HeaderText="Duration" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                    <Template>
-                        @{ var r = (LeadActivityDto)context; }
-                        <span>@(r.DurationMinutes.HasValue ? r.DurationMinutes + " min" : "—")</span>
-                    </Template>
-                </GridColumn>
-                <GridColumn HeaderText="Status" Width="120">
-                    <Template>
-                        @{ var r = (LeadActivityDto)context; }
-                        <span class="@(r.IsCompleted ? "la-status-completed" : "la-status-open")">
-                            @(r.IsCompleted ? "✓ Completed" : "◆ Open")
-                        </span>
-                    </Template>
-                </GridColumn>
-                <GridColumn HeaderText="Actions" Width="130" AllowFiltering="false" AllowSorting="false" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
-                    <Template>
-                        @{ var r = (LeadActivityDto)context; }
-                        <div class="la-actions">
-                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true" title="Edit activity">
-                                <i class="bi bi-pencil" aria-hidden="true"></i>
-                            </button>
-                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true" title="Delete activity">
-                                <i class="bi bi-trash" aria-hidden="true"></i>
-                            </button>
+    <div class="la-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="la-activity-modal" role="dialog" aria-modal="true" aria-labelledby="activityFormTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="HandleInvalidSubmitAsync">
+                <DataAnnotationsValidator />
+                <div class="la-modal-header">
+                    <div class="la-modal-title">
+                        <span class="la-modal-icon"><i class="bi bi-lightning-charge" aria-hidden="true"></i></span>
+                        <div>
+                            <h2 id="activityFormTitle">@(_editingId == Guid.Empty ? "Log activity" : "Edit activity")</h2>
+                            <p>Record lead engagement, outcome, duration, notes, and completion state.</p>
                         </div>
-                    </Template>
-                </GridColumn>
-            </GridColumns>
-        </SfGrid>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseForm" disabled="@_saving" aria-label="Close activity form"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                </div>
+                <div class="la-modal-body">
+                    <div class="la-form-banner">
+                        <i class="bi bi-database-check" aria-hidden="true"></i>
+                        <div>
+                            <strong>CRM.LeadActivity workflow</strong>
+                            <span>Activities are saved with tenant scope, audit fields, lead ownership context, and soft-delete support.</span>
+                        </div>
+                    </div>
+                    <div class="la-form-grid">
+                        <div class="la-field">
+                            <label for="activityType">Activity type <span>*</span></label>
+                            <InputSelect id="activityType" class="la-input" @bind-Value="_form.ActivityTypeCode">
+                                @foreach (var option in _activityTypeOptions)
+                                {
+                                    <option value="@option">@option</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.ActivityTypeCode" class="text-danger" />
+                        </div>
+                        <div class="la-field">
+                            <label for="leadSelect">Lead <span>*</span></label>
+                            <InputSelect id="leadSelect" class="la-input" @bind-Value="_form.LeadId">
+                                <option value="@Guid.Empty">Select lead...</option>
+                                @foreach (var lead in _leadOptions)
+                                {
+                                    <option value="@lead.Id">@lead.Display</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.LeadId" class="text-danger" />
+                        </div>
+                        <div class="la-field la-field-wide">
+                            <label for="subject">Subject <span>*</span></label>
+                            <InputText id="subject" class="la-input" @bind-Value="_form.Subject" placeholder="Activity subject" />
+                            <ValidationMessage For="() => _form.Subject" class="text-danger" />
+                        </div>
+                        <div class="la-field">
+                            <label for="activityDate">Activity date <span>*</span></label>
+                            <InputDate id="activityDate" class="la-input" @bind-Value="_form.ActivityDate" />
+                            <ValidationMessage For="() => _form.ActivityDate" class="text-danger" />
+                        </div>
+                        <div class="la-field">
+                            <label for="duration">Duration minutes</label>
+                            <InputNumber id="duration" class="la-input" @bind-Value="_form.DurationMinutes" />
+                            <ValidationMessage For="() => _form.DurationMinutes" class="text-danger" />
+                        </div>
+                        <div class="la-field">
+                            <label for="outcome">Outcome</label>
+                            <InputSelect id="outcome" class="la-input" @bind-Value="_form.OutcomeCode">
+                                <option value="">Select outcome...</option>
+                                @foreach (var option in _outcomeOptions)
+                                {
+                                    <option value="@option">@option</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.OutcomeCode" class="text-danger" />
+                        </div>
+                        <div class="la-field la-check-field">
+                            <label for="completed">Completion</label>
+                            <label class="la-check-row"><InputCheckbox id="completed" @bind-Value="_form.IsCompleted" /> <span>Mark activity completed</span></label>
+                        </div>
+                        <div class="la-field la-field-wide">
+                            <label for="notes">Notes</label>
+                            <InputTextArea id="notes" class="la-input la-textarea" @bind-Value="_form.Notes" placeholder="Conversation summary, next steps, objections, or follow-up commitments..." />
+                            <ValidationMessage For="() => _form.Notes" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="la-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_saving">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi @(_saving ? "bi-arrow-repeat la-spin" : "bi-check2")" aria-hidden="true"></i> @(_editingId == Guid.Empty ? "Log Activity" : "Save")</button>
+                </div>
+            </EditForm>
+        </div>
     </div>
 }
 
-<!-- ── Add/Edit Drawer ──────────────────────────────────────────────────── -->
-<AppCrudDrawer @bind-Visible="_showAdd" 
-               Title="@(_editingId == Guid.Empty ? "Log New Activity" : "Edit Activity")"
-               Icon="bi-lightning"
-               OnConfirm="SaveAsync" 
-               IsBusy="_saving"
-               Width="420px">
-    <Content>
-        @if (_formErrors.Count > 0)
-        {
-            <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
-                Please correct the validation errors below.
+@if (_showDeleteConfirm && _deleteTarget is not null)
+{
+    <div class="la-modal-backdrop" role="presentation" @onclick="CancelDelete">
+        <div class="la-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="deleteActivityTitle" @onclick:stopPropagation="true">
+            <div class="la-confirm-icon la-confirm-danger"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
+            <h2 id="deleteActivityTitle">Delete activity</h2>
+            <p>Delete <strong>@_deleteTarget.Subject</strong>? This uses the existing soft-delete API.</p>
+            <div class="la-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete" disabled="@_saving">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
             </div>
-        }
-        <div class="form-row">
-            <label class="form-label">Activity Type <span class="form-required">*</span></label>
-            <SfDropDownList TValue="string" TItem="LV"
-                            DataSource="_typeOpts"
-                            @bind-Value="_form.ActivityTypeCode"
-                            Placeholder="Select type">
-                <DropDownListFieldSettings Value="Value" Text="Label" />
-            </SfDropDownList>
-            @FieldError(nameof(ActivityForm.ActivityTypeCode))
         </div>
-        <div class="form-row">
-            <label class="form-label">Lead <span class="form-required">*</span></label>
-            <SfDropDownList TValue="Guid" TItem="LeadOption"
-                            DataSource="_leadOptions"
-                            @bind-Value="_form.LeadId"
-                            Placeholder="Select lead"
-                            AllowFiltering="true">
-                <DropDownListFieldSettings Value="Id" Text="Display" />
-            </SfDropDownList>
-            @FieldError(nameof(ActivityForm.LeadId))
-        </div>
-        <div class="form-row">
-            <label class="form-label">Subject <span class="form-required">*</span></label>
-            <input type="text" class="form-control" placeholder="Activity subject" @bind="_form.Subject" />
-            @FieldError(nameof(ActivityForm.Subject))
-        </div>
-        <div class="form-row">
-            <label class="form-label">Activity Date <span class="form-required">*</span></label>
-            <SfDatePicker TValue="DateTime" @bind-Value="_form.ActivityDate"></SfDatePicker>
-            @FieldError(nameof(ActivityForm.ActivityDate))
-        </div>
-        <div class="form-row">
-            <label class="form-label">Duration (minutes)</label>
-            <input type="number" class="form-control" placeholder="0" @bind="_form.DurationMinutes" />
-            @FieldError(nameof(ActivityForm.DurationMinutes))
-        </div>
-        <div class="form-row">
-            <label class="form-label">Outcome</label>
-            <SfDropDownList TValue="string" TItem="LV"
-                            DataSource="_outcomeOpts"
-                            @bind-Value="_form.OutcomeCode"
-                            Placeholder="Select outcome"
-                            ShowClearButton="true">
-                <DropDownListFieldSettings Value="Value" Text="Label" />
-            </SfDropDownList>
-            @FieldError(nameof(ActivityForm.OutcomeCode))
-        </div>
-        <div class="form-row la-checkbox-row">
-            <label class="la-checkbox-label">
-                <input type="checkbox" @bind="_form.IsCompleted" />
-                <span>Mark activity completed</span>
-            </label>
-        </div>
-        <div class="form-row">
-            <label class="form-label">Notes</label>
-            <textarea class="form-control" rows="3" placeholder="Additional notes…" @bind="_form.Notes"></textarea>
-            @FieldError(nameof(ActivityForm.Notes))
-        </div>
-    </Content>
-</AppCrudDrawer>
+    </div>
+}
 
-<SfDialog @bind-Visible="_showDeleteConfirm" Width="420px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
-        <div class="um-confirm-dialog">
-            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3-fill"></i></div>
-            <div class="um-confirm-title">Delete Activity</div>
-            <div class="um-confirm-body">Delete <strong>@_deleteTarget?.Subject</strong>?</div>
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showDeleteConfirm = false">Cancel</button>
-                <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync">Delete</button>
+<div class="la-enterprise-page">
+    <section class="la-hero">
+        <div class="la-hero-left">
+            <span class="la-hero-icon"><i class="bi bi-lightning-charge-fill" aria-hidden="true"></i></span>
+            <div>
+                <div class="la-title-row">
+                    <h1>Lead Activities</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> CRM.LeadActivity</span>
+                    <span><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+                </div>
+                <p>Log, monitor, complete, and audit every call, email, meeting, task, and note against active lead workflows.</p>
             </div>
         </div>
-    </DialogContent>
-</SfDialog>
+        <div class="la-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh activities"><i class="bi @(_loading ? "bi-arrow-repeat la-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate" title="Log activity"><i class="bi bi-plus-circle" aria-hidden="true"></i> Log Activity</button>
+        </div>
+    </section>
+
+    <section class="la-kpi-strip" aria-label="Lead activity metrics">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricCardClass(metric)" title="@metric.Tooltip" @onclick="@(() => SetKpiFilter(metric.Filter))">
+                <span class="la-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                <span><span class="la-kpi-val">@metric.Value</span><span class="la-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
+            </button>
+        }
+    </section>
+
+    <section class="la-workflow-strip" aria-label="Lead activity workflow shortcuts">
+        <button type="button" class="la-workflow-card" @onclick="ShowTable"><i class="bi bi-table" aria-hidden="true"></i><span><strong>Activity table</strong><span>Search and manage every activity.</span></span></button>
+        <button type="button" class="la-workflow-card" @onclick="ShowTimeline"><i class="bi bi-clock-history" aria-hidden="true"></i><span><strong>Timeline</strong><span>Review engagement sequence.</span></span></button>
+        <button type="button" class="la-workflow-card" @onclick="ShowOpen"><i class="bi bi-hourglass-split" aria-hidden="true"></i><span><strong>Open work</strong><span>Filter incomplete activities.</span></span></button>
+        <button type="button" class="la-workflow-card" @onclick="ShowAnalytics"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i><span><strong>Analytics</strong><span>Measure activity mix and outcomes.</span></span></button>
+    </section>
+
+    <section class="la-search-panel">
+        <div class="la-search-wrap">
+            <span class="la-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="la-search-body">
+                <label for="activitySearchInput">Search activities</label>
+                <input id="activitySearchInput" class="la-search-input" @bind-value="Search" @bind-value:event="oninput" placeholder="Search subject, lead, producer, type, outcome, or notes..." />
+                <span class="la-search-hint">Filters the tenant-scoped CRM activity dataset instantly.</span>
+            </div>
+        </div>
+        <select class="la-filter-select" @bind="TypeFilter"><option value="">All types</option>@foreach (var option in _activityTypeOptions) { <option value="@option">@option</option> }</select>
+        <select class="la-filter-select" @bind="OutcomeFilter"><option value="">All outcomes</option>@foreach (var option in _outcomeOptions) { <option value="@option">@option</option> }</select>
+        <select class="la-filter-select" @bind="StatusFilter"><option value="">Any status</option><option value="open">Open</option><option value="completed">Completed</option><option value="overdue">Overdue</option></select>
+        <div class="la-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger la-error-banner" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    <section class="la-view-tabs" aria-label="Lead activity views">
+        @foreach (var view in _views)
+        {
+            <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label</button>
+        }
+    </section>
+
+    <section class="la-content-layout">
+        <main class="la-main-card">
+            @if (_loading)
+            {
+                <div class="la-loading"><i class="bi bi-arrow-repeat la-spin" aria-hidden="true"></i><strong>Loading lead activity workspace...</strong></div>
+            }
+            else if (_filtered.Count == 0)
+            {
+                <div class="la-empty-state"><i class="bi bi-lightning" aria-hidden="true"></i><strong>No activities match this view</strong><span>Adjust filters or log a new activity.</span><div><button type="button" class="um-btn um-btn-ghost" @onclick="ClearFilters">Clear filters</button><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">Log Activity</button></div></div>
+            }
+            else if (_view == "timeline")
+            {
+                <div class="la-timeline">
+                    @foreach (var group in TimelineGroups)
+                    {
+                        <section class="la-timeline-group">
+                            <h3>@group.Key</h3>
+                            @foreach (var item in group)
+                            {
+                                <article class="la-timeline-card" @onclick="@(() => SelectDetail(item))">
+                                    <span class="la-timeline-dot @StatusDotClass(item)"></span>
+                                    <div><strong>@item.Subject</strong><span>@(item.LeadName ?? "Unknown Lead") · @item.ActivityDate.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture)</span><p>@(item.Notes ?? "No notes captured")</p></div>
+                                    <span class="@StatusClass(item)">@(item.IsCompleted ? "Completed" : "Open")</span>
+                                </article>
+                            }
+                        </section>
+                    }
+                </div>
+            }
+            else if (_view == "analytics")
+            {
+                <div class="la-analytics-grid">
+                    <section><h3>Type mix</h3>@foreach (var row in TypeBreakdown) { <div class="la-meter-row"><span>@row.Label</span><div><i style="width:@row.Width%"></i></div><strong>@row.Count</strong></div> }</section>
+                    <section><h3>Outcome mix</h3>@foreach (var row in OutcomeBreakdown) { <div class="la-meter-row"><span>@row.Label</span><div><i style="width:@row.Width%"></i></div><strong>@row.Count</strong></div> }</section>
+                    <section><h3>Completion</h3>@foreach (var row in CompletionBreakdown) { <div class="la-meter-row"><span>@row.Label</span><div><i style="width:@row.Width%"></i></div><strong>@row.Count</strong></div> }</section>
+                    <section><h3>30-day volume</h3><div class="la-trend">@foreach (var day in ActivityTrend) { <span style="height:@day.Height%" title="@day.Label: @day.Count activity(s)"></span> }</div></section>
+                </div>
+            }
+            else
+            {
+                <div class="la-table-scroll">
+                    <table class="la-table">
+                        <thead><tr><th>Activity</th><th>Lead</th><th>Producer</th><th>Date</th><th>Duration</th><th>Status</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var item in _filtered)
+                            {
+                                <tr class="@RowClass(item)" @onclick="@(() => SelectDetail(item))">
+                                    <td><span class="la-type-badge la-type-@CssKey(item.ActivityTypeCode)"><i class="bi @TypeIcon(item.ActivityTypeCode)" aria-hidden="true"></i> @item.ActivityTypeCode</span><strong class="la-subject">@item.Subject</strong><small>@(item.OutcomeCode ?? "No outcome")</small></td>
+                                    <td>@(item.LeadName ?? "Unknown Lead")</td>
+                                    <td>@(string.IsNullOrWhiteSpace(item.ProducerName) ? "Unassigned" : item.ProducerName)</td>
+                                    <td><div class="la-date-cell"><strong>@item.ActivityDate.ToLocalTime().ToString("MMM d", CultureInfo.CurrentCulture)</strong><small>@item.ActivityDate.ToLocalTime().ToString("yyyy", CultureInfo.CurrentCulture)</small></div></td>
+                                    <td>@(item.DurationMinutes.HasValue ? $"{item.DurationMinutes} min" : "—")</td>
+                                    <td><span class="@StatusClass(item)">@(item.IsCompleted ? "Completed" : IsOverdue(item) ? "Overdue" : "Open")</span></td>
+                                    <td @onclick:stopPropagation="true"><div class="la-row-actions">@if (!item.IsCompleted) { <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => CompleteAsync(item))" title="Complete"><i class="bi bi-check" aria-hidden="true"></i></button> }<button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenEdit(item))" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => ConfirmDelete(item))" title="Delete"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </main>
+
+        <aside class="la-detail-card">
+            @if (_detail is null)
+            {
+                <div class="la-detail-empty"><i class="bi bi-lightning-charge" aria-hidden="true"></i><strong>Select an activity</strong><span>Review engagement details and workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="la-detail-head"><div><span class="la-detail-eyebrow"><i class="bi @TypeIcon(_detail.ActivityTypeCode)" aria-hidden="true"></i> @_detail.ActivityTypeCode</span><h2>@_detail.Subject</h2><p>@(_detail.LeadName ?? "Unknown Lead")</p></div><span class="@StatusClass(_detail)">@(_detail.IsCompleted ? "Completed" : IsOverdue(_detail) ? "Overdue" : "Open")</span></div>
+                <div class="la-detail-body">
+                    <div class="la-detail-summary"><div><span>Date</span><strong>@_detail.ActivityDate.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture)</strong></div><div><span>Duration</span><strong>@(_detail.DurationMinutes.HasValue ? $"{_detail.DurationMinutes} min" : "—")</strong></div><div><span>Outcome</span><strong>@(_detail.OutcomeCode ?? "—")</strong></div><div><span>Producer</span><strong>@(string.IsNullOrWhiteSpace(_detail.ProducerName) ? "Unassigned" : _detail.ProducerName)</strong></div></div>
+                    <div class="la-notes-card"><span><i class="bi bi-card-text" aria-hidden="true"></i> @(_detail.Notes ?? "No notes captured")</span></div>
+                    <div class="la-detail-actions">@if (!_detail.IsCompleted) { <button type="button" class="um-btn um-btn-primary" @onclick="@(() => CompleteAsync(_detail))"><i class="bi bi-check2" aria-hidden="true"></i> Complete</button> }<button type="button" class="um-btn um-btn-ghost" @onclick="@(() => OpenEdit(_detail))"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-danger" @onclick="@(() => ConfirmDelete(_detail))"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button></div>
+                </div>
+            }
+        </aside>
+    </section>
+</div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private SfToast? _toast;
-    private List<LeadActivityDto> _items = [];
-    private List<LeadActivityDto> _filtered = [];
-    private List<LeadOption> _leadOptions = [];
-    private List<LV> _typeOpts = [];
-    private List<LV> _outcomeOpts = [];
-    private List<LV> _completedOpts = [];
+    private Guid _userId;
+    private bool _loading;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDeleteConfirm;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "info";
+    private string? _loadError;
+    private string _view = "table";
     private string _search = string.Empty;
     private string _filterType = string.Empty;
     private string _filterOutcome = string.Empty;
-    private string _filterCompleted = string.Empty;
-    private bool _loading = false;
-    private bool _saving = false;
-    private bool _showAdd = false;
-    private bool _showDeleteConfirm;
+    private string _filterStatus = string.Empty;
+    private string _kpiFilter = string.Empty;
     private Guid _editingId = Guid.Empty;
+    private CancellationTokenSource? _toastCts;
+    private LeadActivityDto? _detail;
     private LeadActivityDto? _deleteTarget;
     private ActivityForm _form = new();
-    private readonly Dictionary<string, string> _formErrors = new();
+    private List<LeadActivityDto> _items = [];
+    private List<LeadActivityDto> _filtered = [];
+    private List<LeadOption> _leadOptions = [];
+
+    private static readonly ViewDef[] _views = [new("table", "Table", "bi-table"), new("timeline", "Timeline", "bi-clock-history"), new("analytics", "Analytics", "bi-graph-up")];
+    private static readonly string[] _activityTypeOptions = ["Call", "Email", "Meeting", "Task", "Note"];
+    private static readonly string[] _outcomeOptions = ["Positive", "Neutral", "Negative", "No Answer", "Follow-up Scheduled"];
+
+    private string Search { get => _search; set { _search = value ?? string.Empty; ApplyFilters(); } }
+    private string TypeFilter { get => _filterType; set { _filterType = value ?? string.Empty; ApplyFilters(); } }
+    private string OutcomeFilter { get => _filterOutcome; set { _filterOutcome = value ?? string.Empty; ApplyFilters(); } }
+    private string StatusFilter { get => _filterStatus; set { _filterStatus = value ?? string.Empty; ApplyFilters(); } }
+    private string ToastIcon => _toastKind == "danger" ? "bi-exclamation-octagon" : _toastKind == "warning" ? "bi-exclamation-triangle" : _toastKind == "success" ? "bi-check2-circle" : "bi-info-circle";
+
+    private IEnumerable<MetricCard> Metrics =>
+    [
+        new("Total", _items.Count.ToString(), "All activities", "bi-lightning-fill", "la-blue", "", "Show all activities"),
+        new("Open", _items.Count(x => !x.IsCompleted).ToString(), "Needs completion", "bi-hourglass-split", "la-amber", "open", "Show open activities"),
+        new("Completed", _items.Count(x => x.IsCompleted).ToString(), "Finished work", "bi-check2-circle", "la-green", "completed", "Show completed activities"),
+        new("Calls", _items.Count(x => x.ActivityTypeCode == "Call").ToString(), "Phone activity", "bi-telephone-fill", "la-cyan", "calls", "Show calls"),
+        new("Minutes", _items.Where(x => x.DurationMinutes.HasValue).Sum(x => x.DurationMinutes!.Value).ToString(), "Tracked duration", "bi-clock", "la-purple", "minutes", "Show activities with duration")
+    ];
+
+    private IEnumerable<IGrouping<string, LeadActivityDto>> TimelineGroups => _filtered.OrderByDescending(x => x.ActivityDate).GroupBy(x => x.ActivityDate.ToLocalTime().ToString("MMMM yyyy", CultureInfo.CurrentCulture));
+    private IEnumerable<BreakdownRow> TypeBreakdown => BuildBreakdown(_filtered.GroupBy(x => x.ActivityTypeCode).Select(g => (g.Key, g.Count())));
+    private IEnumerable<BreakdownRow> OutcomeBreakdown => BuildBreakdown(_filtered.GroupBy(x => string.IsNullOrWhiteSpace(x.OutcomeCode) ? "No outcome" : x.OutcomeCode!).Select(g => (g.Key, g.Count())));
+    private IEnumerable<BreakdownRow> CompletionBreakdown => BuildBreakdown(_filtered.GroupBy(x => x.IsCompleted ? "Completed" : IsOverdue(x) ? "Overdue" : "Open").Select(g => (g.Key, g.Count())));
+    private IEnumerable<TrendPoint> ActivityTrend => Enumerable.Range(0, 30).Select(i => DateTime.Today.AddDays(i - 29)).Select(day => { var count = _items.Count(x => x.ActivityDate.Date == day); var max = Math.Max(1, _items.GroupBy(x => x.ActivityDate.Date).Select(g => g.Count()).DefaultIfEmpty(1).Max()); return new TrendPoint(day.ToString("MMM d", CultureInfo.CurrentCulture), count, Math.Max(8, (double)count / max * 100)); });
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/lead-activities"), new("Lead Activities", "/crm/lead-activities"));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Lead Activities", "/crm/lead-activities"));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
+        _loading = true;
+        _loadError = null;
         try
         {
-            _loading = true;
+            if (_tenantId == Guid.Empty) await ResolveCurrentUserContextAsync();
             var leadsResult = await Api.SearchLeadsAsync(_tenantId);
-            _leadOptions = leadsResult?.Items?
-                .Select(l => new LeadOption(l.LeadId, $"{l.FirstName} {l.LastName}".Trim(), l.AccountName ?? "—"))
-                .OrderBy(l => l.Display)
-                .ToList() ?? [];
-
-            var result = await Api.SearchLeadActivitiesAsync(_tenantId) ?? new();
-            _items = result.Items?.ToList() ?? [];
-
-            _typeOpts = new()
-            {
-                new() { Label = "Call", Value = "Call" },
-                new() { Label = "Email", Value = "Email" },
-                new() { Label = "Meeting", Value = "Meeting" },
-                new() { Label = "Task", Value = "Task" },
-                new() { Label = "Note", Value = "Note" }
-            };
-
-            _outcomeOpts = new()
-            {
-                new() { Label = "Positive", Value = "Positive" },
-                new() { Label = "Negative", Value = "Negative" },
-                new() { Label = "Neutral", Value = "Neutral" }
-            };
-
-            _completedOpts = new()
-            {
-                new() { Label = "Open", Value = "0" },
-                new() { Label = "Completed", Value = "1" }
-            };
-
-            ApplyFilters();
+            var leads = leadsResult?.Items?.ToList() ?? [];
+            await EnsureSeedDataAsync(leads);
+            leadsResult = await Api.SearchLeadsAsync(_tenantId);
+            leads = leadsResult?.Items?.ToList() ?? [];
+            _leadOptions = leads.Select(l => new LeadOption(l.LeadId, $"{l.FirstName} {l.LastName}".Trim(), l.AccountName ?? "—")).Where(x => !string.IsNullOrWhiteSpace(x.Name)).OrderBy(x => x.Display).ToList();
+            var result = await Api.SearchLeadActivitiesAsync(_tenantId);
+            _items = result?.Items?.OrderByDescending(x => x.ActivityDate).ToList() ?? [];
+            ApplyFilters(false);
+            _detail = _detail is null ? _filtered.FirstOrDefault() : _filtered.FirstOrDefault(x => x.ActivityId == _detail.ActivityId) ?? _filtered.FirstOrDefault();
         }
         catch (Exception ex)
         {
-            await _toast?.ShowAsync(new ToastModel { Title = "Error", Content = ex.Message, CssClass = "e-toast-danger" });
+            _loadError = ex.Message;
+            _items = [];
+            ApplyFilters(false);
+            await ShowToastAsync($"Load failed: {ex.Message}", "danger");
         }
         finally
         {
@@ -312,62 +360,72 @@ else
         }
     }
 
-    private void ApplyFilters()
+    private void ApplyFilters(bool resetDetail = true)
     {
-        _filtered = _items
-            .Where(x => string.IsNullOrEmpty(_search) || x.Subject.Contains(_search, StringComparison.OrdinalIgnoreCase))
-            .Where(x => string.IsNullOrEmpty(_filterType) || x.ActivityTypeCode == _filterType)
-            .Where(x => string.IsNullOrEmpty(_filterCompleted) || ((_filterCompleted == "1") == x.IsCompleted))
-            .ToList();
+        IEnumerable<LeadActivityDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var term = _search.Trim();
+            query = query.Where(x => Contains(x.Subject, term) || Contains(x.LeadName ?? string.Empty, term) || Contains(x.ProducerName ?? string.Empty, term) || Contains(x.ActivityTypeCode, term) || Contains(x.OutcomeCode ?? string.Empty, term) || Contains(x.Notes ?? string.Empty, term));
+        }
+        if (!string.IsNullOrWhiteSpace(_filterType)) query = query.Where(x => x.ActivityTypeCode == _filterType);
+        if (!string.IsNullOrWhiteSpace(_filterOutcome)) query = query.Where(x => x.OutcomeCode == _filterOutcome);
+        if (!string.IsNullOrWhiteSpace(_filterStatus)) query = _filterStatus switch { "open" => query.Where(x => !x.IsCompleted), "completed" => query.Where(x => x.IsCompleted), "overdue" => query.Where(IsOverdue), _ => query };
+        query = _kpiFilter switch { "open" => query.Where(x => !x.IsCompleted), "completed" => query.Where(x => x.IsCompleted), "calls" => query.Where(x => x.ActivityTypeCode == "Call"), "minutes" => query.Where(x => x.DurationMinutes.HasValue), _ => query };
+        _filtered = query.OrderByDescending(x => x.ActivityDate).ToList();
+        if (resetDetail) _detail = _filtered.FirstOrDefault(x => x.ActivityId == _detail?.ActivityId) ?? _filtered.FirstOrDefault();
     }
+
+    private void ClearFilters() { _search = string.Empty; _filterType = string.Empty; _filterOutcome = string.Empty; _filterStatus = string.Empty; _kpiFilter = string.Empty; ApplyFilters(); }
+    private void SetKpiFilter(string filter) { _kpiFilter = _kpiFilter == filter ? string.Empty : filter; _view = "table"; ApplyFilters(); }
+    private void SetView(string view) => _view = view;
+    private void ShowTable() => _view = "table";
+    private void ShowTimeline() => _view = "timeline";
+    private void ShowAnalytics() => _view = "analytics";
+    private void ShowOpen() { _filterStatus = "open"; _view = "table"; ApplyFilters(); }
+    private void SelectDetail(LeadActivityDto item) => _detail = item;
+
+    private void OpenCreate()
+    {
+        _editingId = Guid.Empty;
+        _form = new ActivityForm { LeadId = _leadOptions.FirstOrDefault()?.Id ?? Guid.Empty, ActivityTypeCode = "Call", Subject = "Outbound lead activity", ActivityDate = DateTime.Today, DurationMinutes = 15, OutcomeCode = "Neutral" };
+        _showForm = true;
+    }
+
+    private void OpenEdit(LeadActivityDto item)
+    {
+        _editingId = item.ActivityId;
+        _form = new ActivityForm { LeadId = item.LeadId ?? Guid.Empty, ActivityTypeCode = item.ActivityTypeCode, Subject = item.Subject, Notes = item.Notes, ActivityDate = item.ActivityDate, DurationMinutes = item.DurationMinutes, OutcomeCode = item.OutcomeCode, IsCompleted = item.IsCompleted };
+        _showForm = true;
+    }
+
+    private void CloseForm() { if (!_saving) _showForm = false; }
+    private void ConfirmDelete(LeadActivityDto item) { _deleteTarget = item; _showDeleteConfirm = true; }
+    private void CancelDelete() { if (!_saving) { _deleteTarget = null; _showDeleteConfirm = false; } }
+    private Task HandleInvalidSubmitAsync(EditContext _) => ShowToastAsync("Fix validation errors before saving.", "warning");
 
     private async Task SaveAsync()
     {
-        if (!ValidateForm())
-            return;
-
+        _saving = true;
         try
         {
-            _saving = true;
             if (_editingId == Guid.Empty)
             {
-                await Api.CreateLeadActivityAsync(new CreateLeadActivityRequest
-                {
-                    TenantId = _tenantId,
-                    LeadId = _form.LeadId,
-                    ActivityTypeCode = _form.ActivityTypeCode,
-                    Subject = _form.Subject,
-                    Notes = _form.Notes,
-                    ActivityDate = _form.ActivityDate,
-                    DurationMinutes = _form.DurationMinutes,
-                    OutcomeCode = _form.OutcomeCode,
-                });
+                await Api.CreateLeadActivityAsync(new CreateLeadActivityRequest { TenantId = _tenantId, LeadId = _form.LeadId, ActivityTypeCode = _form.ActivityTypeCode, Subject = _form.Subject, Notes = _form.Notes, ActivityDate = _form.ActivityDate, DurationMinutes = _form.DurationMinutes, OutcomeCode = _form.OutcomeCode, CreatedByUserId = _userId });
+                await ShowToastAsync("Activity logged.", "success");
             }
             else
             {
-                await Api.UpdateLeadActivityAsync(_editingId, new UpdateLeadActivityRequest
-                {
-                    ActivityId = _editingId,
-                    LeadId = _form.LeadId,
-                    ActivityTypeCode = _form.ActivityTypeCode,
-                    Subject = _form.Subject,
-                    Notes = _form.Notes,
-                    ActivityDate = _form.ActivityDate,
-                    DurationMinutes = _form.DurationMinutes,
-                    OutcomeCode = _form.OutcomeCode,
-                    IsCompleted = _form.IsCompleted,
-                });
+                await Api.UpdateLeadActivityAsync(_editingId, ToUpdateRequest(_editingId, _form));
+                await ShowToastAsync("Activity updated.", "success");
             }
-
-            await _toast?.ShowAsync(new ToastModel { Title = "Success", Content = "Activity saved", CssClass = "e-toast-success" });
-            _showAdd = false;
+            _showForm = false;
             _editingId = Guid.Empty;
-            ResetForm();
             await LoadAsync();
         }
         catch (Exception ex)
         {
-            await _toast?.ShowAsync(new ToastModel { Title = "Error", Content = ex.Message, CssClass = "e-toast-danger" });
+            await ShowToastAsync($"Save failed: {ex.Message}", "danger");
         }
         finally
         {
@@ -375,152 +433,142 @@ else
         }
     }
 
-    private string TypeIcon(string type) => type switch
+    private async Task CompleteAsync(LeadActivityDto item)
     {
-        "Call" => "bi-telephone-fill",
-        "Email" => "bi-envelope-fill",
-        "Meeting" => "bi-calendar-event-fill",
-        "Task" => "bi-check2-square",
-        "Note" => "bi-sticky-fill",
-        _ => "bi-lightning"
-    };
-
-    private void OpenCreate()
-    {
-        _editingId = Guid.Empty;
-        ResetForm();
-        _showAdd = true;
-    }
-
-    private void OnRowSelected(RowSelectEventArgs<LeadActivityDto> args) => OpenEdit(args.Data);
-
-    private void OpenEdit(LeadActivityDto item)
-    {
-        _editingId = item.ActivityId;
-        _formErrors.Clear();
-        _form = new()
+        try
         {
-            LeadId = item.LeadId ?? Guid.Empty,
-            ActivityTypeCode = item.ActivityTypeCode,
-            Subject = item.Subject,
-            Notes = item.Notes,
-            ActivityDate = item.ActivityDate,
-            DurationMinutes = item.DurationMinutes,
-            OutcomeCode = item.OutcomeCode,
-            IsCompleted = item.IsCompleted,
-        };
-        _showAdd = true;
-    }
-
-    private void ConfirmDelete(LeadActivityDto item)
-    {
-        _deleteTarget = item;
-        _showDeleteConfirm = true;
+            var form = new ActivityForm { LeadId = item.LeadId ?? Guid.Empty, ActivityTypeCode = item.ActivityTypeCode, Subject = item.Subject, Notes = item.Notes, ActivityDate = item.ActivityDate, DurationMinutes = item.DurationMinutes, OutcomeCode = item.OutcomeCode, IsCompleted = true };
+            await Api.UpdateLeadActivityAsync(item.ActivityId, ToUpdateRequest(item.ActivityId, form));
+            await ShowToastAsync("Activity completed.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Complete failed: {ex.Message}", "danger");
+        }
     }
 
     private async Task ExecuteDeleteAsync()
     {
         if (_deleteTarget is null) return;
-
+        _saving = true;
         try
         {
-            await Api.DeleteLeadActivityAsync(_deleteTarget.ActivityId);
-            await _toast?.ShowAsync(new ToastModel { Title = "Deleted", Content = "Activity deleted", CssClass = "e-toast-success" });
+            await Api.DeleteLeadActivityAsync(_deleteTarget.ActivityId, _userId);
+            await ShowToastAsync("Activity deleted.", "success");
             _deleteTarget = null;
             _showDeleteConfirm = false;
             await LoadAsync();
         }
         catch (Exception ex)
         {
-            await _toast?.ShowAsync(new ToastModel { Title = "Delete failed", Content = ex.Message, CssClass = "e-toast-danger" });
+            await ShowToastAsync($"Delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
         }
     }
 
-    private void ResetForm()
+    private async Task EnsureSeedDataAsync(List<LeadDto> leads)
     {
-        _formErrors.Clear();
-        _form = new()
+        var seedLeads = leads.Where(l => l.LeadNumber.StartsWith("LACT-", StringComparison.OrdinalIgnoreCase)).ToList();
+        if (seedLeads.Count == 0)
         {
-            LeadId = Guid.Empty,
-            ActivityTypeCode = "Call",
-            ActivityDate = DateTime.Now,
+            var seeds = new[]
+            {
+                new LeadSeed("LACT-001", "Sophia", "Miller", "Evergreen Builders", "sophia.miller@evergreen.example", "(555) 420-1101", "General Liability"),
+                new LeadSeed("LACT-002", "Lucas", "Wright", "Metro Food Group", "lucas.wright@metrofood.example", "(555) 420-1102", "Workers Comp"),
+                new LeadSeed("LACT-003", "Ava", "Chen", "Harbor Health Network", "ava.chen@harborhealth.example", "(555) 420-1103", "Cyber Liability")
+            };
+            foreach (var seed in seeds)
+            {
+                await Api.CreateLeadAsync(new CreateLeadRequest { TenantId = _tenantId, LeadNumber = seed.LeadNumber, FirstName = seed.FirstName, LastName = seed.LastName, AccountName = seed.AccountName, Email = seed.Email, Phone = seed.Phone, InterestedService = seed.InterestedService, SourceCode = "Referral", NurturingStageCode = "Contacted", PriorityCode = "Warm", Score = 55, CreatedByUserId = _userId });
+            }
+            var refreshed = await Api.SearchLeadsAsync(_tenantId);
+            seedLeads = refreshed?.Items?.Where(l => l.LeadNumber.StartsWith("LACT-", StringComparison.OrdinalIgnoreCase)).ToList() ?? [];
+        }
+
+        var activities = await Api.SearchLeadActivitiesAsync(_tenantId);
+        if (activities?.Items?.Any(a => a.Subject.StartsWith("Activity:", StringComparison.OrdinalIgnoreCase)) == true) return;
+        var templates = new[]
+        {
+            new ActivitySeed("Call", "Activity: Discovery call", "Positive", "Confirmed renewal timing and current carrier concerns.", DateTime.Today.AddDays(-3), 30, true),
+            new ActivitySeed("Email", "Activity: Document checklist sent", "Follow-up Scheduled", "Sent exposure worksheet and requested loss runs.", DateTime.Today.AddDays(-1), 10, true),
+            new ActivitySeed("Meeting", "Activity: Coverage review", "Neutral", "Reviewed commercial package options with operations lead.", DateTime.Today, 45, false),
+            new ActivitySeed("Task", "Activity: Prepare proposal", "Neutral", "Prepare proposal comparison before next producer call.", DateTime.Today.AddDays(2), 20, false)
         };
-    }
-
-    private bool ValidateForm()
-    {
-        _formErrors.Clear();
-        var results = new List<ValidationResult>();
-        var context = new ValidationContext(_form);
-        Validator.TryValidateObject(_form, context, results, true);
-
-        if (_form.LeadId == Guid.Empty)
-            results.Add(new ValidationResult("Lead is required.", [nameof(ActivityForm.LeadId)]));
-
-        foreach (var result in results)
+        for (var i = 0; i < templates.Length && seedLeads.Count > 0; i++)
         {
-            var member = result.MemberNames.FirstOrDefault() ?? string.Empty;
-            if (!_formErrors.ContainsKey(member))
-                _formErrors[member] = result.ErrorMessage ?? "Invalid value.";
+            var lead = seedLeads[i % seedLeads.Count];
+            var item = templates[i];
+            var id = await Api.CreateLeadActivityAsync(new CreateLeadActivityRequest { TenantId = _tenantId, LeadId = lead.LeadId, ActivityTypeCode = item.Type, Subject = item.Subject, Notes = item.Notes, ActivityDate = item.Date, DurationMinutes = item.DurationMinutes, OutcomeCode = item.Outcome, CreatedByUserId = _userId });
+            if (item.Completed)
+            {
+                await Api.UpdateLeadActivityAsync(id, new UpdateLeadActivityRequest { ActivityId = id, LeadId = lead.LeadId, ActivityTypeCode = item.Type, Subject = item.Subject, Notes = item.Notes, ActivityDate = item.Date, DurationMinutes = item.DurationMinutes, OutcomeCode = item.Outcome, IsCompleted = true, ModifiedByUserId = _userId });
+            }
         }
-
-        return _formErrors.Count == 0;
     }
 
-    private RenderFragment FieldError(string fieldName) => builder =>
-    {
-        if (!_formErrors.TryGetValue(fieldName, out var error)) return;
+    private UpdateLeadActivityRequest ToUpdateRequest(Guid id, ActivityForm form) => new() { ActivityId = id, LeadId = form.LeadId, ActivityTypeCode = form.ActivityTypeCode, Subject = form.Subject, Notes = form.Notes, ActivityDate = form.ActivityDate, DurationMinutes = form.DurationMinutes, OutcomeCode = form.OutcomeCode, IsCompleted = form.IsCompleted, ModifiedByUserId = _userId };
 
-        builder.OpenElement(0, "div");
-        builder.AddAttribute(1, "class", "text-danger");
-        builder.AddContent(2, error);
-        builder.CloseElement();
-    };
-
-    private sealed record LeadOption(Guid Id, string Name, string Company)
+    private static IEnumerable<BreakdownRow> BuildBreakdown(IEnumerable<(string Label, int Count)> rows)
     {
-        public string Display => string.IsNullOrWhiteSpace(Company) || Company == "—" ? Name : $"{Name} — {Company}";
+        var list = rows.OrderByDescending(x => x.Count).ToList();
+        var max = Math.Max(1, list.Select(x => x.Count).DefaultIfEmpty(1).Max());
+        return list.Select(x => new BreakdownRow(x.Label, x.Count, (double)x.Count / max * 100));
     }
+
+    private async Task ShowToastAsync(string message, string kind = "info")
+    {
+        _toastCts?.Cancel(); _toastCts?.Dispose(); _toastCts = new CancellationTokenSource();
+        _toastMessage = message.Length <= 120 ? message : $"{message[..117]}..."; _toastKind = ToastKind(kind); _toastVisible = true; StateHasChanged();
+        try { await Task.Delay(_toastKind == "danger" ? 10000 : 6500, _toastCts.Token); _toastVisible = false; await InvokeAsync(StateHasChanged); } catch (TaskCanceledException) { }
+    }
+
+    private void HideToast() { _toastCts?.Cancel(); _toastVisible = false; }
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : value.Contains("success", StringComparison.OrdinalIgnoreCase) ? "success" : "info";
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _userId = context.UserId; }
+    private static bool Contains(string value, string term) => value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static bool IsOverdue(LeadActivityDto item) => !item.IsCompleted && item.ActivityDate.Date < DateTime.Today;
+    private static string CssKey(string value) => value.ToLowerInvariant().Replace(" ", "-");
+    private static string TypeIcon(string type) => type switch { "Call" => "bi-telephone-fill", "Email" => "bi-envelope-fill", "Meeting" => "bi-calendar-event-fill", "Task" => "bi-check2-square", "Note" => "bi-sticky-fill", _ => "bi-lightning" };
+    private static string StatusClass(LeadActivityDto item) => item.IsCompleted ? "la-status la-status-completed" : IsOverdue(item) ? "la-status la-status-overdue" : "la-status la-status-open";
+    private static string StatusDotClass(LeadActivityDto item) => item.IsCompleted ? "la-dot-completed" : IsOverdue(item) ? "la-dot-overdue" : "la-dot-open";
+    private string RowClass(LeadActivityDto item) => _detail?.ActivityId == item.ActivityId ? "la-row-selected" : IsOverdue(item) ? "la-row-overdue" : item.IsCompleted ? "la-row-closed" : string.Empty;
+    private string MetricCardClass(MetricCard metric) => $"la-kpi-card {metric.Tone} {(_kpiFilter == metric.Filter && !string.IsNullOrWhiteSpace(metric.Filter) ? "la-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewDef view) => _view == view.Id ? "la-view-btn la-view-btn-active" : "la-view-btn";
+
+    private sealed record ViewDef(string Id, string Label, string Icon);
+    private sealed record MetricCard(string Label, string Value, string Caption, string Icon, string Tone, string Filter, string Tooltip);
+    private sealed record LeadOption(Guid Id, string Name, string Company) { public string Display => string.IsNullOrWhiteSpace(Company) || Company == "—" ? Name : $"{Name} — {Company}"; }
+    private sealed record LeadSeed(string LeadNumber, string FirstName, string LastName, string AccountName, string Email, string Phone, string InterestedService);
+    private sealed record ActivitySeed(string Type, string Subject, string Outcome, string Notes, DateTime Date, int DurationMinutes, bool Completed);
+    private sealed record BreakdownRow(string Label, int Count, double Width);
+    private sealed record TrendPoint(string Label, int Count, double Height);
 
     private sealed class ActivityForm
     {
-        [Required]
+        [RequiredNonEmptyGuid]
         public Guid LeadId { get; set; }
-
         [Required, StringLength(50)]
         public string ActivityTypeCode { get; set; } = "Call";
-
         [Required, StringLength(200)]
         public string Subject { get; set; } = string.Empty;
-
-        public DateTime ActivityDate { get; set; } = DateTime.Now;
-
+        [Required]
+        public DateTime ActivityDate { get; set; } = DateTime.Today;
         [Range(0, 1440)]
         public int? DurationMinutes { get; set; }
-
         [StringLength(50)]
         public string? OutcomeCode { get; set; }
-
         [StringLength(2000)]
         public string? Notes { get; set; }
-
         public bool IsCompleted { get; set; }
     }
 
-    private class LV 
-    { 
-        public string Label { get; set; } = string.Empty;
-        public string Value { get; set; } = string.Empty;
-    }
-
-    async Task ResolveCurrentUserContextAsync()
+    private sealed class RequiredNonEmptyGuidAttribute : ValidationAttribute
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        public override bool IsValid(object? value) => value is Guid id && id != Guid.Empty;
+        public override string FormatErrorMessage(string name) => $"{name} is required.";
     }
 }

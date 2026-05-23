@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
 using Ams.Application.Features.AccountNotes;
+using Ams.Application.Features.AccountSegments;
 using Ams.Application.Features.Accounts;
 using Ams.Application.Features.BillingAccounts;
 using Ams.Application.Features.Billing;
@@ -12,6 +13,8 @@ using Ams.Application.Features.Tenants;
 using Ams.Application.Features.Compliance;
 using Ams.Application.Features.Contacts;
 using Ams.Application.Features.Documents;
+using Ams.Application.Features.Duplicates;
+using Ams.Application.Features.Enrichment;
 using Ams.Application.Features.Engagements;
 using Ams.Application.Features.Forecast;
 using Ams.Application.Features.Audit;
@@ -53,6 +56,7 @@ using Ams.Application.Features.Lobs;
 using Ams.Application.Features.Appetite;
 using Ams.Application.Features.Communications;
 using Ams.Application.Features.Submissions;
+using Ams.Application.Features.Workbench;
 
 namespace Ams.Web.Services;
 
@@ -98,6 +102,35 @@ public sealed partial class ApiClient
     {
         public Guid Id { get; set; }
         public string JsonData { get; set; } = string.Empty;
+    }
+
+    // -- My Workbench -----------------------------------------
+    public Task<MyWorkbenchDto?> GetMyWorkbenchAsync(Guid tenantId, Guid? userId = null, string? searchTerm = null, string? viewCode = null, string? priorityCode = null, string? statusCode = null, DateOnly? workDate = null, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/workbench?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&viewCode={Uri.EscapeDataString(viewCode ?? string.Empty)}&priorityCode={Uri.EscapeDataString(priorityCode ?? string.Empty)}&statusCode={Uri.EscapeDataString(statusCode ?? string.Empty)}";
+        if (userId.HasValue)
+        {
+            url += $"&userId={userId.Value}";
+        }
+
+        if (workDate.HasValue)
+        {
+            url += $"&workDate={workDate.Value:yyyy-MM-dd}";
+        }
+
+        return _httpClient.GetFromJsonAsync<MyWorkbenchDto>(url, cancellationToken);
+    }
+
+    public async Task SetMyWorkbenchTaskStatusAsync(Guid taskItemId, MyWorkbenchTaskStatusRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/workbench/tasks/{taskItemId}/status", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task SetMyWorkbenchNotificationReadAsync(Guid notificationId, MyWorkbenchNotificationStatusRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/workbench/notifications/{notificationId}/read", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
     }
 
     // -- Agency Dashboard -------------------------------------
@@ -909,6 +942,70 @@ public sealed partial class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
+    // -- CRM Duplicate Management ------------------------------
+    public Task<PagedResult<DuplicateGroupDto>?> SearchDuplicatesAsync(DuplicateSearchRequest request, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<DuplicateGroupDto>>($"api/duplicates?tenantId={request.TenantId}&entityType={Uri.EscapeDataString(request.EntityType ?? string.Empty)}&searchTerm={Uri.EscapeDataString(request.SearchTerm ?? string.Empty)}&confidenceBand={Uri.EscapeDataString(request.ConfidenceBand ?? string.Empty)}&statusCode={Uri.EscapeDataString(request.StatusCode ?? string.Empty)}&pageNumber={request.PageNumber}&pageSize={request.PageSize}", cancellationToken);
+
+    public async Task<PagedResult<DuplicateGroupDto>?> ScanDuplicatesAsync(DuplicateScanRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/duplicates/scan", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<PagedResult<DuplicateGroupDto>>(cancellationToken: cancellationToken);
+    }
+
+    public async Task SetDuplicatePrimaryAsync(Guid groupId, DuplicateSetPrimaryRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/duplicates/{groupId}/primary", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task MergeDuplicateGroupAsync(Guid groupId, DuplicateResolveRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/duplicates/{groupId}/merge", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task DismissDuplicateGroupAsync(Guid groupId, DuplicateResolveRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/duplicates/{groupId}/dismiss", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task BulkMergeDuplicateGroupsAsync(DuplicateBulkResolveRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync("api/duplicates/bulk-merge", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task BulkDismissDuplicateGroupsAsync(DuplicateBulkResolveRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync("api/duplicates/bulk-dismiss", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    // -- CRM Data Enrichment -----------------------------------
+    public Task<EnrichmentWorkspaceDto?> GetEnrichmentWorkspaceAsync(EnrichmentSearchRequest request, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<EnrichmentWorkspaceDto>($"api/enrichment?tenantId={request.TenantId}&searchTerm={Uri.EscapeDataString(request.SearchTerm ?? string.Empty)}&providerStatus={Uri.EscapeDataString(request.ProviderStatus ?? string.Empty)}&jobStatus={Uri.EscapeDataString(request.JobStatus ?? string.Empty)}&entityType={Uri.EscapeDataString(request.EntityType ?? string.Empty)}", cancellationToken);
+
+    public async Task ConfigureEnrichmentProviderAsync(Guid providerId, EnrichmentProviderConfigRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/enrichment/providers/{providerId}/configuration", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task SetEnrichmentProviderStatusAsync(Guid providerId, EnrichmentProviderStatusRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/enrichment/providers/{providerId}/status", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task<EnrichmentJobDto?> RunEnrichmentAsync(EnrichmentRunRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/enrichment/run", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<EnrichmentJobDto>(cancellationToken: cancellationToken);
+    }
+
     public Task<IReadOnlyList<LeadCampaignEnrollmentDto>?> GetLeadCampaignsAsync(Guid leadId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<LeadCampaignEnrollmentDto>>($"api/leads/{leadId}/campaigns", cancellationToken);
 
@@ -1020,6 +1117,60 @@ public sealed partial class ApiClient
     // -- Account Segments -------------------------------------
     public Task<PagedResult<AccountSegmentDto>?> SearchAccountSegmentsAsync(string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<AccountSegmentDto>>($"api/client/segments?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public async Task<Guid> CreateAccountSegmentAsync(CreateAccountSegmentRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/client/segments", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task UpdateAccountSegmentAsync(Guid id, UpdateAccountSegmentRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/client/segments/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteAccountSegmentAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/client/segments/{id}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public Task<PagedResult<AccountSegmentRuleDto>?> SearchAccountSegmentRulesAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<AccountSegmentRuleDto>>($"api/client/segment-rules?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public async Task<Guid> CreateAccountSegmentRuleAsync(CreateAccountSegmentRuleRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/client/segment-rules", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result?.Id ?? Guid.Empty;
+    }
+
+    public async Task UpdateAccountSegmentRuleAsync(Guid id, UpdateAccountSegmentRuleRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/client/segment-rules/{id}", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task DeleteAccountSegmentRuleAsync(Guid id, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/client/segment-rules/{id}?modifiedByUserId={modifiedByUserId}", cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task RecalculateAccountSegmentRulesAsync(Guid tenantId, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"api/client/segment-rules/recalculate?tenantId={tenantId}&modifiedByUserId={modifiedByUserId}", null, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task RecalculateAccountSegmentRuleAsync(Guid tenantId, Guid id, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"api/client/segment-rules/{id}/recalculate?tenantId={tenantId}&modifiedByUserId={modifiedByUserId}", null, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
 
     // -- Account Ownership ------------------------------------
     public Task<PagedResult<AccountOwnerHistoryDto>?> SearchAccountOwnershipAsync(Guid tenantId, Guid? accountId = null, string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)

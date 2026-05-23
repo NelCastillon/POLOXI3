@@ -168,6 +168,10 @@ public sealed class DatabaseMigrator
         new("0135_DMS_DocumentException_CreateSeed", Migration0135_DmsDocumentExceptionCreateSeed),
         new("0136_DMS_DocumentPacket_CreateSeed", Migration0136_DmsDocumentPacketCreateSeed),
         new("0137_AuditLog_CreateSeed", Migration0137_AuditLogCreateSeed),
+        new("0138_CRM_SegmentationRule_SchemaSync_Seed", Migration0138_CrmSegmentationRuleSchemaSyncSeed),
+        new("0139_CRM_DuplicateManagement_Create", Migration0139_CrmDuplicateManagementCreate),
+        new("0140_CRM_Enrichment_CreateSeed", Migration0140_CrmEnrichmentCreateSeed),
+        new("0141_OPS_WorkbenchQuickLink_CreateSeed", Migration0141_OpsWorkbenchQuickLinkCreateSeed),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -6865,5 +6869,510 @@ SELECT NEWID(), d.DocumentPacketId, NULL, d.DocumentName, d.DocumentType, d.IsRe
 FROM @Docs d
 WHERE EXISTS (SELECT 1 FROM DMS.DocumentPacket p WHERE p.DocumentPacketId = d.DocumentPacketId AND p.IsDeleted = 0)
   AND NOT EXISTS (SELECT 1 FROM DMS.DocumentPacketDocument x WHERE x.DocumentPacketId = d.DocumentPacketId AND x.DocumentName = d.DocumentName AND x.IsDeleted = 0);
+";
+
+    private const string Migration0138_CrmSegmentationRuleSchemaSyncSeed = @"
+IF SCHEMA_ID(N'CRM') IS NULL EXEC(N'CREATE SCHEMA CRM');
+
+IF OBJECT_ID(N'CRM.SegmentationRule', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.SegmentationRule
+    (
+        RuleId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CRM_SegmentationRule PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SegmentId UNIQUEIDENTIFIER NULL,
+        SegmentCode NVARCHAR(80) NOT NULL,
+        RuleCode NVARCHAR(80) NOT NULL,
+        RuleName NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        CriteriaJson NVARCHAR(4000) NOT NULL CONSTRAINT DF_SegmentationRule_CriteriaJson DEFAULT N'[]',
+        LogicConnector NVARCHAR(10) NOT NULL CONSTRAINT DF_SegmentationRule_LogicConnector DEFAULT N'AND',
+        Priority INT NOT NULL CONSTRAINT DF_SegmentationRule_Priority DEFAULT 10,
+        RunOnSchedule BIT NOT NULL CONSTRAINT DF_SegmentationRule_RunOnSchedule DEFAULT 0,
+        AccountsMatched INT NOT NULL CONSTRAINT DF_SegmentationRule_AccountsMatched DEFAULT 0,
+        AccuracyPercent DECIMAL(5,2) NOT NULL CONSTRAINT DF_SegmentationRule_AccuracyPercent DEFAULT 0,
+        LastRunDateUtc DATETIME2 NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_SegmentationRule_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SegmentationRule_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SegmentationRule_IsDeleted DEFAULT 0
+    );
+END
+ELSE
+BEGIN
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'SegmentId') IS NULL ALTER TABLE CRM.SegmentationRule ADD SegmentId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'SegmentCode') IS NULL ALTER TABLE CRM.SegmentationRule ADD SegmentCode NVARCHAR(80) NULL;
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'RuleCode') IS NULL ALTER TABLE CRM.SegmentationRule ADD RuleCode NVARCHAR(80) NULL;
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'RuleName') IS NULL ALTER TABLE CRM.SegmentationRule ADD RuleName NVARCHAR(200) NULL;
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'Description') IS NULL ALTER TABLE CRM.SegmentationRule ADD Description NVARCHAR(500) NULL;
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'CriteriaJson') IS NULL ALTER TABLE CRM.SegmentationRule ADD CriteriaJson NVARCHAR(4000) NULL;
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'LogicConnector') IS NULL ALTER TABLE CRM.SegmentationRule ADD LogicConnector NVARCHAR(10) NULL;
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'Priority') IS NULL ALTER TABLE CRM.SegmentationRule ADD Priority INT NULL;
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'RunOnSchedule') IS NULL ALTER TABLE CRM.SegmentationRule ADD RunOnSchedule BIT NULL;
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'AccountsMatched') IS NULL ALTER TABLE CRM.SegmentationRule ADD AccountsMatched INT NULL;
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'AccuracyPercent') IS NULL ALTER TABLE CRM.SegmentationRule ADD AccuracyPercent DECIMAL(5,2) NULL;
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'LastRunDateUtc') IS NULL ALTER TABLE CRM.SegmentationRule ADD LastRunDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'IsActive') IS NULL ALTER TABLE CRM.SegmentationRule ADD IsActive BIT NULL;
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'CreatedDateUtc') IS NULL ALTER TABLE CRM.SegmentationRule ADD CreatedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'CreatedByUserId') IS NULL ALTER TABLE CRM.SegmentationRule ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.SegmentationRule ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.SegmentationRule ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'IsDeleted') IS NULL ALTER TABLE CRM.SegmentationRule ADD IsDeleted BIT NULL;
+
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'Field') IS NOT NULL ALTER TABLE CRM.SegmentationRule ALTER COLUMN Field NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'Operator') IS NOT NULL ALTER TABLE CRM.SegmentationRule ALTER COLUMN Operator NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'Value') IS NOT NULL ALTER TABLE CRM.SegmentationRule ALTER COLUMN Value NVARCHAR(500) NULL;
+
+    EXEC sp_executesql N'
+    UPDATE CRM.SegmentationRule
+    SET SegmentCode = COALESCE(SegmentCode, N''VIP''),
+        RuleCode = COALESCE(RuleCode, CONCAT(N''SEG-'', LEFT(CONVERT(NVARCHAR(36), RuleId), 8))),
+        RuleName = COALESCE(RuleName, N''Segmentation Rule''),
+        CriteriaJson = COALESCE(CriteriaJson, N''[]''),
+        LogicConnector = COALESCE(LogicConnector, N''AND''),
+        Priority = COALESCE(Priority, 10),
+        RunOnSchedule = COALESCE(RunOnSchedule, 1),
+        AccountsMatched = COALESCE(AccountsMatched, 0),
+        AccuracyPercent = COALESCE(AccuracyPercent, 0),
+        IsActive = COALESCE(IsActive, 1),
+        CreatedDateUtc = COALESCE(CreatedDateUtc, SYSUTCDATETIME()),
+        IsDeleted = COALESCE(IsDeleted, 0);';
+
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'Field') IS NOT NULL AND COL_LENGTH(N'CRM.SegmentationRule', N'Operator') IS NOT NULL
+    BEGIN
+        EXEC sp_executesql N'
+        UPDATE CRM.SegmentationRule
+        SET RuleName = CASE WHEN RuleName = N''Segmentation Rule'' THEN CONCAT(COALESCE(Field, N''Segment''), N'' '', COALESCE(Operator, N''Rule'')) ELSE RuleName END,
+            CriteriaJson = CASE WHEN CriteriaJson = N''[]'' THEN CONCAT(N''[{""Field"":""'', COALESCE(Field, N''Industry''), N''"",""Operator"":""'', COALESCE(Operator, N''Equals''), N''"",""Value"":""'', COALESCE(Value, N''''), N''"",""Points"":25}]'') ELSE CriteriaJson END;';
+    END
+
+    IF COL_LENGTH(N'CRM.SegmentationRule', N'SortOrder') IS NOT NULL
+    BEGIN
+        EXEC sp_executesql N'
+        UPDATE CRM.SegmentationRule
+        SET Priority = COALESCE(Priority, SortOrder, 10);';
+    END
+
+    ALTER TABLE CRM.SegmentationRule ALTER COLUMN SegmentCode NVARCHAR(80) NOT NULL;
+    ALTER TABLE CRM.SegmentationRule ALTER COLUMN RuleCode NVARCHAR(80) NOT NULL;
+    ALTER TABLE CRM.SegmentationRule ALTER COLUMN RuleName NVARCHAR(200) NOT NULL;
+    ALTER TABLE CRM.SegmentationRule ALTER COLUMN CriteriaJson NVARCHAR(4000) NOT NULL;
+    ALTER TABLE CRM.SegmentationRule ALTER COLUMN LogicConnector NVARCHAR(10) NOT NULL;
+    ALTER TABLE CRM.SegmentationRule ALTER COLUMN Priority INT NOT NULL;
+    ALTER TABLE CRM.SegmentationRule ALTER COLUMN RunOnSchedule BIT NOT NULL;
+    ALTER TABLE CRM.SegmentationRule ALTER COLUMN AccountsMatched INT NOT NULL;
+    ALTER TABLE CRM.SegmentationRule ALTER COLUMN AccuracyPercent DECIMAL(5,2) NOT NULL;
+    ALTER TABLE CRM.SegmentationRule ALTER COLUMN IsActive BIT NOT NULL;
+    ALTER TABLE CRM.SegmentationRule ALTER COLUMN CreatedDateUtc DATETIME2 NOT NULL;
+    ALTER TABLE CRM.SegmentationRule ALTER COLUMN IsDeleted BIT NOT NULL;
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.SegmentationRule') AND name = N'IX_SegmentationRule_TenantActive')
+    EXEC(N'CREATE INDEX IX_SegmentationRule_TenantActive ON CRM.SegmentationRule(TenantId, IsActive, IsDeleted, Priority, CreatedDateUtc DESC);');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.SegmentationRule') AND name = N'IX_SegmentationRule_TenantCode')
+    EXEC(N'CREATE UNIQUE INDEX IX_SegmentationRule_TenantCode ON CRM.SegmentationRule(TenantId, RuleCode) WHERE IsDeleted = 0;');
+
+DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+DECLARE @AdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+
+CREATE TABLE #SegmentationRuleSeedRules
+(
+    RuleId UNIQUEIDENTIFIER,
+    SegmentCode NVARCHAR(80),
+    RuleCode NVARCHAR(80),
+    RuleName NVARCHAR(200),
+    Description NVARCHAR(500),
+    CriteriaJson NVARCHAR(4000),
+    Priority INT,
+    RunOnSchedule BIT
+);
+
+INSERT INTO #SegmentationRuleSeedRules VALUES
+('c1380000-0000-0000-0000-000000000001', N'VIP', N'VIP-ENTERPRISE', N'VIP Enterprise Clients', N'Automatically identify high-value enterprise relationships for focused retention and executive outreach.', N'[{""Field"":""AnnualRevenue"",""Operator"":""GreaterThan"",""Value"":""10000000"",""Points"":45},{""Field"":""LifecycleStage"",""Operator"":""Equals"",""Value"":""Client"",""Points"":20}]', 1, 1),
+('c1380000-0000-0000-0000-000000000002', N'STANDARD', N'MIDMARKET-GROWTH', N'Mid-Market Growth Segment', N'Surface growing mid-market accounts that are ready for advisory, cross-sell, and rounding workflows.', N'[{""Field"":""AnnualRevenue"",""Operator"":""GreaterThan"",""Value"":""1000000"",""Points"":25},{""Field"":""AnnualRevenue"",""Operator"":""LessThan"",""Value"":""10000000"",""Points"":15}]', 2, 1),
+('c1380000-0000-0000-0000-000000000003', N'TECH', N'TECH-INDUSTRY', N'Technology Industry Focus', N'Group technology accounts for targeted cyber, professional liability, and renewal campaigns.', N'[{""Field"":""Industry"",""Operator"":""Contains"",""Value"":""Technology"",""Points"":50}]', 3, 0),
+('c1380000-0000-0000-0000-000000000004', N'RETAIL', N'RETAIL-SERVICE', N'Retail and Service Accounts', N'Identify retail and service-sector accounts for package policy and loss-control workflows.', N'[{""Field"":""Industry"",""Operator"":""Contains"",""Value"":""Retail"",""Points"":35}]', 4, 0);
+
+IF OBJECT_ID(N'Client.AccountSegment', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Client.AccountSegment (SegmentId, TenantId, SegmentCode, SegmentName, Description, IsActive, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), @TenantId, r.SegmentCode, r.RuleName, r.Description, 1, SYSUTCDATETIME(), 0
+    FROM #SegmentationRuleSeedRules r
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM Client.AccountSegment s
+        WHERE s.TenantId = @TenantId
+          AND s.SegmentCode = r.SegmentCode
+          AND s.IsDeleted = 0
+    );
+END
+
+EXEC sp_executesql N'
+INSERT INTO CRM.SegmentationRule
+(RuleId, TenantId, SegmentId, SegmentCode, RuleCode, RuleName, Description, CriteriaJson, LogicConnector, Priority, RunOnSchedule, AccountsMatched, AccuracyPercent, LastRunDateUtc, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT r.RuleId,
+       @TenantId,
+       COALESCE(s.SegmentId, r.RuleId),
+       r.SegmentCode,
+       r.RuleCode,
+       r.RuleName,
+       r.Description,
+       r.CriteriaJson,
+       N''AND'',
+       r.Priority,
+       r.RunOnSchedule,
+       0,
+       0,
+       NULL,
+       1,
+       SYSUTCDATETIME(),
+       @AdminUserId,
+       0
+FROM #SegmentationRuleSeedRules r
+LEFT JOIN Client.AccountSegment s ON s.TenantId = @TenantId AND s.SegmentCode = r.SegmentCode AND s.IsDeleted = 0
+WHERE NOT EXISTS (SELECT 1 FROM CRM.SegmentationRule x WHERE x.TenantId = @TenantId AND x.RuleCode = r.RuleCode AND x.IsDeleted = 0);',
+N'@TenantId UNIQUEIDENTIFIER, @AdminUserId UNIQUEIDENTIFIER',
+@TenantId = @TenantId,
+@AdminUserId = @AdminUserId;
+
+EXEC sp_executesql N'
+UPDATE ruleRow
+SET AccountsMatched = counts.AccountsMatched,
+    AccuracyPercent = CASE WHEN counts.AccountsMatched >= 100 THEN 94 WHEN counts.AccountsMatched >= 25 THEN 88 WHEN counts.AccountsMatched > 0 THEN 81 ELSE 0 END,
+    LastRunDateUtc = SYSUTCDATETIME()
+FROM CRM.SegmentationRule ruleRow
+OUTER APPLY (
+    SELECT COUNT(1) AS AccountsMatched
+    FROM Client.Account accountRow
+    WHERE accountRow.TenantId = ruleRow.TenantId
+      AND accountRow.IsDeleted = 0
+      AND accountRow.SegmentCode = ruleRow.SegmentCode
+) counts
+WHERE ruleRow.TenantId = @TenantId AND ruleRow.IsDeleted = 0;',
+N'@TenantId UNIQUEIDENTIFIER',
+@TenantId = @TenantId;
+
+DROP TABLE #SegmentationRuleSeedRules;
+";
+
+    private const string Migration0139_CrmDuplicateManagementCreate = @"
+IF SCHEMA_ID(N'CRM') IS NULL EXEC(N'CREATE SCHEMA CRM');
+
+IF OBJECT_ID(N'CRM.DuplicateGroup', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.DuplicateGroup
+    (
+        GroupId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CRM_DuplicateGroup PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        EntityType NVARCHAR(40) NOT NULL,
+        MatchKey NVARCHAR(500) NOT NULL,
+        MatchReasons NVARCHAR(500) NOT NULL,
+        ConfidenceScore INT NOT NULL CONSTRAINT DF_DuplicateGroup_Confidence DEFAULT 0,
+        StatusCode NVARCHAR(40) NOT NULL CONSTRAINT DF_DuplicateGroup_Status DEFAULT N'Open',
+        PrimaryRecordId UNIQUEIDENTIFIER NULL,
+        PrimaryName NVARCHAR(300) NOT NULL CONSTRAINT DF_DuplicateGroup_PrimaryName DEFAULT N'',
+        DetectedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DuplicateGroup_Detected DEFAULT SYSUTCDATETIME(),
+        ResolvedDateUtc DATETIME2 NULL,
+        ResolvedByUserId UNIQUEIDENTIFIER NULL,
+        ResolutionNotes NVARCHAR(500) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DuplicateGroup_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DuplicateGroup_IsDeleted DEFAULT 0
+    );
+END
+ELSE
+BEGIN
+    IF COL_LENGTH(N'CRM.DuplicateGroup', N'TenantId') IS NULL ALTER TABLE CRM.DuplicateGroup ADD TenantId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.DuplicateGroup', N'EntityType') IS NULL ALTER TABLE CRM.DuplicateGroup ADD EntityType NVARCHAR(40) NULL;
+    IF COL_LENGTH(N'CRM.DuplicateGroup', N'MatchKey') IS NULL ALTER TABLE CRM.DuplicateGroup ADD MatchKey NVARCHAR(500) NULL;
+    IF COL_LENGTH(N'CRM.DuplicateGroup', N'MatchReasons') IS NULL ALTER TABLE CRM.DuplicateGroup ADD MatchReasons NVARCHAR(500) NULL;
+    IF COL_LENGTH(N'CRM.DuplicateGroup', N'ConfidenceScore') IS NULL ALTER TABLE CRM.DuplicateGroup ADD ConfidenceScore INT NULL;
+    IF COL_LENGTH(N'CRM.DuplicateGroup', N'StatusCode') IS NULL ALTER TABLE CRM.DuplicateGroup ADD StatusCode NVARCHAR(40) NULL;
+    IF COL_LENGTH(N'CRM.DuplicateGroup', N'PrimaryRecordId') IS NULL ALTER TABLE CRM.DuplicateGroup ADD PrimaryRecordId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.DuplicateGroup', N'PrimaryName') IS NULL ALTER TABLE CRM.DuplicateGroup ADD PrimaryName NVARCHAR(300) NULL;
+    IF COL_LENGTH(N'CRM.DuplicateGroup', N'DetectedDateUtc') IS NULL ALTER TABLE CRM.DuplicateGroup ADD DetectedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'CRM.DuplicateGroup', N'ResolvedDateUtc') IS NULL ALTER TABLE CRM.DuplicateGroup ADD ResolvedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'CRM.DuplicateGroup', N'ResolvedByUserId') IS NULL ALTER TABLE CRM.DuplicateGroup ADD ResolvedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.DuplicateGroup', N'ResolutionNotes') IS NULL ALTER TABLE CRM.DuplicateGroup ADD ResolutionNotes NVARCHAR(500) NULL;
+    IF COL_LENGTH(N'CRM.DuplicateGroup', N'CreatedDateUtc') IS NULL ALTER TABLE CRM.DuplicateGroup ADD CreatedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'CRM.DuplicateGroup', N'CreatedByUserId') IS NULL ALTER TABLE CRM.DuplicateGroup ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.DuplicateGroup', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.DuplicateGroup ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'CRM.DuplicateGroup', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.DuplicateGroup ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.DuplicateGroup', N'IsDeleted') IS NULL ALTER TABLE CRM.DuplicateGroup ADD IsDeleted BIT NULL;
+
+    EXEC sp_executesql N'
+    UPDATE CRM.DuplicateGroup
+    SET TenantId = COALESCE(TenantId, ''00000000-0000-0000-0000-000000000001''),
+        EntityType = COALESCE(EntityType, N''Account''),
+        MatchKey = COALESCE(MatchKey, CONCAT(N''Legacy:'', CONVERT(NVARCHAR(36), GroupId))),
+        MatchReasons = COALESCE(MatchReasons, N''Legacy duplicate group''),
+        ConfidenceScore = COALESCE(ConfidenceScore, 0),
+        StatusCode = COALESCE(StatusCode, N''Open''),
+        PrimaryName = COALESCE(PrimaryName, N''''),
+        DetectedDateUtc = COALESCE(DetectedDateUtc, SYSUTCDATETIME()),
+        CreatedDateUtc = COALESCE(CreatedDateUtc, SYSUTCDATETIME()),
+        IsDeleted = COALESCE(IsDeleted, 0);';
+
+    ALTER TABLE CRM.DuplicateGroup ALTER COLUMN TenantId UNIQUEIDENTIFIER NOT NULL;
+    ALTER TABLE CRM.DuplicateGroup ALTER COLUMN EntityType NVARCHAR(40) NOT NULL;
+    ALTER TABLE CRM.DuplicateGroup ALTER COLUMN MatchKey NVARCHAR(500) NOT NULL;
+    ALTER TABLE CRM.DuplicateGroup ALTER COLUMN MatchReasons NVARCHAR(500) NOT NULL;
+    ALTER TABLE CRM.DuplicateGroup ALTER COLUMN ConfidenceScore INT NOT NULL;
+    ALTER TABLE CRM.DuplicateGroup ALTER COLUMN StatusCode NVARCHAR(40) NOT NULL;
+    ALTER TABLE CRM.DuplicateGroup ALTER COLUMN PrimaryName NVARCHAR(300) NOT NULL;
+    ALTER TABLE CRM.DuplicateGroup ALTER COLUMN DetectedDateUtc DATETIME2 NOT NULL;
+    ALTER TABLE CRM.DuplicateGroup ALTER COLUMN CreatedDateUtc DATETIME2 NOT NULL;
+    ALTER TABLE CRM.DuplicateGroup ALTER COLUMN IsDeleted BIT NOT NULL;
+END
+
+IF OBJECT_ID(N'CRM.DuplicateRecord', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.DuplicateRecord
+    (
+        DuplicateRecordId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CRM_DuplicateRecord PRIMARY KEY DEFAULT NEWID(),
+        GroupId UNIQUEIDENTIFIER NOT NULL,
+        RecordId UNIQUEIDENTIFIER NOT NULL,
+        RecordName NVARCHAR(300) NOT NULL,
+        IsPrimary BIT NOT NULL CONSTRAINT DF_DuplicateRecord_IsPrimary DEFAULT 0,
+        SourceSystem NVARCHAR(80) NOT NULL CONSTRAINT DF_DuplicateRecord_Source DEFAULT N'CRM',
+        CreatedDateUtc DATETIME2 NULL,
+        FieldValuesJson NVARCHAR(MAX) NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DuplicateRecord_IsDeleted DEFAULT 0
+    );
+END
+ELSE
+BEGIN
+    IF COL_LENGTH(N'CRM.DuplicateRecord', N'GroupId') IS NULL ALTER TABLE CRM.DuplicateRecord ADD GroupId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.DuplicateRecord', N'RecordId') IS NULL ALTER TABLE CRM.DuplicateRecord ADD RecordId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.DuplicateRecord', N'RecordName') IS NULL ALTER TABLE CRM.DuplicateRecord ADD RecordName NVARCHAR(300) NULL;
+    IF COL_LENGTH(N'CRM.DuplicateRecord', N'IsPrimary') IS NULL ALTER TABLE CRM.DuplicateRecord ADD IsPrimary BIT NULL;
+    IF COL_LENGTH(N'CRM.DuplicateRecord', N'SourceSystem') IS NULL ALTER TABLE CRM.DuplicateRecord ADD SourceSystem NVARCHAR(80) NULL;
+    IF COL_LENGTH(N'CRM.DuplicateRecord', N'CreatedDateUtc') IS NULL ALTER TABLE CRM.DuplicateRecord ADD CreatedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'CRM.DuplicateRecord', N'FieldValuesJson') IS NULL ALTER TABLE CRM.DuplicateRecord ADD FieldValuesJson NVARCHAR(MAX) NULL;
+    IF COL_LENGTH(N'CRM.DuplicateRecord', N'IsDeleted') IS NULL ALTER TABLE CRM.DuplicateRecord ADD IsDeleted BIT NULL;
+
+    EXEC sp_executesql N'
+    UPDATE CRM.DuplicateRecord
+    SET GroupId = COALESCE(GroupId, ''00000000-0000-0000-0000-000000000000''),
+        RecordId = COALESCE(RecordId, DuplicateRecordId),
+        RecordName = COALESCE(RecordName, N''Duplicate record''),
+        IsPrimary = COALESCE(IsPrimary, 0),
+        SourceSystem = COALESCE(SourceSystem, N''CRM''),
+        IsDeleted = COALESCE(IsDeleted, 0);';
+
+    ALTER TABLE CRM.DuplicateRecord ALTER COLUMN GroupId UNIQUEIDENTIFIER NOT NULL;
+    ALTER TABLE CRM.DuplicateRecord ALTER COLUMN RecordId UNIQUEIDENTIFIER NOT NULL;
+    ALTER TABLE CRM.DuplicateRecord ALTER COLUMN RecordName NVARCHAR(300) NOT NULL;
+    ALTER TABLE CRM.DuplicateRecord ALTER COLUMN IsPrimary BIT NOT NULL;
+    ALTER TABLE CRM.DuplicateRecord ALTER COLUMN SourceSystem NVARCHAR(80) NOT NULL;
+    ALTER TABLE CRM.DuplicateRecord ALTER COLUMN IsDeleted BIT NOT NULL;
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.DuplicateGroup') AND name = N'IX_DuplicateGroup_TenantEntityStatus')
+    CREATE INDEX IX_DuplicateGroup_TenantEntityStatus ON CRM.DuplicateGroup(TenantId, EntityType, StatusCode, IsDeleted, ConfidenceScore DESC, DetectedDateUtc DESC);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.DuplicateGroup') AND name = N'IX_DuplicateGroup_MatchKey')
+    CREATE UNIQUE INDEX IX_DuplicateGroup_MatchKey ON CRM.DuplicateGroup(TenantId, EntityType, MatchKey) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.DuplicateRecord') AND name = N'IX_DuplicateRecord_Group')
+    CREATE INDEX IX_DuplicateRecord_Group ON CRM.DuplicateRecord(GroupId, IsDeleted, IsPrimary DESC);
+
+IF OBJECT_ID(N'dbo.AMS_DigitsOnly', N'FN') IS NULL
+BEGIN
+    EXEC(N'
+    CREATE FUNCTION dbo.AMS_DigitsOnly(@value NVARCHAR(4000))
+    RETURNS NVARCHAR(4000)
+    AS
+    BEGIN
+        DECLARE @result NVARCHAR(4000) = N'''';
+        DECLARE @i INT = 1;
+        WHILE @i <= LEN(COALESCE(@value, N''''))
+        BEGIN
+            IF SUBSTRING(@value, @i, 1) LIKE N''[0-9]'' SET @result += SUBSTRING(@value, @i, 1);
+            SET @i += 1;
+        END
+        RETURN @result;
+    END');
+END
+";
+
+    private const string Migration0140_CrmEnrichmentCreateSeed = @"
+IF SCHEMA_ID(N'CRM') IS NULL EXEC(N'CREATE SCHEMA CRM');
+
+IF OBJECT_ID(N'CRM.EnrichmentProvider', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.EnrichmentProvider
+    (
+        ProviderId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CRM_EnrichmentProvider PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ProviderCode NVARCHAR(80) NOT NULL,
+        ProviderName NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(500) NOT NULL CONSTRAINT DF_EnrichmentProvider_Description DEFAULT N'',
+        IconCssClass NVARCHAR(80) NOT NULL CONSTRAINT DF_EnrichmentProvider_Icon DEFAULT N'bi-plug',
+        StatusCode NVARCHAR(40) NOT NULL CONSTRAINT DF_EnrichmentProvider_Status DEFAULT N'Disconnected',
+        EnableAutoEnrich BIT NOT NULL CONSTRAINT DF_EnrichmentProvider_Auto DEFAULT 0,
+        AvailableFields NVARCHAR(1000) NOT NULL CONSTRAINT DF_EnrichmentProvider_Available DEFAULT N'',
+        SelectedFields NVARCHAR(1000) NOT NULL CONSTRAINT DF_EnrichmentProvider_Selected DEFAULT N'',
+        ConnectedDateUtc DATETIME2 NULL,
+        LastRunDateUtc DATETIME2 NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_EnrichmentProvider_Sort DEFAULT 0,
+        Notes NVARCHAR(500) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_EnrichmentProvider_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_EnrichmentProvider_IsDeleted DEFAULT 0
+    );
+END
+
+IF OBJECT_ID(N'CRM.EnrichmentJob', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.EnrichmentJob
+    (
+        JobId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CRM_EnrichmentJob PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ProviderId UNIQUEIDENTIFIER NULL,
+        JobName NVARCHAR(200) NOT NULL,
+        ProviderName NVARCHAR(200) NOT NULL,
+        TargetEntityType NVARCHAR(40) NOT NULL CONSTRAINT DF_EnrichmentJob_Target DEFAULT N'All',
+        StatusCode NVARCHAR(40) NOT NULL CONSTRAINT DF_EnrichmentJob_Status DEFAULT N'Completed',
+        RecordsRequested INT NOT NULL CONSTRAINT DF_EnrichmentJob_Requested DEFAULT 0,
+        RecordsEnriched INT NOT NULL CONSTRAINT DF_EnrichmentJob_Enriched DEFAULT 0,
+        RecordsFailed INT NOT NULL CONSTRAINT DF_EnrichmentJob_Failed DEFAULT 0,
+        SuccessRate DECIMAL(9,4) NOT NULL CONSTRAINT DF_EnrichmentJob_Success DEFAULT 0,
+        StartedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_EnrichmentJob_Started DEFAULT SYSUTCDATETIME(),
+        CompletedDateUtc DATETIME2 NULL,
+        Notes NVARCHAR(500) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_EnrichmentJob_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_EnrichmentJob_IsDeleted DEFAULT 0
+    );
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.EnrichmentProvider') AND name = N'IX_EnrichmentProvider_TenantCode')
+    CREATE UNIQUE INDEX IX_EnrichmentProvider_TenantCode ON CRM.EnrichmentProvider(TenantId, ProviderCode) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.EnrichmentJob') AND name = N'IX_EnrichmentJob_TenantStarted')
+    CREATE INDEX IX_EnrichmentJob_TenantStarted ON CRM.EnrichmentJob(TenantId, StartedDateUtc DESC, StatusCode, IsDeleted);
+
+DECLARE @TenantId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM Core.Tenant ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000001');
+DECLARE @AdminUserId UNIQUEIDENTIFIER = (SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId ORDER BY CreatedDateUtc);
+
+DECLARE @Providers TABLE
+(
+    ProviderCode NVARCHAR(80),
+    ProviderName NVARCHAR(200),
+    Description NVARCHAR(500),
+    IconCssClass NVARCHAR(80),
+    StatusCode NVARCHAR(40),
+    EnableAutoEnrich BIT,
+    AvailableFields NVARCHAR(1000),
+    SelectedFields NVARCHAR(1000),
+    SortOrder INT
+);
+
+INSERT INTO @Providers VALUES
+(N'ZOOMINFO', N'ZoomInfo', N'Real-time B2B database with company and contact intelligence.', N'bi-globe', N'Connected', 1, N'Company Size,Industry,Revenue,Website,Phone,CEO Name,Founded Year', N'Company Size,Industry,Revenue,Website', 10),
+(N'LINKEDIN', N'LinkedIn', N'Professional network data for contact and company verification.', N'bi-linkedin', N'Disconnected', 0, N'Job Title,Company,Experience,Education,LinkedIn URL,Endorsements', N'', 20),
+(N'APOLLO', N'Apollo.io', N'Sales intelligence platform with verified contact and company data.', N'bi-activity', N'Connected', 1, N'Email,Phone,Job Title,Company,Tech Stack,Funding Stage,Contact Intent', N'Email,Phone,Job Title,Company', 30),
+(N'HUNTER', N'Hunter.io', N'Email finder and verifier for B2B sales and marketing.', N'bi-envelope', N'Disconnected', 0, N'Email Address,Email Type,Confidence Score,Verification Status', N'', 40),
+(N'CLEARBIT', N'Clearbit', N'The API of record for B2B data enrichment.', N'bi-database', N'Connected', 0, N'Company Domain,Industry,Employees,Raised Funding,Tech Stack,Social Profiles', N'Company Domain,Industry,Employees', 50);
+
+INSERT INTO CRM.EnrichmentProvider
+(ProviderId, TenantId, ProviderCode, ProviderName, Description, IconCssClass, StatusCode, EnableAutoEnrich, AvailableFields, SelectedFields, ConnectedDateUtc, SortOrder, Notes, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @TenantId, p.ProviderCode, p.ProviderName, p.Description, p.IconCssClass, p.StatusCode, p.EnableAutoEnrich, p.AvailableFields, p.SelectedFields,
+       CASE WHEN p.StatusCode = N'Connected' THEN SYSUTCDATETIME() ELSE NULL END, p.SortOrder, N'Seeded enterprise enrichment provider.', SYSUTCDATETIME(), @AdminUserId, 0
+FROM @Providers p
+WHERE NOT EXISTS (SELECT 1 FROM CRM.EnrichmentProvider ep WHERE ep.TenantId = @TenantId AND ep.ProviderCode = p.ProviderCode AND ep.IsDeleted = 0);
+
+IF NOT EXISTS (SELECT 1 FROM CRM.EnrichmentJob WHERE TenantId = @TenantId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO CRM.EnrichmentJob
+    (JobId, TenantId, ProviderId, JobName, ProviderName, TargetEntityType, StatusCode, RecordsRequested, RecordsEnriched, RecordsFailed, SuccessRate, StartedDateUtc, CompletedDateUtc, Notes, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), @TenantId, ep.ProviderId, seed.JobName, ep.ProviderName, seed.TargetEntityType, seed.StatusCode, seed.RecordsRequested, seed.RecordsEnriched, seed.RecordsRequested - seed.RecordsEnriched,
+           CASE WHEN seed.RecordsRequested = 0 THEN 0 ELSE CAST(seed.RecordsEnriched AS DECIMAL(18,4)) / CAST(seed.RecordsRequested AS DECIMAL(18,4)) END,
+           DATEADD(DAY, -seed.DaysAgo, SYSUTCDATETIME()), DATEADD(HOUR, seed.DurationHours, DATEADD(DAY, -seed.DaysAgo, SYSUTCDATETIME())), N'Seeded enrichment job history.', SYSUTCDATETIME(), @AdminUserId, 0
+    FROM (VALUES
+        (N'ZOOMINFO', N'ZoomInfo - Company Data', N'Account', N'Completed', 1250, 1203, 5, 2),
+        (N'APOLLO', N'Apollo - Contact Verification', N'Contact', N'Completed', 892, 856, 3, 1),
+        (N'CLEARBIT', N'Clearbit - Tech Stack Analysis', N'Account', N'Completed', 450, 423, 1, 1),
+        (N'ZOOMINFO', N'ZoomInfo - Industry Classification', N'All', N'Completed', 3100, 3087, 10, 3)
+    ) seed(ProviderCode, JobName, TargetEntityType, StatusCode, RecordsRequested, RecordsEnriched, DaysAgo, DurationHours)
+    INNER JOIN CRM.EnrichmentProvider ep ON ep.TenantId = @TenantId AND ep.ProviderCode = seed.ProviderCode AND ep.IsDeleted = 0;
+END
+";
+
+    private const string Migration0141_OpsWorkbenchQuickLinkCreateSeed = @"
+IF SCHEMA_ID(N'OPS') IS NULL EXEC(N'CREATE SCHEMA OPS');
+
+IF OBJECT_ID(N'OPS.WorkbenchQuickLink', N'U') IS NULL
+BEGIN
+    CREATE TABLE OPS.WorkbenchQuickLink
+    (
+        QuickLinkId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_OPS_WorkbenchQuickLink PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LinkCode NVARCHAR(80) NOT NULL,
+        Label NVARCHAR(160) NOT NULL,
+        IconCssClass NVARCHAR(120) NOT NULL,
+        Url NVARCHAR(300) NOT NULL,
+        CategoryCode NVARCHAR(80) NOT NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_WorkbenchQuickLink_SortOrder DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_WorkbenchQuickLink_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_WorkbenchQuickLink_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_WorkbenchQuickLink_IsDeleted DEFAULT 0
+    );
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'OPS.WorkbenchQuickLink') AND name = N'IX_WorkbenchQuickLink_Code')
+    CREATE UNIQUE INDEX IX_WorkbenchQuickLink_Code ON OPS.WorkbenchQuickLink(TenantId, LinkCode) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'OPS.WorkbenchQuickLink') AND name = N'IX_WorkbenchQuickLink_Tenant')
+    CREATE INDEX IX_WorkbenchQuickLink_Tenant ON OPS.WorkbenchQuickLink(TenantId, IsDeleted, IsActive, SortOrder);
+
+DECLARE @TenantId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM Core.Tenant ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000001');
+
+DECLARE @Links TABLE
+(
+    LinkCode NVARCHAR(80),
+    Label NVARCHAR(160),
+    IconCssClass NVARCHAR(120),
+    Url NVARCHAR(300),
+    CategoryCode NVARCHAR(80),
+    SortOrder INT
+);
+
+INSERT INTO @Links VALUES
+(N'MY_TASKS', N'My Tasks', N'bi bi-check2-square', N'/workbench/tasks', N'Work', 10),
+(N'MY_CALENDAR', N'My Calendar', N'bi bi-calendar-event', N'/workbench/calendar', N'Work', 20),
+(N'MY_ACTIVITIES', N'My Activities', N'bi bi-activity', N'/workbench/activities', N'Work', 30),
+(N'PRODUCER_WORKBENCH', N'Producer Workbench', N'bi bi-briefcase', N'/workbench/producer', N'Role', 40),
+(N'CSR_WORKBENCH', N'CSR Workbench', N'bi bi-headset', N'/workbench/csr', N'Role', 50),
+(N'SERVICE_MANAGER', N'Service Manager', N'bi bi-kanban', N'/workbench/service-manager', N'Role', 60),
+(N'ACCOUNTING', N'Accounting', N'bi bi-calculator', N'/workbench/accounting', N'Role', 70),
+(N'MARKETING', N'Marketing', N'bi bi-megaphone', N'/workbench/marketing', N'Role', 80),
+(N'OPERATIONS', N'Operations', N'bi bi-diagram-3', N'/workbench/operations', N'Role', 90);
+
+INSERT INTO OPS.WorkbenchQuickLink
+(QuickLinkId, TenantId, LinkCode, Label, IconCssClass, Url, CategoryCode, SortOrder, IsActive, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), @TenantId, l.LinkCode, l.Label, l.IconCssClass, l.Url, l.CategoryCode, l.SortOrder, 1, SYSUTCDATETIME(), 0
+FROM @Links l
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM OPS.WorkbenchQuickLink q
+    WHERE q.TenantId = @TenantId
+      AND q.LinkCode = l.LinkCode
+      AND q.IsDeleted = 0
+);
 ";
 }

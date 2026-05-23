@@ -56,6 +56,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IRoleRepository, RoleRepository>();
         services.AddScoped<IContactRepository, ContactRepository>();
+        services.AddScoped<IDuplicateRepository, DuplicateRepository>();
+        services.AddScoped<IEnrichmentRepository, EnrichmentRepository>();
+        services.AddScoped<IMyWorkbenchRepository, MyWorkbenchRepository>();
         services.AddScoped<IEngagementRepository, EngagementRepository>();
         services.AddScoped<ITimeEntryRepository, TimeEntryRepository>();
         services.AddScoped<IExpenseRepository, ExpenseRepository>();
@@ -105,6 +108,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IUserService, UserService>();
         services.AddScoped<IRoleService, RoleService>();
         services.AddScoped<IContactService, ContactService>();
+        services.AddScoped<IDuplicateService, DuplicateService>();
+        services.AddScoped<IEnrichmentService, EnrichmentService>();
+        services.AddScoped<IMyWorkbenchService, MyWorkbenchService>();
         services.AddScoped<IEngagementService, EngagementService>();
         services.AddScoped<ITimeEntryService, TimeEntryService>();
         services.AddScoped<IExpenseService, ExpenseService>();
@@ -246,11 +252,13 @@ public static class ServiceCollectionExtensions
         // ── Client and Account engines ───────────────────────────────
         services.AddScoped<IAccountNoteRepository, AccountNoteRepository>();
         services.AddScoped<IAccountSegmentRepository, AccountSegmentRepository>();
+        services.AddScoped<IAccountSegmentRuleRepository, AccountSegmentRuleRepository>();
         services.AddScoped<IPortalInviteRepository, PortalInviteRepository>();
         services.AddScoped<IAccountOwnerHistoryRepository, AccountOwnerHistoryRepository>();
 
         services.AddScoped<IAccountNoteService, AccountNoteService>();
         services.AddScoped<IAccountSegmentService, AccountSegmentService>();
+        services.AddScoped<IAccountSegmentRuleService, AccountSegmentRuleService>();
         services.AddScoped<IPortalInviteService, PortalInviteService>();
         services.AddScoped<IAccountOwnerHistoryService, AccountOwnerHistoryService>();
 

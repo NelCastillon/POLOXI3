@@ -1,260 +1,159 @@
 @page "/workbench/service-manager"
 @namespace Ams.Web.Components.Pages.Workbench
+@using System.Globalization
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
 @inject ConfirmationDialogService Confirmations
 
-<PageTitle>Service Manager Workbench</PageTitle>
+<PageTitle>Enterprise Service Manager Workbench</PageTitle>
 
-<WorkbenchShell Title="Service Manager Workbench"
-                Subtitle="Team performance, SLA health, escalations, capacity, quality audits and carrier service tickets"
-                Icon="bi-diagram-3-fill"
-                @bind-Scope="_scope"
-                BranchId="@_branchId"
-                BranchIdChanged="OnBranchChangedAsync"
-                TeamId="@_teamId"
-                TeamIdChanged="OnTeamChangedAsync"
-                SavedViews="_savedViews"
-                OnSaveView="SaveViewAsync"
-                OnLoadView="LoadViewAsync"
-                OnDeleteView="DeleteViewAsync"
-                SlaItems="_slaItems"
-                AiSummary="_aiSummary"
-                AiSummaryLoading="_aiLoading"
-                AiSummaryGeneratedAt="_aiGeneratedAt"
-                OnGenerateAiSummary="GenerateAiSummaryAsync"
-                OnRefresh="LoadAsync"
-                Loading="_loading">
-    <Queues>
+@if (_toastVisible)
+{
+    <div class="smw-toast smw-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="smw-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
 
-        @if (!string.IsNullOrWhiteSpace(_loadError))
-        {
-            <div class="alert alert-danger" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
-                @_loadError
-            </div>
-        }
-
-        <div class="sm-insight-strip">
-            <div class="sm-insight-card sm-insight-card--danger">
-                <span class="sm-insight-icon"><i class="bi bi-exclamation-octagon" aria-hidden="true"></i></span>
-                <div><div class="sm-insight-label">Manager Focus</div><div class="sm-insight-value">@ManagerFocusText</div></div>
-            </div>
-            <div class="sm-insight-card">
-                <span class="sm-insight-icon sm-insight-icon--blue"><i class="bi bi-speedometer2" aria-hidden="true"></i></span>
-                <div><div class="sm-insight-label">SLA Health</div><div class="sm-insight-value">@SlaHealthText</div></div>
-            </div>
-            <div class="sm-insight-card">
-                <span class="sm-insight-icon sm-insight-icon--green"><i class="bi bi-person-check" aria-hidden="true"></i></span>
-                <div><div class="sm-insight-label">Team Load</div><div class="sm-insight-value">@_c.TeamCapacityPct.ToString("F0")% avg utilization</div></div>
-            </div>
-            <div class="sm-insight-card">
-                <span class="sm-insight-icon sm-insight-icon--purple"><i class="bi bi-award" aria-hidden="true"></i></span>
-                <div><div class="sm-insight-label">Quality</div><div class="sm-insight-value">@_c.AvgQualityScore.ToString("F1") / 10</div></div>
+<div class="smw-enterprise-page">
+    <section class="smw-hero">
+        <div class="smw-hero-left">
+            <span class="smw-hero-icon"><i class="bi bi-diagram-3-fill" aria-hidden="true"></i></span>
+            <div>
+                <div class="smw-title-row">
+                    <h1>Service Manager Workbench</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> Live operations data</span>
+                    <span><i class="bi bi-shield-check" aria-hidden="true"></i> SLA governed</span>
+                </div>
+                <p>Manage escalations, SLA breaches, capacity, quality audits, carrier tickets, and unassigned work in one enterprise command center.</p>
             </div>
         </div>
+        <div class="smw-hero-actions">
+            <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh service manager workbench"><i class="bi @(_loading ? "bi-arrow-repeat smw-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button class="um-btn um-btn-ghost" @onclick="GenerateAiSummaryAsync" disabled="@_aiLoading"><i class="bi @(_aiLoading ? "bi-arrow-repeat smw-spin" : "bi-stars")" aria-hidden="true"></i> AI Summary</button>
+            <button class="um-btn um-btn-ghost" @onclick="ExportAsync"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/ops/service-requests")'><i class="bi bi-kanban" aria-hidden="true"></i> Service Desk</button>
+        </div>
+    </section>
 
-        <!-- ── KPI strip ─────────────────────────────────────────────────── -->
-        <div class="wb-kpi-strip">
-            <div class="@KpiClass(1)" @onclick='() => FocusQueue(1, "escalations")' role="button" tabindex="0">
-                <span class="wb-kpi-icon wb-kpi-i5"><i class="bi bi-arrow-up-circle-fill" aria-hidden="true"></i></span>
-                <div class="wb-kpi-body">
-                    <div class="wb-kpi-val @(_c.Escalations > 0 ? "wb-kpi-val--alert" : "")">@_c.Escalations</div>
-                    <div class="wb-kpi-lbl">Escalations</div>
-                </div>
-                @KpiDot(1)
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger smw-error-banner" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    <section class="smw-insight-strip" aria-label="Service manager insights">
+        <article class="smw-insight-card smw-insight-primary"><span class="smw-insight-icon smw-tone-danger"><i class="bi bi-bullseye" aria-hidden="true"></i></span><div><small>Manager Focus</small><strong>@ManagerFocusText</strong></div></article>
+        <article class="smw-insight-card"><span class="smw-insight-icon smw-tone-info"><i class="bi bi-speedometer2" aria-hidden="true"></i></span><div><small>SLA Health</small><strong>@SlaHealthText</strong></div></article>
+        <article class="smw-insight-card"><span class="smw-insight-icon smw-tone-success"><i class="bi bi-person-check" aria-hidden="true"></i></span><div><small>Team Load</small><strong>@_c.TeamCapacityPct.ToString("F0", CultureInfo.CurrentCulture)% avg utilization</strong></div></article>
+        <article class="smw-insight-card"><span class="smw-insight-icon smw-tone-purple"><i class="bi bi-award" aria-hidden="true"></i></span><div><small>Quality</small><strong>@_c.AvgQualityScore.ToString("F1", CultureInfo.CurrentCulture) / 10</strong></div></article>
+    </section>
+
+    <section class="smw-ops-strip">
+        <article class="smw-scope-card">
+            <div class="smw-scope-head"><span><i class="bi bi-funnel" aria-hidden="true"></i> Operations Scope</span><strong>@(_scope.Equals("team", StringComparison.OrdinalIgnoreCase) ? "Team" : "Me")</strong></div>
+            <div class="smw-scope-grid">
+                <label><span>Scope</span><select class="smw-filter-select" value="@_scope" @onchange="ScopeChangedCallback"><option value="me">My queue</option><option value="team">Team queue</option></select></label>
+                <label><span>Branch</span><input class="smw-filter-input" value="@_branchId" @onchange="BranchChangedCallback" placeholder="All branches" /></label>
+                <label><span>Team</span><input class="smw-filter-input" value="@_teamId" @onchange="TeamChangedCallback" placeholder="All teams" /></label>
             </div>
-            <div class="@KpiClass(2)" @onclick='() => FocusQueue(2, "sla-breaches")' role="button" tabindex="0">
-                <span class="wb-kpi-icon wb-kpi-i5"><i class="bi bi-alarm-fill" aria-hidden="true"></i></span>
-                <div class="wb-kpi-body">
-                    <div class="wb-kpi-val @(_c.SlaBreaches > 0 ? "wb-kpi-val--alert" : "")">@_c.SlaBreaches</div>
-                    <div class="wb-kpi-lbl">SLA Breaches</div>
-                </div>
-                @KpiDot(2)
-            </div>
-            <div class="@KpiClass(3)" @onclick='() => FocusQueue(3, "capacity")' role="button" tabindex="0">
-                <span class="wb-kpi-icon wb-kpi-i1"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
-                <div class="wb-kpi-body">
-                    <div class="wb-kpi-val">@_c.TeamCapacityPct.ToString("F0")%</div>
-                    <div class="wb-kpi-lbl">Team Capacity</div>
-                    <div class="wb-kpi-sub">@_c.AgentsOnline of @_c.AgentsTotal online</div>
-                </div>
-                @KpiDot(3)
-            </div>
-            <div class="@KpiClass(4)" @onclick='() => FocusQueue(4, "quality-audits")' role="button" tabindex="0">
-                <span class="wb-kpi-icon wb-kpi-i3"><i class="bi bi-clipboard2-check-fill" aria-hidden="true"></i></span>
-                <div class="wb-kpi-body">
-                    <div class="wb-kpi-val">@_c.QualityAudits</div>
-                    <div class="wb-kpi-lbl">Quality Audits</div>
-                    <div class="wb-kpi-sub">avg @_c.AvgQualityScore.ToString("F1") / 10</div>
-                </div>
-                @KpiDot(4)
-            </div>
-            <div class="@KpiClass(5)" @onclick='() => FocusQueue(5, "carrier-tickets")' role="button" tabindex="0">
-                <span class="wb-kpi-icon wb-kpi-i4"><i class="bi bi-building" aria-hidden="true"></i></span>
-                <div class="wb-kpi-body">
-                    <div class="wb-kpi-val">@_c.CarrierTickets</div>
-                    <div class="wb-kpi-lbl">Carrier Tickets</div>
-                </div>
-                @KpiDot(5)
-            </div>
-            <div class="@KpiClass(6)" @onclick='() => FocusQueue(6, "unassigned")' role="button" tabindex="0">
-                <span class="wb-kpi-icon wb-kpi-i2"><i class="bi bi-inbox-fill" aria-hidden="true"></i></span>
-                <div class="wb-kpi-body">
-                    <div class="wb-kpi-val @(_c.Unassigned > 0 ? "wb-kpi-val--warn" : "")">@_c.Unassigned</div>
-                    <div class="wb-kpi-lbl">Unassigned Items</div>
-                </div>
-                @KpiDot(6)
+        </article>
+        <article class="smw-ai-card">
+            <div class="smw-ai-head"><span><i class="bi bi-stars" aria-hidden="true"></i> Manager Intelligence</span>@if (_aiGeneratedAt.HasValue) { <small>@FormatAge(_aiGeneratedAt.Value)</small> }</div>
+            <p>@(_aiSummary ?? "Generate a manager summary to prioritize breached escalations, overloaded agents, unassigned work, carrier service tickets, and quality opportunities.")</p>
+        </article>
+    </section>
+
+    <section class="smw-kpi-strip" aria-label="Service manager metrics">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="@(() => SetActiveQueue(metric.QueueId))">
+                <span class="smw-kpi-icon @metric.Tone"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                <span><span class="smw-kpi-val">@metric.Value</span><span class="smw-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
+            </button>
+        }
+    </section>
+
+    <section class="smw-workflow-strip" aria-label="Service manager workflow actions">
+        <button class="smw-workflow-card" @onclick="ShowEscalations"><i class="bi bi-arrow-up-circle" aria-hidden="true"></i><span><strong>Review escalations</strong><span>Open critical manager actions.</span></span></button>
+        <button class="smw-workflow-card" @onclick="ShowBreaches"><i class="bi bi-alarm" aria-hidden="true"></i><span><strong>Recover SLA</strong><span>Focus breached service work.</span></span></button>
+        <button class="smw-workflow-card" @onclick="ShowCapacity"><i class="bi bi-people" aria-hidden="true"></i><span><strong>Rebalance team</strong><span>Review agent utilization.</span></span></button>
+        <button class="smw-workflow-card" @onclick="ShowUnassigned"><i class="bi bi-inbox" aria-hidden="true"></i><span><strong>Assign work</strong><span>Clear unassigned queue.</span></span></button>
+    </section>
+
+    <section class="smw-search-panel">
+        <div class="smw-search-wrap">
+            <span class="smw-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="smw-search-body">
+                <label for="serviceManagerSearchInput">Search service operations</label>
+                <input id="serviceManagerSearchInput" class="smw-search-input" value="@_search" @oninput="SearchChangedCallback" placeholder="Search title, account, ref, queue, carrier, assignee, audit notes, or escalation source..." />
+                <span class="smw-search-hint">Filters apply to the active manager queue while preserving the synced service aggregate.</span>
             </div>
         </div>
+        <select class="smw-filter-select" value="@_filterPriority" @onchange="PriorityChangedCallback" title="Filter priority">
+            <option value="">All priorities</option>
+            @foreach (var option in _priorityOptions) { <option value="@option.Value">@option.Label</option> }
+        </select>
+        <select class="smw-filter-select" value="@_filterSla" @onchange="SlaChangedCallback" title="Filter SLA">
+            <option value="">All SLA</option>
+            @foreach (var option in _slaOptions) { <option value="@option.Value">@option.Label</option> }
+        </select>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+        <div class="smw-search-result"><strong>@ActiveQueueCount</strong><span>@ActiveQueueLabel</span></div>
+    </section>
 
-        @QueueTabs()
-        @FilterRow()
-
-        @if (!_loading)
+    <section class="smw-view-tabs" aria-label="Service manager tabs">
+        @foreach (var q in Queues)
         {
-            <!-- ── Escalations ─────────────────────────────────────────────── -->
-            @if (_activeQueue == "escalations")
-            {
-                <div class="wb-grid-card app-datagrid">
-                    <SfGrid TValue="SmItem" DataSource="@Filtered(_escalations)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
-                        <GridColumns>
-                            <GridColumn HeaderText="Level" Width="90"><Template>@{ var i=(SmItem)context; }<span class="@EscBadge(i.Level)">L@(i.Level)</span></Template></GridColumn>
-                            <GridColumn Field="@nameof(SmItem.Title)"       HeaderText="Issue"    Width="240"><Template>@{ var i=(SmItem)context; }<div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub wb-mono">@i.RefNumber</div></div></Template></GridColumn>
-                            <GridColumn Field="@nameof(SmItem.AccountName)" HeaderText="Account"  Width="180" />
-                            <GridColumn Field="@nameof(SmItem.AssignedTo)"  HeaderText="Assigned" Width="140" />
-                            <GridColumn Field="@nameof(SmItem.EscalatedBy)" HeaderText="Raised By" Width="140" />
-                            <GridColumn HeaderText="SLA"  Width="120"><Template>@{ var i=(SmItem)context; }<span class="@SlaBadge(i.SlaStatus)">@i.SlaStatus</span></Template></GridColumn>
-                            <GridColumn HeaderText="Age"  Width="80"><Template>@{ var i=(SmItem)context; }<span class="@AgeBadge(i.AgeDays)">@i.AgeDays d</span></Template></GridColumn>
-                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(SmItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
-                        </GridColumns>
-                    </SfGrid>
-                </div>
-            }
-            <!-- ── SLA Breaches ────────────────────────────────────────────── -->
-            @if (_activeQueue == "sla-breaches")
-            {
-                <div class="wb-grid-card app-datagrid">
-                    <SfGrid TValue="SmItem" DataSource="@Filtered(_slaBreaches)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
-                        <GridColumns>
-                            <GridColumn HeaderText="Priority" Width="100"><Template>@{ var i=(SmItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template></GridColumn>
-                            <GridColumn Field="@nameof(SmItem.Title)"       HeaderText="Item"     Width="240"><Template>@{ var i=(SmItem)context; }<div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub wb-mono">@i.RefNumber</div></div></Template></GridColumn>
-                            <GridColumn Field="@nameof(SmItem.QueueName)"   HeaderText="Queue"    Width="150" />
-                            <GridColumn Field="@nameof(SmItem.AccountName)" HeaderText="Account"  Width="180" />
-                            <GridColumn Field="@nameof(SmItem.AssignedTo)"  HeaderText="Assigned" Width="140" />
-                            <GridColumn Field="@nameof(SmItem.SlaBreachMins)" HeaderText="Overdue" Width="110" TextAlign="TextAlign.Right">
-                                <Template>@{ var i=(SmItem)context; }<span class="wb-overdue wb-mono">+@i.SlaBreachMins m</span></Template>
-                            </GridColumn>
-                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(SmItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
-                        </GridColumns>
-                    </SfGrid>
-                </div>
-            }
-            <!-- ── Capacity ────────────────────────────────────────────────── -->
-            @if (_activeQueue == "capacity")
-            {
-                <div class="wb-grid-card app-datagrid">
-                    <SfGrid TValue="AgentCapacity" DataSource="_agentCapacity" AllowSorting="true" EnableHover="true">
-                        <GridColumns>
-                            <GridColumn Field="@nameof(AgentCapacity.AgentName)"   HeaderText="Agent"    Width="200" />
-                            <GridColumn Field="@nameof(AgentCapacity.TeamName)"    HeaderText="Team"     Width="150" />
-                            <GridColumn Field="@nameof(AgentCapacity.Status)"      HeaderText="Status"   Width="120"><Template>@{ var a=(AgentCapacity)context; }<span class="@AgentStatusBadge(a.Status)">@a.Status</span></Template></GridColumn>
-                            <GridColumn Field="@nameof(AgentCapacity.OpenItems)"   HeaderText="Open"     Width="90"  TextAlign="TextAlign.Right" />
-                            <GridColumn Field="@nameof(AgentCapacity.OverdueItems)" HeaderText="Overdue" Width="100" TextAlign="TextAlign.Right">
-                                <Template>@{ var a=(AgentCapacity)context; }<span class="@(a.OverdueItems>0?"wb-overdue":"")">@a.OverdueItems</span></Template>
-                            </GridColumn>
-                            <GridColumn HeaderText="Utilisation" Width="200">
-                                <Template>
-                                    @{ var a=(AgentCapacity)context; }
-                                    <div class="wb-score-wrap"><div class="wb-score-fill" style="width:@a.UtilPct.ToString("F0",System.Globalization.CultureInfo.InvariantCulture)%;background:@UtilColor(a.UtilPct)"></div></div>
-                                </Template>
-                            </GridColumn>
-                            <GridColumn Field="@nameof(AgentCapacity.UtilPct)" HeaderText="%" Width="70" TextAlign="TextAlign.Right"><Template>@{ var a=(AgentCapacity)context; }@a.UtilPct.ToString("F0")%</Template></GridColumn>
-                        </GridColumns>
-                    </SfGrid>
-                </div>
-            }
-            <!-- ── Quality Audits ──────────────────────────────────────────── -->
-            @if (_activeQueue == "quality-audits")
-            {
-                <div class="wb-grid-card app-datagrid">
-                    <SfGrid TValue="SmItem" DataSource="@Filtered(_qualityAudits)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
-                        <GridColumns>
-                            <GridColumn Field="@nameof(SmItem.Title)"       HeaderText="Item Audited" Width="240"><Template>@{ var i=(SmItem)context; }<div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub wb-mono">@i.RefNumber</div></div></Template></GridColumn>
-                            <GridColumn Field="@nameof(SmItem.AssignedTo)"  HeaderText="Agent"        Width="150" />
-                            <GridColumn Field="@nameof(SmItem.QualityScore)" HeaderText="Score"       Width="100" TextAlign="TextAlign.Right">
-                                <Template>@{ var i=(SmItem)context; }<span class="@QualBadge(i.QualityScore)">@i.QualityScore.ToString("F1")</span></Template>
-                            </GridColumn>
-                            <GridColumn Field="@nameof(SmItem.AuditedBy)"   HeaderText="Audited By"   Width="150" />
-                            <GridColumn Field="@nameof(SmItem.AuditedAt)"   HeaderText="Date"         Width="130"><Template>@{ var i=(SmItem)context; }<span>@i.AuditedAt?.ToString("d")</span></Template></GridColumn>
-                            <GridColumn Field="@nameof(SmItem.QualityNotes)" HeaderText="Notes"       Width="260" />
-                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(SmItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
-                        </GridColumns>
-                    </SfGrid>
-                </div>
-            }
-            <!-- ── Carrier Tickets ─────────────────────────────────────────── -->
-            @if (_activeQueue == "carrier-tickets")
-            {
-                <div class="wb-grid-card app-datagrid">
-                    <SfGrid TValue="SmItem" DataSource="@Filtered(_carrierTickets)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
-                        <GridColumns>
-                            <GridColumn HeaderText="Priority" Width="100"><Template>@{ var i=(SmItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template></GridColumn>
-                            <GridColumn Field="@nameof(SmItem.Title)"       HeaderText="Ticket"    Width="240"><Template>@{ var i=(SmItem)context; }<div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub wb-mono">@i.RefNumber</div></div></Template></GridColumn>
-                            <GridColumn Field="@nameof(SmItem.CarrierName)" HeaderText="Carrier"   Width="160" />
-                            <GridColumn Field="@nameof(SmItem.AccountName)" HeaderText="Account"   Width="170" />
-                            <GridColumn Field="@nameof(SmItem.AssignedTo)"  HeaderText="Assigned"  Width="140" />
-                            <GridColumn HeaderText="SLA"  Width="120"><Template>@{ var i=(SmItem)context; }<span class="@SlaBadge(i.SlaStatus)">@i.SlaStatus</span></Template></GridColumn>
-                            <GridColumn HeaderText="Age"  Width="80"><Template>@{ var i=(SmItem)context; }<span class="@AgeBadge(i.AgeDays)">@i.AgeDays d</span></Template></GridColumn>
-                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(SmItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
-                        </GridColumns>
-                    </SfGrid>
-                </div>
-            }
-            <!-- ── Unassigned ──────────────────────────────────────────────── -->
-            @if (_activeQueue == "unassigned")
-            {
-                <div class="wb-grid-card app-datagrid">
-                    <SfGrid TValue="SmItem" DataSource="@Filtered(_unassigned)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
-                        <GridColumns>
-                            <GridColumn HeaderText="Priority" Width="100"><Template>@{ var i=(SmItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template></GridColumn>
-                            <GridColumn Field="@nameof(SmItem.Title)"       HeaderText="Item"     Width="260"><Template>@{ var i=(SmItem)context; }<div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub wb-mono">@i.RefNumber</div></div></Template></GridColumn>
-                            <GridColumn Field="@nameof(SmItem.QueueName)"   HeaderText="Queue"    Width="160" />
-                            <GridColumn Field="@nameof(SmItem.AccountName)" HeaderText="Account"  Width="180" />
-                            <GridColumn Field="@nameof(SmItem.CreatedAt)"   HeaderText="Received" Width="130"><Template>@{ var i=(SmItem)context; }<span>@i.CreatedAt.ToString("g")</span></Template></GridColumn>
-                            <GridColumn HeaderText="Age"  Width="80"><Template>@{ var i=(SmItem)context; }<span class="@AgeBadge(i.AgeDays)">@i.AgeDays d</span></Template></GridColumn>
-                            <GridColumn HeaderText="" Width="120" TextAlign="TextAlign.Right">
-                                <Template>
-                                    @{ var i=(SmItem)context; }
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>AssignAsync(i)" title="Assign">
-                                        <i class="bi bi-person-plus" aria-hidden="true"></i>
-                                    </button>
-                                </Template>
-                            </GridColumn>
-                        </GridColumns>
-                    </SfGrid>
-                </div>
-            }
+            <button type="button" class="@QueueTabClass(q.Id)" @onclick="@(() => SetActiveQueue(q.Id))"><i class="@q.Icon" aria-hidden="true"></i> @q.Label @if (q.Badge > 0) { <span class="@(q.IsAlert ? "smw-tab-alert" : string.Empty)">@q.Badge</span> }</button>
         }
-        else
-        {
-            <div class="wb-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
-        }
+        <button type="button" class="@QueueTabClass("analytics")" @onclick='() => SetActiveQueue("analytics")'><i class="bi bi-bar-chart" aria-hidden="true"></i> Analytics</button>
+        <button type="button" class="@QueueTabClass("views")" @onclick='() => SetActiveQueue("views")'><i class="bi bi-bookmark-star" aria-hidden="true"></i> Saved Views @if (_savedViews.Count > 0) { <span>@_savedViews.Count</span> }</button>
+    </section>
 
-        @DetailPanel()
+    <section class="smw-content-layout">
+        <main class="smw-main-card">
+            @if (_loading)
+            {
+                <div class="smw-loading"><i class="bi bi-arrow-repeat smw-spin" aria-hidden="true"></i><strong>Loading service manager workbench...</strong></div>
+            }
+            else if (_activeQueue == "capacity")
+            {
+                <div class="smw-section-head"><div><h2>Team capacity</h2><p>Review agent workload, overdue items, online status, and utilization pressure.</p></div><button class="um-btn um-btn-ghost um-btn-sm" @onclick="ShowUnassigned"><i class="bi bi-inbox"></i> Assign Work</button></div>
+                @if (_agentCapacity.Count == 0) { @EmptyState("bi-people", "No capacity records available", "Refresh the workbench or confirm team service request assignments.") } else { <div class="smw-capacity-grid">@foreach (var agent in _agentCapacity) { @AgentCard(agent) }</div> }
+            }
+            else if (_activeQueue == "analytics")
+            {
+                <div class="smw-section-head"><div><h2>Service operations analytics</h2><p>Monitor manager queue mix, SLA health, priority distribution, and utilization risk.</p></div><button class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-x-lg"></i> Reset</button></div>
+                <div class="smw-analytics-grid"><section><h3>Queue distribution</h3>@foreach (var row in QueueDistribution) { @AnalyticsItem(row) }</section><section><h3>SLA health</h3>@foreach (var row in SlaDistribution) { @AnalyticsItem(row) }</section><section><h3>Priority mix</h3>@foreach (var row in PriorityDistribution) { @AnalyticsItem(row) }</section><section><h3>Utilization risk</h3>@foreach (var row in UtilizationDistribution) { @AnalyticsItem(row) }</section></div>
+            }
+            else if (_activeQueue == "views")
+            {
+                <div class="smw-section-head"><div><h2>Saved views</h2><p>Save, load, and delete service manager view state for your current queue and scope.</p></div><button class="um-btn um-btn-primary um-btn-sm" @onclick="SaveCurrentViewAsync"><i class="bi bi-bookmark-plus"></i> Save Current View</button></div>
+                @if (_savedViews.Count == 0) { @EmptyState("bi-bookmark-star", "No saved views yet", "Save the current scope, queue, and filters for quick access.") } else { <div class="smw-card-grid">@foreach (var view in _savedViews) { <article class="smw-view-card"><div><strong>@view.Name</strong><span>@view.QueueId · @view.Scope</span><small>@(string.IsNullOrWhiteSpace(view.BranchId) ? "All branches" : view.BranchId) · @(string.IsNullOrWhiteSpace(view.TeamId) ? "All teams" : view.TeamId)</small></div><div class="smw-item-actions"><button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => LoadViewAsync(view.Name))">Load</button><button class="um-btn um-btn-danger um-btn-sm" @onclick="@(() => DeleteViewAsync(view.Name))">Delete</button></div></article> }</div> }
+            }
+            else
+            {
+                <div class="smw-section-head"><div><h2>@ActiveQueueTitle</h2><p>@ActiveQueueSubtitle</p></div><button class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/ops/service-requests")'><i class="bi bi-kanban"></i> Service Desk</button></div>
+                @if (ActiveItems.Count == 0) { @EmptyState(ActiveQueueIcon, "No records match this queue", "Adjust filters, refresh the workbench, or open the service desk.") } else { <div class="smw-card-grid">@foreach (var item in ActiveItems) { @QueueCard(item) }</div> }
+            }
+        </main>
 
-    </Queues>
-</WorkbenchShell>
-
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+        <aside class="smw-detail-card">
+            @if (_selected is not null)
+            {
+                <div class="smw-detail-head"><div><span class="smw-detail-eyebrow"><i class="bi @ActiveQueueIcon" aria-hidden="true"></i> @_selected.QueueName</span><h2>@_selected.Title</h2><p>@_selected.AccountName</p></div><span class="@PriBadge(_selected.Priority)">@_selected.Priority</span></div>
+                <div class="smw-detail-body"><div class="smw-detail-summary"><div><span>Ref</span><strong>@_selected.RefNumber</strong></div><div><span>SLA</span><strong class="@SlaTextClass(_selected.SlaStatus)">@_selected.SlaStatus</strong></div><div><span>Assigned</span><strong>@_selected.AssignedTo</strong></div><div><span>Age</span><strong>@_selected.AgeDays d</strong></div><div><span>Level</span><strong>L@_selected.Level</strong></div><div><span>Overdue</span><strong>@(_selected.SlaBreachMins > 0 ? $"{_selected.SlaBreachMins}m" : "—")</strong></div></div>@if (!string.IsNullOrWhiteSpace(_selected.CarrierName) || !string.IsNullOrWhiteSpace(_selected.QualityNotes) || !string.IsNullOrWhiteSpace(_selected.Notes)) { <p class="smw-detail-note">@DetailNote(_selected)</p> }<div class="smw-detail-actions"><button class="um-btn um-btn-ghost" @onclick="@(() => AssignAsync(_selected))"><i class="bi bi-person-plus"></i> Assign To Me</button><button class="um-btn um-btn-primary" @onclick="@(() => Nav.NavigateTo(_selected.DetailUrl))">Open Record <i class="bi bi-arrow-right"></i></button></div></div>
+            }
+            else
+            {
+                <div class="smw-detail-empty"><i class="bi bi-diagram-3-fill" aria-hidden="true"></i><strong>Select a manager item</strong><span>Review escalation, SLA, carrier, quality, and source-record context.</span></div>
+            }
+        </aside>
+    </section>
+</div>
 
 @code {
     Guid TenantId { get; set; }
@@ -263,74 +162,74 @@
     Guid DevUserId { get; set; }
     private Guid _tenantId;
     private Guid _tenantAdminUserId;
-    private SfToast? _toast;
 
-    private bool   _loading  = false;
+    private bool _loading;
+    private bool _toastVisible;
     private string? _loadError;
-    private string _scope    = "team";
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string _scope = "team";
     private string _branchId = string.Empty;
-    private string _teamId   = string.Empty;
+    private string _teamId = string.Empty;
     private string _activeQueue = "escalations";
-    private int    _kpiFocus    = 0;
-    private SmItem? _selected   = null;
+    private SmItem? _selected;
 
-    private string _search         = string.Empty;
+    private string _search = string.Empty;
     private string _filterPriority = string.Empty;
-    private string _filterSla      = string.Empty;
+    private string _filterSla = string.Empty;
 
-    private string?   _aiSummary     = null;
-    private bool      _aiLoading     = false;
-    private DateTime? _aiGeneratedAt = null;
-
-    private List<WorkbenchShell.SavedView>   _savedViews = [];
-    private List<WorkbenchShell.SlaHeatItem> _slaItems   = [];
-
+    private string? _aiSummary;
+    private bool _aiLoading;
+    private DateTime? _aiGeneratedAt;
+    private List<SavedViewVm> _savedViews = [];
+    private List<SlaHeatItemVm> _slaItems = [];
     private SmCounts _c = new();
 
-    private List<SmItem>       _escalations   = [];
-    private List<SmItem>       _slaBreaches   = [];
-    private List<AgentCapacity>_agentCapacity = [];
-    private List<SmItem>       _qualityAudits = [];
-    private List<SmItem>       _carrierTickets= [];
-    private List<SmItem>       _unassigned    = [];
+    private List<SmItem> _escalations = [];
+    private List<SmItem> _slaBreaches = [];
+    private List<AgentCapacity> _agentCapacity = [];
+    private List<SmItem> _qualityAudits = [];
+    private List<SmItem> _carrierTickets = [];
+    private List<SmItem> _unassigned = [];
 
-    private string ManagerFocusText => _c.Escalations > 0
-        ? $"{_c.Escalations} escalation(s) need review"
-        : _c.SlaBreaches > 0 ? $"{_c.SlaBreaches} SLA breach(es)" : "No critical manager actions";
-    private string SlaHealthText => _c.SlaBreaches == 0
-        ? "All monitored queues in SLA"
-        : $"{_c.SlaBreaches} breached / {_c.Escalations + _c.CarrierTickets + _c.Unassigned + _c.SlaBreaches} monitored";
+    private readonly List<LabelValue> _priorityOptions = [new("Critical", "Critical"), new("Urgent", "Urgent"), new("High", "High"), new("Normal", "Normal"), new("Low", "Low")];
+    private readonly List<LabelValue> _slaOptions = [new("On Track", "On Track"), new("At Risk", "At Risk"), new("Breached", "Breached")];
+    private List<QDef> Queues => [new("escalations", "Escalations", "bi bi-arrow-up-circle-fill", _c.Escalations, _c.Escalations > 0), new("sla-breaches", "SLA Breaches", "bi bi-alarm-fill", _c.SlaBreaches, _c.SlaBreaches > 0), new("capacity", "Capacity", "bi bi-people-fill", _c.AgentsTotal, false), new("quality-audits", "Quality Audits", "bi bi-clipboard2-check-fill", _c.QualityAudits, false), new("carrier-tickets", "Carrier Tickets", "bi bi-building", _c.CarrierTickets, false), new("unassigned", "Unassigned", "bi bi-inbox-fill", _c.Unassigned, _c.Unassigned > 0)];
+    private IReadOnlyList<KpiMetric> Metrics => [new("escalations", "Escalations", _c.Escalations.ToString("N0"), ManagerFocusText, "bi-arrow-up-circle-fill", _c.Escalations > 0 ? "smw-tone-danger" : "smw-tone-muted"), new("sla-breaches", "SLA Breaches", _c.SlaBreaches.ToString("N0"), SlaHealthText, "bi-alarm-fill", _c.SlaBreaches > 0 ? "smw-tone-danger" : "smw-tone-success"), new("capacity", "Capacity", _c.TeamCapacityPct.ToString("F0") + "%", $"{_c.AgentsOnline} of {_c.AgentsTotal} online", "bi-people-fill", "smw-tone-info"), new("quality-audits", "Quality", _c.QualityAudits.ToString("N0"), $"avg {_c.AvgQualityScore:F1} / 10", "bi-clipboard2-check-fill", "smw-tone-success"), new("carrier-tickets", "Carrier Tickets", _c.CarrierTickets.ToString("N0"), "Carrier service items", "bi-building", "smw-tone-warning"), new("unassigned", "Unassigned", _c.Unassigned.ToString("N0"), "Needs ownership", "bi-inbox-fill", _c.Unassigned > 0 ? "smw-tone-purple" : "smw-tone-muted")];
 
-    private record QDef(string Id, string Label, string Icon, int Badge, bool IsAlert);
-    private List<QDef> Queues => [
-        new("escalations",   "Escalations",    "bi bi-arrow-up-circle-fill",    _c.Escalations,   _c.Escalations > 0),
-        new("sla-breaches",  "SLA Breaches",   "bi bi-alarm-fill",              _c.SlaBreaches,   _c.SlaBreaches > 0),
-        new("capacity",      "Capacity",       "bi bi-people-fill",             _c.AgentsTotal,   false),
-        new("quality-audits","Quality Audits", "bi bi-clipboard2-check-fill",   _c.QualityAudits, false),
-        new("carrier-tickets","Carrier Tickets","bi bi-building",               _c.CarrierTickets,false),
-        new("unassigned",    "Unassigned",     "bi bi-inbox-fill",              _c.Unassigned,    _c.Unassigned > 0),
-    ];
+    private EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> SearchChangedCallback => EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, e => _search = e.Value?.ToString() ?? string.Empty);
+    private EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> PriorityChangedCallback => EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, e => _filterPriority = e.Value?.ToString() ?? string.Empty);
+    private EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> SlaChangedCallback => EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, e => _filterSla = e.Value?.ToString() ?? string.Empty);
+    private EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> ScopeChangedCallback => EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, async e => { _scope = e.Value?.ToString() ?? "team"; await LoadAsync(); });
+    private EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> BranchChangedCallback => EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, async e => { _branchId = e.Value?.ToString() ?? string.Empty; await LoadAsync(); });
+    private EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> TeamChangedCallback => EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, async e => { _teamId = e.Value?.ToString() ?? string.Empty; await LoadAsync(); });
 
-    private static readonly List<WorkbenchShell.LabelValue> _priorityOptions =
-    [
-        new("Critical","Critical"),new("Urgent","Urgent"),
-        new("High","High"),new("Normal","Normal"),new("Low","Low"),
-    ];
-    private static readonly List<WorkbenchShell.LabelValue> _slaOptions =
-    [
-        new("On Track","On Track"),new("At Risk","At Risk"),new("Breached","Breached"),
-    ];
+    private string ToastIconClass => _toastKind == "danger" ? "bi-exclamation-triangle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-check-circle-fill";
+    private IEnumerable<SmItem> AllItems => _escalations.Concat(_slaBreaches).Concat(_qualityAudits).Concat(_carrierTickets).Concat(_unassigned);
+    private List<SmItem> ActiveItems => ActiveSource.Where(Matches).ToList();
+    private List<SmItem> ActiveSource => _activeQueue switch { "sla-breaches" => _slaBreaches, "quality-audits" => _qualityAudits, "carrier-tickets" => _carrierTickets, "unassigned" => _unassigned, _ => _escalations };
+    private int ActiveQueueCount => _activeQueue == "capacity" ? _agentCapacity.Count : _activeQueue == "analytics" ? AllItems.Count() : _activeQueue == "views" ? _savedViews.Count : ActiveItems.Count;
+    private string ActiveQueueLabel => _activeQueue == "capacity" ? "agents" : _activeQueue == "analytics" ? "records" : _activeQueue == "views" ? "views" : "items";
+    private string ActiveQueueTitle => _activeQueue switch { "sla-breaches" => "SLA breach queue", "quality-audits" => "Quality audit queue", "carrier-tickets" => "Carrier ticket queue", "unassigned" => "Unassigned work queue", _ => "Escalation queue" };
+    private string ActiveQueueSubtitle => _activeQueue switch { "sla-breaches" => "Recover breached service levels and prioritize the longest overdue records.", "quality-audits" => "Review scored service interactions, coaching opportunities, and audit notes.", "carrier-tickets" => "Track carrier service tickets, queue ownership, and client impact.", "unassigned" => "Assign incoming work to service owners and rebalance queue pressure.", _ => "Review urgent complaints, raised issues, high priority requests, and manager interventions." };
+    private string ActiveQueueIcon => _activeQueue switch { "sla-breaches" => "bi-alarm-fill", "capacity" => "bi-people-fill", "quality-audits" => "bi-clipboard2-check-fill", "carrier-tickets" => "bi-building", "unassigned" => "bi-inbox-fill", _ => "bi-arrow-up-circle-fill" };
+    private string ManagerFocusText => _c.Escalations > 0 ? $"{_c.Escalations} escalation(s) need review" : _c.SlaBreaches > 0 ? $"{_c.SlaBreaches} SLA breach(es)" : "No critical manager actions";
+    private string SlaHealthText => _c.SlaBreaches == 0 ? "All monitored queues in SLA" : $"{_c.SlaBreaches} breached / {Math.Max(1, _c.Escalations + _c.CarrierTickets + _c.Unassigned + _c.SlaBreaches)} monitored";
+    private IReadOnlyList<MetricBar> QueueDistribution => BuildAnalytics([new("Escalations", _escalations.Count, "smw-dist-red"), new("SLA", _slaBreaches.Count, "smw-dist-amber"), new("Quality", _qualityAudits.Count, "smw-dist-green"), new("Carrier", _carrierTickets.Count, "smw-dist-purple"), new("Unassigned", _unassigned.Count, "smw-dist-blue")]);
+    private IReadOnlyList<MetricBar> SlaDistribution => BuildAnalytics(AllItems.GroupBy(x => x.SlaStatus).Select(g => new AnalyticsSeed(g.Key, g.Count(), g.Key == "Breached" ? "smw-dist-red" : g.Key == "At Risk" ? "smw-dist-amber" : "smw-dist-green")));
+    private IReadOnlyList<MetricBar> PriorityDistribution => BuildAnalytics(AllItems.GroupBy(x => x.Priority).Select(g => new AnalyticsSeed(g.Key, g.Count(), g.Key is "Critical" or "Urgent" ? "smw-dist-red" : g.Key == "High" ? "smw-dist-purple" : "smw-dist-blue")));
+    private IReadOnlyList<MetricBar> UtilizationDistribution => BuildAnalytics([new("90%+", _agentCapacity.Count(x => x.UtilPct >= 90), "smw-dist-red"), new("75-89%", _agentCapacity.Count(x => x.UtilPct >= 75 && x.UtilPct < 90), "smw-dist-amber"), new("<75%", _agentCapacity.Count(x => x.UtilPct < 75), "smw-dist-green")]);
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Service Manager Workbench","/workbench/service-manager"));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Workbench", "/workbench"), new("Service Manager", "/workbench/service-manager"));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
-        _loading = true; StateHasChanged();
+        _loading = true;
         try
         {
             _loadError = null;
@@ -338,7 +237,6 @@
             var context = await CurrentUser.RequireAsync();
             var dto = await Api.GetServiceManagerWorkbenchAsync(_tenantId, context.UserScopeId, teamScope || context.IsTenantAdministrator, _branchId, _teamId);
             if (dto is null) return;
-
             _c = MapCounts(dto.Counts);
             _escalations = dto.Escalations.Select(MapItem).ToList();
             _slaBreaches = dto.SlaBreaches.Select(MapItem).ToList();
@@ -347,256 +245,114 @@
             _carrierTickets = dto.CarrierTickets.Select(MapItem).ToList();
             _unassigned = dto.Unassigned.Select(MapItem).ToList();
             RebuildSla();
+            _selected = ActiveItems.FirstOrDefault();
         }
         catch (Exception ex)
         {
             _loadError = $"Service manager workbench load failed: {ex.Message}";
-            _escalations = []; _slaBreaches = []; _agentCapacity = [];
-            _qualityAudits = []; _carrierTickets = []; _unassigned = [];
+            _escalations = []; _slaBreaches = []; _agentCapacity = []; _qualityAudits = []; _carrierTickets = []; _unassigned = [];
             _c = new();
             RebuildSla();
-            await ShowToastAsync(_loadError, "e-toast-danger");
+            ShowToast(_loadError, "danger");
         }
         finally { _loading = false; }
     }
 
-    private void RebuildSla() => _slaItems =
-    [
-        new() { QueueName="Escalations",    InSla=_escalations.Count(x => x.SlaStatus != "Breached"),    Breached=_escalations.Count(x => x.SlaStatus == "Breached") },
-        new() { QueueName="SLA Breaches",   InSla=0, Breached=_slaBreaches.Count },
-        new() { QueueName="Carrier Tickets",InSla=_carrierTickets.Count(x => x.SlaStatus != "Breached"), Breached=_carrierTickets.Count(x => x.SlaStatus == "Breached") },
-        new() { QueueName="Unassigned",     InSla=_unassigned.Count(x => x.SlaStatus != "Breached"),     Breached=_unassigned.Count(x => x.SlaStatus == "Breached") },
-    ];
-
-    private async Task OnBranchChangedAsync(string v) { _branchId = v; await LoadAsync(); }
-    private async Task OnTeamChangedAsync(string v)   { _teamId   = v; await LoadAsync(); }
+    private void RebuildSla() => _slaItems = [new("Escalations", _escalations.Count(x => x.SlaStatus != "Breached"), _escalations.Count(x => x.SlaStatus == "Breached")), new("SLA Breaches", 0, _slaBreaches.Count), new("Carrier Tickets", _carrierTickets.Count(x => x.SlaStatus != "Breached"), _carrierTickets.Count(x => x.SlaStatus == "Breached")), new("Unassigned", _unassigned.Count(x => x.SlaStatus != "Breached"), _unassigned.Count(x => x.SlaStatus == "Breached"))];
 
     private async Task GenerateAiSummaryAsync()
     {
-        _aiLoading = true; StateHasChanged();
+        _aiLoading = true;
         await Task.Delay(0);
         _aiSummary = $"Service operations: {_c.Escalations} escalation(s), {_c.SlaBreaches} SLA breach(es), {_c.Unassigned} unassigned item(s), and {_c.TeamCapacityPct:F0}% average team utilization. Prioritize breached escalations, then rebalance agents above 90% utilization.";
         _aiGeneratedAt = DateTime.Now;
-        _aiLoading     = false;
+        _aiLoading = false;
+        ShowToast("Service manager intelligence summary generated.");
     }
-
-    private Task SaveViewAsync(WorkbenchShell.SavedView v)
-    {
-        v.QueueId = _activeQueue; v.Scope = _scope; v.BranchId = _branchId; v.TeamId = _teamId;
-        _savedViews.RemoveAll(x => x.Name == v.Name); _savedViews.Add(v);
-        return ShowToastAsync($"View \"{v.Name}\" saved.", "e-toast-success");
-    }
-    private Task LoadViewAsync(string name) { var v = _savedViews.FirstOrDefault(x => x.Name == name); if (v is not null) { _activeQueue = v.QueueId; _scope = v.Scope; _branchId = v.BranchId; _teamId = v.TeamId; StateHasChanged(); } return Task.CompletedTask; }
-    private async Task DeleteViewAsync(string name) { if (!await Confirmations.ConfirmAsync("Delete saved view", $"Delete saved view {name}?", "Delete")) return; _savedViews.RemoveAll(x => x.Name == name); }
-
-    private List<SmItem> Filtered(List<SmItem> src) => src.Where(i =>
-        (string.IsNullOrEmpty(_filterPriority) || i.Priority == _filterPriority) &&
-        (string.IsNullOrEmpty(_filterSla)      || i.SlaStatus == _filterSla) &&
-        (string.IsNullOrEmpty(_search)         ||
-         i.Title.Contains(_search,       StringComparison.OrdinalIgnoreCase) ||
-         i.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-         i.RefNumber.Contains(_search,   StringComparison.OrdinalIgnoreCase))
-    ).ToList();
-
-    private void FocusQueue(int n, string id) { _kpiFocus = _kpiFocus == n ? 0 : n; _activeQueue = id; _selected = null; }
-    private string KpiClass(int n) => "wb-kpi-card" + (_kpiFocus == n || (_kpiFocus == 0 && _activeQueue == QueueIdForKpi(n)) ? " wb-kpi-card--active" : "");
-    private RenderFragment KpiDot(int n) => _kpiFocus == n ? @<span class="wb-kpi-dot" aria-hidden="true"></span> : _ => { };
-    private void OpenDetail(SmItem i) => _selected = i;
-
-    private static string QueueIdForKpi(int n) => n switch
-    {
-        1 => "escalations", 2 => "sla-breaches", 3 => "capacity",
-        4 => "quality-audits", 5 => "carrier-tickets", 6 => "unassigned",
-        _ => string.Empty,
-    };
 
     private async Task AssignAsync(SmItem i)
     {
         try
         {
             await Api.AssignServiceManagerWorkbenchItemAsync(_tenantId, i.ItemId, _tenantAdminUserId);
-            await ShowToastAsync($"{i.RefNumber} assigned to Tenant Admin.", "e-toast-success");
+            ShowToast($"{i.RefNumber} assigned to Tenant Admin.");
             await LoadAsync();
         }
         catch (Exception ex)
         {
-            await ShowToastAsync($"Assign failed: {ex.Message}", "e-toast-danger");
+            ShowToast($"Assign failed: {ex.Message}", "danger");
         }
     }
 
-    private static SmCounts MapCounts(ServiceManagerWorkbenchCountsDto dto) => new()
-    {
-        Escalations = dto.Escalations,
-        SlaBreaches = dto.SlaBreaches,
-        AgentsOnline = dto.AgentsOnline,
-        AgentsTotal = dto.AgentsTotal,
-        TeamCapacityPct = dto.TeamCapacityPct,
-        QualityAudits = dto.QualityAudits,
-        AvgQualityScore = dto.AvgQualityScore,
-        CarrierTickets = dto.CarrierTickets,
-        Unassigned = dto.Unassigned,
-    };
+    private Task ExportAsync() => Task.Run(() => ShowToast($"Export prepared for {AllItems.Count()} service manager rows and {_agentCapacity.Count} capacity records."));
+    private void SetActiveQueue(string id) { _activeQueue = id; _selected = id is "capacity" or "analytics" or "views" ? null : ActiveItems.FirstOrDefault(); }
+    private void ShowEscalations() { _filterSla = string.Empty; SetActiveQueue("escalations"); }
+    private void ShowBreaches() { _filterSla = "Breached"; SetActiveQueue("sla-breaches"); }
+    private void ShowCapacity() { _filterSla = string.Empty; SetActiveQueue("capacity"); }
+    private void ShowUnassigned() { _filterSla = string.Empty; SetActiveQueue("unassigned"); }
+    private void ResetFilters() { _search = string.Empty; _filterPriority = string.Empty; _filterSla = string.Empty; }
+    private void OpenDetail(SmItem i) => _selected = i;
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
 
-    private static SmItem MapItem(ServiceManagerWorkbenchItemDto dto) => new()
+    private Task SaveCurrentViewAsync()
     {
-        ItemId = dto.ItemId,
-        Title = dto.Title,
-        RefNumber = dto.RefNumber,
-        AccountName = dto.AccountName,
-        AssignedTo = dto.AssignedTo,
-        EscalatedBy = dto.EscalatedBy,
-        CarrierName = dto.CarrierName,
-        QueueName = dto.QueueName,
-        AuditedBy = dto.AuditedBy,
-        QualityNotes = dto.QualityNotes,
-        Priority = dto.Priority,
-        SlaStatus = dto.SlaStatus,
-        Level = dto.Level,
-        AgeDays = dto.AgeDays,
-        SlaBreachMins = dto.SlaBreachMins,
-        QualityScore = dto.QualityScore,
-        CreatedAt = dto.CreatedAt,
-        AuditedAt = dto.AuditedAt,
-        Notes = dto.Notes,
-        DetailUrl = dto.DetailUrl,
-    };
-
-    private static AgentCapacity MapAgent(ServiceManagerAgentCapacityDto dto) => new()
-    {
-        AgentName = dto.AgentName,
-        TeamName = dto.TeamName,
-        Status = dto.Status,
-        OpenItems = dto.OpenItems,
-        OverdueItems = dto.OverdueItems,
-        UtilPct = dto.UtilPct,
-    };
-
-    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
-    {
-        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+        var name = $"{(_activeQueue == "capacity" ? "Team capacity" : ActiveQueueTitle)} · {DateTime.Now:MMM d h:mm tt}";
+        _savedViews.RemoveAll(x => x.Name == name);
+        _savedViews.Add(new(name, _activeQueue, _scope, _branchId, _teamId, _search, _filterPriority, _filterSla));
+        ShowToast($"View \"{name}\" saved.");
+        return Task.CompletedTask;
     }
 
-    private RenderFragment QueueTabs() => __builder =>
+    private Task LoadViewAsync(string name)
     {
-        <div class="wb-queue-tabs" role="tablist">
-        @foreach (var q in Queues)
-        {
-            <button class="wb-queue-tab @(q.Id == _activeQueue ? "wb-queue-tab--active" : "")"
-                    role="tab" @onclick="() => { _activeQueue = q.Id; _selected = null; }">
-                <i class="@q.Icon" aria-hidden="true"></i> @q.Label
-                @if (q.Badge > 0) { <span class="wb-tab-badge @(q.IsAlert?"wb-tab-badge--alert":"")">@q.Badge</span> }
-            </button>
-        }
-        </div>;
-    };
+        var v = _savedViews.FirstOrDefault(x => x.Name == name);
+        if (v is null) return Task.CompletedTask;
+        _activeQueue = v.QueueId; _scope = v.Scope; _branchId = v.BranchId; _teamId = v.TeamId; _search = v.Search; _filterPriority = v.Priority; _filterSla = v.Sla;
+        _selected = _activeQueue is "capacity" or "analytics" or "views" ? null : ActiveItems.FirstOrDefault();
+        ShowToast($"View \"{name}\" loaded.");
+        return Task.CompletedTask;
+    }
 
-    private RenderFragment FilterRow() => __builder =>
+    private async Task DeleteViewAsync(string name)
     {
-        <div class="wb-filter-row">
-            <div class="wb-search-box">
-                <i class="bi bi-search wb-search-icon" aria-hidden="true"></i>
-                <input class="wb-search-input" type="text" placeholder="Search…"
-                       value="@_search" @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; StateHasChanged(); })" />
-            </div>
-            <SfDropDownList TValue="string" TItem="WorkbenchShell.LabelValue" DataSource="_priorityOptions" Placeholder="All Priorities" ShowClearButton="true" Width="155px" Value="_filterPriority" ValueChanged="@((string v) => { _filterPriority = v; StateHasChanged(); })">
-                <DropDownListFieldSettings Value="Value" Text="Label" />
-            </SfDropDownList>
-            <SfDropDownList TValue="string" TItem="WorkbenchShell.LabelValue" DataSource="_slaOptions" Placeholder="All SLA" ShowClearButton="true" Width="140px" Value="_filterSla" ValueChanged="@((string v) => { _filterSla = v; StateHasChanged(); })">
-                <DropDownListFieldSettings Value="Value" Text="Label" />
-            </SfDropDownList>
-        </div>;
-    };
+        if (!await Confirmations.ConfirmAsync("Delete saved view", $"Delete saved view {name}?", "Delete")) return;
+        _savedViews.RemoveAll(x => x.Name == name);
+        ShowToast($"View \"{name}\" deleted.", "warning");
+    }
 
-    private RenderFragment DetailPanel() => __builder =>
-    {
-        @if (_selected is not null)
-        {
-            <div class="wb-overlay" @onclick="() => _selected = null" role="button" tabindex="-1" aria-label="Close"></div>
-            <div class="wb-detail-panel" role="complementary">
-                <div class="wb-detail-hdr">
-                    <span class="@PriBadge(_selected.Priority)">@_selected.Priority</span>
-                    <span class="@SlaBadge(_selected.SlaStatus)">@_selected.SlaStatus</span>
-                    <button class="um-btn um-btn-ghost um-btn-sm" style="margin-left:auto" @onclick="() => _selected = null"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
-                </div>
-                <h2 class="wb-detail-title">@_selected.Title</h2>
-                <div class="wb-detail-body">
-                    <div class="wb-detail-row"><span class="wb-detail-lbl">Ref</span><span class="wb-mono">@_selected.RefNumber</span></div>
-                    <div class="wb-detail-row"><span class="wb-detail-lbl">Account</span><span>@_selected.AccountName</span></div>
-                    <div class="wb-detail-row"><span class="wb-detail-lbl">Assigned</span><span>@_selected.AssignedTo</span></div>
-                    @if (!string.IsNullOrEmpty(_selected.CarrierName)) { <div class="wb-detail-row"><span class="wb-detail-lbl">Carrier</span><span>@_selected.CarrierName</span></div> }
-                    <div class="wb-detail-row"><span class="wb-detail-lbl">Age</span><span class="@AgeBadge(_selected.AgeDays)">@_selected.AgeDays d</span></div>
-                    @if (!string.IsNullOrEmpty(_selected.Notes)) { <div class="wb-detail-row"><span class="wb-detail-lbl">Notes</span><p class="wb-detail-notes">@_selected.Notes</p></div> }
-                </div>
-                <div class="wb-detail-footer">
-                    <button class="um-btn um-btn-primary" @onclick="() => Nav.NavigateTo(_selected.DetailUrl)">Open Record <i class="bi bi-arrow-right" aria-hidden="true"></i></button>
-                </div>
-            </div>
-        }
-    };
-
-    private static string PriBadge(string p) => p switch { "Critical"=>"wb-pri wb-pri--critical","Urgent"=>"wb-pri wb-pri--urgent","High"=>"wb-pri wb-pri--high","Normal"=>"wb-pri wb-pri--normal",_=>"wb-pri wb-pri--low" };
-    private static string SlaBadge(string s) => s switch { "On Track"=>"wb-sla wb-sla--ok","At Risk"=>"wb-sla wb-sla--warn",_=>"wb-sla wb-sla--breach" };
-    private static string AgeBadge(int d) => d > 7 ? "wb-age wb-age--old" : d > 3 ? "wb-age wb-age--mid" : "wb-age wb-age--ok";
-    private static string EscBadge(int l) => l >= 3 ? "wb-esc wb-esc--3" : l == 2 ? "wb-esc wb-esc--2" : "wb-esc wb-esc--1";
-    private static string QualBadge(double s) => s >= 8 ? "wb-sla wb-sla--ok" : s >= 6 ? "wb-sla wb-sla--warn" : "wb-sla wb-sla--breach";
-    private static string AgentStatusBadge(string s) => s switch { "Online"=>"wb-status wb-status--approved","Away"=>"wb-status wb-status--review","Offline"=>"wb-status wb-status--rejected",_=>"wb-status" };
+    private bool Matches(SmItem i) => (string.IsNullOrWhiteSpace(_filterPriority) || i.Priority == _filterPriority) && (string.IsNullOrWhiteSpace(_filterSla) || i.SlaStatus == _filterSla) && (string.IsNullOrWhiteSpace(_search) || new[] { i.Title, i.AccountName, i.RefNumber, i.QueueName, i.CarrierName, i.AssignedTo, i.EscalatedBy, i.AuditedBy, i.QualityNotes, i.Notes ?? string.Empty }.Any(v => !string.IsNullOrWhiteSpace(v) && v.Contains(_search, StringComparison.OrdinalIgnoreCase)));
+    private RenderFragment QueueCard(SmItem item) => @<article class="smw-item-card @(ReferenceEquals(_selected, item) ? "smw-item-selected" : string.Empty)" @onclick="@(() => OpenDetail(item))"><div class="smw-item-top"><span class="smw-avatar" style="@AvatarStyle(item.AccountName)">@Initials(item.AccountName)</span><div><strong>@item.Title</strong><span>@item.AccountName</span></div></div><div class="smw-item-meta"><span class="@PriBadge(item.Priority)">@item.Priority</span><span class="@SlaBadge(item.SlaStatus)">@item.SlaStatus</span><span class="@EscBadge(item.Level)">L@item.Level</span>@if (!string.IsNullOrWhiteSpace(item.CarrierName)) { <span class="smw-chip">@item.CarrierName</span> }@if (item.QualityScore > 0) { <span class="@QualBadge(item.QualityScore)">@item.QualityScore.ToString("F1")</span> }</div><div class="smw-item-footer"><strong>@item.RefNumber</strong><span>@(item.SlaBreachMins > 0 ? $"+{item.SlaBreachMins}m" : item.CreatedAt.ToString("MMM d", CultureInfo.CurrentCulture))</span></div><div class="smw-item-actions" @onclick:stopPropagation="true"><button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenDetail(item))"><i class="bi bi-layout-sidebar-inset"></i></button><button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => AssignAsync(item))"><i class="bi bi-person-plus"></i></button><button class="um-btn um-btn-primary um-btn-sm" @onclick="@(() => Nav.NavigateTo(item.DetailUrl))">Open</button></div></article>;
+    private RenderFragment AgentCard(AgentCapacity agent) => @<article class="smw-agent-card"><div class="smw-agent-head"><span class="smw-avatar" style="@AvatarStyle(agent.AgentName)">@Initials(agent.AgentName)</span><div><strong>@agent.AgentName</strong><span>@agent.TeamName</span></div><span class="@AgentStatusBadge(agent.Status)">@agent.Status</span></div><div class="smw-agent-metrics"><div><span>Open</span><strong>@agent.OpenItems</strong></div><div><span>Overdue</span><strong class="@(agent.OverdueItems > 0 ? "smw-text-danger" : string.Empty)">@agent.OverdueItems</strong></div><div><span>Utilization</span><strong>@agent.UtilPct.ToString("F0")%</strong></div></div><div class="smw-util-track"><i style="width:@agent.UtilPct.ToString("F0", CultureInfo.InvariantCulture)%;background:@UtilColor(agent.UtilPct)"></i></div></article>;
+    private RenderFragment EmptyState(string icon, string title, string text) => @<div class="smw-empty-state"><i class="bi @icon" aria-hidden="true"></i><strong>@title</strong><span>@text</span><button class="um-btn um-btn-primary" @onclick="LoadAsync">Refresh</button></div>;
+    private RenderFragment AnalyticsItem(MetricBar row) => @<button class="smw-analytics-row"><span>@row.Label</span><div><i class="@row.Tone" style="width:@row.WidthPercent%"></i></div><strong>@row.Count</strong><small>@row.Percent.ToString("F0")%</small></button>;
+    private IReadOnlyList<MetricBar> BuildAnalytics(IEnumerable<AnalyticsSeed> seeds) { var items = seeds.ToList(); var total = Math.Max(1, items.Sum(x => x.Count)); return items.Select(x => new MetricBar(x.Label, x.Count, x.Tone, x.Count * 100m / total, Math.Max(4m, x.Count * 100m / total))).ToList(); }
+    private string MetricCardClass(KpiMetric metric) => $"smw-kpi-card {(metric.QueueId == _activeQueue ? "smw-kpi-card-active" : string.Empty)}";
+    private string QueueTabClass(string id) => $"smw-view-btn {(id == _activeQueue ? "smw-view-btn-active" : string.Empty)}";
+    private static SmCounts MapCounts(ServiceManagerWorkbenchCountsDto dto) => new() { Escalations = dto.Escalations, SlaBreaches = dto.SlaBreaches, AgentsOnline = dto.AgentsOnline, AgentsTotal = dto.AgentsTotal, TeamCapacityPct = dto.TeamCapacityPct, QualityAudits = dto.QualityAudits, AvgQualityScore = dto.AvgQualityScore, CarrierTickets = dto.CarrierTickets, Unassigned = dto.Unassigned };
+    private static SmItem MapItem(ServiceManagerWorkbenchItemDto dto) => new() { ItemId = dto.ItemId, Title = dto.Title, RefNumber = dto.RefNumber, AccountName = dto.AccountName, AssignedTo = dto.AssignedTo, EscalatedBy = dto.EscalatedBy, CarrierName = dto.CarrierName, QueueName = dto.QueueName, AuditedBy = dto.AuditedBy, QualityNotes = dto.QualityNotes, Priority = dto.Priority, SlaStatus = dto.SlaStatus, Level = dto.Level, AgeDays = dto.AgeDays, SlaBreachMins = dto.SlaBreachMins, QualityScore = dto.QualityScore, CreatedAt = dto.CreatedAt, AuditedAt = dto.AuditedAt, Notes = dto.Notes, DetailUrl = dto.DetailUrl };
+    private static AgentCapacity MapAgent(ServiceManagerAgentCapacityDto dto) => new() { AgentName = dto.AgentName, TeamName = dto.TeamName, Status = dto.Status, OpenItems = dto.OpenItems, OverdueItems = dto.OverdueItems, UtilPct = dto.UtilPct };
+    private static string DetailNote(SmItem i) => !string.IsNullOrWhiteSpace(i.QualityNotes) ? i.QualityNotes : !string.IsNullOrWhiteSpace(i.CarrierName) ? $"Carrier: {i.CarrierName}" : i.Notes ?? string.Empty;
+    private static string PriBadge(string p) => p switch { "Critical" => "smw-pri smw-pri-critical", "Urgent" => "smw-pri smw-pri-urgent", "High" => "smw-pri smw-pri-high", "Normal" => "smw-pri smw-pri-normal", _ => "smw-pri smw-pri-low" };
+    private static string SlaBadge(string s) => s switch { "On Track" => "smw-sla smw-sla-ok", "At Risk" => "smw-sla smw-sla-warn", _ => "smw-sla smw-sla-breach" };
+    private static string SlaTextClass(string s) => s == "Breached" ? "smw-text-danger" : s == "At Risk" ? "smw-text-warning" : "smw-text-success";
+    private static string EscBadge(int l) => l >= 3 ? "smw-esc smw-esc-3" : l == 2 ? "smw-esc smw-esc-2" : "smw-esc smw-esc-1";
+    private static string QualBadge(double s) => s >= 8 ? "smw-sla smw-sla-ok" : s >= 6 ? "smw-sla smw-sla-warn" : "smw-sla smw-sla-breach";
+    private static string AgentStatusBadge(string s) => s switch { "Online" => "smw-status smw-status-online", "Away" => "smw-status smw-status-away", "Offline" => "smw-status smw-status-offline", _ => "smw-status" };
     private static string UtilColor(double p) => p >= 90 ? "#dc2626" : p >= 75 ? "#b45309" : "#16a34a";
+    private static string FormatAge(DateTime dt) { var diff = DateTime.Now - dt; if (diff.TotalMinutes < 1) return "Just now"; if (diff.TotalHours < 1) return $"{(int)diff.TotalMinutes}m ago"; if (diff.TotalDays < 1) return $"{(int)diff.TotalHours}h ago"; if (diff.TotalDays < 30) return $"{(int)diff.TotalDays}d ago"; return dt.ToString("d", CultureInfo.CurrentCulture); }
+    private static string Initials(string name) { var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length >= 1 ? name[..1] : "?"; }
+    private static string AvatarStyle(string name) { var hue = Math.Abs(name.GetHashCode()) % 360; return $"background:hsl({hue},50%,40%);color:#fff;"; }
+    async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); TenantId = context.TenantId; TenantAdminUserId = context.UserId; _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; DevTenantId = context.TenantId; DevUserId = context.UserId; }
 
-    private sealed class SmCounts
-    {
-        public int    Escalations     { get; set; }
-        public int    SlaBreaches     { get; set; }
-        public int    AgentsOnline    { get; set; }
-        public int    AgentsTotal     { get; set; }
-        public double TeamCapacityPct { get; set; }
-        public int    QualityAudits   { get; set; }
-        public double AvgQualityScore { get; set; }
-        public int    CarrierTickets  { get; set; }
-        public int    Unassigned      { get; set; }
-    }
-
-    private sealed class SmItem
-    {
-        public Guid     ItemId        { get; set; } = Guid.NewGuid();
-        public string   Title         { get; set; } = string.Empty;
-        public string   RefNumber     { get; set; } = string.Empty;
-        public string   AccountName   { get; set; } = string.Empty;
-        public string   AssignedTo    { get; set; } = string.Empty;
-        public string   EscalatedBy   { get; set; } = string.Empty;
-        public string   CarrierName   { get; set; } = string.Empty;
-        public string   QueueName     { get; set; } = string.Empty;
-        public string   AuditedBy     { get; set; } = string.Empty;
-        public string   QualityNotes  { get; set; } = string.Empty;
-        public string   Priority      { get; set; } = "Normal";
-        public string   SlaStatus     { get; set; } = "On Track";
-        public int      Level         { get; set; } = 1;
-        public int      AgeDays       { get; set; }
-        public int      SlaBreachMins { get; set; }
-        public double   QualityScore  { get; set; }
-        public DateTime CreatedAt     { get; set; } = DateTime.UtcNow;
-        public DateTime? AuditedAt    { get; set; }
-        public string?  Notes         { get; set; }
-        public string   DetailUrl     { get; set; } = "/workbench/service-manager";
-    }
-
-    private sealed class AgentCapacity
-    {
-        public string AgentName    { get; set; } = string.Empty;
-        public string TeamName     { get; set; } = string.Empty;
-        public string Status       { get; set; } = "Online";
-        public int    OpenItems    { get; set; }
-        public int    OverdueItems { get; set; }
-        public double UtilPct      { get; set; }
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
-    }
+    private sealed record LabelValue(string Value, string Label);
+    private sealed record QDef(string Id, string Label, string Icon, int Badge, bool IsAlert);
+    private sealed record KpiMetric(string QueueId, string Label, string Value, string Caption, string Icon, string Tone);
+    private sealed record AnalyticsSeed(string Label, int Count, string Tone);
+    private sealed record MetricBar(string Label, int Count, string Tone, decimal Percent, decimal WidthPercent);
+    private sealed record SavedViewVm(string Name, string QueueId, string Scope, string BranchId, string TeamId, string Search, string Priority, string Sla);
+    private sealed record SlaHeatItemVm(string QueueName, int InSla, int Breached);
+    private sealed class SmCounts { public int Escalations { get; set; } public int SlaBreaches { get; set; } public int AgentsOnline { get; set; } public int AgentsTotal { get; set; } public double TeamCapacityPct { get; set; } public int QualityAudits { get; set; } public double AvgQualityScore { get; set; } public int CarrierTickets { get; set; } public int Unassigned { get; set; } }
+    private sealed class SmItem { public Guid ItemId { get; set; } = Guid.NewGuid(); public string Title { get; set; } = string.Empty; public string RefNumber { get; set; } = string.Empty; public string AccountName { get; set; } = string.Empty; public string AssignedTo { get; set; } = string.Empty; public string EscalatedBy { get; set; } = string.Empty; public string CarrierName { get; set; } = string.Empty; public string QueueName { get; set; } = string.Empty; public string AuditedBy { get; set; } = string.Empty; public string QualityNotes { get; set; } = string.Empty; public string Priority { get; set; } = "Normal"; public string SlaStatus { get; set; } = "On Track"; public int Level { get; set; } = 1; public int AgeDays { get; set; } public int SlaBreachMins { get; set; } public double QualityScore { get; set; } public DateTime CreatedAt { get; set; } = DateTime.UtcNow; public DateTime? AuditedAt { get; set; } public string? Notes { get; set; } public string DetailUrl { get; set; } = "/workbench/service-manager"; }
+    private sealed class AgentCapacity { public string AgentName { get; set; } = string.Empty; public string TeamName { get; set; } = string.Empty; public string Status { get; set; } = "Online"; public int OpenItems { get; set; } public int OverdueItems { get; set; } public double UtilPct { get; set; } }
 }

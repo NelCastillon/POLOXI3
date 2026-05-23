@@ -1,270 +1,516 @@
 @page "/crm/leads/duplicates"
 @namespace Ams.Web.Components.Pages.Crm
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
 
-<PageTitle>Lead Duplicates</PageTitle>
+<PageTitle>Enterprise Lead Duplicates</PageTitle>
 
-<AppPageHeader Title="Lead Duplicates"
-               Subtitle="Review and resolve duplicate leads — merge, keep, or dismiss"
-               Icon="bi-subtract">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh">
-            <i class="bi bi-arrow-clockwise @(_loading ? "ldup-spin" : "")" aria-hidden="true"></i>
-        </button>
-    </Actions>
-</AppPageHeader>
+@if (_toastVisible)
+{
+    <div class="ld-toast ld-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ld-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
 
-<!-- Summary strip -->
-<div class="ldup-summary-strip">
-    <button type="button" class="@SummaryClass("groups", "ldup-s1")" @onclick='() => SetFilter("groups")' title="Show all unresolved duplicate groups">
-        <div class="ldup-summary-val">@_groups.Count</div>
-        <div class="ldup-summary-lbl">Duplicate Groups</div>
-    </button>
-    <button type="button" class="@SummaryClass("leads", "ldup-s2")" @onclick='() => SetFilter("leads")' title="Show duplicate groups with the most lead records">
-        <div class="ldup-summary-val">@MultiLeadGroups.Count</div>
-        <div class="ldup-summary-lbl">Multi-Lead Groups</div>
-    </button>
-    <button type="button" class="@SummaryClass("high", "ldup-s3")" @onclick='() => SetFilter("high")' title="Show high-confidence duplicate groups">
-        <div class="ldup-summary-val">@_groups.Count(g => g.Confidence >= 90)</div>
-        <div class="ldup-summary-lbl">High Confidence</div>
-    </button>
-    <button type="button" class="@SummaryClass("resolved", "ldup-s4")" @onclick='() => SetFilter("resolved")' title="Show duplicate groups resolved today">
-        <div class="ldup-summary-val">@_resolved</div>
-        <div class="ldup-summary-lbl">Resolved Today</div>
-    </button>
+@if (_showConfirm && _confirmAction is not null)
+{
+    <div class="ldup-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="ldup-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="duplicateConfirmTitle" @onclick:stopPropagation="true">
+            <div class="ldup-confirm-icon ldup-confirm-@_confirmAction.Kind"><i class="bi @_confirmAction.Icon" aria-hidden="true"></i></div>
+            <h2 id="duplicateConfirmTitle">@_confirmAction.Title</h2>
+            <p>@_confirmAction.Message</p>
+            <div class="ldup-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_busy">Cancel</button>
+                <button type="button" class="um-btn @_confirmAction.ButtonClass" @onclick="ExecuteConfirmedAsync" disabled="@_busy">
+                    @if (_busy)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    @_confirmAction.ButtonText
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="ldup-enterprise-page">
+    <section class="ldup-hero">
+        <div class="ldup-hero-left">
+            <span class="ldup-hero-icon"><i class="bi bi-subtract" aria-hidden="true"></i></span>
+            <div>
+                <div class="ldup-title-row">
+                    <h1>Enterprise Lead Duplicates</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> Live CRM scan</span>
+                    <span><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+                </div>
+                <p>Find, compare, prioritize, merge, or dismiss duplicate lead records using governed CRM matching workflow.</p>
+            </div>
+        </div>
+        <div class="ldup-hero-actions">
+            <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh duplicate scan"><i class="bi @(_loading ? "bi-arrow-repeat ldup-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button class="um-btn um-btn-ghost" @onclick="RunScanAsync" disabled="@_loading" title="Run duplicate scan"><i class="bi bi-search" aria-hidden="true"></i> Scan</button>
+            <button class="um-btn um-btn-ghost" @onclick="NavigateToLeads" title="Open enterprise leads"><i class="bi bi-person-lines-fill" aria-hidden="true"></i> Leads</button>
+            <button class="um-btn um-btn-primary" @onclick="ShowHighConfidence" title="Prioritize high confidence matches"><i class="bi bi-lightning-charge" aria-hidden="true"></i> High Confidence</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="ldup-error-banner"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    <section class="ldup-kpi-strip" aria-label="Lead duplicate metrics">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricCardClass(metric)" @onclick="@(() => SetQuickFilter(metric.Filter))">
+                <span class="ldup-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                <span><span class="ldup-kpi-val">@metric.Value</span><span class="ldup-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
+            </button>
+        }
+    </section>
+
+    <section class="ldup-workflow-strip" aria-label="Duplicate workflow actions">
+        <button class="ldup-workflow-card" @onclick="RunScanAsync"><i class="bi bi-search" aria-hidden="true"></i><span><strong>Scan leads</strong><span>Refresh duplicate detection.</span></span></button>
+        <button class="ldup-workflow-card" @onclick="ShowHighConfidence"><i class="bi bi-lightning-charge" aria-hidden="true"></i><span><strong>Prioritize high</strong><span>Focus strongest matches.</span></span></button>
+        <button class="ldup-workflow-card" @onclick="ShowMultiLeadGroups"><i class="bi bi-people" aria-hidden="true"></i><span><strong>Multi-lead groups</strong><span>Review larger clusters.</span></span></button>
+        <button class="ldup-workflow-card" @onclick="ShowResolved"><i class="bi bi-check2-circle" aria-hidden="true"></i><span><strong>Resolved today</strong><span>Audit merge decisions.</span></span></button>
+    </section>
+
+    <section class="ldup-search-panel">
+        <div class="ldup-search-wrap">
+            <span class="ldup-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="ldup-search-body">
+                <label for="duplicateSearchInput">Search duplicate workspace</label>
+                <input id="duplicateSearchInput" class="ldup-search-input" value="@_searchTerm" @oninput="OnSearchChanged" placeholder="Search name, email, phone, company, reason, stage, or confidence..." />
+                <span class="ldup-search-hint">Enterprise search filters duplicate groups and resolved duplicate decisions in memory.</span>
+            </div>
+        </div>
+        <select class="ldup-filter-select" value="@_confidenceFilter" @onchange="OnConfidenceFilterChanged">
+            <option value="">All confidence</option>
+            <option value="High">High confidence</option>
+            <option value="Medium">Medium confidence</option>
+            <option value="Low">Low confidence</option>
+        </select>
+        <select class="ldup-filter-select" value="@_reasonFilter" @onchange="OnReasonFilterChanged">
+            <option value="">All match reasons</option>
+            @foreach (var reason in ReasonOptions)
+            {
+                <option value="@reason">@reason</option>
+            }
+        </select>
+        <select class="ldup-filter-select" value="@_stageFilter" @onchange="OnStageFilterChanged">
+            <option value="">All stages</option>
+            @foreach (var stage in StageOptions)
+            {
+                <option value="@stage">@stage</option>
+            }
+        </select>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+        <div class="ldup-search-result"><strong>@FilteredGroups.Count</strong><span>groups</span></div>
+    </section>
+
+    <section class="ldup-view-tabs" aria-label="Lead duplicate views">
+        @foreach (var view in _views)
+        {
+            <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label</button>
+        }
+    </section>
+
+    <section class="ldup-content-layout">
+        <main class="ldup-main-card">
+            @if (_loading)
+            {
+                <div class="ldup-loading"><i class="bi bi-arrow-repeat ldup-spin" aria-hidden="true"></i><strong>Scanning enterprise lead records...</strong></div>
+            }
+            else if (_view == "groups")
+            {
+                <div class="ldup-section-head">
+                    <div><h2>Duplicate group resolution</h2><p>Compare matching leads, choose a primary record, then merge or dismiss with confirmation.</p></div>
+                    <button class="um-btn um-btn-primary um-btn-sm" @onclick="RunScanAsync"><i class="bi bi-search" aria-hidden="true"></i> Re-scan</button>
+                </div>
+                @if (FilteredGroups.Count == 0)
+                {
+                    <div class="ldup-empty-state"><i class="bi bi-check-circle" aria-hidden="true"></i><strong>No duplicate groups match this view</strong><span>Adjust filters or run a scan to re-check CRM leads.</span><button class="um-btn um-btn-primary" @onclick="RunScanAsync">Re-scan leads</button></div>
+                }
+                else
+                {
+                    <div class="ldup-groups-grid">
+                        @foreach (var group in FilteredGroups)
+                        {
+                            <article class="ldup-group-card @GroupCardClass(group)" @onclick="@(() => SelectGroup(group))">
+                                <div class="ldup-group-hdr">
+                                    <div class="ldup-group-title">
+                                        <span class="ldup-group-icon @ConfidenceAvatarClass(group.Confidence)"><i class="bi bi-intersect" aria-hidden="true"></i></span>
+                                        <div><strong>@group.MatchReason match</strong><span>@group.Leads.Count duplicate lead(s) · @PrimaryLead(group).Company</span></div>
+                                    </div>
+                                    <div class="ldup-group-actions" @onclick:stopPropagation="true">
+                                        <button class="um-btn um-btn-primary um-btn-sm" @onclick="@(() => ConfirmMerge(group))" title="Merge duplicate group"><i class="bi bi-union" aria-hidden="true"></i> Merge</button>
+                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => ConfirmDismiss(group))" title="Dismiss duplicate group"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                                    </div>
+                                </div>
+                                <div class="ldup-group-meta">
+                                    <span class="ldup-confidence @ConfidenceClass(group.Confidence)">@group.Confidence% match</span>
+                                    <span class="ldup-reason"><i class="bi bi-lightning-charge" aria-hidden="true"></i> @group.MatchReason</span>
+                                    <span class="ldup-order-pill">@group.Leads.Count records</span>
+                                </div>
+                                <div class="ldup-lead-compare">
+                                    @foreach (var lead in group.Leads)
+                                    {
+                                        <div class="ldup-lead-card @(lead.IsPrimary ? "ldup-lead-card-primary" : string.Empty)">
+                                            <div class="ldup-lead-top"><span class="ldup-avatar @AvatarColor(lead.FullName)" aria-hidden="true">@Initials(lead.FullName)</span><span><strong>@lead.FullName</strong><small>@lead.Company</small></span></div>
+                                            <div class="ldup-lead-lines"><span><i class="bi bi-envelope" aria-hidden="true"></i> @lead.Email</span><span><i class="bi bi-telephone" aria-hidden="true"></i> @lead.Phone</span></div>
+                                            <div class="ldup-lead-footer"><span class="@StageBadge(lead.Stage)">@lead.Stage</span><span class="ldup-score-pill @ScoreTone(lead.Score)">@lead.Score</span></div>
+                                            @if (lead.IsPrimary)
+                                            {
+                                                <span class="ldup-primary-badge"><i class="bi bi-star-fill" aria-hidden="true"></i> Primary</span>
+                                            }
+                                            else
+                                            {
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => SetPrimary(group, lead))" @onclick:stopPropagation="true">Set primary</button>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            </article>
+                        }
+                    </div>
+                }
+            }
+            else if (_view == "resolved")
+            {
+                <div class="ldup-section-head"><div><h2>Resolved duplicate decisions</h2><p>Review duplicate groups merged or dismissed during this working session.</p></div><button class="um-btn um-btn-ghost um-btn-sm" @onclick="ShowGroups"><i class="bi bi-arrow-left" aria-hidden="true"></i> Open Groups</button></div>
+                @if (FilteredResolvedGroups.Count == 0)
+                {
+                    <div class="ldup-empty-state"><i class="bi bi-journal-check" aria-hidden="true"></i><strong>No resolved duplicates match this view</strong><span>Merge or dismiss a group to see it here.</span><button class="um-btn um-btn-ghost" @onclick="ShowGroups">Review groups</button></div>
+                }
+                else
+                {
+                    <div class="ldup-history-list">
+                        @foreach (var group in FilteredResolvedGroups)
+                        {
+                            <article class="ldup-history-item" @onclick="@(() => SelectGroup(group))">
+                                <span class="ldup-history-icon"><i class="bi @(group.Resolution == "Merged" ? "bi-union" : "bi-x-circle")" aria-hidden="true"></i></span>
+                                <div><strong>@group.Resolution: @group.MatchReason match</strong><span>@group.Leads.Count lead(s) · primary @PrimaryLead(group).FullName · @group.ResolvedAt?.ToLocalTime().ToString("MMM d, h:mm tt", CultureInfo.CurrentCulture)</span></div>
+                                <span class="ldup-confidence @ConfidenceClass(group.Confidence)">@group.Confidence%</span>
+                            </article>
+                        }
+                    </div>
+                }
+            }
+            else
+            {
+                <div class="ldup-section-head"><div><h2>Duplicate analytics</h2><p>Monitor confidence mix and match reason distribution for the current scan.</p></div><button class="um-btn um-btn-ghost um-btn-sm" @onclick="RunScanAsync"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Refresh analytics</button></div>
+                <div class="ldup-analytics-grid">
+                    <section>
+                        <h3>Confidence distribution</h3>
+                        @foreach (var row in ConfidenceDistribution)
+                        {
+                            <div class="ldup-stage-row"><span>@row.Label</span><div><i class="@row.Tone" style="width:@row.WidthPercent%"></i></div><strong>@row.Count</strong><small>@row.Percent.ToString("F0")%</small></div>
+                        }
+                    </section>
+                    <section>
+                        <h3>Match reasons</h3>
+                        @foreach (var reason in ReasonBreakdown)
+                        {
+                            <button class="@ReasonRowClass(reason.Reason)" @onclick="@(() => SelectReason(reason.Reason))"><span><i class="bi @ReasonIcon(reason.Reason)" aria-hidden="true"></i> @reason.Reason</span><div><i style="width:@reason.WidthPercent%"></i></div><strong>@reason.Count</strong><small>groups</small></button>
+                        }
+                    </section>
+                </div>
+            }
+        </main>
+
+        <aside class="ldup-detail-card">
+            @if (_selectedGroup is not null)
+            {
+                var primary = PrimaryLead(_selectedGroup);
+                <div class="ldup-detail-head"><div><span class="ldup-detail-eyebrow"><i class="bi @ReasonIcon(_selectedGroup.MatchReason)" aria-hidden="true"></i> @_selectedGroup.MatchReason match</span><h2>@primary.FullName</h2><p>@primary.Company</p></div><span class="ldup-confidence @ConfidenceClass(_selectedGroup.Confidence)">@_selectedGroup.Confidence%</span></div>
+                <div class="ldup-detail-body">
+                    <div class="ldup-detail-summary"><div><span>Records</span><strong>@_selectedGroup.Leads.Count</strong></div><div><span>Primary</span><strong>@primary.FullName</strong></div><div><span>Reason</span><strong>@_selectedGroup.MatchReason</strong></div><div><span>Status</span><strong>@(_selectedGroup.IsResolved ? _selectedGroup.Resolution : "Open")</strong></div></div>
+                    <div class="ldup-contact-card"><span><i class="bi bi-envelope" aria-hidden="true"></i> @primary.Email</span><span><i class="bi bi-telephone" aria-hidden="true"></i> @primary.Phone</span><span><i class="bi bi-building" aria-hidden="true"></i> @primary.Company</span></div>
+                    <div class="ldup-detail-actions"><button class="um-btn um-btn-ghost" @onclick="@(() => OpenLeadInCrm(primary))"><i class="bi bi-person-lines-fill" aria-hidden="true"></i> Open Lead</button>@if (!_selectedGroup.IsResolved) { <button class="um-btn um-btn-primary" @onclick="@(() => ConfirmMerge(_selectedGroup))"><i class="bi bi-union" aria-hidden="true"></i> Merge</button><button class="um-btn um-btn-danger" @onclick="@(() => ConfirmDismiss(_selectedGroup))"><i class="bi bi-x-circle" aria-hidden="true"></i> Dismiss</button> }</div>
+                </div>
+            }
+            else
+            {
+                <div class="ldup-detail-empty"><i class="bi bi-intersect" aria-hidden="true"></i><strong>Select a duplicate group</strong><span>Review duplicate intelligence, primary lead, match reason, and resolution actions.</span></div>
+            }
+        </aside>
+    </section>
 </div>
 
-@if (_loading)
-{
-    <div class="ldup-loading">
-        <i class="bi bi-arrow-clockwise ldup-spin" style="font-size:1.4rem;"></i>
-        <span>Scanning for duplicates…</span>
-    </div>
-}
-else if (!string.IsNullOrWhiteSpace(_loadError))
-{
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
-}
-else if (!_groups.Any() && !_resolvedGroups.Any())
-{
-    <div class="ldup-empty-state">
-        <i class="bi bi-check-circle-fill ldup-empty-icon"></i>
-        <div class="ldup-empty-title">No Duplicates Found</div>
-        <div class="ldup-empty-sub">All leads appear to be unique. Run a manual scan to re-check.</div>
-        <button class="um-btn um-btn-primary" @onclick="LoadAsync">Re-scan Leads</button>
-    </div>
-}
-else
-{
-    @if (!FilteredGroups.Any())
-    {
-        <div class="ldup-empty-state">
-            <i class="bi bi-funnel ldup-empty-icon"></i>
-            <div class="ldup-empty-title">No Matches for @ActiveFilterLabel</div>
-            <div class="ldup-empty-sub">Choose another KPI filter or refresh the duplicate scan.</div>
-            <button class="um-btn um-btn-ghost" @onclick='() => SetFilter("groups")'>Show All Duplicates</button>
-        </div>
-    }
-    <div class="ldup-groups">
-        @foreach (var grp in FilteredGroups)
-        {
-            <div class="ldup-group-card">
-                <div class="ldup-group-header">
-                    <div class="ldup-group-meta">
-                        <span class="ldup-conf-badge ldup-conf--@ConfClass(grp.Confidence)">
-                            @grp.Confidence% match
-                        </span>
-                        <span class="ldup-match-reason">
-                            <i class="bi bi-lightning-charge-fill"></i> @grp.MatchReason
-                        </span>
-                    </div>
-                    <div class="ldup-group-actions">
-                        <button class="um-btn um-btn-sm um-btn-primary" @onclick="() => MergeAsync(grp)">
-                            <i class="bi bi-union"></i> Merge
-                        </button>
-                        <button class="um-btn um-btn-sm um-btn-ghost" @onclick="() => DismissAsync(grp)">
-                            <i class="bi bi-x-lg"></i> Dismiss
-                        </button>
-                    </div>
-                </div>
-                <div class="ldup-lead-grid">
-                    @foreach (var lead in grp.Leads)
-                    {
-                        <div class="ldup-lead-card @(lead.IsPrimary ? "ldup-lead-card--primary" : "")">
-                            @if (lead.IsPrimary)
-                            {
-                                <div class="ldup-primary-badge">Primary</div>
-                            }
-                            <div class="ldup-lead-name">@lead.FullName</div>
-                            <div class="ldup-lead-detail"><i class="bi bi-envelope"></i> @lead.Email</div>
-                            <div class="ldup-lead-detail"><i class="bi bi-telephone"></i> @lead.Phone</div>
-                            <div class="ldup-lead-detail"><i class="bi bi-building"></i> @lead.Company</div>
-                            <div class="ldup-lead-detail"><i class="bi bi-calendar3"></i> Created @lead.CreatedDate</div>
-                            <div class="ldup-lead-stage-row">
-                                <span class="ldup-stage ldup-stage--@lead.Stage.ToLower()">@lead.Stage</span>
-                                <span class="ldup-score">Score: @lead.Score</span>
-                            </div>
-                            @if (!lead.IsPrimary)
-                            {
-                                <button class="um-btn um-btn-sm um-btn-ghost ldup-set-primary-btn" @onclick="() => SetPrimary(grp, lead)">
-                                    Set as Primary
-                                </button>
-                            }
-                        </div>
-                    }
-                </div>
-            </div>
-        }
-    </div>
-}
-
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
+    private Guid _tenantId;
     private Guid _tenantAdminUserId;
-    bool _loading = true;
-    int _resolved;
-    string? _loadError;
-    string _activeFilter = "groups";
-    List<DupGroup> _groups = [];
-    List<DupGroup> _resolvedGroups = [];
+    private bool _loading = true;
+    private bool _busy;
+    private bool _showConfirm;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "info";
+    private string _loadError = string.Empty;
+    private string _activeFilter = string.Empty;
+    private string _searchTerm = string.Empty;
+    private string _confidenceFilter = string.Empty;
+    private string _reasonFilter = string.Empty;
+    private string _stageFilter = string.Empty;
+    private string _view = "groups";
+    private int _resolved;
+    private CancellationTokenSource? _toastCts;
+    private ConfirmAction? _confirmAction;
+    private DupGroup? _selectedGroup;
+    private List<DupGroup> _groups = [];
+    private List<DupGroup> _resolvedGroups = [];
 
-    List<DupGroup> MultiLeadGroups => _groups.Where(g => g.Leads.Count > 2).ToList();
+    private static readonly List<ViewDef> _views = [new("groups", "Duplicate Groups", "bi-intersect"), new("resolved", "Resolved", "bi-journal-check"), new("analytics", "Analytics", "bi-graph-up-arrow")];
 
-    IEnumerable<DupGroup> FilteredGroups => _activeFilter switch
+    private List<DupGroup> MultiLeadGroups => _groups.Where(g => g.Leads.Count > 2).ToList();
+    private IEnumerable<string> ReasonOptions => _groups.Concat(_resolvedGroups).Select(g => g.MatchReason).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private IEnumerable<string> StageOptions => _groups.Concat(_resolvedGroups).SelectMany(g => g.Leads).Select(l => l.Stage).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+
+    private IEnumerable<KpiModel> Metrics =>
+    [
+        new("Groups", _groups.Count.ToString(), "Open duplicates", "bi-intersect", "ldup-blue", ""),
+        new("Multi-lead", MultiLeadGroups.Count.ToString(), "Larger clusters", "bi-people", "ldup-purple", "Multi"),
+        new("High", _groups.Count(g => g.Confidence >= 90).ToString(), "Strong matches", "bi-lightning-charge", "ldup-red", "High"),
+        new("Resolved", _resolved.ToString(), "This session", "bi-check2-circle", "ldup-green", "Resolved"),
+        new("Leads", _groups.Sum(g => g.Leads.Count).ToString(), "Impacted records", "bi-person-lines-fill", "ldup-cyan", "")
+    ];
+
+    private List<DupGroup> FilteredGroups => ApplyGroupFilters(_groups).ToList();
+    private List<DupGroup> FilteredResolvedGroups => ApplyGroupFilters(_resolvedGroups).ToList();
+
+    private IEnumerable<DistributionRow> ConfidenceDistribution
     {
-        "leads" => MultiLeadGroups,
-        "high" => _groups.Where(g => g.Confidence >= 90),
-        "resolved" => _resolvedGroups,
-        _ => _groups
-    };
+        get
+        {
+            var total = Math.Max(1, _groups.Count);
+            var rows = new[]
+            {
+                new DistributionRow("High", _groups.Count(x => x.Confidence >= 90), 0, "ldup-dist-high"),
+                new DistributionRow("Medium", _groups.Count(x => x.Confidence >= 70 && x.Confidence < 90), 0, "ldup-dist-medium"),
+                new DistributionRow("Low", _groups.Count(x => x.Confidence < 70), 0, "ldup-dist-low")
+            };
+            var max = Math.Max(1, rows.Max(x => x.Count));
+            return rows.Select(x => x with { WidthPercent = (double)x.Count / max * 100, Percent = (double)x.Count / total * 100 });
+        }
+    }
 
-    string ActiveFilterLabel => _activeFilter switch
+    private IEnumerable<ReasonBreakdownRow> ReasonBreakdown
     {
-        "leads" => "Multi-Lead Groups",
-        "high" => "High Confidence",
-        "resolved" => "Resolved Today",
-        _ => "Duplicate Groups"
-    };
+        get
+        {
+            var rows = _groups.GroupBy(x => x.MatchReason).Select(g => new ReasonBreakdownRow(g.Key, g.Count(), 0)).ToList();
+            var max = Math.Max(1, rows.Select(x => x.Count).DefaultIfEmpty(1).Max());
+            return rows.OrderByDescending(x => x.Count).Select(x => x with { WidthPercent = max == 0 ? 0 : (double)x.Count / max * 100 });
+        }
+    }
+
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-octagon", "warning" => "bi-exclamation-triangle", "success" => "bi-check2-circle", _ => "bi-info-circle" };
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("CRM", "/crm"), new("Leads", "/crm/leads"), new("Duplicates"));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Lead Duplicates", "/crm/leads/duplicates"));
         await LoadAsync();
     }
 
-    async Task LoadAsync()
+    private async Task LoadAsync()
     {
         _loading = true;
-        _loadError = null;
+        _loadError = string.Empty;
         try
         {
-            var result = await Api.SearchLeadsAsync(_tenantId);
+            if (_tenantId == Guid.Empty) await ResolveCurrentUserContextAsync();
+            var result = await Api.SearchLeadsAsync(_tenantId, string.IsNullOrWhiteSpace(_searchTerm) ? null : _searchTerm);
             var leads = result?.Items?.ToList() ?? [];
             _groups = BuildDuplicateGroups(leads);
+            _selectedGroup = _selectedGroup is null ? _groups.FirstOrDefault() : _groups.FirstOrDefault(g => g.GroupKey == _selectedGroup.GroupKey) ?? _groups.FirstOrDefault();
         }
         catch (Exception ex)
         {
-            _loadError = $"Scan failed: {ex.Message}";
+            _loadError = $"Duplicate scan failed: {ex.Message}";
             _groups = [];
+            await ShowToastAsync("Duplicate scan failed.", "danger");
         }
-        finally
+        finally { _loading = false; }
+    }
+
+    private async Task RunScanAsync()
+    {
+        await LoadAsync();
+        await ShowToastAsync($"Duplicate scan completed: {_groups.Count} group(s) found.", _groups.Count == 0 ? "success" : "warning");
+    }
+
+    private IEnumerable<DupGroup> ApplyGroupFilters(IEnumerable<DupGroup> groups)
+    {
+        var query = groups;
+        if (!string.IsNullOrWhiteSpace(_searchTerm))
         {
-            _loading = false;
+            var term = _searchTerm.Trim();
+            query = query.Where(g => Contains(g.MatchReason, term) || g.Confidence.ToString(CultureInfo.InvariantCulture).Contains(term, StringComparison.OrdinalIgnoreCase) || g.Leads.Any(l => Contains(l.FullName, term) || Contains(l.Email, term) || Contains(l.Phone, term) || Contains(l.Company, term) || Contains(l.Stage, term)));
         }
+        if (!string.IsNullOrWhiteSpace(_reasonFilter)) query = query.Where(g => g.MatchReason == _reasonFilter);
+        if (!string.IsNullOrWhiteSpace(_stageFilter)) query = query.Where(g => g.Leads.Any(l => l.Stage == _stageFilter));
+        query = _confidenceFilter switch
+        {
+            "High" => query.Where(g => g.Confidence >= 90),
+            "Medium" => query.Where(g => g.Confidence >= 70 && g.Confidence < 90),
+            "Low" => query.Where(g => g.Confidence < 70),
+            _ => query
+        };
+        query = _activeFilter switch
+        {
+            "Multi" => query.Where(g => g.Leads.Count > 2),
+            "High" => query.Where(g => g.Confidence >= 90),
+            _ => query
+        };
+        return query.OrderByDescending(g => g.Confidence).ThenByDescending(g => g.Leads.Count);
     }
 
-    async Task MergeAsync(DupGroup grp)
+    private void ConfirmMerge(DupGroup group) => OpenConfirm(new("Merge duplicate leads", $"Merge {group.Leads.Count - 1} duplicate record(s) into {PrimaryLead(group).FullName}?", "Merge", "um-btn-primary", "bi-union", "warning", () => MergeAsync(group)));
+    private void ConfirmDismiss(DupGroup group) => OpenConfirm(new("Dismiss duplicate group", $"Dismiss the {group.MatchReason} match for {PrimaryLead(group).FullName}?", "Dismiss", "um-btn-danger", "bi-x-circle", "danger", () => DismissAsync(group)));
+
+    private Task MergeAsync(DupGroup group)
     {
-        await Task.Delay(0);
-        _groups.Remove(grp);
-        _resolvedGroups.Insert(0, grp);
+        ResolveGroup(group, "Merged");
+        return ShowToastAsync("Duplicate group merged for this session.", "success");
+    }
+
+    private Task DismissAsync(DupGroup group)
+    {
+        ResolveGroup(group, "Dismissed");
+        return ShowToastAsync("Duplicate group dismissed.", "success");
+    }
+
+    private void ResolveGroup(DupGroup group, string resolution)
+    {
+        var existing = _groups.FirstOrDefault(g => g.GroupKey == group.GroupKey);
+        if (existing is not null) _groups.Remove(existing);
+        group.Resolution = resolution;
+        group.ResolvedAt = DateTime.UtcNow;
+        _resolvedGroups.RemoveAll(g => g.GroupKey == group.GroupKey);
+        _resolvedGroups.Insert(0, group);
         _resolved++;
+        _selectedGroup = group;
+        _view = "resolved";
     }
 
-    async Task DismissAsync(DupGroup grp)
+    private void SetPrimary(DupGroup group, DupLead lead)
     {
-        await Task.Delay(0);
-        _groups.Remove(grp);
-        _resolvedGroups.Insert(0, grp);
-        _resolved++;
-    }
-
-    void SetPrimary(DupGroup grp, DupLead lead)
-    {
-        foreach (var l in grp.Leads) l.IsPrimary = false;
+        foreach (var item in group.Leads) item.IsPrimary = false;
         lead.IsPrimary = true;
+        _selectedGroup = group;
+        _ = ShowToastAsync($"{lead.FullName} set as primary.", "success");
     }
 
-    static string ConfClass(int c) => c >= 90 ? "high" : c >= 70 ? "med" : "low";
+    private void SetView(string view) => _view = view;
+    private void ShowGroups() => SetView("groups");
+    private void ShowResolved() => SetView("resolved");
+    private void ShowHighConfidence() { _activeFilter = "High"; _confidenceFilter = "High"; _view = "groups"; }
+    private void ShowMultiLeadGroups() { _activeFilter = "Multi"; _view = "groups"; }
+    private void SelectGroup(DupGroup group) => _selectedGroup = group;
+    private void SelectReason(string reason) { _reasonFilter = _reasonFilter == reason ? string.Empty : reason; _view = "groups"; }
+    private void SetQuickFilter(string filter) { _activeFilter = _activeFilter == filter ? string.Empty : filter; if (filter == "Resolved") _view = "resolved"; else _view = "groups"; if (filter == "High") _confidenceFilter = _confidenceFilter == "High" ? string.Empty : "High"; }
+    private void ResetFilters() { _activeFilter = string.Empty; _searchTerm = string.Empty; _confidenceFilter = string.Empty; _reasonFilter = string.Empty; _stageFilter = string.Empty; }
+    private void OnSearchChanged(BlazorChangeEventArgs e) => _searchTerm = e.Value?.ToString() ?? string.Empty;
+    private void OnConfidenceFilterChanged(BlazorChangeEventArgs e) { _confidenceFilter = e.Value?.ToString() ?? string.Empty; _activeFilter = string.Empty; }
+    private void OnReasonFilterChanged(BlazorChangeEventArgs e) { _reasonFilter = e.Value?.ToString() ?? string.Empty; _activeFilter = string.Empty; }
+    private void OnStageFilterChanged(BlazorChangeEventArgs e) { _stageFilter = e.Value?.ToString() ?? string.Empty; _activeFilter = string.Empty; }
+    private void NavigateToLeads() => Nav.NavigateTo("/crm/leads");
+    private void OpenLeadInCrm(DupLead lead) => Nav.NavigateTo($"/crm/leads?search={Uri.EscapeDataString(lead.Email == "—" ? lead.FullName : lead.Email)}");
 
-    void SetFilter(string filter) => _activeFilter = filter;
+    private void OpenConfirm(ConfirmAction action) { _confirmAction = action; _showConfirm = true; }
+    private void CancelConfirm() { if (!_busy) { _showConfirm = false; _confirmAction = null; } }
+    private async Task ExecuteConfirmedAsync() { if (_confirmAction is null) return; _busy = true; try { var action = _confirmAction; await action.ExecuteAsync(); _showConfirm = false; _confirmAction = null; } catch (Exception ex) { await ShowToastAsync($"Action failed: {ex.Message}", "danger"); } finally { _busy = false; } }
 
-    string SummaryClass(string filter, string tone) => $"ldup-summary-card {tone} {(_activeFilter == filter ? "ldup-summary-card--active" : string.Empty)}";
+    private async Task ShowToastAsync(string message, string kind = "info")
+    {
+        _toastCts?.Cancel(); _toastCts?.Dispose(); _toastCts = new CancellationTokenSource();
+        _toastMessage = message.Length <= 96 ? message : $"{message[..93]}..."; _toastKind = ToastKind(kind); _toastVisible = true; StateHasChanged();
+        try { await Task.Delay(_toastKind == "danger" ? 10400 : 8000, _toastCts.Token); _toastVisible = false; await InvokeAsync(StateHasChanged); } catch (TaskCanceledException) { }
+    }
 
-    static List<DupGroup> BuildDuplicateGroups(IEnumerable<LeadDto> leads)
+    private void HideToast() { _toastCts?.Cancel(); _toastVisible = false; }
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : value.Contains("success", StringComparison.OrdinalIgnoreCase) ? "success" : "info";
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static DupLead PrimaryLead(DupGroup group) => group.Leads.FirstOrDefault(l => l.IsPrimary) ?? group.Leads.First();
+    private static string ConfidenceBand(int value) => value >= 90 ? "High" : value >= 70 ? "Medium" : "Low";
+    private static string ConfidenceClass(int value) => value >= 90 ? "ldup-confidence-high" : value >= 70 ? "ldup-confidence-medium" : "ldup-confidence-low";
+    private static string ConfidenceAvatarClass(int value) => value >= 90 ? "ldup-group-icon-high" : value >= 70 ? "ldup-group-icon-medium" : "ldup-group-icon-low";
+    private static string ReasonIcon(string reason) => reason switch { "Email address" => "bi-envelope-fill", "Phone number" => "bi-telephone-fill", "Name + company" => "bi-building-fill-check", _ => "bi-intersect" };
+    private static string NormalizeStage(string? stage, int statusCode) => !string.IsNullOrWhiteSpace(stage) ? stage.Trim() switch { "Won" => "Converted", "Closed" => "Lost", var s => s } : statusCode switch { 2 => "Contacted", 3 => "Qualified", 4 => "Converted", 5 => "Lost", _ => "New" };
+    private static string StageBadge(string stage) => $"ldup-stage ldup-stage-{stage.ToLowerInvariant().Replace(' ', '-')}";
+    private static string ScoreTone(int score) => score >= 80 ? "ldup-score-hot" : score >= 50 ? "ldup-score-warm" : "ldup-score-cold";
+    private string MetricCardClass(KpiModel metric) => $"ldup-kpi-card {metric.Tone} {(_activeFilter == metric.Filter && !string.IsNullOrWhiteSpace(metric.Filter) ? "ldup-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewDef view) => _view == view.Id ? "ldup-view-btn ldup-view-btn-active" : "ldup-view-btn";
+    private string GroupCardClass(DupGroup group) => group.GroupKey == _selectedGroup?.GroupKey ? "ldup-group-card-selected" : string.Empty;
+    private string ReasonRowClass(string reason) => _reasonFilter == reason ? "ldup-funnel-row ldup-active" : "ldup-funnel-row";
+    private static string AvatarColor(string name) { var colors = new[] { "ldup-av1", "ldup-av2", "ldup-av3", "ldup-av4", "ldup-av5", "ldup-av6" }; return colors[Math.Abs(name.GetHashCode()) % colors.Length]; }
+    private static string Initials(string name) { var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length > 0 ? name[..1] : "?"; }
+
+    private async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+    }
+
+    private static List<DupGroup> BuildDuplicateGroups(IEnumerable<LeadDto> leads)
     {
         var groups = new List<DupGroup>();
         groups.AddRange(BuildGroups(leads.Where(l => !string.IsNullOrWhiteSpace(l.Email)).GroupBy(l => l.Email!.Trim().ToLowerInvariant()), "Email address", 97));
         groups.AddRange(BuildGroups(leads.Where(l => !string.IsNullOrWhiteSpace(l.Phone)).GroupBy(l => DigitsOnly(l.Phone!)), "Phone number", 90));
-        groups.AddRange(BuildGroups(leads.GroupBy(l => $"{l.FirstName.Trim().ToLowerInvariant()}|{l.LastName.Trim().ToLowerInvariant()}|{l.AccountName?.Trim().ToLowerInvariant()}"), "Name + company", 84));
+        groups.AddRange(BuildGroups(leads.Where(l => !string.IsNullOrWhiteSpace(l.FirstName) && !string.IsNullOrWhiteSpace(l.LastName)).GroupBy(l => $"{l.FirstName.Trim().ToLowerInvariant()}|{l.LastName.Trim().ToLowerInvariant()}|{l.AccountName?.Trim().ToLowerInvariant()}"), "Name + company", 84));
 
         return groups
-            .GroupBy(g => string.Join('|', g.Leads.Select(l => l.LeadId).OrderBy(id => id)))
+            .GroupBy(g => g.GroupKey)
             .Select(g => g.OrderByDescending(x => x.Confidence).First())
             .OrderByDescending(g => g.Confidence)
             .ThenByDescending(g => g.Leads.Count)
             .ToList();
     }
 
-    static IEnumerable<DupGroup> BuildGroups(IEnumerable<IGrouping<string, LeadDto>> source, string reason, int confidence) =>
+    private static IEnumerable<DupGroup> BuildGroups(IEnumerable<IGrouping<string, LeadDto>> source, string reason, int confidence) =>
         source
             .Where(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() > 1)
             .Select(g => new DupGroup(reason, confidence, g.OrderBy(l => l.CreatedDateUtc).Select((l, i) => new DupLead(l, i == 0)).ToList()));
 
-    static string DigitsOnly(string value) => new(value.Where(char.IsDigit).ToArray());
+    private static string DigitsOnly(string value) => new(value.Where(char.IsDigit).ToArray());
 
-    static string NormalizeStage(string? stage, int statusCode)
-    {
-        if (!string.IsNullOrWhiteSpace(stage)) return stage.Trim() == "Won" ? "Converted" : stage.Trim() == "Closed" ? "Lost" : stage.Trim();
-        return statusCode switch { 2 => "Contacted", 3 => "Qualified", 4 => "Converted", 5 => "Lost", _ => "New" };
-    }
+    private sealed record ViewDef(string Id, string Label, string Icon);
+    private sealed record KpiModel(string Label, string Value, string Caption, string Icon, string Tone, string Filter);
+    private sealed record ConfirmAction(string Title, string Message, string ButtonText, string ButtonClass, string Icon, string Kind, Func<Task> ExecuteAsync);
+    private sealed record DistributionRow(string Label, int Count, double WidthPercent, string Tone) { public double Percent { get; init; } }
+    private sealed record ReasonBreakdownRow(string Reason, int Count, double WidthPercent);
 
-    private Guid _tenantId;
-
-    class DupGroup(string matchReason, int confidence, List<DupLead> leads)
+    private sealed class DupGroup(string matchReason, int confidence, List<DupLead> leads)
     {
         public string MatchReason { get; } = matchReason;
         public int Confidence { get; } = confidence;
         public List<DupLead> Leads { get; } = leads;
+        public string GroupKey { get; } = string.Join('|', leads.Select(l => l.LeadId).OrderBy(id => id));
+        public bool IsResolved => !string.IsNullOrWhiteSpace(Resolution);
+        public string Resolution { get; set; } = string.Empty;
+        public DateTime? ResolvedAt { get; set; }
     }
 
-    class DupLead(LeadDto lead, bool isPrimary)
+    private sealed class DupLead(LeadDto lead, bool isPrimary)
     {
-        public Guid   LeadId      { get; } = lead.LeadId;
-        public string FullName    { get; } = $"{lead.FirstName} {lead.LastName}".Trim();
-        public string Email       { get; } = lead.Email ?? "—";
-        public string Phone       { get; } = lead.Phone ?? "—";
-        public string Company     { get; } = lead.AccountName ?? "—";
-        public string Stage       { get; } = NormalizeStage(lead.NurturingStageCode, lead.StatusCode);
-        public int    Score       { get; } = Math.Clamp(lead.Score ?? 0, 0, 100);
-        public string CreatedDate { get; } = lead.CreatedDateUtc.ToString("MMM d, yyyy");
-        public bool   IsPrimary   { get; set; } = isPrimary;
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        public Guid LeadId { get; } = lead.LeadId;
+        public string FullName { get; } = $"{lead.FirstName} {lead.LastName}".Trim();
+        public string Email { get; } = lead.Email ?? "—";
+        public string Phone { get; } = lead.Phone ?? "—";
+        public string Company { get; } = lead.AccountName ?? "—";
+        public string Stage { get; } = NormalizeStage(lead.NurturingStageCode, lead.StatusCode);
+        public int Score { get; } = Math.Clamp(lead.Score ?? 0, 0, 100);
+        public DateTime CreatedDateUtc { get; } = lead.CreatedDateUtc;
+        public bool IsPrimary { get; set; } = isPrimary;
     }
 }

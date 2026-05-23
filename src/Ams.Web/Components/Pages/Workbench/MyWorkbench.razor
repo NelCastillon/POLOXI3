@@ -1,258 +1,486 @@
 @page "/workbench"
 @namespace Ams.Web.Components.Pages.Workbench
+@using System.Globalization
+@using Ams.Application.Features.Workbench
+@using ChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>My Workbench — AMS</PageTitle>
+<PageTitle>Enterprise My Workbench — AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+@if (_toastVisible)
+{
+    <div class="mwb-toast mwb-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="mwb-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
 
-<AppPageHeader Title="My Workbench"
-               Subtitle="Your personalised hub — tasks, activities, schedule and quick access to every role workbench"
-               Icon="bi-grid-1x2">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="Refresh" title="Refresh">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/workbench/tasks")'>
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Task
-        </button>
-    </Actions>
-</AppPageHeader>
+<div class="mwb-enterprise-page">
+    <section class="mwb-hero">
+        <div class="mwb-hero-left">
+            <span class="mwb-hero-icon"><i class="bi bi-grid-1x2" aria-hidden="true"></i></span>
+            <div>
+                <div class="mwb-title-row">
+                    <h1>My Workbench</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> Live operational data</span>
+                    <span><i class="bi bi-person-check" aria-hidden="true"></i> User scoped</span>
+                </div>
+                <p>Your enterprise command center for tasks, activities, schedule, notifications, and role workbenches.</p>
+            </div>
+        </div>
+        <div class="mwb-hero-actions">
+            <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh workbench"><i class="bi @(_loading ? "bi-arrow-repeat mwb-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/workbench/tasks")' title="Open task workspace"><i class="bi bi-check2-square" aria-hidden="true"></i> Tasks</button>
+            <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/workbench/calendar")' title="Open calendar"><i class="bi bi-calendar-event" aria-hidden="true"></i> Calendar</button>
+            <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/workbench/tasks")' title="Create a task"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Task</button>
+        </div>
+    </section>
 
-<!-- ── KPI summary strip ─────────────────────────────────────────── -->
-<div class="mw-kpi-strip">
-    @KpiCard("bi-check2-square",  "Open Tasks",        _kpis.OpenTasks.ToString(),        "mw-kpi-tasks",   "/workbench/tasks")
-    @KpiCard("bi-alarm-fill",     "Overdue",           _kpis.OverdueTasks.ToString(),     "mw-kpi-overdue", "/workbench/tasks")
-    @KpiCard("bi-lightning-fill", "Activities Today",  _kpis.ActivitiesToday.ToString(),  "mw-kpi-act",     "/workbench/activities")
-    @KpiCard("bi-bell-fill",      "Unread Notifs.",    _kpis.Unread.ToString(),           "mw-kpi-notif",   "/workbench/notifications")
-    @KpiCard("bi-arrow-clockwise","Renewals Due",      _kpis.RenewalsDue.ToString(),      "mw-kpi-ren",     "/renewals")
-    @KpiCard("bi-headset",        "Open Requests",     _kpis.OpenServiceRequests.ToString(),"mw-kpi-sr",    "/ops/service-requests")
-</div>
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger mwb-error-banner" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_loadError</div>
+    }
 
-<!-- ── Main body ─────────────────────────────────────────────────── -->
-<div class="mw-body">
+    <section class="mwb-kpi-strip" aria-label="Workbench metrics">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="@(() => SetQuickFilter(metric.Filter))">
+                <span class="mwb-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                <span><span class="mwb-kpi-val">@metric.Value.ToString("N0", CultureInfo.CurrentCulture)</span><span class="mwb-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
+            </button>
+        }
+    </section>
 
-    <!-- Left column: tasks + schedule -->
-    <div class="mw-col mw-col-main">
+    <section class="mwb-workflow-strip" aria-label="Workbench workflow actions">
+        <button class="mwb-workflow-card" @onclick="ShowTasks"><i class="bi bi-check2-square" aria-hidden="true"></i><span><strong>Work task queue</strong><span>Prioritize, complete, and navigate tasks.</span></span></button>
+        <button class="mwb-workflow-card" @onclick="ShowSchedule"><i class="bi bi-calendar-week" aria-hidden="true"></i><span><strong>Review schedule</strong><span>See today's meetings and follow-ups.</span></span></button>
+        <button class="mwb-workflow-card" @onclick="ShowActivities"><i class="bi bi-activity" aria-hidden="true"></i><span><strong>Audit activity</strong><span>Track recent operational interactions.</span></span></button>
+        <button class="mwb-workflow-card" @onclick="ShowNotifications"><i class="bi bi-bell" aria-hidden="true"></i><span><strong>Clear alerts</strong><span>Review and mark notifications read.</span></span></button>
+    </section>
 
-        <!-- Today's Tasks -->
-        <div class="mw-card">
-            <div class="mw-card-hdr">
-                <div class="mw-card-title">
-                    <i class="bi bi-check2-square" aria-hidden="true"></i> Today's Tasks
-                    @if (_kpis.OverdueTasks > 0)
+    <section class="mwb-search-panel">
+        <div class="mwb-search-wrap">
+            <span class="mwb-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="mwb-search-body">
+                <label for="workbenchSearchInput">Search workbench</label>
+                <input id="workbenchSearchInput" class="mwb-search-input" value="@_searchTerm" @oninput="SearchChangedCallback" placeholder="Search tasks, schedule, activities, notifications, or role links..." />
+                <span class="mwb-search-hint">Filters all tabs instantly; refresh syncs the same context with the API.</span>
+            </div>
+        </div>
+        <select class="mwb-filter-select" value="@_priorityFilter" @onchange="PriorityChangedCallback" title="Filter task priority">
+            <option value="">All priorities</option>
+            <option value="Critical">Critical</option>
+            <option value="High">High</option>
+            <option value="Medium">Medium</option>
+            <option value="Normal">Normal</option>
+            <option value="Low">Low</option>
+        </select>
+        <select class="mwb-filter-select" value="@_statusFilter" @onchange="StatusChangedCallback" title="Filter task status">
+            <option value="">All statuses</option>
+            <option value="Open">Open</option>
+            <option value="InProgress">In Progress</option>
+            <option value="Completed">Completed</option>
+            <option value="Closed">Closed</option>
+        </select>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+        <button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-cloud-arrow-down" aria-hidden="true"></i> Sync</button>
+        <div class="mwb-search-result"><strong>@ActiveCount</strong><span>@ActiveCountLabel</span></div>
+    </section>
+
+    <section class="mwb-view-tabs" aria-label="Workbench views">
+        @foreach (var view in _views)
+        {
+            <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label</button>
+        }
+    </section>
+
+    <section class="mwb-content-layout">
+        <main class="mwb-main-card">
+            @if (_loading)
+            {
+                <div class="mwb-loading"><i class="bi bi-arrow-repeat mwb-spin" aria-hidden="true"></i><strong>Syncing your enterprise workbench...</strong></div>
+            }
+            else if (_view == "tasks")
+            {
+                <div class="mwb-section-head"><div><h2>Task command queue</h2><p>Review priorities, complete work, and open the full task workspace without losing context.</p></div><button class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/workbench/tasks")'><i class="bi bi-arrow-right" aria-hidden="true"></i> All Tasks</button></div>
+                @if (FilteredTasks.Count == 0)
+                {
+                    <div class="mwb-empty-state"><i class="bi bi-check2-all" aria-hidden="true"></i><strong>No tasks match this view</strong><span>Adjust filters, sync data, or open the full task workspace.</span><button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/workbench/tasks")'>Open tasks</button></div>
+                }
+                else
+                {
+                    <div class="mwb-task-list">
+                        @foreach (var task in FilteredTasks)
+                        {
+                            <article class="mwb-task-item @(task.IsOverdue ? "mwb-task-overdue" : string.Empty) @(SelectedTaskId == task.TaskItemId ? "mwb-task-selected" : string.Empty)" @onclick="@(() => SelectTask(task))">
+                                <button type="button" class="mwb-task-check @(task.IsCompleted ? "mwb-task-check-done" : string.Empty)" title="Toggle task completion" @onclick="@(() => ToggleTaskAsync(task))" @onclick:stopPropagation="true" disabled="@_busy"><i class="bi @(task.IsCompleted ? "bi-check-circle-fill" : "bi-circle")" aria-hidden="true"></i></button>
+                                <div class="mwb-task-body"><strong class="@(task.IsCompleted ? "mwb-task-done" : string.Empty)">@task.Title</strong><span>@TaskMeta(task)</span></div>
+                                <span class="@PriorityClass(task.PriorityCode)">@PriorityLabel(task.PriorityCode)</span>
+                            </article>
+                        }
+                    </div>
+                }
+            }
+            else if (_view == "schedule")
+            {
+                <div class="mwb-section-head"><div><h2>Today's schedule</h2><p>@DateTime.Today.ToString("dddd, MMMM d", CultureInfo.CurrentCulture) meetings, follow-ups, and commitments.</p></div><button class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/workbench/calendar")'><i class="bi bi-calendar-event" aria-hidden="true"></i> Calendar</button></div>
+                @if (FilteredSchedule.Count == 0)
+                {
+                    <div class="mwb-empty-state"><i class="bi bi-calendar-check" aria-hidden="true"></i><strong>Nothing scheduled for this view</strong><span>Use calendar to add or review workbench commitments.</span><button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/workbench/calendar")'>Open calendar</button></div>
+                }
+                else
+                {
+                    <div class="mwb-schedule-list">
+                        @foreach (var item in FilteredSchedule)
+                        {
+                            <article class="mwb-schedule-item @(SelectedScheduleId == item.EventId ? "mwb-schedule-selected" : string.Empty)" @onclick="@(() => SelectSchedule(item))">
+                                <div class="mwb-schedule-time"><strong>@item.StartDateTime.ToLocalTime().ToString("h:mm tt", CultureInfo.CurrentCulture)</strong><span>@ScheduleDuration(item)</span></div>
+                                <span class="mwb-schedule-dot @TypeTone(item.EventTypeCode)"></span>
+                                <div class="mwb-schedule-body"><strong>@item.Title</strong><span>@(string.IsNullOrWhiteSpace(item.AccountName) ? item.Location : item.AccountName)</span></div>
+                                <span class="mwb-chip @TypeTone(item.EventTypeCode)">@DisplayCode(item.EventTypeCode)</span>
+                            </article>
+                        }
+                    </div>
+                }
+            }
+            else if (_view == "activity")
+            {
+                <div class="mwb-section-head"><div><h2>Recent activity</h2><p>Operational timeline from CRM and service workflows.</p></div><button class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/workbench/activities")'><i class="bi bi-activity" aria-hidden="true"></i> Activities</button></div>
+                @if (FilteredActivities.Count == 0)
+                {
+                    <div class="mwb-empty-state"><i class="bi bi-clock-history" aria-hidden="true"></i><strong>No activity matches this view</strong><span>Sync or broaden your search to review operational updates.</span><button class="um-btn um-btn-primary" @onclick="LoadAsync">Sync activity</button></div>
+                }
+                else
+                {
+                    <div class="mwb-activity-feed">
+                        @foreach (var activity in FilteredActivities)
+                        {
+                            <article class="mwb-activity-item @(SelectedActivityId == activity.ActivityId ? "mwb-activity-selected" : string.Empty)" @onclick="@(() => SelectActivity(activity))">
+                                <span class="mwb-activity-icon @TypeTone(activity.ActivityTypeCode)"><i class="bi @ActivityIcon(activity.ActivityTypeCode)" aria-hidden="true"></i></span>
+                                <div><strong>@activity.Subject</strong><span>@(activity.AccountName ?? "Operational activity") · @FormatAge(activity.ActivityDateTime)</span></div>
+                            </article>
+                        }
+                    </div>
+                }
+            }
+            else if (_view == "notifications")
+            {
+                <div class="mwb-section-head"><div><h2>Notifications</h2><p>Review unread alerts and clear completed items.</p></div><button class="um-btn um-btn-primary um-btn-sm" @onclick="MarkAllNotificationsReadAsync" disabled="@_busy"><i class="bi bi-check2-all" aria-hidden="true"></i> Mark All Read</button></div>
+                @if (FilteredNotifications.Count == 0)
+                {
+                    <div class="mwb-empty-state"><i class="bi bi-bell-slash" aria-hidden="true"></i><strong>No notifications match this view</strong><span>You're clear for the current filters.</span><button class="um-btn um-btn-primary" @onclick="LoadAsync">Refresh</button></div>
+                }
+                else
+                {
+                    <div class="mwb-notification-list">
+                        @foreach (var notification in FilteredNotifications)
+                        {
+                            <article class="mwb-notification-item @(notification.IsRead ? "mwb-notification-read" : string.Empty) @(SelectedNotificationId == notification.NotificationId ? "mwb-notification-selected" : string.Empty)" @onclick="@(() => SelectNotification(notification))">
+                                <span class="mwb-notification-icon @SeverityTone(notification.SeverityCode)"><i class="bi @NotificationIcon(notification.SeverityCode)" aria-hidden="true"></i></span>
+                                <div><strong>@notification.Title</strong><span>@notification.Message</span><small>@FormatAge(notification.CreatedDateUtc)</small></div>
+                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => MarkNotificationReadAsync(notification))" @onclick:stopPropagation="true" disabled="@(notification.IsRead || _busy)">Read</button>
+                            </article>
+                        }
+                    </div>
+                }
+            }
+            else
+            {
+                <div class="mwb-section-head"><div><h2>Workbench quick links</h2><p>Navigate to role workbenches and personal productivity tools.</p></div><button class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/workbench/operations")'><i class="bi bi-diagram-3" aria-hidden="true"></i> Operations</button></div>
+                <div class="mwb-link-grid">
+                    @foreach (var link in FilteredQuickLinks)
                     {
-                        <span class="mw-badge-red">@_kpis.OverdueTasks overdue</span>
+                        <button class="mwb-link-card" @onclick="@(() => Nav.NavigateTo(link.Url))" title="Open @link.Label">
+                            <span><i class="@NormalizeIcon(link.IconCssClass)" aria-hidden="true"></i></span>
+                            <strong>@link.Label</strong>
+                            <small>@DisplayCode(link.CategoryCode)</small>
+                        </button>
                     }
                 </div>
-                <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/workbench/tasks")'>
-                    View All <i class="bi bi-arrow-right" aria-hidden="true"></i>
-                </button>
-            </div>
-            <div class="mw-task-list">
-                @foreach (var t in _tasks.Take(6))
-                {
-                    <div class="mw-task-row @(t.IsOverdue ? "mw-task-overdue" : "")">
-                        <button class="mw-task-check @(t.Done ? "mw-task-check--done" : "")"
-                                @onclick="() => t.Done = !t.Done" title="Toggle complete">
-                            <i class="bi @(t.Done ? "bi-check-circle-fill" : "bi-circle")" aria-hidden="true"></i>
-                        </button>
-                        <div class="mw-task-body">
-                            <span class="mw-task-title @(t.Done ? "mw-task-done" : "")">@t.Title</span>
-                            <span class="mw-task-meta">@t.Category · @t.DueLabel</span>
-                        </div>
-                        <span class="mw-pri-badge mw-pri-@t.Priority.ToLower()">@t.Priority</span>
-                    </div>
-                }
-                @if (!_tasks.Any())
-                {
-                    <div class="mw-empty"><i class="bi bi-check2-all" aria-hidden="true"></i> All clear — no tasks today!</div>
-                }
-            </div>
-        </div>
+            }
+        </main>
 
-        <!-- Today's Schedule -->
-        <div class="mw-card">
-            <div class="mw-card-hdr">
-                <div class="mw-card-title">
-                    <i class="bi bi-calendar3" aria-hidden="true"></i> Today's Schedule
-                    <span class="mw-date-chip">@DateTime.Today.ToString("ddd, MMM d")</span>
-                </div>
-                <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/workbench/calendar")'>
-                    Calendar <i class="bi bi-arrow-right" aria-hidden="true"></i>
-                </button>
-            </div>
-            <div class="mw-schedule-list">
-                @foreach (var e in _events)
-                {
-                    <div class="mw-sched-row mw-sched-@e.Type.ToLower()">
-                        <div class="mw-sched-time">@e.StartTime.ToString("h:mm tt")</div>
-                        <div class="mw-sched-dot"></div>
-                        <div class="mw-sched-body">
-                            <span class="mw-sched-title">@e.Title</span>
-                            @if (!string.IsNullOrEmpty(e.Account))
-                            {
-                                <span class="mw-sched-acct">@e.Account</span>
-                            }
-                        </div>
-                        <span class="mw-sched-chip mw-sched-chip-@e.Type.ToLower()">@e.Type</span>
-                    </div>
-                }
-                @if (!_events.Any())
-                {
-                    <div class="mw-empty"><i class="bi bi-calendar-check" aria-hidden="true"></i> Nothing scheduled today.</div>
-                }
-            </div>
-        </div>
-
-    </div>
-
-    <!-- Right column: recent activity + workbench links -->
-    <div class="mw-col mw-col-side">
-
-        <!-- Recent Activity Feed -->
-        <div class="mw-card">
-            <div class="mw-card-hdr">
-                <div class="mw-card-title">
-                    <i class="bi bi-lightning" aria-hidden="true"></i> Recent Activity
-                </div>
-                <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/workbench/activities")'>
-                    View All <i class="bi bi-arrow-right" aria-hidden="true"></i>
-                </button>
-            </div>
-            <div class="mw-activity-feed">
-                @foreach (var a in _activities.Take(7))
-                {
-                    <div class="mw-activity-row">
-                        <div class="mw-act-icon mw-act-@a.Type.ToLower()">
-                            <i class="bi @ActivityIcon(a.Type)" aria-hidden="true"></i>
-                        </div>
-                        <div class="mw-act-body">
-                            <span class="mw-act-title">@a.Subject</span>
-                            <span class="mw-act-meta">@a.Account · @FormatAge(a.LoggedAt)</span>
-                        </div>
-                    </div>
-                }
-            </div>
-        </div>
-
-        <!-- Role Workbench quick links -->
-        <div class="mw-card">
-            <div class="mw-card-hdr">
-                <div class="mw-card-title">
-                    <i class="bi bi-grid" aria-hidden="true"></i> Role Workbenches
-                </div>
-            </div>
-            <div class="mw-wb-grid">
-                @foreach (var wb in _workbenches)
-                {
-                    <button class="mw-wb-tile" @onclick="() => Nav.NavigateTo(wb.Url)">
-                        <i class="bi @wb.Icon mw-wb-icon" aria-hidden="true"></i>
-                        <span class="mw-wb-label">@wb.Label</span>
-                    </button>
-                }
-            </div>
-        </div>
-
-    </div>
+        <aside class="mwb-detail-card">
+            @if (_selectedTask is not null)
+            {
+                <div class="mwb-detail-head"><div><span class="mwb-detail-eyebrow"><i class="bi bi-check2-square" aria-hidden="true"></i> Selected task</span><h2>@_selectedTask.Title</h2><p>@TaskMeta(_selectedTask)</p></div><span class="@PriorityClass(_selectedTask.PriorityCode)">@PriorityLabel(_selectedTask.PriorityCode)</span></div>
+                <div class="mwb-detail-body"><div class="mwb-detail-summary"><div><span>Status</span><strong>@DisplayCode(_selectedTask.StatusCode)</strong></div><div><span>Due</span><strong>@DueLabel(_selectedTask)</strong></div><div><span>Type</span><strong>@DisplayCode(_selectedTask.TaskTypeCode)</strong></div><div><span>Stage</span><strong>@DisplayCode(_selectedTask.StageCode)</strong></div></div><p class="mwb-detail-note">@(_selectedTask.Description ?? "No task description has been provided.")</p><div class="mwb-detail-actions"><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/workbench/tasks")'><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Tasks</button><button class="um-btn um-btn-primary" @onclick="@(() => ToggleTaskAsync(_selectedTask))" disabled="@_busy"><i class="bi bi-check2-circle" aria-hidden="true"></i> @(_selectedTask.IsCompleted ? "Reopen" : "Complete")</button></div></div>
+            }
+            else if (_selectedSchedule is not null)
+            {
+                <div class="mwb-detail-head"><div><span class="mwb-detail-eyebrow"><i class="bi bi-calendar-event" aria-hidden="true"></i> Schedule</span><h2>@_selectedSchedule.Title</h2><p>@_selectedSchedule.StartDateTime.ToLocalTime().ToString("MMM d, h:mm tt", CultureInfo.CurrentCulture)</p></div><span class="mwb-chip @TypeTone(_selectedSchedule.EventTypeCode)">@DisplayCode(_selectedSchedule.EventTypeCode)</span></div>
+                <div class="mwb-detail-body"><div class="mwb-detail-summary"><div><span>Starts</span><strong>@_selectedSchedule.StartDateTime.ToLocalTime().ToString("h:mm tt", CultureInfo.CurrentCulture)</strong></div><div><span>Ends</span><strong>@(_selectedSchedule.EndDateTime?.ToLocalTime().ToString("h:mm tt", CultureInfo.CurrentCulture) ?? "Open")</strong></div><div><span>Account</span><strong>@(_selectedSchedule.AccountName ?? "—")</strong></div><div><span>Location</span><strong>@(_selectedSchedule.Location ?? "—")</strong></div></div><div class="mwb-detail-actions"><button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/workbench/calendar")'><i class="bi bi-calendar-week" aria-hidden="true"></i> Open Calendar</button></div></div>
+            }
+            else if (_selectedNotification is not null)
+            {
+                <div class="mwb-detail-head"><div><span class="mwb-detail-eyebrow"><i class="bi bi-bell" aria-hidden="true"></i> Notification</span><h2>@_selectedNotification.Title</h2><p>@FormatAge(_selectedNotification.CreatedDateUtc)</p></div><span class="mwb-chip @SeverityTone(_selectedNotification.SeverityCode)">@DisplayCode(_selectedNotification.SeverityCode)</span></div>
+                <div class="mwb-detail-body"><p class="mwb-detail-note">@_selectedNotification.Message</p><div class="mwb-detail-actions"><button class="um-btn um-btn-ghost" @onclick="@(() => OpenNotificationTarget(_selectedNotification))"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open</button><button class="um-btn um-btn-primary" @onclick="@(() => MarkNotificationReadAsync(_selectedNotification))" disabled="@(_selectedNotification.IsRead || _busy)"><i class="bi bi-check2" aria-hidden="true"></i> Mark Read</button></div></div>
+            }
+            else
+            {
+                <div class="mwb-detail-empty"><i class="bi bi-grid-1x2" aria-hidden="true"></i><strong>Select workbench item</strong><span>Click a task, schedule event, activity, or notification to see details and available actions.</span></div>
+            }
+        </aside>
+    </section>
 </div>
 
 @code {
-    SfToast _toast = default!;
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private MyWorkbenchDto _workspace = new();
+    private bool _loading = true;
+    private bool _busy;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "info";
+    private string? _loadError;
+    private string _view = "tasks";
+    private string _activeFilter = "all";
+    private string _searchTerm = string.Empty;
+    private string _priorityFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private MyWorkbenchTaskDto? _selectedTask;
+    private MyWorkbenchScheduleEventDto? _selectedSchedule;
+    private MyWorkbenchActivityDto? _selectedActivity;
+    private MyWorkbenchNotificationDto? _selectedNotification;
 
-    sealed record KpiSummary(int OpenTasks, int OverdueTasks, int ActivitiesToday,
-                             int Unread, int RenewalsDue, int OpenServiceRequests);
-    sealed record TaskItem(string Title, string Category, string Priority, string DueLabel, bool IsOverdue)
-    {
-        public bool Done { get; set; }
-    }
-    sealed record ScheduleEvent(string Title, string Account, string Type, DateTime StartTime);
-    sealed record ActivityItem(string Subject, string Account, string Type, DateTime LoggedAt);
-    sealed record WbLink(string Label, string Icon, string Url);
+    private Guid? SelectedTaskId => _selectedTask?.TaskItemId;
+    private Guid? SelectedScheduleId => _selectedSchedule?.EventId;
+    private Guid? SelectedActivityId => _selectedActivity?.ActivityId;
+    private Guid? SelectedNotificationId => _selectedNotification?.NotificationId;
+    private string ToastIconClass => _toastKind switch { "success" => "bi-check-circle-fill", "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-info-circle-fill" };
+    private EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> SearchChangedCallback => EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, e => _searchTerm = e.Value?.ToString() ?? string.Empty);
+    private EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> PriorityChangedCallback => EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, e => _priorityFilter = e.Value?.ToString() ?? string.Empty);
+    private EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> StatusChangedCallback => EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, e => _statusFilter = e.Value?.ToString() ?? string.Empty);
 
-    KpiSummary _kpis = new(0,0,0,0,0,0);
+    private IReadOnlyList<ViewOption> _views = [new("tasks", "Tasks", "bi-check2-square"), new("schedule", "Schedule", "bi-calendar-week"), new("activity", "Activity", "bi-activity"), new("notifications", "Alerts", "bi-bell"), new("links", "Links", "bi-grid")];
 
-    List<TaskItem>      _tasks      = new();
-    List<ScheduleEvent> _events     = new();
-    List<ActivityItem>  _activities = new();
-
-    readonly WbLink[] _workbenches =
+    private IReadOnlyList<KpiMetric> Metrics =>
     [
-        new("Producer",       "bi-person-badge",     "/workbench/producer"),
-        new("CSR",            "bi-headset",           "/workbench/csr"),
-        new("Service Mgr",    "bi-diagram-3-fill",    "/workbench/service-manager"),
-        new("Accounting",     "bi-calculator-fill",   "/workbench/accounting"),
-        new("Marketing",      "bi-megaphone-fill",    "/workbench/marketing"),
-        new("Operations",     "bi-tools",             "/workbench/operations"),
+        new("open", "Open Tasks", _workspace.Kpis.OpenTasks, "Active task queue", "bi-check2-square"),
+        new("overdue", "Overdue", _workspace.Kpis.OverdueTasks, "Needs attention now", "bi-alarm"),
+        new("activity", "Activities Today", _workspace.Kpis.ActivitiesToday, "Logged today", "bi-lightning-charge"),
+        new("unread", "Unread Alerts", _workspace.Kpis.UnreadNotifications, "Notifications to clear", "bi-bell"),
+        new("renewals", "Renewals Due", _workspace.Kpis.RenewalsDue, "Renewal workflow tasks", "bi-arrow-clockwise"),
+        new("service", "Open Requests", _workspace.Kpis.OpenServiceRequests, "Service queue tasks", "bi-headset"),
+        new("completed", "Completed", _workspace.Kpis.CompletedToday, "Closed today", "bi-check2-all")
     ];
 
-    protected override void OnInitialized()
+    private List<MyWorkbenchTaskDto> FilteredTasks => _workspace.Tasks.Where(MatchesTask).OrderByDescending(t => t.IsOverdue).ThenBy(t => t.DueDate ?? DateOnly.MaxValue).ThenByDescending(t => t.CreatedDateUtc).ToList();
+    private List<MyWorkbenchScheduleEventDto> FilteredSchedule => _workspace.Schedule.Where(MatchesSchedule).OrderBy(s => s.StartDateTime).ToList();
+    private List<MyWorkbenchActivityDto> FilteredActivities => _workspace.Activities.Where(MatchesActivity).OrderByDescending(a => a.ActivityDateTime).ToList();
+    private List<MyWorkbenchNotificationDto> FilteredNotifications => _workspace.Notifications.Where(MatchesNotification).OrderBy(n => n.IsRead).ThenByDescending(n => n.CreatedDateUtc).ToList();
+    private List<MyWorkbenchQuickLinkDto> FilteredQuickLinks => QuickLinks.Where(MatchesQuickLink).OrderBy(l => l.SortOrder).ThenBy(l => l.Label).ToList();
+    private IReadOnlyList<MyWorkbenchQuickLinkDto> QuickLinks => _workspace.QuickLinks.Count > 0 ? _workspace.QuickLinks : DefaultQuickLinks;
+    private int ActiveCount => _view switch { "schedule" => FilteredSchedule.Count, "activity" => FilteredActivities.Count, "notifications" => FilteredNotifications.Count, "links" => FilteredQuickLinks.Count, _ => FilteredTasks.Count };
+    private string ActiveCountLabel => _view switch { "schedule" => "events", "activity" => "activities", "notifications" => "alerts", "links" => "links", _ => "tasks" };
+
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Workbench", "/workbench"));
-        BuildStub();
+        await ResolveCurrentUserContextAsync();
+        await LoadAsync();
     }
 
-    void BuildStub()
+    private async Task ResolveCurrentUserContextAsync()
     {
-        _kpis = new(14, 3, 7, 5, 9, 4);
-
-        _tasks = new()
-        {
-            new("Follow up on Hartford quote — Sullivan Mfg.",  "Quote Follow-up", "High",   "Today",        false),
-            new("Send cert of insurance to Metro Freight",       "Certificate",     "High",   "Today",        false),
-            new("Review renewal proposal — Apex Medical",        "Renewal",         "Medium", "Today",        false),
-            new("Call back Bridgewater Hotels re: premium",      "Call",            "High",   "Overdue 2d",   true),
-            new("Prepare ACORD 25 — Dallas Roofing",             "Document",        "Low",    "Tomorrow",     false),
-            new("Update pipeline forecast Q2",                   "Admin",           "Low",    "This week",    false),
-        };
-
-        _events = new()
-        {
-            new("Renewal Review Call — Sullivan Mfg.",   "Sullivan Mfg. LLC",    "Call",     DateTime.Today.AddHours(9)),
-            new("Quote Presentation — Metro Freight",    "Metro Freight Co.",    "Meeting",  DateTime.Today.AddHours(10.5)),
-            new("Team Standup",                          "",                     "Meeting",  DateTime.Today.AddHours(11)),
-            new("Follow-up: Apex Medical",               "Apex Medical Group",   "Task",     DateTime.Today.AddHours(14)),
-            new("Webinar: E&S Market Update",            "",                     "Event",    DateTime.Today.AddHours(15)),
-        };
-
-        var rnd = new Random(42);
-        var types  = new[]{ "Call","Email","Meeting","Note","Task" };
-        var accts  = new[]{ "Sullivan Mfg. LLC","Metro Freight Co.","Apex Medical Group","Dallas Roofing LLC","Sun Valley Resort" };
-        var subjs  = new[]{ "Discussed renewal options","Sent proposal document","Left voicemail","Policy review completed","Reviewed coverage gap","Confirmed effective date","Emailed quote summary" };
-
-        _activities = Enumerable.Range(0, 12).Select(i => new ActivityItem(
-            subjs[rnd.Next(subjs.Length)],
-            accts[rnd.Next(accts.Length)],
-            types[rnd.Next(types.Length)],
-            DateTime.Now.AddMinutes(-rnd.Next(5, 480))
-        )).OrderByDescending(a => a.LoggedAt).ToList();
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
     }
 
-    void Refresh() => BuildStub();
-
-    RenderFragment KpiCard(string icon, string label, string val, string css, string href) =>
-        @<button class="mw-kpi-card @css" @onclick="() => Nav.NavigateTo(href)">
-            <div class="mw-kpi-val">@val</div>
-            <div class="mw-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
-        </button>;
-
-    static string ActivityIcon(string t) => t switch
+    private async Task LoadAsync()
     {
-        "Call"    => "bi-telephone-fill",
-        "Email"   => "bi-envelope-fill",
-        "Meeting" => "bi-calendar-event-fill",
-        "Task"    => "bi-check2-square",
-        _         => "bi-sticky-fill"
-    };
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _workspace = await Api.GetMyWorkbenchAsync(_tenantId, _tenantAdminUserId, _searchTerm, _view, _priorityFilter, _statusFilter, DateOnly.FromDateTime(DateTime.Today)) ?? new();
+            _selectedTask ??= FilteredTasks.FirstOrDefault();
+            ShowToast("Workbench synced successfully.", "success");
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Workbench load failed: {ex.Message}";
+            ShowToast($"Workbench load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
 
-    static string FormatAge(DateTime dt)
+    private void SetQuickFilter(string filter)
     {
-        var diff = DateTime.Now - dt;
-        if (diff.TotalMinutes < 60)  return $"{(int)diff.TotalMinutes}m ago";
-        if (diff.TotalHours   < 24)  return $"{(int)diff.TotalHours}h ago";
+        _activeFilter = filter;
+        _view = filter switch { "activity" => "activity", "unread" => "notifications", _ => "tasks" };
+        ClearSelectionForView();
+    }
+
+    private void SetView(string view)
+    {
+        _view = view;
+        if (view is not "tasks")
+        {
+            _activeFilter = "all";
+        }
+        ClearSelectionForView();
+    }
+
+    private void ShowTasks() => SetView("tasks");
+    private void ShowSchedule() => SetView("schedule");
+    private void ShowActivities() => SetView("activity");
+    private void ShowNotifications() => SetView("notifications");
+
+    private void ResetFilters()
+    {
+        _searchTerm = string.Empty;
+        _priorityFilter = string.Empty;
+        _statusFilter = string.Empty;
+        _activeFilter = "all";
+    }
+
+    private async Task ToggleTaskAsync(MyWorkbenchTaskDto task)
+    {
+        _busy = true;
+        try
+        {
+            var nextStatus = task.IsCompleted ? "Open" : "Completed";
+            await Api.SetMyWorkbenchTaskStatusAsync(task.TaskItemId, new MyWorkbenchTaskStatusRequest { TenantId = _tenantId, StatusCode = nextStatus, ModifiedByUserId = _tenantAdminUserId });
+            task.StatusCode = nextStatus;
+            task.IsCompleted = nextStatus == "Completed";
+            task.CompletedDate = task.IsCompleted ? DateOnly.FromDateTime(DateTime.Today) : null;
+            ShowToast($"Task {(task.IsCompleted ? "completed" : "reopened")}: {task.Title}", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Task update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task MarkNotificationReadAsync(MyWorkbenchNotificationDto notification)
+    {
+        _busy = true;
+        try
+        {
+            await Api.SetMyWorkbenchNotificationReadAsync(notification.NotificationId, new MyWorkbenchNotificationStatusRequest { TenantId = _tenantId, IsRead = true, ModifiedByUserId = _tenantAdminUserId });
+            notification.IsRead = true;
+            ShowToast($"Notification marked read: {notification.Title}", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Notification update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task MarkAllNotificationsReadAsync()
+    {
+        foreach (var notification in FilteredNotifications.Where(n => !n.IsRead).ToList())
+        {
+            await MarkNotificationReadAsync(notification);
+        }
+    }
+
+    private void SelectTask(MyWorkbenchTaskDto task) { _selectedTask = task; _selectedSchedule = null; _selectedActivity = null; _selectedNotification = null; }
+    private void SelectSchedule(MyWorkbenchScheduleEventDto item) { _selectedSchedule = item; _selectedTask = null; _selectedActivity = null; _selectedNotification = null; }
+    private void SelectActivity(MyWorkbenchActivityDto item) { _selectedActivity = item; _selectedTask = null; _selectedSchedule = null; _selectedNotification = null; }
+    private void SelectNotification(MyWorkbenchNotificationDto item) { _selectedNotification = item; _selectedTask = null; _selectedSchedule = null; _selectedActivity = null; }
+
+    private void ClearSelectionForView()
+    {
+        _selectedTask = _view == "tasks" ? FilteredTasks.FirstOrDefault() : null;
+        _selectedSchedule = _view == "schedule" ? FilteredSchedule.FirstOrDefault() : null;
+        _selectedActivity = _view == "activity" ? FilteredActivities.FirstOrDefault() : null;
+        _selectedNotification = _view == "notifications" ? FilteredNotifications.FirstOrDefault() : null;
+    }
+
+    private bool MatchesTask(MyWorkbenchTaskDto task)
+    {
+        if (!MatchesSearch(task.Title, task.Description, task.TaskTypeCode, task.PriorityCode, task.StatusCode, task.RelatedEntityName)) return false;
+        if (!string.IsNullOrWhiteSpace(_priorityFilter) && !string.Equals(task.PriorityCode, _priorityFilter, StringComparison.OrdinalIgnoreCase)) return false;
+        if (!string.IsNullOrWhiteSpace(_statusFilter) && !string.Equals(task.StatusCode, _statusFilter, StringComparison.OrdinalIgnoreCase)) return false;
+        return _activeFilter switch
+        {
+            "open" => !task.IsCompleted,
+            "overdue" => task.IsOverdue,
+            "renewals" => ContainsAny(task.TaskTypeCode, "renewal") || ContainsAny(task.Title, "renewal"),
+            "service" => ContainsAny(task.TaskTypeCode, "service") || ContainsAny(task.Title, "service") || ContainsAny(task.StageCode, "service"),
+            "completed" => task.IsCompleted,
+            _ => true
+        };
+    }
+
+    private bool MatchesSchedule(MyWorkbenchScheduleEventDto item) => MatchesSearch(item.Title, item.AccountName, item.EventTypeCode, item.Location);
+    private bool MatchesActivity(MyWorkbenchActivityDto item) => MatchesSearch(item.Subject, item.AccountName, item.ActivityTypeCode, item.Notes);
+    private bool MatchesNotification(MyWorkbenchNotificationDto item) => MatchesSearch(item.Title, item.Message, item.SeverityCode) && (_activeFilter != "unread" || !item.IsRead);
+    private bool MatchesQuickLink(MyWorkbenchQuickLinkDto item) => MatchesSearch(item.Label, item.LinkCode, item.CategoryCode, item.Url);
+
+    private bool MatchesSearch(params string?[] values) => string.IsNullOrWhiteSpace(_searchTerm) || values.Any(v => !string.IsNullOrWhiteSpace(v) && v.Contains(_searchTerm, StringComparison.OrdinalIgnoreCase));
+    private static bool ContainsAny(string? value, string token) => !string.IsNullOrWhiteSpace(value) && value.Contains(token, StringComparison.OrdinalIgnoreCase);
+    private string MetricCardClass(KpiMetric metric) => $"mwb-kpi-card {(metric.Filter == _activeFilter ? "mwb-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewOption view) => $"mwb-view-btn {(view.Id == _view ? "mwb-view-btn-active" : string.Empty)}";
+    private static string NormalizeIcon(string icon) => icon.StartsWith("bi ", StringComparison.OrdinalIgnoreCase) ? icon : $"bi {icon}";
+    private static string DisplayCode(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value.Replace("_", " ").Replace("-", " ");
+    private static string PriorityLabel(string? value) => string.IsNullOrWhiteSpace(value) ? "Normal" : DisplayCode(value);
+    private static string PriorityClass(string? value) => $"mwb-priority mwb-priority-{(string.IsNullOrWhiteSpace(value) ? "normal" : value.ToLowerInvariant())}";
+    private static string DueLabel(MyWorkbenchTaskDto task) => task.DueDate?.ToString("MMM d", CultureInfo.CurrentCulture) ?? "No due date";
+    private static string TaskMeta(MyWorkbenchTaskDto task) => $"{DisplayCode(task.TaskTypeCode)} · {DueLabel(task)} · {DisplayCode(task.StatusCode)}";
+    private static string ScheduleDuration(MyWorkbenchScheduleEventDto item) => item.EndDateTime is null ? "Open" : $"{item.EndDateTime.Value.ToLocalTime():h:mm tt}";
+    private static string TypeTone(string? type) => $"mwb-tone-{(string.IsNullOrWhiteSpace(type) ? "default" : type.ToLowerInvariant().Replace(" ", "-"))}";
+    private static string SeverityTone(string? severity) => $"mwb-tone-{(string.IsNullOrWhiteSpace(severity) ? "info" : severity.ToLowerInvariant())}";
+    private static string ActivityIcon(string? type) => (type ?? string.Empty).ToLowerInvariant() switch { var t when t.Contains("call") => "bi-telephone-fill", var t when t.Contains("email") => "bi-envelope-fill", var t when t.Contains("meeting") => "bi-calendar-event-fill", var t when t.Contains("task") => "bi-check2-square", _ => "bi-sticky-fill" };
+    private static string NotificationIcon(string? severity) => (severity ?? string.Empty).ToLowerInvariant() switch { "critical" or "high" or "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "success" => "bi-check-circle-fill", _ => "bi-info-circle-fill" };
+
+    private static string FormatAge(DateTime dt)
+    {
+        var diff = DateTime.UtcNow - (dt.Kind == DateTimeKind.Local ? dt.ToUniversalTime() : dt);
+        if (diff.TotalMinutes < 1) return "just now";
+        if (diff.TotalMinutes < 60) return $"{(int)diff.TotalMinutes}m ago";
+        if (diff.TotalHours < 24) return $"{(int)diff.TotalHours}h ago";
         return $"{(int)diff.TotalDays}d ago";
     }
+
+    private void OpenNotificationTarget(MyWorkbenchNotificationDto notification)
+    {
+        Nav.NavigateTo(string.IsNullOrWhiteSpace(notification.TargetUrl) ? "/workbench" : notification.TargetUrl);
+    }
+
+    private void ShowToast(string message, string kind)
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
+    }
+
+    private void HideToast() => _toastVisible = false;
+
+    private static IReadOnlyList<MyWorkbenchQuickLinkDto> DefaultQuickLinks =>
+    [
+        new() { Label = "My Tasks", IconCssClass = "bi bi-check2-square", Url = "/workbench/tasks", CategoryCode = "Work", SortOrder = 10 },
+        new() { Label = "My Calendar", IconCssClass = "bi bi-calendar-event", Url = "/workbench/calendar", CategoryCode = "Work", SortOrder = 20 },
+        new() { Label = "My Activities", IconCssClass = "bi bi-activity", Url = "/workbench/activities", CategoryCode = "Work", SortOrder = 30 },
+        new() { Label = "Producer Workbench", IconCssClass = "bi bi-briefcase", Url = "/workbench/producer", CategoryCode = "Role", SortOrder = 40 },
+        new() { Label = "CSR Workbench", IconCssClass = "bi bi-headset", Url = "/workbench/csr", CategoryCode = "Role", SortOrder = 50 },
+        new() { Label = "Service Manager", IconCssClass = "bi bi-kanban", Url = "/workbench/service-manager", CategoryCode = "Role", SortOrder = 60 },
+        new() { Label = "Accounting", IconCssClass = "bi bi-calculator", Url = "/workbench/accounting", CategoryCode = "Role", SortOrder = 70 },
+        new() { Label = "Marketing", IconCssClass = "bi bi-megaphone", Url = "/workbench/marketing", CategoryCode = "Role", SortOrder = 80 },
+        new() { Label = "Operations", IconCssClass = "bi bi-diagram-3", Url = "/workbench/operations", CategoryCode = "Role", SortOrder = 90 }
+    ];
+
+    private sealed record KpiMetric(string Filter, string Label, int Value, string Caption, string Icon);
+    private sealed record ViewOption(string Id, string Label, string Icon);
 }

@@ -1,905 +1,541 @@
 @page "/crm/leads/follow-up"
 @namespace Ams.Web.Components.Pages.Crm
-@inject ApiClient Api
-@inject CurrentUserContext CurrentUser
-@inject NavigationManager Nav
-@inject BreadcrumbService Breadcrumbs
 @using Ams.Application.Common.Dtos
 @using Ams.Application.Features.LeadActivities
+@using Ams.Application.Features.Leads
+@using Microsoft.AspNetCore.Components.Forms
 @using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
 
 <PageTitle>Lead Follow-up — CRM</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<AppPageHeader Title="Lead Follow-up"
-               Subtitle="Schedule, track, and manage follow-up activities for your leads"
-               Icon="bi-calendar-event">
-    <Actions>
-        <div class="lf-view-toggle" role="group" aria-label="View mode">
-            @foreach (var v in _views)
-            {
-                <button class="lf-view-btn @(_view == v.Id ? "lf-view-btn--active" : "")"
-                        @onclick="() => _view = v.Id"
-                        title="@v.Label"
-                        aria-pressed="@(_view == v.Id)">
-                    <i class="bi @v.Icon" aria-hidden="true"></i>
-                    <span class="lf-view-lbl">@v.Label</span>
-                </button>
-            }
-        </div>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise @(_loading ? "lf-spin" : "")" aria-hidden="true"></i>
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenScheduleDrawer">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> Schedule Follow-up
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
-<div class="lf-kpi-strip">
-    <button type="button" class="@KpiClass("scheduled", "lf-kpi-card")" @onclick='() => ApplyKpiFilter("scheduled")' title="Show all scheduled follow-ups">
-        <span class="lf-kpi-icon lf-ki1"><i class="bi bi-calendar-event" aria-hidden="true"></i></span>
-        <div>
-            <div class="lf-kpi-val">@_kpi.ScheduledFollowUps</div>
-            <div class="lf-kpi-lbl">Scheduled Follow-ups</div>
-        </div>
-    </button>
-    <button type="button" class="@KpiClass("overdue", "lf-kpi-card")" @onclick='() => ApplyKpiFilter("overdue")' title="Show overdue follow-ups">
-        <span class="lf-kpi-icon lf-ki2"><i class="bi bi-hourglass-top" aria-hidden="true"></i></span>
-        <div>
-            <div class="lf-kpi-val">@_kpi.OverdueFollowUps</div>
-            <div class="lf-kpi-lbl">Overdue Follow-ups</div>
-        </div>
-    </button>
-    <button type="button" class="@KpiClass("completed", "lf-kpi-card")" @onclick='() => ApplyKpiFilter("completed")' title="Show completed follow-ups">
-        <span class="lf-kpi-icon lf-ki3"><i class="bi bi-check-circle" aria-hidden="true"></i></span>
-        <div>
-            <div class="lf-kpi-val">@_kpi.CompletedFollowUps</div>
-            <div class="lf-kpi-lbl">Completed This Week</div>
-        </div>
-    </button>
-    <button type="button" class="@KpiClass("rate", "lf-kpi-card")" @onclick='() => ApplyKpiFilter("rate")' title="Show all follow-ups">
-        <span class="lf-kpi-icon lf-ki4"><i class="bi bi-percent" aria-hidden="true"></i></span>
-        <div>
-            <div class="lf-kpi-val">@_kpi.CompletionRate.ToString("F0")%</div>
-            <div class="lf-kpi-lbl">Completion Rate</div>
-        </div>
-    </button>
-</div>
-
-<!-- ════════════════════════════════════════════════════════════════════════
-     VIEW: MY FOLLOW-UPS (DASHBOARD)
-     ════════════════════════════════════════════════════════════════════════ -->
-@if (_view == "my-followups")
+@if (_toastVisible)
 {
-    <div class="lf-container">
-        <!-- Priority Section -->
-        <div class="lf-section">
-            <h3 class="lf-section-title">🔴 Overdue (Action Required)</h3>
-            @if (_overdueFollowUps.Count == 0)
-            {
-                <div class="lf-empty-mini">
-                    <i class="bi bi-check-circle" aria-hidden="true"></i>
-                    <p>No overdue follow-ups</p>
-                </div>
-            }
-            else
-            {
-                <div class="lf-card-list">
-                    @foreach (var followup in _overdueFollowUps.Take(5))
-                    {
-                        <div class="lf-followup-card lf-card-overdue">
-                            <div class="lf-card-hdr">
-                                <div class="lf-card-title">
-                                    <span class="lf-lead-name">@followup.LeadName</span>
-                                    <span class="lf-company">@followup.CompanyName</span>
-                                </div>
-                                <span class="lf-status-badge lf-status-overdue">Overdue</span>
-                            </div>
-                            <div class="lf-card-body">
-                                <div class="lf-field">
-                                    <span class="lf-label">Activity:</span>
-                                    <span class="lf-value">@followup.ActivityType</span>
-                                </div>
-                                <div class="lf-field">
-                                    <span class="lf-label">Due:</span>
-                                    <span class="lf-value lf-overdue-date">@followup.DueDate.ToString("MMM dd") - @GetDaysOverdue(followup.DueDate) days ago</span>
-                                </div>
-                                <div class="lf-field">
-                                    <span class="lf-label">Notes:</span>
-                                    <span class="lf-value">@followup.Notes</span>
-                                </div>
-                            </div>
-                            <div class="lf-card-actions">
-                                <button class="um-btn um-btn-sm um-btn-primary" @onclick="() => CompleteFollowUp(followup)">
-                                    <i class="bi bi-check" aria-hidden="true"></i> Complete
-                                </button>
-                                <button class="um-btn um-btn-sm um-btn-ghost" @onclick="() => RescheduleFollowUp(followup)">
-                                    <i class="bi bi-arrow-repeat" aria-hidden="true"></i> Reschedule
-                                </button>
-                            </div>
-                        </div>
-                    }
-                </div>
-            }
-        </div>
-
-        <!-- Due Today Section -->
-        <div class="lf-section">
-            <h3 class="lf-section-title">🟡 Due Today</h3>
-            @if (_dueTodayFollowUps.Count == 0)
-            {
-                <div class="lf-empty-mini">
-                    <i class="bi bi-calendar-day" aria-hidden="true"></i>
-                    <p>No follow-ups due today</p>
-                </div>
-            }
-            else
-            {
-                <div class="lf-card-list">
-                    @foreach (var followup in _dueTodayFollowUps)
-                    {
-                        <div class="lf-followup-card lf-card-today">
-                            <div class="lf-card-hdr">
-                                <div class="lf-card-title">
-                                    <span class="lf-lead-name">@followup.LeadName</span>
-                                    <span class="lf-company">@followup.CompanyName</span>
-                                </div>
-                                <span class="lf-status-badge lf-status-today">Due Today</span>
-                            </div>
-                            <div class="lf-card-body">
-                                <div class="lf-field">
-                                    <span class="lf-label">Activity:</span>
-                                    <span class="lf-value">@followup.ActivityType</span>
-                                </div>
-                                <div class="lf-field">
-                                    <span class="lf-label">Contact:</span>
-                                    <span class="lf-value">@followup.ContactMethod</span>
-                                </div>
-                                <div class="lf-field">
-                                    <span class="lf-label">Notes:</span>
-                                    <span class="lf-value">@followup.Notes</span>
-                                </div>
-                            </div>
-                            <div class="lf-card-actions">
-                                <button class="um-btn um-btn-sm um-btn-primary" @onclick="() => CompleteFollowUp(followup)">
-                                    <i class="bi bi-check" aria-hidden="true"></i> Complete
-                                </button>
-                                <button class="um-btn um-btn-sm um-btn-ghost" @onclick="() => EditFollowUp(followup)">
-                                    <i class="bi bi-pencil" aria-hidden="true"></i> Edit
-                                </button>
-                            </div>
-                        </div>
-                    }
-                </div>
-            }
-        </div>
-
-        <!-- Upcoming Section -->
-        <div class="lf-section">
-            <h3 class="lf-section-title">🟢 Upcoming (Next 7 Days)</h3>
-            @if (_upcomingFollowUps.Count == 0)
-            {
-                <div class="lf-empty-mini">
-                    <i class="bi bi-calendar" aria-hidden="true"></i>
-                    <p>No follow-ups scheduled in the next 7 days</p>
-                </div>
-            }
-            else
-            {
-                <div class="lf-card-list">
-                    @foreach (var followup in _upcomingFollowUps)
-                    {
-                        var daysUntil = (followup.DueDate - DateTime.Now).Days;
-                        <div class="lf-followup-card lf-card-upcoming">
-                            <div class="lf-card-hdr">
-                                <div class="lf-card-title">
-                                    <span class="lf-lead-name">@followup.LeadName</span>
-                                    <span class="lf-company">@followup.CompanyName</span>
-                                </div>
-                                <span class="lf-status-badge lf-status-upcoming">@(daysUntil == 1 ? "Tomorrow" : $"In {daysUntil} days")</span>
-                            </div>
-                            <div class="lf-card-body">
-                                <div class="lf-field">
-                                    <span class="lf-label">Activity:</span>
-                                    <span class="lf-value">@followup.ActivityType</span>
-                                </div>
-                                <div class="lf-field">
-                                    <span class="lf-label">Due Date:</span>
-                                    <span class="lf-value">@followup.DueDate.ToString("MMM dd, yyyy")</span>
-                                </div>
-                                <div class="lf-field">
-                                    <span class="lf-label">Priority:</span>
-                                    <span class="lf-priority-badge @GetPriorityClass(followup.Priority)">@followup.Priority</span>
-                                </div>
-                            </div>
-                            <div class="lf-card-actions">
-                                <button class="um-btn um-btn-sm um-btn-ghost" @onclick="() => EditFollowUp(followup)">
-                                    <i class="bi bi-pencil" aria-hidden="true"></i> Edit
-                                </button>
-                            </div>
-                        </div>
-                    }
-                </div>
-            }
-        </div>
+    <div class="lf-toast lf-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="lf-toast-close" @onclick="HideToast" aria-label="Dismiss notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-<!-- ════════════════════════════════════════════════════════════════════════
-     VIEW: CALENDAR
-     ════════════════════════════════════════════════════════════════════════ -->
-@if (_view == "calendar")
+@if (_showForm)
 {
-    <div class="lf-calendar-container">
-        <div class="lf-calendar-header">
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevMonth">
-                <i class="bi bi-chevron-left" aria-hidden="true"></i>
-            </button>
-            <h3>@_currentMonth.ToString("MMMM yyyy")</h3>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="NextMonth">
-                <i class="bi bi-chevron-right" aria-hidden="true"></i>
-            </button>
-        </div>
-
-        <div class="lf-calendar-grid">
-            @for (int i = 0; i < 7; i++)
-            {
-                <div class="lf-cal-day-header">@GetDayName(i)</div>
-            }
-
-            @{
-                var firstDay = new DateTime(_currentMonth.Year, _currentMonth.Month, 1);
-                var lastDay = firstDay.AddMonths(1).AddDays(-1);
-                var startDate = firstDay.AddDays(-(int)firstDay.DayOfWeek);
-                var currentDate = startDate;
-
-                for (int week = 0; week < 6; week++)
-                {
-                    for (int day = 0; day < 7; day++)
-                    {
-                        var date = currentDate;
-                        var isCurrentMonth = date.Month == _currentMonth.Month;
-                        var followupsForDay = _allFollowUps.Where(f => f.DueDate.Date == date.Date).ToList();
-                        var isToday = date.Date == DateTime.Now.Date;
-
-                        <div class="lf-cal-day @(isCurrentMonth ? "" : "lf-cal-other-month") @(isToday ? "lf-cal-today" : "") @(date.Date == _selectedCalendarDate?.Date ? "lf-cal-selected" : "")" @onclick="() => SelectDate(date)">
-                            <div class="lf-cal-date">@date.Day</div>
-                            <div class="lf-cal-followups">
-                                @foreach (var fu in followupsForDay.Take(3))
+    <div class="lf-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="lf-followup-modal" role="dialog" aria-modal="true" aria-labelledby="followupFormTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_form" OnValidSubmit="SaveFollowUpAsync" OnInvalidSubmit="HandleInvalidSubmitAsync">
+                <DataAnnotationsValidator />
+                <div class="lf-modal-header">
+                    <div class="lf-modal-title">
+                        <span class="lf-modal-icon"><i class="bi bi-calendar-plus" aria-hidden="true"></i></span>
+                        <div>
+                            <h2 id="followupFormTitle">@(_editingId == Guid.Empty ? "Schedule follow-up" : "Edit follow-up")</h2>
+                            <p>Capture the next action, due date, owner context, and workflow status.</p>
+                        </div>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseForm" aria-label="Close follow-up form"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                </div>
+                <div class="lf-modal-body">
+                    <div class="lf-form-banner">
+                        <i class="bi bi-shield-check" aria-hidden="true"></i>
+                        <div>
+                            <strong>LeadActivity backed workflow</strong>
+                            <span>Follow-ups are saved to CRM.LeadActivity with tenant scope and activity audit fields.</span>
+                        </div>
+                    </div>
+                    <div class="lf-form-grid">
+                        <div class="lf-field lf-field-wide">
+                            <label for="leadSelect">Lead <span>*</span></label>
+                            <InputSelect id="leadSelect" class="lf-input" @bind-Value="_form.LeadId">
+                                <option value="@Guid.Empty">Select lead...</option>
+                                @foreach (var lead in _leadOptions)
                                 {
-                                    <div class="lf-cal-dot @GetCalendarDotClass(fu.Status)" title="@fu.LeadName"></div>
+                                    <option value="@lead.Id">@lead.Name — @lead.Company</option>
                                 }
-                                @if (followupsForDay.Count > 3)
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.LeadId" class="text-danger" />
+                        </div>
+                        <div class="lf-field">
+                            <label for="activityType">Activity type <span>*</span></label>
+                            <InputSelect id="activityType" class="lf-input" @bind-Value="_form.ActivityType">
+                                <option value="">Select activity...</option>
+                                @foreach (var option in _activityTypeOptions)
                                 {
-                                    <div class="lf-cal-more">+@(followupsForDay.Count - 3)</div>
+                                    <option value="@option">@option</option>
                                 }
-                            </div>
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.ActivityType" class="text-danger" />
                         </div>
-
-                        currentDate = currentDate.AddDays(1);
-                    }
-                }
-            }
-        </div>
-
-        <div class="lf-calendar-legend">
-            <div class="lf-legend-item">
-                <div class="lf-legend-dot lf-cal-completed"></div>
-                <span>Completed</span>
-            </div>
-            <div class="lf-legend-item">
-                <div class="lf-legend-dot lf-cal-overdue"></div>
-                <span>Overdue</span>
-            </div>
-            <div class="lf-legend-item">
-                <div class="lf-legend-dot lf-cal-pending"></div>
-                <span>Pending</span>
-            </div>
-        </div>
-
-        <div class="lf-calendar-details">
-            <h4>Follow-ups for Selected Date</h4>
-            @if (_selectedDateFollowUps.Count == 0)
-            {
-                <p class="lf-empty-text">Select a date to view follow-ups</p>
-            }
-            else
-            {
-                <div class="lf-followup-list">
-                    @foreach (var fu in _selectedDateFollowUps)
-                    {
-                        <div class="lf-list-item">
-                            <div class="lf-list-lead">
-                                <strong>@fu.LeadName</strong> - @fu.CompanyName
-                            </div>
-                            <div class="lf-list-detail">@fu.ActivityType • @fu.ContactMethod</div>
-                            <div class="lf-list-status">
-                                <span class="lf-status-badge @GetStatusClass(fu.Status)">@fu.Status</span>
-                            </div>
+                        <div class="lf-field">
+                            <label for="dueDate">Due date <span>*</span></label>
+                            <InputDate id="dueDate" class="lf-input" @bind-Value="_form.DueDate" />
+                            <ValidationMessage For="() => _form.DueDate" class="text-danger" />
                         </div>
-                    }
+                        <div class="lf-field">
+                            <label for="priority">Priority <span>*</span></label>
+                            <InputSelect id="priority" class="lf-input" @bind-Value="_form.Priority">
+                                @foreach (var option in _priorityOptions)
+                                {
+                                    <option value="@option">@option</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.Priority" class="text-danger" />
+                        </div>
+                        <div class="lf-field">
+                            <label for="contactMethod">Contact method <span>*</span></label>
+                            <InputSelect id="contactMethod" class="lf-input" @bind-Value="_form.ContactMethod">
+                                @foreach (var option in _contactMethodOptions)
+                                {
+                                    <option value="@option">@option</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.ContactMethod" class="text-danger" />
+                        </div>
+                        <div class="lf-field">
+                            <label for="status">Status <span>*</span></label>
+                            <InputSelect id="status" class="lf-input" @bind-Value="_form.Status">
+                                @foreach (var option in _statusOptions)
+                                {
+                                    <option value="@option">@option</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.Status" class="text-danger" />
+                        </div>
+                        <div class="lf-field">
+                            <label for="duration">Duration minutes</label>
+                            <InputNumber id="duration" class="lf-input" @bind-Value="_form.DurationMinutes" />
+                            <ValidationMessage For="() => _form.DurationMinutes" class="text-danger" />
+                        </div>
+                        <div class="lf-field lf-field-wide">
+                            <label for="notes">Notes</label>
+                            <InputTextArea id="notes" class="lf-input lf-textarea" @bind-Value="_form.Notes" placeholder="Coverage interests, timing, decision process, or next best action..." />
+                            <ValidationMessage For="() => _form.Notes" class="text-danger" />
+                        </div>
+                    </div>
                 </div>
-            }
+                <div class="lf-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi @(_saving ? "bi-arrow-repeat lf-spin" : "bi-check2")" aria-hidden="true"></i> @(_editingId == Guid.Empty ? "Schedule" : "Save")</button>
+                </div>
+            </EditForm>
         </div>
     </div>
 }
 
-<!-- ════════════════════════════════════════════════════════════════════════
-     VIEW: FOLLOW-UP LIST
-     ════════════════════════════════════════════════════════════════════════ -->
-@if (_view == "list")
+@if (_showDeleteConfirm && _deleteTarget is not null)
 {
-    <div class="lf-list-container">
-        <div class="lf-filter-bar">
-            <div class="lf-search-wrap">
-                <i class="bi bi-search" aria-hidden="true"></i>
-                <input type="search" 
-                       class="lf-search-input" 
-                       placeholder="Search leads…"
-                       @bind="_query"
-                       @bind:event="oninput"
-                       aria-label="Search follow-ups" />
-            </div>
-            <SfDropDownList TItem="string" 
-                           TValue="string" 
-                           DataSource="_statusOptions"
-                           @bind-Value="_statusFilter"
-                           Placeholder="All Statuses"
-                           CssClass="lf-filter-select"
-                           AllowFiltering="true"
-                           AllowClear="true">
-            </SfDropDownList>
-            <SfDropDownList TItem="string" 
-                           TValue="string" 
-                           DataSource="_priorityOptions"
-                           @bind-Value="_priorityFilter"
-                           Placeholder="All Priorities"
-                           CssClass="lf-filter-select"
-                           AllowFiltering="true"
-                           AllowClear="true">
-            </SfDropDownList>
-            <SfDropDownList TItem="string" 
-                           TValue="string" 
-                           DataSource="_activityTypeOptions"
-                           @bind-Value="_activityTypeFilter"
-                           Placeholder="All Activities"
-                           CssClass="lf-filter-select"
-                           AllowFiltering="true"
-                           AllowClear="true">
-            </SfDropDownList>
-        </div>
-
-        @if (_loading)
-        {
-            <div class="lf-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
-        }
-        else if (GetVisibleFollowUps().Count == 0)
-        {
-            <div class="lf-empty">
-                <i class="bi bi-inbox" aria-hidden="true"></i>
-                <p>No follow-ups match your filters</p>
-                <button class="um-btn um-btn-ghost" @onclick="ClearFilters">Clear Filters</button>
-            </div>
-        }
-        else
-        {
-            <div class="lf-list-grid">
-                <table role="grid" class="lf-followup-table">
-                    <thead>
-                        <tr>
-                            <th>Lead Name</th>
-                            <th>Company</th>
-                            <th>Activity Type</th>
-                            <th>Due Date</th>
-                            <th>Priority</th>
-                            <th>Status</th>
-                            <th>Contact</th>
-                            <th>Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var followup in GetVisibleFollowUps())
-                        {
-                            <tr class="@GetRowClass(followup)">
-                                <td>
-                                    <div class="lf-lead-cell">
-                                        <span class="lf-avatar" style="background: @GetAvatarColor(followup.Id);">
-                                            @followup.LeadName.First()
-                                        </span>
-                                        <span>@followup.LeadName</span>
-                                    </div>
-                                </td>
-                                <td>@followup.CompanyName</td>
-                                <td>
-                                    <span class="lf-activity-badge">@followup.ActivityType</span>
-                                </td>
-                                <td>
-                                    <div class="lf-date-cell">
-                                        @followup.DueDate.ToString("MMM dd")
-                                        @if (followup.DueDate < DateTime.Now && followup.Status != "Completed")
-                                        {
-                                            <span class="lf-overdue-indicator">Overdue</span>
-                                        }
-                                    </div>
-                                </td>
-                                <td>
-                                    <span class="lf-priority-badge @GetPriorityClass(followup.Priority)">@followup.Priority</span>
-                                </td>
-                                <td>
-                                    <span class="lf-status-badge @GetStatusClass(followup.Status)">@followup.Status</span>
-                                </td>
-                                <td>@followup.ContactMethod</td>
-                                <td>
-                                    <div class="lf-actions">
-                                        @if (followup.Status != "Completed")
-                                        {
-                                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => CompleteFollowUp(followup)" title="Complete">
-                                                <i class="bi bi-check" aria-hidden="true"></i>
-                                            </button>
-                                        }
-                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => EditFollowUp(followup)" title="Edit">
-                                            <i class="bi bi-pencil" aria-hidden="true"></i>
-                                        </button>
-                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ConfirmDelete(followup)" title="Delete">
-                                            <i class="bi bi-trash" aria-hidden="true"></i>
-                                        </button>
-                                    </div>
-                                </td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-            </div>
-        }
-    </div>
-}
-
-<!-- ════════════════════════════════════════════════════════════════════════
-     VIEW: ANALYTICS
-     ════════════════════════════════════════════════════════════════════════ -->
-@if (_view == "analytics")
-{
-    <div class="lf-analytics-container">
-        <div class="lf-analytics-grid">
-            <!-- Completion Trend -->
-            <div class="lf-analytics-card">
-                <h4>Completion Trend (Last 30 Days)</h4>
-                <div class="lf-chart">
-                    <div class="lf-bar-chart">
-                        @for (int i = 29; i >= 0; i--)
-                        {
-                            var date = DateTime.Now.AddDays(-i);
-                            var count = _allFollowUps.Count(f => f.DueDate.Date == date.Date && f.Status == "Completed");
-                            var height = count * 15; // Scale height
-                            <div class="lf-bar" style="height: @(Math.Max(height, 5))px;" title="@date.ToString("MMM dd"): @count completed"></div>
-                        }
-                    </div>
-                </div>
-            </div>
-
-            <!-- Status Distribution -->
-            <div class="lf-analytics-card">
-                <h4>Status Distribution</h4>
-                <div class="lf-stat-row">
-                    <div class="lf-stat">
-                        <span class="lf-stat-color lf-completed"></span>
-                        <span class="lf-stat-label">Completed</span>
-                        <span class="lf-stat-value">@_allFollowUps.Count(f => f.Status == "Completed")</span>
-                    </div>
-                    <div class="lf-stat">
-                        <span class="lf-stat-color lf-pending"></span>
-                        <span class="lf-stat-label">Pending</span>
-                        <span class="lf-stat-value">@_allFollowUps.Count(f => f.Status == "Pending")</span>
-                    </div>
-                    <div class="lf-stat">
-                        <span class="lf-stat-color lf-overdue"></span>
-                        <span class="lf-stat-label">Overdue</span>
-                        <span class="lf-stat-value">@_allFollowUps.Count(f => f.Status == "Overdue")</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Activity Type Distribution -->
-            <div class="lf-analytics-card">
-                <h4>Activity Types</h4>
-                <div class="lf-stat-rows">
-                    @foreach (var actType in _allFollowUps.Select(f => f.ActivityType).Distinct())
-                    {
-                        var count = _allFollowUps.Count(f => f.ActivityType == actType);
-                        var pct = _allFollowUps.Count > 0 ? (count / (double)_allFollowUps.Count) * 100 : 0;
-                        <div class="lf-stat-row">
-                            <span class="lf-activity-type">@actType</span>
-                            <div class="lf-progress-bar">
-                                <div class="lf-progress-fill" style="width: @pct.ToString("F0")%;"></div>
-                            </div>
-                            <span class="lf-activity-count">@count</span>
-                        </div>
-                    }
-                </div>
-            </div>
-
-            <!-- Priority Distribution -->
-            <div class="lf-analytics-card">
-                <h4>Priority Breakdown</h4>
-                <div class="lf-stat-rows">
-                    @foreach (var pri in new[] { "High", "Medium", "Low" })
-                    {
-                        var count = _allFollowUps.Count(f => f.Priority == pri);
-                        var pct = _allFollowUps.Count > 0 ? (count / (double)_allFollowUps.Count) * 100 : 0;
-                        <div class="lf-stat-row">
-                            <span class="@GetPriorityClass(pri)">@pri</span>
-                            <div class="lf-progress-bar">
-                                <div class="lf-progress-fill" style="width: @pct.ToString("F0")%;"></div>
-                            </div>
-                            <span class="lf-priority-count">@count</span>
-                        </div>
-                    }
-                </div>
+    <div class="lf-modal-backdrop" role="presentation" @onclick="CancelDelete">
+        <div class="lf-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="deleteFollowupTitle" @onclick:stopPropagation="true">
+            <div class="lf-confirm-icon lf-confirm-danger"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
+            <h2 id="deleteFollowupTitle">Delete follow-up</h2>
+            <p>Delete follow-up for <strong>@_deleteTarget.LeadName</strong>? This keeps the database row soft-deleted through the existing API.</p>
+            <div class="lf-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
             </div>
         </div>
     </div>
 }
 
-<!-- ════════════════════════════════════════════════════════════════════════
-     DRAWER: SCHEDULE/EDIT FOLLOW-UP
-     ════════════════════════════════════════════════════════════════════════ -->
-@if (_drawerOpen)
-{
-    <div class="lf-drawer-overlay" @onclick='() => _drawerOpen = false'></div>
-    <div class="lf-drawer-panel">
-        <div class="lf-drawer-hdr">
-            <h2>@(_editingFollowUp == null ? "Schedule Follow-up" : "Edit Follow-up")</h2>
-            <button class="um-btn um-btn-ghost" @onclick="() => _drawerOpen = false" title="Close">
-                <i class="bi bi-x-lg" aria-hidden="true"></i>
-            </button>
-        </div>
-
-        <div class="lf-drawer-body">
-            <div class="lf-form-group">
-                <label for="lead">Lead <span class="lf-required">*</span></label>
-                <SfDropDownList TItem="LeadOption" 
-                               TValue="Guid" 
-                               DataSource="_leadOptions"
-                               @bind-Value="_formData.LeadId"
-                               ID="lead"
-                               TextField="Name"
-                               ValueField="Id"
-                               Placeholder="Select lead…"
-                               AllowFiltering="true">
-                </SfDropDownList>
-            </div>
-
-            <div class="lf-form-group">
-                <label for="activity">Activity Type <span class="lf-required">*</span></label>
-                <SfDropDownList TItem="string" 
-                               TValue="string" 
-                               DataSource="_activityTypeOptions"
-                               @bind-Value="_formData.ActivityType"
-                               ID="activity"
-                               Placeholder="Select activity…"
-                               AllowFiltering="true">
-                </SfDropDownList>
-            </div>
-
-            <div class="lf-form-row">
-                <div class="lf-form-group">
-                    <label for="duedate">Due Date <span class="lf-required">*</span></label>
-                    <input type="date" id="duedate" class="lf-input" @bind="_formData.DueDate" />
+<div class="lf-enterprise-page">
+    <section class="lf-hero">
+        <div class="lf-hero-left">
+            <span class="lf-hero-icon"><i class="bi bi-calendar2-check-fill" aria-hidden="true"></i></span>
+            <div>
+                <div class="lf-title-row">
+                    <h1>Lead Follow-up</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> CRM.LeadActivity</span>
+                    <span><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
                 </div>
-
-                <div class="lf-form-group">
-                    <label for="priority">Priority</label>
-                    <SfDropDownList TItem="string" 
-                                   TValue="string" 
-                                   DataSource="_priorityOptions"
-                                   @bind-Value="_formData.Priority"
-                                   ID="priority"
-                                   Placeholder="Select priority…">
-                    </SfDropDownList>
-                </div>
-            </div>
-
-            <div class="lf-form-group">
-                <label for="contact">Contact Method</label>
-                <SfDropDownList TItem="string" 
-                               TValue="string" 
-                               DataSource="_contactMethodOptions"
-                               @bind-Value="_formData.ContactMethod"
-                               ID="contact"
-                               Placeholder="Select method…">
-                </SfDropDownList>
-            </div>
-
-            <div class="lf-form-group">
-                <label for="notes">Notes</label>
-                <textarea id="notes" class="lf-textarea" @bind="_formData.Notes" placeholder="Add details about this follow-up…"></textarea>
-            </div>
-
-            @if (_editingFollowUp != null)
-            {
-                <div class="lf-form-group">
-                    <label for="status">Status</label>
-                    <SfDropDownList TItem="string" 
-                                   TValue="string" 
-                                   DataSource="_statusOptions"
-                                   @bind-Value="_formData.Status"
-                                   ID="status"
-                                   Placeholder="Select status…">
-                    </SfDropDownList>
-                </div>
-            }
-        </div>
-
-        <div class="lf-drawer-ft">
-            <button class="um-btn um-btn-ghost" @onclick="() => _drawerOpen = false">Cancel</button>
-            <button class="um-btn um-btn-primary" @onclick="SaveFollowUp">@(_editingFollowUp == null ? "Schedule" : "Save")</button>
-        </div>
-    </div>
-}
-
-<SfDialog @bind-Visible="_showDeleteConfirm" Width="420px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
-        <div class="um-confirm-dialog">
-            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3-fill"></i></div>
-            <div class="um-confirm-title">Delete Follow-up</div>
-            <div class="um-confirm-body">Delete follow-up for <strong>@_deleteTarget?.LeadName</strong>?</div>
-            <div class="um-modal-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showDeleteConfirm = false">Cancel</button>
-                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync">Delete</button>
+                <p>Schedule, prioritize, complete, and audit lead follow-ups through a governed CRM activity workflow.</p>
             </div>
         </div>
-    </DialogContent>
-</SfDialog>
+        <div class="lf-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh follow-ups"><i class="bi @(_loading ? "bi-arrow-repeat lf-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenNewFollowUp" title="Schedule follow-up"><i class="bi bi-plus-circle" aria-hidden="true"></i> Schedule Follow-up</button>
+        </div>
+    </section>
 
-@code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
-    // ── Types ───────────────────────────────────────────────────────────
-    private sealed record View(string Id, string Label, string Icon);
-    private sealed record FollowUpRow(Guid Id, string LeadName, string CompanyName, Guid LeadId, string ActivityType, string ContactMethod, DateTime DueDate, string Priority, string Status, string Notes);
-    private sealed record LeadOption(Guid Id, string Name, string Company);
-    private sealed record CreateLeadSeed(string LeadNumber, string FirstName, string LastName, string AccountName, string Email, string Phone, string InterestedService);
-    private sealed record FollowUpSeed(string ActivityType, string Subject, string Notes, DateTime ActivityDate, string Status);
-    private sealed record KpiData(int ScheduledFollowUps, int OverdueFollowUps, int CompletedFollowUps, double CompletionRate);
-    private class FollowUpFormData
+    @if (!string.IsNullOrWhiteSpace(_loadError))
     {
-        [Required]
-        public Guid LeadId { get; set; }
-        [Required, StringLength(50)]
-        public string ActivityType { get; set; } = string.Empty;
-        public DateTime DueDate { get; set; }
-        [Required, StringLength(20)]
-        public string Priority { get; set; } = "Medium";
-        [Required, StringLength(50)]
-        public string ContactMethod { get; set; } = "Phone Call";
-        [StringLength(2000)]
-        public string Notes { get; set; } = string.Empty;
-        [Required, StringLength(50)]
-        public string Status { get; set; } = "Pending";
+        <div class="lf-error-banner" style="border-left: 4px solid #dc3545; animation: lf-shake 0.3s ease;"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_loadError</div>
     }
 
-    // ── State ────────────────────────────────────────────────────────────
-    private readonly View[] _views = [
-        new("my-followups", "My Follow-ups", "bi-inbox"),
-        new("calendar", "Calendar", "bi-calendar"),
-        new("list", "List", "bi-list-ul"),
-        new("analytics", "Analytics", "bi-graph-up"),
-    ];
+    <section class="lf-kpi-strip" aria-label="Lead follow-up metrics">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricCardClass(metric)" title="@metric.Tooltip" @onclick="@(() => SetKpiFilter(metric.Filter))">
+                <span class="lf-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                <span><span class="lf-kpi-val">@metric.Value</span><span class="lf-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
+            </button>
+        }
+    </section>
 
-    private string _view = "my-followups";
+    <section class="lf-workflow-strip" aria-label="Follow-up workflow shortcuts">
+        <button type="button" class="lf-workflow-card" @onclick="ShowDashboard"><i class="bi bi-inbox" aria-hidden="true"></i><span><strong>My queue</strong><span>Overdue, due today, and upcoming work.</span></span></button>
+        <button type="button" class="lf-workflow-card" @onclick="ShowCalendar"><i class="bi bi-calendar3" aria-hidden="true"></i><span><strong>Calendar</strong><span>Review daily follow-up load.</span></span></button>
+        <button type="button" class="lf-workflow-card" @onclick="ShowOverdue"><i class="bi bi-exclamation-octagon" aria-hidden="true"></i><span><strong>Overdue focus</strong><span>Filter records requiring action.</span></span></button>
+        <button type="button" class="lf-workflow-card" @onclick="ShowAnalytics"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i><span><strong>Analytics</strong><span>Measure status, type, and priority mix.</span></span></button>
+    </section>
+
+    <section class="lf-search-panel">
+        <div class="lf-search-wrap">
+            <span class="lf-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="lf-search-body">
+                <label for="followupSearchInput">Search follow-ups</label>
+                <input id="followupSearchInput" class="lf-search-input" @bind-value="Search" @bind-value:event="oninput" placeholder="Search lead, company, activity, contact, status, priority, or notes..." />
+                <span class="lf-search-hint">Filters the current tenant-scoped CRM activity dataset instantly.</span>
+            </div>
+        </div>
+        <select class="lf-filter-select" @bind="StatusFilter"><option value="">All statuses</option>@foreach (var option in _statusOptions) { <option value="@option">@option</option> }</select>
+        <select class="lf-filter-select" @bind="PriorityFilter"><option value="">All priorities</option>@foreach (var option in _priorityOptions) { <option value="@option">@option</option> }</select>
+        <select class="lf-filter-select" @bind="ActivityFilter"><option value="">All activities</option>@foreach (var option in _activityTypeOptions) { <option value="@option">@option</option> }</select>
+        <div class="lf-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    <section class="lf-view-tabs" aria-label="Follow-up views">
+        @foreach (var view in _views)
+        {
+            <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label</button>
+        }
+    </section>
+
+    <section class="lf-content-layout">
+        <main class="lf-main-card">
+            @if (_loading)
+            {
+                <div class="lf-loading"><i class="bi bi-arrow-repeat lf-spin" aria-hidden="true"></i><strong>Loading lead follow-up workspace...</strong></div>
+            }
+            else if (_filtered.Count == 0)
+            {
+                <div class="lf-empty-state"><i class="bi bi-calendar-x" aria-hidden="true"></i><strong>No follow-ups match this view</strong><span>Adjust filters or schedule a new follow-up.</span><div><button type="button" class="um-btn um-btn-ghost" @onclick="ClearFilters">Clear filters</button><button type="button" class="um-btn um-btn-primary" @onclick="OpenNewFollowUp">Schedule follow-up</button></div></div>
+            }
+            else if (_view == "dashboard")
+            {
+                <div class="lf-dashboard-grid">
+                    <section class="lf-queue-section lf-overdue-section"><header><span><i class="bi bi-exclamation-octagon" aria-hidden="true"></i> Overdue</span><strong>@OverdueRows.Count</strong></header>@if (OverdueRows.Count == 0) { <div class="lf-mini-empty">No overdue follow-ups</div> } else { @foreach (var item in OverdueRows.Take(6)) { <article class="lf-followup-card lf-card-overdue" @onclick="@(() => SelectDetail(item))"><div class="lf-card-head"><div><strong>@item.LeadName</strong><span>@item.CompanyName</span></div><span class="@StatusClass(item.Status)">@item.Status</span></div><div class="lf-card-body"><span><i class="bi @ActivityIcon(item.ActivityType)" aria-hidden="true"></i> @item.ActivityType</span><span><i class="bi bi-calendar" aria-hidden="true"></i> @item.DueDate.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture)</span><span><i class="bi bi-broadcast" aria-hidden="true"></i> @item.ContactMethod</span></div><div class="lf-card-actions" @onclick:stopPropagation="true">@if (!item.IsClosed) { <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="@(() => CompleteFollowUpAsync(item))"><i class="bi bi-check2" aria-hidden="true"></i> Complete</button> }<button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenEdit(item))"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div></article> } }</section>
+                    <section class="lf-queue-section lf-today-section"><header><span><i class="bi bi-calendar-day" aria-hidden="true"></i> Due today</span><strong>@DueTodayRows.Count</strong></header>@if (DueTodayRows.Count == 0) { <div class="lf-mini-empty">No follow-ups due today</div> } else { @foreach (var item in DueTodayRows.Take(6)) { <article class="lf-followup-card lf-card-today" @onclick="@(() => SelectDetail(item))"><div class="lf-card-head"><div><strong>@item.LeadName</strong><span>@item.CompanyName</span></div><span class="@StatusClass(item.Status)">@item.Status</span></div><div class="lf-card-body"><span><i class="bi @ActivityIcon(item.ActivityType)" aria-hidden="true"></i> @item.ActivityType</span><span><i class="bi bi-calendar" aria-hidden="true"></i> @item.DueDate.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture)</span><span><i class="bi bi-broadcast" aria-hidden="true"></i> @item.ContactMethod</span></div><div class="lf-card-actions" @onclick:stopPropagation="true">@if (!item.IsClosed) { <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="@(() => CompleteFollowUpAsync(item))"><i class="bi bi-check2" aria-hidden="true"></i> Complete</button> }<button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenEdit(item))"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div></article> } }</section>
+                    <section class="lf-queue-section lf-upcoming-section"><header><span><i class="bi bi-calendar-week" aria-hidden="true"></i> Next 7 days</span><strong>@UpcomingRows.Count</strong></header>@if (UpcomingRows.Count == 0) { <div class="lf-mini-empty">No upcoming follow-ups</div> } else { @foreach (var item in UpcomingRows.Take(6)) { <article class="lf-followup-card lf-card-upcoming" @onclick="@(() => SelectDetail(item))"><div class="lf-card-head"><div><strong>@item.LeadName</strong><span>@item.CompanyName</span></div><span class="@StatusClass(item.Status)">@item.Status</span></div><div class="lf-card-body"><span><i class="bi @ActivityIcon(item.ActivityType)" aria-hidden="true"></i> @item.ActivityType</span><span><i class="bi bi-calendar" aria-hidden="true"></i> @item.DueDate.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture)</span><span><i class="bi bi-broadcast" aria-hidden="true"></i> @item.ContactMethod</span></div><div class="lf-card-actions" @onclick:stopPropagation="true">@if (!item.IsClosed) { <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="@(() => CompleteFollowUpAsync(item))"><i class="bi bi-check2" aria-hidden="true"></i> Complete</button> }<button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenEdit(item))"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div></article> } }</section>
+                </div>
+            }
+            else if (_view == "calendar")
+            {
+                <div class="lf-calendar-layout">
+                    <section>
+                        <div class="lf-calendar-header"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousMonth"><i class="bi bi-chevron-left" aria-hidden="true"></i></button><h3>@_currentMonth.ToString("MMMM yyyy", CultureInfo.CurrentCulture)</h3><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextMonth"><i class="bi bi-chevron-right" aria-hidden="true"></i></button></div>
+                        <div class="lf-calendar-grid">
+                            @foreach (var day in _dayNames)
+                            {
+                                <div class="lf-calendar-day-name">@day</div>
+                            }
+                            @foreach (var day in CalendarDays)
+                            {
+                                var dayRows = _filtered.Where(x => x.DueDate.Date == day.Date).ToList();
+                                <button type="button" class="@CalendarDayClass(day)" @onclick="@(() => SelectDate(day))">
+                                    <span>@day.Day</span>
+                                    <small>@dayRows.Count</small>
+                                    <div>@foreach (var item in dayRows.Take(3)) { <i class="@StatusDotClass(item.Status)" title="@item.LeadName"></i> }</div>
+                                </button>
+                            }
+                        </div>
+                    </section>
+                    <aside class="lf-calendar-detail"><h3>@(_selectedDate?.ToString("MMM d, yyyy", CultureInfo.CurrentCulture) ?? "Select a date")</h3>@if (SelectedDateRows.Count == 0) { <div class="lf-mini-empty">No follow-ups for this date.</div> } else { @foreach (var item in SelectedDateRows) { <article class="lf-followup-card lf-card-calendar" @onclick="@(() => SelectDetail(item))"><div class="lf-card-head"><div><strong>@item.LeadName</strong><span>@item.CompanyName</span></div><span class="@StatusClass(item.Status)">@item.Status</span></div><div class="lf-card-body"><span><i class="bi @ActivityIcon(item.ActivityType)" aria-hidden="true"></i> @item.ActivityType</span><span><i class="bi bi-calendar" aria-hidden="true"></i> @item.DueDate.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture)</span><span><i class="bi bi-broadcast" aria-hidden="true"></i> @item.ContactMethod</span></div><div class="lf-card-actions" @onclick:stopPropagation="true">@if (!item.IsClosed) { <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="@(() => CompleteFollowUpAsync(item))"><i class="bi bi-check2" aria-hidden="true"></i> Complete</button> }<button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenEdit(item))"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div></article> } }</aside>
+                </div>
+            }
+            else if (_view == "analytics")
+            {
+                <div class="lf-analytics-grid">
+                    <section><h3>Status distribution</h3>@foreach (var row in StatusBreakdown) { <div class="lf-meter-row"><span>@row.Label</span><div><i style="width:@row.Width%"></i></div><strong>@row.Count</strong></div> }</section>
+                    <section><h3>Activity mix</h3>@foreach (var row in ActivityBreakdown) { <div class="lf-meter-row"><span>@row.Label</span><div><i style="width:@row.Width%"></i></div><strong>@row.Count</strong></div> }</section>
+                    <section><h3>Priority mix</h3>@foreach (var row in PriorityBreakdown) { <div class="lf-meter-row"><span>@row.Label</span><div><i style="width:@row.Width%"></i></div><strong>@row.Count</strong></div> }</section>
+                    <section><h3>Completion trend</h3><div class="lf-trend">@foreach (var day in CompletionTrend) { <span style="height:@day.Height%" title="@day.Label: @day.Count completed"></span> }</div></section>
+                </div>
+            }
+            else
+            {
+                <div class="lf-table-scroll">
+                    <table class="lf-table">
+                        <thead><tr><th>Lead</th><th>Activity</th><th>Due</th><th>Priority</th><th>Status</th><th>Contact</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var item in _filtered)
+                            {
+                                <tr class="@RowClass(item)" @onclick="@(() => SelectDetail(item))">
+                                    <td><div class="lf-name-cell"><span class="lf-avatar @AvatarClass(item.LeadName)" aria-hidden="true">@Initials(item.LeadName)</span><span><strong>@item.LeadName</strong><small>@item.CompanyName</small></span></div></td>
+                                    <td><span class="lf-activity-badge"><i class="bi @ActivityIcon(item.ActivityType)" aria-hidden="true"></i> @item.ActivityType</span></td>
+                                    <td><div class="lf-date-cell"><strong>@item.DueDate.ToLocalTime().ToString("MMM d", CultureInfo.CurrentCulture)</strong><small>@DueLabel(item)</small></div></td>
+                                    <td><span class="@PriorityClass(item.Priority)">@item.Priority</span></td>
+                                    <td><span class="@StatusClass(item.Status)">@item.Status</span></td>
+                                    <td>@item.ContactMethod</td>
+                                    <td @onclick:stopPropagation="true"><div class="lf-row-actions">@if (!item.IsClosed) { <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => CompleteFollowUpAsync(item))" title="Complete"><i class="bi bi-check" aria-hidden="true"></i></button> }<button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenEdit(item))" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => ConfirmDelete(item))" title="Delete"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </main>
+
+        <aside class="lf-detail-card">
+            @if (_detail is null)
+            {
+                <div class="lf-detail-empty"><i class="bi bi-calendar2-check" aria-hidden="true"></i><strong>Select a follow-up</strong><span>Review next action details and workflow commands.</span></div>
+            }
+            else
+            {
+                <div class="lf-detail-head"><div><span class="lf-detail-eyebrow"><i class="bi @ActivityIcon(_detail.ActivityType)" aria-hidden="true"></i> @_detail.ActivityType</span><h2>@_detail.LeadName</h2><p>@_detail.CompanyName</p></div><span class="@StatusClass(_detail.Status)">@_detail.Status</span></div>
+                <div class="lf-detail-body">
+                    <div class="lf-detail-summary"><div><span>Due</span><strong>@_detail.DueDate.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture)</strong></div><div><span>Priority</span><strong>@_detail.Priority</strong></div><div><span>Contact</span><strong>@_detail.ContactMethod</strong></div><div><span>Duration</span><strong>@(_detail.DurationMinutes.HasValue ? $"{_detail.DurationMinutes} min" : "—")</strong></div></div>
+                    <div class="lf-notes-card"><span><i class="bi bi-card-text" aria-hidden="true"></i> @(_detail.Notes ?? "No notes captured")</span></div>
+                    <div class="lf-detail-actions">@if (!_detail.IsClosed) { <button type="button" class="um-btn um-btn-primary" @onclick="@(() => CompleteFollowUpAsync(_detail))"><i class="bi bi-check2" aria-hidden="true"></i> Complete</button> }<button type="button" class="um-btn um-btn-ghost" @onclick="@(() => RescheduleFollowUp(_detail))"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Reschedule</button><button type="button" class="um-btn um-btn-ghost" @onclick="@(() => OpenEdit(_detail))"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-danger" @onclick="@(() => ConfirmDelete(_detail))"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button></div>
+                </div>
+            }
+        </aside>
+    </section>
+</div>
+
+@code {
+    private Guid _tenantId;
+    private Guid _userId;
     private bool _loading;
-    private string _query = string.Empty;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDeleteConfirm;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "info";
+    private string _loadError = string.Empty;
+    private string _view = "dashboard";
+    private string _search = string.Empty;
     private string _statusFilter = string.Empty;
     private string _priorityFilter = string.Empty;
-    private string _activityTypeFilter = string.Empty;
+    private string _activityFilter = string.Empty;
     private string _kpiFilter = string.Empty;
-    private bool _drawerOpen;
-    private bool _showDeleteConfirm;
-
-    private List<FollowUpRow> _allFollowUps = [];
-    private List<LeadOption> _leadOptions = [];
-    private FollowUpRow? _editingFollowUp;
+    private Guid _editingId = Guid.Empty;
+    private DateTime _currentMonth = DateTime.Today;
+    private DateTime? _selectedDate = DateTime.Today;
+    private CancellationTokenSource? _toastCts;
+    private FollowUpRow? _detail;
     private FollowUpRow? _deleteTarget;
-    private FollowUpFormData _formData = new();
+    private FollowUpFormModel _form = new();
+    private List<LeadOption> _leadOptions = [];
+    private List<FollowUpRow> _items = [];
+    private List<FollowUpRow> _filtered = [];
 
-    private List<string> _priorityOptions = new() { "High", "Medium", "Low" };
-    private List<string> _contactMethodOptions = new() { "Phone Call", "Email", "Meeting", "Text", "LinkedIn" };
-    private List<string> _statusOptions = new() { "Pending", "Completed", "Cancelled" };
+    private static readonly ViewDef[] _views = [new("dashboard", "Queue", "bi-inbox"), new("list", "List", "bi-list-ul"), new("calendar", "Calendar", "bi-calendar3"), new("analytics", "Analytics", "bi-graph-up")];
+    private static readonly string[] _activityTypeOptions = ["Phone Call", "Email", "Meeting", "Text", "LinkedIn", "Demo", "Proposal", "Check-in"];
+    private static readonly string[] _priorityOptions = ["High", "Medium", "Low"];
+    private static readonly string[] _contactMethodOptions = ["Phone Call", "Email", "Meeting", "Text", "LinkedIn", "Portal"];
+    private static readonly string[] _statusOptions = ["Pending", "Completed", "Cancelled"];
+    private static readonly string[] _dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-    private List<FollowUpRow> _overdueFollowUps = [];
-    private List<FollowUpRow> _dueTodayFollowUps = [];
-    private List<FollowUpRow> _upcomingFollowUps = [];
-    private List<FollowUpRow> _selectedDateFollowUps = [];
-    private DateTime? _selectedCalendarDate;
-    private DateTime _currentMonth = DateTime.Now;
+    private string Search
+    {
+        get => _search;
+        set { _search = value ?? string.Empty; ApplyFilters(); }
+    }
 
-    private KpiData _kpi = new(0, 0, 0, 0);
-    private SfToast? _toast;
-    private Guid _tenantId;
+    private string StatusFilter
+    {
+        get => _statusFilter;
+        set { _statusFilter = value ?? string.Empty; ApplyFilters(); }
+    }
 
-    private readonly string[] _activityTypeOptions = ["Phone Call", "Email", "Meeting", "Presentation", "Demo", "Proposal", "Check-in"];
-    private readonly string[] _avatarColors = ["#dc2626", "#f59e0b", "#10b981", "#0369a1", "#7c3aed", "#db2777"];
-    private readonly string[] _dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    private string PriorityFilter
+    {
+        get => _priorityFilter;
+        set { _priorityFilter = value ?? string.Empty; ApplyFilters(); }
+    }
 
-    // ── Lifecycle ────────────────────────────────────────────────────────
+    private string ActivityFilter
+    {
+        get => _activityFilter;
+        set { _activityFilter = value ?? string.Empty; ApplyFilters(); }
+    }
+
+    private IEnumerable<MetricCard> Metrics =>
+    [
+        new("Scheduled", _items.Count(x => !x.IsClosed).ToString(), "Open follow-up queue", "bi-calendar-event", "lf-blue", "scheduled", "Show open scheduled follow-ups"),
+        new("Overdue", _items.Count(x => x.IsOverdue).ToString(), "Action required", "bi-exclamation-octagon", "lf-red", "overdue", "Show overdue follow-ups"),
+        new("Today", _items.Count(x => x.DueDate.Date == DateTime.Today && !x.IsClosed).ToString(), "Due today", "bi-calendar-day", "lf-amber", "today", "Show follow-ups due today"),
+        new("Completed", _items.Count(x => x.Status == "Completed" && x.DueDate >= DateTime.Today.AddDays(-7)).ToString(), "Completed this week", "bi-check-circle", "lf-green", "completed", "Show recently completed follow-ups"),
+        new("Completion", CompletionRate.ToString("F0") + "%", "All-time rate", "bi-percent", "lf-purple", "", "Show all follow-ups")
+    ];
+
+    private double CompletionRate => _items.Count == 0 ? 0 : (double)_items.Count(x => x.Status == "Completed") / _items.Count * 100;
+    private IReadOnlyList<FollowUpRow> OverdueRows => _filtered.Where(x => x.IsOverdue).OrderBy(x => x.DueDate).ToList();
+    private IReadOnlyList<FollowUpRow> DueTodayRows => _filtered.Where(x => x.DueDate.Date == DateTime.Today && !x.IsClosed).OrderBy(x => x.DueDate).ToList();
+    private IReadOnlyList<FollowUpRow> UpcomingRows => _filtered.Where(x => x.DueDate.Date > DateTime.Today && x.DueDate.Date <= DateTime.Today.AddDays(7) && !x.IsClosed).OrderBy(x => x.DueDate).ToList();
+    private IReadOnlyList<FollowUpRow> SelectedDateRows => _selectedDate.HasValue ? _filtered.Where(x => x.DueDate.Date == _selectedDate.Value.Date).OrderBy(x => x.DueDate).ToList() : [];
+    private string ToastIcon => _toastKind == "danger" ? "bi-exclamation-octagon" : _toastKind == "warning" ? "bi-exclamation-triangle" : _toastKind == "success" ? "bi-check2-circle" : "bi-info-circle";
+
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(
-            new("CRM", "/crm"),
-            new("Leads", "/crm/leads"),
-            new("Follow-up", null)
-        );
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Leads", "/crm/leads"), new("Follow-up", "/crm/leads/follow-up"));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
         _loading = true;
+        _loadError = string.Empty;
         try
         {
-            // Load leads for the dropdown
+            if (_tenantId == Guid.Empty) await ResolveCurrentUserContextAsync();
             var leadsResult = await Api.SearchLeadsAsync(_tenantId);
-            if (leadsResult?.Items != null)
-            {
-                _leadOptions = leadsResult.Items
-                    .Select(l => new LeadOption(l.LeadId, $"{l.FirstName} {l.LastName}".Trim(), l.AccountName ?? "Unknown"))
-                    .ToList();
-            }
-
-            await EnsureSeedDataAsync(leadsResult?.Items?.ToList() ?? []);
-
+            var leads = leadsResult?.Items?.ToList() ?? [];
+            await EnsureSeedDataAsync(leads);
             leadsResult = await Api.SearchLeadsAsync(_tenantId);
-            if (leadsResult?.Items != null)
-            {
-                _leadOptions = leadsResult.Items
-                    .Select(l => new LeadOption(l.LeadId, $"{l.FirstName} {l.LastName}".Trim(), l.AccountName ?? "Unknown"))
-                    .ToList();
-            }
-
-            var activitiesResult = await Api.SearchLeadActivitiesAsync(_tenantId);
-            var leadLookup = _leadOptions.ToDictionary(l => l.Id);
-            _allFollowUps = activitiesResult?.Items?
-                .Where(a => a.LeadId.HasValue && IsFollowUpActivity(a))
-                .Select(a => MapFollowUp(a, leadLookup))
-                .ToList() ?? [];
-
-            UpdateKpi();
-            OrganizeFollowUps();
-            _loading = false;
+            leads = leadsResult?.Items?.ToList() ?? [];
+            _leadOptions = leads.Select(l => new LeadOption(l.LeadId, $"{l.FirstName} {l.LastName}".Trim(), l.AccountName ?? "Unknown")).Where(x => !string.IsNullOrWhiteSpace(x.Name)).OrderBy(x => x.Name).ToList();
+            var leadLookup = _leadOptions.ToDictionary(x => x.Id);
+            var activities = await Api.SearchLeadActivitiesAsync(_tenantId);
+            _items = activities?.Items?.Where(a => a.LeadId.HasValue && IsFollowUpActivity(a)).Select(a => MapFollowUp(a, leadLookup)).OrderBy(x => x.DueDate).ToList() ?? [];
+            ApplyFilters(false);
+            _detail = _detail is null ? _filtered.FirstOrDefault() : _filtered.FirstOrDefault(x => x.Id == _detail.Id) ?? _filtered.FirstOrDefault();
         }
         catch (Exception ex)
         {
-            await ShowToast("error", "Failed to load data", ex.Message);
+            _loadError = ex.Message;
+            _items = [];
+            ApplyFilters(false);
+            await ShowToastAsync($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
             _loading = false;
         }
     }
 
-    private void UpdateKpi()
+    private void ApplyFilters(bool resetDetail = true)
     {
-        var scheduled = _allFollowUps.Count(f => f.Status != "Completed");
-        var overdue = _allFollowUps.Count(f => f.DueDate < DateTime.Now && f.Status != "Completed");
-        var completedThisWeek = _allFollowUps.Count(f => f.Status == "Completed" && f.DueDate >= DateTime.Now.AddDays(-7));
-        var completionRate = _allFollowUps.Count > 0 ? (_allFollowUps.Count(f => f.Status == "Completed") / (double)_allFollowUps.Count) * 100 : 0;
-
-        _kpi = new(scheduled, overdue, completedThisWeek, completionRate);
-    }
-
-    private void OrganizeFollowUps()
-    {
-        _overdueFollowUps = _allFollowUps.Where(f => f.DueDate < DateTime.Now && f.Status != "Completed").OrderBy(f => f.DueDate).ToList();
-        _dueTodayFollowUps = _allFollowUps.Where(f => f.DueDate.Date == DateTime.Now.Date && f.Status != "Completed").ToList();
-        _upcomingFollowUps = _allFollowUps.Where(f => f.DueDate > DateTime.Now && f.DueDate <= DateTime.Now.AddDays(7) && f.Status != "Completed").OrderBy(f => f.DueDate).ToList();
-    }
-
-    // ── Filtering ────────────────────────────────────────────────────────
-    private List<FollowUpRow> GetVisibleFollowUps()
-    {
-        var q = _query.Trim().ToLower();
-        var result = _allFollowUps.Where(f =>
+        IEnumerable<FollowUpRow> query = _items;
+        if (!string.IsNullOrWhiteSpace(_search))
         {
-            if (!string.IsNullOrEmpty(_kpiFilter) && _kpiFilter switch
-            {
-                "scheduled" => f.Status != "Completed",
-                "overdue" => f.DueDate < DateTime.Now && f.Status != "Completed",
-                "completed" => f.Status == "Completed" && f.DueDate >= DateTime.Now.AddDays(-7),
-                _ => false
-            } is false)
-                return false;
-
-            if (!string.IsNullOrEmpty(q) && !f.LeadName.ToLower().Contains(q) && !f.CompanyName.ToLower().Contains(q))
-                return false;
-
-            if (!string.IsNullOrEmpty(_statusFilter) && !f.Status.Equals(_statusFilter, StringComparison.OrdinalIgnoreCase))
-                return false;
-
-            if (!string.IsNullOrEmpty(_priorityFilter) && !f.Priority.Equals(_priorityFilter, StringComparison.OrdinalIgnoreCase))
-                return false;
-
-            if (!string.IsNullOrEmpty(_activityTypeFilter) && !f.ActivityType.Equals(_activityTypeFilter, StringComparison.OrdinalIgnoreCase))
-                return false;
-
-            return true;
-        }).OrderBy(f => f.DueDate).ToList();
-
-        return result;
+            var term = _search.Trim();
+            query = query.Where(x => Contains(x.LeadName, term) || Contains(x.CompanyName, term) || Contains(x.ActivityType, term) || Contains(x.ContactMethod, term) || Contains(x.Priority, term) || Contains(x.Status, term) || Contains(x.Notes ?? string.Empty, term));
+        }
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.Status == _statusFilter);
+        if (!string.IsNullOrWhiteSpace(_priorityFilter)) query = query.Where(x => x.Priority == _priorityFilter);
+        if (!string.IsNullOrWhiteSpace(_activityFilter)) query = query.Where(x => x.ActivityType == _activityFilter);
+        query = _kpiFilter switch
+        {
+            "scheduled" => query.Where(x => !x.IsClosed),
+            "overdue" => query.Where(x => x.IsOverdue),
+            "today" => query.Where(x => x.DueDate.Date == DateTime.Today && !x.IsClosed),
+            "completed" => query.Where(x => x.Status == "Completed" && x.DueDate >= DateTime.Today.AddDays(-7)),
+            _ => query
+        };
+        _filtered = query.OrderBy(x => x.IsClosed).ThenBy(x => x.DueDate).ToList();
+        if (resetDetail) _detail = _filtered.FirstOrDefault(x => x.Id == _detail?.Id) ?? _filtered.FirstOrDefault();
     }
 
-    private void ClearFilters()
-    {
-        _query = string.Empty;
-        _statusFilter = string.Empty;
-        _priorityFilter = string.Empty;
-        _activityTypeFilter = string.Empty;
-        _kpiFilter = string.Empty;
-    }
-
-    private void ApplyKpiFilter(string filter)
-    {
-        _kpiFilter = filter == "rate" || _kpiFilter == filter ? string.Empty : filter;
-        _view = "list";
-    }
-
-    private string KpiClass(string filter, string cssClass) => $"{cssClass} {(_kpiFilter == filter ? "lf-kpi-card--active" : string.Empty)}";
-
-    // ── Calendar ─────────────────────────────────────────────────────────
-    private void PrevMonth() => _currentMonth = _currentMonth.AddMonths(-1);
+    private void ClearFilters() { _search = string.Empty; _statusFilter = string.Empty; _priorityFilter = string.Empty; _activityFilter = string.Empty; _kpiFilter = string.Empty; ApplyFilters(); }
+    private void SetKpiFilter(string filter) { _kpiFilter = _kpiFilter == filter ? string.Empty : filter; _view = "list"; ApplyFilters(); }
+    private void SetView(string view) => _view = view;
+    private void ShowDashboard() => _view = "dashboard";
+    private void ShowCalendar() => _view = "calendar";
+    private void ShowAnalytics() => _view = "analytics";
+    private void ShowOverdue() { _kpiFilter = "overdue"; _view = "list"; ApplyFilters(); }
+    private void SelectDetail(FollowUpRow item) => _detail = item;
+    private void PreviousMonth() => _currentMonth = _currentMonth.AddMonths(-1);
     private void NextMonth() => _currentMonth = _currentMonth.AddMonths(1);
-    private string GetDayName(int index) => _dayNames[index];
+    private void SelectDate(DateTime date) { _selectedDate = date.Date; _view = "calendar"; }
 
-    private void SelectDate(DateTime date)
+    private void OpenNewFollowUp()
     {
-        _selectedCalendarDate = date.Date;
-        _selectedDateFollowUps = _allFollowUps
-            .Where(f => f.DueDate.Date == date.Date)
-            .OrderBy(f => f.DueDate)
-            .ToList();
+        _editingId = Guid.Empty;
+        _form = new FollowUpFormModel { LeadId = _leadOptions.FirstOrDefault()?.Id ?? Guid.Empty, ActivityType = "Phone Call", DueDate = DateTime.Today.AddDays(1), Priority = "Medium", ContactMethod = "Phone Call", Status = "Pending", DurationMinutes = 30 };
+        _showForm = true;
     }
 
-    // ── Follow-up Operations ─────────────────────────────────────────────
-    private void OpenScheduleDrawer()
+    private void OpenEdit(FollowUpRow item)
     {
-        _editingFollowUp = null;
-        _formData = new()
+        _editingId = item.Id;
+        _form = new FollowUpFormModel { LeadId = item.LeadId, ActivityType = item.ActivityType, DueDate = item.DueDate, Priority = item.Priority, ContactMethod = item.ContactMethod, Status = item.Status == "Overdue" ? "Pending" : item.Status, DurationMinutes = item.DurationMinutes, Notes = item.Notes ?? string.Empty };
+        _showForm = true;
+    }
+
+    private void RescheduleFollowUp(FollowUpRow item)
+    {
+        OpenEdit(item);
+        _form.Status = "Pending";
+        if (_form.DueDate.Date <= DateTime.Today) _form.DueDate = DateTime.Today.AddDays(1);
+    }
+
+    private void CloseForm() { if (!_saving) _showForm = false; }
+    private void ConfirmDelete(FollowUpRow item) { _deleteTarget = item; _showDeleteConfirm = true; }
+    private void CancelDelete() { if (!_saving) { _deleteTarget = null; _showDeleteConfirm = false; } }
+
+    private async Task SaveFollowUpAsync()
+    {
+        _saving = true;
+        try
         {
-            LeadId = Guid.Empty,
-            ActivityType = string.Empty,
-            DueDate = DateTime.Now.AddDays(1),
-            Priority = "Medium",
-            ContactMethod = "Phone Call",
-            Notes = string.Empty,
-            Status = "Pending"
-        };
-        _drawerOpen = true;
-    }
-
-    private void EditFollowUp(FollowUpRow followup)
-    {
-        _editingFollowUp = followup;
-        _formData = new()
+            var lead = _leadOptions.FirstOrDefault(x => x.Id == _form.LeadId);
+            if (lead is null) { await ShowToastAsync("Select a valid lead.", "warning"); return; }
+            if (_editingId == Guid.Empty)
+            {
+                await Api.CreateLeadActivityAsync(new CreateLeadActivityRequest { TenantId = _tenantId, LeadId = _form.LeadId, ActivityTypeCode = _form.ActivityType, Subject = SubjectFor(_form.ActivityType), Notes = ComposeNotes(_form.Priority, _form.ContactMethod, _form.Notes), ActivityDate = _form.DueDate, DurationMinutes = _form.DurationMinutes, OutcomeCode = _form.Status, CreatedByUserId = _userId });
+                await ShowToastAsync($"Follow-up scheduled for {lead.Name}.", "success");
+            }
+            else
+            {
+                await Api.UpdateLeadActivityAsync(_editingId, ToUpdateRequest(_editingId, _form, _form.Status == "Completed"));
+                await ShowToastAsync($"Follow-up updated for {lead.Name}.", "success");
+            }
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
         {
-            LeadId = followup.LeadId,
-            ActivityType = followup.ActivityType,
-            DueDate = followup.DueDate,
-            Priority = followup.Priority,
-            ContactMethod = followup.ContactMethod,
-            Notes = followup.Notes,
-            Status = followup.Status
-        };
-        _drawerOpen = true;
+            await ShowToastAsync($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
     }
 
-    private void RescheduleFollowUp(FollowUpRow followup)
+    private Task HandleInvalidSubmitAsync(EditContext _) => ShowToastAsync("Fix validation errors before saving.", "warning");
+
+    private async Task CompleteFollowUpAsync(FollowUpRow item)
     {
-        EditFollowUp(followup);
+        try
+        {
+            var form = new FollowUpFormModel { LeadId = item.LeadId, ActivityType = item.ActivityType, DueDate = item.DueDate, Priority = item.Priority, ContactMethod = item.ContactMethod, Status = "Completed", DurationMinutes = item.DurationMinutes, Notes = item.Notes ?? string.Empty };
+            await Api.UpdateLeadActivityAsync(item.Id, ToUpdateRequest(item.Id, form, true));
+            await ShowToastAsync($"Follow-up for {item.LeadName} completed.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Complete failed: {ex.Message}", "danger");
+        }
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteLeadActivityAsync(_deleteTarget.Id, _userId);
+            await ShowToastAsync($"Follow-up for {_deleteTarget.LeadName} deleted.", "success");
+            _deleteTarget = null;
+            _showDeleteConfirm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
     }
 
     private async Task EnsureSeedDataAsync(List<LeadDto> leads)
@@ -909,275 +545,157 @@
         {
             var seeds = new[]
             {
-                new CreateLeadSeed("LFU-001", "Maya", "Patel", "Northstar Manufacturing", "maya.patel@northstarmfg.example", "(555) 410-1001", "Commercial Package"),
-                new CreateLeadSeed("LFU-002", "Ethan", "Brooks", "Harbor Retail Group", "ethan.brooks@harborretail.example", "(555) 410-1002", "Workers Comp"),
-                new CreateLeadSeed("LFU-003", "Olivia", "Reed", "Summit Dental Partners", "olivia.reed@summitdental.example", "(555) 410-1003", "Professional Liability"),
-                new CreateLeadSeed("LFU-004", "Noah", "Kim", "Blue Ridge Logistics", "noah.kim@brlogistics.example", "(555) 410-1004", "Fleet Coverage"),
+                new LeadSeed("LFU-001", "Maya", "Patel", "Northstar Manufacturing", "maya.patel@northstarmfg.example", "(555) 410-1001", "Commercial Package"),
+                new LeadSeed("LFU-002", "Ethan", "Brooks", "Harbor Retail Group", "ethan.brooks@harborretail.example", "(555) 410-1002", "Workers Comp"),
+                new LeadSeed("LFU-003", "Olivia", "Reed", "Summit Dental Partners", "olivia.reed@summitdental.example", "(555) 410-1003", "Professional Liability"),
+                new LeadSeed("LFU-004", "Noah", "Kim", "Blue Ridge Logistics", "noah.kim@brlogistics.example", "(555) 410-1004", "Fleet Coverage")
             };
-
             foreach (var seed in seeds)
             {
-                await Api.CreateLeadAsync(new()
-                {
-                    TenantId = _tenantId,
-                    LeadNumber = seed.LeadNumber,
-                    FirstName = seed.FirstName,
-                    LastName = seed.LastName,
-                    AccountName = seed.AccountName,
-                    Email = seed.Email,
-                    Phone = seed.Phone,
-                    InterestedService = seed.InterestedService,
-                });
+                await Api.CreateLeadAsync(new CreateLeadRequest { TenantId = _tenantId, LeadNumber = seed.LeadNumber, FirstName = seed.FirstName, LastName = seed.LastName, AccountName = seed.AccountName, Email = seed.Email, Phone = seed.Phone, InterestedService = seed.InterestedService, SourceCode = "Referral", NurturingStageCode = "New", PriorityCode = "Warm", Score = 45, CreatedByUserId = _userId });
             }
-
             var refreshed = await Api.SearchLeadsAsync(_tenantId);
             seedLeads = refreshed?.Items?.Where(l => l.LeadNumber.StartsWith("LFU-", StringComparison.OrdinalIgnoreCase)).ToList() ?? [];
         }
 
         var activities = await Api.SearchLeadActivitiesAsync(_tenantId);
-        if (activities?.Items?.Any(a => a.Subject.StartsWith("Follow-up:", StringComparison.OrdinalIgnoreCase)) == true)
-            return;
-
-        var now = DateTime.Now;
+        if (activities?.Items?.Any(a => a.Subject.StartsWith("Follow-up:", StringComparison.OrdinalIgnoreCase)) == true) return;
         var templates = new[]
         {
-            new FollowUpSeed("Phone Call", "Follow-up: Coverage review call", "Discuss current renewal concerns and timeline.", now.AddDays(-2), "Pending"),
-            new FollowUpSeed("Email", "Follow-up: Send proposal checklist", "Email required exposure details and document checklist.", now.Date, "Pending"),
-            new FollowUpSeed("Meeting", "Follow-up: Schedule discovery meeting", "Coordinate producer meeting with decision makers.", now.AddDays(2), "Pending"),
-            new FollowUpSeed("Demo", "Follow-up: Walk through client portal", "Show portal document center and self-service requests.", now.AddDays(5), "Pending"),
-            new FollowUpSeed("Email", "Follow-up: Completed thank-you note", "Sent recap and next steps after first conversation.", now.AddDays(-3), "Completed"),
+            new FollowUpSeed("Phone Call", "High", "Phone Call", "Discuss current renewal concerns and timeline.", DateTime.Today.AddDays(-2), "Pending", 30),
+            new FollowUpSeed("Email", "Medium", "Email", "Send required exposure details and document checklist.", DateTime.Today, "Pending", 15),
+            new FollowUpSeed("Meeting", "Medium", "Meeting", "Coordinate producer meeting with decision makers.", DateTime.Today.AddDays(2), "Pending", 45),
+            new FollowUpSeed("Demo", "Low", "Portal", "Show portal document center and self-service requests.", DateTime.Today.AddDays(5), "Pending", 30),
+            new FollowUpSeed("Email", "Low", "Email", "Sent recap and next steps after first conversation.", DateTime.Today.AddDays(-3), "Completed", 10)
         };
-
         for (var i = 0; i < templates.Length && seedLeads.Count > 0; i++)
         {
             var lead = seedLeads[i % seedLeads.Count];
             var item = templates[i];
-            await Api.CreateLeadActivityAsync(new()
-            {
-                TenantId = _tenantId,
-                LeadId = lead.LeadId,
-                ActivityTypeCode = item.ActivityType,
-                Subject = item.Subject,
-                Notes = item.Notes,
-                ActivityDate = item.ActivityDate,
-                OutcomeCode = item.Status,
-            });
+            await Api.CreateLeadActivityAsync(new CreateLeadActivityRequest { TenantId = _tenantId, LeadId = lead.LeadId, ActivityTypeCode = item.ActivityType, Subject = SubjectFor(item.ActivityType), Notes = ComposeNotes(item.Priority, item.ContactMethod, item.Notes), ActivityDate = item.DueDate, DurationMinutes = item.DurationMinutes, OutcomeCode = item.Status, CreatedByUserId = _userId });
         }
     }
 
-    private async Task CompleteFollowUp(FollowUpRow followup)
+    private IEnumerable<DateTime> CalendarDays
     {
-        try
+        get
         {
-            await Api.UpdateLeadActivityAsync(followup.Id, ToUpdateRequest(followup with { Status = "Completed" }, true, true));
-            _allFollowUps.Remove(followup);
-            _allFollowUps.Add(followup with { Status = "Completed" });
-            UpdateKpi();
-            OrganizeFollowUps();
-            await ShowToast("success", "Follow-up Completed", $"Follow-up for {followup.LeadName} marked as completed");
-        }
-        catch (Exception ex)
-        {
-            await ShowToast("error", "Complete Failed", ex.Message);
+            var first = new DateTime(_currentMonth.Year, _currentMonth.Month, 1);
+            var start = first.AddDays(-(int)first.DayOfWeek);
+            for (var i = 0; i < 42; i++) yield return start.AddDays(i);
         }
     }
 
-    private async Task SaveFollowUp()
+    private IEnumerable<BreakdownRow> StatusBreakdown => BuildBreakdown(_items.GroupBy(x => x.Status).Select(g => (g.Key, g.Count())));
+    private IEnumerable<BreakdownRow> ActivityBreakdown => BuildBreakdown(_items.GroupBy(x => x.ActivityType).Select(g => (g.Key, g.Count())));
+    private IEnumerable<BreakdownRow> PriorityBreakdown => BuildBreakdown(_items.GroupBy(x => x.Priority).Select(g => (g.Key, g.Count())));
+    private IEnumerable<TrendPoint> CompletionTrend => Enumerable.Range(0, 30).Select(i => DateTime.Today.AddDays(i - 29)).Select(day => { var count = _items.Count(x => x.Status == "Completed" && x.DueDate.Date == day); var max = Math.Max(1, _items.Count(x => x.Status == "Completed")); return new TrendPoint(day.ToString("MMM d", CultureInfo.CurrentCulture), count, Math.Max(8, (double)count / max * 100)); });
+
+    private static IEnumerable<BreakdownRow> BuildBreakdown(IEnumerable<(string Label, int Count)> rows)
     {
-        if (_formData.LeadId == Guid.Empty || string.IsNullOrEmpty(_formData.ActivityType))
-        {
-            await ShowToast("warning", "Invalid Input", "Please select lead and activity type");
-            return;
-        }
-
-        var lead = _leadOptions.FirstOrDefault(l => l.Id == _formData.LeadId);
-        if (lead == null) return;
-
-        try
-        {
-            var savedId = _editingFollowUp?.Id ?? Guid.NewGuid();
-            if (_editingFollowUp is null)
-            {
-                savedId = await Api.CreateLeadActivityAsync(new CreateLeadActivityRequest
-                {
-                    TenantId = _tenantId,
-                    LeadId = _formData.LeadId,
-                    ActivityTypeCode = _formData.ActivityType,
-                    Subject = $"Follow-up: {_formData.ActivityType}",
-                    Notes = _formData.Notes,
-                    ActivityDate = _formData.DueDate,
-                    OutcomeCode = _formData.Status,
-                });
-            }
-
-            if (_editingFollowUp != null)
-            {
-                await Api.UpdateLeadActivityAsync(_editingFollowUp.Id, ToUpdateRequest(_editingFollowUp, _formData.Status == "Completed"));
-                _allFollowUps.Remove(_editingFollowUp);
-            }
-
-            _allFollowUps.Add(new(
-                savedId,
-                lead.Name,
-                lead.Company,
-                _formData.LeadId,
-                _formData.ActivityType,
-                _formData.ContactMethod,
-                _formData.DueDate,
-                _formData.Priority,
-                _formData.Status,
-                _formData.Notes
-            ));
-
-            UpdateKpi();
-            OrganizeFollowUps();
-            _drawerOpen = false;
-            await ShowToast("success", _editingFollowUp == null ? "Follow-up Scheduled" : "Follow-up Updated", 
-                $"Follow-up for {lead.Name} has been {(_editingFollowUp == null ? "scheduled" : "updated")}");
-        }
-        catch (Exception ex)
-        {
-            await ShowToast("error", "Save Failed", ex.Message);
-        }
+        var list = rows.OrderByDescending(x => x.Count).ToList();
+        var max = Math.Max(1, list.Select(x => x.Count).DefaultIfEmpty(1).Max());
+        return list.Select(x => new BreakdownRow(x.Label, x.Count, (double)x.Count / max * 100));
     }
 
-    private async Task DeleteFollowUp(FollowUpRow followup)
-    {
-        try
-        {
-            await Api.DeleteLeadActivityAsync(followup.Id);
-            _allFollowUps.Remove(followup);
-            UpdateKpi();
-            OrganizeFollowUps();
-            await ShowToast("success", "Follow-up Deleted", $"Follow-up for {followup.LeadName} has been deleted");
-        }
-        catch (Exception ex)
-        {
-            await ShowToast("error", "Delete Failed", ex.Message);
-        }
-    }
-
-    private void ConfirmDelete(FollowUpRow followup)
-    {
-        _deleteTarget = followup;
-        _showDeleteConfirm = true;
-    }
-
-    private async Task ExecuteDeleteAsync()
-    {
-        if (_deleteTarget is null) return;
-
-        await DeleteFollowUp(_deleteTarget);
-        _deleteTarget = null;
-        _showDeleteConfirm = false;
-    }
-
-    // ── Helpers ──────────────────────────────────────────────────────────
-    private static bool IsFollowUpActivity(LeadActivityDto activity) =>
-        activity.Subject.Contains("follow", StringComparison.OrdinalIgnoreCase) ||
-        activity.ActivityTypeCode.Contains("follow", StringComparison.OrdinalIgnoreCase) ||
-        activity.OutcomeCode is "Pending" or "Completed" or "Cancelled";
-
+    private static bool IsFollowUpActivity(LeadActivityDto activity) => activity.Subject.StartsWith("Follow-up:", StringComparison.OrdinalIgnoreCase) || activity.Subject.Contains("follow", StringComparison.OrdinalIgnoreCase) || activity.ActivityTypeCode.Contains("follow", StringComparison.OrdinalIgnoreCase) || activity.OutcomeCode is "Pending" or "Completed" or "Cancelled";
     private static FollowUpRow MapFollowUp(LeadActivityDto activity, IReadOnlyDictionary<Guid, LeadOption> leadLookup)
     {
         var lead = activity.LeadId.HasValue && leadLookup.TryGetValue(activity.LeadId.Value, out var option) ? option : null;
-        var status = activity.IsCompleted || string.Equals(activity.OutcomeCode, "Completed", StringComparison.OrdinalIgnoreCase) ? "Completed" : activity.ActivityDate < DateTime.Now ? "Overdue" : activity.OutcomeCode ?? "Pending";
-        return new(
-            activity.ActivityId,
-            activity.LeadName ?? lead?.Name ?? "Unknown Lead",
-            lead?.Company ?? "—",
-            activity.LeadId ?? Guid.Empty,
-            activity.ActivityTypeCode,
-            ContactMethod(activity.ActivityTypeCode),
-            activity.ActivityDate,
-            PriorityFromDate(activity.ActivityDate, activity.IsCompleted),
-            status,
-            activity.Notes ?? activity.Subject);
+        var notes = ParseNotes(activity.Notes, out var priority, out var contact);
+        var status = activity.IsCompleted || string.Equals(activity.OutcomeCode, "Completed", StringComparison.OrdinalIgnoreCase) ? "Completed" : string.Equals(activity.OutcomeCode, "Cancelled", StringComparison.OrdinalIgnoreCase) ? "Cancelled" : activity.ActivityDate < DateTime.Now ? "Overdue" : "Pending";
+        return new FollowUpRow(activity.ActivityId, activity.LeadId ?? Guid.Empty, activity.LeadName ?? lead?.Name ?? "Unknown Lead", lead?.Company ?? "—", activity.ActivityTypeCode, activity.ActivityDate, priority ?? PriorityFromDate(activity.ActivityDate, activity.IsCompleted), contact ?? ContactMethod(activity.ActivityTypeCode), status, notes, activity.DurationMinutes);
     }
 
-    private static string ContactMethod(string activityType) => activityType switch
+    private static string ComposeNotes(string priority, string contactMethod, string? notes) => $"[Priority: {priority}] [Contact: {contactMethod}]\n{notes}".Trim();
+    private static string? ParseNotes(string? source, out string? priority, out string? contact)
     {
-        "Call" or "Phone Call" => "Phone Call",
-        "Email" => "Email",
-        "Meeting" => "Meeting",
-        _ => activityType,
-    };
-
-    private static string PriorityFromDate(DateTime dueDate, bool completed) => completed ? "Low" : dueDate.Date <= DateTime.Now.Date ? "High" : dueDate <= DateTime.Now.AddDays(2) ? "Medium" : "Low";
-
-    private string GetAvatarColor(Guid id) => _avatarColors[Math.Abs(id.GetHashCode()) % _avatarColors.Length];
-
-    private string GetPriorityClass(string priority) => priority switch
-    {
-        "High" => "lf-priority-high",
-        "Medium" => "lf-priority-medium",
-        "Low" => "lf-priority-low",
-        _ => string.Empty,
-    };
-
-    private string GetStatusClass(string status) => status switch
-    {
-        "Completed" => "lf-status-completed",
-        "Overdue" => "lf-status-overdue",
-        "Pending" => "lf-status-pending",
-        "Cancelled" => "lf-status-cancelled",
-        _ => string.Empty,
-    };
-
-    private string GetRowClass(FollowUpRow followup) => followup.Status switch
-    {
-        "Completed" => "lf-row-completed",
-        "Overdue" => "lf-row-overdue",
-        _ => string.Empty,
-    };
-
-    private string GetCalendarDotClass(string status) => status switch
-    {
-        "Completed" => "lf-cal-completed",
-        "Overdue" => "lf-cal-overdue",
-        _ => "lf-cal-pending",
-    };
-
-    private UpdateLeadActivityRequest ToUpdateRequest(FollowUpRow followup, bool isCompleted) => new()
-    {
-        ActivityId = followup.Id,
-        LeadId = _formData.LeadId,
-        ActivityTypeCode = _formData.ActivityType,
-        Subject = $"Follow-up: {_formData.ActivityType}",
-        Notes = _formData.Notes,
-        ActivityDate = _formData.DueDate,
-        OutcomeCode = _formData.Status,
-        IsCompleted = isCompleted,
-    };
-
-    private UpdateLeadActivityRequest ToUpdateRequest(FollowUpRow followup, bool isCompleted, bool useRowValues) => new()
-    {
-        ActivityId = followup.Id,
-        LeadId = followup.LeadId,
-        ActivityTypeCode = followup.ActivityType,
-        Subject = $"Follow-up: {followup.ActivityType}",
-        Notes = followup.Notes,
-        ActivityDate = followup.DueDate,
-        OutcomeCode = followup.Status,
-        IsCompleted = isCompleted,
-    };
-
-    private int GetDaysOverdue(DateTime dueDate) => (int)(DateTime.Now - dueDate).TotalDays;
-
-    private async Task ShowToast(string type, string title, string message)
-    {
-        if (_toast is null) return;
-        await _toast.ShowAsync(new ToastModel { Title = title, Content = message, CssClass = $"e-toast-{type}" });
+        priority = null; contact = null;
+        if (string.IsNullOrWhiteSpace(source)) return null;
+        var text = source.Trim();
+        if (text.StartsWith("[Priority:", StringComparison.OrdinalIgnoreCase))
+        {
+            var priorityEnd = text.IndexOf(']');
+            if (priorityEnd > 0) priority = text[10..priorityEnd].Trim();
+            var contactStart = text.IndexOf("[Contact:", StringComparison.OrdinalIgnoreCase);
+            if (contactStart >= 0)
+            {
+                var contactEnd = text.IndexOf(']', contactStart);
+                if (contactEnd > contactStart) contact = text[(contactStart + 9)..contactEnd].Trim();
+                text = text[(contactEnd + 1)..].Trim();
+            }
+            else if (priorityEnd > 0)
+            {
+                text = text[(priorityEnd + 1)..].Trim();
+            }
+        }
+        return string.IsNullOrWhiteSpace(text) ? null : text;
     }
 
-    async Task ResolveCurrentUserContextAsync()
+    private UpdateLeadActivityRequest ToUpdateRequest(Guid id, FollowUpFormModel form, bool isCompleted) => new() { ActivityId = id, LeadId = form.LeadId, ActivityTypeCode = form.ActivityType, Subject = SubjectFor(form.ActivityType), Notes = ComposeNotes(form.Priority, form.ContactMethod, form.Notes), ActivityDate = form.DueDate, DurationMinutes = form.DurationMinutes, OutcomeCode = form.Status, IsCompleted = isCompleted, ModifiedByUserId = _userId };
+    private static string SubjectFor(string activityType) => $"Follow-up: {activityType}"[..Math.Min(200, $"Follow-up: {activityType}".Length)];
+    private static string ContactMethod(string activityType) => activityType switch { "Phone Call" or "Call" => "Phone Call", "Email" => "Email", "Meeting" => "Meeting", "Text" => "Text", "LinkedIn" => "LinkedIn", _ => activityType };
+    private static string PriorityFromDate(DateTime dueDate, bool completed) => completed ? "Low" : dueDate.Date <= DateTime.Today ? "High" : dueDate.Date <= DateTime.Today.AddDays(2) ? "Medium" : "Low";
+    private static bool Contains(string value, string term) => value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static string Initials(string name) { var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length > 0 ? name[..1] : "?"; }
+    private static string AvatarClass(string name) { var classes = new[] { "lf-av1", "lf-av2", "lf-av3", "lf-av4", "lf-av5", "lf-av6" }; return classes[Math.Abs(name.GetHashCode()) % classes.Length]; }
+    private static string ActivityIcon(string value) => value switch { "Phone Call" => "bi-telephone", "Email" => "bi-envelope", "Meeting" => "bi-people", "Text" => "bi-chat-dots", "LinkedIn" => "bi-linkedin", _ => "bi-calendar-check" };
+    private static string PriorityClass(string value) => $"lf-priority lf-priority-{value.ToLowerInvariant()}";
+    private static string StatusClass(string value) => $"lf-status lf-status-{value.ToLowerInvariant()}";
+    private static string StatusDotClass(string value) => $"lf-dot lf-dot-{value.ToLowerInvariant()}";
+    private static string DueLabel(FollowUpRow item) => item.Status == "Completed" ? "Completed" : item.IsOverdue ? $"{(DateTime.Today - item.DueDate.Date).Days} day(s) overdue" : item.DueDate.Date == DateTime.Today ? "Due today" : $"In {(item.DueDate.Date - DateTime.Today).Days} day(s)";
+    private string RowClass(FollowUpRow item) => _detail?.Id == item.Id ? "lf-row-selected" : item.IsOverdue ? "lf-row-overdue" : item.IsClosed ? "lf-row-closed" : string.Empty;
+    private string MetricCardClass(MetricCard metric) => $"lf-kpi-card {metric.Tone} {(_kpiFilter == metric.Filter && !string.IsNullOrWhiteSpace(metric.Filter) ? "lf-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewDef view) => _view == view.Id ? "lf-view-btn lf-view-btn-active" : "lf-view-btn";
+    private string CalendarDayClass(DateTime day) => $"lf-calendar-day {(day.Month == _currentMonth.Month ? string.Empty : "lf-calendar-muted")} {(day.Date == DateTime.Today ? "lf-calendar-today" : string.Empty)} {(_selectedDate?.Date == day.Date ? "lf-calendar-selected" : string.Empty)}";
+
+    private async Task ShowToastAsync(string message, string kind = "info")
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        _toastCts?.Cancel(); _toastCts?.Dispose(); _toastCts = new CancellationTokenSource();
+        _toastMessage = message.Length <= 120 ? message : $"{message[..117]}..."; _toastKind = ToastKind(kind); _toastVisible = true; StateHasChanged();
+        try { await Task.Delay(_toastKind == "danger" ? 10000 : 6500, _toastCts.Token); _toastVisible = false; await InvokeAsync(StateHasChanged); } catch (TaskCanceledException) { }
+    }
+
+    private void HideToast() { _toastCts?.Cancel(); _toastVisible = false; }
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : value.Contains("success", StringComparison.OrdinalIgnoreCase) ? "success" : "info";
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _userId = context.UserId; }
+
+    private sealed record ViewDef(string Id, string Label, string Icon);
+    private sealed record MetricCard(string Label, string Value, string Caption, string Icon, string Tone, string Filter, string Tooltip);
+    private sealed record LeadOption(Guid Id, string Name, string Company);
+    private sealed record LeadSeed(string LeadNumber, string FirstName, string LastName, string AccountName, string Email, string Phone, string InterestedService);
+    private sealed record FollowUpSeed(string ActivityType, string Priority, string ContactMethod, string Notes, DateTime DueDate, string Status, int DurationMinutes);
+    private sealed record BreakdownRow(string Label, int Count, double Width);
+    private sealed record TrendPoint(string Label, int Count, double Height);
+    private sealed record FollowUpRow(Guid Id, Guid LeadId, string LeadName, string CompanyName, string ActivityType, DateTime DueDate, string Priority, string ContactMethod, string Status, string? Notes, int? DurationMinutes)
+    {
+        public bool IsClosed => Status is "Completed" or "Cancelled";
+        public bool IsOverdue => DueDate < DateTime.Now && !IsClosed;
+    }
+
+    private sealed class FollowUpFormModel
+    {
+        [RequiredNonEmptyGuid]
+        public Guid LeadId { get; set; }
+        [Required, StringLength(50)]
+        public string ActivityType { get; set; } = string.Empty;
+        [Required]
+        public DateTime DueDate { get; set; } = DateTime.Today.AddDays(1);
+        [Required, StringLength(20)]
+        public string Priority { get; set; } = "Medium";
+        [Required, StringLength(50)]
+        public string ContactMethod { get; set; } = "Phone Call";
+        [Required, StringLength(50)]
+        public string Status { get; set; } = "Pending";
+        [Range(0, 1440)]
+        public int? DurationMinutes { get; set; } = 30;
+        [StringLength(2000)]
+        public string Notes { get; set; } = string.Empty;
+    }
+
+    private sealed class RequiredNonEmptyGuidAttribute : ValidationAttribute
+    {
+        public override bool IsValid(object? value) => value is Guid id && id != Guid.Empty;
+        public override string FormatErrorMessage(string name) => $"{name} is required.";
     }
 }

@@ -4,6 +4,7 @@ window.amsShell = (function () {
 
     var _ref     = null;
     var _handler = null;
+    var _portals = {};
 
     var kpiAllLabels = ['all', 'total', 'total users', 'total documents', 'total events', 'total invoices', 'total payments', 'total portal users'];
 
@@ -125,6 +126,24 @@ window.amsShell = (function () {
         });
     }
 
+    function getModalRoot() {
+        var root = document.getElementById('ams-modal-root');
+        if (!root) {
+            root = document.createElement('div');
+            root.id = 'ams-modal-root';
+            document.body.appendChild(root);
+        }
+
+        return root;
+    }
+
+    function lockBodyForModals() {
+        var root = document.getElementById('ams-modal-root');
+        var hasModal = root && root.children.length > 0;
+        document.body.classList.toggle('ams-modal-open', !!hasModal);
+        document.body.style.overflow = hasModal ? 'hidden' : '';
+    }
+
     document.addEventListener('click', function (event) {
         var card = event.target.closest('[class*="kpi-card"], [class*="kpi-tile"], .pc-kpi-card, .api-kpi-card, .pu-kpi-card, .pr-kpi-card, .pd-kpi-card, .pa-kpi-card');
         if (!card) return;
@@ -171,6 +190,39 @@ window.amsShell = (function () {
         /** Toggle the dark-theme attribute on the document root. */
         setTheme: function (dark) {
             document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+        },
+
+        /** Move a Blazor-rendered modal element to the document body so it escapes clipped layouts. */
+        portalModal: function (id) {
+            var el = document.getElementById(id);
+            if (!el) {
+                lockBodyForModals();
+                return false;
+            }
+
+            var root = getModalRoot();
+            if (el.parentElement !== root) {
+                _portals[id] = { parent: el.parentNode, next: el.nextSibling };
+                root.appendChild(el);
+            }
+            lockBodyForModals();
+            return true;
+        },
+
+        /** Return a portaled modal to normal Blazor disposal flow when it is still present. */
+        releaseModal: function (id) {
+            var el = document.getElementById(id);
+            if (el && el.parentElement && el.parentElement.id === 'ams-modal-root') {
+                var portal = _portals[id];
+                if (portal && portal.parent && portal.parent.isConnected) {
+                    portal.parent.insertBefore(el, portal.next && portal.next.isConnected ? portal.next : null);
+                } else {
+                    el.remove();
+                }
+            }
+
+            delete _portals[id];
+            lockBodyForModals();
         },
 
         /** Trigger a file download from a base-64 encoded string. */

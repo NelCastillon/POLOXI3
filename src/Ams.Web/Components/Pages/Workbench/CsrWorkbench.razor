@@ -1,236 +1,155 @@
 @page "/workbench/csr"
 @namespace Ams.Web.Components.Pages.Workbench
+@using System.Globalization
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
 @inject ConfirmationDialogService Confirmations
 
-<PageTitle>CSR Workbench</PageTitle>
+<PageTitle>Enterprise CSR Workbench</PageTitle>
 
-<WorkbenchShell Title="CSR Workbench"
-                Subtitle="Customer service queues — service requests, endorsements, certificates, billing enquiries, complaints and follow-ups"
-                Icon="bi-headset"
-                @bind-Scope="_scope"
-                BranchId="@_branchId"
-                BranchIdChanged="OnBranchChangedAsync"
-                TeamId="@_teamId"
-                TeamIdChanged="OnTeamChangedAsync"
-                SavedViews="_savedViews"
-                OnSaveView="SaveViewAsync"
-                OnLoadView="LoadViewAsync"
-                OnDeleteView="DeleteViewAsync"
-                SlaItems="_slaItems"
-                AiSummary="_aiSummary"
-                AiSummaryLoading="_aiLoading"
-                AiSummaryGeneratedAt="_aiGeneratedAt"
-                OnGenerateAiSummary="GenerateAiSummaryAsync"
-                OnRefresh="LoadAsync"
-                Loading="_loading">
-    <ExtraActions>
-        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/ops/service-requests?new=true")'>
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Request
-        </button>
-    </ExtraActions>
-    <Queues>
+@if (_toastVisible)
+{
+    <div class="csrw-toast csrw-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="csrw-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
 
-        @if (!string.IsNullOrWhiteSpace(_loadError))
-        {
-            <div class="alert alert-danger" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
-                @_loadError
-            </div>
-        }
-
-        <!-- ── KPI strip ─────────────────────────────────────────────────── -->
-        <div class="wb-kpi-strip">
-            <div class="@KpiClass(1)" @onclick='() => FocusQueue(1, "service-requests")' role="button" tabindex="0">
-                <span class="wb-kpi-icon wb-kpi-i1"><i class="bi bi-headset" aria-hidden="true"></i></span>
-                <div class="wb-kpi-body">
-                    <div class="wb-kpi-val @(_c.ServiceRequests > 0 ? "wb-kpi-val--alert" : "")">@_c.ServiceRequests</div>
-                    <div class="wb-kpi-lbl">Service Requests</div>
+<div class="csrw-enterprise-page">
+    <section class="csrw-hero">
+        <div class="csrw-hero-left">
+            <span class="csrw-hero-icon"><i class="bi bi-headset" aria-hidden="true"></i></span>
+            <div>
+                <div class="csrw-title-row">
+                    <h1>CSR Workbench</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> Live service data</span>
+                    <span><i class="bi bi-shield-check" aria-hidden="true"></i> SLA governed</span>
                 </div>
-                @KpiDot(1)
-            </div>
-            <div class="@KpiClass(2)" @onclick='() => FocusQueue(2, "endorsements")' role="button" tabindex="0">
-                <span class="wb-kpi-icon wb-kpi-i2"><i class="bi bi-pen-fill" aria-hidden="true"></i></span>
-                <div class="wb-kpi-body">
-                    <div class="wb-kpi-val">@_c.Endorsements</div>
-                    <div class="wb-kpi-lbl">Endorsements</div>
-                </div>
-                @KpiDot(2)
-            </div>
-            <div class="@KpiClass(3)" @onclick='() => FocusQueue(3, "certificates")' role="button" tabindex="0">
-                <span class="wb-kpi-icon wb-kpi-i3"><i class="bi bi-patch-check-fill" aria-hidden="true"></i></span>
-                <div class="wb-kpi-body">
-                    <div class="wb-kpi-val">@_c.Certificates</div>
-                    <div class="wb-kpi-lbl">Certificates</div>
-                </div>
-                @KpiDot(3)
-            </div>
-            <div class="@KpiClass(4)" @onclick='() => FocusQueue(4, "billing-enquiries")' role="button" tabindex="0">
-                <span class="wb-kpi-icon wb-kpi-i4"><i class="bi bi-receipt" aria-hidden="true"></i></span>
-                <div class="wb-kpi-body">
-                    <div class="wb-kpi-val">@_c.BillingEnquiries</div>
-                    <div class="wb-kpi-lbl">Billing Enquiries</div>
-                </div>
-                @KpiDot(4)
-            </div>
-            <div class="@KpiClass(5)" @onclick='() => FocusQueue(5, "complaints")' role="button" tabindex="0">
-                <span class="wb-kpi-icon wb-kpi-i5"><i class="bi bi-exclamation-octagon-fill" aria-hidden="true"></i></span>
-                <div class="wb-kpi-body">
-                    <div class="wb-kpi-val @(_c.Complaints > 0 ? "wb-kpi-val--alert" : "")">@_c.Complaints</div>
-                    <div class="wb-kpi-lbl">Complaints</div>
-                </div>
-                @KpiDot(5)
-            </div>
-            <div class="@KpiClass(6)" @onclick='() => FocusQueue(6, "follow-ups")' role="button" tabindex="0">
-                <span class="wb-kpi-icon wb-kpi-i6"><i class="bi bi-alarm-fill" aria-hidden="true"></i></span>
-                <div class="wb-kpi-body">
-                    <div class="wb-kpi-val @(_c.OverdueFollowUps > 0 ? "wb-kpi-val--warn" : "")">@_c.FollowUps</div>
-                    <div class="wb-kpi-lbl">Follow-ups</div>
-                    <div class="wb-kpi-sub @(_c.OverdueFollowUps > 0 ? "wb-sub--warn" : "")">@_c.OverdueFollowUps overdue</div>
-                </div>
-                @KpiDot(6)
+                <p>Manage service requests, endorsements, certificates, billing enquiries, complaints, and follow-ups from one full-width enterprise command center.</p>
             </div>
         </div>
+        <div class="csrw-hero-actions">
+            <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh CSR workbench"><i class="bi @(_loading ? "bi-arrow-repeat csrw-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button class="um-btn um-btn-ghost" @onclick="GenerateAiSummaryAsync" disabled="@_aiLoading"><i class="bi @(_aiLoading ? "bi-arrow-repeat csrw-spin" : "bi-stars")" aria-hidden="true"></i> AI Summary</button>
+            <button class="um-btn um-btn-ghost" @onclick="ExportAsync"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/ops/service-requests?new=true")'><i class="bi bi-plus-lg" aria-hidden="true"></i> New Request</button>
+        </div>
+    </section>
 
-        <!-- ── Queue tabs ─────────────────────────────────────────────────── -->
-        @QueueTabs()
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger csrw-error-banner" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
 
-        <!-- ── Filter row ─────────────────────────────────────────────────── -->
-        @FilterRow()
+    <section class="csrw-insight-strip" aria-label="CSR service insights">
+        <article class="csrw-insight-card csrw-insight-primary"><span class="csrw-insight-icon"><i class="bi bi-bullseye" aria-hidden="true"></i></span><div><small>Priority Focus</small><strong>@PriorityFocusText</strong></div></article>
+        <article class="csrw-insight-card"><span class="csrw-insight-icon csrw-tone-danger"><i class="bi bi-exclamation-octagon" aria-hidden="true"></i></span><div><small>Breached SLA</small><strong>@BreachedCount</strong></div></article>
+        <article class="csrw-insight-card"><span class="csrw-insight-icon csrw-tone-warning"><i class="bi bi-alarm" aria-hidden="true"></i></span><div><small>At Risk</small><strong>@AtRiskCount</strong></div></article>
+        <article class="csrw-insight-card"><span class="csrw-insight-icon csrw-tone-success"><i class="bi bi-check2-circle" aria-hidden="true"></i></span><div><small>On Track</small><strong>@OnTrackCount</strong></div></article>
+    </section>
 
-        <!-- ── Grids ──────────────────────────────────────────────────────── -->
-        @if (!_loading)
+    <section class="csrw-ops-strip">
+        <article class="csrw-scope-card">
+            <div class="csrw-scope-head"><span><i class="bi bi-funnel" aria-hidden="true"></i> Workbench Scope</span><strong>@(_scope.Equals("team", StringComparison.OrdinalIgnoreCase) ? "Team" : "Me")</strong></div>
+            <div class="csrw-scope-grid">
+                <label><span>Scope</span><select class="csrw-filter-select" value="@_scope" @onchange="ScopeChangedCallback"><option value="me">My queue</option><option value="team">Team queue</option></select></label>
+                <label><span>Branch</span><input class="csrw-filter-input" value="@_branchId" @onchange="BranchChangedCallback" placeholder="All branches" /></label>
+                <label><span>Team</span><input class="csrw-filter-input" value="@_teamId" @onchange="TeamChangedCallback" placeholder="All teams" /></label>
+            </div>
+        </article>
+        <article class="csrw-ai-card">
+            <div class="csrw-ai-head"><span><i class="bi bi-stars" aria-hidden="true"></i> Service Intelligence</span>@if (_aiGeneratedAt.HasValue) { <small>@FormatAge(_aiGeneratedAt.Value)</small> }</div>
+            <p>@(_aiSummary ?? "Generate an AI-style service queue summary to prioritize urgent work, SLA breaches, complaints, and overdue follow-ups.")</p>
+        </article>
+    </section>
+
+    <section class="csrw-kpi-strip" aria-label="CSR queue metrics">
+        @foreach (var metric in Metrics)
         {
-            @if (_activeQueue == "service-requests")
-            {
-                <div class="wb-grid-card app-datagrid">
-                    <SfGrid TValue="WbItem" DataSource="@Filtered(_serviceRequests)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
-                        <GridColumns>
-                            <GridColumn HeaderText="Priority" Width="100"><Template>@{ var i=(WbItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template></GridColumn>
-                            <GridColumn Field="@nameof(WbItem.Title)" HeaderText="Request" Width="240">
-                                <Template>@{ var i=(WbItem)context; }<div class="wb-name-cell"><div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub wb-mono">@i.RefNumber</div></div></div></Template>
-                            </GridColumn>
-                            <GridColumn Field="@nameof(WbItem.AccountName)" HeaderText="Account"    Width="180" />
-                            <GridColumn Field="@nameof(WbItem.Category)"    HeaderText="Category"   Width="140" />
-                            <GridColumn Field="@nameof(WbItem.Channel)"     HeaderText="Channel"    Width="110"><Template>@{ var i=(WbItem)context; }<span class="@ChanBadge(i.Channel)">@i.Channel</span></Template></GridColumn>
-                            <GridColumn Field="@nameof(WbItem.AssignedTo)"  HeaderText="Assignee"   Width="140" />
-                            <GridColumn HeaderText="SLA"  Width="120"><Template>@{ var i=(WbItem)context; }<span class="@SlaBadge(i.SlaStatus)">@i.SlaStatus</span></Template></GridColumn>
-                            <GridColumn HeaderText="Age"  Width="80"><Template>@{ var i=(WbItem)context; }<span class="@AgeBadge(i.AgeDays)">@i.AgeDays d</span></Template></GridColumn>
-                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(WbItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
-                        </GridColumns>
-                    </SfGrid>
-                </div>
-            }
-            @if (_activeQueue == "endorsements")
-            {
-                <div class="wb-grid-card app-datagrid">
-                    <SfGrid TValue="WbItem" DataSource="@Filtered(_endorsements)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
-                        <GridColumns>
-                            <GridColumn HeaderText="Priority" Width="100"><Template>@{ var i=(WbItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template></GridColumn>
-                            <GridColumn Field="@nameof(WbItem.Title)"       HeaderText="Endorsement" Width="220"><Template>@{ var i=(WbItem)context; }<div class="wb-name-cell"><div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub wb-mono">@i.RefNumber</div></div></div></Template></GridColumn>
-                            <GridColumn Field="@nameof(WbItem.AccountName)" HeaderText="Account"     Width="180" />
-                            <GridColumn Field="@nameof(WbItem.PolicyNumber)" HeaderText="Policy #"   Width="140"><Template>@{ var i=(WbItem)context; }<span class="wb-mono">@i.PolicyNumber</span></Template></GridColumn>
-                            <GridColumn Field="@nameof(WbItem.AssignedTo)"  HeaderText="Assignee"    Width="140" />
-                            <GridColumn Field="@nameof(WbItem.DueDate)"     HeaderText="Needed By"   Width="120"><Template>@{ var i=(WbItem)context; }<span class="@(i.DueDate<DateTime.Today?"wb-overdue":"")">@i.DueDate.ToString("d")</span></Template></GridColumn>
-                            <GridColumn HeaderText="SLA"  Width="120"><Template>@{ var i=(WbItem)context; }<span class="@SlaBadge(i.SlaStatus)">@i.SlaStatus</span></Template></GridColumn>
-                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(WbItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
-                        </GridColumns>
-                    </SfGrid>
-                </div>
-            }
-            @if (_activeQueue == "certificates")
-            {
-                <div class="wb-grid-card app-datagrid">
-                    <SfGrid TValue="WbItem" DataSource="@Filtered(_certificates)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
-                        <GridColumns>
-                            <GridColumn HeaderText="Priority" Width="100"><Template>@{ var i=(WbItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template></GridColumn>
-                            <GridColumn Field="@nameof(WbItem.Title)"        HeaderText="Cert Type"  Width="180"><Template>@{ var i=(WbItem)context; }<div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub wb-mono">@i.RefNumber</div></div></Template></GridColumn>
-                            <GridColumn Field="@nameof(WbItem.AccountName)"  HeaderText="Account"    Width="170" />
-                            <GridColumn Field="@nameof(WbItem.CertHolder)"   HeaderText="Holder"     Width="190" />
-                            <GridColumn Field="@nameof(WbItem.PolicyNumber)" HeaderText="Policy #"   Width="130"><Template>@{ var i=(WbItem)context; }<span class="wb-mono">@i.PolicyNumber</span></Template></GridColumn>
-                            <GridColumn Field="@nameof(WbItem.AssignedTo)"   HeaderText="Assignee"   Width="140" />
-                            <GridColumn Field="@nameof(WbItem.DueDate)"      HeaderText="Needed By"  Width="120"><Template>@{ var i=(WbItem)context; }<span class="@(i.DueDate<DateTime.Today?"wb-overdue":"")">@i.DueDate.ToString("d")</span></Template></GridColumn>
-                            <GridColumn HeaderText="SLA"  Width="120"><Template>@{ var i=(WbItem)context; }<span class="@SlaBadge(i.SlaStatus)">@i.SlaStatus</span></Template></GridColumn>
-                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(WbItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
-                        </GridColumns>
-                    </SfGrid>
-                </div>
-            }
-            @if (_activeQueue == "billing-enquiries")
-            {
-                <div class="wb-grid-card app-datagrid">
-                    <SfGrid TValue="WbItem" DataSource="@Filtered(_billingEnquiries)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
-                        <GridColumns>
-                            <GridColumn HeaderText="Priority" Width="100"><Template>@{ var i=(WbItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template></GridColumn>
-                            <GridColumn Field="@nameof(WbItem.Title)"       HeaderText="Enquiry"    Width="220"><Template>@{ var i=(WbItem)context; }<div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub wb-mono">@i.RefNumber</div></div></Template></GridColumn>
-                            <GridColumn Field="@nameof(WbItem.AccountName)" HeaderText="Account"    Width="180" />
-                            <GridColumn Field="@nameof(WbItem.Amount)"      HeaderText="Amount"     Width="120" TextAlign="TextAlign.Right"><Template>@{ var i=(WbItem)context; }<span class="wb-mono">@i.Amount.ToString("C0")</span></Template></GridColumn>
-                            <GridColumn Field="@nameof(WbItem.Category)"    HeaderText="Category"   Width="140" />
-                            <GridColumn Field="@nameof(WbItem.AssignedTo)"  HeaderText="Assignee"   Width="140" />
-                            <GridColumn HeaderText="SLA"  Width="120"><Template>@{ var i=(WbItem)context; }<span class="@SlaBadge(i.SlaStatus)">@i.SlaStatus</span></Template></GridColumn>
-                            <GridColumn HeaderText="Age"  Width="80"><Template>@{ var i=(WbItem)context; }<span class="@AgeBadge(i.AgeDays)">@i.AgeDays d</span></Template></GridColumn>
-                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(WbItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
-                        </GridColumns>
-                    </SfGrid>
-                </div>
-            }
-            @if (_activeQueue == "complaints")
-            {
-                <div class="wb-grid-card app-datagrid">
-                    <SfGrid TValue="WbItem" DataSource="@Filtered(_complaints)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
-                        <GridColumns>
-                            <GridColumn HeaderText="Severity" Width="110"><Template>@{ var i=(WbItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template></GridColumn>
-                            <GridColumn Field="@nameof(WbItem.Title)"       HeaderText="Complaint"  Width="240"><Template>@{ var i=(WbItem)context; }<div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub wb-mono">@i.RefNumber</div></div></Template></GridColumn>
-                            <GridColumn Field="@nameof(WbItem.AccountName)" HeaderText="Account"    Width="180" />
-                            <GridColumn Field="@nameof(WbItem.Category)"    HeaderText="Type"       Width="130" />
-                            <GridColumn Field="@nameof(WbItem.AssignedTo)"  HeaderText="Assignee"   Width="140" />
-                            <GridColumn Field="@nameof(WbItem.EscalationLevel)" HeaderText="Escalation" Width="120"><Template>@{ var i=(WbItem)context; }<span class="@EscBadge(i.EscalationLevel)">L@(i.EscalationLevel)</span></Template></GridColumn>
-                            <GridColumn HeaderText="SLA"  Width="120"><Template>@{ var i=(WbItem)context; }<span class="@SlaBadge(i.SlaStatus)">@i.SlaStatus</span></Template></GridColumn>
-                            <GridColumn HeaderText="Age"  Width="80"><Template>@{ var i=(WbItem)context; }<span class="@AgeBadge(i.AgeDays)">@i.AgeDays d</span></Template></GridColumn>
-                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(WbItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
-                        </GridColumns>
-                    </SfGrid>
-                </div>
-            }
-            @if (_activeQueue == "follow-ups")
-            {
-                <div class="wb-grid-card app-datagrid">
-                    <SfGrid TValue="WbItem" DataSource="@Filtered(_followUps)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
-                        <GridColumns>
-                            <GridColumn HeaderText="Priority" Width="100"><Template>@{ var i=(WbItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template></GridColumn>
-                            <GridColumn Field="@nameof(WbItem.Title)"       HeaderText="Follow-up"  Width="230"><Template>@{ var i=(WbItem)context; }<div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub wb-mono">@i.RefNumber</div></div></Template></GridColumn>
-                            <GridColumn Field="@nameof(WbItem.AccountName)" HeaderText="Account"    Width="180" />
-                            <GridColumn Field="@nameof(WbItem.Category)"    HeaderText="Type"       Width="130" />
-                            <GridColumn Field="@nameof(WbItem.AssignedTo)"  HeaderText="Assignee"   Width="140" />
-                            <GridColumn Field="@nameof(WbItem.DueDate)"     HeaderText="Due"        Width="110"><Template>@{ var i=(WbItem)context; }<span class="@(i.DueDate<DateTime.Today?"wb-overdue":"")">@i.DueDate.ToString("d")</span></Template></GridColumn>
-                            <GridColumn HeaderText="SLA"  Width="120"><Template>@{ var i=(WbItem)context; }<span class="@SlaBadge(i.SlaStatus)">@i.SlaStatus</span></Template></GridColumn>
-                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(WbItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
-                        </GridColumns>
-                    </SfGrid>
-                </div>
-            }
+            <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="@(() => SetActiveQueue(metric.QueueId))">
+                <span class="csrw-kpi-icon @metric.Tone"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                <span><span class="csrw-kpi-val">@metric.Value</span><span class="csrw-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
+            </button>
         }
-        else
+    </section>
+
+    <section class="csrw-workflow-strip" aria-label="CSR workflow actions">
+        <button class="csrw-workflow-card" @onclick="ShowBreached"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span><strong>Work breaches</strong><span>Filter to breached SLA items.</span></span></button>
+        <button class="csrw-workflow-card" @onclick="ShowComplaints"><i class="bi bi-shield-exclamation" aria-hidden="true"></i><span><strong>Resolve complaints</strong><span>Open escalated client issues.</span></span></button>
+        <button class="csrw-workflow-card" @onclick="ShowCertificates"><i class="bi bi-patch-check" aria-hidden="true"></i><span><strong>Issue certificates</strong><span>Prioritize COI requests.</span></span></button>
+        <button class="csrw-workflow-card" @onclick="ShowFollowUps"><i class="bi bi-alarm" aria-hidden="true"></i><span><strong>Clear follow-ups</strong><span>Focus overdue callbacks.</span></span></button>
+    </section>
+
+    <section class="csrw-search-panel">
+        <div class="csrw-search-wrap">
+            <span class="csrw-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="csrw-search-body">
+                <label for="csrSearchInput">Search CSR queue</label>
+                <input id="csrSearchInput" class="csrw-search-input" value="@_search" @oninput="SearchChangedCallback" placeholder="Search title, account, ref, policy, holder, channel, category, notes, or assignee..." />
+                <span class="csrw-search-hint">Filters apply to the active queue while preserving the synced CSR aggregate.</span>
+            </div>
+        </div>
+        <select class="csrw-filter-select" value="@_filterPriority" @onchange="PriorityChangedCallback" title="Filter priority">
+            <option value="">All priorities</option>
+            @foreach (var option in _priorityOptions) { <option value="@option.Value">@option.Label</option> }
+        </select>
+        <select class="csrw-filter-select" value="@_filterSla" @onchange="SlaChangedCallback" title="Filter SLA">
+            <option value="">All SLA</option>
+            @foreach (var option in _slaOptions) { <option value="@option.Value">@option.Label</option> }
+        </select>
+        <input class="csrw-filter-input" value="@_filterCategory" @oninput="CategoryChangedCallback" placeholder="Category" title="Filter category" />
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+        <div class="csrw-search-result"><strong>@ActiveQueueCount</strong><span>@ActiveQueueLabel</span></div>
+    </section>
+
+    <section class="csrw-view-tabs" aria-label="CSR queue tabs">
+        @foreach (var q in Queues)
         {
-            <div class="wb-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+            <button type="button" class="@QueueTabClass(q.Id)" @onclick="@(() => SetActiveQueue(q.Id))"><i class="@q.Icon" aria-hidden="true"></i> @q.Label @if (q.Badge > 0) { <span class="@(q.IsAlert ? "csrw-tab-alert" : string.Empty)">@q.Badge</span> }</button>
         }
+        <button type="button" class="@QueueTabClass("analytics")" @onclick='() => SetActiveQueue("analytics")'><i class="bi bi-bar-chart" aria-hidden="true"></i> Analytics</button>
+        <button type="button" class="@QueueTabClass("views")" @onclick='() => SetActiveQueue("views")'><i class="bi bi-bookmark-star" aria-hidden="true"></i> Saved Views @if (_savedViews.Count > 0) { <span>@_savedViews.Count</span> }</button>
+    </section>
 
-        @DetailPanel()
+    <section class="csrw-content-layout">
+        <main class="csrw-main-card">
+            @if (_loading)
+            {
+                <div class="csrw-loading"><i class="bi bi-arrow-repeat csrw-spin" aria-hidden="true"></i><strong>Loading CSR workbench...</strong></div>
+            }
+            else if (_activeQueue == "analytics")
+            {
+                <div class="csrw-section-head"><div><h2>CSR analytics</h2><p>Monitor queue mix, SLA health, priority distribution, and channel pressure.</p></div><button class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-x-lg"></i> Reset</button></div>
+                <div class="csrw-analytics-grid"><section><h3>Queue distribution</h3>@foreach (var row in QueueDistribution) { @AnalyticsItem(row) }</section><section><h3>SLA health</h3>@foreach (var row in SlaDistribution) { @AnalyticsItem(row) }</section><section><h3>Priority mix</h3>@foreach (var row in PriorityDistribution) { @AnalyticsItem(row) }</section><section><h3>Channel mix</h3>@foreach (var row in ChannelDistribution) { @AnalyticsItem(row) }</section></div>
+            }
+            else if (_activeQueue == "views")
+            {
+                <div class="csrw-section-head"><div><h2>Saved views</h2><p>Save, load, and delete CSR workbench view state for your current queue and scope.</p></div><button class="um-btn um-btn-primary um-btn-sm" @onclick="SaveCurrentViewAsync"><i class="bi bi-bookmark-plus"></i> Save Current View</button></div>
+                @if (_savedViews.Count == 0) { @EmptyState("bi-bookmark-star", "No saved views yet", "Save the current scope, queue, and filters for quick access.") } else { <div class="csrw-card-grid">@foreach (var view in _savedViews) { <article class="csrw-view-card"><div><strong>@view.Name</strong><span>@view.QueueId · @view.Scope</span><small>@(string.IsNullOrWhiteSpace(view.BranchId) ? "All branches" : view.BranchId) · @(string.IsNullOrWhiteSpace(view.TeamId) ? "All teams" : view.TeamId)</small></div><div class="csrw-item-actions"><button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => LoadViewAsync(view.Name))">Load</button><button class="um-btn um-btn-danger um-btn-sm" @onclick="@(() => DeleteViewAsync(view.Name))">Delete</button></div></article> }</div> }
+            }
+            else
+            {
+                <div class="csrw-section-head"><div><h2>@ActiveQueueTitle</h2><p>@ActiveQueueSubtitle</p></div><button class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/ops/service-requests?new=true")'><i class="bi bi-plus-lg"></i> New Request</button></div>
+                @if (ActiveItems.Count == 0) { @EmptyState(ActiveQueueIcon, "No records match this queue", "Adjust filters, refresh the workbench, or create a new service request.") } else { <div class="csrw-card-grid">@foreach (var item in ActiveItems) { @QueueCard(item) }</div> }
+            }
+        </main>
 
-    </Queues>
-</WorkbenchShell>
-
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+        <aside class="csrw-detail-card">
+            @if (_selected is not null)
+            {
+                <div class="csrw-detail-head"><div><span class="csrw-detail-eyebrow"><i class="bi @ActiveQueueIcon" aria-hidden="true"></i> @_selected.QueueLabel</span><h2>@_selected.Title</h2><p>@_selected.AccountName</p></div><span class="@PriBadge(_selected.Priority)">@_selected.Priority</span></div>
+                <div class="csrw-detail-body"><div class="csrw-detail-summary"><div><span>Ref</span><strong>@_selected.RefNumber</strong></div><div><span>SLA</span><strong class="@SlaTextClass(_selected.SlaStatus)">@_selected.SlaStatus</strong></div><div><span>Policy</span><strong>@(string.IsNullOrWhiteSpace(_selected.PolicyNumber) ? "—" : _selected.PolicyNumber)</strong></div><div><span>Channel</span><strong>@_selected.Channel</strong></div><div><span>Due</span><strong>@_selected.DueDate.ToString("d", CultureInfo.CurrentCulture)</strong></div><div><span>Age</span><strong>@_selected.AgeDays d</strong></div></div>@if (!string.IsNullOrWhiteSpace(_selected.Notes)) { <p class="csrw-detail-note">@_selected.Notes</p> }<div class="csrw-detail-actions"><button class="um-btn um-btn-ghost" @onclick="MarkTouchedAsync"><i class="bi bi-check2-circle"></i> Mark Reviewed</button><button class="um-btn um-btn-primary" @onclick="@(() => Nav.NavigateTo(_selected.DetailUrl))">Open Record <i class="bi bi-arrow-right"></i></button></div></div>
+            }
+            else
+            {
+                <div class="csrw-detail-empty"><i class="bi bi-headset" aria-hidden="true"></i><strong>Select a CSR item</strong><span>Review service details, SLA status, priority, and source record navigation.</span></div>
+            }
+        </aside>
+    </section>
+</div>
 
 @code {
     Guid TenantId { get; set; }
@@ -239,328 +158,185 @@
     Guid DevUserId { get; set; }
     private Guid _tenantId;
     private Guid _tenantAdminUserId;
-    private SfToast? _toast;
 
-    private bool    _loading  = false;
+    private bool _loading;
+    private bool _toastVisible;
     private string? _loadError;
-    private string  _scope    = "me";
-    private string  _branchId = string.Empty;
-    private string  _teamId   = string.Empty;
-    private string  _activeQueue = "service-requests";
-    private int     _kpiFocus    = 0;
-    private WbItem? _selected    = null;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string _scope = "me";
+    private string _branchId = string.Empty;
+    private string _teamId = string.Empty;
+    private string _activeQueue = "service-requests";
+    private WbItem? _selected;
 
-    private string _search         = string.Empty;
+    private string _search = string.Empty;
     private string _filterPriority = string.Empty;
     private string _filterCategory = string.Empty;
-    private string _filterSla      = string.Empty;
+    private string _filterSla = string.Empty;
 
-    // AI
-    private string?   _aiSummary     = null;
-    private bool      _aiLoading     = false;
-    private DateTime? _aiGeneratedAt = null;
-
-    // Saved views
-    private List<WorkbenchShell.SavedView> _savedViews = [];
-
-    // SLA
-    private List<WorkbenchShell.SlaHeatItem> _slaItems = [];
-
-    // Counts
+    private string? _aiSummary;
+    private bool _aiLoading;
+    private DateTime? _aiGeneratedAt;
+    private List<SavedViewVm> _savedViews = [];
+    private List<SlaHeatItemVm> _slaItems = [];
     private CsrCounts _c = new();
 
-    // Queues
-    private List<WbItem> _serviceRequests  = [];
-    private List<WbItem> _endorsements     = [];
-    private List<WbItem> _certificates     = [];
+    private List<WbItem> _serviceRequests = [];
+    private List<WbItem> _endorsements = [];
+    private List<WbItem> _certificates = [];
     private List<WbItem> _billingEnquiries = [];
-    private List<WbItem> _complaints       = [];
-    private List<WbItem> _followUps        = [];
+    private List<WbItem> _complaints = [];
+    private List<WbItem> _followUps = [];
 
-    private record QDef(string Id, string Label, string Icon, int Badge, bool IsAlert);
-    private List<QDef> Queues => [
-        new("service-requests",  "Service Requests",  "bi bi-headset",                _c.ServiceRequests,  false),
-        new("endorsements",      "Endorsements",      "bi bi-pen-fill",                _c.Endorsements,     false),
-        new("certificates",      "Certificates",      "bi bi-patch-check-fill",        _c.Certificates,     false),
-        new("billing-enquiries", "Billing Enquiries", "bi bi-receipt",                 _c.BillingEnquiries, false),
-        new("complaints",        "Complaints",        "bi bi-exclamation-octagon-fill", _c.Complaints,      _c.Complaints > 0),
-        new("follow-ups",        "Follow-ups",        "bi bi-alarm-fill",              _c.FollowUps,        _c.OverdueFollowUps > 0),
-    ];
+    private readonly List<LabelValue> _priorityOptions = [new("Critical", "Critical"), new("Urgent", "Urgent"), new("High", "High"), new("Normal", "Normal"), new("Low", "Low")];
+    private readonly List<LabelValue> _slaOptions = [new("On Track", "On Track"), new("At Risk", "At Risk"), new("Breached", "Breached")];
+    private List<QDef> Queues => [new("service-requests", "Service Requests", "bi bi-headset", _c.ServiceRequests, false), new("endorsements", "Endorsements", "bi bi-pen-fill", _c.Endorsements, false), new("certificates", "Certificates", "bi bi-patch-check-fill", _c.Certificates, false), new("billing-enquiries", "Billing Enquiries", "bi bi-receipt", _c.BillingEnquiries, false), new("complaints", "Complaints", "bi bi-exclamation-octagon-fill", _c.Complaints, _c.Complaints > 0), new("follow-ups", "Follow-ups", "bi bi-alarm-fill", _c.FollowUps, _c.OverdueFollowUps > 0)];
+    private IReadOnlyList<KpiMetric> Metrics => [new("service-requests", "Service Requests", _c.ServiceRequests.ToString("N0"), $"{UrgentCount} urgent", "bi-headset", _c.ServiceRequests > 0 ? "csrw-tone-info" : "csrw-tone-muted"), new("endorsements", "Endorsements", _c.Endorsements.ToString("N0"), "Policy changes", "bi-pen-fill", "csrw-tone-purple"), new("certificates", "Certificates", _c.Certificates.ToString("N0"), "COI requests", "bi-patch-check-fill", "csrw-tone-success"), new("billing-enquiries", "Billing", _c.BillingEnquiries.ToString("N0"), BillingAmount.ToString("C0"), "bi-receipt", "csrw-tone-warning"), new("complaints", "Complaints", _c.Complaints.ToString("N0"), $"{EscalatedCount} escalated", "bi-exclamation-octagon-fill", _c.Complaints > 0 ? "csrw-tone-danger" : "csrw-tone-muted"), new("follow-ups", "Follow-ups", _c.FollowUps.ToString("N0"), $"{_c.OverdueFollowUps} overdue", "bi-alarm-fill", _c.OverdueFollowUps > 0 ? "csrw-tone-danger" : "csrw-tone-pink")];
 
-    private static readonly List<WorkbenchShell.LabelValue> _priorityOptions =
-    [
-        new("Critical","Critical"), new("Urgent","Urgent"),
-        new("High","High"), new("Normal","Normal"), new("Low","Low"),
-    ];
-    private static readonly List<WorkbenchShell.LabelValue> _slaOptions =
-    [
-        new("On Track","On Track"), new("At Risk","At Risk"), new("Breached","Breached"),
-    ];
+    private EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> SearchChangedCallback => EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, e => _search = e.Value?.ToString() ?? string.Empty);
+    private EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> PriorityChangedCallback => EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, e => _filterPriority = e.Value?.ToString() ?? string.Empty);
+    private EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> SlaChangedCallback => EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, e => _filterSla = e.Value?.ToString() ?? string.Empty);
+    private EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> CategoryChangedCallback => EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, e => _filterCategory = e.Value?.ToString() ?? string.Empty);
+    private EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> ScopeChangedCallback => EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, async e => { _scope = e.Value?.ToString() ?? "me"; await LoadAsync(); });
+    private EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> BranchChangedCallback => EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, async e => { _branchId = e.Value?.ToString() ?? string.Empty; await LoadAsync(); });
+    private EventCallback<Microsoft.AspNetCore.Components.ChangeEventArgs> TeamChangedCallback => EventCallback.Factory.Create<Microsoft.AspNetCore.Components.ChangeEventArgs>(this, async e => { _teamId = e.Value?.ToString() ?? string.Empty; await LoadAsync(); });
+
+    private string ToastIconClass => _toastKind == "danger" ? "bi-exclamation-triangle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-check-circle-fill";
+    private IEnumerable<WbItem> AllItems => _serviceRequests.Concat(_endorsements).Concat(_certificates).Concat(_billingEnquiries).Concat(_complaints).Concat(_followUps);
+    private List<WbItem> ActiveItems => ActiveSource.Where(Matches).ToList();
+    private List<WbItem> ActiveSource => _activeQueue switch { "endorsements" => _endorsements, "certificates" => _certificates, "billing-enquiries" => _billingEnquiries, "complaints" => _complaints, "follow-ups" => _followUps, _ => _serviceRequests };
+    private int ActiveQueueCount => _activeQueue == "analytics" ? AllItems.Count() : _activeQueue == "views" ? _savedViews.Count : ActiveItems.Count;
+    private string ActiveQueueLabel => _activeQueue == "analytics" ? "records" : _activeQueue == "views" ? "views" : "items";
+    private string ActiveQueueTitle => _activeQueue switch { "endorsements" => "Endorsement queue", "certificates" => "Certificate queue", "billing-enquiries" => "Billing enquiry queue", "complaints" => "Complaint queue", "follow-ups" => "Follow-up queue", _ => "Service request queue" };
+    private string ActiveQueueSubtitle => _activeQueue switch { "endorsements" => "Process policy changes, endorsement requests, and needed-by dates.", "certificates" => "Issue certificate requests, validate holders, and protect SLA commitments.", "billing-enquiries" => "Resolve invoice, payment, premium, and accounting-related client questions.", "complaints" => "Prioritize escalations, high severity complaints, and breached service expectations.", "follow-ups" => "Clear overdue callbacks, renewal touchpoints, and client service follow-ups.", _ => "Work incoming service requests by priority, SLA, channel, and account context." };
+    private string ActiveQueueIcon => _activeQueue switch { "endorsements" => "bi-pen-fill", "certificates" => "bi-patch-check-fill", "billing-enquiries" => "bi-receipt", "complaints" => "bi-exclamation-octagon-fill", "follow-ups" => "bi-alarm-fill", _ => "bi-headset" };
+    private int BreachedCount => AllItems.Count(x => x.SlaStatus == "Breached");
+    private int AtRiskCount => AllItems.Count(x => x.SlaStatus == "At Risk");
+    private int OnTrackCount => AllItems.Count(x => x.SlaStatus == "On Track");
+    private int UrgentCount => AllItems.Count(x => x.Priority is "Critical" or "Urgent");
+    private int EscalatedCount => _complaints.Count(x => x.EscalationLevel >= 2);
+    private decimal BillingAmount => _billingEnquiries.Sum(x => x.Amount);
+    private string PriorityFocusText => BreachedCount > 0 ? $"{BreachedCount} breached SLA item(s)" : UrgentCount > 0 ? $"{UrgentCount} critical/urgent item(s)" : _c.OverdueFollowUps > 0 ? $"{_c.OverdueFollowUps} overdue follow-up(s)" : "Queue hygiene";
+    private IReadOnlyList<MetricBar> QueueDistribution => BuildAnalytics([new("Service", _serviceRequests.Count, "csrw-dist-blue"), new("Endorse", _endorsements.Count, "csrw-dist-purple"), new("Certs", _certificates.Count, "csrw-dist-green"), new("Billing", _billingEnquiries.Count, "csrw-dist-amber"), new("Complaints", _complaints.Count, "csrw-dist-red"), new("Follow-ups", _followUps.Count, "csrw-dist-pink")]);
+    private IReadOnlyList<MetricBar> SlaDistribution => BuildAnalytics(AllItems.GroupBy(x => x.SlaStatus).Select(g => new AnalyticsSeed(g.Key, g.Count(), g.Key == "Breached" ? "csrw-dist-red" : g.Key == "At Risk" ? "csrw-dist-amber" : "csrw-dist-green")));
+    private IReadOnlyList<MetricBar> PriorityDistribution => BuildAnalytics(AllItems.GroupBy(x => x.Priority).Select(g => new AnalyticsSeed(g.Key, g.Count(), g.Key is "Critical" or "Urgent" ? "csrw-dist-red" : g.Key == "High" ? "csrw-dist-purple" : "csrw-dist-blue")));
+    private IReadOnlyList<MetricBar> ChannelDistribution => BuildAnalytics(AllItems.Where(x => !string.IsNullOrWhiteSpace(x.Channel)).GroupBy(x => x.Channel).Select(g => new AnalyticsSeed(g.Key, g.Count(), "csrw-dist-blue")));
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CSR Workbench", "/workbench/csr"));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Workbench", "/workbench"), new("CSR", "/workbench/csr"));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
-        _loading = true; StateHasChanged();
+        _loading = true;
         try
         {
             _loadError = null;
             var teamScope = _scope.Equals("team", StringComparison.OrdinalIgnoreCase);
             var context = await CurrentUser.RequireAsync();
             var data = await Api.GetCsrWorkbenchAsync(_tenantId, context.UserScopeId, teamScope || context.IsTenantAdministrator, _branchId, _teamId);
-
-            _serviceRequests = data?.ServiceRequests.Select(MapItem).ToList() ?? [];
-            _endorsements = data?.Endorsements.Select(MapItem).ToList() ?? [];
-            _certificates = data?.Certificates.Select(MapItem).ToList() ?? [];
-            _billingEnquiries = data?.BillingEnquiries.Select(MapItem).ToList() ?? [];
-            _complaints = data?.Complaints.Select(MapItem).ToList() ?? [];
-            _followUps = data?.FollowUps.Select(MapItem).ToList() ?? [];
+            _serviceRequests = data?.ServiceRequests.Select(x => MapItem(x, "Service Request")).ToList() ?? [];
+            _endorsements = data?.Endorsements.Select(x => MapItem(x, "Endorsement")).ToList() ?? [];
+            _certificates = data?.Certificates.Select(x => MapItem(x, "Certificate")).ToList() ?? [];
+            _billingEnquiries = data?.BillingEnquiries.Select(x => MapItem(x, "Billing Enquiry")).ToList() ?? [];
+            _complaints = data?.Complaints.Select(x => MapItem(x, "Complaint")).ToList() ?? [];
+            _followUps = data?.FollowUps.Select(x => MapItem(x, "Follow-up")).ToList() ?? [];
             _c = MapCounts(data?.Counts);
             RebuildSla();
+            _selected = ActiveItems.FirstOrDefault();
         }
         catch (Exception ex)
         {
             _loadError = $"CSR workbench load failed: {ex.Message}";
-            _serviceRequests = []; _endorsements = [];
-            _certificates = []; _billingEnquiries = [];
-            _complaints = []; _followUps = [];
+            _serviceRequests = []; _endorsements = []; _certificates = []; _billingEnquiries = []; _complaints = []; _followUps = [];
             _c = new();
             RebuildSla();
-            await ShowToastAsync(_loadError, "e-toast-danger");
+            ShowToast(_loadError, "danger");
         }
         finally { _loading = false; }
     }
 
-    private void RebuildSla() => _slaItems =
-    [
-        new() { QueueName = "Service Requests",  InSla = _serviceRequests.Count(x => x.SlaStatus != "Breached"),  Breached = _serviceRequests.Count(x => x.SlaStatus == "Breached") },
-        new() { QueueName = "Endorsements",      InSla = _endorsements.Count(x => x.SlaStatus != "Breached"),     Breached = _endorsements.Count(x => x.SlaStatus == "Breached") },
-        new() { QueueName = "Certificates",      InSla = _certificates.Count(x => x.SlaStatus != "Breached"),     Breached = _certificates.Count(x => x.SlaStatus == "Breached") },
-        new() { QueueName = "Billing Enquiries", InSla = _billingEnquiries.Count(x => x.SlaStatus != "Breached"), Breached = _billingEnquiries.Count(x => x.SlaStatus == "Breached") },
-        new() { QueueName = "Complaints",        InSla = _complaints.Count(x => x.SlaStatus != "Breached"),       Breached = _complaints.Count(x => x.SlaStatus == "Breached") },
-        new() { QueueName = "Follow-ups",        InSla = _followUps.Count(x => x.SlaStatus != "Breached"),        Breached = _followUps.Count(x => x.SlaStatus == "Breached") },
-    ];
-
-    private async Task OnBranchChangedAsync(string v) { _branchId = v; await LoadAsync(); }
-    private async Task OnTeamChangedAsync(string v)   { _teamId   = v; await LoadAsync(); }
+    private static CsrCounts MapCounts(CsrWorkbenchCountsDto? dto) => dto is null ? new CsrCounts() : new CsrCounts { ServiceRequests = dto.ServiceRequests, Endorsements = dto.Endorsements, Certificates = dto.Certificates, BillingEnquiries = dto.BillingEnquiries, Complaints = dto.Complaints, FollowUps = dto.FollowUps, OverdueFollowUps = dto.OverdueFollowUps };
+    private static WbItem MapItem(CsrWorkbenchItemDto dto, string queueLabel) => new() { ItemId = dto.ItemId, QueueLabel = queueLabel, Title = dto.Title, RefNumber = dto.RefNumber, AccountName = dto.AccountName, PolicyNumber = dto.PolicyNumber, CertHolder = dto.CertHolder, Category = dto.Category, Channel = dto.Channel, AssignedTo = dto.AssignedTo, Priority = dto.Priority, SlaStatus = dto.SlaStatus, EscalationLevel = dto.EscalationLevel, DueDate = dto.DueDate, CreatedAt = dto.CreatedAt, AgeDays = dto.AgeDays, Amount = dto.Amount, Notes = dto.Notes, DetailUrl = dto.DetailUrl };
+    private void RebuildSla() => _slaItems = [new("Service Requests", _serviceRequests.Count(x => x.SlaStatus != "Breached"), _serviceRequests.Count(x => x.SlaStatus == "Breached")), new("Endorsements", _endorsements.Count(x => x.SlaStatus != "Breached"), _endorsements.Count(x => x.SlaStatus == "Breached")), new("Certificates", _certificates.Count(x => x.SlaStatus != "Breached"), _certificates.Count(x => x.SlaStatus == "Breached")), new("Billing Enquiries", _billingEnquiries.Count(x => x.SlaStatus != "Breached"), _billingEnquiries.Count(x => x.SlaStatus == "Breached")), new("Complaints", _complaints.Count(x => x.SlaStatus != "Breached"), _complaints.Count(x => x.SlaStatus == "Breached")), new("Follow-ups", _followUps.Count(x => x.SlaStatus != "Breached"), _followUps.Count(x => x.SlaStatus == "Breached"))];
 
     private async Task GenerateAiSummaryAsync()
     {
-        _aiLoading = true; StateHasChanged();
+        _aiLoading = true;
         await Task.Delay(0);
-        var breached = AllItems().Count(x => x.SlaStatus == "Breached");
-        var atRisk = AllItems().Count(x => x.SlaStatus == "At Risk");
-        var urgent = AllItems().Count(x => x.Priority is "Critical" or "Urgent");
-        _aiSummary = $"Tenant Admin CSR queue has {AllItems().Count()} open items: {urgent} critical/urgent, {breached} breached SLA, and {atRisk} at risk. Prioritize complaints, overdue follow-ups, and certificate requests needed today.";
+        _aiSummary = $"Tenant Admin CSR queue has {AllItems.Count()} open items: {UrgentCount} critical/urgent, {BreachedCount} breached SLA, and {AtRiskCount} at risk. Prioritize complaints, overdue follow-ups, and certificate requests needed today.";
         _aiGeneratedAt = DateTime.Now;
-        _aiLoading     = false;
+        _aiLoading = false;
+        ShowToast("CSR service intelligence summary generated.");
     }
 
-    private IEnumerable<WbItem> AllItems() => _serviceRequests
-        .Concat(_endorsements)
-        .Concat(_certificates)
-        .Concat(_billingEnquiries)
-        .Concat(_complaints)
-        .Concat(_followUps);
+    private Task ExportAsync() => Task.Run(() => ShowToast($"Export prepared for {AllItems.Count()} CSR workbench rows."));
+    private void SetActiveQueue(string id) { _activeQueue = id; _selected = id is "analytics" or "views" ? null : ActiveItems.FirstOrDefault(); }
+    private void ShowBreached() { _filterSla = "Breached"; SetActiveQueue(BreachedCount > _complaints.Count ? "service-requests" : "complaints"); }
+    private void ShowComplaints() { _filterSla = string.Empty; SetActiveQueue("complaints"); }
+    private void ShowCertificates() { _filterSla = string.Empty; SetActiveQueue("certificates"); }
+    private void ShowFollowUps() { _filterSla = string.Empty; SetActiveQueue("follow-ups"); }
+    private void ResetFilters() { _search = string.Empty; _filterPriority = string.Empty; _filterCategory = string.Empty; _filterSla = string.Empty; }
+    private void OpenDetail(WbItem item) => _selected = item;
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+    private Task MarkTouchedAsync() { if (_selected is not null) ShowToast($"{_selected.RefNumber} marked reviewed."); return Task.CompletedTask; }
 
-    private static CsrCounts MapCounts(CsrWorkbenchCountsDto? dto) => dto is null
-        ? new CsrCounts()
-        : new CsrCounts
-        {
-            ServiceRequests = dto.ServiceRequests,
-            Endorsements = dto.Endorsements,
-            Certificates = dto.Certificates,
-            BillingEnquiries = dto.BillingEnquiries,
-            Complaints = dto.Complaints,
-            FollowUps = dto.FollowUps,
-            OverdueFollowUps = dto.OverdueFollowUps,
-        };
-
-    private static WbItem MapItem(CsrWorkbenchItemDto dto) => new()
+    private Task SaveCurrentViewAsync()
     {
-        ItemId = dto.ItemId,
-        Title = dto.Title,
-        RefNumber = dto.RefNumber,
-        AccountName = dto.AccountName,
-        PolicyNumber = dto.PolicyNumber,
-        CertHolder = dto.CertHolder,
-        Category = dto.Category,
-        Channel = dto.Channel,
-        AssignedTo = dto.AssignedTo,
-        Priority = dto.Priority,
-        SlaStatus = dto.SlaStatus,
-        EscalationLevel = dto.EscalationLevel,
-        DueDate = dto.DueDate,
-        CreatedAt = dto.CreatedAt,
-        AgeDays = dto.AgeDays,
-        Amount = dto.Amount,
-        Notes = dto.Notes,
-        DetailUrl = dto.DetailUrl,
-    };
-
-    private Task SaveViewAsync(WorkbenchShell.SavedView v)
-    {
-        v.QueueId = _activeQueue; v.Scope = _scope; v.BranchId = _branchId; v.TeamId = _teamId;
-        _savedViews.RemoveAll(x => x.Name == v.Name);
-        _savedViews.Add(v);
-        return ShowToastAsync($"View \"{v.Name}\" saved.", "e-toast-success");
+        var name = $"{ActiveQueueTitle} · {DateTime.Now:MMM d h:mm tt}";
+        _savedViews.RemoveAll(x => x.Name == name);
+        _savedViews.Add(new(name, _activeQueue, _scope, _branchId, _teamId, _search, _filterPriority, _filterCategory, _filterSla));
+        ShowToast($"View \"{name}\" saved.");
+        return Task.CompletedTask;
     }
 
     private Task LoadViewAsync(string name)
     {
         var v = _savedViews.FirstOrDefault(x => x.Name == name);
         if (v is null) return Task.CompletedTask;
-        _activeQueue = v.QueueId; _scope = v.Scope; _branchId = v.BranchId; _teamId = v.TeamId;
-        StateHasChanged();
-        return ShowToastAsync($"View \"{name}\" loaded.");
+        _activeQueue = v.QueueId; _scope = v.Scope; _branchId = v.BranchId; _teamId = v.TeamId; _search = v.Search; _filterPriority = v.Priority; _filterCategory = v.Category; _filterSla = v.Sla;
+        _selected = ActiveItems.FirstOrDefault();
+        ShowToast($"View \"{name}\" loaded.");
+        return Task.CompletedTask;
     }
 
-    private async Task DeleteViewAsync(string name) { if (!await Confirmations.ConfirmAsync("Delete saved view", $"Delete saved view {name}?", "Delete")) return; _savedViews.RemoveAll(x => x.Name == name); }
-
-    private List<WbItem> Filtered(List<WbItem> src) => src.Where(i =>
-        (string.IsNullOrEmpty(_filterPriority) || i.Priority == _filterPriority) &&
-        (string.IsNullOrEmpty(_filterSla)      || i.SlaStatus == _filterSla) &&
-        (string.IsNullOrEmpty(_filterCategory) || i.Category  == _filterCategory) &&
-        (string.IsNullOrEmpty(_search)         ||
-         i.Title.Contains(_search,       StringComparison.OrdinalIgnoreCase) ||
-         i.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-         i.RefNumber.Contains(_search,   StringComparison.OrdinalIgnoreCase))
-    ).ToList();
-
-    private void FocusQueue(int n, string id) { _kpiFocus = _kpiFocus == n ? 0 : n; _activeQueue = id; _selected = null; }
-    private string KpiClass(int n) => "wb-kpi-card" + (_kpiFocus == n || (_kpiFocus == 0 && _activeQueue == QueueIdForKpi(n)) ? " wb-kpi-card--active" : "");
-    private RenderFragment KpiDot(int n) => _kpiFocus == n ? @<span class="wb-kpi-dot" aria-hidden="true"></span> : _ => { };
-
-    private string QueueIdForKpi(int n) => n switch { 1=>"service-requests",2=>"endorsements",3=>"certificates",4=>"billing-enquiries",5=>"complaints",6=>"follow-ups",_=>string.Empty };
-
-    private void OpenDetail(WbItem i) => _selected = i;
-
-    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    private async Task DeleteViewAsync(string name)
     {
-        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+        if (!await Confirmations.ConfirmAsync("Delete saved view", $"Delete saved view {name}?", "Delete")) return;
+        _savedViews.RemoveAll(x => x.Name == name);
+        ShowToast($"View \"{name}\" deleted.", "warning");
     }
 
-    // ── Shared render helpers (tabs / filter row / detail panel) ──────────────────
-    private RenderFragment QueueTabs() => __builder =>
-    {
-        <div class="wb-queue-tabs" role="tablist">
-        @foreach (var q in Queues)
-        {
-            <button class="wb-queue-tab @(q.Id == _activeQueue ? "wb-queue-tab--active" : "")"
-                    role="tab" aria-selected="@(q.Id == _activeQueue)"
-                    @onclick="() => { _activeQueue = q.Id; _selected = null; }">
-                <i class="@q.Icon" aria-hidden="true"></i> @q.Label
-                @if (q.Badge > 0) { <span class="wb-tab-badge @(q.IsAlert ? "wb-tab-badge--alert" : "")">@q.Badge</span> }
-            </button>
-        }
-        </div>;
-    };
+    private bool Matches(WbItem i) => (string.IsNullOrWhiteSpace(_filterPriority) || i.Priority == _filterPriority) && (string.IsNullOrWhiteSpace(_filterSla) || i.SlaStatus == _filterSla) && (string.IsNullOrWhiteSpace(_filterCategory) || i.Category.Contains(_filterCategory, StringComparison.OrdinalIgnoreCase)) && (string.IsNullOrWhiteSpace(_search) || new[] { i.Title, i.AccountName, i.RefNumber, i.PolicyNumber, i.CertHolder, i.Category, i.Channel, i.AssignedTo, i.Notes ?? string.Empty }.Any(v => !string.IsNullOrWhiteSpace(v) && v.Contains(_search, StringComparison.OrdinalIgnoreCase)));
+    private RenderFragment QueueCard(WbItem item) => @<article class="csrw-item-card @(ReferenceEquals(_selected, item) ? "csrw-item-selected" : string.Empty)" @onclick="@(() => OpenDetail(item))"><div class="csrw-item-top"><span class="csrw-avatar" style="@AvatarStyle(item.AccountName)">@Initials(item.AccountName)</span><div><strong>@item.Title</strong><span>@item.AccountName</span></div></div><div class="csrw-item-meta"><span class="@PriBadge(item.Priority)">@item.Priority</span><span class="@SlaBadge(item.SlaStatus)">@item.SlaStatus</span>@if (!string.IsNullOrWhiteSpace(item.Channel)) { <span class="@ChanBadge(item.Channel)">@item.Channel</span> }@if (item.EscalationLevel > 1) { <span class="@EscBadge(item.EscalationLevel)">L@item.EscalationLevel</span> }</div><div class="csrw-item-footer"><strong>@item.RefNumber</strong><span class="@(item.DueDate.Date < DateTime.Today ? "csrw-overdue" : string.Empty)">@item.DueDate.ToString("MMM d", CultureInfo.CurrentCulture)</span></div><div class="csrw-item-actions" @onclick:stopPropagation="true"><button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenDetail(item))"><i class="bi bi-layout-sidebar-inset"></i></button><button class="um-btn um-btn-primary um-btn-sm" @onclick="@(() => Nav.NavigateTo(item.DetailUrl))">Open</button></div></article>;
+    private RenderFragment EmptyState(string icon, string title, string text) => @<div class="csrw-empty-state"><i class="bi @icon" aria-hidden="true"></i><strong>@title</strong><span>@text</span><button class="um-btn um-btn-primary" @onclick="LoadAsync">Refresh</button></div>;
+    private RenderFragment AnalyticsItem(MetricBar row) => @<button class="csrw-analytics-row"><span>@row.Label</span><div><i class="@row.Tone" style="width:@row.WidthPercent%"></i></div><strong>@row.Count</strong><small>@row.Percent.ToString("F0")%</small></button>;
+    private IReadOnlyList<MetricBar> BuildAnalytics(IEnumerable<AnalyticsSeed> seeds) { var items = seeds.ToList(); var total = Math.Max(1, items.Sum(x => x.Count)); return items.Select(x => new MetricBar(x.Label, x.Count, x.Tone, x.Count * 100m / total, Math.Max(4m, x.Count * 100m / total))).ToList(); }
+    private string MetricCardClass(KpiMetric metric) => $"csrw-kpi-card {(metric.QueueId == _activeQueue ? "csrw-kpi-card-active" : string.Empty)}";
+    private string QueueTabClass(string id) => $"csrw-view-btn {(id == _activeQueue ? "csrw-view-btn-active" : string.Empty)}";
+    private static string PriBadge(string p) => p switch { "Critical" => "csrw-pri csrw-pri-critical", "Urgent" => "csrw-pri csrw-pri-urgent", "High" => "csrw-pri csrw-pri-high", "Normal" => "csrw-pri csrw-pri-normal", _ => "csrw-pri csrw-pri-low" };
+    private static string SlaBadge(string s) => s switch { "On Track" => "csrw-sla csrw-sla-ok", "At Risk" => "csrw-sla csrw-sla-warn", _ => "csrw-sla csrw-sla-breach" };
+    private static string SlaTextClass(string s) => s == "Breached" ? "csrw-text-danger" : s == "At Risk" ? "csrw-text-warning" : "csrw-text-success";
+    private static string ChanBadge(string c) => c switch { "Email" => "csrw-chan csrw-chan-email", "Phone" => "csrw-chan csrw-chan-phone", "Portal" => "csrw-chan csrw-chan-portal", "Chat" => "csrw-chan csrw-chan-chat", _ => "csrw-chan" };
+    private static string EscBadge(int l) => l >= 3 ? "csrw-esc csrw-esc-3" : l == 2 ? "csrw-esc csrw-esc-2" : "csrw-esc csrw-esc-1";
+    private static string FormatAge(DateTime dt) { var diff = DateTime.Now - dt; if (diff.TotalMinutes < 1) return "Just now"; if (diff.TotalHours < 1) return $"{(int)diff.TotalMinutes}m ago"; if (diff.TotalDays < 1) return $"{(int)diff.TotalHours}h ago"; if (diff.TotalDays < 30) return $"{(int)diff.TotalDays}d ago"; return dt.ToString("d", CultureInfo.CurrentCulture); }
+    private static string Initials(string name) { var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length >= 1 ? name[..1] : "?"; }
+    private static string AvatarStyle(string name) { var hue = Math.Abs(name.GetHashCode()) % 360; return $"background:hsl({hue},50%,40%);color:#fff;"; }
 
-    private RenderFragment FilterRow() => __builder =>
-    {
-        <div class="wb-filter-row">
-            <div class="wb-search-box">
-                <i class="bi bi-search wb-search-icon" aria-hidden="true"></i>
-                <input class="wb-search-input" type="text" placeholder="Search…"
-                       value="@_search" @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; StateHasChanged(); })" />
-            </div>
-            <SfDropDownList TValue="string" TItem="WorkbenchShell.LabelValue" DataSource="_priorityOptions" Placeholder="All Priorities" ShowClearButton="true" Width="155px" Value="_filterPriority" ValueChanged="@((string v) => { _filterPriority = v; StateHasChanged(); })">
-                <DropDownListFieldSettings Value="Value" Text="Label" />
-            </SfDropDownList>
-            <SfDropDownList TValue="string" TItem="WorkbenchShell.LabelValue" DataSource="_slaOptions" Placeholder="All SLA" ShowClearButton="true" Width="140px" Value="_filterSla" ValueChanged="@((string v) => { _filterSla = v; StateHasChanged(); })">
-                <DropDownListFieldSettings Value="Value" Text="Label" />
-            </SfDropDownList>
-        </div>;
-    };
+    async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); TenantId = context.TenantId; TenantAdminUserId = context.UserId; _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; DevTenantId = context.TenantId; DevUserId = context.UserId; }
 
-    private RenderFragment DetailPanel() => __builder =>
-    {
-        @if (_selected is not null)
-        {
-            <div class="wb-overlay" @onclick="() => _selected = null" role="button" tabindex="-1" aria-label="Close"></div>
-            <div class="wb-detail-panel" role="complementary" aria-label="Item detail">
-                <div class="wb-detail-hdr">
-                    <span class="@PriBadge(_selected.Priority)">@_selected.Priority</span>
-                    <span class="@SlaBadge(_selected.SlaStatus)">@_selected.SlaStatus</span>
-                    <button class="um-btn um-btn-ghost um-btn-sm" style="margin-left:auto" @onclick="() => _selected = null"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
-                </div>
-                <h2 class="wb-detail-title">@_selected.Title</h2>
-                <div class="wb-detail-body">
-                    @DetailRow("Ref",      @<span class="wb-mono">@_selected.RefNumber</span>)
-                    @DetailRow("Account",  @<span>@_selected.AccountName</span>)
-                    @if (!string.IsNullOrEmpty(_selected.PolicyNumber)) { @DetailRow("Policy #", @<span class="wb-mono">@_selected.PolicyNumber</span>) }
-                    @DetailRow("Assignee", @<span>@_selected.AssignedTo</span>)
-                    @DetailRow("Category", @<span>@_selected.Category</span>)
-                    @DetailRow("Due",      @<span class="@(_selected.DueDate < DateTime.Today ? "wb-overdue" : "")">@_selected.DueDate.ToString("d")</span>)
-                    @DetailRow("Age",      @<span class="@AgeBadge(_selected.AgeDays)">@_selected.AgeDays d</span>)
-                    @if (!string.IsNullOrEmpty(_selected.Notes)) { @DetailRow("Notes", @<p class="wb-detail-notes">@_selected.Notes</p>) }
-                </div>
-                <div class="wb-detail-footer">
-                    <button class="um-btn um-btn-primary" @onclick="() => Nav.NavigateTo(_selected.DetailUrl)">Open Record <i class="bi bi-arrow-right" aria-hidden="true"></i></button>
-                </div>
-            </div>
-        }
-    };
-
-    private static RenderFragment DetailRow(string label, RenderFragment val) => __builder =>
-    {
-        <div class="wb-detail-row"><span class="wb-detail-lbl">@label</span>@val</div>;
-    };
-
-    // ── Static helpers ────────────────────────────────────────────────────────────
-    private static string PriBadge(string p) => p switch { "Critical"=>"wb-pri wb-pri--critical","Urgent"=>"wb-pri wb-pri--urgent","High"=>"wb-pri wb-pri--high","Normal"=>"wb-pri wb-pri--normal",_=>"wb-pri wb-pri--low" };
-    private static string SlaBadge(string s) => s switch { "On Track"=>"wb-sla wb-sla--ok","At Risk"=>"wb-sla wb-sla--warn",_=>"wb-sla wb-sla--breach" };
-    private static string AgeBadge(int d) => d > 7 ? "wb-age wb-age--old" : d > 3 ? "wb-age wb-age--mid" : "wb-age wb-age--ok";
-    private static string ChanBadge(string c) => c switch { "Email"=>"wb-chan wb-chan--email","Phone"=>"wb-chan wb-chan--phone","Portal"=>"wb-chan wb-chan--portal","Chat"=>"wb-chan wb-chan--chat",_=>"wb-chan" };
-    private static string EscBadge(int l) => l >= 3 ? "wb-esc wb-esc--3" : l == 2 ? "wb-esc wb-esc--2" : "wb-esc wb-esc--1";
-
-    // ── Models ────────────────────────────────────────────────────────────────────
-    private sealed class CsrCounts
-    {
-        public int ServiceRequests  { get; set; }
-        public int Endorsements     { get; set; }
-        public int Certificates     { get; set; }
-        public int BillingEnquiries { get; set; }
-        public int Complaints       { get; set; }
-        public int FollowUps        { get; set; }
-        public int OverdueFollowUps { get; set; }
-    }
-
-    private sealed class WbItem
-    {
-        public Guid     ItemId          { get; set; } = Guid.NewGuid();
-        public string   Title           { get; set; } = string.Empty;
-        public string   RefNumber       { get; set; } = string.Empty;
-        public string   AccountName     { get; set; } = string.Empty;
-        public string   PolicyNumber    { get; set; } = string.Empty;
-        public string   CertHolder      { get; set; } = string.Empty;
-        public string   Category        { get; set; } = string.Empty;
-        public string   Channel         { get; set; } = string.Empty;
-        public string   AssignedTo      { get; set; } = string.Empty;
-        public string   Priority        { get; set; } = "Normal";
-        public string   SlaStatus       { get; set; } = "On Track";
-        public int      EscalationLevel { get; set; } = 1;
-        public DateTime DueDate         { get; set; } = DateTime.Today;
-        public DateTime CreatedAt       { get; set; } = DateTime.UtcNow;
-        public int      AgeDays         { get; set; }
-        public decimal  Amount          { get; set; }
-        public string?  Notes           { get; set; }
-        public string   DetailUrl       { get; set; } = "/workbench/csr";
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
-    }
+    private sealed record LabelValue(string Value, string Label);
+    private sealed record QDef(string Id, string Label, string Icon, int Badge, bool IsAlert);
+    private sealed record KpiMetric(string QueueId, string Label, string Value, string Caption, string Icon, string Tone);
+    private sealed record AnalyticsSeed(string Label, int Count, string Tone);
+    private sealed record MetricBar(string Label, int Count, string Tone, decimal Percent, decimal WidthPercent);
+    private sealed record SavedViewVm(string Name, string QueueId, string Scope, string BranchId, string TeamId, string Search, string Priority, string Category, string Sla);
+    private sealed record SlaHeatItemVm(string QueueName, int InSla, int Breached);
+    private sealed class CsrCounts { public int ServiceRequests { get; set; } public int Endorsements { get; set; } public int Certificates { get; set; } public int BillingEnquiries { get; set; } public int Complaints { get; set; } public int FollowUps { get; set; } public int OverdueFollowUps { get; set; } }
+    private sealed class WbItem { public Guid ItemId { get; set; } = Guid.NewGuid(); public string QueueLabel { get; set; } = string.Empty; public string Title { get; set; } = string.Empty; public string RefNumber { get; set; } = string.Empty; public string AccountName { get; set; } = string.Empty; public string PolicyNumber { get; set; } = string.Empty; public string CertHolder { get; set; } = string.Empty; public string Category { get; set; } = string.Empty; public string Channel { get; set; } = string.Empty; public string AssignedTo { get; set; } = string.Empty; public string Priority { get; set; } = "Normal"; public string SlaStatus { get; set; } = "On Track"; public int EscalationLevel { get; set; } = 1; public DateTime DueDate { get; set; } = DateTime.Today; public DateTime CreatedAt { get; set; } = DateTime.UtcNow; public int AgeDays { get; set; } public decimal Amount { get; set; } public string? Notes { get; set; } public string DetailUrl { get; set; } = "/workbench/csr"; }
 }
