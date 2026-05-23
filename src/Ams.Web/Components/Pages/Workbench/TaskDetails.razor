@@ -1,5 +1,7 @@
 @page "/workbench/tasks/{TaskId:guid}"
 @namespace Ams.Web.Components.Pages.Workbench
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
 @using Ams.Application.Common.Dtos
 @using Ams.Application.Features.Operations
 @inject ApiClient Api
@@ -7,138 +9,221 @@
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Task Detail — AMS</PageTitle>
+<PageTitle>Enterprise Task Detail — AMS</PageTitle>
 
-@if (_toastMessage is not null)
+@if (_toastVisible)
 {
-    <div class="mt-toast @(_toastIsError ? "mt-toast--danger" : "mt-toast--success")" role="status">
-        <i class="bi @(_toastIsError ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+    <div class="td-toast td-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
         <span>@_toastMessage</span>
-        <button type="button" @onclick="ClearToast" aria-label="Close notification"><i class="bi bi-x-lg"></i></button>
+        <button type="button" class="td-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-<AppPageHeader Title="Task Detail"
-               Subtitle="Tenant Admin task review, completion, and deletion"
-               Icon="bi-check2-square">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/workbench/tasks")'>
-            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Tasks
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh task">
-            <i class="bi bi-arrow-clockwise @(_loading ? "ad-spin" : "")" aria-hidden="true"></i>
-        </button>
-    </Actions>
-</AppPageHeader>
-
-@if (_loadError is not null)
+@if (_showEdit && _task is not null)
 {
-    <div class="alert alert-danger mt-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
-    </div>
-}
-else if (_loading)
-{
-    <div class="mt-loading" aria-live="polite">
-        <div class="um-spinner" aria-hidden="true"></div>
-        <span>Loading task detail…</span>
-    </div>
-}
-else if (_task is not null)
-{
-    <section class="td-hero">
-        <div>
-            <div class="td-meta">
-                <span class="td-chip"><i class="bi bi-hash"></i>@_task.TaskNumber</span>
-                <span class="td-chip"><i class="bi bi-tag"></i>@_task.TaskTypeCode</span>
-                <span class="td-chip mt-pri mt-pri-@_task.PriorityCode.ToLower()">@_task.PriorityCode</span>
-            </div>
-            <h2 class="td-title">@_task.Title</h2>
-            <div class="td-meta">
-                <span class="td-chip"><i class="bi bi-kanban"></i>@_task.StageCode</span>
-                <span class="td-chip"><i class="bi bi-circle-fill"></i>@_task.StatusCode</span>
-                @if (_task.DueDate.HasValue)
-                {
-                    <span class="td-chip @(IsOverdue ? "mt-due-red" : null)"><i class="bi bi-calendar3"></i>@_task.DueDate.Value.ToString("MMM d, yyyy")</span>
-                }
-            </div>
+    <div class="td-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="taskEditTitle" @onclick="CloseEdit">
+        <div class="td-modal" @onclick:stopPropagation="true">
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" class="td-entry-form">
+                <DataAnnotationsValidator />
+                <div class="um-modal-header td-entry-header"><i class="bi bi-pencil-square" aria-hidden="true"></i><span id="taskEditTitle">Edit enterprise task</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseEdit" aria-label="Close edit task form"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+                <div class="um-modal-body td-entry-body">
+                    <div class="td-entry-intro"><strong>Task workflow update</strong><span>Update priority, stage, assignment, due date, and completion state while preserving the tenant task record.</span></div>
+                    <div class="td-form-grid">
+                        <div class="td-field td-field-wide"><label for="taskTitle">Title <span class="um-required">*</span></label><InputText id="taskTitle" class="form-control" @bind-Value="_form.Title" /><ValidationMessage For="() => _form.Title" class="text-danger" /></div>
+                        <div class="td-field"><label for="taskType">Category <span class="um-required">*</span></label><InputSelect id="taskType" class="form-select" @bind-Value="_form.TaskTypeCode">@foreach (var item in Categories) { <option value="@item">@item</option> }</InputSelect><ValidationMessage For="() => _form.TaskTypeCode" class="text-danger" /></div>
+                        <div class="td-field"><label for="taskPriority">Priority <span class="um-required">*</span></label><InputSelect id="taskPriority" class="form-select" @bind-Value="_form.PriorityCode">@foreach (var item in Priorities) { <option value="@item">@item</option> }</InputSelect><ValidationMessage For="() => _form.PriorityCode" class="text-danger" /></div>
+                        <div class="td-field"><label for="taskStage">Stage <span class="um-required">*</span></label><InputSelect id="taskStage" class="form-select" @bind-Value="_form.StageCode">@foreach (var item in Stages) { <option value="@item">@item</option> }</InputSelect><ValidationMessage For="() => _form.StageCode" class="text-danger" /></div>
+                        <div class="td-field"><label for="taskStatus">Status <span class="um-required">*</span></label><InputSelect id="taskStatus" class="form-select" @bind-Value="_form.StatusCode">@foreach (var item in Statuses) { <option value="@item">@DisplayCode(item)</option> }</InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                        <div class="td-field"><label for="taskDueDate">Due date</label><InputDate id="taskDueDate" class="form-control" @bind-Value="_form.DueDate" /><ValidationMessage For="() => _form.DueDate" class="text-danger" /></div>
+                        <div class="td-field td-field-wide"><label for="taskRelated">Account / Related entity</label><InputText id="taskRelated" class="form-control" @bind-Value="_form.RelatedEntityName" /><ValidationMessage For="() => _form.RelatedEntityName" class="text-danger" /></div>
+                        <div class="td-field td-field-full"><label for="taskDescription">Description / Notes</label><InputTextArea id="taskDescription" class="form-control td-notes-input" rows="6" @bind-Value="_form.Description" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
+                    </div>
+                </div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseEdit" disabled="@_saving">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-save" aria-hidden="true"></i> Save Task</button></div>
+            </EditForm>
         </div>
-        <div class="td-actions">
-            <button class="um-btn um-btn-ghost" @onclick="ToggleCompleteAsync" disabled="@_saving">
-                <i class="bi @(_task.StatusCode == "Completed" ? "bi-arrow-counterclockwise" : "bi-check2-circle")"></i>
-                @(_task.StatusCode == "Completed" ? "Reopen" : "Mark Complete")
-            </button>
-            <button class="um-btn um-btn-danger" @onclick="() => _showDelete = true" disabled="@_saving">
-                <i class="bi bi-trash"></i> Delete
-            </button>
-        </div>
-    </section>
-
-    <div class="td-grid">
-        <section class="td-panel">
-            <h3><i class="bi bi-card-text"></i>Description</h3>
-            <div class="td-description">@(string.IsNullOrWhiteSpace(_task.Description) ? "No description provided." : _task.Description)</div>
-        </section>
-
-        <section class="td-panel">
-            <h3><i class="bi bi-info-circle"></i>Task Information</h3>
-            <div class="td-detail-list">
-                <div class="td-detail-row"><span>Account</span><strong>@(_task.RelatedEntityName ?? "—")</strong></div>
-                <div class="td-detail-row"><span>Assigned To</span><strong>@AssignedToName</strong></div>
-                <div class="td-detail-row"><span>Due Date</span><strong>@(_task.DueDate?.ToString("MMM d, yyyy") ?? "—")</strong></div>
-                <div class="td-detail-row"><span>Completed</span><strong>@(_task.CompletedDate?.ToString("MMM d, yyyy") ?? "—")</strong></div>
-                <div class="td-detail-row"><span>Created</span><strong>@_task.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</strong></div>
-                <div class="td-detail-row"><span>Modified</span><strong>@(_task.ModifiedDateUtc?.ToLocalTime().ToString("MMM d, yyyy h:mm tt") ?? "—")</strong></div>
-            </div>
-        </section>
     </div>
 }
 
 @if (_showDelete && _task is not null)
 {
-    <div class="mt-modal-backdrop" @onclick="() => _showDelete = false">
-        <div class="um-confirm-dialog mt-confirm" @onclick:stopPropagation="true">
-            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div>
-            <div class="um-confirm-title">Delete task?</div>
+    <div class="td-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="taskDeleteTitle" @onclick="CancelDelete">
+        <div class="um-confirm-dialog td-confirm" @onclick:stopPropagation="true">
+            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash" aria-hidden="true"></i></div>
+            <div id="taskDeleteTitle" class="um-confirm-title">Delete task?</div>
             <div class="um-confirm-text">This will remove <strong>@_task.Title</strong> from the Tenant Admin task queue.</div>
-            <div class="um-modal-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
-                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
-            </div>
+            <div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="CancelDelete" disabled="@_saving">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button></div>
         </div>
     </div>
 }
 
+<div class="td-enterprise-page">
+    <section class="td-hero">
+        <div class="td-hero-left">
+            <span class="td-hero-icon"><i class="bi @TaskIcon" aria-hidden="true"></i></span>
+            <div>
+                <div class="td-title-row">
+                    <h1>@(_task?.Title ?? "Task Detail")</h1>
+                    @if (_task is not null)
+                    {
+                        <span><i class="bi bi-hash" aria-hidden="true"></i> @_task.TaskNumber</span>
+                        <span><i class="bi bi-database-check" aria-hidden="true"></i> OPS.TaskItem synced</span>
+                    }
+                    else
+                    {
+                        <span><i class="bi bi-hourglass-split" aria-hidden="true"></i> Loading task</span>
+                    }
+                </div>
+                <p>@HeroSubtitle</p>
+            </div>
+        </div>
+        <div class="td-hero-actions">
+            <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/workbench/tasks")'><i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Tasks</button>
+            <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh task"><i class="bi @(_loading ? "bi-arrow-repeat td-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            @if (_task is not null)
+            {
+                <button class="um-btn um-btn-ghost" @onclick="OpenEdit" disabled="@_saving"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                <button class="um-btn um-btn-primary" @onclick="ToggleCompleteAsync" disabled="@_saving"><i class="bi @(_task.StatusCode == "Completed" ? "bi-arrow-counterclockwise" : "bi-check2-circle")" aria-hidden="true"></i> @(_task.StatusCode == "Completed" ? "Reopen" : "Complete")</button>
+            }
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger td-error-banner" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    @if (_loading)
+    {
+        <section class="td-loading"><i class="bi bi-arrow-repeat td-spin" aria-hidden="true"></i><strong>Loading enterprise task detail...</strong><span>Syncing task workflow, assignment, and due-date metadata.</span></section>
+    }
+    else if (_task is not null)
+    {
+        <section class="td-kpi-strip" aria-label="Task health metrics">
+            @foreach (var metric in Metrics)
+            {
+                <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="@(() => SetView(metric.View))"><span class="td-kpi-icon @metric.Tone"><i class="bi @metric.Icon" aria-hidden="true"></i></span><span><span class="td-kpi-val">@metric.Value</span><span class="td-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span></button>
+            }
+        </section>
+
+        <section class="td-workflow-strip" aria-label="Task workflow actions">
+            <button type="button" class="td-workflow-card" @onclick="ToggleCompleteAsync" disabled="@_saving"><i class="bi @(_task.StatusCode == "Completed" ? "bi-arrow-counterclockwise" : "bi-check2-all")" aria-hidden="true"></i><span><strong>@(_task.StatusCode == "Completed" ? "Reopen workflow" : "Complete task")</strong><span>@(_task.StatusCode == "Completed" ? "Return task to active work." : "Mark this task completed.")</span></span></button>
+            <button type="button" class="td-workflow-card" @onclick="OpenEdit" disabled="@_saving"><i class="bi bi-pencil-square" aria-hidden="true"></i><span><strong>Edit task</strong><span>Update status, due date, priority, and notes.</span></span></button>
+            <button type="button" class="td-workflow-card" @onclick="ShowTimeline"><i class="bi bi-clock-history" aria-hidden="true"></i><span><strong>Review activity</strong><span>Audit creation, modification, and completion.</span></span></button>
+            <button type="button" class="td-workflow-card td-workflow-danger" @onclick="ShowDelete" disabled="@_saving"><i class="bi bi-trash" aria-hidden="true"></i><span><strong>Delete task</strong><span>Confirm before removing this task.</span></span></button>
+        </section>
+
+        <section class="td-view-tabs" aria-label="Task detail views">
+            @foreach (var view in _views)
+            {
+                <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label</button>
+            }
+        </section>
+
+        <section class="td-content-layout">
+            <main class="td-main-card">
+                @if (_activeView == "overview")
+                {
+                    <div class="td-section-head"><div><h2>Task command summary</h2><p>Current state, due-date posture, assignment, and operational notes.</p></div><button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenEdit"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div>
+                    <div class="td-summary-grid">
+                        <section class="td-panel td-panel-wide"><h3><i class="bi bi-card-text" aria-hidden="true"></i> Description</h3><p class="td-description">@(string.IsNullOrWhiteSpace(_task.Description) ? "No description provided for this task." : _task.Description)</p></section>
+                        <section class="td-panel"><h3><i class="bi bi-kanban" aria-hidden="true"></i> Workflow</h3><div class="td-detail-list"><div><span>Stage</span><strong>@DisplayCode(_task.StageCode)</strong></div><div><span>Status</span><strong>@DisplayCode(_task.StatusCode)</strong></div><div><span>Priority</span><strong>@_task.PriorityCode</strong></div><div><span>Task type</span><strong>@_task.TaskTypeCode</strong></div></div></section>
+                        <section class="td-panel"><h3><i class="bi bi-person-check" aria-hidden="true"></i> Ownership</h3><div class="td-detail-list"><div><span>Assigned to</span><strong>@AssignedToName</strong></div><div><span>Related entity</span><strong>@(_task.RelatedEntityName ?? "—")</strong></div><div><span>Tenant</span><strong>@ShortId(_task.TenantId)</strong></div><div><span>Task id</span><strong>@ShortId(_task.TaskItemId)</strong></div></div></section>
+                    </div>
+                }
+                else if (_activeView == "timeline")
+                {
+                    <div class="td-section-head"><div><h2>Task activity timeline</h2><p>Auditable lifecycle events from the task record.</p></div><button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button></div>
+                    <div class="td-timeline">@foreach (var item in TimelineItems) { <article class="td-timeline-item"><span class="td-timeline-icon @item.Tone"><i class="bi @item.Icon" aria-hidden="true"></i></span><div><strong>@item.Title</strong><p>@item.Description</p><small>@item.When</small></div></article> }</div>
+                }
+                else
+                {
+                    <div class="td-section-head"><div><h2>Governance metadata</h2><p>Database-backed identifiers, audit dates, and soft-delete posture.</p></div><button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenEdit"><i class="bi bi-pencil" aria-hidden="true"></i> Update</button></div>
+                    <div class="td-metadata-grid"><div><span>Task item id</span><strong>@_task.TaskItemId</strong></div><div><span>Tenant id</span><strong>@_task.TenantId</strong></div><div><span>Created by</span><strong>@(_task.CreatedByUserId?.ToString() ?? "—")</strong></div><div><span>Modified by</span><strong>@(_task.ModifiedByUserId?.ToString() ?? "—")</strong></div><div><span>Related entity id</span><strong>@(_task.RelatedEntityId?.ToString() ?? "—")</strong></div><div><span>Account id</span><strong>@(_task.AccountId?.ToString() ?? "—")</strong></div><div><span>Soft deleted</span><strong>@(_task.IsDeleted ? "Yes" : "No")</strong></div><div><span>Last refreshed</span><strong>@DateTime.Now.ToString("MMM d, yyyy h:mm tt", CultureInfo.CurrentCulture)</strong></div></div>
+                }
+            </main>
+
+            <aside class="td-detail-card">
+                <div class="td-detail-head"><div><span class="td-detail-eyebrow"><i class="bi @TaskIcon" aria-hidden="true"></i> @_task.TaskNumber</span><h2>@DisplayCode(_task.StatusCode)</h2><p>@DueLabel</p></div><span class="@PriorityClass(_task.PriorityCode)">@_task.PriorityCode</span></div>
+                <div class="td-detail-body">
+                    <div class="td-detail-summary"><div><span>Due date</span><strong>@(_task.DueDate?.ToString("MMM d, yyyy", CultureInfo.CurrentCulture) ?? "—")</strong></div><div><span>Completed</span><strong>@(_task.CompletedDate?.ToString("MMM d, yyyy", CultureInfo.CurrentCulture) ?? "—")</strong></div><div><span>Created</span><strong>@FormatDate(_task.CreatedDateUtc)</strong></div><div><span>Modified</span><strong>@(_task.ModifiedDateUtc.HasValue ? FormatDate(_task.ModifiedDateUtc.Value) : "—")</strong></div></div>
+                    <p class="td-detail-note @DueTone"><i class="bi @DueIcon" aria-hidden="true"></i> @WorkflowGuidance</p>
+                    <div class="td-detail-actions"><button class="um-btn um-btn-ghost" @onclick="OpenEdit" disabled="@_saving"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button class="um-btn um-btn-primary" @onclick="ToggleCompleteAsync" disabled="@_saving"><i class="bi @(_task.StatusCode == "Completed" ? "bi-arrow-counterclockwise" : "bi-check2")" aria-hidden="true"></i> @(_task.StatusCode == "Completed" ? "Reopen" : "Complete")</button><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/workbench/tasks")'><i class="bi bi-list-check" aria-hidden="true"></i> Queue</button><button class="um-btn um-btn-danger" @onclick="ShowDelete" disabled="@_saving"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button></div>
+                </div>
+            </aside>
+        </section>
+    }
+</div>
+
 @code {
-    Guid TenantId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantId;
-    private Guid _tenantAdminUserId;
     [Parameter] public Guid TaskId { get; set; }
 
-    Guid TenantAdminUserId { get; set; }
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private TaskItemDto? _task;
+    private UserDto? _assignedTo;
+    private string? _loadError;
+    private bool _loading = true;
+    private bool _saving;
+    private bool _showDelete;
+    private bool _showEdit;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string _activeView = "overview";
+    private TaskEditFormModel _form = new();
 
-    TaskItemDto? _task;
-    UserDto? _assignedTo;
-    string? _loadError;
-    string? _toastMessage;
-    bool _toastIsError;
-    bool _loading;
-    bool _saving;
-    bool _showDelete;
+    private static readonly string[] Categories = ["Renewal", "Quote Follow-up", "Certificate", "Endorsement", "Call", "Document", "Admin", "Billing", "Claim", "Approval", "Task"];
+    private static readonly string[] Priorities = ["Low", "Medium", "High"];
+    private static readonly string[] Statuses = ["Open", "InProgress", "Blocked", "Completed", "Closed"];
+    private static readonly string[] Stages = ["Intake", "In Progress", "Review", "Approval", "Done"];
+    private readonly ViewOption[] _views = [new("overview", "Overview", "bi-layout-text-window"), new("timeline", "Timeline", "bi-clock-history"), new("metadata", "Metadata", "bi-database-check")];
 
-    bool IsOverdue => _task?.StatusCode != "Completed" && _task?.DueDate is { } dueDate && dueDate < DateOnly.FromDateTime(DateTime.Today);
-    string AssignedToName => _assignedTo is null ? (_task?.AssignedToUserId is null ? "Unassigned" : "Assigned user") : DisplayName(_assignedTo);
+    private bool IsCompleted => _task?.StatusCode is "Completed" or "Closed";
+    private bool IsOverdue => !IsCompleted && _task?.DueDate is { } dueDate && dueDate < DateOnly.FromDateTime(DateTime.Today);
+    private bool IsDueToday => !IsCompleted && _task?.DueDate == DateOnly.FromDateTime(DateTime.Today);
+    private string AssignedToName => _assignedTo is null ? (_task?.AssignedToUserId is null ? "Unassigned" : "Assigned user") : DisplayName(_assignedTo);
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
+    private string TaskIcon => IsCompleted ? "bi-check-circle-fill" : IsOverdue ? "bi-alarm-fill" : IsDueToday ? "bi-sun-fill" : "bi-check2-square";
+    private string HeroSubtitle => _task is null ? "Loading Tenant Admin task workflow details." : $"Review {_task.TaskNumber}, manage completion, update workflow metadata, and preserve tenant-scoped task governance.";
+    private string DueLabel => _task?.DueDate is null ? "No due date" : IsOverdue ? $"Overdue since {_task.DueDate.Value:MMM d}" : IsDueToday ? "Due today" : $"Due {_task.DueDate.Value:MMM d}";
+    private string DueTone => IsOverdue ? "td-note-danger" : IsDueToday ? "td-note-warning" : IsCompleted ? "td-note-success" : "td-note-info";
+    private string DueIcon => IsOverdue ? "bi-exclamation-triangle-fill" : IsDueToday ? "bi-sun-fill" : IsCompleted ? "bi-check-circle-fill" : "bi-info-circle-fill";
+    private string WorkflowGuidance => IsCompleted ? "Task is complete. Reopen it if follow-up work is required." : IsOverdue ? "Task is overdue. Review ownership, due date, and completion blockers." : IsDueToday ? "Task is due today. Prioritize completion or update the workflow stage." : "Task is active and within the current workflow window.";
+
+    private IReadOnlyList<KpiMetric> Metrics =>
+    [
+        new(DisplayCode(_task?.StatusCode ?? "Open"), "Status", "Current workflow status", "bi-circle-fill", StatusTone(_task?.StatusCode), "overview"),
+        new(DisplayCode(_task?.StageCode ?? "Intake"), "Stage", "Current processing stage", "bi-kanban", "td-tone-info", "overview"),
+        new(_task?.PriorityCode ?? "Medium", "Priority", "Task priority level", "bi-flag-fill", PriorityTone(_task?.PriorityCode), "overview"),
+        new(DueLabel, "Due", "Due-date posture", DueIcon, DueTone.Replace("td-note", "td-tone"), "timeline")
+    ];
+
+    private IReadOnlyList<TimelineItem> TimelineItems
+    {
+        get
+        {
+            if (_task is null) return [];
+            var items = new List<TimelineItem>
+            {
+                new("Task created", $"Created by {(_task.CreatedByUserId?.ToString() ?? "system")}.", FormatDate(_task.CreatedDateUtc), "bi-plus-circle", "td-tone-info")
+            };
+            if (_task.ModifiedDateUtc.HasValue) items.Add(new("Task modified", $"Last modified by {(_task.ModifiedByUserId?.ToString() ?? "system")}.", FormatDate(_task.ModifiedDateUtc.Value), "bi-pencil-square", "td-tone-warning"));
+            if (_task.CompletedDate.HasValue) items.Add(new("Task completed", "Completion date was recorded on the task workflow.", _task.CompletedDate.Value.ToString("MMM d, yyyy", CultureInfo.CurrentCulture), "bi-check-circle", "td-tone-success"));
+            if (_task.DueDate.HasValue) items.Add(new(IsOverdue ? "Due date passed" : "Due date scheduled", IsOverdue ? "Task still requires attention after its due date." : "Task has an active due-date target.", _task.DueDate.Value.ToString("MMM d, yyyy", CultureInfo.CurrentCulture), IsOverdue ? "bi-alarm-fill" : "bi-calendar3", IsOverdue ? "td-tone-danger" : "td-tone-info"));
+            return items;
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Workbench", "/workbench"), new("My Tasks", "/workbench/tasks"), new("Task Detail", Nav.Uri));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Workbench", "/workbench"), new("Tasks", "/workbench/tasks"), new("Task Detail", Nav.Uri));
         await LoadAsync();
     }
 
-    async Task LoadAsync()
+    private async Task LoadAsync()
     {
         _loading = true;
         _loadError = null;
@@ -148,6 +233,7 @@ else if (_task is not null)
             if (_task is null)
             {
                 _loadError = "Task not found.";
+                _assignedTo = null;
             }
             else if (_task.AssignedToUserId.HasValue)
             {
@@ -161,6 +247,7 @@ else if (_task is not null)
         catch (Exception ex)
         {
             _loadError = $"Failed to load task: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
         }
         finally
         {
@@ -168,15 +255,14 @@ else if (_task is not null)
         }
     }
 
-    async Task ToggleCompleteAsync()
+    private async Task ToggleCompleteAsync()
     {
         if (_task is null) return;
-
         var completed = _task.StatusCode != "Completed";
         _saving = true;
         try
         {
-            await Api.UpdateTaskItemAsync(_task.TaskItemId, new()
+            await Api.UpdateTaskItemAsync(_task.TaskItemId, new UpdateTaskItemRequest
             {
                 Title = _task.Title,
                 Description = _task.Description,
@@ -185,18 +271,17 @@ else if (_task is not null)
                 PriorityCode = _task.PriorityCode,
                 StatusCode = completed ? "Completed" : "Open",
                 RelatedEntityName = _task.RelatedEntityName,
-                AssignedToUserId = _task.AssignedToUserId ?? TenantAdminUserId,
+                AssignedToUserId = _task.AssignedToUserId ?? _tenantAdminUserId,
                 DueDate = _task.DueDate,
                 CompletedDate = completed ? DateOnly.FromDateTime(DateTime.Today) : null,
-                ModifiedByUserId = TenantAdminUserId
+                ModifiedByUserId = _tenantAdminUserId
             });
-
-            ShowToast(completed ? "Task completed" : "Task reopened");
+            ShowToast(completed ? "Task completed." : "Task reopened.");
             await LoadAsync();
         }
         catch (Exception ex)
         {
-            ShowToast($"Update failed: {ex.Message}", isError: true);
+            ShowToast($"Update failed: {ex.Message}", "danger");
         }
         finally
         {
@@ -204,19 +289,70 @@ else if (_task is not null)
         }
     }
 
-    async Task ExecuteDeleteAsync()
+    private void OpenEdit()
     {
         if (_task is null) return;
+        _form = new TaskEditFormModel
+        {
+            Title = _task.Title,
+            Description = _task.Description,
+            TaskTypeCode = _task.TaskTypeCode,
+            StageCode = _task.StageCode,
+            PriorityCode = _task.PriorityCode,
+            StatusCode = _task.StatusCode,
+            RelatedEntityName = _task.RelatedEntityName,
+            DueDate = _task.DueDate
+        };
+        _showEdit = true;
+    }
 
+    private async Task SaveAsync()
+    {
+        if (_task is null) return;
         _saving = true;
         try
         {
-            await Api.DeleteTaskItemAsync(_task.TaskItemId, TenantAdminUserId);
+            await Api.UpdateTaskItemAsync(_task.TaskItemId, new UpdateTaskItemRequest
+            {
+                Title = _form.Title,
+                Description = _form.Description,
+                TaskTypeCode = _form.TaskTypeCode,
+                StageCode = _form.StatusCode == "Completed" ? "Done" : _form.StageCode,
+                PriorityCode = _form.PriorityCode,
+                StatusCode = _form.StatusCode,
+                RelatedEntityName = _form.RelatedEntityName,
+                AssignedToUserId = _task.AssignedToUserId ?? _tenantAdminUserId,
+                DueDate = _form.DueDate,
+                CompletedDate = _form.StatusCode == "Completed" ? DateOnly.FromDateTime(DateTime.Today) : null,
+                ModifiedByUserId = _tenantAdminUserId
+            });
+            _showEdit = false;
+            ShowToast("Task updated successfully.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_task is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteTaskItemAsync(_task.TaskItemId, _tenantAdminUserId);
+            ShowToast("Task deleted successfully.");
             Nav.NavigateTo("/workbench/tasks");
         }
         catch (Exception ex)
         {
-            ShowToast($"Delete failed: {ex.Message}", isError: true);
+            ShowToast($"Delete failed: {ex.Message}", "danger");
         }
         finally
         {
@@ -224,28 +360,44 @@ else if (_task is not null)
         }
     }
 
-    void ShowToast(string message, bool isError = false)
-    {
-        _toastMessage = message;
-        _toastIsError = isError;
-    }
+    private void SetView(string view) => _activeView = view;
+    private void ShowTimeline() => _activeView = "timeline";
+    private void ShowDelete() => _showDelete = true;
+    private void CancelDelete() => _showDelete = false;
+    private void CloseEdit() => _showEdit = false;
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
 
-    void ClearToast() => _toastMessage = null;
-
-    static string DisplayName(UserDto user) =>
-        !string.IsNullOrWhiteSpace(user.DisplayName) ? user.DisplayName! :
-        !string.IsNullOrWhiteSpace(user.FullName) ? user.FullName :
-        !string.IsNullOrWhiteSpace(user.Email) ? user.Email :
-        user.UserName;
-
-    async Task ResolveCurrentUserContextAsync()
+    private async Task ResolveCurrentUserContextAsync()
     {
         var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
         _tenantId = context.TenantId;
         _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+    }
+
+    private string MetricCardClass(KpiMetric metric) => $"td-kpi-card {(metric.View == _activeView ? "td-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewOption view) => $"td-view-btn {(view.Id == _activeView ? "td-view-btn-active" : string.Empty)}";
+    private static string PriorityClass(string priority) => $"td-priority td-priority-{priority.ToLowerInvariant()}";
+    private static string PriorityTone(string? priority) => priority?.ToLowerInvariant() switch { "high" => "td-tone-danger", "medium" => "td-tone-warning", "low" => "td-tone-muted", _ => "td-tone-info" };
+    private static string StatusTone(string? status) => status?.ToLowerInvariant() switch { "completed" or "closed" => "td-tone-success", "blocked" => "td-tone-danger", "inprogress" or "in progress" => "td-tone-warning", _ => "td-tone-info" };
+    private static string DisplayCode(string value) => value.Replace("_", " ").Replace("-", " ");
+    private static string FormatDate(DateTime value) => value.ToLocalTime().ToString("MMM d, yyyy h:mm tt", CultureInfo.CurrentCulture);
+    private static string ShortId(Guid value) => value.ToString()[..8];
+    private static string DisplayName(UserDto user) => !string.IsNullOrWhiteSpace(user.DisplayName) ? user.DisplayName! : !string.IsNullOrWhiteSpace(user.FullName) ? user.FullName : !string.IsNullOrWhiteSpace(user.Email) ? user.Email : user.UserName;
+
+    private sealed record ViewOption(string Id, string Label, string Icon);
+    private sealed record KpiMetric(string Value, string Label, string Caption, string Icon, string Tone, string View);
+    private sealed record TimelineItem(string Title, string Description, string When, string Icon, string Tone);
+
+    private sealed class TaskEditFormModel
+    {
+        [Required, StringLength(200)] public string Title { get; set; } = string.Empty;
+        [StringLength(2000)] public string? Description { get; set; }
+        [Required, StringLength(50)] public string TaskTypeCode { get; set; } = "Task";
+        [Required, StringLength(50)] public string StageCode { get; set; } = "Intake";
+        [Required, StringLength(50)] public string PriorityCode { get; set; } = "Medium";
+        [Required, StringLength(50)] public string StatusCode { get; set; } = "Open";
+        [StringLength(100)] public string? RelatedEntityName { get; set; }
+        public DateOnly? DueDate { get; set; }
     }
 }
