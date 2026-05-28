@@ -1,500 +1,485 @@
 @page "/crm/forecast"
 @namespace Ams.Web.Components.Pages.Crm
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Opportunities
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Pipeline Forecast — CRM</PageTitle>
+<PageTitle>Enterprise Forecast Command Center</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+@if (_toastVisible)
+{
+    <div class="fce-toast fce-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="fce-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
 
-<AppPageHeader Title="Pipeline Forecast"
-               Subtitle="Analyze and forecast pipeline by stage, forecast category, and producer"
-               Icon="bi-graph-up-arrow">
-    <Actions>
-        <div class="fc-view-toggle" role="group" aria-label="View mode">
-            @foreach (var v in _views)
+@if (_showStageDialog && _selected is not null)
+{
+    <div class="fce-modal-backdrop" role="presentation" @onclick="CloseDialogs">
+        <div class="fce-modal" role="dialog" aria-modal="true" aria-labelledby="stageDialogTitle" @onclick:stopPropagation="true">
+            <div class="fce-modal-header">
+                <div class="fce-modal-title"><span class="fce-modal-icon"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i></span><span><h2 id="stageDialogTitle">Advance Forecast Stage</h2><p>@_selected.Name</p></span></div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDialogs" disabled="@_busy" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="fce-modal-body">
+                <label class="fce-field">Target stage<select class="fce-input" @bind="_targetStage">@foreach (var stage in StageOptions) { <option value="@stage">@stage</option> }</select></label>
+                @if (!string.IsNullOrWhiteSpace(_dialogError))
+                {
+                    <div class="fce-form-error"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_dialogError</div>
+                }
+            </div>
+            <div class="fce-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialogs" disabled="@_busy">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="MoveSelectedStageAsync" disabled="@_busy"><i class="bi bi-check-lg" aria-hidden="true"></i> Update Stage</button></div>
+        </div>
+    </div>
+}
+
+@if (_showForecastDialog && _selected is not null)
+{
+    <div class="fce-modal-backdrop" role="presentation" @onclick="CloseDialogs">
+        <div class="fce-modal" role="dialog" aria-modal="true" aria-labelledby="forecastDialogTitle" @onclick:stopPropagation="true">
+            <div class="fce-modal-header">
+                <div class="fce-modal-title"><span class="fce-modal-icon fce-modal-icon-green"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span><span><h2 id="forecastDialogTitle">Update Forecast Commit</h2><p>@_selected.Name</p></span></div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDialogs" disabled="@_busy" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="fce-modal-body fce-modal-grid">
+                <label class="fce-field">Forecast<select class="fce-input" @bind="_targetForecast">@foreach (var forecast in ForecastOptions) { <option value="@forecast">@forecast</option> }</select></label>
+                <label class="fce-field">Win probability<input class="fce-input" type="number" min="0" max="100" step="1" @bind="_targetWinPct" /></label>
+                @if (!string.IsNullOrWhiteSpace(_dialogError))
+                {
+                    <div class="fce-form-error fce-span-all"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_dialogError</div>
+                }
+            </div>
+            <div class="fce-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialogs" disabled="@_busy">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="UpdateSelectedForecastAsync" disabled="@_busy"><i class="bi bi-check-lg" aria-hidden="true"></i> Save Forecast</button></div>
+        </div>
+    </div>
+}
+
+<div class="fce-page">
+    <section class="fce-hero">
+        <div class="fce-hero-left">
+            <span class="fce-hero-icon"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span>
+            <div>
+                <div class="fce-title-row">
+                    <h1>Forecast Command Center</h1>
+                    <span><i class="bi bi-cash-stack" aria-hidden="true"></i> Weighted revenue</span>
+                    <span><i class="bi bi-calendar-check" aria-hidden="true"></i> Close timing</span>
+                    <span><i class="bi bi-shield-check" aria-hidden="true"></i> Tenant scoped</span>
+                </div>
+                <p>Enterprise forecast cockpit ranked by revenue impact, commit quality, close urgency, owner coverage, and pipeline risk from live CRM opportunities.</p>
+            </div>
+        </div>
+        <div class="fce-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat fce-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/opportunities")'><i class="bi bi-trophy" aria-hidden="true"></i> Opportunities</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/opportunities/pipeline")'><i class="bi bi-funnel" aria-hidden="true"></i> Pipeline</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/crm/opportunities/new")'><i class="bi bi-plus-lg" aria-hidden="true"></i> New Opportunity</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger fce-error-banner" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    @if (_loading)
+    {
+        <section class="fce-loading-state"><i class="bi bi-arrow-repeat fce-spin" aria-hidden="true"></i><strong>Building forecast intelligence...</strong><span>Syncing opportunities, producers, close timing, weighted values, and risk signals.</span></section>
+    }
+    else
+    {
+        <section class="fce-kpi-strip" aria-label="Forecast KPI filters">
+            @foreach (var metric in Metrics)
             {
-                <button class="fc-view-btn @(_view == v.Id ? "fc-view-btn--active" : "")"
-                        @onclick="() => _view = v.Id"
-                        title="@v.Label"
-                        aria-pressed="@(_view == v.Id)">
-                    <i class="bi @v.Icon" aria-hidden="true"></i>
-                    <span class="fc-view-lbl">@v.Label</span>
+                <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="@(() => SetFilter(metric.Filter))">
+                    <span class="fce-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                    <span><span class="fce-kpi-val">@metric.Value</span><span class="fce-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
                 </button>
             }
-        </div>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise @(_loading ? "fc-spin" : "")" aria-hidden="true"></i>
-        </button>
-    </Actions>
-</AppPageHeader>
+        </section>
 
-<section class="ma-hero opp-hero">
-    <div>
-        <span class="ma-eyebrow">CRM · Opportunities</span>
-        <h2>Sales Forecast</h2>
-        <p>Projected close amounts by stage, forecast category, producer, and close timeline using live opportunities.</p>
-    </div>
-    <div class="ma-hero-actions">
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/opportunities")'><i class="bi bi-trophy"></i> Opportunities</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/opportunities/pipeline")'><i class="bi bi-funnel"></i> Pipeline</button>
-    </div>
-</section>
+        <section class="fce-workflow-strip" aria-label="Forecast workflow actions">
+            <button type="button" class="fce-workflow-card fce-workflow-primary" @onclick='() => SetView("overview")'><i class="bi bi-speedometer2" aria-hidden="true"></i><span><strong>Executive forecast</strong><span>Prioritize commit and revenue risk.</span></span></button>
+            <button type="button" class="fce-workflow-card" @onclick='() => SetFilter("commit")'><i class="bi bi-check2-circle" aria-hidden="true"></i><span><strong>Protect commit</strong><span>Review committed revenue.</span></span></button>
+            <button type="button" class="fce-workflow-card" @onclick='() => SetFilter("risk")'><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span><strong>Risk desk</strong><span>Inspect overdue and low-confidence deals.</span></span></button>
+            <button type="button" class="fce-workflow-card" @onclick='() => SetView("timeline")'><i class="bi bi-calendar-range" aria-hidden="true"></i><span><strong>Close calendar</strong><span>Balance weekly and monthly close load.</span></span></button>
+        </section>
 
-<!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
-<div class="fc-kpi-strip">
-    <div class="fc-kpi-card">
-        <span class="fc-kpi-icon fc-ki1"><i class="bi bi-trophy-fill" aria-hidden="true"></i></span>
-        <div>
-            <div class="fc-kpi-val">@_kpi.TotalOpps</div>
-            <div class="fc-kpi-lbl">Total Opportunities</div>
-        </div>
-    </div>
-    <div class="fc-kpi-card">
-        <span class="fc-kpi-icon fc-ki2"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
-        <div>
-            <div class="fc-kpi-val">@_kpi.TotalPipeline.ToString("C0")</div>
-            <div class="fc-kpi-lbl">Total Pipeline</div>
-        </div>
-    </div>
-    <div class="fc-kpi-card">
-        <span class="fc-kpi-icon fc-ki3"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span>
-        <div>
-            <div class="fc-kpi-val">@_kpi.WeightedPipeline.ToString("C0")</div>
-            <div class="fc-kpi-lbl">Weighted Pipeline</div>
-        </div>
-    </div>
-    <div class="fc-kpi-card">
-        <span class="fc-kpi-icon fc-ki4"><i class="bi bi-percent" aria-hidden="true"></i></span>
-        <div>
-            <div class="fc-kpi-val">@_kpi.AvgWinRate.ToString("F0")%</div>
-            <div class="fc-kpi-lbl">Avg Win Rate</div>
-        </div>
-    </div>
-    <div class="fc-kpi-card">
-        <span class="fc-kpi-icon fc-ki5"><i class="bi bi-check2-circle" aria-hidden="true"></i></span>
-        <div>
-            <div class="fc-kpi-val">@_kpi.ClosingThisMonth.ToString("C0")</div>
-            <div class="fc-kpi-lbl">Closing This Month</div>
-        </div>
-    </div>
-</div>
-
-<!-- ── Filter bar ────────────────────────────────────────────────────────── -->
-<div class="fc-filter-bar">
-    <div class="fc-search-wrap">
-        <i class="bi bi-search fc-search-icon" aria-hidden="true"></i>
-        <input class="fc-search-input" type="search" placeholder="Search opportunities…"
-               value="@_search"
-               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; ApplyFilters(); })" />
-    </div>
-    <SfDropDownList TValue="string" TItem="LV" DataSource="_stageOptions" Placeholder="All Stages" ShowClearButton="true" Width="145px" Value="_filterStage" ValueChanged="@((string v) => { _filterStage = v; ApplyFilters(); })"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
-    <SfDropDownList TValue="string" TItem="LV" DataSource="_forecastOptions" Placeholder="All Forecasts" ShowClearButton="true" Width="150px" Value="_filterForecast" ValueChanged="@((string v) => { _filterForecast = v; ApplyFilters(); })"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
-    <SfDropDownList TValue="string" TItem="LV" DataSource="_ownerOptions" Placeholder="All Owners" ShowClearButton="true" Width="145px" Value="_filterOwner" ValueChanged="@((string v) => { _filterOwner = v; ApplyFilters(); })"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
-</div>
-
-<!-- ════════════════════════════════════════════════════════════════════════
-     VIEW: FUNNEL
-     ════════════════════════════════════════════════════════════════════════ -->
-@if (_view == "funnel")
-{
-    @if (_loading)
-    {
-        <div class="fc-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
-    }
-    else
-    {
-        <div class="fc-funnel-layout">
-            <h3 class="fc-section-hdr">Pipeline by Stage</h3>
-            @foreach (var sg in _stageData)
-            {
-                var pct = _maxStageAmount == 0 ? 0 : (double)sg.Amount / (double)_maxStageAmount * 100;
-                <div class="fc-stage-row">
-                    <span class="@StageBadge(sg.Stage)" style="min-width:110px">@sg.Stage</span>
-                    <div class="fc-stage-track">
-                        <div class="fc-stage-fill @StageFill(sg.Stage)" style="width:@pct.ToString("F1",System.Globalization.CultureInfo.InvariantCulture)%"></div>
-                    </div>
-                    <span class="fc-mono fc-bold" style="min-width:100px;text-align:right">@sg.Amount.ToString("C0")</span>
-                    <span class="fc-count">@sg.Count opp@(sg.Count != 1 ? "s" : "")</span>
-                    <span class="fc-weighted">@sg.WeightedAmount.ToString("C0")</span>
+        <section class="fce-filter-panel">
+            <div class="fce-search-wrap">
+                <span class="fce-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+                <div class="fce-search-body">
+                    <label for="forecastSearch">Search forecast</label>
+                    <input id="forecastSearch" class="fce-search-input" value="@_search" @oninput="OnSearchChanged" placeholder="Search opportunity, account, owner, stage, forecast, lead, or description..." />
+                    <span>Filters every KPI, tab, chart, timeline, producer panel, and action table.</span>
                 </div>
+            </div>
+            <label class="fce-filter-field">Stage<select class="fce-filter-select" value="@_stageFilter" @onchange="OnStageChanged"><option value="">All stages</option>@foreach (var stage in StageOptions) { <option value="@stage">@stage</option> }</select></label>
+            <label class="fce-filter-field">Forecast<select class="fce-filter-select" value="@_forecastFilter" @onchange="OnForecastChanged"><option value="">All forecasts</option>@foreach (var forecast in ForecastOptions) { <option value="@forecast">@forecast</option> }</select></label>
+            <label class="fce-filter-field">Owner<select class="fce-filter-select" value="@_ownerFilter" @onchange="OnOwnerChanged"><option value="">All owners</option><option value="Unassigned">Unassigned</option>@foreach (var owner in OwnerOptions) { <option value="@owner">@owner</option> }</select></label>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-cloud-arrow-down" aria-hidden="true"></i> Sync</button>
+            <div class="fce-filter-result"><strong>@FilteredRows.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><span>shown</span></div>
+        </section>
+
+        <section class="fce-view-tabs" aria-label="Forecast views">
+            @foreach (var view in _views)
+            {
+                <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label <span>@ViewCount(view.Id)</span></button>
             }
-        </div>
-    }
-}
+        </section>
 
-<!-- ════════════════════════════════════════════════════════════════════════
-     VIEW: FORECAST CATEGORY
-     ════════════════════════════════════════════════════════════════════════ -->
-@if (_view == "forecast")
-{
-    @if (_loading)
-    {
-        <div class="fc-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
-    }
-    else
-    {
-        <div class="fc-grid-card app-datagrid">
-            <SfGrid TValue="ForecastRow" DataSource="_forecastData" AllowSorting="true" EnableHover="true" RowHeight="48">
-                <GridColumns>
-                    <GridColumn Field="@nameof(ForecastRow.Category)" HeaderText="Forecast Category" MinWidth="140">
-                        <Template>@{ var f = (ForecastRow)context; }<span class="@ForecastBadge(f.Category)">@f.Category</span></Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(ForecastRow.Count)" HeaderText="Count" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
-                    <GridColumn Field="@nameof(ForecastRow.TotalAmount)" HeaderText="Total Pipeline" Width="140" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                        <Template>@{ var f = (ForecastRow)context; }<span class="fc-mono fc-bold">@f.TotalAmount.ToString("C0")</span></Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(ForecastRow.WeightedAmount)" HeaderText="Weighted" Width="140" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                        <Template>@{ var f = (ForecastRow)context; }<span class="fc-mono">@f.WeightedAmount.ToString("C0")</span></Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(ForecastRow.AvgWinPct)" HeaderText="Avg Win %" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                        <Template>@{ var f = (ForecastRow)context; }<span>@f.AvgWinPct.ToString("F0")%</span></Template>
-                    </GridColumn>
-                    <GridColumn HeaderText="Visual" Width="200">
-                        <Template>
-                            @{ var f = (ForecastRow)context; }
-                            <div class="fc-bar-wrap">
-                                <div class="fc-bar" style="width:@f.TotalAmount.ToString("F0")%;background:@CategoryColor(f.Category);max-width:120px"></div>
-                                <span class="fc-bar-label">@f.TotalAmount.ToString("C0")</span>
-                            </div>
-                        </Template>
-                    </GridColumn>
-                </GridColumns>
-            </SfGrid>
-        </div>
-    }
-}
+        @if (_rows.Count == 0)
+        {
+            <section class="fce-empty-state"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i><strong>No forecast opportunities available</strong><span>Create or sync CRM opportunities to build an enterprise forecast.</span><button type="button" class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/crm/opportunities/new")'>New Opportunity</button></section>
+        }
+        else
+        {
+            <section class="fce-content-layout">
+                <main class="fce-main-card">
+                    @if (_view == "overview")
+                    {
+                        <div class="fce-section-head"><div><h2>Executive forecast overview</h2><p>Revenue weighted by probability, commit health, close timing, stage mix, and deal importance.</p></div><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => SetView("table")'><i class="bi bi-list-check" aria-hidden="true"></i> Action Table</button></div>
+                        <div class="fce-overview-grid">
+                            <section class="fce-spotlight-card"><span><i class="bi bi-stars" aria-hidden="true"></i> Most important forecast item</span><strong>@(TopOpportunity?.Name ?? "—")</strong><p>@(TopOpportunity is null ? "No opportunity needs forecast action." : $"{FormatCurrency(TopOpportunity.Amount)} · {TopOpportunity.Forecast} · closes {FormatDate(TopOpportunity.CloseDate)}")</p><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="SelectTopOpportunity">Inspect</button></section>
+                            <section class="fce-guidance-card"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Forecast guidance</h3><p>@GuidanceText</p><div class="fce-guidance-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("commit")'>Commit</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("closing")'>Closing</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("risk")'>Risk</button></div></section>
+                        </div>
+                        <div class="fce-dashboard-grid">
+                            @DistributionPanel("Forecast category", ForecastRows, "bi-graph-up-arrow", "fce-tone-blue")
+                            @DistributionPanel("Stage coverage", StageRows, "bi-diagram-3", "fce-tone-purple")
+                            @DistributionPanel("Win probability", WinRows, "bi-percent", "fce-tone-green")
+                        </div>
+                    }
+                    else if (_view == "forecast")
+                    {
+                        <div class="fce-section-head"><div><h2>Forecast category command</h2><p>Commit, best-case, pipeline, and closed revenue ranked by weighted value and confidence quality.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("commit")'>Commit Only</button></div>
+                        <div class="fce-category-grid">@foreach (var row in ForecastCategoryRows) { <article class="fce-category-card" @onclick="@(() => SelectForecastCategory(row.Category))"><header><span class="fce-badge @ForecastBadgeClass(row.Category)">@row.Category</span><strong>@FormatCurrency(row.WeightedAmount)</strong></header><div class="fce-category-bar"><i style="width:@row.Width"></i></div><div class="fce-card-stats"><div><span>Total</span><strong>@FormatCurrency(row.TotalAmount)</strong></div><div><span>Deals</span><strong>@row.Count</strong></div><div><span>Avg win</span><strong>@row.AvgWinPct.ToString("F0", CultureInfo.CurrentCulture)%</strong></div></div></article> }</div>
+                    }
+                    else if (_view == "timeline")
+                    {
+                        <div class="fce-section-head"><div><h2>Close timeline</h2><p>Forecast timing by overdue, this week, this month, next month, and later pipeline.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("closing")'>Closing Focus</button></div>
+                        <div class="fce-timeline-list">@foreach (var row in TimelineRows) { <button type="button" class="fce-timeline-row" @onclick="@(() => SelectTimeline(row.Filter))"><span><i class="bi @row.Icon" aria-hidden="true"></i></span><div><strong>@row.Period</strong><small>@row.Count opportunity(s) · @row.AvgWinPct.ToString("F0", CultureInfo.CurrentCulture)% avg win</small></div><div class="fce-timeline-bar"><i style="width:@row.Width"></i></div><em>@FormatCurrency(row.WeightedAmount)</em></button> }</div>
+                    }
+                    else if (_view == "producers")
+                    {
+                        <div class="fce-section-head"><div><h2>Producer forecast workload</h2><p>Owner-level weighted revenue, commit load, close urgency, and assignment gaps.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("unassigned")'>Assignment Gaps</button></div>
+                        <div class="fce-producer-grid">@foreach (var owner in OwnerRows) { <article class="@(IsSelected(owner) ? "fce-producer-card fce-producer-card-active" : "fce-producer-card")" @onclick="@(() => SelectOwner(owner))"><header><span class="fce-owner-avatar">@Initials(owner.Owner)</span><span class="fce-badge @OwnerBadgeClass(owner)">@owner.Status</span></header><h3>@owner.Owner</h3><p>@owner.Summary</p><div class="fce-card-stats"><div><span>Open</span><strong>@owner.OpenCount</strong></div><div><span>Commit</span><strong>@owner.CommitCount</strong></div><div><span>Weighted</span><strong>@FormatCurrency(owner.WeightedAmount)</strong></div></div></article> }</div>
+                    }
+                    else
+                    {
+                        <div class="fce-section-head"><div><h2>Forecast action table</h2><p>Importance-ranked opportunities synchronized with CRM data and existing opportunity workflows.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters">Reset</button></div>
+                        <div class="fce-table-wrap"><table class="fce-table"><thead><tr><th>Priority</th><th>Opportunity</th><th>Forecast</th><th>Stage</th><th>Amount</th><th>Weighted</th><th>Win</th><th>Owner</th><th>Close</th><th>Actions</th></tr></thead><tbody>@foreach (var item in FilteredRows) { <tr class="@(IsSelected(item) ? "fce-row-selected" : string.Empty)" @onclick="@(() => SelectOpportunity(item))"><td><span class="fce-priority">@item.ImportanceLabel</span></td><td><strong>@item.Name</strong><small>@item.AccountName · @item.Number</small></td><td><span class="fce-badge @ForecastBadgeClass(item.Forecast)">@item.Forecast</span></td><td><span class="fce-badge @StageBadgeClass(item.Stage)">@item.Stage</span></td><td>@FormatCurrency(item.Amount)</td><td>@FormatCurrency(item.WeightedAmount)</td><td>@item.WinPct.ToString("F0", CultureInfo.CurrentCulture)%</td><td>@item.Owner</td><td class="@(item.IsOverdue ? "fce-overdue" : string.Empty)">@FormatDate(item.CloseDate)</td><td><div class="fce-row-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="@(() => OpenForecastDialog(item))">Forecast</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick:stopPropagation="true" @onclick="@(() => NavigateOpportunity(item.Id))">Open</button></div></td></tr> }</tbody></table></div>
+                    }
+                </main>
 
-<!-- ════════════════════════════════════════════════════════════════════════
-     VIEW: PRODUCER BREAKDOWN
-     ════════════════════════════════════════════════════════════════════════ -->
-@if (_view == "producer")
-{
-    @if (_loading)
-    {
-        <div class="fc-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+                <aside class="fce-detail-panel">
+                    @if (_selected is not null)
+                    {
+                        <div class="fce-detail-head"><div><span><i class="bi bi-graph-up-arrow" aria-hidden="true"></i> Forecast item</span><h2>@_selected.Name</h2><p>@_selected.AccountName · @_selected.Number</p></div><span class="fce-badge @ForecastBadgeClass(_selected.Forecast)">@_selected.Forecast</span></div>
+                        <div class="fce-score-ring"><strong>@_selected.ImportanceScore.ToString("F0", CultureInfo.CurrentCulture)</strong><span>importance score</span></div>
+                        <div class="fce-detail-summary"><div><span>Pipeline</span><strong>@FormatCurrency(_selected.Amount)</strong></div><div><span>Weighted</span><strong>@FormatCurrency(_selected.WeightedAmount)</strong></div><div><span>Win</span><strong>@_selected.WinPct.ToString("F0", CultureInfo.CurrentCulture)%</strong></div><div><span>Close</span><strong>@FormatDate(_selected.CloseDate)</strong></div></div>
+                        <div class="fce-note-card"><strong>Recommended action</strong><p>@NextBestAction(_selected)</p></div>
+                        <div class="fce-rules-card"><header><strong>Forecast signals</strong><span>@_selected.Owner</span></header>@foreach (var signal in Signals(_selected)) { <p><em>@signal</em><span>active</span></p> }</div>
+                        <div class="fce-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="@(() => OpenForecastDialog(_selected))"><i class="bi bi-pencil-square" aria-hidden="true"></i> Update Forecast</button><button type="button" class="um-btn um-btn-ghost" @onclick="@(() => OpenStageDialog(_selected))"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Move Stage</button><button type="button" class="um-btn um-btn-ghost" @onclick="@(() => NavigateOpportunity(_selected.Id))"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open</button></div>
+                    }
+                    else if (_selectedOwner is not null)
+                    {
+                        <div class="fce-detail-head"><div><span><i class="bi bi-person-badge" aria-hidden="true"></i> Producer forecast</span><h2>@_selectedOwner.Owner</h2><p>@_selectedOwner.Summary</p></div><span class="fce-badge @OwnerBadgeClass(_selectedOwner)">@_selectedOwner.Status</span></div>
+                        <div class="fce-detail-summary"><div><span>Total</span><strong>@FormatCurrency(_selectedOwner.TotalAmount)</strong></div><div><span>Weighted</span><strong>@FormatCurrency(_selectedOwner.WeightedAmount)</strong></div><div><span>Commit</span><strong>@_selectedOwner.CommitCount</strong></div><div><span>Closing</span><strong>@_selectedOwner.ClosingCount</strong></div></div>
+                        <div class="fce-rules-card"><header><strong>Important opportunities</strong><span>@_selectedOwner.Count total</span></header>@foreach (var item in _rows.Where(r => r.Owner == _selectedOwner.Owner).OrderByDescending(r => r.ImportanceScore).Take(5)) { <p><em>@item.Name</em><span>@FormatCurrency(item.WeightedAmount)</span></p> }</div>
+                    }
+                    else
+                    {
+                        <div class="fce-detail-empty"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i><strong>Select a forecast item</strong><span>Review importance, weighted revenue, owner, close timing, and recommended action.</span></div>
+                    }
+                </aside>
+            </section>
+        }
     }
-    else
-    {
-        <div class="fc-grid-card app-datagrid">
-            <SfGrid TValue="ProducerRow" DataSource="_producerData" AllowSorting="true" EnableHover="true" RowHeight="48">
-                <GridColumns>
-                    <GridColumn Field="@nameof(ProducerRow.Producer)" HeaderText="Producer" MinWidth="160" />
-                    <GridColumn Field="@nameof(ProducerRow.TotalOpps)" HeaderText="Opportunities" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
-                    <GridColumn Field="@nameof(ProducerRow.TotalPipeline)" HeaderText="Total Pipeline" Width="140" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                        <Template>@{ var p = (ProducerRow)context; }<span class="fc-mono fc-bold">@p.TotalPipeline.ToString("C0")</span></Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(ProducerRow.WeightedPipeline)" HeaderText="Weighted" Width="140" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                        <Template>@{ var p = (ProducerRow)context; }<span class="fc-mono">@p.WeightedPipeline.ToString("C0")</span></Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(ProducerRow.AvgDealSize)" HeaderText="Avg Deal Size" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                        <Template>@{ var p = (ProducerRow)context; }<span class="fc-mono">@p.AvgDealSize.ToString("C0")</span></Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(ProducerRow.WinRate)" HeaderText="Win Rate" Width="100">
-                        <Template>@{ var p = (ProducerRow)context; }<span>@p.WinRate.ToString("F0")%</span></Template>
-                    </GridColumn>
-                </GridColumns>
-            </SfGrid>
-        </div>
-    }
-}
-
-<!-- ════════════════════════════════════════════════════════════════════════
-     VIEW: TIMELINE (CLOSING SCHEDULE)
-     ════════════════════════════════════════════════════════════════════════ -->
-@if (_view == "timeline")
-{
-    @if (_loading)
-    {
-        <div class="fc-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
-    }
-    else
-    {
-        <div class="fc-grid-card app-datagrid">
-            <SfGrid TValue="TimelineRow" DataSource="_timelineData" AllowSorting="true" EnableHover="true" RowHeight="48">
-                <GridColumns>
-                    <GridColumn Field="@nameof(TimelineRow.Period)" HeaderText="Period" Width="120" />
-                    <GridColumn Field="@nameof(TimelineRow.Count)" HeaderText="Closing" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
-                    <GridColumn Field="@nameof(TimelineRow.TotalAmount)" HeaderText="Total Value" Width="140" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                        <Template>@{ var t = (TimelineRow)context; }<span class="fc-mono fc-bold">@t.TotalAmount.ToString("C0")</span></Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(TimelineRow.WeightedAmount)" HeaderText="Weighted Value" Width="150" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                        <Template>@{ var t = (TimelineRow)context; }<span class="fc-mono">@t.WeightedAmount.ToString("C0")</span></Template>
-                    </GridColumn>
-                    <GridColumn HeaderText="Confidence" Width="180">
-                        <Template>
-                            @{ var t = (TimelineRow)context; }
-                            <div class="fc-confidence-bar">
-                                <div class="fc-confidence-fill" style="width:@t.AvgWinPct%"></div>
-                                <span class="fc-confidence-label">@t.AvgWinPct.ToString("F0")%</span>
-                            </div>
-                        </Template>
-                    </GridColumn>
-                </GridColumns>
-            </SfGrid>
-        </div>
-    }
-}
+</div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private SfToast? _toast;
-    private string _view = "funnel";
-    private bool _loading = false;
-
-    // ── Data models ───────────────────────────────────────────────────────────
-    private record ViewDef(string Id, string Label, string Icon);
-    private static readonly List<ViewDef> _views =
-    [
-        new("funnel", "Funnel", "bi-funnel-fill"),
-        new("forecast", "Forecast", "bi-graph-up-arrow"),
-        new("producer", "Producer", "bi-person-badge"),
-        new("timeline", "Timeline", "bi-calendar-event"),
-    ];
-
-    // ── Data ──────────────────────────────────────────────────────────────────
-    private List<StageRow> _stageData = [];
-    private List<ForecastRow> _forecastData = [];
-    private List<ProducerRow> _producerData = [];
-    private List<TimelineRow> _timelineData = [];
-    private ForecastKpi _kpi = new();
-    private decimal _maxStageAmount = 0;
-
-    // ── Filters ───────────────────────────────────────────────────────────────
+    private Guid _tenantAdminUserId;
+    private bool _loading = true;
+    private bool _busy;
+    private bool _toastVisible;
+    private bool _showStageDialog;
+    private bool _showForecastDialog;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string _dialogError = string.Empty;
     private string _search = string.Empty;
-    private string _filterStage = string.Empty;
-    private string _filterForecast = string.Empty;
-    private string _filterOwner = string.Empty;
+    private string _activeFilter = "all";
+    private string _stageFilter = string.Empty;
+    private string _forecastFilter = string.Empty;
+    private string _ownerFilter = string.Empty;
+    private string _view = "overview";
+    private string _targetStage = "Qualification";
+    private string _targetForecast = "Pipeline";
+    private decimal _targetWinPct = 50;
+    private ForecastOpportunityRow? _selected;
+    private OwnerForecastRow? _selectedOwner;
+    private List<ForecastOpportunityRow> _rows = [];
+    private List<AccountDto> _accounts = [];
+    private List<UserDto> _users = [];
 
-    // ── Reference data ────────────────────────────────────────────────────────
-    private static readonly List<LV> _stageOptions =
-    [
-        new("Qualified", "Qualified"),
-        new("Needs Analysis", "Needs Analysis"),
-        new("Proposal", "Proposal"),
-        new("Negotiation", "Negotiation"),
-    ];
+    private static readonly string[] StageOptions = ["Qualification", "Needs Analysis", "Proposal", "Negotiation", "Closed Won", "Closed Lost"];
+    private static readonly string[] ForecastOptions = ["Pipeline", "Best Case", "Commit", "Closed"];
+    private readonly ViewDef[] _views = [new("overview", "Overview", "bi-speedometer2"), new("forecast", "Forecast", "bi-graph-up-arrow"), new("timeline", "Timeline", "bi-calendar-range"), new("producers", "Producers", "bi-people"), new("table", "Action Table", "bi-table")];
 
-    private static readonly List<LV> _forecastOptions =
-    [
-        new("Best Case", "Best Case"),
-        new("Commit", "Commit"),
-        new("Pipeline", "Pipeline"),
-        new("Closed Won", "Closed Won"),
-    ];
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
+    private IReadOnlyList<ForecastOpportunityRow> FilteredRows => ApplyFilters(_rows).ToList();
+    private IReadOnlyList<DistributionRow> StageRows => BuildDistribution(FilteredRows.Select(r => new DistributionSource(r.Stage, r.Amount)));
+    private IReadOnlyList<DistributionRow> ForecastRows => BuildDistribution(FilteredRows.Select(r => new DistributionSource(r.Forecast, r.WeightedAmount)));
+    private IReadOnlyList<DistributionRow> WinRows => BuildDistribution(FilteredRows.Select(r => new DistributionSource(WinBand(r.WinPct), r.WeightedAmount)));
+    private IReadOnlyList<ForecastCategoryRow> ForecastCategoryRows => BuildForecastCategoryRows();
+    private IReadOnlyList<TimelineRow> TimelineRows => BuildTimelineRows();
+    private IReadOnlyList<OwnerForecastRow> OwnerRows => BuildOwnerRows();
+    private IEnumerable<string> OwnerOptions => _rows.Select(r => r.Owner).Where(o => !string.IsNullOrWhiteSpace(o) && o != "Unassigned").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(o => o);
+    private ForecastOpportunityRow? TopOpportunity => FilteredRows.OrderByDescending(r => r.ImportanceScore).ThenByDescending(r => r.WeightedAmount).FirstOrDefault();
+    private int OpenCount => _rows.Count(r => r.IsOpen);
+    private int CommitCount => _rows.Count(r => r.Forecast == "Commit");
+    private int RiskCount => _rows.Count(r => r.IsRisk);
+    private int ClosingCount => _rows.Count(r => r.IsOpen && r.DaysToClose <= 14);
+    private decimal PipelineAmount => _rows.Where(r => r.IsOpen).Sum(r => r.Amount);
+    private decimal WeightedAmount => _rows.Where(r => r.IsOpen).Sum(r => r.WeightedAmount);
+    private decimal CommitAmount => _rows.Where(r => r.Forecast == "Commit").Sum(r => r.WeightedAmount);
+    private decimal BestCaseAmount => _rows.Where(r => r.Forecast == "Best Case").Sum(r => r.WeightedAmount);
+    private decimal ForecastCoverage => PipelineAmount <= 0 ? 0 : WeightedAmount / PipelineAmount * 100m;
+    private string GuidanceText => RiskCount > 0 ? $"{RiskCount.ToString("N0", CultureInfo.CurrentCulture)} forecast item(s) are overdue, low-confidence, or missing ownership and should be reviewed first." : CommitCount > 0 ? $"{CommitCount.ToString("N0", CultureInfo.CurrentCulture)} committed item(s) represent {FormatCurrency(CommitAmount)} weighted forecast to protect." : "Forecast is ready for prioritization by weighted revenue, close timing, and owner coverage.";
+    private IReadOnlyList<Metric> Metrics => [new("all", _rows.Count.ToString("N0", CultureInfo.CurrentCulture), "Total", "All forecast records", "bi-grid", "fce-kpi-blue"), new("open", OpenCount.ToString("N0", CultureInfo.CurrentCulture), "Open", "Active forecast items", "bi-kanban", "fce-kpi-green"), new("weighted", FormatCurrency(WeightedAmount), "Weighted", "Probability adjusted value", "bi-graph-up-arrow", "fce-kpi-purple"), new("commit", FormatCurrency(CommitAmount), "Commit", "Committed weighted forecast", "bi-check2-circle", "fce-kpi-green"), new("bestcase", FormatCurrency(BestCaseAmount), "Best Case", "Upside weighted forecast", "bi-stars", "fce-kpi-cyan"), new("risk", RiskCount.ToString("N0", CultureInfo.CurrentCulture), "At Risk", "Overdue, low confidence, or unassigned", "bi-exclamation-triangle", "fce-kpi-amber")];
 
-    private static readonly List<LV> _ownerOptions =
-    [
-        new("Alice Carter", "Alice Carter"),
-        new("Bob Martinez", "Bob Martinez"),
-        new("Carol Smith", "Carol Smith"),
-        new("David Lee", "David Lee"),
-        new("Eva Johnson", "Eva Johnson"),
-    ];
-
-    // ── Lifecycle ─────────────────────────────────────────────────────────────
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Pipeline Forecast", "/crm/forecast"));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Opportunities", "/crm/opportunities"), new("Forecast", "/crm/forecast"));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
-        _loading = true; StateHasChanged();
+        _loading = true;
+        _loadError = null;
         try
         {
-            var result = await Api.SearchOpportunitiesAsync(_tenantId);
-            BuildForecastData((result?.Items ?? []).Select(OpportunityPageData.FromDto).ToList());
+            if (_tenantId == Guid.Empty) await ResolveCurrentUserContextAsync();
+            var opportunities = await Api.SearchOpportunitiesAsync(_tenantId, pageSize: 500);
+            var accounts = await Api.SearchAccountsAsync(_tenantId, pageSize: 500);
+            var users = await Api.SearchUsersAsync(_tenantId, pageSize: 500);
+            _accounts = accounts?.Items.ToList() ?? [];
+            _users = users?.Items.ToList() ?? [];
+            _rows = (opportunities?.Items ?? []).Select(MapOpportunity).OrderByDescending(r => r.ImportanceScore).ToList();
+            _selected = _selected is null ? FilteredRows.FirstOrDefault() : _rows.FirstOrDefault(r => r.Id == _selected.Id) ?? FilteredRows.FirstOrDefault();
+            _selectedOwner = null;
+            ShowToast("Forecast intelligence synced from existing CRM opportunities.", "success");
         }
         catch (Exception ex)
         {
-            await ShowToastAsync($"Error loading forecast: {ex.Message}", "e-toast-danger");
+            _loadError = $"Failed to load forecast: {ex.Message}";
+            _rows = [];
+            _selected = null;
+            _selectedOwner = null;
+            ShowToast($"Forecast load failed: {ex.Message}", "danger");
         }
-        finally { _loading = false; }
-    }
-
-    private void BuildForecastData(List<OpportunityRow> opportunities)
-    {
-        var now = DateTime.UtcNow;
-        _stageData = opportunities.GroupBy(x => x.Stage).Select(g => new StageRow { Stage = g.Key, Count = g.Count(), Amount = g.Sum(x => x.EstimatedAmount), WeightedAmount = g.Sum(x => x.WeightedAmount) }).OrderBy(x => OpportunityPageConstants.StageOrder(x.Stage)).ToList();
-        _maxStageAmount = _stageData.Count == 0 ? 0 : _stageData.Max(x => x.Amount);
-        _forecastData = opportunities.GroupBy(x => x.ForecastCategory).Select(g => new ForecastRow(g.Key, g.Count(), g.Sum(x => x.EstimatedAmount), g.Sum(x => x.WeightedAmount), g.Any() ? (int)g.Average(x => x.WinProbability) : 0)).OrderByDescending(x => x.TotalAmount).ToList();
-        _producerData = opportunities.GroupBy(x => x.OwnerUserId?.ToString() ?? "Unassigned").Select(g => new ProducerRow(g.Key, g.Count(), g.Sum(x => x.EstimatedAmount), g.Sum(x => x.WeightedAmount), g.Any() ? g.Average(x => x.EstimatedAmount) : 0, g.Any() ? (int)g.Average(x => x.WinProbability) : 0)).OrderByDescending(x => x.TotalPipeline).ToList();
-        _timelineData =
-        [
-            BuildTimelineRow("This Week", opportunities.Where(x => x.CloseDate.HasValue && (x.CloseDate.Value - now).TotalDays <= 7 && x.CloseDate.Value >= now)),
-            BuildTimelineRow("This Month", opportunities.Where(x => x.CloseDate.HasValue && x.CloseDate.Value.Month == now.Month && x.CloseDate.Value.Year == now.Year)),
-            BuildTimelineRow("Next Month", opportunities.Where(x => x.CloseDate.HasValue && x.CloseDate.Value.Month == now.AddMonths(1).Month && x.CloseDate.Value.Year == now.AddMonths(1).Year)),
-            BuildTimelineRow($"Q{((now.Month - 1) / 3) + 1}", opportunities.Where(x => x.CloseDate.HasValue && ((x.CloseDate.Value.Month - 1) / 3) == ((now.Month - 1) / 3) && x.CloseDate.Value.Year == now.Year)),
-        ];
-
-        _kpi = new ForecastKpi
+        finally
         {
-            TotalOpps = _stageData.Sum(s => s.Count),
-            TotalPipeline = _stageData.Sum(s => s.Amount),
-            WeightedPipeline = _stageData.Sum(s => s.WeightedAmount),
-            AvgWinRate = _stageData.Count > 0
-                ? (int)(_stageData.Average(s => (double)s.WeightedAmount / (double)s.Amount * 100))
-                : 0,
-            ClosingThisMonth = _timelineData.FirstOrDefault(t => t.Period == "This Month")?.TotalAmount ?? 0,
-        };
-
-        ApplyFilters();
+            _loading = false;
+        }
     }
 
-    private static TimelineRow BuildTimelineRow(string period, IEnumerable<OpportunityRow> rows)
+    private ForecastOpportunityRow MapOpportunity(OpportunityDto dto)
+    {
+        var stage = !string.IsNullOrWhiteSpace(dto.StageName) ? dto.StageName! : OpportunityPageConstants.StageName(dto.StatusCode);
+        var owner = !string.IsNullOrWhiteSpace(dto.OwnerName) ? dto.OwnerName! : OwnerName(dto.OwnerUserId);
+        var close = dto.CloseDate ?? DateTime.UtcNow.AddDays(30);
+        var forecast = NormalizeForecast(dto.ForecastCategoryCode);
+        return new(dto.OpportunityId, dto.OpportunityNumber, dto.OpportunityName, dto.AccountId, dto.AccountName ?? AccountName(dto.AccountId), stage, dto.EstimatedAmount, dto.WinProbability, forecast, dto.OwnerUserId, owner, close, dto.Description, dto.SourceLead);
+    }
+
+    private IEnumerable<ForecastOpportunityRow> ApplyFilters(IEnumerable<ForecastOpportunityRow> rows)
+    {
+        var query = rows;
+        if (!string.IsNullOrWhiteSpace(_search)) { var term = _search.Trim(); query = query.Where(r => Contains(r.Name, term) || Contains(r.Number, term) || Contains(r.AccountName, term) || Contains(r.Owner, term) || Contains(r.Stage, term) || Contains(r.Forecast, term) || Contains(r.Description, term) || Contains(r.SourceLead, term)); }
+        if (!string.IsNullOrWhiteSpace(_stageFilter)) query = query.Where(r => r.Stage == _stageFilter);
+        if (!string.IsNullOrWhiteSpace(_forecastFilter)) query = query.Where(r => r.Forecast == _forecastFilter);
+        if (!string.IsNullOrWhiteSpace(_ownerFilter)) query = _ownerFilter == "Unassigned" ? query.Where(r => r.Owner == "Unassigned") : query.Where(r => r.Owner == _ownerFilter);
+        query = _activeFilter switch { "open" => query.Where(r => r.IsOpen), "weighted" => query.Where(r => r.IsOpen && r.WeightedAmount > 0), "commit" => query.Where(r => r.Forecast == "Commit"), "bestcase" => query.Where(r => r.Forecast == "Best Case"), "closing" => query.Where(r => r.IsOpen && r.DaysToClose <= 14), "risk" => query.Where(r => r.IsRisk), "unassigned" => query.Where(r => r.Owner == "Unassigned"), _ => query };
+        return query.OrderByDescending(r => r.ImportanceScore).ThenBy(r => r.CloseDate);
+    }
+
+    private IReadOnlyList<ForecastCategoryRow> BuildForecastCategoryRows()
+    {
+        var rows = FilteredRows.GroupBy(r => r.Forecast).Select(g => new ForecastCategoryRow(g.Key, g.Count(), g.Sum(r => r.Amount), g.Sum(r => r.WeightedAmount), g.Any() ? g.Average(r => r.WinPct) : 0, "0%")).OrderByDescending(r => r.WeightedAmount).ToList();
+        var max = Math.Max(1, rows.Select(r => r.WeightedAmount).DefaultIfEmpty(1).Max());
+        return rows.Select(r => r with { Width = WidthPct(r.WeightedAmount, max) }).ToList();
+    }
+
+    private IReadOnlyList<TimelineRow> BuildTimelineRows()
+    {
+        var now = DateTime.UtcNow.Date;
+        var nextMonth = now.AddMonths(1);
+        var rows = new List<TimelineRow>
+        {
+            BuildTimelineRow("Overdue", "overdue", "bi-calendar-x", FilteredRows.Where(r => r.IsOverdue)),
+            BuildTimelineRow("This Week", "closing", "bi-calendar-week", FilteredRows.Where(r => r.IsOpen && r.CloseDate.Date >= now && r.CloseDate.Date <= now.AddDays(7))),
+            BuildTimelineRow("This Month", "closing", "bi-calendar-check", FilteredRows.Where(r => r.IsOpen && r.CloseDate.Month == now.Month && r.CloseDate.Year == now.Year)),
+            BuildTimelineRow("Next Month", "open", "bi-calendar-plus", FilteredRows.Where(r => r.IsOpen && r.CloseDate.Month == nextMonth.Month && r.CloseDate.Year == nextMonth.Year)),
+            BuildTimelineRow("Later", "open", "bi-calendar-range", FilteredRows.Where(r => r.IsOpen && r.CloseDate.Date > nextMonth.AddMonths(1).Date))
+        };
+        var max = Math.Max(1, rows.Select(r => r.WeightedAmount).DefaultIfEmpty(1).Max());
+        return rows.Select(r => r with { Width = WidthPct(r.WeightedAmount, max) }).ToList();
+    }
+
+    private static TimelineRow BuildTimelineRow(string period, string filter, string icon, IEnumerable<ForecastOpportunityRow> rows)
     {
         var list = rows.ToList();
-        return new(period, list.Count, list.Sum(x => x.EstimatedAmount), list.Sum(x => x.WeightedAmount), list.Any() ? (int)list.Average(x => x.WinProbability) : 0);
+        return new(period, filter, icon, list.Count, list.Sum(r => r.Amount), list.Sum(r => r.WeightedAmount), list.Any() ? list.Average(r => r.WinPct) : 0, "0%");
     }
 
-    private void ApplyFilters()
+    private IReadOnlyList<OwnerForecastRow> BuildOwnerRows()
     {
-        // Apply filtering logic here
-        StateHasChanged();
-    }
-
-    private async Task ShowToastAsync(string msg, string css = "e-toast-info")
-    {
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = css });
-    }
-
-    // ── Badge helpers ─────────────────────────────────────────────────────────
-    private static string StageBadge(string s) => s switch
-    {
-        "Qualified" => "fc-stage fc-stage--qualified",
-        "Needs Analysis" => "fc-stage fc-stage--needs",
-        "Proposal" => "fc-stage fc-stage--proposal",
-        "Negotiation" => "fc-stage fc-stage--negotiation",
-        _ => "fc-stage",
-    };
-
-    private static string StageFill(string s) => s switch
-    {
-        "Qualified" => "fc-sf--qualified",
-        "Needs Analysis" => "fc-sf--needs",
-        "Proposal" => "fc-sf--proposal",
-        "Negotiation" => "fc-sf--negotiation",
-        _ => "fc-sf--default",
-    };
-
-    private static string ForecastBadge(string cat) => cat switch
-    {
-        "Best Case" => "fc-fc--best",
-        "Commit" => "fc-fc--commit",
-        "Pipeline" => "fc-fc--pipeline",
-        "Closed Won" => "fc-fc--closed",
-        _ => "fc-fc--default",
-    };
-
-    private static string CategoryColor(string cat) => cat switch
-    {
-        "Best Case" => "#dbeafe",
-        "Commit" => "#d1fae5",
-        "Pipeline" => "#f3f4f6",
-        "Closed Won" => "#d1fae5",
-        _ => "#e5eaf3",
-    };
-
-    // ── Models ────────────────────────────────────────────────────────────────
-    private sealed class StageRow
-    {
-        public string Stage { get; set; } = string.Empty;
-        public int Count { get; set; }
-        public decimal Amount { get; set; }
-        public decimal WeightedAmount { get; set; }
-    }
-
-    private sealed class ForecastRow
-    {
-        public string Category { get; set; } = string.Empty;
-        public int Count { get; set; }
-        public decimal TotalAmount { get; set; }
-        public decimal WeightedAmount { get; set; }
-        public int AvgWinPct { get; set; }
-
-        public ForecastRow() { }
-        public ForecastRow(string cat, int cnt, decimal tot, decimal wtd, int pct)
+        return _rows.GroupBy(r => r.Owner).Select(g =>
         {
-            Category = cat;
-            Count = cnt;
-            TotalAmount = tot;
-            WeightedAmount = wtd;
-            AvgWinPct = pct;
-        }
+            var items = g.ToList();
+            var open = items.Count(r => r.IsOpen);
+            var commit = items.Count(r => r.Forecast == "Commit");
+            var closing = items.Count(r => r.IsOpen && r.DaysToClose <= 14);
+            var weighted = items.Sum(r => r.WeightedAmount);
+            var risk = items.Count(r => r.IsRisk);
+            var status = g.Key == "Unassigned" ? "Gap" : risk > 0 ? "Risk" : commit > 0 ? "Commit" : weighted >= 100000 ? "High Value" : "Stable";
+            return new OwnerForecastRow(g.Key, items.Count, open, commit, closing, items.Sum(r => r.Amount), weighted, risk, status, $"{open.ToString("N0", CultureInfo.CurrentCulture)} open · {FormatCurrency(weighted)} weighted · {risk} risk signal(s).");
+        }).OrderByDescending(o => o.Status == "Gap").ThenByDescending(o => o.RiskCount).ThenByDescending(o => o.WeightedAmount).ToList();
     }
 
-    private sealed class ProducerRow
+    private async Task MoveSelectedStageAsync()
     {
-        public string Producer { get; set; } = string.Empty;
-        public int TotalOpps { get; set; }
-        public decimal TotalPipeline { get; set; }
-        public decimal WeightedPipeline { get; set; }
-        public decimal AvgDealSize { get; set; }
-        public int WinRate { get; set; }
-
-        public ProducerRow() { }
-        public ProducerRow(string prod, int opps, decimal tot, decimal wtd, decimal avg, int win)
+        if (_selected is null) return;
+        _busy = true;
+        _dialogError = string.Empty;
+        try
         {
-            Producer = prod;
-            TotalOpps = opps;
-            TotalPipeline = tot;
-            WeightedPipeline = wtd;
-            AvgDealSize = avg;
-            WinRate = win;
+            await Api.UpdateOpportunityStageAsync(_selected.Id, new UpdateOpportunityStageRequest { Stage = _targetStage, ModifiedByUserId = _tenantAdminUserId });
+            var name = _selected.Name;
+            CloseDialogs();
+            await LoadAsync();
+            ShowToast($"{name} moved to {_targetStage}.", "success");
         }
-    }
-
-    private sealed class TimelineRow
-    {
-        public string Period { get; set; } = string.Empty;
-        public int Count { get; set; }
-        public decimal TotalAmount { get; set; }
-        public decimal WeightedAmount { get; set; }
-        public int AvgWinPct { get; set; }
-
-        public TimelineRow() { }
-        public TimelineRow(string p, int cnt, decimal tot, decimal wtd, int pct)
+        catch (Exception ex)
         {
-            Period = p;
-            Count = cnt;
-            TotalAmount = tot;
-            WeightedAmount = wtd;
-            AvgWinPct = pct;
+            _dialogError = $"Stage update failed: {ex.Message}";
+            ShowToast($"Stage update failed: {ex.Message}", "danger");
         }
+        finally { _busy = false; }
     }
 
-    private sealed class ForecastKpi
+    private async Task UpdateSelectedForecastAsync()
     {
-        public int TotalOpps { get; set; }
-        public decimal TotalPipeline { get; set; }
-        public decimal WeightedPipeline { get; set; }
-        public int AvgWinRate { get; set; }
-        public decimal ClosingThisMonth { get; set; }
+        if (_selected is null) return;
+        if (_targetWinPct < 0 || _targetWinPct > 100) { _dialogError = "Win probability must be between 0 and 100."; return; }
+        _busy = true;
+        _dialogError = string.Empty;
+        try
+        {
+            var request = new UpdateOpportunityRequest { OpportunityName = _selected.Name, EstimatedAmount = _selected.Amount, CloseDate = _selected.CloseDate, WinProbability = _targetWinPct, ForecastCategoryCode = _targetForecast, StageName = _selected.Stage, Description = _selected.Description, OwnerUserId = _selected.OwnerUserId, ModifiedByUserId = _tenantAdminUserId };
+            await Api.UpdateOpportunityAsync(_selected.Id, request);
+            var name = _selected.Name;
+            CloseDialogs();
+            await LoadAsync();
+            ShowToast($"{name} forecast updated to {_targetForecast}.", "success");
+        }
+        catch (Exception ex)
+        {
+            _dialogError = $"Forecast update failed: {ex.Message}";
+            ShowToast($"Forecast update failed: {ex.Message}", "danger");
+        }
+        finally { _busy = false; }
     }
 
-    private sealed record LV(string Label, string Value);
+    private void SetFilter(string filter) { _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter; if (filter is "commit" or "risk" or "closing" or "unassigned") _view = "table"; _selected = FilteredRows.FirstOrDefault(); _selectedOwner = null; }
+    private void SetView(string view) { _view = view; _selected = FilteredRows.FirstOrDefault(); _selectedOwner = null; }
+    private void SelectOpportunity(ForecastOpportunityRow row) { _selected = row; _selectedOwner = null; }
+    private void SelectOwner(OwnerForecastRow owner) { _selectedOwner = owner; _selected = null; }
+    private void SelectTopOpportunity() { if (TopOpportunity is not null) { _selected = TopOpportunity; _selectedOwner = null; _view = "table"; } }
+    private void SelectForecastCategory(string category) { _forecastFilter = _forecastFilter == category ? string.Empty : category; _activeFilter = "all"; _view = "table"; _selected = FilteredRows.FirstOrDefault(); }
+    private void SelectTimeline(string filter) { _activeFilter = filter == "overdue" ? "risk" : filter; _view = "table"; _selected = FilteredRows.FirstOrDefault(); }
+    private void OpenStageDialog(ForecastOpportunityRow row) { _selected = row; _targetStage = NextStage(row.Stage); _dialogError = string.Empty; _showStageDialog = true; }
+    private void OpenForecastDialog(ForecastOpportunityRow row) { _selected = row; _targetForecast = row.Forecast; _targetWinPct = row.WinPct; _dialogError = string.Empty; _showForecastDialog = true; }
+    private void CloseDialogs() { if (!_busy) { _showStageDialog = false; _showForecastDialog = false; _dialogError = string.Empty; } }
+    private void ResetFilters() { _activeFilter = "all"; _search = string.Empty; _stageFilter = string.Empty; _forecastFilter = string.Empty; _ownerFilter = string.Empty; _selected = FilteredRows.FirstOrDefault(); _selectedOwner = null; }
+    private void OnSearchChanged(BlazorChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault(); }
+    private void OnStageChanged(BlazorChangeEventArgs e) { _stageFilter = e.Value?.ToString() ?? string.Empty; _activeFilter = "all"; _selected = FilteredRows.FirstOrDefault(); }
+    private void OnForecastChanged(BlazorChangeEventArgs e) { _forecastFilter = e.Value?.ToString() ?? string.Empty; _activeFilter = "all"; _selected = FilteredRows.FirstOrDefault(); }
+    private void OnOwnerChanged(BlazorChangeEventArgs e) { _ownerFilter = e.Value?.ToString() ?? string.Empty; _activeFilter = "all"; _selected = FilteredRows.FirstOrDefault(); }
+    private void NavigateOpportunity(Guid id) => Nav.NavigateTo($"/crm/opportunities/{id}");
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message.Length <= 160 ? message : $"{message[..157]}..."; _toastKind = ToastKind(kind); _toastVisible = true; }
 
-    async Task ResolveCurrentUserContextAsync()
+    private int ViewCount(string view) => view switch { "producers" => OwnerRows.Count, "timeline" => TimelineRows.Sum(r => r.Count), "forecast" => ForecastCategoryRows.Count, _ => FilteredRows.Count };
+    private bool IsSelected(ForecastOpportunityRow row) => _selected?.Id == row.Id;
+    private bool IsSelected(OwnerForecastRow owner) => _selectedOwner?.Owner == owner.Owner;
+    private string AccountName(Guid accountId) => _accounts.FirstOrDefault(a => a.AccountId == accountId)?.AccountName ?? "Unknown account";
+    private string OwnerName(Guid? ownerId) { if (!ownerId.HasValue) return "Unassigned"; var user = _users.FirstOrDefault(u => u.UserId == ownerId.Value); return user is null ? "Unknown owner" : DisplayUser(user); }
+    private static string DisplayUser(UserDto user) => !string.IsNullOrWhiteSpace(user.DisplayName) ? user.DisplayName : !string.IsNullOrWhiteSpace(user.FullName) ? user.FullName : user.UserName;
+    private static string Initials(string name) { var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : parts.Length == 1 ? parts[0][..1] : "?"; }
+    private static string NormalizeForecast(string? value) => string.IsNullOrWhiteSpace(value) ? "Pipeline" : value.Equals("Closed Won", StringComparison.OrdinalIgnoreCase) ? "Closed" : value;
+    private static string NextStage(string stage) { var index = Array.IndexOf(StageOptions, stage); return index < 0 || index >= StageOptions.Length - 1 ? stage : StageOptions[index + 1]; }
+    private static string WinBand(decimal winPct) => winPct >= 75 ? "High 75%+" : winPct >= 50 ? "Medium 50-74%" : "Low <50%";
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static string FormatCurrency(decimal value) => value.ToString("C0", CultureInfo.CurrentCulture);
+    private static string FormatDate(DateTime value) => value.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture);
+    private static string WidthPct(decimal value, decimal max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, (double)(value / max * 100)))).ToString("F1", CultureInfo.InvariantCulture) + "%";
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : "success";
+    private string MetricCardClass(Metric metric) => $"fce-kpi-card {metric.Tone} {(_activeFilter == metric.Filter ? "fce-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewDef view) => $"fce-view-btn {(view.Id == _view ? "fce-view-btn-active" : string.Empty)}";
+    private static string StageBadgeClass(string stage) => stage switch { "Closed Won" => "fce-badge-success", "Closed Lost" => "fce-badge-danger", "Negotiation" => "fce-badge-warning", "Proposal" => "fce-badge-purple", "Needs Analysis" => "fce-badge-info", _ => "fce-badge-neutral" };
+    private static string ForecastBadgeClass(string forecast) => forecast switch { "Commit" => "fce-badge-success", "Best Case" => "fce-badge-info", "Closed" => "fce-badge-purple", _ => "fce-badge-neutral" };
+    private static string OwnerBadgeClass(OwnerForecastRow owner) => owner.Status switch { "Gap" => "fce-badge-danger", "Risk" => "fce-badge-warning", "Commit" => "fce-badge-success", "High Value" => "fce-badge-info", _ => "fce-badge-neutral" };
+    private static string NextBestAction(ForecastOpportunityRow row) => row.Owner == "Unassigned" ? "Assign an owner before this forecast item is committed." : row.IsOverdue ? "Close date is overdue. Update close timing, stage, or forecast commitment immediately." : row.Forecast == "Commit" && row.WinPct < 70 ? "Committed forecast has low confidence. Validate buyer commitment and decision path." : row.DaysToClose <= 14 ? "Confirm close plan, blockers, and next action before the forecast window closes." : row.Forecast == "Best Case" ? "Qualify upside and decide whether this can move into commit." : "Keep next activity current and improve forecast confidence.";
+    private static IEnumerable<string> Signals(ForecastOpportunityRow row) { yield return $"Forecast: {row.Forecast}."; yield return $"Weighted value: {FormatCurrency(row.WeightedAmount)}."; if (row.IsOverdue) yield return "Close date is overdue."; if (row.DaysToClose <= 14) yield return "Close date is within fourteen days."; if (row.Forecast == "Commit" && row.WinPct < 70) yield return "Commit confidence is below 70%."; if (row.Owner == "Unassigned") yield return "Owner assignment is required."; }
+
+    private RenderFragment DistributionPanel(string title, IReadOnlyList<DistributionRow> rows, string icon, string tone) => @<section class="fce-analytics-panel @tone"><h3><i class="bi @icon" aria-hidden="true"></i> @title</h3><div class="fce-analytics-list">@foreach (var row in rows) { <button type="button" @onclick="@(() => ApplyDistribution(row.Label, title))"><span>@row.Label</span><div><i style="width:@row.Width"></i></div><strong>@FormatCurrency(row.Amount)</strong><small>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</small></button> }</div></section>;
+
+    private void ApplyDistribution(string label, string title)
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        if (title.Contains("Forecast", StringComparison.OrdinalIgnoreCase)) _forecastFilter = _forecastFilter == label ? string.Empty : label;
+        else if (title.Contains("Win", StringComparison.OrdinalIgnoreCase)) _activeFilter = label.StartsWith("High", StringComparison.OrdinalIgnoreCase) ? "weighted" : label.StartsWith("Low", StringComparison.OrdinalIgnoreCase) ? "risk" : "all";
+        else _stageFilter = _stageFilter == label ? string.Empty : label;
+        _view = "table";
+        _selected = FilteredRows.FirstOrDefault();
+    }
+
+    private static IReadOnlyList<DistributionRow> BuildDistribution(IEnumerable<DistributionSource> sources)
+    {
+        var rows = sources.GroupBy(s => s.Label).Select(g => new DistributionRow(g.Key, g.Count(), g.Sum(x => x.Amount), "0%")).OrderByDescending(r => r.Amount).ThenBy(r => r.Label).ToList();
+        var max = Math.Max(1, rows.Select(r => r.Amount).DefaultIfEmpty(1).Max());
+        return rows.Select(r => r with { Width = WidthPct(r.Amount, max) }).ToList();
+    }
+
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+
+    private sealed record ViewDef(string Id, string Label, string Icon);
+    private sealed record Metric(string Filter, string Value, string Label, string Caption, string Icon, string Tone);
+    private sealed record DistributionSource(string Label, decimal Amount);
+    private sealed record DistributionRow(string Label, int Count, decimal Amount, string Width);
+    private sealed record ForecastCategoryRow(string Category, int Count, decimal TotalAmount, decimal WeightedAmount, decimal AvgWinPct, string Width);
+    private sealed record TimelineRow(string Period, string Filter, string Icon, int Count, decimal TotalAmount, decimal WeightedAmount, decimal AvgWinPct, string Width);
+    private sealed record OwnerForecastRow(string Owner, int Count, int OpenCount, int CommitCount, int ClosingCount, decimal TotalAmount, decimal WeightedAmount, int RiskCount, string Status, string Summary);
+    private sealed record ForecastOpportunityRow(Guid Id, string Number, string Name, Guid AccountId, string AccountName, string Stage, decimal Amount, decimal WinPct, string Forecast, Guid? OwnerUserId, string Owner, DateTime CloseDate, string? Description, string? SourceLead)
+    {
+        public bool IsOpen => Stage is not "Closed Won" and not "Closed Lost";
+        public int DaysToClose => (int)Math.Ceiling((CloseDate.Date - DateTime.UtcNow.Date).TotalDays);
+        public bool IsOverdue => IsOpen && CloseDate.Date < DateTime.UtcNow.Date;
+        public decimal WeightedAmount => Amount * WinPct / 100m;
+        public bool IsRisk => IsOverdue || Owner == "Unassigned" || (Forecast == "Commit" && WinPct < 70) || (IsOpen && DaysToClose <= 14 && WinPct < 50);
+        public decimal ImportanceScore => (IsOpen ? 500000 : 0) + WeightedAmount + (Forecast == "Commit" ? 175000 : 0) + (Forecast == "Best Case" ? 90000 : 0) + (DaysToClose <= 14 ? 150000 : 0) + (IsRisk ? 200000 : 0) + (WinPct * 1000);
+        public string ImportanceLabel => ImportanceScore >= 900000 ? "Critical" : ImportanceScore >= 500000 ? "High" : ImportanceScore >= 200000 ? "Medium" : "Normal";
     }
 }

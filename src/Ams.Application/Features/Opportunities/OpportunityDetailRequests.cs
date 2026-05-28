@@ -24,6 +24,8 @@ public sealed class UpdateOpportunityRequest
     [StringLength(2000)]
     public string? Description { get; set; }
 
+    public Guid? OwnerUserId { get; set; }
+
     public Guid? ModifiedByUserId { get; set; }
 }
 

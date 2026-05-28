@@ -7,70 +7,389 @@
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Declines — AMS</PageTitle>
+<PageTitle>Decline Command Center — AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+<div class="sd-page">
+    <section class="sd-hero">
+        <div class="sd-hero__content">
+            <div class="sd-hero__eyebrow"><i class="bi bi-x-octagon" aria-hidden="true"></i> Enterprise decline intelligence</div>
+            <h1>Decline Intelligence Center</h1>
+            <p>Prioritize declined submissions, recover lost premium, trigger remarketing, assign follow-up ownership, and turn declined risks into actionable opportunities.</p>
+            <div class="sd-hero__meta">
+                <span><i class="bi bi-stack" aria-hidden="true"></i>@ActiveDeclineCount active declines</span>
+                <span><i class="bi bi-exclamation-diamond" aria-hidden="true"></i>@PriorityDeclineCount priority</span>
+                <span><i class="bi bi-cash-stack" aria-hidden="true"></i>@LostPremium.ToString("C0") lost premium</span>
+                <span><i class="bi bi-arrow-repeat" aria-hidden="true"></i>@RemarketingCount remarketing</span>
+            </div>
+        </div>
+        <div class="sd-hero__actions">
+            <button type="button" class="sd-btn sd-btn--light" @onclick="LoadAsync" disabled="@_loading">
+                <i class="bi bi-arrow-clockwise @_refreshIconClass" aria-hidden="true"></i> Refresh
+            </button>
+            <button type="button" class="sd-btn sd-btn--primary" @onclick='() => Nav.NavigateTo("/submissions/new")'>
+                <i class="bi bi-plus-lg" aria-hidden="true"></i> Re-submit
+            </button>
+            <button type="button" class="sd-btn sd-btn--light" @onclick='() => Nav.NavigateTo("/submissions")'>
+                <i class="bi bi-send" aria-hidden="true"></i> Submissions
+            </button>
+            <button type="button" class="sd-btn sd-btn--light" @onclick='() => Nav.NavigateTo("/submissions/applications")'>
+                <i class="bi bi-clipboard-check" aria-hidden="true"></i> Applications
+            </button>
+            <button type="button" class="sd-btn sd-btn--light" @onclick='() => Nav.NavigateTo("/submissions/quotes")'>
+                <i class="bi bi-file-earmark-text" aria-hidden="true"></i> Quotes
+            </button>
+        </div>
+    </section>
 
-@if (_showActionDialog)
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger sd-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span>@_loadError</span>
+        </div>
+    }
+
+    <section class="sd-kpi-strip" aria-label="Decline KPIs">
+        @KpiCard("all", "Total Declines", ActiveDeclineCount.ToString(), "Active declined or withdrawn submissions", "bi-stack", "red")
+        @KpiCard("priority", "Priority", PriorityDeclineCount.ToString(), "High-value, recent, or remarketing-ready declines", "bi-exclamation-octagon", "orange")
+        @KpiCard("carrier", "Carrier", CarrierDeclineCount.ToString(), "Declines from carrier or market response", "bi-building-x", "amber")
+        @KpiCard("remarket", "Remarketing", RemarketingCount.ToString(), "Declines pending or in remarketing", "bi-arrow-repeat", "cyan")
+        @KpiCard("trend30", "30-Day Trend", Trend30Count.ToString(), "Declines received in the last 30 days", "bi-graph-down-arrow", "blue")
+        @KpiCard("lost", "Lost Premium", LostPremium.ToString("C0"), "Total target premium attached to declines", "bi-cash-stack", "emerald")
+    </section>
+
+    <section class="sd-workflows" aria-label="Decline workflows">
+        <button type="button" class="sd-workflow" @onclick="ShowPriorityQueue">
+            <i class="bi bi-lightning-charge" aria-hidden="true"></i>
+            <span><strong>Priority recovery</strong><small>Open highest-impact decline work</small></span>
+        </button>
+        <button type="button" class="sd-workflow" @onclick="ShowRemarketingQueue">
+            <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+            <span><strong>Remarketing</strong><small>Review risks that can be placed again</small></span>
+        </button>
+        <button type="button" class="sd-workflow" @onclick="ShowRecentDeclines">
+            <i class="bi bi-calendar-range" aria-hidden="true"></i>
+            <span><strong>Recent declines</strong><small>Analyze the last 30 days of losses</small></span>
+        </button>
+        <button type="button" class="sd-workflow" @onclick="ShowProducerView">
+            <i class="bi bi-person-workspace" aria-hidden="true"></i>
+            <span><strong>Producer view</strong><small>Track ownership and follow-up</small></span>
+        </button>
+        <button type="button" class="sd-workflow" @onclick="ShowLobView">
+            <i class="bi bi-layers" aria-hidden="true"></i>
+            <span><strong>LOB view</strong><small>Find decline patterns by line</small></span>
+        </button>
+    </section>
+
+    <section class="sd-filter-panel" aria-label="Decline filters">
+        <div class="sd-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input @bind="SearchText" @bind:event="oninput" placeholder="Search submission, account, LOB, carrier, type, reason, producer, premium, date, priority…" />
+        </div>
+        <div class="sd-filter-grid">
+            <label>
+                <span>Decline Type</span>
+                <select class="form-select" @bind="TypeFilter">
+                    <option value="">All types</option>
+                    @foreach (var type in TypeOptions)
+                    {
+                        <option value="@type">@type</option>
+                    }
+                </select>
+            </label>
+            <label>
+                <span>Remarketing</span>
+                <select class="form-select" @bind="RemarketingFilter">
+                    <option value="">All statuses</option>
+                    @foreach (var status in RemarketingOptions)
+                    {
+                        <option value="@status">@status</option>
+                    }
+                </select>
+            </label>
+            <label>
+                <span>Producer</span>
+                <select class="form-select" @bind="ProducerFilter">
+                    <option value="">All producers</option>
+                    @foreach (var producer in ProducerOptions)
+                    {
+                        <option value="@producer">@producer</option>
+                    }
+                </select>
+            </label>
+            <label>
+                <span>Sort</span>
+                <select class="form-select" @bind="SortMode">
+                    <option value="importance">Importance</option>
+                    <option value="recent">Most recent</option>
+                    <option value="premium">Lost premium</option>
+                    <option value="remarketing">Remarketing</option>
+                    <option value="producer">Producer</option>
+                </select>
+            </label>
+        </div>
+        <button type="button" class="sd-btn sd-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)">
+            <i class="bi bi-x-lg" aria-hidden="true"></i> Reset
+        </button>
+    </section>
+
+    <nav class="sd-tabs" aria-label="Decline views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="@TabClass(tab.Key)" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </nav>
+
+    <main class="sd-dashboard">
+        <section class="sd-main-card">
+            <div class="sd-card-header">
+                <div>
+                    <span class="sd-section-kicker">@ActiveViewTitle</span>
+                    <h2>@FilteredRows.Count() declines</h2>
+                    <p>Ranked by enterprise importance: recency, lost premium, decline type, priority, remarketing readiness, and market history.</p>
+                </div>
+                <div class="sd-card-actions">
+                    <button type="button" class="sd-btn sd-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)">
+                        <i class="bi bi-chevron-left" aria-hidden="true"></i> Previous
+                    </button>
+                    <span class="sd-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="sd-btn sd-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">
+                        Next <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                    </button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="sd-loading"><span class="sd-spinner"></span> Loading declines…</div>
+            }
+            else if (!FilteredRows.Any())
+            {
+                <div class="sd-empty">
+                    <i class="bi bi-search" aria-hidden="true"></i>
+                    <strong>No declines found</strong>
+                    <span>Adjust filters or refresh the decline register.</span>
+                </div>
+            }
+            else if (_activeTab == "producer")
+            {
+                <div class="sd-producer-grid">
+                    @foreach (var group in ProducerRows)
+                    {
+                        <article class="sd-producer-card">
+                            <div class="sd-producer-card__head">
+                                <div>
+                                    <span>Producer</span>
+                                    <h3>@group.Name</h3>
+                                </div>
+                                <strong>@group.Count</strong>
+                            </div>
+                            <p>@group.Premium.ToString("C0") lost premium • @group.Priority priority • @group.Remarketing remarketing</p>
+                            <div class="sd-mini-bar"><span style="width:@group.Percent%"></span></div>
+                            <button type="button" class="sd-btn sd-btn--ghost" @onclick="() => FilterByProducer(group.Name)">View producer</button>
+                        </article>
+                    }
+                </div>
+            }
+            else if (_activeTab == "lob")
+            {
+                <div class="sd-lob-grid">
+                    @foreach (var group in LobRows)
+                    {
+                        <article class="sd-lob-card">
+                            <div class="sd-lob-icon"><i class="bi bi-layers" aria-hidden="true"></i></div>
+                            <div>
+                                <h3>@group.Name</h3>
+                                <p>@group.Count declines • @group.Premium.ToString("C0") lost • @group.Priority priority</p>
+                                <div class="sd-mini-bar"><span style="width:@group.Percent%"></span></div>
+                            </div>
+                            <button type="button" class="sd-btn sd-btn--ghost" @onclick="() => FilterByLob(group.Name)">Open</button>
+                        </article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="sd-table-wrap">
+                    <table class="sd-table">
+                        <thead>
+                            <tr>
+                                <th>Importance</th>
+                                <th>Submission</th>
+                                <th>Account</th>
+                                <th>LOB</th>
+                                <th>Carrier</th>
+                                <th>Type</th>
+                                <th>Reason</th>
+                                <th>Declined</th>
+                                <th>Lost Premium</th>
+                                <th>Remarketing</th>
+                                <th>Producer</th>
+                                <th class="sd-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in PagedRows)
+                            {
+                                <tr class="@RowClass(row)" @onclick="() => SelectRow(row)">
+                                    <td>@ImportanceBadge(row)</td>
+                                    <td>
+                                        <button type="button" class="sd-link-button" @onclick:stopPropagation="true" @onclick="() => OpenDecline(row)">@row.SubmissionNo</button>
+                                        <small>@row.Priority priority</small>
+                                    </td>
+                                    <td><strong>@row.Account</strong></td>
+                                    <td><span class="sd-lob-pill">@Safe(row.Lob, "Unknown")</span></td>
+                                    <td>@Safe(row.Carrier, "Internal")</td>
+                                    <td>@TypeBadge(row.DeclineType)</td>
+                                    <td><span class="sd-reason" title="@row.DeclineReason">@row.DeclineReason</span></td>
+                                    <td>@DateBadge(row.DeclineDate)</td>
+                                    <td>@PremiumCell(row.LostPremium)</td>
+                                    <td>@RemarketingBadge(row.RemarketingStatus)</td>
+                                    <td>@Safe(row.Producer, "Unassigned")</td>
+                                    <td class="sd-actions-col">
+                                        <button type="button" class="sd-icon-btn" title="Open action menu" @onclick:stopPropagation="true" @onclick="() => ToggleActionMenu(row)">
+                                            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+                                        </button>
+                                        @if (_openActionMenuFor == row.DeclineId)
+                                        {
+                                            <div class="sd-menu" role="menu" @onclick:stopPropagation="true">
+                                                <div class="sd-menu__summary">
+                                                    <strong>@row.SubmissionNo</strong>
+                                                    <span>@row.DeclineType</span>
+                                                </div>
+                                                @foreach (var action in _actions)
+                                                {
+                                                    <button type="button" class="@ActionMenuItemClass(action)" role="menuitem" @onclick="() => HandleActionAsync(action.Key)">
+                                                        <i class="bi @action.Icon" aria-hidden="true"></i>
+                                                        <span>@action.Label</span>
+                                                    </button>
+                                                }
+                                            </div>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="sd-side-panel">
+            <section class="sd-panel-card">
+                <span class="sd-section-kicker">Selected decline</span>
+                @if (_selected is null)
+                {
+                    <div class="sd-empty sd-empty--compact">
+                        <i class="bi bi-cursor" aria-hidden="true"></i>
+                        <strong>Select a decline</strong>
+                        <span>Choose a decline to review reason, premium impact, and recovery actions.</span>
+                    </div>
+                }
+                else
+                {
+                    <div class="sd-selected">
+                        <div class="sd-selected__title">
+                            <h3>@_selected.SubmissionNo</h3>
+                            @RemarketingBadge(_selected.RemarketingStatus)
+                        </div>
+                        <p>@_selected.Account • @_selected.DeclineType</p>
+                        <div class="sd-score-card">
+                            <span>Importance score</span>
+                            <strong>@ImportanceScore(_selected)</strong>
+                            <small>@ImportanceLevel(_selected)</small>
+                        </div>
+                        <div class="sd-detail-list">
+                            <div><span>Reason</span><strong>@_selected.DeclineReason</strong></div>
+                            <div><span>LOB</span><strong>@Safe(_selected.Lob, "Unknown")</strong></div>
+                            <div><span>Carrier</span><strong>@Safe(_selected.Carrier, "Internal")</strong></div>
+                            <div><span>Lost Premium</span><strong>@_selected.LostPremium.ToString("C0")</strong></div>
+                            <div><span>Declined</span><strong>@_selected.DeclineDate.ToString("MMM d, yyyy")</strong></div>
+                            <div><span>Effective</span><strong>@_selected.EffectiveDate.ToString("MMM d, yyyy")</strong></div>
+                            <div><span>Markets</span><strong>@_selected.MarketCount</strong></div>
+                            <div><span>Quotes</span><strong>@_selected.QuoteCount</strong></div>
+                            <div><span>Producer</span><strong>@Safe(_selected.Producer, "Unassigned")</strong></div>
+                        </div>
+                        <div class="sd-selected-actions">
+                            <button type="button" class="sd-btn sd-btn--primary" @onclick="() => OpenDecline(_selected)"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Submission</button>
+                            <button type="button" class="sd-btn sd-btn--ghost" @onclick='() => OpenActionDialog("Start Remarketing")'><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Remarket</button>
+                            <button type="button" class="sd-btn sd-btn--ghost" @onclick='() => OpenActionDialog("Re-submit")'><i class="bi bi-send-plus" aria-hidden="true"></i> Re-submit</button>
+                        </div>
+                    </div>
+                }
+            </section>
+
+            <section class="sd-panel-card">
+                <span class="sd-section-kicker">Decline intelligence</span>
+                <div class="sd-insight-list">
+                    @foreach (var insight in Insights)
+                    {
+                        <div class="sd-insight">
+                            <i class="bi @insight.Icon" aria-hidden="true"></i>
+                            <div>
+                                <strong>@insight.Title</strong>
+                                <span>@insight.Description</span>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </section>
+        </aside>
+    </main>
+</div>
+
+@if (_showActionDialog && _selected is not null)
 {
-    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseActionDialog">
-        <div class="mt-modal sd-action-modal" role="dialog" aria-modal="true" aria-labelledby="sd-action-title" @onclick:stopPropagation="true">
-            <div class="um-modal-header">
+    <div class="sd-modal-backdrop" role="presentation" @onclick="CloseActionDialog">
+        <div class="sd-modal" role="dialog" aria-modal="true" aria-labelledby="sd-action-title" @onclick:stopPropagation="true">
+            <div class="sd-modal__header">
                 <i class="bi @_actionIcon" aria-hidden="true"></i>
                 <span id="sd-action-title">@_actionTitle</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseActionDialog" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button>
+                <button type="button" class="sd-icon-btn sd-icon-btn--light ms-auto" @onclick="CloseActionDialog" disabled="@_actionBusy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
             </div>
             <EditForm Model="_actionForm" OnValidSubmit="ConfirmActionAsync" OnInvalidSubmit="NotifyActionValidationAsync">
                 <DataAnnotationsValidator />
-                <div class="um-modal-body">
+                <div class="sd-modal__body">
                     <div class="sd-modal-intro">
-                        <span class="sd-modal-chip"><i class="bi bi-shield-check" aria-hidden="true"></i> Decline workflow</span>
-                        <p>@_actionHelpText</p>
+                        <strong>@_actionHelpText</strong>
+                        <span>@_selected.SubmissionNo — @_selected.Account — @_selected.DeclineType</span>
                     </div>
-                    <div class="um-form-grid">
-                        <div class="um-field um-field--full">
-                            <label>Decline</label>
-                            <input class="form-control sd-readonly-input" value="@_selected.SubmissionNo - @_selected.Account" disabled />
-                        </div>
+                    <div class="sd-form-grid">
                         @if (_pendingAction == "Assign Producer")
                         {
-                            <div class="um-field um-field--full">
-                                <label>Producer / Owner <span class="text-danger">*</span></label>
+                            <label class="sd-field sd-field--full">
+                                <span>Producer / Owner <em>*</em></span>
                                 <InputText class="form-control" @bind-Value="_actionForm.Producer" />
                                 <ValidationMessage For="() => _actionForm.Producer" class="text-danger" />
-                            </div>
+                            </label>
                         }
                         @if (_pendingAction is "Re-submit" or "Start Remarketing")
                         {
-                            <div class="um-field">
-                                <label>Target Effective Date <span class="text-danger">*</span></label>
+                            <label class="sd-field">
+                                <span>Target Effective Date <em>*</em></span>
                                 <InputDate class="form-control" @bind-Value="_actionForm.EffectiveDate" />
                                 <ValidationMessage For="() => _actionForm.EffectiveDate" class="text-danger" />
-                            </div>
-                            <div class="um-field">
-                                <label>Target Premium</label>
+                            </label>
+                            <label class="sd-field">
+                                <span>Target Premium</span>
                                 <InputNumber class="form-control" @bind-Value="_actionForm.TargetPremium" />
                                 <ValidationMessage For="() => _actionForm.TargetPremium" class="text-danger" />
-                            </div>
-                        }
-                        <div class="um-field um-field--full">
-                            <label>
-                                @NotesLabel
-                                @if (RequiresNotes)
-                                {
-                                    <span class="text-danger">*</span>
-                                }
                             </label>
+                        }
+                        <label class="sd-field sd-field--full">
+                            <span>@ActionNotesLabel</span>
                             <InputTextArea class="form-control" rows="4" @bind-Value="_actionForm.Notes" />
                             <ValidationMessage For="() => _actionForm.Notes" class="text-danger" />
-                        </div>
+                        </label>
                     </div>
                 </div>
-                <div class="um-modal-footer">
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseActionDialog" disabled="@_actionBusy">Cancel</button>
-                    <button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy">
+                <div class="sd-modal__footer">
+                    <button type="button" class="sd-btn sd-btn--ghost" @onclick="CloseActionDialog" disabled="@_actionBusy">Cancel</button>
+                    <button type="submit" class="sd-btn sd-btn--primary" disabled="@_actionBusy">
                         @if (_actionBusy)
                         {
                             <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
@@ -82,27 +401,28 @@
         </div>
     </div>
 }
+
 @if (_showConfirmDialog)
 {
-    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseConfirmDialog">
-        <div class="mt-modal sd-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="sd-confirm-title" @onclick:stopPropagation="true">
-            <div class="um-modal-header">
+    <div class="sd-modal-backdrop" role="presentation" @onclick="CloseConfirmDialog">
+        <div class="sd-confirm" role="dialog" aria-modal="true" aria-labelledby="sd-confirm-title" @onclick:stopPropagation="true">
+            <div class="sd-modal__header">
                 <i class="bi @_confirmIcon" aria-hidden="true"></i>
                 <span>Confirm decline action</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseConfirmDialog" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button>
+                <button type="button" class="sd-icon-btn sd-icon-btn--light ms-auto" @onclick="CloseConfirmDialog" disabled="@_actionBusy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
             </div>
-            <div class="um-confirm-dialog">
-                <div class="um-confirm-icon @(_pendingAction == "Archive" ? "um-confirm-icon--warning" : "um-confirm-icon--info")">
+            <div class="sd-confirm__body">
+                <div class="@ConfirmIconClass">
                     <i class="bi @_confirmIcon" aria-hidden="true"></i>
                 </div>
-                <div class="um-confirm-message">
-                    <h6 id="sd-confirm-title">@_confirmTitle</h6>
+                <div>
+                    <h3 id="sd-confirm-title">@_confirmTitle</h3>
                     <p>@_confirmMessage</p>
                 </div>
             </div>
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseConfirmDialog" disabled="@_actionBusy">Cancel</button>
-                <button type="button" class="um-btn @(_pendingAction == "Archive" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteConfirmedActionAsync" disabled="@_actionBusy">
+            <div class="sd-modal__footer">
+                <button type="button" class="sd-btn sd-btn--ghost" @onclick="CloseConfirmDialog" disabled="@_actionBusy">Cancel</button>
+                <button type="button" class="@ConfirmButtonClass" @onclick="ExecuteConfirmedActionAsync" disabled="@_actionBusy">
                     @if (_actionBusy)
                     {
                         <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
@@ -113,183 +433,41 @@
         </div>
     </div>
 }
-<div class="sd-enterprise-page">
-    <div class="sd-header">
-        <div class="sd-header-left">
-            <div class="sd-lob-icon">
-                <i class="bi bi-x-circle" aria-hidden="true"></i>
-            </div>
-            <div class="sd-header-info">
-                <div class="sd-title-row">
-                    <h1 class="sd-page-title">Decline Intelligence Center</h1>
-                    <span class="sd-status-pill">@FilteredRows.Count() active</span>
-                    @if (HasFilters)
-                    {
-                        <span class="sd-filter-pill">Filtered</span>
-                    }
-                </div>
-                <div class="sd-sub-row">
-                    <span class="sd-sub-chip"><i class="bi bi-stack" aria-hidden="true"></i>@_rows.Count total declines</span>
-                    <span class="sd-sub-chip"><i class="bi bi-building-x" aria-hidden="true"></i>@_rows.Count(r => r.DeclineType == "Carrier") carrier declined</span>
-                    <span class="sd-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i>@_rows.Count(r => r.RemarketingStatus is "Pending" or "In Progress") remarketing</span>
-                    <span class="sd-sub-chip"><i class="bi bi-cash-stack" aria-hidden="true"></i>@_rows.Sum(r => r.LostPremium).ToString("C0") lost premium</span>
-                </div>
-            </div>
-        </div>
-        <div class="sd-header-actions">
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "sd-spin" : "")"></i> Refresh</button>
-            <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenNewSubmission"><i class="bi bi-plus-lg"></i> Re-submit</button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenSubmissions"><i class="bi bi-send"></i> Submissions</button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenQuotes"><i class="bi bi-file-text"></i> Quotes</button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenApplications"><i class="bi bi-clipboard"></i> Applications</button>
-        </div>
-    </div>
 
-    @if (_loadError is not null)
+<div class="sd-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
     {
-        <div class="alert alert-danger sd-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-            <i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError
+        <div class="sd-toast @toast.CssClass">
+            <i class="bi @ToastIconClass(toast)" aria-hidden="true"></i>
+            <span>@toast.Message</span>
+            <button type="button" @onclick="() => DismissToast(toast.Id)"><i class="bi bi-x" aria-hidden="true"></i></button>
         </div>
     }
-
-    <div class="sd-kpi-strip">
-        @KpiCard("bi-x-circle", "Total", _rows.Count.ToString(), "sd-kpi-total", null)
-        @KpiCard("bi-building-x", "Carrier", _rows.Count(r => r.DeclineType == "Carrier").ToString(), "sd-kpi-carrier", "Carrier")
-        @KpiCard("bi-person-x", "Withdrawn", _rows.Count(r => r.DeclineType == "Withdrawn").ToString(), "sd-kpi-withdrawn", "Withdrawn")
-        @KpiCard("bi-clipboard-x", "Non-Renewal", _rows.Count(r => r.DeclineType == "Non-Renewal").ToString(), "sd-kpi-nonrenew", "Non-Renewal")
-        @KpiCard("bi-arrow-repeat", "Remarketing", _rows.Count(r => r.RemarketingStatus is "Pending" or "In Progress").ToString(), "sd-kpi-remarket", "__remarket")
-        @KpiCard("bi-cash", "Lost Premium", _rows.Sum(r => r.LostPremium).ToString("C0"), "sd-kpi-lost", "__lost")
-        @KpiCard("bi-graph-down-arrow", "30-Day Trend", _rows.Count(r => r.DeclineDate >= DateTime.Today.AddDays(-30)).ToString(), "sd-kpi-trend", "__trend30")
-    </div>
-
-    <div class="sd-enterprise-search" role="search" aria-label="Search declines">
-        <div class="sd-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
-        <div class="sd-search-body">
-            <label for="sd-search-input">Enterprise search</label>
-            <input id="sd-search-input" class="sd-search-input" @bind="SearchText" @bind:event="oninput" placeholder="Search every decline field: submission, account, carrier, type, reason, status, premium, dates, priority, IDs…" />
-            <div class="sd-search-hint">
-                Searches all visible and supporting decline fields as you type.
-            </div>
-        </div>
-        <div class="sd-search-result">
-            <strong>@FilteredRows.Count()</strong>
-            <span>matches</span>
-        </div>
-        @if (!string.IsNullOrWhiteSpace(_searchText))
-        {
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm sd-search-clear" @onclick="ClearFilters">
-                <i class="bi bi-x-lg" aria-hidden="true"></i> Clear
-            </button>
-        }
-    </div>
-
-    <div class="sd-view-tabs">
-        @foreach (var tab in _tabs)
-        {
-            <button class="sd-view-tab @(_activeTab == tab.Key ? "sd-view-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)">
-                <i class="bi @tab.Icon" aria-hidden="true"></i>
-                <span>@tab.Label</span>
-                <span class="sd-tab-count">@TabCount(tab.Key)</span>
-            </button>
-        }
-    </div>
-
-    <div class="sd-grid-wrap">
-        @if (_loading)
-        {
-            <div class="sd-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span>Loading declines…</span></div>
-        }
-        else if (!PagedRows.Any())
-        {
-            <div class="sd-empty-state">
-                <i class="bi bi-search" aria-hidden="true"></i>
-                <strong>No declines found</strong>
-                <span>Adjust filters or refresh the decline register.</span>
-            </div>
-        }
-        else
-        {
-            <div class="sd-grid-toolbar">
-                <div>
-                    <strong>@PageSummary</strong>
-                    @if (HasFilters)
-                    {
-                        <span class="sd-filter-note">Filtered</span>
-                    }
-                </div>
-                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-circle"></i> Clear filters</button>
-            </div>
-            <div class="sd-table-scroll">
-                <table class="sd-table">
-                    <thead>
-                        <tr>
-                            <th>Submission</th>
-                            <th>Account</th>
-                            <th>LOB</th>
-                            <th>Carrier</th>
-                            <th>Type</th>
-                            <th>Reason</th>
-                            <th>Declined</th>
-                            <th>Lost Premium</th>
-                            <th>Remarketing</th>
-                            <th>Producer</th>
-                            <th class="sd-actions-col">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var row in PagedRows)
-                        {
-                            <tr class="sd-table-row" @onclick="() => OpenDecline(row)">
-                                <td>@SubLink(row)</td>
-                                <td>
-                                    <div class="sd-account-cell">
-                                        <span class="sd-avatar">@Initials(row.Account)</span>
-                                        <strong>@row.Account</strong>
-                                    </div>
-                                </td>
-                                <td>@LobChip(row.Lob)</td>
-                                <td>@row.Carrier</td>
-                                <td>@TypeChip(row.DeclineType)</td>
-                                <td><span class="sd-reason" title="@row.DeclineReason">@row.DeclineReason</span></td>
-                                <td>@DateCell(row.DeclineDate)</td>
-                                <td>@PremCell(row.LostPremium)</td>
-                                <td>@RemarketChip(row.RemarketingStatus)</td>
-                                <td>@row.Producer</td>
-                                <td class="sd-actions-col">@CtxBtn(row)</td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-            </div>
-            <div class="sd-pager">
-                <span>@PageSummary</span>
-                <div class="sd-pager-actions">
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left"></i> Previous</button>
-                    <span class="sd-page-chip">Page @_page of @TotalPages</span>
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right"></i></button>
-                </div>
-            </div>
-        }
-    </div>
 </div>
 
 @code {
-    SfToast _toast = default!;
-
     bool _loading;
     bool _showActionDialog;
     bool _showConfirmDialog;
     bool _actionBusy;
     string _activeTab = "all";
-    string? _kpiFilter;
+    string _activeKpi = "all";
+    string _sortMode = "importance";
     string? _loadError;
     string? _searchText;
+    string? _typeFilter;
+    string? _remarketingFilter;
+    string? _producerFilter;
+    string? _lobFilter;
+    string _refreshIconClass = string.Empty;
     Guid? _openActionMenuFor;
     int _page = 1;
-    const int PageSize = 20;
+    const int PageSize = 18;
 
-    DeclineRow _selected = new();
+    DeclineRow? _selected;
     readonly DeclineActionForm _actionForm = new();
+    readonly List<DeclineRow> _rows = [];
+    readonly List<ToastMessage> _toasts = [];
     string _pendingAction = string.Empty;
     string _actionTitle = "Decline Action";
     string _actionIcon = "bi-x-circle";
@@ -299,57 +477,40 @@
     string _confirmMessage = "Confirm this decline action?";
     string _confirmIcon = "bi-question-circle";
 
-    sealed class DeclineRow : DeclineRegisterRow
-    {
-        public DateTime EffectiveDate { get; set; }
-        public DateTime ExpirationDate { get; set; }
-        public string Priority { get; set; } = "Normal";
-        public int MarketCount { get; set; }
-        public int QuoteCount { get; set; }
-        public bool Archived { get; set; }
-    }
+    readonly TabDef[] _tabs =
+    [
+        new("all", "All", "bi-stack"),
+        new("priority", "Priority", "bi-lightning-charge"),
+        new("carrier", "Carrier", "bi-building-x"),
+        new("withdrawn", "Withdrawn", "bi-person-x"),
+        new("nonrenew", "Non-Renewal", "bi-clipboard-x"),
+        new("remarket", "Remarketing", "bi-arrow-repeat"),
+        new("30days", "30 Days", "bi-calendar-range"),
+        new("producer", "Producer", "bi-person-workspace"),
+        new("lob", "LOB", "bi-layers"),
+    ];
 
-    record TabDef(string Key, string Label, string Icon);
-    record ActionItem(string Text, string IconCss);
+    readonly ActionDef[] _actions =
+    [
+        new("Open", "Open Submission", "bi-box-arrow-up-right", false),
+        new("Re-submit", "Re-submit", "bi-arrow-repeat", false),
+        new("Start Remarketing", "Start Remarketing", "bi-megaphone", false),
+        new("Assign Producer", "Assign Producer", "bi-person-check", false),
+        new("View Submission", "View Submission", "bi-send", false),
+        new("Archive", "Archive", "bi-archive", true),
+    ];
 
-    static readonly string[] DeclineTypes = ["Carrier", "Withdrawn", "Non-Renewal"];
-    static readonly string[] RemarketingStatuses = ["Pending", "In Progress", "Completed", "Not Started", "Archived"];
-
-    readonly TabDef[] _tabs = new TabDef[]
-    {
-        new TabDef("all", "All", "bi-stack"),
-        new TabDef("carrier", "Carrier Declined", "bi-building-x"),
-        new TabDef("withdrawn", "Withdrawn", "bi-person-x"),
-        new TabDef("nonrenew", "Non-Renewals", "bi-clipboard-x"),
-        new TabDef("remarket", "Remarketing", "bi-arrow-repeat"),
-        new TabDef("30days", "Last 30 Days", "bi-calendar-range"),
-        new TabDef("producer", "By Producer", "bi-person-workspace"),
-    };
-
-    readonly ActionItem[] _actionItems = new ActionItem[]
-    {
-        new ActionItem("Open", "bi bi-box-arrow-up-right"),
-        new ActionItem("Re-submit", "bi bi-arrow-repeat"),
-        new ActionItem("Start Remarketing", "bi bi-megaphone"),
-        new ActionItem("Assign Producer", "bi bi-person-check"),
-        new ActionItem("View Submission", "bi bi-send"),
-        new ActionItem("Archive", "bi bi-archive"),
-    };
-
-    readonly List<DeclineRow> _rows = [];
-
-    bool HasFilters => !string.IsNullOrWhiteSpace(_searchText) || _kpiFilter is not null;
-    string? SearchText
-    {
-        get => _searchText;
-        set
-        {
-            _searchText = value;
-            _page = 1;
-        }
-    }
-    bool RequiresNotes => _pendingAction is "Re-submit" or "Start Remarketing" or "Assign Producer" or "Archive";
-    string NotesLabel => _pendingAction switch
+    int ActiveDeclineCount => _rows.Count(r => !r.Archived);
+    int PriorityDeclineCount => PriorityRows.Count();
+    int CarrierDeclineCount => _rows.Count(r => !r.Archived && r.DeclineType == "Carrier");
+    int RemarketingCount => _rows.Count(r => !r.Archived && r.RemarketingStatus is "Pending" or "In Progress");
+    int Trend30Count => _rows.Count(r => !r.Archived && r.DeclineDate >= DateTime.Today.AddDays(-30));
+    decimal LostPremium => _rows.Where(r => !r.Archived).Sum(r => r.LostPremium);
+    bool HasFilters => _activeKpi != "all" || !string.IsNullOrWhiteSpace(_searchText) || !string.IsNullOrWhiteSpace(_typeFilter) || !string.IsNullOrWhiteSpace(_remarketingFilter) || !string.IsNullOrWhiteSpace(_producerFilter) || !string.IsNullOrWhiteSpace(_lobFilter);
+    string ActiveViewTitle => _tabs.FirstOrDefault(t => t.Key == _activeTab)?.Label ?? "All";
+    string ConfirmIconClass => _pendingAction == "Archive" ? "sd-confirm-icon sd-confirm-icon--danger" : "sd-confirm-icon";
+    string ConfirmButtonClass => _pendingAction == "Archive" ? "sd-btn sd-btn--danger" : "sd-btn sd-btn--primary";
+    string ActionNotesLabel => _pendingAction switch
     {
         "Re-submit" => "Resubmission Notes",
         "Start Remarketing" => "Remarketing Strategy",
@@ -358,31 +519,64 @@
         _ => "Notes"
     };
 
-    IEnumerable<DeclineRow> BaseTabRows => _activeTab switch
+    string? SearchText { get => _searchText; set { _searchText = value; _page = 1; } }
+    string? TypeFilter { get => _typeFilter; set { _typeFilter = value; _page = 1; } }
+    string? RemarketingFilter { get => _remarketingFilter; set { _remarketingFilter = value; _page = 1; } }
+    string? ProducerFilter { get => _producerFilter; set { _producerFilter = value; _page = 1; } }
+    string SortMode { get => _sortMode; set { _sortMode = value; _page = 1; } }
+
+    IEnumerable<string> TypeOptions => _rows.Select(r => r.DeclineType).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    IEnumerable<string> RemarketingOptions => _rows.Select(r => r.RemarketingStatus).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    IEnumerable<string> ProducerOptions => _rows.Select(r => Safe(r.Producer, "Unassigned")).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    IEnumerable<DeclineRow> PriorityRows => _rows.Where(r => !r.Archived && ImportanceLevel(r) is "Critical" or "High");
+
+    IEnumerable<DeclineRow> TabRows => _activeTab switch
     {
-        "carrier" => _rows.Where(r => r.DeclineType == "Carrier"),
-        "withdrawn" => _rows.Where(r => r.DeclineType == "Withdrawn"),
-        "nonrenew" => _rows.Where(r => r.DeclineType == "Non-Renewal"),
-        "remarket" => _rows.Where(r => r.RemarketingStatus is "Pending" or "In Progress"),
-        "30days" => _rows.Where(r => r.DeclineDate >= DateTime.Today.AddDays(-30)),
-        "producer" => _rows.OrderBy(r => r.Producer).ThenByDescending(r => r.DeclineDate),
-        _ => _rows.Where(r => !r.Archived),
+        "priority" => PriorityRows,
+        "carrier" => _rows.Where(r => !r.Archived && r.DeclineType == "Carrier"),
+        "withdrawn" => _rows.Where(r => !r.Archived && r.DeclineType == "Withdrawn"),
+        "nonrenew" => _rows.Where(r => !r.Archived && r.DeclineType == "Non-Renewal"),
+        "remarket" => _rows.Where(r => !r.Archived && r.RemarketingStatus is "Pending" or "In Progress"),
+        "30days" => _rows.Where(r => !r.Archived && r.DeclineDate >= DateTime.Today.AddDays(-30)),
+        "producer" => _rows.Where(r => !r.Archived),
+        "lob" => _rows.Where(r => !r.Archived),
+        _ => _rows.Where(r => !r.Archived)
     };
 
-    IEnumerable<DeclineRow> FilteredRows => ApplyEnterpriseFilters(BaseTabRows);
+    IEnumerable<DeclineRow> FilteredRows => SortRows(ApplyFilters(TabRows));
     IEnumerable<DeclineRow> PagedRows => FilteredRows.Skip((_page - 1) * PageSize).Take(PageSize);
     int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRows.Count() / (double)PageSize));
-    string PageSummary
+
+    IEnumerable<GroupSummary> ProducerRows
     {
         get
         {
-            var total = FilteredRows.Count();
-            if (total == 0) return "No declines";
-            var start = ((_page - 1) * PageSize) + 1;
-            var end = Math.Min(_page * PageSize, total);
-            return $"Showing {start}-{end} of {total}";
+            var groups = FilteredRows.GroupBy(r => Safe(r.Producer, "Unassigned")).ToList();
+            var max = Math.Max(1, groups.Count == 0 ? 1 : groups.Max(g => g.Count()));
+            return groups.Select(g => new GroupSummary(g.Key, g.Count(), g.Sum(x => x.LostPremium), g.Count(x => ImportanceLevel(x) is "Critical" or "High"), g.Count(x => x.RemarketingStatus is "Pending" or "In Progress"), Math.Max(8, (int)Math.Round(g.Count() * 100m / max))))
+                .OrderByDescending(g => g.Priority)
+                .ThenByDescending(g => g.Premium);
         }
     }
+
+    IEnumerable<GroupSummary> LobRows
+    {
+        get
+        {
+            var groups = FilteredRows.GroupBy(r => Safe(r.Lob, "Unknown")).ToList();
+            var max = Math.Max(1, groups.Count == 0 ? 1 : groups.Max(g => g.Count()));
+            return groups.Select(g => new GroupSummary(g.Key, g.Count(), g.Sum(x => x.LostPremium), g.Count(x => ImportanceLevel(x) is "Critical" or "High"), g.Count(x => x.RemarketingStatus is "Pending" or "In Progress"), Math.Max(8, (int)Math.Round(g.Count() * 100m / max))))
+                .OrderByDescending(g => g.Premium);
+        }
+    }
+
+    IEnumerable<InsightDef> Insights =>
+    [
+        new("Recovery pipeline", $"{RemarketingCount} declines are pending or in remarketing.", "bi-arrow-repeat"),
+        new("Premium at risk", $"{LostPremium:C0} in lost premium is represented in active declines.", "bi-cash-stack"),
+        new("Recent trend", $"{Trend30Count} declines were recorded in the last 30 days.", "bi-graph-down-arrow"),
+        new("Carrier appetite", $"{CarrierDeclineCount} active declines came from carrier or market response.", "bi-building-x")
+    ];
 
     protected override async Task OnInitializedAsync()
     {
@@ -393,50 +587,48 @@
     async Task LoadAsync()
     {
         _loading = true;
+        _refreshIconClass = "sd-spin";
         _loadError = null;
         try
         {
-            var result = await Api.SearchSubmissionsAsync(SubmissionPageConstants.TenantId, pageSize: 150);
+            var result = await Api.SearchSubmissionsAsync(SubmissionPageConstants.TenantId, pageSize: 500);
             _rows.Clear();
             _rows.AddRange((result?.Items ?? [])
                 .Where(s => s.Status is "Declined" or "Withdrawn")
                 .Select(ToDeclineRow));
 
-            if (_rows.Count == 0)
-                BuildStub();
-
+            _selected = _selected is null ? _rows.OrderByDescending(ImportanceScore).FirstOrDefault() : _rows.FirstOrDefault(r => r.DeclineId == _selected.DeclineId) ?? _rows.OrderByDescending(ImportanceScore).FirstOrDefault();
             _page = Math.Min(_page, TotalPages);
         }
         catch (Exception ex)
         {
             _loadError = $"Failed to load declines: {ex.Message}";
-            await _toast.ShowAsync(new ToastModel { Content = $"Load failed: {ex.Message}", CssClass = "e-toast-danger" });
-            if (_rows.Count == 0)
-                BuildStub();
+            ShowToast($"Load failed: {ex.Message}", "sd-toast--danger");
         }
         finally
         {
             _loading = false;
+            _refreshIconClass = string.Empty;
         }
     }
 
     static DeclineRow ToDeclineRow(SubmissionDto dto)
     {
-        var x = SubmissionPageData.ToDeclineRow(dto);
+        var row = SubmissionPageData.ToDeclineRow(dto);
         return new DeclineRow
         {
-            DeclineId = x.DeclineId,
-            SubmissionNo = x.SubmissionNo,
-            SubId = x.SubId,
-            Account = x.Account,
-            Lob = x.Lob,
-            Carrier = dto.MarketCount > 1 ? "Multiple Markets" : x.Carrier,
+            DeclineId = row.DeclineId,
+            SubmissionNo = row.SubmissionNo,
+            SubId = row.SubId,
+            Account = row.Account,
+            Lob = row.Lob,
+            Carrier = dto.MarketCount > 1 ? "Multiple Markets" : row.Carrier,
             DeclineType = DeriveDeclineType(dto),
             DeclineReason = DeriveDeclineReason(dto),
-            DeclineDate = x.DeclineDate,
-            LostPremium = x.LostPremium,
+            DeclineDate = row.DeclineDate,
+            LostPremium = row.LostPremium,
             RemarketingStatus = dto.Status == "Declined" ? "Pending" : "Not Started",
-            Producer = x.Producer,
+            Producer = row.Producer,
             EffectiveDate = dto.EffectiveDate,
             ExpirationDate = dto.ExpirationDate,
             Priority = string.IsNullOrWhiteSpace(dto.Priority) ? "Normal" : dto.Priority,
@@ -460,7 +652,7 @@
         return "Market response not competitive for current placement.";
     }
 
-    IEnumerable<DeclineRow> ApplyEnterpriseFilters(IEnumerable<DeclineRow> rows)
+    IEnumerable<DeclineRow> ApplyFilters(IEnumerable<DeclineRow> rows)
     {
         if (!string.IsNullOrWhiteSpace(_searchText))
         {
@@ -473,47 +665,122 @@
                 || Contains(r.DeclineReason, term)
                 || Contains(r.RemarketingStatus, term)
                 || Contains(r.Producer, term)
+                || Contains(r.Priority, term)
                 || Contains(r.DeclineId.ToString(), term)
                 || Contains(r.SubId.ToString(), term)
                 || Contains(r.DeclineDate.ToString("MM/dd/yyyy"), term)
-                || Contains(r.DeclineDate.ToString("yyyy-MM-dd"), term)
                 || Contains(r.EffectiveDate.ToString("MM/dd/yyyy"), term)
-                || Contains(r.EffectiveDate.ToString("yyyy-MM-dd"), term)
                 || Contains(r.ExpirationDate.ToString("MM/dd/yyyy"), term)
-                || Contains(r.ExpirationDate.ToString("yyyy-MM-dd"), term)
                 || Contains(r.LostPremium.ToString("C0"), term)
                 || Contains(r.LostPremium.ToString("0.##"), term)
-                || Contains(r.Priority, term)
                 || Contains(r.MarketCount.ToString(), term)
-                || Contains(r.QuoteCount.ToString(), term)
-                || Contains(r.Archived ? "Archived" : "Active", term));
+                || Contains(r.QuoteCount.ToString(), term));
         }
 
-        rows = _kpiFilter switch
+        if (!string.IsNullOrWhiteSpace(_typeFilter))
         {
-            null => rows,
-            "__remarket" => rows.Where(r => r.RemarketingStatus is "Pending" or "In Progress"),
-            "__lost" => rows.Where(r => r.LostPremium > 0),
-            "__trend30" => rows.Where(r => r.DeclineDate >= DateTime.Today.AddDays(-30)),
-            var f => rows.Where(r => r.DeclineType == f)
+            rows = rows.Where(r => string.Equals(r.DeclineType, _typeFilter, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_remarketingFilter))
+        {
+            rows = rows.Where(r => string.Equals(r.RemarketingStatus, _remarketingFilter, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_producerFilter))
+        {
+            rows = rows.Where(r => string.Equals(Safe(r.Producer, "Unassigned"), _producerFilter, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_lobFilter))
+        {
+            rows = rows.Where(r => string.Equals(Safe(r.Lob, "Unknown"), _lobFilter, StringComparison.OrdinalIgnoreCase));
+        }
+
+        rows = _activeKpi switch
+        {
+            "priority" => rows.Where(r => ImportanceLevel(r) is "Critical" or "High"),
+            "carrier" => rows.Where(r => r.DeclineType == "Carrier"),
+            "remarket" => rows.Where(r => r.RemarketingStatus is "Pending" or "In Progress"),
+            "trend30" => rows.Where(r => r.DeclineDate >= DateTime.Today.AddDays(-30)),
+            "lost" => rows.Where(r => r.LostPremium > 0),
+            _ => rows
         };
 
         return rows;
     }
 
-    static bool Contains(string? source, string term) =>
-        !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
+    IEnumerable<DeclineRow> SortRows(IEnumerable<DeclineRow> rows) => _sortMode switch
+    {
+        "recent" => rows.OrderByDescending(r => r.DeclineDate),
+        "premium" => rows.OrderByDescending(r => r.LostPremium),
+        "remarketing" => rows.OrderBy(r => r.RemarketingStatus).ThenByDescending(r => r.DeclineDate),
+        "producer" => rows.OrderBy(r => Safe(r.Producer, "Unassigned")).ThenByDescending(r => r.LostPremium),
+        _ => rows.OrderByDescending(ImportanceScore).ThenByDescending(r => r.DeclineDate)
+    };
+
+    int ImportanceScore(DeclineRow row)
+    {
+        var score = 0;
+        score += row.RemarketingStatus switch
+        {
+            "Pending" => 26,
+            "In Progress" => 22,
+            "Not Started" => 14,
+            "Completed" => 6,
+            "Archived" => 0,
+            _ => 10
+        };
+
+        var age = DaysSinceDecline(row);
+        score += age switch
+        {
+            <= 7 => 24,
+            <= 30 => 18,
+            <= 60 => 10,
+            _ => 4
+        };
+
+        score += row.DeclineType switch
+        {
+            "Carrier" => 12,
+            "Non-Renewal" => 10,
+            "Withdrawn" => 6,
+            _ => 5
+        };
+
+        if (row.Priority.Contains("Critical", StringComparison.OrdinalIgnoreCase)) score += 20;
+        else if (row.Priority.Contains("High", StringComparison.OrdinalIgnoreCase)) score += 14;
+        if (row.LostPremium >= 100000) score += 14;
+        else if (row.LostPremium >= 50000) score += 8;
+        if (row.MarketCount > 0) score += 5;
+        if (row.QuoteCount == 0 && row.DeclineType == "Carrier") score += 5;
+
+        return Math.Clamp(score, 0, 100);
+    }
+
+    string ImportanceLevel(DeclineRow row) => ImportanceScore(row) switch
+    {
+        >= 78 => "Critical",
+        >= 58 => "High",
+        >= 36 => "Medium",
+        _ => "Standard"
+    };
+
+    int DaysSinceDecline(DeclineRow row) => (int)Math.Floor((DateTime.Today - row.DeclineDate.Date).TotalDays);
 
     string TabCount(string key) => key switch
     {
-        "all" => _rows.Count(r => !r.Archived).ToString(),
-        "carrier" => _rows.Count(r => r.DeclineType == "Carrier").ToString(),
-        "withdrawn" => _rows.Count(r => r.DeclineType == "Withdrawn").ToString(),
-        "nonrenew" => _rows.Count(r => r.DeclineType == "Non-Renewal").ToString(),
-        "remarket" => _rows.Count(r => r.RemarketingStatus is "Pending" or "In Progress").ToString(),
-        "30days" => _rows.Count(r => r.DeclineDate >= DateTime.Today.AddDays(-30)).ToString(),
-        "producer" => _rows.Select(r => r.Producer).Distinct().Count().ToString(),
-        _ => string.Empty,
+        "all" => ActiveDeclineCount.ToString(),
+        "priority" => PriorityDeclineCount.ToString(),
+        "carrier" => CarrierDeclineCount.ToString(),
+        "withdrawn" => _rows.Count(r => !r.Archived && r.DeclineType == "Withdrawn").ToString(),
+        "nonrenew" => _rows.Count(r => !r.Archived && r.DeclineType == "Non-Renewal").ToString(),
+        "remarket" => RemarketingCount.ToString(),
+        "30days" => Trend30Count.ToString(),
+        "producer" => _rows.Where(r => !r.Archived).Select(r => Safe(r.Producer, "Unassigned")).Distinct(StringComparer.OrdinalIgnoreCase).Count().ToString(),
+        "lob" => _rows.Where(r => !r.Archived).Select(r => Safe(r.Lob, "Unknown")).Distinct(StringComparer.OrdinalIgnoreCase).Count().ToString(),
+        _ => string.Empty
     };
 
     void SetActiveTab(string key)
@@ -522,44 +789,81 @@
         _page = 1;
     }
 
-    void ToggleKpiFilter(string? filterKey)
+    void SetKpi(string key)
     {
-        _kpiFilter = filterKey is null || _kpiFilter == filterKey ? null : filterKey;
+        _activeKpi = _activeKpi == key ? "all" : key;
         _page = 1;
     }
 
-    void OpenNewSubmission() => Nav.NavigateTo("/submissions/new");
-    void OpenSubmissions() => Nav.NavigateTo("/submissions");
-    void OpenQuotes() => Nav.NavigateTo("/submissions/quotes");
-    void OpenApplications() => Nav.NavigateTo("/submissions/applications");
+    void SetDashboardFocus(string tab, string kpi)
+    {
+        _activeTab = tab;
+        _activeKpi = kpi;
+        _sortMode = "importance";
+        _page = 1;
+    }
+
+    void ShowPriorityQueue() => SetDashboardFocus("priority", "priority");
+    void ShowRemarketingQueue() => SetDashboardFocus("remarket", "remarket");
+    void ShowRecentDeclines() => SetDashboardFocus("30days", "trend30");
+    void ShowProducerView() => SetDashboardFocus("producer", "all");
+    void ShowLobView() => SetDashboardFocus("lob", "all");
+
+    void SelectRow(DeclineRow row)
+    {
+        _selected = row;
+        _openActionMenuFor = null;
+    }
+
     void OpenDecline(DeclineRow row) => Nav.NavigateTo($"/submissions/{row.SubId}");
+
+    void ToggleActionMenu(DeclineRow row)
+    {
+        _selected = row;
+        _openActionMenuFor = _openActionMenuFor == row.DeclineId ? null : row.DeclineId;
+    }
+
+    void FilterByProducer(string producer)
+    {
+        _producerFilter = producer;
+        _activeTab = "all";
+        _page = 1;
+    }
+
+    void FilterByLob(string lob)
+    {
+        _lobFilter = lob;
+        _activeTab = "all";
+        _page = 1;
+    }
 
     void ClearFilters()
     {
         _searchText = null;
-        _kpiFilter = null;
+        _typeFilter = null;
+        _remarketingFilter = null;
+        _producerFilter = null;
+        _lobFilter = null;
+        _activeKpi = "all";
         _page = 1;
     }
 
     void PreviousPage()
     {
-        if (_page > 1)
-            _page--;
+        if (_page > 1) _page--;
     }
 
     void NextPage()
     {
-        if (_page < TotalPages)
-            _page++;
+        if (_page < TotalPages) _page++;
     }
 
     async Task HandleActionAsync(string action)
     {
         _openActionMenuFor = null;
-
-        if (_selected.SubId == Guid.Empty)
+        if (_selected is null)
         {
-            await _toast.ShowAsync(new ToastModel { Content = "Select a decline before running an action.", CssClass = "e-toast-danger" });
+            ShowToast("Select a decline before running an action.", "sd-toast--danger");
             return;
         }
 
@@ -576,10 +880,18 @@
                 OpenActionDialog(action);
                 break;
         }
+
+        await Task.CompletedTask;
     }
 
     void OpenActionDialog(string action)
     {
+        if (_selected is null)
+        {
+            ShowToast("Select a decline before running an action.", "sd-toast--danger");
+            return;
+        }
+
         _pendingAction = action;
         _actionForm.Reset(_selected, action);
         (_actionTitle, _actionIcon, _actionButtonText) = action switch
@@ -613,11 +925,16 @@
         return Task.CompletedTask;
     }
 
-    Task NotifyActionValidationAsync() =>
-        _toast.ShowAsync(new ToastModel { Content = "Please correct the highlighted fields before continuing.", CssClass = "e-toast-danger" });
+    Task NotifyActionValidationAsync()
+    {
+        ShowToast("Please correct the highlighted fields before continuing.", "sd-toast--danger");
+        return Task.CompletedTask;
+    }
 
     void OpenConfirmDialog(string action)
     {
+        if (_selected is null) return;
+
         _pendingAction = action;
         (_confirmTitle, _confirmMessage, _confirmIcon) = action switch
         {
@@ -636,16 +953,9 @@
         _showConfirmDialog = false;
     }
 
-    void CloseActionMenu()
-    {
-        if (_actionBusy) return;
-        _openActionMenuFor = null;
-    }
-
     async Task ExecuteConfirmedActionAsync()
     {
-        if (_selected.SubId == Guid.Empty)
-            return;
+        if (_selected is null) return;
 
         _actionBusy = true;
         try
@@ -653,7 +963,7 @@
             var message = _pendingAction switch
             {
                 "Re-submit" => await ResubmitAsync(),
-                "Start Remarketing" => await StartRemarketingAsync(),
+                "Start Remarketing" => StartRemarketing(),
                 "Assign Producer" => AssignProducer(),
                 "Archive" => ArchiveDecline(),
                 _ => "No action executed."
@@ -661,11 +971,11 @@
 
             _showActionDialog = false;
             _showConfirmDialog = false;
-            await _toast.ShowAsync(new ToastModel { Content = message, CssClass = "e-toast-success" });
+            ShowToast(message, "sd-toast--success");
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new ToastModel { Content = $"Action failed: {ex.Message}", CssClass = "e-toast-danger" });
+            ShowToast($"Action failed: {ex.Message}", "sd-toast--danger");
         }
         finally
         {
@@ -675,158 +985,91 @@
 
     async Task<string> ResubmitAsync()
     {
+        if (_selected is null) return "No decline selected.";
         var response = await Api.CopySubmissionAsync(_selected.SubId, new CopySubmissionRequest(SubmissionPageConstants.TenantId, _actionForm.EffectiveDate, _selected.Lob, _selected.Priority));
         return response.Message;
     }
 
-    Task<string> StartRemarketingAsync()
+    string StartRemarketing()
     {
+        if (_selected is null) return "No decline selected.";
         _selected.RemarketingStatus = "In Progress";
         if (_selected.LostPremium == 0 && _actionForm.TargetPremium is > 0)
             _selected.LostPremium = _actionForm.TargetPremium.Value;
         Nav.NavigateTo("/renewals/remarketing");
-        return Task.FromResult($"Remarketing started for {_selected.SubmissionNo}.");
+        return $"Remarketing started for {_selected.SubmissionNo}.";
     }
 
     string AssignProducer()
     {
+        if (_selected is null) return "No decline selected.";
         _selected.Producer = _actionForm.Producer ?? _selected.Producer;
         return $"Producer assigned to {_selected.SubmissionNo}.";
     }
 
     string ArchiveDecline()
     {
+        if (_selected is null) return "No decline selected.";
         _selected.Archived = true;
         _selected.RemarketingStatus = "Archived";
         _page = Math.Min(_page, TotalPages);
         return $"{_selected.SubmissionNo} archived.";
     }
 
-    void BuildStub()
+    void ShowToast(string message, string cssClass)
     {
-        var rng = new Random(99);
-        var lobs = new[] { "General Liability", "Commercial Property", "Commercial Auto", "Workers Comp", "Umbrella / Excess", "Professional Liability", "Home / Dwelling", "Personal Auto" };
-        var types = new[] { "Carrier", "Carrier", "Carrier", "Withdrawn", "Withdrawn", "Non-Renewal" };
-        var reasons = new[] { "Prior losses", "Occupancy class", "Capacity constraints", "Rate adequacy", "Client opted not to renew", "Underwriting appetite", "Loss ratio concern", "Binding guidelines exceeded" };
-        var carriers = new[] { "Travelers", "Chubb", "Zurich", "AIG", "Liberty Mutual", "Hartford", "Nationwide", "CNA" };
-        var accounts = new[] { "Sullivan Mfg. LLC", "Bridgewater Hotels", "Metro Freight Co.", "PineCrest Builders", "Omega Tech Corp.", "BlueSky Aviation", "Harbor Fresh Foods", "Summit Properties LLC" };
-        var producers = new[] { "Thornton & Associates", "Pacific Bridge Insurance", "Allied Risk Group", "Midwest Coverage Partners" };
-        var remarket = new[] { "Pending", "Pending", "In Progress", "Completed", "Not Started" };
-
-        for (int i = 1; i <= 56; i++)
+        var toast = new ToastMessage(Guid.NewGuid(), message, cssClass);
+        _toasts.Add(toast);
+        _ = Task.Run(async () =>
         {
-            var declined = DateTime.Today.AddDays(-rng.Next(0, 120));
-            _rows.Add(new DeclineRow
-            {
-                DeclineId = Guid.NewGuid(),
-                SubId = Guid.NewGuid(),
-                SubmissionNo = $"SUB-2025-DEC-{i:D4}",
-                Account = accounts[rng.Next(accounts.Length)],
-                Lob = lobs[rng.Next(lobs.Length)],
-                Carrier = carriers[rng.Next(carriers.Length)],
-                DeclineType = types[rng.Next(types.Length)],
-                DeclineReason = reasons[rng.Next(reasons.Length)],
-                DeclineDate = declined,
-                LostPremium = rng.Next(4000, 175000),
-                RemarketingStatus = remarket[rng.Next(remarket.Length)],
-                Producer = producers[rng.Next(producers.Length)],
-                EffectiveDate = declined.AddDays(rng.Next(20, 120)),
-                ExpirationDate = declined.AddDays(rng.Next(385, 500)),
-                Priority = rng.Next(0, 4) == 0 ? "High" : "Normal",
-                MarketCount = rng.Next(0, 4),
-                QuoteCount = rng.Next(0, 2)
-            });
-        }
+            await Task.Delay(5000);
+            await InvokeAsync(() => DismissToast(toast.Id));
+        });
     }
 
-    RenderFragment SubLink(DeclineRow r) =>
-        @<button class="sd-link um-btn um-btn-ghost um-btn-xs"
-                 @onclick:stopPropagation="true"
-                 @onclick="() => OpenDecline(r)">
-            @r.SubmissionNo
-        </button>;
+    void DismissToast(Guid id) => _toasts.RemoveAll(t => t.Id == id);
 
-    RenderFragment LobChip(string lob) =>
-        @<span class="sd-lob-chip">@lob</span>;
+    string TabClass(string key) => _activeTab == key ? "sd-tab sd-tab--active" : "sd-tab";
+    string RowClass(DeclineRow row) => _selected?.DeclineId == row.DeclineId ? "sd-row sd-row--selected" : "sd-row";
+    static string ActionMenuItemClass(ActionDef action) => action.IsDanger ? "sd-menu-item sd-menu-item--danger" : "sd-menu-item";
+    static string ToastIconClass(ToastMessage toast) => toast.CssClass.Contains("danger", StringComparison.OrdinalIgnoreCase) ? "bi-exclamation-triangle" : "bi-check-circle";
 
-    RenderFragment TypeChip(string type)
+    RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string tone)
     {
-        var css = type.ToLowerInvariant().Replace(" ", "-").Replace("_", "-");
-        return @<span class="sd-type sd-type-@css">@type</span>;
-    }
-
-    RenderFragment PremCell(decimal value) =>
-        @<span class="sd-prem">@value.ToString("C0")</span>;
-
-    RenderFragment RemarketChip(string status)
-    {
-        var css = status.ToLowerInvariant().Replace(" ", "-").Replace("_", "-");
-        return @<span class="sd-remarket sd-remarket-@css">@status</span>;
-    }
-
-    RenderFragment DateCell(DateTime date)
-    {
-        var css = date >= DateTime.Today.AddDays(-7) ? "sd-date-recent" : date >= DateTime.Today.AddDays(-30) ? "sd-date-month" : string.Empty;
-        return @<span class="@css">@date.ToString("MM/dd/yyyy")</span>;
-    }
-
-    RenderFragment CtxBtn(DeclineRow row) =>
-        @<div class="um-action-menu-wrap sd-action-menu-wrap" @onclick:stopPropagation="true">
-            <button type="button"
-                    class="um-btn um-btn-ghost um-btn-xs sd-ctx-btn"
-                    aria-haspopup="menu"
-                    aria-expanded="@(_openActionMenuFor == row.DeclineId)"
-                    title="Decline actions"
-                    @onclick="() => ToggleActionMenu(row)">
-                <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
-            </button>
-            @if (_openActionMenuFor == row.DeclineId)
-            {
-                <div class="sd-action-menu" role="menu" aria-label="Decline actions">
-                    <div class="sd-action-menu-summary">
-                        <strong>@row.SubmissionNo</strong>
-                        <span>@row.DeclineType</span>
-                    </div>
-                    @foreach (var item in _actionItems)
-                    {
-                        <button type="button"
-                                class="um-action-menu-item @(item.Text == "Archive" ? "um-action-menu-item--danger" : null)"
-                                role="menuitem"
-                                @onclick="() => HandleActionAsync(item.Text)">
-                            <i class="@item.IconCss" aria-hidden="true"></i>
-                            <span>@item.Text</span>
-                        </button>
-                    }
-                </div>
-            }
-        </div>;
-
-    void ToggleActionMenu(DeclineRow row)
-    {
-        _selected = row;
-        _openActionMenuFor = _openActionMenuFor == row.DeclineId ? null : row.DeclineId;
-    }
-
-    RenderFragment KpiCard(string icon, string label, string value, string css, string? filterKey)
-    {
-        var isActive = _kpiFilter == filterKey;
-        var cardClass = $"sd-kpi-card {css} {(isActive ? "sd-kpi-active" : string.Empty)}";
-        var title = filterKey is null ? "Show all" : isActive ? "Clear filter" : $"Filter by {label}";
-        return @<button type="button"
-                        class="@cardClass"
-                        @onclick="() => ToggleKpiFilter(filterKey)"
-                        title="@title">
-            <div class="sd-kpi-val">@value</div>
-            <div class="sd-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
+        var active = _activeKpi == key;
+        var cardClass = active ? $"sd-kpi sd-kpi--{tone} sd-kpi--active" : $"sd-kpi sd-kpi--{tone}";
+        var title = active ? "Clear KPI filter" : subtitle;
+        return @<button type="button" class="@cardClass" @onclick="() => SetKpi(key)" title="@title">
+            <span><i class="bi @icon" aria-hidden="true"></i>@label</span>
+            <strong>@value</strong>
+            <small>@subtitle</small>
         </button>;
     }
 
-    static string Initials(string value)
+    RenderFragment TypeBadge(string type) => @<span class="sd-type sd-type--@Slug(type)">@type</span>;
+    RenderFragment RemarketingBadge(string status) => @<span class="sd-remarket sd-remarket--@Slug(status)">@status</span>;
+    RenderFragment ImportanceBadge(DeclineRow row) => @<span class="sd-importance sd-importance--@Slug(ImportanceLevel(row))">@ImportanceLevel(row)<small>@ImportanceScore(row)</small></span>;
+    RenderFragment PremiumCell(decimal value) => @<strong class="sd-premium">@value.ToString("C0")</strong>;
+
+    RenderFragment DateBadge(DateTime date)
     {
-        var words = value.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (words.Length == 0) return "D";
-        if (words.Length == 1) return words[0][..Math.Min(2, words[0].Length)].ToUpperInvariant();
-        return string.Concat(words.Take(2).Select(w => char.ToUpperInvariant(w[0])));
+        var age = (DateTime.Today - date.Date).TotalDays;
+        var css = age <= 7 ? "recent" : age <= 30 ? "month" : "normal";
+        return @<span class="sd-date sd-date--@css">@date.ToString("MMM d, yyyy")</span>;
+    }
+
+    static bool Contains(string? source, string term) => !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
+    static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    static string Slug(string value) => value.ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
+
+    sealed class DeclineRow : DeclineRegisterRow
+    {
+        public DateTime EffectiveDate { get; set; }
+        public DateTime ExpirationDate { get; set; }
+        public string Priority { get; set; } = "Normal";
+        public int MarketCount { get; set; }
+        public int QuoteCount { get; set; }
+        public bool Archived { get; set; }
     }
 
     sealed class DeclineActionForm : IValidatableObject
@@ -865,4 +1108,10 @@
                 yield return new ValidationResult("Notes are required for this action.", [nameof(Notes)]);
         }
     }
+
+    sealed record TabDef(string Key, string Label, string Icon);
+    sealed record ActionDef(string Key, string Label, string Icon, bool IsDanger);
+    sealed record GroupSummary(string Name, int Count, decimal Premium, int Priority, int Remarketing, int Percent);
+    sealed record InsightDef(string Title, string Description, string Icon);
+    sealed record ToastMessage(Guid Id, string Message, string CssClass);
 }

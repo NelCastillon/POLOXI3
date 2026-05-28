@@ -1,687 +1,520 @@
 @page "/crm/opportunities"
 @namespace Ams.Web.Components.Pages.Crm
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Opportunities
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
-@using Ams.Application.Features.Opportunities
 
-<PageTitle>Opportunities — CRM</PageTitle>
+<PageTitle>Enterprise Opportunities</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<AppPageHeader Title="Opportunities"
-               Subtitle="Track every deal from qualification to close"
-               Icon="bi-trophy-fill">
-    <Actions>
-        <div class="op-view-toggle" role="group" aria-label="View mode">
-            @foreach (var v in _views)
-            {
-                <button class="op-view-btn @(_view == v.Id ? "op-view-btn--active" : "")"
-                        @onclick="() => _view = v.Id"
-                        title="@v.Label"
-                        aria-pressed="@(_view == v.Id)">
-                    <i class="bi @v.Icon" aria-hidden="true"></i>
-                    <span class="op-view-lbl">@v.Label</span>
-                </button>
-            }
-        </div>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise @(_loading ? "op-spin" : "")" aria-hidden="true"></i>
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreateAsync">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Opportunity
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<section class="ma-hero opp-hero">
-    <div>
-        <span class="ma-eyebrow">CRM · Opportunities</span>
-        <h2>Opportunity Command Center</h2>
-        <p>Track revenue potential from qualification to close across pipeline, kanban, and forecast views.</p>
-    </div>
-    <div class="ma-hero-actions">
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/opportunities/pipeline")'><i class="bi bi-funnel"></i> Pipeline</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/opportunities/board")'><i class="bi bi-kanban"></i> Board</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/forecast")'><i class="bi bi-graph-up-arrow"></i> Forecast</button>
-    </div>
-</section>
-
-<!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
-<div class="op-kpi-strip">
-    <div class="op-kpi-card @(_activeFilter is null ? "op-kpi-card--active" : "")" @onclick='() => SetKpiFilter(null)' title="Show all opportunities">
-        <span class="op-kpi-icon op-ki1"><i class="bi bi-trophy-fill" aria-hidden="true"></i></span>
-        <div><div class="op-kpi-val">@_kpi.Total</div><div class="op-kpi-lbl">Total Open</div></div>
-    </div>
-    <div class="op-kpi-card @(_activeFilter == "pipeline" ? "op-kpi-card--active" : "")" @onclick='() => SetKpiFilter("pipeline")' title="Show open pipeline opportunities">
-        <span class="op-kpi-icon op-ki2"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
-        <div><div class="op-kpi-val">@_kpi.Pipeline.ToString("C0")</div><div class="op-kpi-lbl">Pipeline</div></div>
-    </div>
-    <div class="op-kpi-card @(_activeFilter == "weighted" ? "op-kpi-card--active" : "")" @onclick='() => SetKpiFilter("weighted")' title="Show weighted pipeline opportunities">
-        <span class="op-kpi-icon op-ki3"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span>
-        <div><div class="op-kpi-val">@_kpi.WeightedPipeline.ToString("C0")</div><div class="op-kpi-lbl">Weighted</div></div>
-    </div>
-    <div class="op-kpi-card @(_activeFilter == "won" ? "op-kpi-card--active" : "")" @onclick='() => SetKpiFilter("won")' title="Show won opportunities">
-        <span class="op-kpi-icon op-ki4"><i class="bi bi-check2-circle" aria-hidden="true"></i></span>
-        <div><div class="op-kpi-val">@_kpi.WonThisMonth.ToString("C0")</div><div class="op-kpi-lbl">Won This Month</div></div>
-    </div>
-    <div class="op-kpi-card @(_activeFilter == "closing" ? "op-kpi-card--active" : "")" @onclick='() => SetKpiFilter("closing")' title="Show opportunities closing this week">
-        <span class="op-kpi-icon op-ki5"><i class="bi bi-calendar-x" aria-hidden="true"></i></span>
-        <div>
-            <div class="op-kpi-val @(_kpi.ClosingThisWeek > 0 ? "op-kpi-val--warn" : "")">@_kpi.ClosingThisWeek</div>
-            <div class="op-kpi-lbl">Closing This Week</div>
-        </div>
-    </div>
-    <div class="op-kpi-card @(_activeFilter == "highprob" ? "op-kpi-card--active" : "")" @onclick='() => SetKpiFilter("highprob")' title="Show high-probability opportunities">
-        <span class="op-kpi-icon op-ki1"><i class="bi bi-percent" aria-hidden="true"></i></span>
-        <div><div class="op-kpi-val">@_kpi.AvgWinRate.ToString("F0")%</div><div class="op-kpi-lbl">Avg Win Rate</div></div>
-    </div>
-</div>
-
-<!-- ── Filter bar ────────────────────────────────────────────────────────── -->
-<div class="op-filter-bar">
-    <div class="op-search-wrap">
-        <i class="bi bi-search op-search-icon" aria-hidden="true"></i>
-        <input class="op-search-input" type="search" placeholder="Search opportunities…"
-               value="@_search"
-               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; ApplyFilters(); })" />
-    </div>
-    <SfDropDownList TValue="string" TItem="LV" DataSource="_stageOptions"  Placeholder="All Stages"    ShowClearButton="true" Width="145px" Value="_filterStage"    ValueChanged="@((string v) => { _filterStage = v; ApplyFilters(); })"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
-    <SfDropDownList TValue="string" TItem="LV" DataSource="_ownerOptions"  Placeholder="All Owners"    ShowClearButton="true" Width="145px" Value="_filterOwner"    ValueChanged="@((string v) => { _filterOwner = v; ApplyFilters(); })"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
-    <SfDropDownList TValue="string" TItem="LV" DataSource="_forecastOptions" Placeholder="All Forecasts" ShowClearButton="true" Width="150px" Value="_filterForecast" ValueChanged="@((string v) => { _filterForecast = v; ApplyFilters(); })"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
-    @if (_selected.Count > 0)
-    {
-        <div class="op-bulk">
-            <span class="op-bulk-count">@_selected.Count selected</span>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showBulkStage = true"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Move Stage</button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showAssign = true"><i class="bi bi-person-check" aria-hidden="true"></i> Assign</button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearSelection"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
-        </div>
-    }
-</div>
-
-<!-- ══ VIEW: GRID ═══════════════════════════════════════════════════════════ -->
-@if (_view == "grid")
+@if (_toastVisible)
 {
-    @if (_loading)
-    {
-        <div class="op-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
-    }
-    else
-    {
-        <div class="op-grid-card app-datagrid">
-            <SfGrid @ref="_grid" TValue="OppRow" DataSource="_filtered"
-                    AllowPaging="true" AllowSorting="true" AllowFiltering="true"
-                    AllowSelection="true" EnableHover="true" RowHeight="56">
-                <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
-                <GridSelectionSettings Type="Syncfusion.Blazor.Grids.SelectionType.Multiple" />
-                <GridPageSettings PageSize="25" PageSizes="@(new int[]{10,25,50,100})" />
-                <GridEvents TValue="OppRow" RowSelected="OnRowSelected" RowDeselected="OnRowDeselected" />
-                <GridColumns>
-                    <GridColumn Type="ColumnType.CheckBox" Width="48" />
-                    <GridColumn HeaderText="Opportunity" Width="220" Field="@nameof(OppRow.Name)">
-                        <Template>
-                            @{ var r = (OppRow)context; }
-                            <div class="op-name-cell">
-                                <div class="op-opp-icon @ForecastColor(r.ForecastCategory)"><i class="bi bi-trophy" aria-hidden="true"></i></div>
-                                <div>
-                                    <div class="op-item-name">@r.Name</div>
-                                    <div class="op-item-sub">@r.AccountName</div>
-                                </div>
-                            </div>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(OppRow.Stage)" HeaderText="Stage" Width="150">
-                        <Template>@{ var r = (OppRow)context; }<span class="@StageBadge(r.Stage)">@r.Stage</span></Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(OppRow.Amount)" HeaderText="Amount" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                        <Template>@{ var r = (OppRow)context; }<span class="op-mono op-bold">@r.Amount.ToString("C0")</span></Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(OppRow.WinPct)" HeaderText="Win %" Width="100">
-                        <Template>
-                            @{ var r = (OppRow)context; }
-                            <div class="op-win-wrap">
-                                <div class="op-win-bar" style="width:@r.WinPct%;background:@WinColor(r.WinPct)"></div>
-                                <span class="op-win-num">@r.WinPct%</span>
-                            </div>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(OppRow.ForecastCategory)" HeaderText="Forecast" Width="130">
-                        <Template>@{ var r = (OppRow)context; }<span class="@ForecastBadge(r.ForecastCategory)">@r.ForecastCategory</span></Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(OppRow.Owner)"    HeaderText="Owner"      Width="140" />
-                    <GridColumn Field="@nameof(OppRow.CloseDate)" HeaderText="Close Date" Width="120">
-                        <Template>
-                            @{ var r = (OppRow)context; }
-                            <span class="@(r.CloseDate < DateTime.UtcNow && r.Stage != "Closed Won" && r.Stage != "Closed Lost" ? "op-overdue" : "op-mono")">
-                                @(r.CloseDate.ToString("d"))
-                            </span>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn HeaderText="" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                        <Template>
-                            @{ var r = (OppRow)context; }
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo($"/crm/opportunities/{r.OppId}")'>
-                                <i class="bi bi-arrow-right" aria-hidden="true"></i>
-                            </button>
-                        </Template>
-                    </GridColumn>
-                </GridColumns>
-            </SfGrid>
-        </div>
-    }
+    <div class="op-toast op-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="op-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
 }
 
-<!-- ══ VIEW: KANBAN ═════════════════════════════════════════════════════════ -->
-@if (_view == "kanban")
+@if (_showCreate)
 {
-    @if (_loading)
-    {
-        <div class="op-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
-    }
-    else
-    {
-        <div class="op-kanban-wrap">
-            <SfKanban TValue="OppRow" KeyField="@nameof(OppRow.Stage)" DataSource="_filtered">
-                <KanbanColumns>
-                    @foreach (var col in _kanbanCols)
-                    {
-                        <KanbanColumn HeaderText="@col.Label" KeyField="@(new List<string>{col.Key})"
-                                      AllowDrop="true" AllowDrag="true" ShowItemCount="true" />
-                    }
-                </KanbanColumns>
-                <KanbanCardSettings HeaderField="@nameof(OppRow.OppId)" ContentField="@nameof(OppRow.Name)">
-                    <Template Context="kanbanCtx">
-                        @{ var r = (OppRow)kanbanCtx; }
-                        <div class="op-kcard" @onclick='() => Nav.NavigateTo($"/crm/opportunities/{r.OppId}")'>
-                            <div class="op-kcard-hdr">
-                                <span class="@ForecastBadge(r.ForecastCategory)">@r.ForecastCategory</span>
-                                <span class="op-win-chip" style="color:@WinColor(r.WinPct)">@r.WinPct%</span>
-                            </div>
-                            <div class="op-kcard-name">@r.Name</div>
-                            <div class="op-kcard-acct">@r.AccountName</div>
-                            <div class="op-kcard-footer">
-                                <span class="op-mono op-bold">@r.Amount.ToString("C0")</span>
-                                <span class="op-kcard-close @(r.CloseDate < DateTime.UtcNow ? "op-overdue" : "")">
-                                    <i class="bi bi-calendar3" aria-hidden="true"></i> @r.CloseDate.ToString("d")
-                                </span>
-                            </div>
-                            <div class="op-kcard-owner"><i class="bi bi-person" aria-hidden="true"></i> @r.Owner</div>
+    <div class="op-modal-backdrop" role="presentation" @onclick="CloseCreate">
+        <div class="op-modal" role="dialog" aria-modal="true" aria-labelledby="opCreateTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_form" OnValidSubmit="CreateOpportunityAsync">
+                <DataAnnotationsValidator />
+                <div class="op-modal-header">
+                    <div class="op-modal-title"><span class="op-modal-icon"><i class="bi bi-trophy-fill" aria-hidden="true"></i></span><span><h2 id="opCreateTitle">New Opportunity</h2><p>Capture revenue potential and place it into the active pipeline.</p></span></div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseCreate" disabled="@_busy" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="op-modal-body">
+                    <div class="op-form-grid">
+                        <div class="op-field op-field-wide">
+                            <label for="opName">Opportunity Name <span>*</span></label>
+                            <InputText id="opName" class="op-input" @bind-Value="_form.OpportunityName" />
+                            <ValidationMessage For="() => _form.OpportunityName" class="text-danger" />
                         </div>
-                    </Template>
-                </KanbanCardSettings>
-            </SfKanban>
-        </div>
-    }
-}
-
-<!-- ══ VIEW: FORECAST ══════════════════════════════════════════════════════ -->
-@if (_view == "forecast")
-{
-    <div class="op-forecast-layout">
-        <!-- Stage funnel bars -->
-        <div class="op-forecast-chart">
-            <h3 class="op-section-hdr">Pipeline by Stage</h3>
-            @foreach (var sg in _stageRollup)
-            {
-                var maxAmt = _stageRollup.Max(s => s.Amount);
-                var pct    = maxAmt == 0 ? 0 : (double)sg.Amount / (double)maxAmt * 100;
-                <div class="op-stage-bar-row">
-                    <span class="@StageBadge(sg.Stage)" style="min-width:110px">@sg.Stage</span>
-                    <div class="op-stage-bar-track">
-                        <div class="op-stage-bar-fill @StageFill(sg.Stage)"
-                             style="width:@pct.ToString("F1",System.Globalization.CultureInfo.InvariantCulture)%"></div>
+                        <div class="op-field">
+                            <label for="opAccount">Account <span>*</span></label>
+                            <InputSelect id="opAccount" class="op-input" @bind-Value="_form.AccountId">
+                                <option value="@Guid.Empty">Select account</option>
+                                @foreach (var account in _accounts.OrderBy(a => a.AccountName))
+                                {
+                                    <option value="@account.AccountId">@account.AccountName</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.AccountId" class="text-danger" />
+                        </div>
+                        <div class="op-field">
+                            <label for="opAmount">Estimated Amount</label>
+                            <InputNumber id="opAmount" class="op-input" @bind-Value="_form.EstimatedAmount" />
+                            <ValidationMessage For="() => _form.EstimatedAmount" class="text-danger" />
+                        </div>
+                        <div class="op-field">
+                            <label for="opClose">Close Date</label>
+                            <InputDate id="opClose" class="op-input" @bind-Value="_form.CloseDate" />
+                            <ValidationMessage For="() => _form.CloseDate" class="text-danger" />
+                        </div>
+                        <div class="op-field">
+                            <label for="opWin">Win Probability</label>
+                            <InputNumber id="opWin" class="op-input" @bind-Value="_form.WinProbability" />
+                            <ValidationMessage For="() => _form.WinProbability" class="text-danger" />
+                        </div>
+                        <div class="op-field">
+                            <label for="opForecast">Forecast <span>*</span></label>
+                            <InputSelect id="opForecast" class="op-input" @bind-Value="_form.ForecastCategoryCode">
+                                @foreach (var option in ForecastOptions)
+                                {
+                                    <option value="@option">@option</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.ForecastCategoryCode" class="text-danger" />
+                        </div>
+                        <div class="op-field">
+                            <label for="opOwner">Owner</label>
+                            <InputSelect id="opOwner" class="op-input" @bind-Value="_form.OwnerUserId">
+                                <option value="">Current user</option>
+                                @foreach (var user in ActiveUsers)
+                                {
+                                    <option value="@user.UserId">@DisplayUser(user)</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="op-field op-field-wide">
+                            <label for="opDescription">Description</label>
+                            <InputTextArea id="opDescription" class="op-input op-textarea" @bind-Value="_form.Description" placeholder="Business need, coverage goal, competitor pressure, or next step" />
+                            <ValidationMessage For="() => _form.Description" class="text-danger" />
+                        </div>
                     </div>
-                    <span class="op-mono op-bold" style="min-width:90px;text-align:right">@sg.Amount.ToString("C0")</span>
-                    <span class="op-stage-cnt">@sg.Count opp@(sg.Count != 1 ? "s" : "")</span>
+                    @if (!string.IsNullOrWhiteSpace(_formError))
+                    {
+                        <div class="op-form-error"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_formError</div>
+                    }
                 </div>
-            }
-        </div>
-        <!-- Forecast category table -->
-        <div class="op-forecast-table">
-            <h3 class="op-section-hdr">Forecast Summary</h3>
-            <SfGrid TValue="ForecastRollup" DataSource="_forecastRollup"
-                    AllowSorting="true" EnableHover="true" RowHeight="48">
-                <GridColumns>
-                    <GridColumn Field="@nameof(ForecastRollup.Category)"   HeaderText="Category"  MinWidth="140">
-                        <Template>@{ var f = (ForecastRollup)context; }<span class="@ForecastBadge(f.Category)">@f.Category</span></Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(ForecastRollup.Count)"      HeaderText="Count"     Width="70"  TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
-                    <GridColumn Field="@nameof(ForecastRollup.TotalAmount)" HeaderText="Total"    Width="140" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                        <Template>@{ var f = (ForecastRollup)context; }<span class="op-mono op-bold">@f.TotalAmount.ToString("C0")</span></Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(ForecastRollup.WeightedAmount)" HeaderText="Weighted" Width="140" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                        <Template>@{ var f = (ForecastRollup)context; }<span class="op-mono">@f.WeightedAmount.ToString("C0")</span></Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(ForecastRollup.AvgWinPct)"  HeaderText="Avg Win %" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                        <Template>@{ var f = (ForecastRollup)context; }<span>@f.AvgWinPct.ToString("F0")%</span></Template>
-                    </GridColumn>
-                </GridColumns>
-            </SfGrid>
+                <div class="op-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseCreate" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy"><i class="bi bi-check-lg" aria-hidden="true"></i> Create Opportunity</button>
+                </div>
+            </EditForm>
         </div>
     </div>
 }
 
-<!-- ── Dialogs ───────────────────────────────────────────────────────────── -->
-<SfDialog @bind-Visible="_showAdd" Width="640px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
-        <div class="um-modal-header">
-            <i class="bi bi-trophy-fill" aria-hidden="true"></i>
-            <span>New Opportunity</span>
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseCreate"><i class="bi bi-x-lg"></i></button>
+@if (_showStage || _showAssign)
+{
+    <div class="op-modal-backdrop" role="presentation" @onclick="CloseBulkDialogs">
+        <div class="op-mini-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+            <div class="op-modal-header">
+                <div class="op-modal-title"><span class="op-modal-icon"><i class="bi @(_showStage ? "bi-arrow-right-circle" : "bi-person-check")" aria-hidden="true"></i></span><span><h2>@(_showStage ? "Move Stage" : "Assign Owner")</h2><p>@_selectedIds.Count opportunity(s) selected.</p></span></div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseBulkDialogs"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="op-modal-body">
+                @if (_showStage)
+                {
+                    <label class="op-field">Stage<select class="op-input" @bind="_bulkStage">@foreach (var stage in StageOptions) { <option value="@stage">@stage</option> }</select></label>
+                }
+                else
+                {
+                    <label class="op-field">Owner<select class="op-input" @bind="_bulkOwner"><option value="">Select owner</option>@foreach (var user in ActiveUsers) { <option value="@user.UserId">@DisplayUser(user)</option> }</select></label>
+                }
+            </div>
+            <div class="op-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseBulkDialogs">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="CommitBulkAsync" disabled="@_busy"><i class="bi bi-check-lg" aria-hidden="true"></i> Apply</button></div>
         </div>
-        <EditForm Model="_form" OnValidSubmit="CreateOpportunityAsync">
-            <DataAnnotationsValidator />
-            <div class="um-modal-body">
-                <div class="um-form-grid">
-                    <div>
-                        <label class="form-label">Opportunity Name</label>
-                        <InputText class="form-control" @bind-Value="_form.OpportunityName" />
-                        <ValidationMessage For="() => _form.OpportunityName" class="text-danger" />
-                    </div>
-                    <div>
-                        <label class="form-label">Account</label>
-                        <SfDropDownList TValue="Guid" TItem="AccountOption" DataSource="_accountOptions" Placeholder="Select account" Width="100%" @bind-Value="_form.AccountId">
-                            <DropDownListFieldSettings Value="AccountId" Text="AccountName" />
-                        </SfDropDownList>
-                        <ValidationMessage For="() => _form.AccountId" class="text-danger" />
-                    </div>
-                    <div>
-                        <label class="form-label">Estimated Amount</label>
-                        <InputNumber class="form-control" @bind-Value="_form.EstimatedAmount" />
-                        <ValidationMessage For="() => _form.EstimatedAmount" class="text-danger" />
-                    </div>
-                    <div>
-                        <label class="form-label">Win Probability</label>
-                        <InputNumber class="form-control" @bind-Value="_form.WinProbability" />
-                        <ValidationMessage For="() => _form.WinProbability" class="text-danger" />
-                    </div>
-                    <div>
-                        <label class="form-label">Close Date</label>
-                        <InputDate class="form-control" @bind-Value="_form.CloseDate" />
-                        <ValidationMessage For="() => _form.CloseDate" class="text-danger" />
-                    </div>
-                    <div>
-                        <label class="form-label">Forecast</label>
-                        <InputSelect class="form-select" @bind-Value="_form.ForecastCategoryCode">
-                            @foreach (var option in _forecastOptions)
-                            {
-                                <option value="@option.Value">@option.Label</option>
-                            }
-                        </InputSelect>
-                        <ValidationMessage For="() => _form.ForecastCategoryCode" class="text-danger" />
-                    </div>
-                </div>
-            </div>
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseCreate">Cancel</button>
-                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Create Opportunity</button>
-            </div>
-        </EditForm>
-    </DialogContent>
-</SfDialog>
+    </div>
+}
 
-<SfDialog @bind-Visible="_showAssign" Width="400px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="op-dlg-hdr"><i class="bi bi-person-check" aria-hidden="true"></i> Assign Owner</span></Header>
-        <Content>
-            <div class="op-dlg-body">
-                <p class="op-dlg-info">Assign <strong>@_selected.Count opportunity(s)</strong> to:</p>
-                <SfDropDownList TValue="string" TItem="LV" DataSource="_ownerOptions" Placeholder="Select owner…" Width="100%" @bind-Value="_assignTarget"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
+<div class="op-enterprise-page">
+    <section class="op-hero">
+        <div class="op-hero-left">
+            <span class="op-hero-icon"><i class="bi bi-trophy-fill" aria-hidden="true"></i></span>
+            <div>
+                <div class="op-title-row"><h1>Opportunity Command Center</h1><span><i class="bi bi-cash-coin" aria-hidden="true"></i> Revenue pipeline</span><span><i class="bi bi-kanban" aria-hidden="true"></i> Stage workflow</span><span><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span></div>
+                <p>Prioritize revenue, forecast confidence, close urgency, owner workload, stage movement, and conversion opportunities.</p>
             </div>
-        </Content>
-        <FooterTemplate>
-            <div class="op-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showAssign = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="CommitAssignAsync" disabled="@string.IsNullOrEmpty(_assignTarget)"><i class="bi bi-check-lg" aria-hidden="true"></i> Assign</button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+        <div class="op-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat op-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/opportunities/pipeline")'><i class="bi bi-funnel" aria-hidden="true"></i> Pipeline</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/opportunities/board")'><i class="bi bi-kanban" aria-hidden="true"></i> Board</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Opportunity</button>
+        </div>
+    </section>
 
-<SfDialog @bind-Visible="_showBulkStage" Width="400px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="op-dlg-hdr"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Move Stage</span></Header>
-        <Content>
-            <div class="op-dlg-body">
-                <p class="op-dlg-info">Move <strong>@_selected.Count opportunity(s)</strong> to stage:</p>
-                <SfDropDownList TValue="string" TItem="LV" DataSource="_stageOptions" Placeholder="Select stage…" Width="100%" @bind-Value="_bulkStageTarget"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
-            </div>
-        </Content>
-        <FooterTemplate>
-            <div class="op-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showBulkStage = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="CommitBulkStageAsync" disabled="@string.IsNullOrEmpty(_bulkStageTarget)"><i class="bi bi-check-lg" aria-hidden="true"></i> Move</button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger op-error-banner" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    @if (_loading)
+    {
+        <section class="op-loading-state"><i class="bi bi-arrow-repeat op-spin" aria-hidden="true"></i><strong>Loading enterprise opportunity pipeline...</strong><span>Syncing opportunities, accounts, owners, stages, forecast categories, and revenue rollups.</span></section>
+    }
+    else
+    {
+        <section class="op-kpi-strip" aria-label="Opportunity KPI filters">
+            @foreach (var metric in Metrics)
+            {
+                <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="@(() => SetFilter(metric.Filter))"><span class="op-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span><span><span class="op-kpi-val">@metric.Value</span><span class="op-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span></button>
+            }
+        </section>
+
+        <section class="op-workflow-strip" aria-label="Opportunity workflow actions">
+            <button type="button" class="op-workflow-card op-workflow-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i><span><strong>Create opportunity</strong><span>Capture new revenue potential.</span></span></button>
+            <button type="button" class="op-workflow-card" @onclick='() => SetFilter("closing")'><i class="bi bi-calendar-x" aria-hidden="true"></i><span><strong>Closing focus</strong><span>Prioritize urgent close dates.</span></span></button>
+            <button type="button" class="op-workflow-card" @onclick='() => SetFilter("commit")'><i class="bi bi-check2-circle" aria-hidden="true"></i><span><strong>Commit forecast</strong><span>Review high-confidence pipeline.</span></span></button>
+            <button type="button" class="op-workflow-card" @onclick='() => SetView("forecast")'><i class="bi bi-graph-up-arrow" aria-hidden="true"></i><span><strong>Forecast</strong><span>Analyze weighted revenue.</span></span></button>
+        </section>
+
+        <section class="op-filter-panel">
+            <div class="op-search-wrap"><span class="op-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span><div class="op-search-body"><label for="opSearch">Search opportunities</label><input id="opSearch" class="op-search-input" value="@_search" @oninput="OnSearchChanged" placeholder="Search opportunity, account, owner, stage, forecast, lead, or notes..." /><span>Search filters every view, KPI, pipeline, forecast, and table.</span></div></div>
+            <label class="op-filter-field">Stage<select class="op-filter-select" value="@_stageFilter" @onchange="OnStageChanged"><option value="">All stages</option>@foreach (var stage in StageOptions) { <option value="@stage">@stage</option> }</select></label>
+            <label class="op-filter-field">Owner<select class="op-filter-select" value="@_ownerFilter" @onchange="OnOwnerChanged"><option value="">All owners</option><option value="Unassigned">Unassigned</option>@foreach (var owner in OwnerOptions) { <option value="@owner">@owner</option> }</select></label>
+            <label class="op-filter-field">Forecast<select class="op-filter-select" value="@_forecastFilter" @onchange="OnForecastChanged"><option value="">All forecasts</option>@foreach (var forecast in ForecastOptions) { <option value="@forecast">@forecast</option> }</select></label>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-cloud-arrow-down" aria-hidden="true"></i> Sync</button>
+            <div class="op-filter-result"><strong>@FilteredRows.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><span>shown</span></div>
+        </section>
+
+        @if (_selectedIds.Count > 0)
+        {
+            <section class="op-bulk-bar"><strong>@_selectedIds.Count selected</strong><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenBulkStage"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Move Stage</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenBulkAssign"><i class="bi bi-person-check" aria-hidden="true"></i> Assign</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearSelection"><i class="bi bi-x-lg" aria-hidden="true"></i></button></section>
+        }
+
+        <section class="op-view-tabs" aria-label="Opportunity views">
+            @foreach (var view in _views)
+            {
+                <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label <span>@ViewCount(view.Id)</span></button>
+            }
+        </section>
+
+        @if (_rows.Count == 0)
+        {
+            <section class="op-empty-state"><i class="bi bi-trophy" aria-hidden="true"></i><strong>No opportunities available</strong><span>Create an opportunity or sync existing CRM pipeline data for this tenant.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">Create Opportunity</button></section>
+        }
+        else
+        {
+            <section class="op-content-layout">
+                <main class="op-main-card">
+                    @if (_view == "overview")
+                    {
+                        <div class="op-section-head"><div><h2>Executive opportunity overview</h2><p>Revenue priority ranked by amount, win probability, close urgency, and forecast confidence.</p></div><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => SetView("pipeline")'><i class="bi bi-kanban" aria-hidden="true"></i> Pipeline</button></div>
+                        <div class="op-overview-grid"><section class="op-spotlight-card"><span><i class="bi bi-stars" aria-hidden="true"></i> Top priority opportunity</span><strong>@(TopOpportunity?.Name ?? "—")</strong><p>@(TopOpportunity is null ? "No matching opportunity requires attention." : $"{FormatCurrency(TopOpportunity.Amount)} · {TopOpportunity.Stage} · {TopOpportunity.WinPct}% win")</p><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="SelectTopOpportunity">Inspect opportunity</button></section><section class="op-guidance-card"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Pipeline guidance</h3><p>@GuidanceText</p><div class="op-guidance-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("closing")'>Closing</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("highprob")'>High Prob</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("commit")'>Commit</button></div></section></div>
+                        <section class="op-panel"><h3><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Revenue priority ranking</h3><div class="op-rank-stack">@foreach (var item in FilteredRows.Take(8)) { <button type="button" class="@(IsSelected(item) ? "op-rank-row op-rank-active" : "op-rank-row")" @onclick="@(() => SelectOpportunity(item))"><span>@item.Name</span><div><i style="width:@item.Width"></i></div><strong>@FormatCurrency(item.Amount)</strong><small>@item.Stage</small></button> }</div></section>
+                    }
+                    else if (_view == "pipeline")
+                    {
+                        <div class="op-section-head"><div><h2>Native pipeline board</h2><p>Stage-based opportunity board with clickable cards and quick stage movement.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("open")'>Open</button></div>
+                        <div class="op-board">@foreach (var stage in StageOptions) { <section class="op-board-col"><header><strong>@stage</strong><span>@FilteredRows.Count(r => r.Stage == stage)</span></header><div>@foreach (var item in FilteredRows.Where(r => r.Stage == stage)) { <article class="@(IsSelected(item) ? "op-pipeline-card op-pipeline-card-selected" : "op-pipeline-card")" @onclick="@(() => SelectOpportunity(item))"><div class="op-card-top"><span class="op-badge @StageBadgeClass(item.Stage)">@item.Stage</span><button type="button" class="op-card-check" @onclick:stopPropagation="true" @onclick="@(() => ToggleSelection(item.Id))"><i class="bi @(_selectedIds.Contains(item.Id) ? "bi-check-square-fill" : "bi-square")" aria-hidden="true"></i></button></div><h3>@item.Name</h3><p>@item.AccountName</p><div class="op-card-stats"><div><span>Amount</span><strong>@FormatCurrency(item.Amount)</strong></div><div><span>Win</span><strong>@item.WinPct%</strong></div></div><footer><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="@(() => MoveStageAsync(item, NextStage(item.Stage)))">Move</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick:stopPropagation="true" @onclick="@(() => NavigateOpportunity(item.Id))">Open</button></footer></article> }</div></section> }</div>
+                    }
+                    else if (_view == "forecast")
+                    {
+                        <div class="op-section-head"><div><h2>Forecast and stage analytics</h2><p>Weighted revenue by forecast category and stage progression.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/crm/forecast")'>Forecast</button></div>
+                        <div class="op-analytics-grid">@AnalyticsPanel("Stage distribution", StageDistribution, "bi-bar-chart-steps", "op-tone-blue") @AnalyticsPanel("Forecast distribution", ForecastDistribution, "bi-graph-up-arrow", "op-tone-green") @InsightPanel</div>
+                    }
+                    else if (_view == "owners")
+                    {
+                        <div class="op-section-head"><div><h2>Owner workload</h2><p>Pipeline concentration, weighted revenue, and close urgency by owner.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenBulkAssign">Assign</button></div>
+                        <div class="op-card-grid">@foreach (var owner in OwnerRows) { <article class="@(IsSelected(owner) ? "op-owner-card op-owner-card-selected" : "op-owner-card")" @onclick="@(() => SelectOwner(owner))"><div class="op-card-top"><span class="op-owner-avatar">@Initials(owner.OwnerName)</span><span class="op-badge @OwnerBadgeClass(owner)">@owner.Status</span></div><h3>@owner.OwnerName</h3><p>@owner.Summary</p><div class="op-card-stats"><div><span>Open</span><strong>@owner.OpenCount</strong></div><div><span>Weighted</span><strong>@FormatCurrency(owner.WeightedAmount)</strong></div></div></article> }</div>
+                    }
+                    else
+                    {
+                        <div class="op-section-head"><div><h2>Opportunity operating table</h2><p>Native table synchronized from opportunity, account, owner, stage, and forecast data.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters">Reset</button></div>
+                        <div class="op-table-wrap"><table class="op-table"><thead><tr><th></th><th>Opportunity</th><th>Stage</th><th>Amount</th><th>Win</th><th>Forecast</th><th>Owner</th><th>Close</th></tr></thead><tbody>@foreach (var item in FilteredRows) { <tr class="@(IsSelected(item) ? "op-row-selected" : string.Empty)" @onclick="@(() => SelectOpportunity(item))"><td><button type="button" class="op-card-check" @onclick:stopPropagation="true" @onclick="@(() => ToggleSelection(item.Id))"><i class="bi @(_selectedIds.Contains(item.Id) ? "bi-check-square-fill" : "bi-square")" aria-hidden="true"></i></button></td><td><strong>@item.Name</strong><small>@item.AccountName · @item.Number</small></td><td><span class="op-badge @StageBadgeClass(item.Stage)">@item.Stage</span></td><td>@FormatCurrency(item.Amount)</td><td>@item.WinPct%</td><td><span class="op-badge @ForecastBadgeClass(item.Forecast)">@item.Forecast</span></td><td>@item.Owner</td><td class="@(item.IsOverdue ? "op-overdue" : string.Empty)">@FormatDate(item.CloseDate)</td></tr> }</tbody></table></div>
+                    }
+                </main>
+
+                <aside class="op-detail-panel">
+                    @if (_selected is not null)
+                    {
+                        <div class="op-detail-head"><div><span><i class="bi bi-trophy" aria-hidden="true"></i> Opportunity</span><h2>@_selected.Name</h2><p>@_selected.AccountName · @_selected.Number</p></div><span class="op-badge @StageBadgeClass(_selected.Stage)">@_selected.Stage</span></div>
+                        <div class="op-score-ring"><strong>@_selected.WinPct%</strong><span>win probability</span></div>
+                        <div class="op-detail-summary"><div><span>Amount</span><strong>@FormatCurrency(_selected.Amount)</strong></div><div><span>Weighted</span><strong>@FormatCurrency(_selected.WeightedAmount)</strong></div><div><span>Owner</span><strong>@_selected.Owner</strong></div><div><span>Close</span><strong>@FormatDate(_selected.CloseDate)</strong></div></div>
+                        <div class="op-note-card"><strong>Next best action</strong><p>@NextBestAction(_selected)</p></div>
+                        <div class="op-rules-card"><header><strong>Pipeline signals</strong><span>@_selected.Forecast</span></header>@foreach (var signal in Signals(_selected)) { <p><em>@signal</em><span>active</span></p> }</div>
+                        <div class="op-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="@(() => NavigateOpportunity(_selected.Id))"><i class="bi bi-arrow-right" aria-hidden="true"></i> Open</button><button type="button" class="um-btn um-btn-ghost" @onclick="@(() => MoveStageAsync(_selected, NextStage(_selected.Stage)))"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Move</button><button type="button" class="um-btn um-btn-ghost" @onclick="OpenBulkAssign"><i class="bi bi-person-check" aria-hidden="true"></i> Assign</button></div>
+                    }
+                    else if (_selectedOwner is not null)
+                    {
+                        <div class="op-detail-head"><div><span><i class="bi bi-person-badge" aria-hidden="true"></i> Owner</span><h2>@_selectedOwner.OwnerName</h2><p>@_selectedOwner.Summary</p></div><span class="op-badge @OwnerBadgeClass(_selectedOwner)">@_selectedOwner.Status</span></div>
+                        <div class="op-detail-summary"><div><span>Open</span><strong>@_selectedOwner.OpenCount</strong></div><div><span>Total</span><strong>@FormatCurrency(_selectedOwner.TotalAmount)</strong></div><div><span>Weighted</span><strong>@FormatCurrency(_selectedOwner.WeightedAmount)</strong></div><div><span>Closing</span><strong>@_selectedOwner.ClosingCount</strong></div></div>
+                        <div class="op-rules-card"><header><strong>Owner opportunities</strong><span>@_selectedOwner.Count total</span></header>@foreach (var item in _rows.Where(r => r.Owner == _selectedOwner.OwnerName).Take(5)) { <p><em>@item.Name</em><span>@FormatCurrency(item.Amount)</span></p> }</div>
+                    }
+                    else
+                    {
+                        <div class="op-detail-empty"><i class="bi bi-trophy" aria-hidden="true"></i><strong>Select an opportunity</strong><span>Review forecast, win probability, urgency, owner, and recommended actions.</span></div>
+                    }
+                </aside>
+            </section>
+        }
+    }
+</div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private SfToast?          _toast;
-    private SfGrid<OppRow>?   _grid;
-    private string            _view    = "grid";
-    private bool              _loading = false;
-    private bool              _showAdd = false;
-    private bool              _saving  = false;
+    private Guid _tenantAdminUserId;
+    private bool _loading = true;
+    private bool _busy;
+    private bool _showCreate;
+    private bool _showStage;
+    private bool _showAssign;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string _formError = string.Empty;
+    private string _search = string.Empty;
+    private string _activeFilter = "all";
+    private string _stageFilter = string.Empty;
+    private string _ownerFilter = string.Empty;
+    private string _forecastFilter = string.Empty;
+    private string _view = "overview";
+    private string _bulkStage = "Qualification";
+    private string _bulkOwner = string.Empty;
     private OpportunityFormModel _form = new();
-    private List<AccountOption> _accountOptions = [];
+    private OpportunityRow? _selected;
+    private OwnerRow? _selectedOwner;
+    private List<OpportunityRow> _rows = [];
+    private List<AccountDto> _accounts = [];
+    private List<UserDto> _users = [];
+    private HashSet<Guid> _selectedIds = [];
 
-    private record ViewDef(string Id, string Label, string Icon);
-    private static readonly List<ViewDef> _views =
-    [
-        new("grid",     "Grid",     "bi-table"),
-        new("kanban",   "Kanban",   "bi-kanban"),
-        new("forecast", "Forecast", "bi-bar-chart-steps"),
-    ];
+    private static readonly string[] StageOptions = ["Qualification", "Needs Analysis", "Proposal", "Negotiation", "Closed Won", "Closed Lost"];
+    private static readonly string[] ForecastOptions = ["Pipeline", "Best Case", "Commit", "Closed"];
+    private readonly ViewDef[] _views = [new("overview", "Overview", "bi-speedometer2"), new("pipeline", "Pipeline", "bi-kanban"), new("forecast", "Forecast", "bi-graph-up-arrow"), new("owners", "Owners", "bi-people"), new("table", "Table", "bi-table")];
 
-    private record KanbanColDef(string Key, string Label);
-    private static readonly List<KanbanColDef> _kanbanCols =
-    [
-        new("Qualification","Qualification"), new("Needs Analysis","Needs Analysis"),
-        new("Proposal","Proposal"),           new("Negotiation","Negotiation"),
-        new("Closed Won","Closed Won"),       new("Closed Lost","Closed Lost"),
-    ];
-
-    private List<OppRow>       _opps      = [];
-    private List<OppRow>       _filtered  = [];
-    private List<StageRollup>  _stageRollup   = [];
-    private List<ForecastRollup> _forecastRollup = [];
-    private OppKpi             _kpi       = new();
-    private List<OppRow>       _selected  = [];
-
-    private string _search        = string.Empty;
-    private string _filterStage   = string.Empty;
-    private string _filterOwner   = string.Empty;
-    private string _filterForecast = string.Empty;
-    private string? _activeFilter;
-
-    private bool   _showAssign     = false;
-    private bool   _showBulkStage  = false;
-    private string _assignTarget   = string.Empty;
-    private string _bulkStageTarget = string.Empty;
-
-    private static readonly List<LV> _stageOptions =
-    [
-        new("Qualification","Qualification"), new("Needs Analysis","Needs Analysis"),
-        new("Proposal","Proposal"),           new("Negotiation","Negotiation"),
-        new("Closed Won","Closed Won"),       new("Closed Lost","Closed Lost"),
-    ];
-    private static readonly List<LV> _ownerOptions =
-    [
-        new("Alice Carter","Alice Carter"), new("Bob Martinez","Bob Martinez"),
-        new("Carol Smith","Carol Smith"),   new("David Lee","David Lee"),
-    ];
-    private static readonly List<LV> _forecastOptions =
-    [
-        new("Pipeline","Pipeline"), new("Best Case","Best Case"),
-        new("Commit","Commit"),     new("Closed","Closed"),
-    ];
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
+    private IReadOnlyList<OpportunityRow> FilteredRows => ApplyFilters(_rows).ToList();
+    private IReadOnlyList<OwnerRow> OwnerRows => BuildOwnerRows();
+    private IReadOnlyList<DistributionRow> StageDistribution => BuildDistribution(FilteredRows.Select(r => new DistributionSource(r.Stage, 1, r.Amount)));
+    private IReadOnlyList<DistributionRow> ForecastDistribution => BuildDistribution(FilteredRows.Select(r => new DistributionSource(r.Forecast, 1, r.WeightedAmount)));
+    private IEnumerable<string> OwnerOptions => _rows.Select(r => r.Owner).Where(o => !string.IsNullOrWhiteSpace(o) && o != "Unassigned").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(o => o);
+    private IEnumerable<UserDto> ActiveUsers => _users.Where(u => u.StatusCode.Equals("Active", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(u.StatusCode)).OrderBy(DisplayUser);
+    private OpportunityRow? TopOpportunity => FilteredRows.OrderByDescending(r => r.PriorityScore).ThenByDescending(r => r.Amount).FirstOrDefault();
+    private int OpenCount => _rows.Count(r => r.IsOpen);
+    private int ClosingCount => _rows.Count(r => r.IsOpen && r.DaysToClose <= 7);
+    private decimal PipelineAmount => _rows.Where(r => r.IsOpen).Sum(r => r.Amount);
+    private decimal WeightedAmount => _rows.Where(r => r.IsOpen).Sum(r => r.WeightedAmount);
+    private decimal WonThisMonth => _rows.Where(r => r.Stage == "Closed Won" && r.CloseDate.Month == DateTime.UtcNow.Month && r.CloseDate.Year == DateTime.UtcNow.Year).Sum(r => r.Amount);
+    private double AverageWinRate => _rows.Count == 0 ? 0 : _rows.Average(r => r.WinPct);
+    private string GuidanceText => ClosingCount > 0 ? $"{ClosingCount.ToString("N0", CultureInfo.CurrentCulture)} open opportunity(s) close within 7 days and need immediate action." : WeightedAmount > 0 ? $"Weighted pipeline is {FormatCurrency(WeightedAmount)} across {OpenCount.ToString("N0", CultureInfo.CurrentCulture)} open opportunity(s)." : "Create or sync opportunities to activate pipeline intelligence.";
+    private IReadOnlyList<Metric> Metrics => [new("all", _rows.Count.ToString("N0", CultureInfo.CurrentCulture), "Total", "All opportunities", "bi-trophy", "op-kpi-blue"), new("open", OpenCount.ToString("N0", CultureInfo.CurrentCulture), "Open", "Active pipeline", "bi-funnel", "op-kpi-green"), new("pipeline", FormatCurrency(PipelineAmount), "Pipeline", "Open estimated amount", "bi-cash-coin", "op-kpi-cyan"), new("weighted", FormatCurrency(WeightedAmount), "Weighted", "Probability-adjusted pipeline", "bi-graph-up-arrow", "op-kpi-purple"), new("closing", ClosingCount.ToString("N0", CultureInfo.CurrentCulture), "Closing", "Due within 7 days", "bi-calendar-x", "op-kpi-amber"), new("won", FormatCurrency(WonThisMonth), "Won", "Won this month", "bi-check2-circle", "op-kpi-green")];
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("CRM","/crm/opportunities"), new("Opportunities","/crm/opportunities"));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Opportunities", "/crm/opportunities"));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
-        _loading = true; StateHasChanged();
+        _loading = true;
+        _loadError = null;
         try
         {
-            var response = await Api.SearchOpportunitiesAsync(_tenantId);
-            _opps = response?.Items?.Select(MapToOppRow).ToList() ?? [];
-            RebuildDerived();
+            if (_tenantId == Guid.Empty) await ResolveCurrentUserContextAsync();
+            var opportunities = await Api.SearchOpportunitiesAsync(_tenantId, pageSize: 500);
+            var accounts = await Api.SearchAccountsAsync(_tenantId, pageSize: 500);
+            var users = await Api.SearchUsersAsync(_tenantId, pageSize: 500);
+            _accounts = accounts?.Items.ToList() ?? [];
+            _users = users?.Items.ToList() ?? [];
+            _rows = (opportunities?.Items ?? []).Select(MapOpportunity).OrderByDescending(r => r.PriorityScore).ToList();
+            _selected = _selected is null ? FilteredRows.FirstOrDefault() : _rows.FirstOrDefault(r => r.Id == _selected.Id) ?? FilteredRows.FirstOrDefault();
+            _selectedOwner = null;
+            ShowToast("Opportunity pipeline synced.", "success");
         }
         catch (Exception ex)
         {
-            await _toast!.ShowAsync(new ToastModel { Content = $"Error loading opportunities: {ex.Message}", CssClass = "e-toast-danger" });
-            _opps = [];
+            _loadError = $"Failed to load opportunities: {ex.Message}";
+            _rows = [];
+            _selected = null;
+            _selectedOwner = null;
+            ShowToast($"Opportunity load failed: {ex.Message}", "danger");
         }
-        finally { _loading = false; }
-    }
-
-    private async Task OpenCreateAsync()
-    {
-        _form = new OpportunityFormModel
+        finally
         {
-            OpportunityNumber = $"OPP-{DateTime.UtcNow:yyyyMMddHHmmss}",
-            CloseDate = DateTime.UtcNow.Date.AddDays(30),
-            ForecastCategoryCode = "Pipeline",
-            WinProbability = 25
-        };
-        await LoadAccountOptionsAsync();
-        if (_accountOptions.Count == 1)
-            _form.AccountId = _accountOptions[0].AccountId;
-        _showAdd = true;
+            _loading = false;
+        }
     }
 
-    private void CloseCreate() => _showAdd = false;
-
-    private async Task LoadAccountOptionsAsync()
+    private OpportunityRow MapOpportunity(OpportunityDto dto)
     {
-        if (_accountOptions.Count > 0)
-            return;
-
-        var response = await Api.SearchAccountsAsync(_tenantId);
-        _accountOptions = response?.Items?
-            .Select(a => new AccountOption(a.AccountId, a.AccountName))
-            .OrderBy(a => a.AccountName)
-            .ToList() ?? [];
+        var stage = !string.IsNullOrWhiteSpace(dto.StageName) ? dto.StageName! : GetStageName(dto.StatusCode);
+        var owner = !string.IsNullOrWhiteSpace(dto.OwnerName) ? dto.OwnerName! : OwnerName(dto.OwnerUserId);
+        var close = dto.CloseDate ?? DateTime.UtcNow.AddDays(30);
+        return new(dto.OpportunityId, dto.OpportunityNumber, dto.OpportunityName, dto.AccountName ?? AccountName(dto.AccountId), stage, dto.EstimatedAmount, (int)Math.Round(dto.WinProbability), dto.ForecastCategoryCode ?? "Pipeline", dto.OwnerUserId, owner, close, dto.Description, dto.SourceLead, dto.CreatedDateUtc);
     }
+
+    private IEnumerable<OpportunityRow> ApplyFilters(IEnumerable<OpportunityRow> rows)
+    {
+        var query = rows;
+        if (!string.IsNullOrWhiteSpace(_search)) { var term = _search.Trim(); query = query.Where(r => Contains(r.Name, term) || Contains(r.Number, term) || Contains(r.AccountName, term) || Contains(r.Owner, term) || Contains(r.Stage, term) || Contains(r.Forecast, term) || Contains(r.Description, term) || Contains(r.SourceLead, term)); }
+        if (!string.IsNullOrWhiteSpace(_stageFilter)) query = query.Where(r => r.Stage == _stageFilter);
+        if (!string.IsNullOrWhiteSpace(_ownerFilter)) query = _ownerFilter == "Unassigned" ? query.Where(r => r.Owner == "Unassigned") : query.Where(r => r.Owner == _ownerFilter);
+        if (!string.IsNullOrWhiteSpace(_forecastFilter)) query = query.Where(r => r.Forecast == _forecastFilter);
+        query = _activeFilter switch { "open" => query.Where(r => r.IsOpen), "pipeline" => query.Where(r => r.IsOpen), "weighted" => query.Where(r => r.IsOpen && r.WinPct > 0), "closing" => query.Where(r => r.IsOpen && r.DaysToClose <= 7), "highprob" => query.Where(r => r.WinPct >= 70), "commit" => query.Where(r => r.Forecast == "Commit"), "won" => query.Where(r => r.Stage == "Closed Won"), _ => query };
+        return query.OrderByDescending(r => r.PriorityScore).ThenBy(r => r.CloseDate);
+    }
+
+    private IReadOnlyList<OwnerRow> BuildOwnerRows()
+    {
+        var rows = _rows.GroupBy(r => r.Owner).Select(g =>
+        {
+            var all = g.ToList();
+            var open = all.Count(r => r.IsOpen);
+            var total = all.Sum(r => r.Amount);
+            var weighted = all.Sum(r => r.WeightedAmount);
+            var closing = all.Count(r => r.IsOpen && r.DaysToClose <= 7);
+            var status = g.Key == "Unassigned" ? "Gap" : closing > 0 ? "Urgent" : weighted >= 100000 ? "High Value" : "Stable";
+            var summary = $"{open.ToString("N0", CultureInfo.CurrentCulture)} open opportunity(s), {FormatCurrency(weighted)} weighted pipeline.";
+            return new OwnerRow(g.Key, all.Count, open, total, weighted, closing, status, summary);
+        }).OrderByDescending(o => o.Status == "Gap").ThenByDescending(o => o.WeightedAmount).ThenBy(o => o.OwnerName).ToList();
+        return rows;
+    }
+
+    private void OpenCreate()
+    {
+        _form = new() { OpportunityNumber = $"OPP-{DateTime.UtcNow:yyyyMMddHHmmss}", CloseDate = DateTime.UtcNow.Date.AddDays(30), ForecastCategoryCode = "Pipeline", WinProbability = 25, OwnerUserId = _tenantAdminUserId };
+        _formError = string.Empty;
+        _showCreate = true;
+    }
+
+    private void CloseCreate() { if (!_busy) { _showCreate = false; _formError = string.Empty; } }
 
     private async Task CreateOpportunityAsync()
     {
-        _saving = true;
+        if (_form.AccountId == Guid.Empty) { _formError = "Select an account."; return; }
+        _busy = true;
         try
         {
-            var request = new CreateOpportunityRequest
-            {
-                TenantId = _tenantId,
-                OpportunityNumber = _form.OpportunityNumber,
-                AccountId = _form.AccountId,
-                OpportunityName = _form.OpportunityName,
-                EstimatedAmount = _form.EstimatedAmount,
-                OwnerUserId = _tenantAdminUserId,
-                CloseDate = _form.CloseDate,
-                WinProbability = _form.WinProbability,
-                ForecastCategoryCode = _form.ForecastCategoryCode,
-                CreatedByUserId = _tenantAdminUserId
-            };
-
-            var id = await Api.CreateOpportunityAsync(request);
-            _showAdd = false;
+            var id = await Api.CreateOpportunityAsync(new CreateOpportunityRequest { TenantId = _tenantId, OpportunityNumber = _form.OpportunityNumber, AccountId = _form.AccountId, OpportunityName = _form.OpportunityName, EstimatedAmount = _form.EstimatedAmount, OwnerUserId = _form.OwnerUserId ?? _tenantAdminUserId, CloseDate = _form.CloseDate, WinProbability = _form.WinProbability, ForecastCategoryCode = _form.ForecastCategoryCode, CreatedByUserId = _tenantAdminUserId });
+            _showCreate = false;
             await LoadAsync();
-            await _toast!.ShowAsync(new ToastModel { Content = "Opportunity created.", CssClass = "e-toast-success" });
+            ShowToast("Opportunity created.", "success");
             Nav.NavigateTo($"/crm/opportunities/{id}");
         }
         catch (Exception ex)
         {
-            await _toast!.ShowAsync(new ToastModel { Content = $"Create failed: {ex.Message}", CssClass = "e-toast-danger" });
+            _formError = $"Create failed: {ex.Message}";
+            ShowToast($"Create failed: {ex.Message}", "danger");
         }
-        finally
+        finally { _busy = false; }
+    }
+
+    private async Task MoveStageAsync(OpportunityRow row, string stage)
+    {
+        try
         {
-            _saving = false;
+            await Api.UpdateOpportunityStageAsync(row.Id, new UpdateOpportunityStageRequest { Stage = stage, ModifiedByUserId = _tenantAdminUserId });
+            await LoadAsync();
+            ShowToast($"{row.Name} moved to {stage}.", "success");
         }
+        catch (Exception ex) { ShowToast($"Stage update failed: {ex.Message}", "danger"); }
     }
 
-    private OppRow MapToOppRow(OpportunityDto dto)
+    private async Task CommitBulkAsync()
     {
-        return new OppRow
+        _busy = true;
+        try
         {
-            OppId = dto.OpportunityId,
-            Name = dto.OpportunityName,
-            AccountName = dto.AccountName ?? string.Empty,
-            Stage = GetStageName(dto.StatusCode),
-            Amount = dto.EstimatedAmount,
-            WinPct = (int)dto.WinProbability,
-            ForecastCategory = dto.ForecastCategoryCode ?? "Pipeline",
-            Owner = string.Empty,
-            CloseDate = dto.CloseDate ?? DateTime.UtcNow.AddDays(30)
-        };
-    }
-
-    private string GetStageName(int statusCode) => statusCode switch
-    {
-        1 => "Qualification",
-        2 => "Needs Analysis",
-        3 => "Proposal",
-        4 => "Negotiation",
-        5 => "Closed Won",
-        6 => "Closed Lost",
-        _ => "Qualification"
-    };
-
-    private void RebuildDerived()
-    {
-        ApplyFilters();
-        _stageRollup = _opps.GroupBy(x => x.Stage)
-            .Select(g => new StageRollup { Stage = g.Key, Count = g.Count(), Amount = g.Sum(x => x.Amount) })
-            .OrderBy(x => StageOrder(x.Stage)).ToList();
-        _forecastRollup = _opps.GroupBy(x => x.ForecastCategory)
-            .Select(g => new ForecastRollup
+            if (_showStage)
             {
-                Category       = g.Key,
-                Count          = g.Count(),
-                TotalAmount    = g.Sum(x => x.Amount),
-                WeightedAmount = g.Sum(x => x.Amount * (decimal)x.WinPct / 100),
-                AvgWinPct      = g.Any() ? g.Average(x => x.WinPct) : 0,
-            }).ToList();
-        _kpi = new OppKpi
-        {
-            Total           = _opps.Count(x => x.Stage != "Closed Won" && x.Stage != "Closed Lost"),
-            Pipeline        = _opps.Where(x => x.Stage != "Closed Won" && x.Stage != "Closed Lost").Sum(x => x.Amount),
-            WeightedPipeline= _opps.Where(x => x.Stage != "Closed Won" && x.Stage != "Closed Lost").Sum(x => x.Amount * (decimal)x.WinPct / 100),
-            WonThisMonth    = _opps.Where(x => x.Stage == "Closed Won" && x.CloseDate.Month == DateTime.UtcNow.Month && x.CloseDate.Year == DateTime.UtcNow.Year).Sum(x => x.Amount),
-            ClosingThisWeek = _opps.Count(x => x.Stage != "Closed Won" && x.Stage != "Closed Lost" && (x.CloseDate - DateTime.UtcNow).TotalDays <= 7),
-            AvgWinRate      = _opps.Any() ? _opps.Average(x => x.WinPct) : 0,
-        };
-    }
-
-    private void ApplyFilters()
-    {
-        _filtered = _opps.Where(r =>
-            (_activeFilter switch
+                foreach (var row in _rows.Where(r => _selectedIds.Contains(r.Id))) await Api.UpdateOpportunityStageAsync(row.Id, new UpdateOpportunityStageRequest { Stage = _bulkStage, ModifiedByUserId = _tenantAdminUserId });
+                ShowToast($"{_selectedIds.Count} opportunity(s) moved to {_bulkStage}.", "success");
+            }
+            else if (Guid.TryParse(_bulkOwner, out var ownerId))
             {
-                "pipeline" => r.Stage != "Closed Won" && r.Stage != "Closed Lost",
-                "weighted" => r.Stage != "Closed Won" && r.Stage != "Closed Lost" && r.WinPct > 0,
-                "won" => r.Stage == "Closed Won",
-                "closing" => r.Stage != "Closed Won" && r.Stage != "Closed Lost" && (r.CloseDate - DateTime.UtcNow).TotalDays <= 7,
-                "highprob" => r.WinPct >= 70,
-                _ => true
-            }) &&
-            (string.IsNullOrEmpty(_filterStage)    || r.Stage == _filterStage) &&
-            (string.IsNullOrEmpty(_filterOwner)    || r.Owner == _filterOwner) &&
-            (string.IsNullOrEmpty(_filterForecast) || r.ForecastCategory == _filterForecast) &&
-            (string.IsNullOrEmpty(_search) ||
-             r.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             r.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase))
-        ).ToList();
+                foreach (var row in _rows.Where(r => _selectedIds.Contains(r.Id))) await Api.UpdateOpportunityAsync(row.Id, new UpdateOpportunityRequest { OpportunityName = row.Name, EstimatedAmount = row.Amount, CloseDate = row.CloseDate, WinProbability = row.WinPct, ForecastCategoryCode = row.Forecast, StageName = row.Stage, OwnerUserId = ownerId, Description = row.Description, ModifiedByUserId = _tenantAdminUserId });
+                ShowToast($"{_selectedIds.Count} opportunity(s) assigned.", "success");
+            }
+            CloseBulkDialogs();
+            _selectedIds.Clear();
+            await LoadAsync();
+        }
+        catch (Exception ex) { ShowToast($"Bulk action failed: {ex.Message}", "danger"); }
+        finally { _busy = false; }
     }
 
-    private void SetKpiFilter(string? filter)
+    private void SetFilter(string filter) { _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter; if (filter is "closing" or "highprob" or "commit") _view = "table"; _selected = FilteredRows.FirstOrDefault(); _selectedOwner = null; }
+    private void SetView(string view) { _view = view; _selected = FilteredRows.FirstOrDefault(); _selectedOwner = null; }
+    private void SelectOpportunity(OpportunityRow row) { _selected = row; _selectedOwner = null; }
+    private void SelectOwner(OwnerRow owner) { _selectedOwner = owner; _selected = null; }
+    private void SelectTopOpportunity() { if (TopOpportunity is not null) { _selected = TopOpportunity; _view = "table"; } }
+    private void ToggleSelection(Guid id) { if (!_selectedIds.Remove(id)) _selectedIds.Add(id); }
+    private void ClearSelection() => _selectedIds.Clear();
+    private void OpenBulkStage() { _bulkStage = StageOptions.First(); _showStage = true; _showAssign = false; }
+    private void OpenBulkAssign() { if (_selected is not null) _selectedIds.Add(_selected.Id); _bulkOwner = string.Empty; _showAssign = true; _showStage = false; }
+    private void CloseBulkDialogs() { if (!_busy) { _showStage = false; _showAssign = false; } }
+    private void ResetFilters() { _activeFilter = "all"; _search = string.Empty; _stageFilter = string.Empty; _ownerFilter = string.Empty; _forecastFilter = string.Empty; _selected = FilteredRows.FirstOrDefault(); _selectedOwner = null; }
+    private void OnSearchChanged(BlazorChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault(); }
+    private void OnStageChanged(BlazorChangeEventArgs e) { _stageFilter = e.Value?.ToString() ?? string.Empty; _activeFilter = "all"; _selected = FilteredRows.FirstOrDefault(); }
+    private void OnOwnerChanged(BlazorChangeEventArgs e) { _ownerFilter = e.Value?.ToString() ?? string.Empty; _activeFilter = "all"; _selected = FilteredRows.FirstOrDefault(); }
+    private void OnForecastChanged(BlazorChangeEventArgs e) { _forecastFilter = e.Value?.ToString() ?? string.Empty; _activeFilter = "all"; _selected = FilteredRows.FirstOrDefault(); }
+    private void NavigateOpportunity(Guid id) => Nav.NavigateTo($"/crm/opportunities/{id}");
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message.Length <= 150 ? message : $"{message[..147]}..."; _toastKind = ToastKind(kind); _toastVisible = true; }
+
+    private int ViewCount(string view) => view switch { "owners" => OwnerRows.Count, _ => FilteredRows.Count };
+    private bool IsSelected(OpportunityRow row) => _selected?.Id == row.Id;
+    private bool IsSelected(OwnerRow owner) => _selectedOwner?.OwnerName == owner.OwnerName;
+    private string AccountName(Guid accountId) => _accounts.FirstOrDefault(a => a.AccountId == accountId)?.AccountName ?? "Unknown account";
+    private string OwnerName(Guid? ownerId) { if (!ownerId.HasValue) return "Unassigned"; var user = _users.FirstOrDefault(u => u.UserId == ownerId.Value); return user is null ? "Unknown owner" : DisplayUser(user); }
+    private static string DisplayUser(UserDto user) => !string.IsNullOrWhiteSpace(user.DisplayName) ? user.DisplayName : !string.IsNullOrWhiteSpace(user.FullName) ? user.FullName : user.UserName;
+    private static string Initials(string name) { var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : parts.Length == 1 ? parts[0][..1] : "?"; }
+    private static string GetStageName(int statusCode) => statusCode switch { 2 => "Needs Analysis", 3 => "Proposal", 4 => "Negotiation", 5 => "Closed Won", 6 => "Closed Lost", _ => "Qualification" };
+    private static string NextStage(string stage) { var index = Array.IndexOf(StageOptions, stage); return index < 0 || index >= StageOptions.Length - 1 ? stage : StageOptions[index + 1]; }
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static string FormatCurrency(decimal value) => value.ToString("C0", CultureInfo.CurrentCulture);
+    private static string FormatDate(DateTime value) => value.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture);
+    private static string WidthPct(decimal value, decimal max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, (double)(value / max * 100)))).ToString("F1", CultureInfo.InvariantCulture) + "%";
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : "success";
+    private string MetricCardClass(Metric metric) => $"op-kpi-card {metric.Tone} {(_activeFilter == metric.Filter ? "op-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewDef view) => $"op-view-btn {(view.Id == _view ? "op-view-btn-active" : string.Empty)}";
+    private static string StageBadgeClass(string stage) => stage switch { "Closed Won" => "op-badge-success", "Closed Lost" => "op-badge-danger", "Negotiation" => "op-badge-warning", "Proposal" => "op-badge-purple", "Needs Analysis" => "op-badge-info", _ => "op-badge-neutral" };
+    private static string ForecastBadgeClass(string forecast) => forecast switch { "Commit" => "op-badge-success", "Best Case" => "op-badge-info", "Closed" => "op-badge-purple", _ => "op-badge-neutral" };
+    private static string OwnerBadgeClass(OwnerRow owner) => owner.Status switch { "Gap" => "op-badge-danger", "Urgent" => "op-badge-warning", "High Value" => "op-badge-success", _ => "op-badge-info" };
+    private static string NextBestAction(OpportunityRow row) => row.IsOverdue ? "Close date has passed. Update close date, stage, or convert the decision outcome." : row.DaysToClose <= 7 ? "Confirm decision path, remove blockers, and update forecast confidence." : row.WinPct >= 70 ? "Protect the win plan and move the deal toward commit or close." : "Document next activity and strengthen qualification signals.";
+    private static IEnumerable<string> Signals(OpportunityRow row) { yield return $"Forecast category: {row.Forecast}."; yield return $"Weighted value: {FormatCurrency(row.WeightedAmount)}."; if (row.DaysToClose <= 7) yield return "Close date is within seven days."; if (row.WinPct >= 70) yield return "High win probability opportunity."; if (row.Owner == "Unassigned") yield return "Owner assignment is required."; }
+
+    private RenderFragment AnalyticsPanel(string title, IReadOnlyList<DistributionRow> rows, string icon, string tone) => @<section class="op-analytics-panel @tone"><h3><i class="bi @icon" aria-hidden="true"></i> @title</h3><div class="op-analytics-list">@foreach (var row in rows) { <button type="button" @onclick="@(() => ApplyDistribution(row.Label, title))"><span>@row.Label</span><div><i style="width:@row.Width"></i></div><strong>@FormatCurrency(row.Amount)</strong><small>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</small></button> }</div></section>;
+    private RenderFragment InsightPanel => @<section class="op-analytics-panel op-tone-amber"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Executive insight</h3><div class="op-insight-grid"><div><span>Open</span><strong>@OpenCount</strong><small>active deals</small></div><div><span>Weighted</span><strong>@FormatCurrency(WeightedAmount)</strong><small>forecast</small></div><div><span>Closing</span><strong>@ClosingCount</strong><small>7 days</small></div><div><span>Win</span><strong>@AverageWinRate.ToString("F0")%</strong><small>average</small></div></div><p>@GuidanceText</p></section>;
+
+    private void ApplyDistribution(string label, string title)
     {
-        _activeFilter = filter;
-        ApplyFilters();
+        if (title.Contains("Stage", StringComparison.OrdinalIgnoreCase)) _stageFilter = _stageFilter == label ? string.Empty : label;
+        else _forecastFilter = _forecastFilter == label ? string.Empty : label;
+        _activeFilter = "all";
+        _view = "table";
+        _selected = FilteredRows.FirstOrDefault();
     }
 
-    private void OnRowSelected(RowSelectEventArgs<OppRow> args)   { if (!_selected.Any(x => x.OppId == args.Data.OppId)) _selected.Add(args.Data); }
-    private void OnRowDeselected(RowDeselectEventArgs<OppRow> args) => _selected.RemoveAll(x => x.OppId == args.Data.OppId);
-    private void ClearSelection() => _selected.Clear();
-
-    private async Task CommitAssignAsync()
+    private static IReadOnlyList<DistributionRow> BuildDistribution(IEnumerable<DistributionSource> sources)
     {
-        await Task.Delay(0); // TODO: Api.AssignOpportunitiesAsync
-        _showAssign = false;
-        await _toast!.ShowAsync(new ToastModel { Content = $"{_selected.Count} opportunity(s) assigned to {_assignTarget}.", CssClass = "e-toast-success" });
-        _selected.Clear(); _assignTarget = string.Empty;
-    }
-    private async Task CommitBulkStageAsync()
-    {
-        await Task.Delay(0); // TODO: Api.BulkMoveStageAsync
-        _showBulkStage = false;
-        await _toast!.ShowAsync(new ToastModel { Content = $"{_selected.Count} opportunity(s) moved to {_bulkStageTarget}.", CssClass = "e-toast-success" });
-        _selected.Clear(); _bulkStageTarget = string.Empty;
+        var rows = sources.GroupBy(s => s.Label).Select(g => new DistributionRow(g.Key, g.Count(), g.Sum(x => x.Amount), "0%")).OrderByDescending(r => r.Amount).ThenBy(r => r.Label).ToList();
+        var max = Math.Max(1, rows.Select(r => r.Amount).DefaultIfEmpty(1).Max());
+        return rows.Select(r => r with { Width = WidthPct(r.Amount, max) }).ToList();
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
-    private static string StageBadge(string s) => s switch
-    {
-        "Qualification" => "op-stage op-stage--qual",
-        "Needs Analysis"=> "op-stage op-stage--needs",
-        "Proposal"      => "op-stage op-stage--prop",
-        "Negotiation"   => "op-stage op-stage--neg",
-        "Closed Won"    => "op-stage op-stage--won",
-        "Closed Lost"   => "op-stage op-stage--lost",
-        _               => "op-stage",
-    };
-    private static string StageFill(string s) => s switch
-    {
-        "Closed Won" => "op-sf--won", "Closed Lost" => "op-sf--lost",
-        "Negotiation"=> "op-sf--neg", "Proposal"    => "op-sf--prop",
-        _            => "op-sf--default",
-    };
-    private static int StageOrder(string s) => s switch
-    {
-        "Qualification" => 0, "Needs Analysis" => 1, "Proposal" => 2,
-        "Negotiation"   => 3, "Closed Won"     => 4, "Closed Lost" => 5, _ => 99,
-    };
-    private static string ForecastBadge(string f) => f switch
-    {
-        "Commit"    => "op-fc op-fc--commit",
-        "Best Case" => "op-fc op-fc--best",
-        "Closed"    => "op-fc op-fc--closed",
-        _           => "op-fc op-fc--pipeline",
-    };
-    private static string ForecastColor(string f) => f switch
-    {
-        "Commit" => "op-oi--commit", "Closed" => "op-oi--closed", _ => "op-oi--default",
-    };
-    private static string WinColor(int p) => p >= 70 ? "#16a34a" : p >= 40 ? "#b45309" : "#dc2626";
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
 
-    // ── Models ────────────────────────────────────────────────────────────────
-    private sealed class OppRow
+    private sealed record ViewDef(string Id, string Label, string Icon);
+    private sealed record Metric(string Filter, string Value, string Label, string Caption, string Icon, string Tone);
+    private sealed record DistributionSource(string Label, int Count, decimal Amount);
+    private sealed record DistributionRow(string Label, int Count, decimal Amount, string Width);
+    private sealed record OwnerRow(string OwnerName, int Count, int OpenCount, decimal TotalAmount, decimal WeightedAmount, int ClosingCount, string Status, string Summary);
+    private sealed record OpportunityRow(Guid Id, string Number, string Name, string AccountName, string Stage, decimal Amount, int WinPct, string Forecast, Guid? OwnerUserId, string Owner, DateTime CloseDate, string? Description, string? SourceLead, DateTime CreatedDateUtc)
     {
-        public Guid     OppId            { get; set; } = Guid.NewGuid();
-        public string   Name             { get; set; } = string.Empty;
-        public string   AccountName      { get; set; } = string.Empty;
-        public string   Stage            { get; set; } = "Qualification";
-        public decimal  Amount           { get; set; }
-        public int      WinPct           { get; set; }
-        public string   ForecastCategory { get; set; } = "Pipeline";
-        public string   Owner            { get; set; } = string.Empty;
-        public DateTime CloseDate        { get; set; } = DateTime.UtcNow.AddDays(30);
+        public bool IsOpen => Stage is not "Closed Won" and not "Closed Lost";
+        public int DaysToClose => (int)Math.Ceiling((CloseDate.Date - DateTime.UtcNow.Date).TotalDays);
+        public bool IsOverdue => IsOpen && CloseDate.Date < DateTime.UtcNow.Date;
+        public decimal WeightedAmount => Amount * WinPct / 100m;
+        public decimal PriorityScore => (IsOpen ? 500 : 0) + WeightedAmount + (DaysToClose <= 7 ? 250000 : 0) + (Forecast == "Commit" ? 150000 : 0) + (WinPct * 1000);
+        public string Width => WidthPct(Math.Max(1, Amount), 1000000);
     }
-    private sealed class OppKpi
-    {
-        public int     Total            { get; set; }
-        public decimal Pipeline         { get; set; }
-        public decimal WeightedPipeline { get; set; }
-        public decimal WonThisMonth     { get; set; }
-        public int     ClosingThisWeek  { get; set; }
-        public double  AvgWinRate       { get; set; }
-    }
-    private sealed class StageRollup   { public string Stage { get; set; } = string.Empty; public int Count { get; set; } public decimal Amount { get; set; } }
-    private sealed class ForecastRollup
-    {
-        public string  Category       { get; set; } = string.Empty;
-        public int     Count          { get; set; }
-        public decimal TotalAmount    { get; set; }
-        public decimal WeightedAmount { get; set; }
-        public double  AvgWinPct      { get; set; }
-    }
-    private sealed record LV(string Value, string Label);
-    private sealed record AccountOption(Guid AccountId, string AccountName);
 
     private sealed class OpportunityFormModel
     {
@@ -697,7 +530,6 @@
         [Range(0, 999999999999)]
         public decimal EstimatedAmount { get; set; }
 
-        [Required]
         public DateTime? CloseDate { get; set; }
 
         [Range(0, 100)]
@@ -705,17 +537,10 @@
 
         [Required, StringLength(50)]
         public string ForecastCategoryCode { get; set; } = "Pipeline";
-    }
 
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        public Guid? OwnerUserId { get; set; }
+
+        [StringLength(2000)]
+        public string? Description { get; set; }
     }
 }
-

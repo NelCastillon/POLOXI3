@@ -152,10 +152,16 @@ ORDER BY CreatedDateUtc;";
     SELECT o.OpportunityId, o.TenantId, o.OpportunityNumber, o.AccountId,
            a.AccountName, o.OpportunityName, o.EstimatedAmount,
            o.StatusCodeId AS StatusCode, o.OwnerUserId,
-           o.CloseDate, o.WinProbability, o.ForecastCategoryCode, o.LeadId,
-           o.CreatedDateUtc
+            o.CloseDate, o.WinProbability, o.ForecastCategoryCode, o.LeadId,
+            COALESCE(s.StageName, o.StageName, o.ForecastCategoryCode, N'Qualification') AS StageName,
+            o.Description, o.CreatedDateUtc, o.ModifiedDateUtc,
+            COALESCE(NULLIF(LTRIM(RTRIM(u.FullName)), N''), NULLIF(LTRIM(RTRIM(CONCAT(u.FirstName, N' ', u.LastName))), N''), u.UserName, u.Email) AS OwnerName,
+            l.LeadNumber AS SourceLead
     FROM CRM.Opportunity o
     LEFT JOIN Client.Account a ON a.AccountId = o.AccountId
+    LEFT JOIN CRM.OpportunityStage s ON s.OpportunityStageId = o.OpportunityStageId
+    LEFT JOIN IAM.[User] u ON u.UserId = o.OwnerUserId
+    LEFT JOIN CRM.Lead l ON l.LeadId = o.LeadId
     WHERE o.TenantId = @TenantId AND o.IsDeleted = 0
       AND (
            @SearchTerm IS NULL OR @SearchTerm = ''
@@ -205,13 +211,14 @@ SET OpportunityName = @OpportunityName,
     WinProbability = @WinProbability,
     ForecastCategoryCode = @ForecastCategoryCode,
     StageName = @StageName,
+    OwnerUserId = @OwnerUserId,
     Description = @Description,
     ModifiedDateUtc = SYSUTCDATETIME(),
     ModifiedByUserId = @ModifiedByUserId
 WHERE OpportunityId = @OpportunityId AND IsDeleted = 0;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await cn.ExecuteAsync(new CommandDefinition(sql, new { OpportunityId = id, request.OpportunityName, request.EstimatedAmount, request.CloseDate, request.WinProbability, request.ForecastCategoryCode, request.StageName, request.Description, request.ModifiedByUserId }, cancellationToken: cancellationToken));
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { OpportunityId = id, request.OpportunityName, request.EstimatedAmount, request.CloseDate, request.WinProbability, request.ForecastCategoryCode, request.StageName, request.OwnerUserId, request.Description, request.ModifiedByUserId }, cancellationToken: cancellationToken));
     }
 
     public async Task UpdateStageAsync(Guid id, UpdateOpportunityStageRequest request, CancellationToken cancellationToken = default)

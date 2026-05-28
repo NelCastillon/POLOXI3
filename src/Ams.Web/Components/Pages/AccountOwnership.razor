@@ -1,222 +1,322 @@
 @page "/client/account-ownership"
 @namespace Ams.Web.Components.Pages
-@using Microsoft.AspNetCore.Components
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Accounts
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Account Ownership</PageTitle>
+<PageTitle>Enterprise Account Ownership</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<AppPageHeader Title="Account Ownership"
-               Subtitle="Account ownership and transfer history"
-               Icon="bi-diagram-2">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise @(_loading ? "aow-spin" : "")" aria-hidden="true"></i>
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="NewTransfer">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> Transfer Account
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<!-- Filter bar -->
-<div class="aow-filter-bar">
-    <div class="aow-search-wrap">
-        <i class="bi bi-search aow-si" aria-hidden="true"></i>
-        <input class="aow-search" type="search" placeholder="Search accounts�"
-               value="@_search"
-               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => UpdateSearch(e))" />
-    </div>
-    <SfDateRangePicker @ref="_dateRange" Placeholder="All dates" StartDate="_dateStart" EndDate="_dateEnd" Change="OnDateRangeChange"></SfDateRangePicker>
-</div>
-
-@if (_loading)
+@if (_toastVisible)
 {
-    <div class="aow-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading ownership history�</span></div>
-}
-else if (_items == null || _items.Count == 0)
-{
-    <div class="aow-empty">
-        <i class="bi bi-diagram-2" aria-hidden="true"></i>
-        <span>No account ownership records yet.</span>
+    <div class="aow-toast aow-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="aow-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
-else if (_filtered.Count == 0)
+
+@if (_showTransfer)
 {
-    <div class="aow-empty">
-        <i class="bi bi-search" aria-hidden="true"></i>
-        <span>No records match your filters.</span>
-    </div>
-}
-else
-{
-    <div class="aow-grid-card app-datagrid">
-        <SfGrid @ref="_grid" TValue="AccountOwnerHistoryDto" DataSource="_filtered"
-                AllowPaging="true" AllowSorting="true"
-                EnableHover="true" RowHeight="56">
-            <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50,100})" />
-            <GridColumns>
-                <GridColumn HeaderText="Account" MinWidth="200" Field="@nameof(AccountOwnerHistoryDto.AccountName)">
-                    <Template>
-                        @{ var h = (AccountOwnerHistoryDto)context; }
-                        <div class="aow-account-cell">
-                            <div class="aow-icon">
-                                <i class="bi bi-building" aria-hidden="true"></i>
-                            </div>
-                            <div>
-                                <div class="aow-item-name">@h.AccountName</div>
-                            </div>
+    <div class="aow-modal-backdrop" role="presentation" @onclick="CloseTransfer">
+        <div class="aow-transfer-modal" role="dialog" aria-modal="true" aria-labelledby="transferTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_form" OnValidSubmit="ExecuteTransferAsync">
+                <DataAnnotationsValidator />
+                <div class="aow-modal-header">
+                    <div class="aow-modal-title"><span class="aow-modal-icon"><i class="bi bi-arrow-left-right" aria-hidden="true"></i></span><span><h2 id="transferTitle">Transfer Account Ownership</h2><p>Assign a selected account to another active user and capture the reason.</p></span></div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseTransfer" disabled="@_busy" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="aow-modal-body">
+                    <div class="aow-form-banner"><i class="bi bi-shield-check" aria-hidden="true"></i><span><strong>Governed ownership transfer</strong><span>The account owner field is updated through the existing account workflow. Ownership history remains sourced from the account owner history table.</span></span></div>
+                    <div class="aow-form-grid">
+                        <div class="aow-field aow-field-wide">
+                            <label for="transferAccount">Account <span>*</span></label>
+                            <select id="transferAccount" class="aow-input" value="@_form.AccountId" @onchange="OnTransferAccountChanged">
+                                <option value="">Select account</option>
+                                @foreach (var account in _accounts.OrderBy(a => a.AccountName))
+                                {
+                                    <option value="@account.AccountId">@account.AccountName (@OwnerName(account.OwnerUserId))</option>
+                                }
+                            </select>
+                            <ValidationMessage For="() => _form.AccountId" class="text-danger" />
                         </div>
-                    </Template>
-                </GridColumn>
-                <GridColumn HeaderText="Previous Owner" MinWidth="180" Field="@nameof(AccountOwnerHistoryDto.PreviousOwnerName)">
-                    <Template>
-                        @{ var h = (AccountOwnerHistoryDto)context; }
-                        <div class="aow-owner-cell">
-                            <div class="aow-owner-icon">@Initials(h.PreviousOwnerName)</div>
-                            <span>@h.PreviousOwnerName</span>
+                        <div class="aow-field">
+                            <label>Current owner</label>
+                            <input class="aow-input" value="@CurrentTransferOwner" readonly />
                         </div>
-                    </Template>
-                </GridColumn>
-                <GridColumn HeaderText="" Width="40" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
-                    <Template>
-                        <i class="bi bi-arrow-right aow-arrow" aria-hidden="true"></i>
-                    </Template>
-                </GridColumn>
-                <GridColumn HeaderText="New Owner" MinWidth="180" Field="@nameof(AccountOwnerHistoryDto.NewOwnerName)">
-                    <Template>
-                        @{ var h = (AccountOwnerHistoryDto)context; }
-                        <div class="aow-owner-cell">
-                            <div class="aow-owner-icon aow-new">@Initials(h.NewOwnerName)</div>
-                            <span>@h.NewOwnerName</span>
+                        <div class="aow-field">
+                            <label for="transferOwner">New owner <span>*</span></label>
+                            <select id="transferOwner" class="aow-input" @bind="_form.NewOwnerId">
+                                <option value="">Select new owner</option>
+                                @foreach (var user in ActiveUsers)
+                                {
+                                    <option value="@user.UserId">@DisplayUser(user)</option>
+                                }
+                            </select>
+                            <ValidationMessage For="() => _form.NewOwnerId" class="text-danger" />
                         </div>
-                    </Template>
-                </GridColumn>
-                <GridColumn Field="@nameof(AccountOwnerHistoryDto.ChangedDateUtc)" HeaderText="Changed" Width="130" Type="Syncfusion.Blazor.Grids.ColumnType.DateTime" Format="d" />
-                <GridColumn Field="@nameof(AccountOwnerHistoryDto.Notes)" HeaderText="Notes" MinWidth="200" />
-            </GridColumns>
-        </SfGrid>
+                        <div class="aow-field aow-field-wide">
+                            <label for="transferNotes">Transfer notes</label>
+                            <InputTextArea id="transferNotes" class="aow-input aow-textarea" @bind-Value="_form.Notes" placeholder="Reason, servicing context, or relationship transition notes" />
+                            <ValidationMessage For="() => _form.Notes" class="text-danger" />
+                        </div>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(_formError))
+                    {
+                        <div class="aow-form-error"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_formError</div>
+                    }
+                </div>
+                <div class="aow-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseTransfer" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
+                        @if (_busy)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        <i class="bi bi-check-lg" aria-hidden="true"></i> Transfer Ownership
+                    </button>
+                </div>
+            </EditForm>
+        </div>
     </div>
 }
 
-<!-- Transfer Account Modal -->
-<SfDialog @bind-Visible="_showModal" Width="520px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header>
-            <span class="aow-dlg-hdr">
-                <i class="bi bi-arrow-left-right" aria-hidden="true"></i> Transfer Account
-            </span>
-        </Header>
-        <Content>
-            <div class="aow-dlg-body">
-                <div style="display:grid;gap:.75rem">
-                    <div>
-                        <label class="aow-label">Account *</label>
-                        <SfDropDownList TValue="string" TItem="LV" DataSource="_accountOpts" Placeholder="Select account" Width="100%"
-                                        @bind-Value="_transfer.AccountId">
-                            <DropDownListFieldSettings Value="Value" Text="Label" />
-                        </SfDropDownList>
-                    </div>
-                    <div>
-                        <label class="aow-label">Current Owner</label>
-                        <SfTextBox @bind-Value="_transfer.CurrentOwner" Width="100%" ReadOnly="true" />
-                    </div>
-                    <div>
-                        <label class="aow-label">New Owner *</label>
-                        <SfDropDownList TValue="string" TItem="LV" DataSource="_userOpts" Placeholder="Select new owner" Width="100%"
-                                        @bind-Value="_transfer.NewOwnerId">
-                            <DropDownListFieldSettings Value="Value" Text="Label" />
-                        </SfDropDownList>
-                    </div>
-                    <div>
-                        <label class="aow-label">Transfer Notes</label>
-                        <textarea class="aow-textarea" placeholder="Reason for transfer�" @bind="_transfer.Notes" style="height:100px;"></textarea>
-                    </div>
+<div class="aow-enterprise-page">
+    <section class="aow-hero">
+        <div class="aow-hero-left">
+            <span class="aow-hero-icon"><i class="bi bi-diagram-2" aria-hidden="true"></i></span>
+            <div>
+                <div class="aow-title-row">
+                    <h1>Account Ownership Command Center</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> Live ownership history</span>
+                    <span><i class="bi bi-people" aria-hidden="true"></i> User aligned</span>
+                    <span><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+                </div>
+                <p>Monitor account owner transitions, identify coverage gaps, balance producer workload, and prepare governed account transfers.</p>
+            </div>
+        </div>
+        <div class="aow-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh ownership workspace"><i class="bi @(_loading ? "bi-arrow-repeat aow-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/accounts")'><i class="bi bi-building" aria-hidden="true"></i> Accounts</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/users")'><i class="bi bi-people" aria-hidden="true"></i> Users</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenTransfer"><i class="bi bi-arrow-left-right" aria-hidden="true"></i> Transfer Account</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger aow-error-banner" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    @if (_loading)
+    {
+        <section class="aow-loading-state"><i class="bi bi-arrow-repeat aow-spin" aria-hidden="true"></i><strong>Loading account ownership intelligence...</strong><span>Syncing ownership history, accounts, active users, owner workload, and transfer signals.</span></section>
+    }
+    else
+    {
+        <section class="aow-kpi-strip" aria-label="Account ownership metrics">
+            @foreach (var metric in Metrics)
+            {
+                <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="@(() => SetFilter(metric.Filter))">
+                    <span class="aow-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                    <span><span class="aow-kpi-val">@metric.Value</span><span class="aow-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
+                </button>
+            }
+        </section>
+
+        <section class="aow-workflow-strip" aria-label="Account ownership workflow actions">
+            <button type="button" class="aow-workflow-card aow-workflow-primary" @onclick="OpenTransfer"><i class="bi bi-arrow-left-right" aria-hidden="true"></i><span><strong>Transfer ownership</strong><span>Move selected account responsibility.</span></span></button>
+            <button type="button" class="aow-workflow-card" @onclick='() => SetFilter("unassigned")'><i class="bi bi-person-x" aria-hidden="true"></i><span><strong>Coverage gaps</strong><span>Find accounts without owners.</span></span></button>
+            <button type="button" class="aow-workflow-card" @onclick='() => SetFilter("recent")'><i class="bi bi-clock-history" aria-hidden="true"></i><span><strong>Recent transfers</strong><span>Audit ownership movement.</span></span></button>
+            <button type="button" class="aow-workflow-card" @onclick='() => SetView("analytics")'><i class="bi bi-graph-up-arrow" aria-hidden="true"></i><span><strong>Analytics</strong><span>Review owner concentration.</span></span></button>
+        </section>
+
+        <section class="aow-filter-panel">
+            <div class="aow-search-wrap">
+                <span class="aow-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+                <div class="aow-search-body">
+                    <label for="ownershipSearch">Search ownership workspace</label>
+                    <input id="ownershipSearch" class="aow-search-input" value="@_search" @oninput="OnSearchChanged" placeholder="Search account, owner, segment, status, note, or transfer reason..." />
+                    <span>Search filters transfers, owners, accounts, analytics, and operating table.</span>
                 </div>
             </div>
-        </Content>
-        <FooterTemplate>
-            <div class="aow-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showModal = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="ExecuteTransferAsync" disabled="@(string.IsNullOrEmpty(_transfer.AccountId) || string.IsNullOrEmpty(_transfer.NewOwnerId))">
-                    <i class="bi bi-check-lg" aria-hidden="true"></i> Transfer
-                </button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+            <label class="aow-filter-field">Owner<select class="aow-filter-select" value="@_ownerFilter" @onchange="OnOwnerChanged"><option value="">All owners</option><option value="Unassigned">Unassigned</option>@foreach (var owner in OwnerOptions) { <option value="@owner">@owner</option> }</select></label>
+            <label class="aow-filter-field">Period<select class="aow-filter-select" value="@_periodFilter" @onchange="OnPeriodChanged"><option value="">All time</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></label>
+            <label class="aow-filter-field">Sort by<select class="aow-filter-select" value="@_sort" @onchange="OnSortChanged"><option value="recent">Most recent</option><option value="account">Account</option><option value="owner">New owner</option><option value="revenue">Revenue</option></select></label>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-cloud-arrow-down" aria-hidden="true"></i> Sync</button>
+            <div class="aow-filter-result"><strong>@SearchResultCount.ToString("N0", CultureInfo.CurrentCulture)</strong><span>shown</span></div>
+        </section>
+
+        <section class="aow-view-tabs" aria-label="Ownership views">
+            @foreach (var view in _views)
+            {
+                <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label <span>@ViewCount(view.Id)</span></button>
+            }
+        </section>
+
+        @if (_accounts.Count == 0 && _history.Count == 0)
+        {
+            <section class="aow-empty-state"><i class="bi bi-diagram-2" aria-hidden="true"></i><strong>No account ownership data available</strong><span>No accounts or ownership history were returned for this tenant.</span><button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync">Refresh Ownership</button></section>
+        }
+        else
+        {
+            <section class="aow-content-layout">
+                <main class="aow-main-card">
+                    @if (_view == "overview")
+                    {
+                        <div class="aow-section-head"><div><h2>Executive ownership overview</h2><p>Ownership coverage, transfer recency, owner concentration, and high-value account accountability.</p></div><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenTransfer"><i class="bi bi-arrow-left-right" aria-hidden="true"></i> Transfer</button></div>
+                        <div class="aow-overview-grid"><section class="aow-spotlight-card"><span><i class="bi bi-person-x" aria-hidden="true"></i> Highest priority coverage gap</span><strong>@(TopUnassigned?.AccountName ?? TopOwner?.OwnerName ?? "—")</strong><p>@(TopUnassigned is null ? OwnerGuidanceText : $"Unassigned account · {FormatCurrency(TopUnassigned.AnnualRevenue)} revenue · {TopUnassigned.StatusCode}")</p><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="SelectCoveragePriority">Inspect priority</button></section><section class="aow-guidance-card"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Ownership guidance</h3><p>@GuidanceText</p><div class="aow-guidance-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("unassigned")'>Unassigned</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("recent")'>Recent</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetView("owners")'>Owners</button></div></section></div>
+                        <section class="aow-panel"><h3><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Owner workload ranking</h3><div class="aow-rank-stack">@foreach (var owner in OwnerRows.Take(8)) { <button type="button" class="@(IsSelected(owner) ? "aow-rank-row aow-rank-active" : "aow-rank-row")" @onclick="@(() => SelectOwner(owner))"><span>@owner.OwnerName</span><div><i style="width:@owner.Width"></i></div><strong>@owner.AccountCount</strong><small>@FormatCurrency(owner.Revenue)</small></button> }</div></section>
+                    }
+                    else if (_view == "transfers")
+                    {
+                        <div class="aow-section-head"><div><h2>Ownership transfer timeline</h2><p>Audit account movement by previous owner, new owner, date, changed by user, and notes.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("recent")'>Recent</button></div>
+                        @if (FilteredHistory.Count == 0)
+                        {
+                            <div class="aow-empty-state"><i class="bi bi-clock-history" aria-hidden="true"></i><strong>No transfers match this view</strong><span>Adjust filters or complete an ownership change to create transfer history.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenTransfer">Prepare Transfer</button></div>
+                        }
+                        else
+                        {
+                            <div class="aow-timeline">@foreach (var item in FilteredHistory) { <article class="@(IsSelected(item) ? "aow-transfer-item aow-transfer-selected" : "aow-transfer-item")" @onclick="@(() => SelectTransfer(item))"><span class="aow-transfer-icon"><i class="bi bi-arrow-left-right" aria-hidden="true"></i></span><div class="aow-transfer-body"><header><strong>@item.AccountName</strong><span>@FormatDate(item.ChangedDateUtc)</span></header><p><em>@DisplayName(item.PreviousOwnerName)</em><i class="bi bi-arrow-right" aria-hidden="true"></i><em>@DisplayName(item.NewOwnerName)</em></p><footer><span>@(item.Notes ?? "No transfer notes")</span></footer></div></article> }</div>
+                        }
+                    }
+                    else if (_view == "owners")
+                    {
+                        <div class="aow-section-head"><div><h2>Owner workload and concentration</h2><p>Accounts, revenue, transfers received, and ownership coverage by user.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/users")'>Users</button></div>
+                        <div class="aow-card-grid">@foreach (var owner in OwnerRows) { <article class="@(IsSelected(owner) ? "aow-owner-card aow-owner-card-selected" : "aow-owner-card")" @onclick="@(() => SelectOwner(owner))"><div class="aow-card-top"><span class="aow-owner-avatar">@Initials(owner.OwnerName)</span><span class="aow-badge @OwnerBadgeClass(owner)">@owner.Status</span></div><h3>@owner.OwnerName</h3><p>@owner.Summary</p><div class="aow-card-stats"><div><span>Accounts</span><strong>@owner.AccountCount</strong></div><div><span>Revenue</span><strong>@FormatCurrency(owner.Revenue)</strong></div></div></article> }</div>
+                    }
+                    else if (_view == "accounts")
+                    {
+                        <div class="aow-section-head"><div><h2>Account ownership coverage</h2><p>Current owner assignment status and relationship accountability by account.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("unassigned")'>Coverage Gaps</button></div>
+                        <div class="aow-account-grid">@foreach (var account in FilteredAccounts) { <button type="button" class="@(IsSelected(account) ? "aow-account-row aow-active" : "aow-account-row")" @onclick="@(() => SelectAccount(account))"><span>@account.AccountName</span><div><i style="width:@AccountWidth(account)"></i></div><strong>@OwnerName(account.OwnerUserId)</strong><small>@FormatCurrency(account.AnnualRevenue)</small></button> }</div>
+                    }
+                    else if (_view == "analytics")
+                    {
+                        <div class="aow-section-head"><div><h2>Ownership analytics</h2><p>Owner distribution, transfer recency, and account coverage distribution.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Refresh</button></div>
+                        <div class="aow-analytics-grid">@AnalyticsPanel("Owner distribution", OwnerDistribution, "bi-people", "aow-tone-blue") @AnalyticsPanel("Transfer recency", TransferDistribution, "bi-clock-history", "aow-tone-green") @InsightPanel</div>
+                    }
+                    else
+                    {
+                        <div class="aow-section-head"><div><h2>Ownership operating table</h2><p>Native table synchronized from account ownership history and account owner source data.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters">Reset</button></div>
+                        <div class="aow-table-wrap"><table class="aow-table"><thead><tr><th>Account</th><th>Previous Owner</th><th>New Owner</th><th>Changed</th><th>Notes</th></tr></thead><tbody>@foreach (var item in FilteredHistory) { <tr class="@(IsSelected(item) ? "aow-row-selected" : string.Empty)" @onclick="@(() => SelectTransfer(item))"><td><strong>@item.AccountName</strong><small>@AccountMeta(item.AccountId)</small></td><td>@DisplayName(item.PreviousOwnerName)</td><td>@DisplayName(item.NewOwnerName)</td><td>@FormatDate(item.ChangedDateUtc)</td><td>@(item.Notes ?? "—")</td></tr> }</tbody></table></div>
+                    }
+                </main>
+
+                <aside class="aow-detail-panel">
+                    @if (_selectedTransfer is not null)
+                    {
+                        <div class="aow-detail-head"><div><span><i class="bi bi-arrow-left-right" aria-hidden="true"></i> Ownership transfer</span><h2>@_selectedTransfer.AccountName</h2><p>@FormatDateTime(_selectedTransfer.ChangedDateUtc)</p></div><span class="aow-badge aow-badge-info">History</span></div>
+                        <div class="aow-transfer-flow"><div><span>Previous</span><strong>@DisplayName(_selectedTransfer.PreviousOwnerName)</strong></div><i class="bi bi-arrow-right" aria-hidden="true"></i><div><span>New</span><strong>@DisplayName(_selectedTransfer.NewOwnerName)</strong></div></div>
+                        <div class="aow-note-card"><strong>Transfer notes</strong><p>@(_selectedTransfer.Notes ?? "No notes were captured for this transfer.")</p></div>
+                        <div class="aow-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="@(() => NavigateAccount(_selectedTransfer.AccountId))"><i class="bi bi-building" aria-hidden="true"></i> Account</button><button type="button" class="um-btn um-btn-ghost" @onclick="OpenTransfer"><i class="bi bi-arrow-left-right" aria-hidden="true"></i> Transfer</button></div>
+                    }
+                    else if (_selectedOwner is not null)
+                    {
+                        <div class="aow-detail-head"><div><span><i class="bi bi-person-badge" aria-hidden="true"></i> Owner workload</span><h2>@_selectedOwner.OwnerName</h2><p>@_selectedOwner.Summary</p></div><span class="aow-badge @OwnerBadgeClass(_selectedOwner)">@_selectedOwner.Status</span></div>
+                        <div class="aow-detail-summary"><div><span>Accounts</span><strong>@_selectedOwner.AccountCount</strong></div><div><span>Transfers in</span><strong>@_selectedOwner.TransferCount</strong></div><div><span>Revenue</span><strong>@FormatCurrency(_selectedOwner.Revenue)</strong></div><div><span>Share</span><strong>@_selectedOwner.Share.ToString("P0", CultureInfo.CurrentCulture)</strong></div></div>
+                        <div class="aow-rules-card"><header><strong>Owner accounts</strong><span>@_selectedOwner.AccountCount total</span></header>@foreach (var account in AccountsForOwner(_selectedOwner.OwnerId).Take(5)) { <p><em>@account.AccountName</em><span>@FormatCurrency(account.AnnualRevenue)</span></p> }</div>
+                        <div class="aow-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick='() => SetOwnerFilter(_selectedOwner.OwnerName)'><i class="bi bi-filter" aria-hidden="true"></i> Filter</button><button type="button" class="um-btn um-btn-ghost" @onclick="OpenTransfer"><i class="bi bi-arrow-left-right" aria-hidden="true"></i> Transfer</button></div>
+                    }
+                    else if (_selectedAccount is not null)
+                    {
+                        <div class="aow-detail-head"><div><span><i class="bi bi-building" aria-hidden="true"></i> Account coverage</span><h2>@_selectedAccount.AccountName</h2><p>@_selectedAccount.AccountNumber · @_selectedAccount.SegmentCode</p></div><span class="aow-badge @(_selectedAccount.OwnerUserId.HasValue ? "aow-badge-success" : "aow-badge-danger")">@(_selectedAccount.OwnerUserId.HasValue ? "Assigned" : "Unassigned")</span></div>
+                        <div class="aow-detail-summary"><div><span>Owner</span><strong>@OwnerName(_selectedAccount.OwnerUserId)</strong></div><div><span>Status</span><strong>@_selectedAccount.StatusCode</strong></div><div><span>Revenue</span><strong>@FormatCurrency(_selectedAccount.AnnualRevenue)</strong></div><div><span>Transfers</span><strong>@_history.Count(h => h.AccountId == _selectedAccount.AccountId)</strong></div></div>
+                        <div class="aow-note-card"><strong>Ownership signal</strong><p>@AccountSignal(_selectedAccount)</p></div>
+                        <div class="aow-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="@(() => NavigateAccount(_selectedAccount.AccountId))"><i class="bi bi-building" aria-hidden="true"></i> Account</button><button type="button" class="um-btn um-btn-ghost" @onclick="@(() => OpenTransfer(_selectedAccount))"><i class="bi bi-arrow-left-right" aria-hidden="true"></i> Transfer</button></div>
+                    }
+                    else
+                    {
+                        <div class="aow-detail-empty"><i class="bi bi-diagram-2" aria-hidden="true"></i><strong>Select an owner, account, or transfer</strong><span>Inspect coverage, workload, transfer history, and recommended ownership actions.</span></div>
+                    }
+                </aside>
+            </section>
+        }
+    }
+</div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private SfToast? _toast;
-    private SfGrid<AccountOwnerHistoryDto>? _grid;
-    private SfDateRangePicker<DateTime?>? _dateRange;
-    private bool _loading = false;
-    private bool _showModal = false;
-
+    private Guid _tenantAdminUserId;
+    private bool _loading = true;
+    private bool _busy;
+    private bool _showTransfer;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string _formError = string.Empty;
     private string _search = string.Empty;
-    private DateTime? _dateStart;
-    private DateTime? _dateEnd;
+    private string _activeFilter = "all";
+    private string _ownerFilter = string.Empty;
+    private string _periodFilter = string.Empty;
+    private string _sort = "recent";
+    private string _view = "overview";
+    private AccountOwnerHistoryDto? _selectedTransfer;
+    private OwnerWorkload? _selectedOwner;
+    private AccountDto? _selectedAccount;
+    private TransferFormModel _form = new();
+    private List<AccountOwnerHistoryDto> _history = [];
+    private List<AccountDto> _accounts = [];
+    private List<UserDto> _users = [];
 
-    private List<AccountOwnerHistoryDto>? _items;
-    private List<AccountOwnerHistoryDto> _filtered = [];
-    private TransferRequest _transfer = new();
-    private List<LV> _accountOpts = [];
-    private List<LV> _userOpts = [];
+    private readonly ViewOption[] _views = [new("overview", "Overview", "bi-speedometer2"), new("transfers", "Transfers", "bi-clock-history"), new("owners", "Owners", "bi-people"), new("accounts", "Accounts", "bi-building"), new("analytics", "Analytics", "bi-graph-up-arrow"), new("table", "Table", "bi-table")];
+
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
+    private IReadOnlyList<AccountOwnerHistoryDto> FilteredHistory => ApplyHistoryFilters(_history).ToList();
+    private IReadOnlyList<AccountDto> FilteredAccounts => ApplyAccountFilters(_accounts).ToList();
+    private IReadOnlyList<OwnerWorkload> OwnerRows => BuildOwnerRows();
+    private IReadOnlyList<DistributionRow> OwnerDistribution => BuildDistribution(OwnerRows.Where(o => o.AccountCount > 0).Select(o => new DistributionSource(o.OwnerName, o.AccountCount)));
+    private IReadOnlyList<DistributionRow> TransferDistribution => BuildDistribution(_history.Select(h => new DistributionSource(TransferBand(h.ChangedDateUtc), 1)));
+    private int UnassignedCount => _accounts.Count(a => !a.OwnerUserId.HasValue);
+    private int RecentTransferCount => _history.Count(h => h.ChangedDateUtc >= DateTime.UtcNow.AddDays(-30));
+    private int SearchResultCount => _view is "accounts" ? FilteredAccounts.Count : _view is "owners" ? OwnerRows.Count : FilteredHistory.Count;
+    private decimal OwnedRevenue => _accounts.Where(a => a.OwnerUserId.HasValue).Sum(a => a.AnnualRevenue ?? 0);
+    private AccountDto? TopUnassigned => _accounts.Where(a => !a.OwnerUserId.HasValue).OrderByDescending(a => a.AnnualRevenue ?? 0).ThenBy(a => a.AccountName).FirstOrDefault();
+    private OwnerWorkload? TopOwner => OwnerRows.OrderByDescending(o => o.AccountCount).ThenByDescending(o => o.Revenue).FirstOrDefault();
+    private string GuidanceText => UnassignedCount > 0 ? $"{UnassignedCount.ToString("N0", CultureInfo.CurrentCulture)} account(s) need owner assignment. Start with the highest revenue coverage gaps." : RecentTransferCount > 0 ? $"{RecentTransferCount.ToString("N0", CultureInfo.CurrentCulture)} transfer(s) occurred in the last 30 days. Review downstream servicing continuity." : "Ownership coverage is stable. Continue monitoring workload concentration and transfer activity.";
+    private string OwnerGuidanceText => TopOwner is null ? "No owner workload is available yet." : $"{TopOwner.OwnerName} owns {TopOwner.AccountCount.ToString("N0", CultureInfo.CurrentCulture)} account(s), representing {TopOwner.Share.ToString("P0", CultureInfo.CurrentCulture)} of assigned workload.";
+    private IEnumerable<string> OwnerOptions => OwnerRows.Select(o => o.OwnerName).Where(o => o != "Unassigned").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(o => o);
+    private IEnumerable<UserDto> ActiveUsers => _users.Where(u => u.StatusCode.Equals("Active", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(u.StatusCode)).OrderBy(u => DisplayUser(u));
+    private string CurrentTransferOwner => Guid.TryParse(_form.AccountId, out var accountId) ? OwnerName(_accounts.FirstOrDefault(a => a.AccountId == accountId)?.OwnerUserId) : "Select an account";
+    private IReadOnlyList<Metric> Metrics => [new("all", _accounts.Count.ToString("N0", CultureInfo.CurrentCulture), "Accounts", "Accounts in ownership scope", "bi-building", "aow-kpi-blue"), new("assigned", (_accounts.Count - UnassignedCount).ToString("N0", CultureInfo.CurrentCulture), "Assigned", "Accounts with owners", "bi-person-check", "aow-kpi-green"), new("unassigned", UnassignedCount.ToString("N0", CultureInfo.CurrentCulture), "Unassigned", "Coverage gaps", "bi-person-x", "aow-kpi-red"), new("recent", RecentTransferCount.ToString("N0", CultureInfo.CurrentCulture), "Recent", "Transfers in 30 days", "bi-clock-history", "aow-kpi-amber"), new("owners", OwnerRows.Count.ToString("N0", CultureInfo.CurrentCulture), "Owners", "Active owner workload", "bi-people", "aow-kpi-purple"), new("revenue", FormatCurrency(OwnedRevenue), "Owned Revenue", "Revenue with owner coverage", "bi-cash-stack", "aow-kpi-cyan")];
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(
-            new("Home", "/"),
-            new("Accounts", "/accounts"),
-            new("Account Ownership", "/client/account-ownership")
-        );
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Accounts", "/accounts"), new("Account Ownership", "/client/account-ownership"));
         await LoadAsync();
-    }
-
-    private void UpdateSearch(Microsoft.AspNetCore.Components.ChangeEventArgs e)
-    {
-        _search = e.Value?.ToString() ?? string.Empty;
-        ApplyFilters();
     }
 
     private async Task LoadAsync()
     {
         _loading = true;
-        StateHasChanged();
-
+        _loadError = null;
         try
         {
-            var result = await Api.SearchAccountOwnershipAsync(_tenantId, null, string.Empty);
-            _items = result?.Items.ToList() ?? [];
-
-            var accounts = await Api.SearchAccountsAsync(_tenantId, string.Empty);
-            _accountOpts = accounts?.Items.Select(a => new LV(a.AccountId.ToString(), a.AccountName)).ToList() ?? [];
-
-            // TODO: Load users for ownership transfer
-            _userOpts = [
-                new("user-1", "John Smith"),
-                new("user-2", "Jane Doe"),
-                new("user-3", "Mike Johnson")
-            ];
-
-            ApplyFilters();
+            if (_tenantId == Guid.Empty) await ResolveCurrentUserContextAsync();
+            var ownershipResult = await Api.SearchAccountOwnershipAsync(_tenantId, pageSize: 500);
+            var accountResult = await Api.SearchAccountsAsync(_tenantId, pageSize: 500);
+            var userResult = await Api.SearchUsersAsync(_tenantId, pageSize: 500);
+            _history = ownershipResult?.Items.ToList() ?? [];
+            _accounts = accountResult?.Items.ToList() ?? [];
+            _users = userResult?.Items.ToList() ?? [];
+            RefreshSelection();
+            ShowToast("Account ownership workspace synced.", "success");
         }
         catch (Exception ex)
         {
-            await _toast!.ShowAsync(new ToastModel { Content = $"Error loading ownership history: {ex.Message}", CssClass = "e-toast-danger" });
+            _loadError = $"Failed to load account ownership workspace: {ex.Message}";
+            _history = [];
+            _accounts = [];
+            _users = [];
+            ClearSelection();
+            ShowToast($"Ownership load failed: {ex.Message}", "danger");
         }
         finally
         {
@@ -224,86 +324,173 @@ else
         }
     }
 
-    private void ApplyFilters()
+    private IEnumerable<AccountOwnerHistoryDto> ApplyHistoryFilters(IEnumerable<AccountOwnerHistoryDto> history)
     {
-        if (_items == null) { _filtered = []; return; }
-
-        _filtered = _items.Where(h =>
-            (string.IsNullOrEmpty(_search) ||
-             h.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             h.PreviousOwnerName?.Contains(_search, StringComparison.OrdinalIgnoreCase) == true ||
-             h.NewOwnerName?.Contains(_search, StringComparison.OrdinalIgnoreCase) == true) &&
-            (!_dateStart.HasValue || h.ChangedDateUtc >= _dateStart.Value) &&
-            (!_dateEnd.HasValue || h.ChangedDateUtc <= _dateEnd.Value.AddDays(1))
-        ).ToList();
+        var query = history;
+        if (!string.IsNullOrWhiteSpace(_search)) { var term = _search.Trim(); query = query.Where(h => Contains(h.AccountName, term) || Contains(h.PreviousOwnerName, term) || Contains(h.NewOwnerName, term) || Contains(h.Notes, term) || Contains(AccountMeta(h.AccountId), term)); }
+        if (!string.IsNullOrWhiteSpace(_ownerFilter)) query = query.Where(h => h.NewOwnerName.Equals(_ownerFilter, StringComparison.OrdinalIgnoreCase) || h.PreviousOwnerName.Equals(_ownerFilter, StringComparison.OrdinalIgnoreCase));
+        if (int.TryParse(_periodFilter, out var days)) query = query.Where(h => h.ChangedDateUtc >= DateTime.UtcNow.AddDays(-days));
+        query = _activeFilter switch { "recent" => query.Where(h => h.ChangedDateUtc >= DateTime.UtcNow.AddDays(-30)), "owners" => query.Where(h => !string.IsNullOrWhiteSpace(h.NewOwnerName)), _ => query };
+        return _sort switch { "account" => query.OrderBy(h => h.AccountName), "owner" => query.OrderBy(h => h.NewOwnerName), "revenue" => query.OrderByDescending(h => AccountRevenue(h.AccountId)), _ => query.OrderByDescending(h => h.ChangedDateUtc) };
     }
 
-    private void OnDateRangeChange(RangeEventArgs args)
+    private IEnumerable<AccountDto> ApplyAccountFilters(IEnumerable<AccountDto> accounts)
     {
-        _dateStart = args.StartDate;
-        _dateEnd = args.EndDate;
-        ApplyFilters();
+        var query = accounts;
+        if (!string.IsNullOrWhiteSpace(_search)) { var term = _search.Trim(); query = query.Where(a => Contains(a.AccountName, term) || Contains(a.AccountNumber, term) || Contains(a.StatusCode, term) || Contains(a.SegmentCode, term) || Contains(OwnerName(a.OwnerUserId), term)); }
+        if (!string.IsNullOrWhiteSpace(_ownerFilter)) query = _ownerFilter == "Unassigned" ? query.Where(a => !a.OwnerUserId.HasValue) : query.Where(a => OwnerName(a.OwnerUserId).Equals(_ownerFilter, StringComparison.OrdinalIgnoreCase));
+        query = _activeFilter switch { "assigned" => query.Where(a => a.OwnerUserId.HasValue), "unassigned" => query.Where(a => !a.OwnerUserId.HasValue), "revenue" => query.Where(a => (a.AnnualRevenue ?? 0) > 0), _ => query };
+        return _sort switch { "account" => query.OrderBy(a => a.AccountName), "owner" => query.OrderBy(a => OwnerName(a.OwnerUserId)).ThenBy(a => a.AccountName), "revenue" => query.OrderByDescending(a => a.AnnualRevenue ?? 0), _ => query.OrderBy(a => a.OwnerUserId.HasValue).ThenByDescending(a => a.AnnualRevenue ?? 0).ThenBy(a => a.AccountName) };
     }
 
-    private void NewTransfer()
+    private IReadOnlyList<OwnerWorkload> BuildOwnerRows()
     {
-        _transfer = new();
-        _showModal = true;
+        var assignedTotal = Math.Max(1, _accounts.Count(a => a.OwnerUserId.HasValue));
+        var rows = _accounts.GroupBy(a => a.OwnerUserId).Select(g =>
+        {
+            var ownerId = g.Key;
+            var ownerName = OwnerName(ownerId);
+            var count = g.Count();
+            var revenue = g.Sum(a => a.AnnualRevenue ?? 0);
+            var transfers = _history.Count(h => h.NewOwnerUserId == ownerId || h.NewOwnerName.Equals(ownerName, StringComparison.OrdinalIgnoreCase));
+            var share = ownerName == "Unassigned" ? 0 : (double)count / assignedTotal;
+            var status = ownerName == "Unassigned" ? "Gap" : share >= .35 ? "Concentrated" : transfers > 0 ? "Active" : "Stable";
+            var summary = ownerName == "Unassigned" ? "Accounts requiring owner assignment." : $"Owns {count.ToString("N0", CultureInfo.CurrentCulture)} account(s) with {transfers.ToString("N0", CultureInfo.CurrentCulture)} transfer(s) received.";
+            return new OwnerWorkload(ownerId, ownerName, count, revenue, transfers, share, status, summary, "0%");
+        }).OrderByDescending(o => o.Status == "Gap").ThenByDescending(o => o.AccountCount).ThenBy(o => o.OwnerName).ToList();
+        var max = Math.Max(1, rows.Select(r => r.AccountCount).DefaultIfEmpty(1).Max());
+        return rows.Select(r => r with { Width = WidthPct(r.AccountCount, max) }).ToList();
     }
+
+    private void OpenTransfer() { _form = new(); _formError = string.Empty; _showTransfer = true; }
+    private void OpenTransfer(AccountDto account) { _form = new() { AccountId = account.AccountId.ToString() }; _formError = string.Empty; _showTransfer = true; }
+    private void CloseTransfer() { if (!_busy) { _showTransfer = false; _formError = string.Empty; } }
 
     private async Task ExecuteTransferAsync()
     {
+        _formError = string.Empty;
+        if (!Guid.TryParse(_form.AccountId, out var accountId) || !Guid.TryParse(_form.NewOwnerId, out var newOwnerId))
+        {
+            _formError = "Select an account and a new owner.";
+            return;
+        }
+        var account = _accounts.FirstOrDefault(a => a.AccountId == accountId);
+        if (account is null)
+        {
+            _formError = "The selected account could not be found.";
+            return;
+        }
+        if (account.OwnerUserId == newOwnerId)
+        {
+            _formError = "The selected user already owns this account.";
+            return;
+        }
+
+        _busy = true;
         try
         {
-            if (string.IsNullOrEmpty(_transfer.AccountId) || string.IsNullOrEmpty(_transfer.NewOwnerId))
-            {
-                await _toast!.ShowAsync(new ToastModel { Content = "Please select account and new owner.", CssClass = "e-toast-warning" });
-                return;
-            }
-
-            // TODO: Call API to transfer account
-            await Task.Delay(100);
-
-            _showModal = false;
-            _transfer = new();
-            await _toast!.ShowAsync(new ToastModel { Content = "Account transferred successfully.", CssClass = "e-toast-success" });
+            await Api.UpdateAccountAsync(accountId, new UpdateAccountRequest { AccountName = account.AccountName, AccountTypeCode = account.AccountTypeCode, MainEmail = account.MainEmail, MainPhone = account.MainPhone, StatusCode = account.StatusCode, SegmentCode = account.SegmentCode, OwnerUserId = newOwnerId, ParentAccountId = account.ParentAccountId, LifecycleStageCode = account.LifecycleStageCode, Industry = account.Industry, Website = account.Website, AnnualRevenue = account.AnnualRevenue, ModifiedByUserId = _tenantAdminUserId });
+            _showTransfer = false;
+            _form = new();
             await LoadAsync();
+            ShowToast("Account owner updated. Ownership history will reflect changes when the backend history workflow records the transfer.", "success");
         }
         catch (Exception ex)
         {
-            await _toast!.ShowAsync(new ToastModel { Content = $"Error transferring account: {ex.Message}", CssClass = "e-toast-danger" });
+            _formError = $"Transfer failed: {ex.Message}";
+            ShowToast($"Transfer failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
         }
     }
 
-    private static string Initials(string name)
+    private void SetFilter(string filter) { _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter; if (filter is "unassigned" or "assigned" or "revenue") _view = "accounts"; else if (filter is "owners") _view = "owners"; else if (filter is "recent") _view = "transfers"; RefreshSelection(); }
+    private void SetView(string view) { _view = view; RefreshSelection(); }
+    private void SelectTransfer(AccountOwnerHistoryDto item) { _selectedTransfer = item; _selectedOwner = null; _selectedAccount = null; }
+    private void SelectOwner(OwnerWorkload owner) { _selectedOwner = owner; _selectedTransfer = null; _selectedAccount = null; }
+    private void SelectAccount(AccountDto account) { _selectedAccount = account; _selectedTransfer = null; _selectedOwner = null; }
+    private void SelectCoveragePriority() { if (TopUnassigned is not null) { SelectAccount(TopUnassigned); _view = "accounts"; } else if (TopOwner is not null) { SelectOwner(TopOwner); _view = "owners"; } }
+    private void SetOwnerFilter(string owner) { _ownerFilter = owner; _view = "accounts"; RefreshSelection(); }
+    private void ResetFilters() { _activeFilter = "all"; _ownerFilter = string.Empty; _periodFilter = string.Empty; _search = string.Empty; _sort = "recent"; RefreshSelection(); }
+    private void OnSearchChanged(BlazorChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; RefreshSelection(); }
+    private void OnOwnerChanged(BlazorChangeEventArgs e) { _ownerFilter = e.Value?.ToString() ?? string.Empty; _activeFilter = "all"; RefreshSelection(); }
+    private void OnPeriodChanged(BlazorChangeEventArgs e) { _periodFilter = e.Value?.ToString() ?? string.Empty; RefreshSelection(); }
+    private void OnSortChanged(BlazorChangeEventArgs e) { _sort = e.Value?.ToString() ?? "recent"; RefreshSelection(); }
+    private void OnTransferAccountChanged(BlazorChangeEventArgs e) => _form.AccountId = e.Value?.ToString() ?? string.Empty;
+    private void NavigateAccount(Guid accountId) => Nav.NavigateTo($"/accounts/{accountId}");
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message.Length <= 150 ? message : $"{message[..147]}..."; _toastKind = ToastKind(kind); _toastVisible = true; }
+
+    private void RefreshSelection()
     {
-        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length > 0 ? name[..1] : "?";
+        if (_view == "owners") { _selectedOwner = OwnerRows.FirstOrDefault(); _selectedTransfer = null; _selectedAccount = null; }
+        else if (_view == "accounts") { _selectedAccount = FilteredAccounts.FirstOrDefault(); _selectedOwner = null; _selectedTransfer = null; }
+        else { _selectedTransfer = FilteredHistory.FirstOrDefault(); _selectedOwner = null; _selectedAccount = null; }
     }
 
-    private async Task<bool> ConfirmDeleteAsync()
+    private void ClearSelection() { _selectedTransfer = null; _selectedOwner = null; _selectedAccount = null; }
+    private int ViewCount(string view) => view switch { "owners" => OwnerRows.Count, "accounts" => FilteredAccounts.Count, _ => FilteredHistory.Count };
+    private bool IsSelected(AccountOwnerHistoryDto item) => _selectedTransfer?.HistoryId == item.HistoryId;
+    private bool IsSelected(OwnerWorkload owner) => _selectedOwner?.OwnerName == owner.OwnerName;
+    private bool IsSelected(AccountDto account) => _selectedAccount?.AccountId == account.AccountId;
+    private IEnumerable<AccountDto> AccountsForOwner(Guid? ownerId) => _accounts.Where(a => a.OwnerUserId == ownerId).OrderByDescending(a => a.AnnualRevenue ?? 0).ThenBy(a => a.AccountName);
+    private decimal AccountRevenue(Guid accountId) => _accounts.FirstOrDefault(a => a.AccountId == accountId)?.AnnualRevenue ?? 0;
+    private string AccountMeta(Guid accountId) { var account = _accounts.FirstOrDefault(a => a.AccountId == accountId); return account is null ? "Account metadata unavailable" : $"{account.AccountNumber} · {OwnerName(account.OwnerUserId)} · {FormatCurrency(account.AnnualRevenue)}"; }
+    private string AccountSignal(AccountDto account) => account.OwnerUserId.HasValue ? $"Owner coverage is assigned to {OwnerName(account.OwnerUserId)}." : "This account has no assigned owner and should be prioritized for reassignment.";
+    private string AccountWidth(AccountDto account) => WidthPct((int)Math.Max(1, Math.Min(100, (account.AnnualRevenue ?? 0) / 10000)), 100);
+    private string OwnerName(Guid? ownerId) { if (!ownerId.HasValue) return "Unassigned"; var user = _users.FirstOrDefault(u => u.UserId == ownerId.Value); return user is null ? "Unknown owner" : DisplayUser(user); }
+    private static string DisplayUser(UserDto user) => !string.IsNullOrWhiteSpace(user.DisplayName) ? user.DisplayName : !string.IsNullOrWhiteSpace(user.FullName) ? user.FullName : user.UserName;
+    private static string DisplayName(string value) => string.IsNullOrWhiteSpace(value) ? "Unassigned" : value;
+    private static string Initials(string name) { var parts = DisplayName(name).Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : parts.Length == 1 && parts[0].Length > 0 ? parts[0][..1] : "?"; }
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static string FormatCurrency(decimal? value) => value.HasValue ? value.Value.ToString("C0", CultureInfo.CurrentCulture) : "—";
+    private static string FormatDate(DateTime value) => value.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture);
+    private static string FormatDateTime(DateTime value) => value.ToLocalTime().ToString("MMM d, h:mm tt", CultureInfo.CurrentCulture);
+    private static string TransferBand(DateTime changed) { var days = (DateTime.UtcNow - changed).TotalDays; return days <= 7 ? "Last 7 days" : days <= 30 ? "Last 30 days" : days <= 90 ? "Last 90 days" : "Older"; }
+    private static string WidthPct(int value, int max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, (double)value / max * 100))).ToString("F1", CultureInfo.InvariantCulture) + "%";
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : "success";
+    private string MetricCardClass(Metric metric) => $"aow-kpi-card {metric.Tone} {(_activeFilter == metric.Filter ? "aow-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewOption view) => $"aow-view-btn {(view.Id == _view ? "aow-view-btn-active" : string.Empty)}";
+    private static string OwnerBadgeClass(OwnerWorkload owner) => owner.Status switch { "Gap" => "aow-badge-danger", "Concentrated" => "aow-badge-warning", "Active" => "aow-badge-info", _ => "aow-badge-success" };
+
+    private RenderFragment AnalyticsPanel(string title, IReadOnlyList<DistributionRow> rows, string icon, string tone) => @<section class="aow-analytics-panel @tone"><h3><i class="bi @icon" aria-hidden="true"></i> @title</h3><div class="aow-analytics-list">@foreach (var row in rows) { <button type="button" @onclick="@(() => ApplyDistribution(row.Label, title))"><span>@row.Label</span><div><i style="width:@row.Width"></i></div><strong>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><small>@row.Percent.ToString("P0", CultureInfo.CurrentCulture)</small></button> }</div></section>;
+    private RenderFragment InsightPanel => @<section class="aow-analytics-panel aow-tone-amber"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Executive insight</h3><div class="aow-insight-grid"><div><span>Assigned</span><strong>@(_accounts.Count - UnassignedCount)</strong><small>owned accounts</small></div><div><span>Gaps</span><strong>@UnassignedCount</strong><small>unassigned</small></div><div><span>Recent</span><strong>@RecentTransferCount</strong><small>30 days</small></div><div><span>Owners</span><strong>@OwnerRows.Count</strong><small>workload rows</small></div></div><p>@GuidanceText</p></section>;
+
+    private void ApplyDistribution(string label, string title)
     {
-        return await Task.FromResult(true); // In real app, use JS interop for confirm
+        if (title.Contains("Owner", StringComparison.OrdinalIgnoreCase)) { _ownerFilter = label; _view = "accounts"; }
+        else { _periodFilter = label switch { "Last 7 days" => "7", "Last 30 days" => "30", "Last 90 days" => "90", _ => string.Empty }; _view = "transfers"; }
+        _activeFilter = "all";
+        RefreshSelection();
     }
 
-    private sealed record LV(string Value, string Label);
-
-    private class TransferRequest
+    private static IReadOnlyList<DistributionRow> BuildDistribution(IEnumerable<DistributionSource> sources)
     {
+        var rows = sources.GroupBy(s => s.Label).Select(g => new DistributionRow(g.Key, g.Sum(s => s.Count), 0, "0%")).OrderByDescending(r => r.Count).ThenBy(r => r.Label).ToList();
+        var total = Math.Max(1, rows.Sum(r => r.Count));
+        var max = Math.Max(1, rows.Select(r => r.Count).DefaultIfEmpty(1).Max());
+        return rows.Select(r => r with { Percent = (double)r.Count / total, Width = WidthPct(r.Count, max) }).ToList();
+    }
+
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+
+    private sealed record ViewOption(string Id, string Label, string Icon);
+    private sealed record Metric(string Filter, string Value, string Label, string Caption, string Icon, string Tone);
+    private sealed record OwnerWorkload(Guid? OwnerId, string OwnerName, int AccountCount, decimal Revenue, int TransferCount, double Share, string Status, string Summary, string Width);
+    private sealed record DistributionSource(string Label, int Count);
+    private sealed record DistributionRow(string Label, int Count, double Percent, string Width);
+
+    private sealed class TransferFormModel
+    {
+        [Required]
         public string AccountId { get; set; } = string.Empty;
-        public string CurrentOwner { get; set; } = string.Empty;
-        public string NewOwnerId { get; set; } = string.Empty;
-        public string? Notes { get; set; }
-    }
 
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        [Required]
+        public string NewOwnerId { get; set; } = string.Empty;
+
+        [StringLength(500)]
+        public string? Notes { get; set; }
     }
 }

@@ -7,82 +7,402 @@
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Applications — AMS</PageTitle>
+<PageTitle>Application Command Center — AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+<div class="sa-page">
+    <section class="sa-hero">
+        <div class="sa-hero__content">
+            <div class="sa-hero__eyebrow"><i class="bi bi-clipboard-check" aria-hidden="true"></i> Enterprise application command center</div>
+            <h1>Application Tracking Desk</h1>
+            <p>Prioritize incomplete applications, monitor carrier submission readiness, manage requirement follow-up, and move approved applications into quote workflows.</p>
+            <div class="sa-hero__meta">
+                <span><i class="bi bi-stack" aria-hidden="true"></i>@TotalApplicationCount applications</span>
+                <span><i class="bi bi-exclamation-diamond" aria-hidden="true"></i>@PriorityApplicationCount priority</span>
+                <span><i class="bi bi-percent" aria-hidden="true"></i>@AverageCompletenessText average complete</span>
+                <span><i class="bi bi-building" aria-hidden="true"></i>@CarrierCount carrier groups</span>
+            </div>
+        </div>
+        <div class="sa-hero__actions">
+            <button type="button" class="sa-btn sa-btn--light" @onclick="LoadAsync" disabled="@_loading">
+                <i class="bi bi-arrow-clockwise @_refreshIconClass" aria-hidden="true"></i> Refresh
+            </button>
+            <button type="button" class="sa-btn sa-btn--primary" @onclick='() => Nav.NavigateTo("/submissions/new")'>
+                <i class="bi bi-plus-lg" aria-hidden="true"></i> New Application
+            </button>
+            <button type="button" class="sa-btn sa-btn--light" @onclick='() => Nav.NavigateTo("/submissions")'>
+                <i class="bi bi-send" aria-hidden="true"></i> Submissions
+            </button>
+            <button type="button" class="sa-btn sa-btn--light" @onclick='() => Nav.NavigateTo("/submissions/quotes")'>
+                <i class="bi bi-file-earmark-text" aria-hidden="true"></i> Quotes
+            </button>
+        </div>
+    </section>
 
-@if (_showActionDialog)
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger sa-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span>@_loadError</span>
+        </div>
+    }
+
+    <section class="sa-kpi-strip" aria-label="Application KPIs">
+        @KpiCard("all", "Total Apps", TotalApplicationCount.ToString(), "All application records from submission workflow", "bi-stack", "blue")
+        @KpiCard("priority", "Priority", PriorityApplicationCount.ToString(), "Incomplete, overdue, high-value, or requirement-heavy applications", "bi-exclamation-octagon", "red")
+        @KpiCard("submitted", "Submitted", SubmittedApplicationCount.ToString(), "Applications submitted or ready for carrier review", "bi-send", "cyan")
+        @KpiCard("requirements", "Requirements", RequirementsApplicationCount.ToString(), "Applications waiting on missing information", "bi-paperclip", "amber")
+        @KpiCard("approved", "Approved", ApprovedApplicationCount.ToString(), "Applications ready for quote workflow", "bi-check-circle", "green")
+        @KpiCard("complete", "Avg Complete", AverageCompletenessText, "Average application completeness", "bi-percent", "emerald")
+    </section>
+
+    <section class="sa-workflows" aria-label="Application workflows">
+        <button type="button" class="sa-workflow" @onclick="ShowPriorityQueue">
+            <i class="bi bi-lightning-charge" aria-hidden="true"></i>
+            <span><strong>Priority queue</strong><small>Open highest-importance application work</small></span>
+        </button>
+        <button type="button" class="sa-workflow" @onclick="ShowRequirementsQueue">
+            <i class="bi bi-paperclip" aria-hidden="true"></i>
+            <span><strong>Requirements</strong><small>Follow up on missing application items</small></span>
+        </button>
+        <button type="button" class="sa-workflow" @onclick="ShowCarrierView">
+            <i class="bi bi-building" aria-hidden="true"></i>
+            <span><strong>Carrier view</strong><small>Analyze applications by market</small></span>
+        </button>
+        <button type="button" class="sa-workflow" @onclick="ShowApprovedQueue">
+            <i class="bi bi-check-circle" aria-hidden="true"></i>
+            <span><strong>Approved apps</strong><small>Move approved applications into quotes</small></span>
+        </button>
+        <button type="button" class="sa-workflow" @onclick="ShowLobView">
+            <i class="bi bi-layers" aria-hidden="true"></i>
+            <span><strong>LOB view</strong><small>Review application quality by line</small></span>
+        </button>
+    </section>
+
+    <section class="sa-filter-panel" aria-label="Application filters">
+        <div class="sa-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input @bind="SearchText" @bind:event="oninput" placeholder="Search app #, submission, account, LOB, carrier, status, producer, premium, due date, priority…" />
+        </div>
+        <div class="sa-filter-grid">
+            <label>
+                <span>Status</span>
+                <select class="form-select" @bind="StatusFilter">
+                    <option value="">All statuses</option>
+                    @foreach (var status in StatusOptions)
+                    {
+                        <option value="@status">@status</option>
+                    }
+                </select>
+            </label>
+            <label>
+                <span>Carrier</span>
+                <select class="form-select" @bind="CarrierFilter">
+                    <option value="">All carriers</option>
+                    @foreach (var carrier in CarrierOptions)
+                    {
+                        <option value="@carrier">@carrier</option>
+                    }
+                </select>
+            </label>
+            <label>
+                <span>Line of Business</span>
+                <select class="form-select" @bind="LobFilter">
+                    <option value="">All lines</option>
+                    @foreach (var lob in LobOptions)
+                    {
+                        <option value="@lob">@lob</option>
+                    }
+                </select>
+            </label>
+            <label>
+                <span>Sort</span>
+                <select class="form-select" @bind="SortMode">
+                    <option value="importance">Importance</option>
+                    <option value="due">Due date</option>
+                    <option value="complete">Completeness</option>
+                    <option value="premium">Premium</option>
+                    <option value="status">Status</option>
+                    <option value="carrier">Carrier</option>
+                </select>
+            </label>
+        </div>
+        <button type="button" class="sa-btn sa-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)">
+            <i class="bi bi-x-lg" aria-hidden="true"></i> Reset
+        </button>
+    </section>
+
+    <nav class="sa-tabs" aria-label="Application views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="@TabClass(tab.Key)" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </nav>
+
+    <main class="sa-dashboard">
+        <section class="sa-main-card">
+            <div class="sa-card-header">
+                <div>
+                    <span class="sa-section-kicker">@ActiveViewTitle</span>
+                    <h2>@FilteredRows.Count() applications</h2>
+                    <p>Ranked by enterprise importance: completeness, due date risk, workflow status, premium opportunity, market readiness, and follow-up urgency.</p>
+                </div>
+                <div class="sa-card-actions">
+                    <button type="button" class="sa-btn sa-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)">
+                        <i class="bi bi-chevron-left" aria-hidden="true"></i> Previous
+                    </button>
+                    <span class="sa-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="sa-btn sa-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">
+                        Next <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                    </button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="sa-loading"><span class="sa-spinner"></span> Loading applications…</div>
+            }
+            else if (!FilteredRows.Any())
+            {
+                <div class="sa-empty">
+                    <i class="bi bi-clipboard" aria-hidden="true"></i>
+                    <strong>No applications found</strong>
+                    <span>Adjust filters or create a new submission application.</span>
+                </div>
+            }
+            else if (_activeTab == "carrier")
+            {
+                <div class="sa-carrier-grid">
+                    @foreach (var group in CarrierRows)
+                    {
+                        <article class="sa-carrier-card">
+                            <div class="sa-carrier-card__head">
+                                <div>
+                                    <span>Carrier market</span>
+                                    <h3>@group.Name</h3>
+                                </div>
+                                <strong>@group.Count</strong>
+                            </div>
+                            <p>@group.AverageComplete.ToString("0")% average complete • @group.Priority priority • @group.Premium.ToString("C0") target premium</p>
+                            <div class="sa-mini-bar"><span style="width:@group.Percent%"></span></div>
+                            <button type="button" class="sa-btn sa-btn--ghost" @onclick="() => FilterByCarrier(group.Name)">View carrier</button>
+                        </article>
+                    }
+                </div>
+            }
+            else if (_activeTab == "lob")
+            {
+                <div class="sa-lob-grid">
+                    @foreach (var group in LobRows)
+                    {
+                        <article class="sa-lob-card">
+                            <div class="sa-lob-icon"><i class="bi bi-layers" aria-hidden="true"></i></div>
+                            <div>
+                                <h3>@group.Name</h3>
+                                <p>@group.Count apps • @group.AverageComplete.ToString("0")% complete • @group.Priority priority</p>
+                                <div class="sa-mini-bar"><span style="width:@group.Percent%"></span></div>
+                            </div>
+                            <button type="button" class="sa-btn sa-btn--ghost" @onclick="() => FilterByLob(group.Name)">Open</button>
+                        </article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="sa-table-wrap">
+                    <table class="sa-table">
+                        <thead>
+                            <tr>
+                                <th>Importance</th>
+                                <th>Application</th>
+                                <th>Submission</th>
+                                <th>Account</th>
+                                <th>LOB</th>
+                                <th>Carrier</th>
+                                <th>Status</th>
+                                <th>Complete</th>
+                                <th>Target Premium</th>
+                                <th>Submitted</th>
+                                <th>Due</th>
+                                <th>Producer</th>
+                                <th class="sa-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in PagedRows)
+                            {
+                                <tr class="@RowClass(row)" @onclick="() => SelectRow(row)">
+                                    <td>@ImportanceBadge(row)</td>
+                                    <td>
+                                        <button type="button" class="sa-link-button" @onclick:stopPropagation="true" @onclick="() => OpenApplication(row)">@row.AppNo</button>
+                                        <small>@row.Priority priority</small>
+                                    </td>
+                                    <td>
+                                        <button type="button" class="sa-sub-link" @onclick:stopPropagation="true" @onclick="() => OpenApplication(row)">@row.SubmissionNo</button>
+                                    </td>
+                                    <td><strong>@row.Account</strong></td>
+                                    <td><span class="sa-lob-pill">@Safe(row.Lob, "Unknown")</span></td>
+                                    <td>@Safe(row.Carrier, "Not Assigned")</td>
+                                    <td>@StatusBadge(row.Status)</td>
+                                    <td>@CompletenessBar(row)</td>
+                                    <td>@MoneyOrDash(row.TargetPremium)</td>
+                                    <td>@row.SubmittedDate.ToString("MMM d, yyyy")</td>
+                                    <td>@DueBadge(row)</td>
+                                    <td>@Safe(row.Producer, "Unassigned")</td>
+                                    <td class="sa-actions-col">
+                                        <button type="button" class="sa-icon-btn" title="Open action menu" @onclick:stopPropagation="true" @onclick="() => ToggleActionMenu(row)">
+                                            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+                                        </button>
+                                        @if (_openActionMenuFor == row.AppId)
+                                        {
+                                            <div class="sa-menu" role="menu" @onclick:stopPropagation="true">
+                                                <div class="sa-menu__summary">
+                                                    <strong>@row.AppNo</strong>
+                                                    <span>@row.Status</span>
+                                                </div>
+                                                @foreach (var action in _actions)
+                                                {
+                                                    <button type="button" class="@ActionMenuItemClass(action)" role="menuitem" @onclick="() => HandleActionAsync(action.Key)">
+                                                        <i class="bi @action.Icon" aria-hidden="true"></i>
+                                                        <span>@action.Label</span>
+                                                    </button>
+                                                }
+                                            </div>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="sa-side-panel">
+            <section class="sa-panel-card">
+                <span class="sa-section-kicker">Selected application</span>
+                @if (_selected is null)
+                {
+                    <div class="sa-empty sa-empty--compact">
+                        <i class="bi bi-cursor" aria-hidden="true"></i>
+                        <strong>Select an application</strong>
+                        <span>Choose an application to review status, requirements, and workflow actions.</span>
+                    </div>
+                }
+                else
+                {
+                    <div class="sa-selected">
+                        <div class="sa-selected__title">
+                            <h3>@_selected.AppNo</h3>
+                            @StatusBadge(_selected.Status)
+                        </div>
+                        <p>@_selected.Account • @_selected.Carrier</p>
+                        <div class="sa-score-card">
+                            <span>Importance score</span>
+                            <strong>@ImportanceScore(_selected)</strong>
+                            <small>@ImportanceLevel(_selected)</small>
+                        </div>
+                        <dl class="sa-detail-list">
+                            <div><dt>Submission</dt><dd>@_selected.SubmissionNo</dd></div>
+                            <div><dt>LOB</dt><dd>@Safe(_selected.Lob, "Unknown")</dd></div>
+                            <div><dt>Complete</dt><dd>@_selected.Completeness%</dd></div>
+                            <div><dt>Target Premium</dt><dd>@MoneyText(_selected.TargetPremium)</dd></div>
+                            <div><dt>Markets</dt><dd>@_selected.MarketCount</dd></div>
+                            <div><dt>Quotes</dt><dd>@_selected.QuoteCount</dd></div>
+                            <div><dt>Effective</dt><dd>@_selected.EffectiveDate.ToString("MMM d, yyyy")</dd></div>
+                            <div><dt>Due</dt><dd>@_selected.DueDate.ToString("MMM d, yyyy")</dd></div>
+                            <div><dt>Producer</dt><dd>@Safe(_selected.Producer, "Unassigned")</dd></div>
+                        </dl>
+                        <div class="sa-selected-actions">
+                            <button type="button" class="sa-btn sa-btn--primary" @onclick="() => OpenApplication(_selected)"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Submission</button>
+                            <button type="button" class="sa-btn sa-btn--ghost" @onclick='() => OpenActionDialog("Submit to Carrier")'><i class="bi bi-send" aria-hidden="true"></i> Submit</button>
+                            <button type="button" class="sa-btn sa-btn--ghost" @onclick='() => OpenActionDialog("Mark Approved")'><i class="bi bi-check-circle" aria-hidden="true"></i> Approve</button>
+                        </div>
+                    </div>
+                }
+            </section>
+
+            <section class="sa-panel-card">
+                <span class="sa-section-kicker">Application intelligence</span>
+                <div class="sa-insight-list">
+                    @foreach (var insight in Insights)
+                    {
+                        <div class="sa-insight">
+                            <i class="bi @insight.Icon" aria-hidden="true"></i>
+                            <div>
+                                <strong>@insight.Title</strong>
+                                <span>@insight.Description</span>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </section>
+        </aside>
+    </main>
+</div>
+
+@if (_showActionDialog && _selected is not null)
 {
-    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseActionDialog">
-        <div class="mt-modal sa-action-modal" role="dialog" aria-modal="true" aria-labelledby="sa-action-title" @onclick:stopPropagation="true">
-            <div class="um-modal-header">
+    <div class="sa-modal-backdrop" role="presentation" @onclick="CloseActionDialog">
+        <div class="sa-modal" role="dialog" aria-modal="true" aria-labelledby="sa-action-title" @onclick:stopPropagation="true">
+            <div class="sa-modal__header">
                 <i class="bi @_actionIcon" aria-hidden="true"></i>
                 <span id="sa-action-title">@_actionTitle</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseActionDialog" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button>
+                <button type="button" class="sa-icon-btn sa-icon-btn--light ms-auto" @onclick="CloseActionDialog" disabled="@_actionBusy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
             </div>
             <EditForm Model="_actionForm" OnValidSubmit="ConfirmActionAsync" OnInvalidSubmit="NotifyActionValidationAsync">
                 <DataAnnotationsValidator />
-                <div class="um-modal-body">
+                <div class="sa-modal__body">
                     <div class="sa-modal-intro">
-                        <span class="sa-modal-chip"><i class="bi bi-shield-check" aria-hidden="true"></i> Application workflow</span>
-                        <p>@_actionHelpText</p>
+                        <strong>@_actionHelpText</strong>
+                        <span>@_selected.AppNo — @_selected.Account — @_selected.Carrier</span>
                     </div>
-                    <div class="um-form-grid">
-                        <div class="um-field um-field--full">
-                            <label>Application</label>
-                            <input class="form-control sa-readonly-input" value="@_selected.AppNo - @_selected.Account" disabled />
-                        </div>
+                    <div class="sa-form-grid">
                         @if (_pendingAction is "Submit to Carrier" or "Mark Approved")
                         {
-                            <div class="um-field um-field--full">
-                                <label>Carrier ID <span class="sa-field-hint">optional</span></label>
-                                <InputText class="form-control" @bind-Value="_actionForm.CarrierIdText" placeholder="Leave blank to use the recommended carrier" />
+                            <label class="sa-field sa-field--full">
+                                <span>Carrier ID</span>
+                                <InputText class="form-control" @bind-Value="_actionForm.CarrierIdText" placeholder="Optional carrier GUID" />
                                 <ValidationMessage For="() => _actionForm.CarrierIdText" class="text-danger" />
-                                <small class="sa-field-help">Use a carrier GUID to target a specific market, or leave blank for the recommended market.</small>
-                            </div>
+                            </label>
                         }
                         @if (_pendingAction == "Mark Approved")
                         {
-                            <div class="um-field">
-                                <label>Target Premium <span class="text-danger">*</span></label>
+                            <label class="sa-field">
+                                <span>Target Premium <em>*</em></span>
                                 <InputNumber class="form-control" @bind-Value="_actionForm.AnnualPremium" />
                                 <ValidationMessage For="() => _actionForm.AnnualPremium" class="text-danger" />
-                            </div>
+                            </label>
                         }
                         @if (_pendingAction is "Add Requirements" or "Request Info")
                         {
-                            <div class="um-field">
-                                <label>Due Date <span class="text-danger">*</span></label>
+                            <label class="sa-field">
+                                <span>Due Date <em>*</em></span>
                                 <InputDate class="form-control" @bind-Value="_actionForm.DueDate" />
                                 <ValidationMessage For="() => _actionForm.DueDate" class="text-danger" />
-                            </div>
+                            </label>
                         }
                         @if (_pendingAction == "Add Requirements")
                         {
-                            <div class="um-field">
-                                <label>Completeness Target</label>
+                            <label class="sa-field">
+                                <span>Completeness Target</span>
                                 <InputNumber class="form-control" @bind-Value="_actionForm.Completeness" />
                                 <ValidationMessage For="() => _actionForm.Completeness" class="text-danger" />
-                            </div>
-                        }
-                        <div class="um-field um-field--full">
-                            <label>
-                                @NotesLabel
-                                @if (RequiresNotes)
-                                {
-                                    <span class="text-danger">*</span>
-                                }
                             </label>
+                        }
+                        <label class="sa-field sa-field--full">
+                            <span>@ActionNotesLabel</span>
                             <InputTextArea class="form-control" rows="4" @bind-Value="_actionForm.Notes" />
                             <ValidationMessage For="() => _actionForm.Notes" class="text-danger" />
-                        </div>
+                        </label>
                     </div>
                 </div>
-                <div class="um-modal-footer">
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseActionDialog" disabled="@_actionBusy">Cancel</button>
-                    <button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy">
+                <div class="sa-modal__footer">
+                    <button type="button" class="sa-btn sa-btn--ghost" @onclick="CloseActionDialog" disabled="@_actionBusy">Cancel</button>
+                    <button type="submit" class="sa-btn sa-btn--primary" disabled="@_actionBusy">
                         @if (_actionBusy)
                         {
                             <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
@@ -94,27 +414,28 @@
         </div>
     </div>
 }
+
 @if (_showConfirmDialog)
 {
-    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseConfirmDialog">
-        <div class="mt-modal sa-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="sa-confirm-title" @onclick:stopPropagation="true">
-            <div class="um-modal-header">
+    <div class="sa-modal-backdrop" role="presentation" @onclick="CloseConfirmDialog">
+        <div class="sa-confirm" role="dialog" aria-modal="true" aria-labelledby="sa-confirm-title" @onclick:stopPropagation="true">
+            <div class="sa-modal__header">
                 <i class="bi @_confirmIcon" aria-hidden="true"></i>
                 <span>Confirm application action</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseConfirmDialog" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button>
+                <button type="button" class="sa-icon-btn sa-icon-btn--light ms-auto" @onclick="CloseConfirmDialog" disabled="@_actionBusy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
             </div>
-            <div class="um-confirm-dialog">
-                <div class="um-confirm-icon @(_pendingAction == "Reject" ? "um-confirm-icon--danger" : "um-confirm-icon--info")">
+            <div class="sa-confirm__body">
+                <div class="@ConfirmIconClass">
                     <i class="bi @_confirmIcon" aria-hidden="true"></i>
                 </div>
-                <div class="um-confirm-message">
-                    <h6 id="sa-confirm-title">@_confirmTitle</h6>
+                <div>
+                    <h3 id="sa-confirm-title">@_confirmTitle</h3>
                     <p>@_confirmMessage</p>
                 </div>
             </div>
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseConfirmDialog" disabled="@_actionBusy">Cancel</button>
-                <button type="button" class="um-btn @(_pendingAction == "Reject" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteConfirmedActionAsync" disabled="@_actionBusy">
+            <div class="sa-modal__footer">
+                <button type="button" class="sa-btn sa-btn--ghost" @onclick="CloseConfirmDialog" disabled="@_actionBusy">Cancel</button>
+                <button type="button" class="@ConfirmButtonClass" @onclick="ExecuteConfirmedActionAsync" disabled="@_actionBusy">
                     @if (_actionBusy)
                     {
                         <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
@@ -125,184 +446,40 @@
         </div>
     </div>
 }
-<div class="sa-enterprise-page">
-    <div class="sa-header">
-        <div class="sa-header-left">
-            <div class="sa-lob-icon">
-                <i class="bi bi-clipboard-check" aria-hidden="true"></i>
-            </div>
-            <div class="sa-header-info">
-                <div class="sa-title-row">
-                    <h1 class="sa-page-title">Application Tracking Desk</h1>
-                    <span class="sa-status-pill">@FilteredRows.Count() active</span>
-                    @if (HasFilters)
-                    {
-                        <span class="sa-filter-pill">Filtered</span>
-                    }
-                </div>
-                <div class="sa-sub-row">
-                    <span class="sa-sub-chip"><i class="bi bi-stack" aria-hidden="true"></i>@_rows.Count total applications</span>
-                    <span class="sa-sub-chip"><i class="bi bi-send" aria-hidden="true"></i>@_rows.Count(r => r.Status == "Submitted") submitted</span>
-                    <span class="sa-sub-chip"><i class="bi bi-hourglass-split" aria-hidden="true"></i>@_rows.Count(r => r.Status == "Under Review") in review</span>
-                    <span class="sa-sub-chip"><i class="bi bi-check-circle" aria-hidden="true"></i>@_rows.Count(r => r.Status == "Approved") approved</span>
-                </div>
-            </div>
-        </div>
-        <div class="sa-header-actions">
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "sa-spin" : "")"></i> Refresh</button>
-            <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenNewSubmission"><i class="bi bi-plus-lg"></i> New Application</button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenSubmissions"><i class="bi bi-send"></i> Submissions</button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenQuotes"><i class="bi bi-file-text"></i> Quotes</button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenDeclines"><i class="bi bi-x-circle"></i> Declines</button>
-        </div>
-    </div>
 
-    @if (_loadError is not null)
+<div class="sa-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
     {
-        <div class="alert alert-danger sa-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-            <i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError
+        <div class="sa-toast @toast.CssClass">
+            <i class="bi @ToastIconClass(toast)" aria-hidden="true"></i>
+            <span>@toast.Message</span>
+            <button type="button" @onclick="() => DismissToast(toast.Id)"><i class="bi bi-x" aria-hidden="true"></i></button>
         </div>
     }
-
-    <div class="sa-kpi-strip">
-        @KpiCard("bi-clipboard", "Total", _rows.Count.ToString(), "sa-kpi-total", null)
-        @KpiCard("bi-pencil-square", "Draft", _rows.Count(r => r.Status == "Draft").ToString(), "sa-kpi-draft", "Draft")
-        @KpiCard("bi-send", "Submitted", _rows.Count(r => r.Status == "Submitted").ToString(), "sa-kpi-submitted", "Submitted")
-        @KpiCard("bi-hourglass-split", "Under Review", _rows.Count(r => r.Status == "Under Review").ToString(), "sa-kpi-review", "Under Review")
-        @KpiCard("bi-exclamation-circle", "Requirements", _rows.Count(r => r.Status == "Requirements Pending").ToString(), "sa-kpi-reqs", "Requirements Pending")
-        @KpiCard("bi-check-circle", "Approved", _rows.Count(r => r.Status == "Approved").ToString(), "sa-kpi-approved", "Approved")
-        @KpiCard("bi-x-circle", "Rejected", _rows.Count(r => r.Status == "Rejected").ToString(), "sa-kpi-rejected", "Rejected")
-        @KpiCard("bi-percent", "Avg Complete", AverageCompletenessText, "sa-kpi-complete", "__complete")
-    </div>
-
-    <div class="sa-enterprise-search" role="search" aria-label="Search applications">
-        <div class="sa-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
-        <div class="sa-search-body">
-            <label for="sa-search-input">Enterprise search</label>
-            <input id="sa-search-input" class="sa-search-input" @bind="SearchText" @bind:event="oninput" placeholder="Search every application field: app #, submission, account, carrier, status, producer, premium, dates, priority, IDs…" />
-            <div class="sa-search-hint">
-                Searches all visible and supporting application fields as you type.
-            </div>
-        </div>
-        <div class="sa-search-result">
-            <strong>@FilteredRows.Count()</strong>
-            <span>matches</span>
-        </div>
-        @if (!string.IsNullOrWhiteSpace(_searchText))
-        {
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm sa-search-clear" @onclick="ClearFilters">
-                <i class="bi bi-x-lg" aria-hidden="true"></i> Clear
-            </button>
-        }
-    </div>
-
-    <div class="sa-view-tabs" role="tablist" aria-label="Application views">
-        @foreach (var t in _tabs)
-        {
-            <button class="sa-view-tab @(_activeTab == t.Key ? "sa-view-tab--active" : "")"
-                    type="button"
-                    role="tab"
-                    aria-selected="@(_activeTab == t.Key)"
-                    @onclick="() => SetActiveTab(t.Key)">
-                <i class="bi @t.Icon" aria-hidden="true"></i> @t.Label
-                <span class="sa-tab-count">@TabCount(t.Key)</span>
-            </button>
-        }
-    </div>
-
-    <div class="sa-grid-wrap">
-        @if (_loading)
-        {
-            <div class="sa-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span>Loading applications…</span></div>
-        }
-        else if (!PagedRows.Any())
-        {
-            <div class="sa-empty-state">
-                <i class="bi bi-clipboard" aria-hidden="true"></i>
-                <strong>No applications found</strong>
-                <span>Adjust filters or create a new submission application.</span>
-            </div>
-        }
-        else
-        {
-            <div class="sa-grid-toolbar">
-                <div>
-                    <strong>@FilteredRows.Count()</strong> applications
-                    @if (HasFilters)
-                    {
-                        <span class="sa-filter-note">Filtered</span>
-                    }
-                </div>
-                <span>Page @_page of @TotalPages</span>
-            </div>
-            <div class="sa-table-scroll">
-                <table class="sa-table">
-                    <thead>
-                        <tr>
-                            <th>Application</th>
-                            <th>Submission</th>
-                            <th>Account</th>
-                            <th>LOB</th>
-                            <th>Carrier</th>
-                            <th>Status</th>
-                            <th>Complete</th>
-                            <th>Submitted</th>
-                            <th>Due</th>
-                            <th>Producer</th>
-                            <th class="sa-actions-col">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var row in PagedRows)
-                        {
-                            <tr class="sa-table-row" @onclick="() => OpenApplication(row)">
-                                <td>@AppNoLink(row)</td>
-                                <td>@SubLink(row)</td>
-                                <td>
-                                    <div class="sa-account-cell">
-                                        <span class="sa-avatar">@Initials(row.Account)</span>
-                                        <strong>@row.Account</strong>
-                                    </div>
-                                </td>
-                                <td>@LobChip(row.Lob)</td>
-                                <td>@row.Carrier</td>
-                                <td>@StatusChip(row.Status)</td>
-                                <td>@CompletenessBar(row.Completeness)</td>
-                                <td>@row.SubmittedDate.ToString("MM/dd/yyyy")</td>
-                                <td>@DueCell(row.DueDate)</td>
-                                <td>@row.Producer</td>
-                                <td class="sa-actions-col">@CtxBtn(row)</td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-            </div>
-            <div class="sa-pager">
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left"></i> Previous</button>
-                <span class="sa-page-chip">@PageSummary</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right"></i></button>
-            </div>
-        }
-    </div>
 </div>
 
 @code {
-    SfToast _toast = default!;
-
     bool _loading;
     bool _showActionDialog;
     bool _showConfirmDialog;
     bool _actionBusy;
     string _activeTab = "all";
-    string? _kpiFilter;
+    string _activeKpi = "all";
+    string _sortMode = "importance";
     string? _loadError;
     string? _searchText;
+    string? _statusFilter;
+    string? _carrierFilter;
+    string? _lobFilter;
+    string _refreshIconClass = string.Empty;
     Guid? _openActionMenuFor;
     int _page = 1;
-    const int PageSize = 20;
+    const int PageSize = 18;
 
-    AppRow _selected = new();
+    AppRow? _selected;
     readonly ApplicationActionForm _actionForm = new();
+    readonly List<AppRow> _rows = [];
+    readonly List<ToastMessage> _toasts = [];
     string _pendingAction = string.Empty;
     string _actionTitle = "Application Action";
     string _actionIcon = "bi-clipboard";
@@ -312,60 +489,44 @@
     string _confirmMessage = "Confirm this application action?";
     string _confirmIcon = "bi-question-circle";
 
-    sealed class AppRow : ApplicationRegisterRow
-    {
-        public Guid CarrierId { get; set; }
-        public decimal? TargetPremium { get; set; }
-        public DateTime EffectiveDate { get; set; }
-        public DateTime ExpirationDate { get; set; }
-        public string Priority { get; set; } = "Normal";
-        public int MarketCount { get; set; }
-        public int QuoteCount { get; set; }
-    }
-
-    record TabDef(string Key, string Label, string Icon);
-    record ActionItem(string Text, string IconCss);
-
-    static readonly string[] ApplicationStatuses = ["Draft", "Submitted", "Under Review", "Requirements Pending", "Approved", "Rejected"];
-
     readonly TabDef[] _tabs =
     [
         new("all", "All", "bi-stack"),
+        new("priority", "Priority", "bi-lightning-charge"),
         new("draft", "Draft", "bi-pencil-square"),
         new("submitted", "Submitted", "bi-send"),
         new("review", "Under Review", "bi-hourglass-split"),
-        new("reqs", "Requirements", "bi-exclamation-circle"),
+        new("reqs", "Requirements", "bi-paperclip"),
         new("approved", "Approved", "bi-check-circle"),
-        new("rejected", "Rejected", "bi-x-circle"),
-        new("carrier", "By Carrier", "bi-building"),
+        new("carrier", "Carrier", "bi-building"),
+        new("lob", "LOB", "bi-layers"),
     ];
 
-    readonly ActionItem[] _actionItems =
+    readonly ActionDef[] _actions =
     [
-        new("Open", "bi bi-box-arrow-up-right"),
-        new("Submit to Carrier", "bi bi-send"),
-        new("Add Requirements", "bi bi-paperclip"),
-        new("Request Info", "bi bi-question-circle"),
-        new("Mark Approved", "bi bi-check-circle"),
-        new("Reject", "bi bi-x-circle"),
-        new("Download App", "bi bi-file-earmark-pdf"),
+        new("Open", "Open Submission", "bi-box-arrow-up-right", false),
+        new("Submit to Carrier", "Submit to Carrier", "bi-send", false),
+        new("Add Requirements", "Add Requirements", "bi-paperclip", false),
+        new("Request Info", "Request Info", "bi-question-circle", false),
+        new("Mark Approved", "Mark Approved", "bi-check-circle", false),
+        new("Download App", "Generate Packet", "bi-file-earmark-pdf", false),
+        new("Reject", "Reject", "bi-x-circle", true),
     ];
 
-    readonly List<AppRow> _rows = [];
+    static readonly string[] ApplicationStatuses = ["Draft", "Submitted", "Under Review", "Requirements Pending", "Approved", "Rejected"];
 
     string AverageCompletenessText => _rows.Count == 0 ? "0%" : $"{_rows.Average(r => r.Completeness):0}%";
-    bool HasFilters => !string.IsNullOrWhiteSpace(_searchText) || _kpiFilter is not null;
-    string? SearchText
-    {
-        get => _searchText;
-        set
-        {
-            _searchText = value;
-            _page = 1;
-        }
-    }
-    bool RequiresNotes => _pendingAction is "Add Requirements" or "Request Info" or "Reject";
-    string NotesLabel => _pendingAction switch
+    int TotalApplicationCount => _rows.Count;
+    int PriorityApplicationCount => PriorityRows.Count();
+    int SubmittedApplicationCount => _rows.Count(r => r.Status == "Submitted");
+    int RequirementsApplicationCount => _rows.Count(r => r.Status == "Requirements Pending");
+    int ApprovedApplicationCount => _rows.Count(r => r.Status == "Approved");
+    int CarrierCount => _rows.Select(r => Safe(r.Carrier, "Not Assigned")).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    bool HasFilters => _activeKpi != "all" || !string.IsNullOrWhiteSpace(_searchText) || !string.IsNullOrWhiteSpace(_statusFilter) || !string.IsNullOrWhiteSpace(_carrierFilter) || !string.IsNullOrWhiteSpace(_lobFilter);
+    string ActiveViewTitle => _tabs.FirstOrDefault(t => t.Key == _activeTab)?.Label ?? "All";
+    string ConfirmIconClass => _pendingAction == "Reject" ? "sa-confirm-icon sa-confirm-icon--danger" : "sa-confirm-icon";
+    string ConfirmButtonClass => _pendingAction == "Reject" ? "sa-btn sa-btn--danger" : "sa-btn sa-btn--primary";
+    string ActionNotesLabel => _pendingAction switch
     {
         "Add Requirements" => "Requirements",
         "Request Info" => "Information Request",
@@ -373,32 +534,65 @@
         _ => "Notes"
     };
 
-    IEnumerable<AppRow> BaseTabRows => _activeTab switch
+    string? SearchText { get => _searchText; set { _searchText = value; _page = 1; } }
+    string? StatusFilter { get => _statusFilter; set { _statusFilter = value; _page = 1; } }
+    string? CarrierFilter { get => _carrierFilter; set { _carrierFilter = value; _page = 1; } }
+    string? LobFilter { get => _lobFilter; set { _lobFilter = value; _page = 1; } }
+    string SortMode { get => _sortMode; set { _sortMode = value; _page = 1; } }
+
+    IEnumerable<string> StatusOptions => _rows.Select(r => r.Status).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    IEnumerable<string> CarrierOptions => _rows.Select(r => Safe(r.Carrier, "Not Assigned")).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    IEnumerable<string> LobOptions => _rows.Select(r => Safe(r.Lob, "Unknown")).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    IEnumerable<AppRow> PriorityRows => _rows.Where(r => ImportanceLevel(r) is "Critical" or "High");
+    IEnumerable<AppRow> OverdueRows => _rows.Where(r => DaysUntilDue(r) < 0 && r.Status is not "Approved" and not "Rejected");
+
+    IEnumerable<AppRow> TabRows => _activeTab switch
     {
+        "priority" => PriorityRows,
         "draft" => _rows.Where(r => r.Status == "Draft"),
         "submitted" => _rows.Where(r => r.Status == "Submitted"),
         "review" => _rows.Where(r => r.Status == "Under Review"),
         "reqs" => _rows.Where(r => r.Status == "Requirements Pending"),
         "approved" => _rows.Where(r => r.Status == "Approved"),
-        "rejected" => _rows.Where(r => r.Status == "Rejected"),
-        "carrier" => _rows.OrderBy(r => r.Carrier).ThenBy(r => r.DueDate),
-        _ => _rows,
+        "carrier" => _rows,
+        "lob" => _rows,
+        _ => _rows
     };
 
-    IEnumerable<AppRow> FilteredRows => ApplyEnterpriseFilters(BaseTabRows);
+    IEnumerable<AppRow> FilteredRows => SortRows(ApplyFilters(TabRows));
     IEnumerable<AppRow> PagedRows => FilteredRows.Skip((_page - 1) * PageSize).Take(PageSize);
     int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRows.Count() / (double)PageSize));
-    string PageSummary
+
+    IEnumerable<GroupSummary> CarrierRows
     {
         get
         {
-            var total = FilteredRows.Count();
-            if (total == 0) return "No applications";
-            var start = ((_page - 1) * PageSize) + 1;
-            var end = Math.Min(_page * PageSize, total);
-            return $"Showing {start}-{end} of {total}";
+            var groups = FilteredRows.GroupBy(r => Safe(r.Carrier, "Not Assigned")).ToList();
+            var max = Math.Max(1, groups.Count == 0 ? 1 : groups.Max(g => g.Count()));
+            return groups.Select(g => new GroupSummary(g.Key, g.Count(), g.Sum(x => x.TargetPremium ?? 0), g.Count(x => ImportanceLevel(x) is "Critical" or "High"), g.Average(x => x.Completeness), Math.Max(8, (int)Math.Round(g.Count() * 100m / max))))
+                .OrderByDescending(g => g.Priority)
+                .ThenByDescending(g => g.Premium);
         }
     }
+
+    IEnumerable<GroupSummary> LobRows
+    {
+        get
+        {
+            var groups = FilteredRows.GroupBy(r => Safe(r.Lob, "Unknown")).ToList();
+            var max = Math.Max(1, groups.Count == 0 ? 1 : groups.Max(g => g.Count()));
+            return groups.Select(g => new GroupSummary(g.Key, g.Count(), g.Sum(x => x.TargetPremium ?? 0), g.Count(x => ImportanceLevel(x) is "Critical" or "High"), g.Average(x => x.Completeness), Math.Max(8, (int)Math.Round(g.Count() * 100m / max))))
+                .OrderByDescending(g => g.Count);
+        }
+    }
+
+    IEnumerable<InsightDef> Insights =>
+    [
+        new("Requirement risk", $"{RequirementsApplicationCount} applications have outstanding requirements.", "bi-paperclip"),
+        new("Overdue follow-up", $"{OverdueRows.Count()} applications are past due and need review.", "bi-clock-history"),
+        new("Carrier readiness", $"{SubmittedApplicationCount} submitted applications are available for market workflow.", "bi-building"),
+        new("Approval pipeline", $"{ApprovedApplicationCount} applications are ready for quote workflow.", "bi-check-circle")
+    ];
 
     protected override async Task OnInitializedAsync()
     {
@@ -409,48 +603,45 @@
     async Task LoadAsync()
     {
         _loading = true;
+        _refreshIconClass = "sa-spin";
         _loadError = null;
         try
         {
-            var result = await Api.SearchSubmissionsAsync(SubmissionPageConstants.TenantId, pageSize: 150);
+            var result = await Api.SearchSubmissionsAsync(SubmissionPageConstants.TenantId, pageSize: 500);
             _rows.Clear();
             _rows.AddRange((result?.Items ?? []).Select(ToAppRow));
-
-            if (_rows.Count == 0)
-                BuildStub();
-
+            _selected = _selected is null ? _rows.OrderByDescending(ImportanceScore).FirstOrDefault() : _rows.FirstOrDefault(r => r.AppId == _selected.AppId) ?? _rows.OrderByDescending(ImportanceScore).FirstOrDefault();
             _page = Math.Min(_page, TotalPages);
         }
         catch (Exception ex)
         {
             _loadError = $"Failed to load applications: {ex.Message}";
-            await _toast.ShowAsync(new ToastModel { Content = $"Load failed: {ex.Message}", CssClass = "e-toast-danger" });
-            if (_rows.Count == 0)
-                BuildStub();
+            ShowToast($"Load failed: {ex.Message}", "sa-toast--danger");
         }
         finally
         {
             _loading = false;
+            _refreshIconClass = string.Empty;
         }
     }
 
     static AppRow ToAppRow(SubmissionDto dto)
     {
-        var x = SubmissionPageData.ToApplicationRow(dto);
+        var row = SubmissionPageData.ToApplicationRow(dto);
         return new AppRow
         {
-            AppId = x.AppId,
-            AppNo = x.AppNo,
-            SubmissionNo = x.SubmissionNo,
-            SubId = x.SubId,
-            Account = x.Account,
-            Lob = x.Lob,
-            Carrier = dto.MarketCount > 1 ? "Multiple Markets" : x.Carrier,
+            AppId = row.AppId,
+            AppNo = row.AppNo,
+            SubmissionNo = row.SubmissionNo,
+            SubId = row.SubId,
+            Account = row.Account,
+            Lob = row.Lob,
+            Carrier = dto.MarketCount > 1 ? "Multiple Markets" : row.Carrier,
             Status = DeriveApplicationStatus(dto),
             Completeness = DeriveCompleteness(dto),
-            SubmittedDate = x.SubmittedDate,
-            DueDate = x.DueDate,
-            Producer = x.Producer,
+            SubmittedDate = row.SubmittedDate,
+            DueDate = row.DueDate,
+            Producer = row.Producer,
             TargetPremium = dto.TargetPremium,
             EffectiveDate = dto.EffectiveDate,
             ExpirationDate = dto.ExpirationDate,
@@ -463,7 +654,7 @@
     static string DeriveApplicationStatus(SubmissionDto dto) => dto.Status switch
     {
         "Draft" => "Draft",
-        "New" => dto.MarketCount > 0 ? "Submitted" : "Submitted",
+        "New" => "Submitted",
         "In Review" => dto.MarketCount > 0 && dto.QuoteCount == 0 ? "Under Review" : "Requirements Pending",
         "Quoted" or "Bound" => "Approved",
         "Declined" or "Withdrawn" => "Rejected",
@@ -480,7 +671,7 @@
         _ => 60
     };
 
-    IEnumerable<AppRow> ApplyEnterpriseFilters(IEnumerable<AppRow> rows)
+    IEnumerable<AppRow> ApplyFilters(IEnumerable<AppRow> rows)
     {
         if (!string.IsNullOrWhiteSpace(_searchText))
         {
@@ -492,50 +683,121 @@
                 || Contains(r.Carrier, term)
                 || Contains(r.Status, term)
                 || Contains(r.Producer, term)
+                || Contains(r.Priority, term)
                 || Contains(r.AppId.ToString(), term)
                 || Contains(r.SubId.ToString(), term)
-                || Contains(r.CarrierId.ToString(), term)
                 || Contains(r.Completeness.ToString(), term)
                 || Contains($"{r.Completeness}%", term)
                 || Contains(r.SubmittedDate.ToString("MM/dd/yyyy"), term)
-                || Contains(r.SubmittedDate.ToString("yyyy-MM-dd"), term)
                 || Contains(r.DueDate.ToString("MM/dd/yyyy"), term)
-                || Contains(r.DueDate.ToString("yyyy-MM-dd"), term)
                 || Contains(r.EffectiveDate.ToString("MM/dd/yyyy"), term)
-                || Contains(r.EffectiveDate.ToString("yyyy-MM-dd"), term)
-                || Contains(r.ExpirationDate.ToString("MM/dd/yyyy"), term)
-                || Contains(r.ExpirationDate.ToString("yyyy-MM-dd"), term)
                 || Contains(r.TargetPremium?.ToString("C0"), term)
                 || Contains(r.TargetPremium?.ToString("0.##"), term)
-                || Contains(r.Priority, term)
                 || Contains(r.MarketCount.ToString(), term)
                 || Contains(r.QuoteCount.ToString(), term));
         }
 
-        rows = _kpiFilter switch
+        if (!string.IsNullOrWhiteSpace(_statusFilter))
         {
-            null => rows,
-            "__complete" => rows.Where(r => r.Completeness >= 90),
-            var f => rows.Where(r => r.Status == f)
+            rows = rows.Where(r => string.Equals(r.Status, _statusFilter, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_carrierFilter))
+        {
+            rows = rows.Where(r => string.Equals(Safe(r.Carrier, "Not Assigned"), _carrierFilter, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_lobFilter))
+        {
+            rows = rows.Where(r => string.Equals(Safe(r.Lob, "Unknown"), _lobFilter, StringComparison.OrdinalIgnoreCase));
+        }
+
+        rows = _activeKpi switch
+        {
+            "priority" => rows.Where(r => ImportanceLevel(r) is "Critical" or "High"),
+            "submitted" => rows.Where(r => r.Status == "Submitted"),
+            "requirements" => rows.Where(r => r.Status == "Requirements Pending"),
+            "approved" => rows.Where(r => r.Status == "Approved"),
+            "complete" => rows.Where(r => r.Completeness >= 90),
+            _ => rows
         };
 
         return rows;
     }
 
-    static bool Contains(string? source, string term) =>
-        !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
+    IEnumerable<AppRow> SortRows(IEnumerable<AppRow> rows) => _sortMode switch
+    {
+        "due" => rows.OrderBy(r => r.DueDate),
+        "complete" => rows.OrderBy(r => r.Completeness).ThenBy(r => r.DueDate),
+        "premium" => rows.OrderByDescending(r => r.TargetPremium ?? 0),
+        "status" => rows.OrderBy(r => r.Status).ThenBy(r => r.DueDate),
+        "carrier" => rows.OrderBy(r => Safe(r.Carrier, "Not Assigned")).ThenBy(r => r.DueDate),
+        _ => rows.OrderByDescending(ImportanceScore).ThenBy(r => r.DueDate)
+    };
+
+    int ImportanceScore(AppRow row)
+    {
+        var score = 0;
+        score += row.Status switch
+        {
+            "Requirements Pending" => 34,
+            "Under Review" => 28,
+            "Submitted" => 22,
+            "Draft" => 14,
+            "Approved" => 18,
+            "Rejected" => 4,
+            _ => 10
+        };
+
+        var due = DaysUntilDue(row);
+        score += due switch
+        {
+            < 0 => 30,
+            <= 3 => 24,
+            <= 7 => 16,
+            <= 14 => 8,
+            _ => 0
+        };
+
+        score += row.Completeness switch
+        {
+            < 45 => 16,
+            < 70 => 10,
+            < 90 => 5,
+            _ => 0
+        };
+
+        if (row.Priority.Contains("Critical", StringComparison.OrdinalIgnoreCase)) score += 20;
+        else if (row.Priority.Contains("High", StringComparison.OrdinalIgnoreCase)) score += 14;
+        if ((row.TargetPremium ?? 0) >= 100000) score += 8;
+        if (row.MarketCount == 0 && row.Status is "Submitted" or "Under Review") score += 6;
+        if (row.QuoteCount > 0) score += 4;
+
+        return Math.Clamp(score, 0, 100);
+    }
+
+    string ImportanceLevel(AppRow row) => ImportanceScore(row) switch
+    {
+        >= 78 => "Critical",
+        >= 58 => "High",
+        >= 36 => "Medium",
+        _ => "Standard"
+    };
+
+    int DaysUntilDue(AppRow row) => (int)Math.Floor((row.DueDate.Date - DateTime.Today).TotalDays);
 
     string TabCount(string key) => key switch
     {
         "all" => _rows.Count.ToString(),
+        "priority" => PriorityRows.Count().ToString(),
         "draft" => _rows.Count(r => r.Status == "Draft").ToString(),
         "submitted" => _rows.Count(r => r.Status == "Submitted").ToString(),
         "review" => _rows.Count(r => r.Status == "Under Review").ToString(),
         "reqs" => _rows.Count(r => r.Status == "Requirements Pending").ToString(),
         "approved" => _rows.Count(r => r.Status == "Approved").ToString(),
-        "rejected" => _rows.Count(r => r.Status == "Rejected").ToString(),
-        "carrier" => _rows.Select(r => r.Carrier).Distinct().Count().ToString(),
-        _ => string.Empty,
+        "carrier" => CarrierCount.ToString(),
+        "lob" => _rows.Select(r => Safe(r.Lob, "Unknown")).Distinct(StringComparer.OrdinalIgnoreCase).Count().ToString(),
+        _ => string.Empty
     };
 
     void SetActiveTab(string key)
@@ -544,44 +806,80 @@
         _page = 1;
     }
 
-    void ToggleKpiFilter(string? filterKey)
+    void SetKpi(string key)
     {
-        _kpiFilter = filterKey is null || _kpiFilter == filterKey ? null : filterKey;
+        _activeKpi = _activeKpi == key ? "all" : key;
         _page = 1;
     }
 
-    void OpenNewSubmission() => Nav.NavigateTo("/submissions/new");
-    void OpenSubmissions() => Nav.NavigateTo("/submissions");
-    void OpenQuotes() => Nav.NavigateTo("/submissions/quotes");
-    void OpenDeclines() => Nav.NavigateTo("/submissions/declines");
+    void SetDashboardFocus(string tab, string kpi)
+    {
+        _activeTab = tab;
+        _activeKpi = kpi;
+        _sortMode = "importance";
+        _page = 1;
+    }
+
+    void ShowPriorityQueue() => SetDashboardFocus("priority", "priority");
+    void ShowRequirementsQueue() => SetDashboardFocus("reqs", "requirements");
+    void ShowCarrierView() => SetDashboardFocus("carrier", "all");
+    void ShowApprovedQueue() => SetDashboardFocus("approved", "approved");
+    void ShowLobView() => SetDashboardFocus("lob", "all");
+
+    void SelectRow(AppRow row)
+    {
+        _selected = row;
+        _openActionMenuFor = null;
+    }
+
     void OpenApplication(AppRow row) => Nav.NavigateTo($"/submissions/{row.SubId}");
+
+    void ToggleActionMenu(AppRow row)
+    {
+        _selected = row;
+        _openActionMenuFor = _openActionMenuFor == row.AppId ? null : row.AppId;
+    }
+
+    void FilterByCarrier(string carrier)
+    {
+        _carrierFilter = carrier;
+        _activeTab = "all";
+        _page = 1;
+    }
+
+    void FilterByLob(string lob)
+    {
+        _lobFilter = lob;
+        _activeTab = "all";
+        _page = 1;
+    }
 
     void ClearFilters()
     {
         _searchText = null;
-        _kpiFilter = null;
+        _statusFilter = null;
+        _carrierFilter = null;
+        _lobFilter = null;
+        _activeKpi = "all";
         _page = 1;
     }
 
     void PreviousPage()
     {
-        if (_page > 1)
-            _page--;
+        if (_page > 1) _page--;
     }
 
     void NextPage()
     {
-        if (_page < TotalPages)
-            _page++;
+        if (_page < TotalPages) _page++;
     }
 
     async Task HandleActionAsync(string action)
     {
         _openActionMenuFor = null;
-
-        if (_selected.SubId == Guid.Empty)
+        if (_selected is null)
         {
-            await _toast.ShowAsync(new ToastModel { Content = "Select an application before running an action.", CssClass = "e-toast-danger" });
+            ShowToast("Select an application before running an action.", "sa-toast--danger");
             return;
         }
 
@@ -595,16 +893,22 @@
             case "Request Info":
             case "Mark Approved":
             case "Download App":
-                OpenActionDialog(action);
-                break;
             case "Reject":
                 OpenActionDialog(action);
                 break;
         }
+
+        await Task.CompletedTask;
     }
 
     void OpenActionDialog(string action)
     {
+        if (_selected is null)
+        {
+            ShowToast("Select an application before running an action.", "sa-toast--danger");
+            return;
+        }
+
         _pendingAction = action;
         _actionForm.Reset(_selected, action);
         (_actionTitle, _actionIcon, _actionButtonText) = action switch
@@ -642,16 +946,21 @@
         return Task.CompletedTask;
     }
 
-    Task NotifyActionValidationAsync() =>
-        _toast.ShowAsync(new ToastModel { Content = "Please correct the highlighted fields before continuing.", CssClass = "e-toast-danger" });
+    Task NotifyActionValidationAsync()
+    {
+        ShowToast("Please correct the highlighted fields before continuing.", "sa-toast--danger");
+        return Task.CompletedTask;
+    }
 
     void OpenConfirmDialog(string action)
     {
+        if (_selected is null) return;
+
         _pendingAction = action;
         (_confirmTitle, _confirmMessage, _confirmIcon) = action switch
         {
             "Submit to Carrier" => ($"Submit {_selected.AppNo}?", "This will send the application to a carrier market and move the submission into review.", "bi-send"),
-            "Add Requirements" => ($"Add requirements to {_selected.AppNo}?", "This will generate an application requirement record for tracking and keep the item visible in follow-up views.", "bi-paperclip"),
+            "Add Requirements" => ($"Add requirements to {_selected.AppNo}?", "This will generate an application requirements packet for follow-up tracking.", "bi-paperclip"),
             "Request Info" => ($"Request more information for {_selected.AppNo}?", "This will generate an application information request packet for follow-up.", "bi-question-circle"),
             "Mark Approved" => ($"Approve {_selected.AppNo}?", "This will create a quote request and move the related application to approved status.", "bi-check-circle"),
             "Reject" => ($"Reject {_selected.AppNo}?", "This will decline the related submission and move the application to rejected status.", "bi-exclamation-triangle"),
@@ -667,39 +976,32 @@
         _showConfirmDialog = false;
     }
 
-    void CloseActionMenu()
-    {
-        if (_actionBusy) return;
-        _openActionMenuFor = null;
-    }
-
     async Task ExecuteConfirmedActionAsync()
     {
-        if (_selected.SubId == Guid.Empty)
-            return;
+        if (_selected is null) return;
 
         _actionBusy = true;
         try
         {
             SubmissionActionResult result = _pendingAction switch
             {
-                "Submit to Carrier" => await Api.SubmitSubmissionToMarketAsync(_selected.SubId, new SubmitSubmissionToMarketRequest(SubmissionPageConstants.TenantId, ParseCarrierId(_actionForm.CarrierIdText), _actionForm.Notes ?? "Application submitted to carrier from application register.")),
+                "Submit to Carrier" => await Api.SubmitSubmissionToMarketAsync(_selected.SubId, new SubmitSubmissionToMarketRequest(SubmissionPageConstants.TenantId, ParseCarrierId(_actionForm.CarrierIdText), _actionForm.Notes ?? "Application submitted to carrier from application command center.")),
                 "Add Requirements" => await GenerateApplicationPacketAsync("Application Requirements", _actionForm.Notes),
                 "Request Info" => await GenerateApplicationPacketAsync("Application Information Request", _actionForm.Notes),
-                "Mark Approved" => await Api.RequestSubmissionQuoteAsync(_selected.SubId, new RequestSubmissionQuoteRequest(SubmissionPageConstants.TenantId, ParseCarrierId(_actionForm.CarrierIdText), _actionForm.AnnualPremium, null, null, _actionForm.Notes ?? "Application approved from application register.")),
-                "Reject" => await Api.DeclineSubmissionAsync(_selected.SubId, new DeclineSubmissionRequest(SubmissionPageConstants.TenantId, _actionForm.Notes ?? $"Application rejected from register: {_selected.AppNo}.")),
+                "Mark Approved" => await Api.RequestSubmissionQuoteAsync(_selected.SubId, new RequestSubmissionQuoteRequest(SubmissionPageConstants.TenantId, ParseCarrierId(_actionForm.CarrierIdText), _actionForm.AnnualPremium, null, null, _actionForm.Notes ?? "Application approved from application command center.")),
+                "Reject" => await Api.DeclineSubmissionAsync(_selected.SubId, new DeclineSubmissionRequest(SubmissionPageConstants.TenantId, _actionForm.Notes ?? $"Application rejected from command center: {_selected.AppNo}.")),
                 "Download App" => await GenerateApplicationPacketAsync("Application Packet", _actionForm.Notes),
                 _ => new SubmissionActionResult(_selected.SubId, "No action executed.")
             };
 
             _showActionDialog = false;
             _showConfirmDialog = false;
-            await _toast.ShowAsync(new ToastModel { Content = result.Message, CssClass = "e-toast-success" });
+            ShowToast(result.Message, "sa-toast--success");
             await LoadAsync();
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new ToastModel { Content = $"Action failed: {ex.Message}", CssClass = "e-toast-danger" });
+            ShowToast($"Action failed: {ex.Message}", "sa-toast--danger");
         }
         finally
         {
@@ -709,146 +1011,78 @@
 
     async Task<SubmissionActionResult> GenerateApplicationPacketAsync(string titlePrefix, string? notes)
     {
+        if (_selected is null) return new SubmissionActionResult(Guid.Empty, "No application selected.");
         var proposalId = await Api.GenerateProposalAsync(new GenerateProposalRequest(_selected.SubId, SubmissionPageConstants.TenantId, $"{titlePrefix} - {_selected.AppNo}", [], notes));
         return new SubmissionActionResult(proposalId, $"{titlePrefix} generated.");
     }
 
-    static Guid? ParseCarrierId(string? value) => Guid.TryParse(value, out var id) ? id : null;
-
-    void BuildStub()
+    void ShowToast(string message, string cssClass)
     {
-        var rng = new Random(77);
-        var lobs = new[] { "General Liability", "Commercial Property", "Commercial Auto", "Workers Comp", "Umbrella / Excess", "Professional Liability", "Home / Dwelling", "Personal Auto" };
-        var statuses = new[] { "Draft", "Submitted", "Submitted", "Under Review", "Under Review", "Requirements Pending", "Approved", "Approved", "Rejected" };
-        var carriers = new[] { "Travelers", "Chubb", "Zurich", "AIG", "Liberty Mutual", "Hartford", "Nationwide", "CNA" };
-        var accounts = new[] { "Sullivan Mfg. LLC", "Bridgewater Hotels", "Metro Freight Co.", "PineCrest Builders", "Omega Tech Corp.", "BlueSky Aviation", "Harbor Fresh Foods", "Summit Properties LLC" };
-        var producers = new[] { "Thornton & Associates", "Pacific Bridge Insurance", "Allied Risk Group", "Midwest Coverage Partners" };
-
-        for (int i = 1; i <= 60; i++)
+        var toast = new ToastMessage(Guid.NewGuid(), message, cssClass);
+        _toasts.Add(toast);
+        _ = Task.Run(async () =>
         {
-            var submitted = DateTime.Today.AddDays(-rng.Next(0, 90));
-            var status = statuses[rng.Next(statuses.Length)];
-            _rows.Add(new AppRow
-            {
-                AppId = Guid.NewGuid(),
-                SubId = Guid.NewGuid(),
-                CarrierId = Guid.NewGuid(),
-                AppNo = $"APP-2025-SEED-{i:D4}",
-                SubmissionNo = $"SUB-2025-SEED-{rng.Next(1, 66):D4}",
-                Account = accounts[rng.Next(accounts.Length)],
-                Lob = lobs[rng.Next(lobs.Length)],
-                Carrier = carriers[rng.Next(carriers.Length)],
-                Status = status,
-                Completeness = status switch { "Draft" => rng.Next(25, 55), "Requirements Pending" => rng.Next(45, 78), "Approved" or "Rejected" => 100, _ => rng.Next(60, 95) },
-                SubmittedDate = submitted,
-                DueDate = submitted.AddDays(rng.Next(7, 30)),
-                Producer = producers[rng.Next(producers.Length)],
-                TargetPremium = rng.Next(10000, 175000),
-                EffectiveDate = DateTime.Today.AddDays(rng.Next(20, 120)),
-                ExpirationDate = DateTime.Today.AddDays(rng.Next(385, 500)),
-                Priority = rng.Next(0, 4) == 0 ? "High" : "Normal",
-                MarketCount = rng.Next(0, 4),
-                QuoteCount = status == "Approved" ? rng.Next(1, 3) : 0
-            });
-        }
+            await Task.Delay(5000);
+            await InvokeAsync(() => DismissToast(toast.Id));
+        });
     }
 
-    RenderFragment AppNoLink(AppRow r) =>
-        @<button class="sa-link um-btn um-btn-ghost um-btn-xs"
-                 @onclick:stopPropagation="true"
-                 @onclick="() => OpenApplication(r)">
-            @r.AppNo
-        </button>;
+    void DismissToast(Guid id) => _toasts.RemoveAll(t => t.Id == id);
 
-    RenderFragment SubLink(AppRow r) =>
-        @<button class="sa-sub-link um-btn um-btn-ghost um-btn-xs"
-                 @onclick:stopPropagation="true"
-                 @onclick="() => OpenApplication(r)">
-            @r.SubmissionNo
-        </button>;
+    string TabClass(string key) => _activeTab == key ? "sa-tab sa-tab--active" : "sa-tab";
+    string RowClass(AppRow row) => _selected?.AppId == row.AppId ? "sa-row sa-row--selected" : "sa-row";
+    static string ActionMenuItemClass(ActionDef action) => action.IsDanger ? "sa-menu-item sa-menu-item--danger" : "sa-menu-item";
+    static string ToastIconClass(ToastMessage toast) => toast.CssClass.Contains("danger", StringComparison.OrdinalIgnoreCase) ? "bi-exclamation-triangle" : "bi-check-circle";
 
-    RenderFragment LobChip(string lob) =>
-        @<span class="sa-lob-chip">@lob</span>;
-
-    RenderFragment StatusChip(string s)
+    RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string tone)
     {
-        var css = s.ToLowerInvariant().Replace(" ", "-").Replace("_", "-");
-        return @<span class="sa-status sa-status-@css">@s</span>;
+        var active = _activeKpi == key;
+        var cardClass = active ? $"sa-kpi sa-kpi--{tone} sa-kpi--active" : $"sa-kpi sa-kpi--{tone}";
+        var title = active ? "Clear KPI filter" : subtitle;
+        return @<button type="button" class="@cardClass" @onclick="() => SetKpi(key)" title="@title">
+            <span><i class="bi @icon" aria-hidden="true"></i>@label</span>
+            <strong>@value</strong>
+            <small>@subtitle</small>
+        </button>;
     }
 
-    RenderFragment CompletenessBar(int pct)
+    RenderFragment StatusBadge(string status) => @<span class="sa-status sa-status--@Slug(status)">@status</span>;
+    RenderFragment ImportanceBadge(AppRow row) => @<span class="sa-importance sa-importance--@Slug(ImportanceLevel(row))">@ImportanceLevel(row)<small>@ImportanceScore(row)</small></span>;
+
+    RenderFragment CompletenessBar(AppRow row)
     {
-        var color = pct >= 80 ? "#059669" : pct >= 50 ? "#d97706" : "#dc2626";
-        return @<div class="sa-complete-wrap" title="@($"{pct}% complete")">
-            <div class="sa-complete-bar" style="width:@pct%;background:@color"></div>
-            <span class="sa-complete-lbl">@pct%</span>
+        var css = row.Completeness >= 90 ? "complete" : row.Completeness >= 70 ? "good" : row.Completeness >= 45 ? "warn" : "risk";
+        return @<div class="sa-complete" title="@($"{row.Completeness}% complete")">
+            <span class="sa-complete__bar"><span class="sa-complete__fill sa-complete__fill--@css" style="width:@row.Completeness%"></span></span>
+            <strong>@row.Completeness%</strong>
         </div>;
     }
 
-    RenderFragment DueCell(DateTime d)
+    RenderFragment DueBadge(AppRow row)
     {
-        var days = (d - DateTime.Today).TotalDays;
-        var css = days < 0 ? "sa-due-late" : days <= 3 ? "sa-due-soon" : string.Empty;
-        return @<span class="@css">@d.ToString("MM/dd/yyyy")</span>;
+        var days = DaysUntilDue(row);
+        var label = days < 0 ? $"{Math.Abs(days)}d late" : days == 0 ? "Today" : $"{days}d";
+        var css = days < 0 ? "late" : days <= 3 ? "soon" : "normal";
+        return @<span class="sa-due sa-due--@css">@label</span>;
     }
 
-    RenderFragment CtxBtn(AppRow row) =>
-        @<div class="um-action-menu-wrap sa-action-menu-wrap" @onclick:stopPropagation="true">
-            <button type="button"
-                    class="um-btn um-btn-ghost um-btn-xs sa-ctx-btn"
-                    aria-haspopup="menu"
-                    aria-expanded="@(_openActionMenuFor == row.AppId)"
-                    title="Application actions"
-                    @onclick="() => ToggleActionMenu(row)">
-                <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
-            </button>
-            @if (_openActionMenuFor == row.AppId)
-            {
-                <div class="sa-action-menu" role="menu" aria-label="Application actions">
-                    <div class="sa-action-menu-summary">
-                        <strong>@row.AppNo</strong>
-                        <span>@row.Status</span>
-                    </div>
-                    @foreach (var item in _actionItems)
-                    {
-                        <button type="button"
-                                class="um-action-menu-item @(item.Text == "Reject" ? "um-action-menu-item--danger" : null)"
-                                role="menuitem"
-                                @onclick="() => HandleActionAsync(item.Text)">
-                            <i class="@item.IconCss" aria-hidden="true"></i>
-                            <span>@item.Text</span>
-                        </button>
-                    }
-                </div>
-            }
-        </div>;
+    RenderFragment MoneyOrDash(decimal? value) => value is > 0 ? @<strong class="sa-premium">@value.Value.ToString("C0")</strong> : @<span class="sa-muted">—</span>;
+    string MoneyText(decimal? value) => value is > 0 ? value.Value.ToString("C0") : "—";
 
-    void ToggleActionMenu(AppRow row)
-    {
-        _selected = row;
-        _openActionMenuFor = _openActionMenuFor == row.AppId ? null : row.AppId;
-    }
+    static Guid? ParseCarrierId(string? value) => Guid.TryParse(value, out var id) ? id : null;
+    static bool Contains(string? source, string term) => !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
+    static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    static string Slug(string value) => value.ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
 
-    RenderFragment KpiCard(string icon, string label, string val, string css, string? filterKey)
+    sealed class AppRow : ApplicationRegisterRow
     {
-        var isActive = _kpiFilter == filterKey;
-        var cardClass = $"sa-kpi-card {css} {(isActive ? "sa-kpi-active" : string.Empty)}";
-        var title = filterKey is null ? "Show all" : isActive ? "Clear filter" : $"Filter by {label}";
-        return @<button type="button"
-                        class="@cardClass"
-                        @onclick="() => ToggleKpiFilter(filterKey)"
-                        title="@title">
-            <div class="sa-kpi-val">@val</div>
-            <div class="sa-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
-        </button>;
-    }
-
-    static string Initials(string value)
-    {
-        var words = value.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (words.Length == 0) return "A";
-        if (words.Length == 1) return words[0][..Math.Min(2, words[0].Length)].ToUpperInvariant();
-        return string.Concat(words.Take(2).Select(w => char.ToUpperInvariant(w[0])));
+        public Guid CarrierId { get; set; }
+        public decimal? TargetPremium { get; set; }
+        public DateTime EffectiveDate { get; set; }
+        public DateTime ExpirationDate { get; set; }
+        public string Priority { get; set; } = "Normal";
+        public int MarketCount { get; set; }
+        public int QuoteCount { get; set; }
     }
 
     sealed class ApplicationActionForm : IValidatableObject
@@ -894,4 +1128,10 @@
                 yield return new ValidationResult("Notes are required for this action.", [nameof(Notes)]);
         }
     }
+
+    sealed record TabDef(string Key, string Label, string Icon);
+    sealed record ActionDef(string Key, string Label, string Icon, bool IsDanger);
+    sealed record GroupSummary(string Name, int Count, decimal Premium, int Priority, double AverageComplete, int Percent);
+    sealed record InsightDef(string Title, string Description, string Icon);
+    sealed record ToastMessage(Guid Id, string Message, string CssClass);
 }

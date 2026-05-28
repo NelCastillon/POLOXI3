@@ -1,64 +1,374 @@
 @page "/submissions"
 @namespace Ams.Web.Components.Pages
 @using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
 @using Ams.Application.Features.Submissions
 @inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Submissions Register — AMS</PageTitle>
+<PageTitle>Submissions Command Center — AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+<div class="sde-page">
+    <section class="sde-hero">
+        <div class="sde-hero__content">
+            <div class="sde-hero__eyebrow"><i class="bi bi-send-check" aria-hidden="true"></i> Enterprise submissions command center</div>
+            <h1>Submissions Command Center</h1>
+            <p>Prioritize underwriting work, monitor market progress, and run submission workflows from one native Blazor dashboard.</p>
+            <div class="sde-hero__meta">
+                <span><i class="bi bi-stack" aria-hidden="true"></i>@_rows.Count submissions</span>
+                <span><i class="bi bi-exclamation-diamond" aria-hidden="true"></i>@CriticalRows.Count() critical</span>
+                <span><i class="bi bi-cash-stack" aria-hidden="true"></i>@PipelinePremium.ToString("C0") target premium</span>
+                <span><i class="bi bi-diagram-3" aria-hidden="true"></i>@MarketedRows.Count() marketed</span>
+            </div>
+        </div>
+        <div class="sde-hero__actions">
+            <button type="button" class="sde-btn sde-btn--light" @onclick="LoadAsync" disabled="@_loading">
+                <i class="bi bi-arrow-clockwise @(_loading ? "sde-spin" : null)" aria-hidden="true"></i> Refresh
+            </button>
+            <button type="button" class="sde-btn sde-btn--primary" @onclick='() => Nav.NavigateTo("/submissions/new")'>
+                <i class="bi bi-plus-lg" aria-hidden="true"></i> New Submission
+            </button>
+            <button type="button" class="sde-btn sde-btn--light" @onclick='() => Nav.NavigateTo("/submissions/quotes")'>
+                <i class="bi bi-file-earmark-text" aria-hidden="true"></i> Quotes
+            </button>
+            <button type="button" class="sde-btn sde-btn--light" @onclick='() => Nav.NavigateTo("/submissions/applications")'>
+                <i class="bi bi-clipboard-check" aria-hidden="true"></i> Applications
+            </button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger sde-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span>@_loadError</span>
+        </div>
+    }
+
+    <section class="sde-kpi-strip" aria-label="Submission KPIs">
+        @KpiCard("all", "Total Submissions", _rows.Count.ToString(), "All active submission records", "bi-stack", "blue")
+        @KpiCard("critical", "Critical Work", CriticalRows.Count().ToString(), "High importance, overdue, or near effective", "bi-exclamation-octagon", "red")
+        @KpiCard("review", "In Review", _rows.Count(IsReview).ToString(), "Submissions currently in underwriting review", "bi-hourglass-split", "amber")
+        @KpiCard("quoted", "Quoted", _rows.Count(IsQuoted).ToString(), "Quoted submissions ready for proposal or bind", "bi-file-earmark-check", "cyan")
+        @KpiCard("bound", "Bound", _rows.Count(IsBound).ToString(), "Converted submissions with bound coverage", "bi-shield-check", "green")
+        @KpiCard("premium", "Target Premium", PipelinePremium.ToString("C0"), "Total target premium in active pipeline", "bi-cash-stack", "emerald")
+    </section>
+
+    <section class="sde-workflows" aria-label="Submission workflows">
+        @WorkflowButton("Critical work", "Open highest-importance submissions first", "bi-lightning-charge", () => SetDashboardFocus("critical", "priority"))
+        @WorkflowButton("Market follow-up", "Review submissions with markets but no quotes", "bi-diagram-3", () => SetDashboardFocus("markets", "market"))
+        @WorkflowButton("Quote desk", "Work quoted items and proposal-ready submissions", "bi-file-earmark-text", () => SetDashboardFocus("quoted", "quoted"))
+        @WorkflowButton("Bind queue", "Convert quoted submissions into policies", "bi-shield-plus", () => SetDashboardFocus("bind", "quoted"))
+        @WorkflowButton("Decline recovery", "Review declined and withdrawn submissions", "bi-arrow-counterclockwise", () => SetDashboardFocus("declined", "declined"))
+    </section>
+
+    <section class="sde-filter-panel" aria-label="Submission filters">
+        <div class="sde-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input @bind="SearchText" @bind:event="oninput" placeholder="Search submission #, account, opportunity, LOB, status, priority, assignee, premium, markets…" />
+        </div>
+        <div class="sde-filter-grid">
+            <label>
+                <span>Status</span>
+                <select class="form-select" @bind="StatusFilter">
+                    <option value="">All statuses</option>
+                    @foreach (var status in StatusOptions)
+                    {
+                        <option value="@status">@status</option>
+                    }
+                </select>
+            </label>
+            <label>
+                <span>Line of Business</span>
+                <select class="form-select" @bind="LobFilter">
+                    <option value="">All lines</option>
+                    @foreach (var lob in LobOptions)
+                    {
+                        <option value="@lob">@lob</option>
+                    }
+                </select>
+            </label>
+            <label>
+                <span>Importance</span>
+                <select class="form-select" @bind="ImportanceFilter">
+                    <option value="">All importance levels</option>
+                    <option value="Critical">Critical</option>
+                    <option value="High">High</option>
+                    <option value="Medium">Medium</option>
+                    <option value="Standard">Standard</option>
+                </select>
+            </label>
+            <label>
+                <span>Sort</span>
+                <select class="form-select" @bind="SortMode">
+                    <option value="importance">Importance</option>
+                    <option value="effective">Effective date</option>
+                    <option value="premium">Target premium</option>
+                    <option value="status">Status</option>
+                    <option value="markets">Market activity</option>
+                </select>
+            </label>
+        </div>
+        <button type="button" class="sde-btn sde-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)">
+            <i class="bi bi-x-lg" aria-hidden="true"></i> Reset
+        </button>
+    </section>
+
+    <nav class="sde-tabs" aria-label="Submission views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="sde-tab @(_activeTab == tab.Key ? "sde-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </nav>
+
+    <main class="sde-dashboard">
+        <section class="sde-main-card">
+            <div class="sde-card-header">
+                <div>
+                    <span class="sde-section-kicker">@ActiveViewTitle</span>
+                    <h2>@FilteredRows.Count() submissions</h2>
+                    <p>Ranked by enterprise importance: urgency, status, premium value, market activity, and quote readiness.</p>
+                </div>
+                <div class="sde-card-actions">
+                    <button type="button" class="sde-btn sde-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)">
+                        <i class="bi bi-chevron-left" aria-hidden="true"></i> Previous
+                    </button>
+                    <span class="sde-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="sde-btn sde-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">
+                        Next <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                    </button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="sde-loading"><span class="sde-spinner"></span> Loading submissions…</div>
+            }
+            else if (!FilteredRows.Any())
+            {
+                <div class="sde-empty">
+                    <i class="bi bi-inbox" aria-hidden="true"></i>
+                    <strong>No submissions found</strong>
+                    <span>Adjust the active view, KPI, search, or filters.</span>
+                </div>
+            }
+            else if (_activeTab == "producer")
+            {
+                <div class="sde-producer-grid">
+                    @foreach (var group in ProducerRows)
+                    {
+                        <article class="sde-producer-card">
+                            <div>
+                                <span>Producer / owner</span>
+                                <h3>@group.Name</h3>
+                            </div>
+                            <strong>@group.Count</strong>
+                            <p>@group.TargetPremium.ToString("C0") target premium • @group.CriticalCount critical • @group.QuoteCount quotes</p>
+                            <button type="button" class="sde-btn sde-btn--ghost" @onclick="() => FilterByOwner(group.Name)">View owner work</button>
+                        </article>
+                    }
+                </div>
+            }
+            else if (_activeTab == "lob")
+            {
+                <div class="sde-lob-grid">
+                    @foreach (var group in LobRows)
+                    {
+                        <article class="sde-lob-card">
+                            <div class="sde-lob-icon"><i class="bi bi-layers" aria-hidden="true"></i></div>
+                            <div>
+                                <h3>@group.Name</h3>
+                                <p>@group.Count submissions • @group.TargetPremium.ToString("C0") target premium</p>
+                                <div class="sde-mini-bar"><span style="width:@group.Percent%"></span></div>
+                            </div>
+                            <button type="button" class="sde-btn sde-btn--ghost" @onclick="() => FilterByLob(group.Name)">Open</button>
+                        </article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="sde-table-wrap">
+                    <table class="sde-table">
+                        <thead>
+                            <tr>
+                                <th>Importance</th>
+                                <th>Submission</th>
+                                <th>Account / Opportunity</th>
+                                <th>Line</th>
+                                <th>Status</th>
+                                <th>Owner</th>
+                                <th>Effective</th>
+                                <th>Due</th>
+                                <th>Premium</th>
+                                <th>Markets</th>
+                                <th>Quotes</th>
+                                <th class="sde-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in PagedRows)
+                            {
+                                <tr class="@(_selected?.SubmissionId == row.SubmissionId ? "sde-row sde-row--selected" : "sde-row")" @onclick="() => SelectRow(row)">
+                                    <td>@ImportanceBadge(row)</td>
+                                    <td>
+                                        <button type="button" class="sde-link-button" @onclick:stopPropagation="true" @onclick="() => OpenSubmission(row)">@row.SubmissionNumber</button>
+                                        <small>@row.CreatedDateUtc.ToString("MMM d, yyyy")</small>
+                                    </td>
+                                    <td>
+                                        <strong>@row.AccountName</strong>
+                                        <small>@(string.IsNullOrWhiteSpace(row.OpportunityName) ? "No linked opportunity" : row.OpportunityName)</small>
+                                    </td>
+                                    <td><span class="sde-lob-pill">@Safe(row.LineOfBusiness, "Unknown")</span></td>
+                                    <td>@StatusBadge(row)</td>
+                                    <td>@Safe(row.AssignedToUserName, "Unassigned")</td>
+                                    <td>@row.EffectiveDate.ToString("MMM d, yyyy")</td>
+                                    <td>@DueBadge(row)</td>
+                                    <td>@PremiumCell(row)</td>
+                                    <td><span class="sde-count-pill">@row.MarketCount</span></td>
+                                    <td><span class="sde-count-pill sde-count-pill--quote">@row.QuoteCount</span></td>
+                                    <td class="sde-actions-col">
+                                        <button type="button" class="sde-icon-btn" title="Open action menu" @onclick:stopPropagation="true" @onclick="() => ToggleActionMenu(row)">
+                                            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+                                        </button>
+                                        @if (_openActionMenuFor == row.SubmissionId)
+                                        {
+                                            <div class="sde-menu" role="menu" @onclick:stopPropagation="true">
+                                                <div class="sde-menu__summary">
+                                                    <strong>@row.SubmissionNumber</strong>
+                                                    <span>@row.AccountName</span>
+                                                </div>
+                                                @foreach (var action in _actions)
+                                                {
+                                                    <button type="button" class="@(action.IsDanger ? "sde-menu-item sde-menu-item--danger" : "sde-menu-item")" role="menuitem" @onclick="() => HandleActionAsync(action.Key)">
+                                                        <i class="bi @action.Icon" aria-hidden="true"></i>
+                                                        <span>@action.Label</span>
+                                                    </button>
+                                                }
+                                            </div>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="sde-side-panel">
+            <section class="sde-panel-card">
+                <span class="sde-section-kicker">Selected submission</span>
+                @if (_selected is null)
+                {
+                    <div class="sde-empty sde-empty--compact">
+                        <i class="bi bi-cursor" aria-hidden="true"></i>
+                        <strong>Select a row</strong>
+                        <span>Choose a submission to inspect priority and actions.</span>
+                    </div>
+                }
+                else
+                {
+                    <div class="sde-selected">
+                        <div class="sde-selected__title">
+                            <h3>@_selected.SubmissionNumber</h3>
+                            @StatusBadge(_selected)
+                        </div>
+                        <p>@_selected.AccountName</p>
+                        <div class="sde-score-card">
+                            <span>Importance score</span>
+                            <strong>@ImportanceScore(_selected)</strong>
+                            <small>@ImportanceLevel(_selected)</small>
+                        </div>
+                        <dl class="sde-detail-list">
+                            <div><dt>LOB</dt><dd>@Safe(_selected.LineOfBusiness, "Unknown")</dd></div>
+                            <div><dt>Priority</dt><dd>@Safe(_selected.Priority, "Standard")</dd></div>
+                            <div><dt>Owner</dt><dd>@Safe(_selected.AssignedToUserName, "Unassigned")</dd></div>
+                            <div><dt>Effective</dt><dd>@_selected.EffectiveDate.ToString("MMM d, yyyy")</dd></div>
+                            <div><dt>Expiration</dt><dd>@_selected.ExpirationDate.ToString("MMM d, yyyy")</dd></div>
+                            <div><dt>Target premium</dt><dd>@((_selected.TargetPremium ?? 0).ToString("C0"))</dd></div>
+                            <div><dt>Markets / Quotes</dt><dd>@_selected.MarketCount / @_selected.QuoteCount</dd></div>
+                        </dl>
+                        <div class="sde-selected-actions">
+                            <button type="button" class="sde-btn sde-btn--primary" @onclick="() => OpenSubmission(_selected)"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open</button>
+                            <button type="button" class="sde-btn sde-btn--ghost" @onclick='() => OpenActionDialog("Submit to Market")'><i class="bi bi-send" aria-hidden="true"></i> Submit</button>
+                            <button type="button" class="sde-btn sde-btn--ghost" @onclick='() => OpenActionDialog("Request Quote")'><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Quote</button>
+                        </div>
+                    </div>
+                }
+            </section>
+
+            <section class="sde-panel-card">
+                <span class="sde-section-kicker">Operational intelligence</span>
+                <div class="sde-insight-list">
+                    @foreach (var insight in Insights)
+                    {
+                        <div class="sde-insight">
+                            <i class="bi @insight.Icon" aria-hidden="true"></i>
+                            <div>
+                                <strong>@insight.Title</strong>
+                                <span>@insight.Description</span>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </section>
+        </aside>
+    </main>
+</div>
 
 @if (_showActionDialog)
 {
-    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseActionDialog">
-        <div class="mt-modal sr-action-modal" role="dialog" aria-modal="true" aria-labelledby="sr-action-title" @onclick:stopPropagation="true">
-            <div class="um-modal-header">
+    <div class="sde-modal-backdrop" role="presentation" @onclick="CloseActionDialog">
+        <div class="sde-modal" role="dialog" aria-modal="true" aria-labelledby="sde-action-title" @onclick:stopPropagation="true">
+            <div class="sde-modal__header">
                 <i class="bi @_actionIcon" aria-hidden="true"></i>
-                <span id="sr-action-title">@_actionTitle</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseActionDialog"><i class="bi bi-x-lg"></i></button>
+                <span id="sde-action-title">@_actionTitle</span>
+                <button type="button" class="sde-icon-btn sde-icon-btn--light ms-auto" @onclick="CloseActionDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
             </div>
             <EditForm Model="_actionForm" OnValidSubmit="ConfirmActionAsync" OnInvalidSubmit="NotifyActionValidationAsync">
                 <DataAnnotationsValidator />
-                <div class="um-modal-body">
-                    <div class="sr-modal-intro">
-                        <span class="sr-modal-chip"><i class="bi bi-shield-check" aria-hidden="true"></i> Enterprise action</span>
-                        <p>@_actionHelpText</p>
+                <div class="sde-modal__body">
+                    <div class="sde-modal-intro">
+                        <strong>@_actionHelpText</strong>
+                        <span>@_selected?.SubmissionNumber — @_selected?.AccountName</span>
                     </div>
-                    <div class="um-form-grid">
-                        <div class="um-field um-field-full">
-                            <label>Submission</label>
-                            <input class="form-control sr-readonly-input" value="@_selected.SubmissionNo - @_selected.Account" disabled />
-                        </div>
+                    <div class="sde-form-grid">
                         @if (_pendingAction is "Submit to Market" or "Request Quote" or "Bind" or "Create Policy")
                         {
-                            <div class="um-field um-field-full">
-                                <label>Carrier ID <span class="sr-field-hint">optional</span></label>
-                                <InputText class="form-control" @bind-Value="_actionForm.CarrierIdText" placeholder="Leave blank to use the top recommended carrier" />
+                            <label class="sde-field sde-field--full">
+                                <span>Carrier ID <small>optional</small></span>
+                                <InputText class="form-control" @bind-Value="_actionForm.CarrierIdText" placeholder="Carrier GUID, or leave blank for best market" />
                                 <ValidationMessage For="() => _actionForm.CarrierIdText" class="text-danger" />
-                                <small class="sr-field-help">Use a carrier GUID when targeting a specific market, or leave blank for the recommended carrier.</small>
-                            </div>
+                            </label>
                         }
                         @if (_pendingAction is "Request Quote" or "Bind" or "Create Policy")
                         {
-                            <div class="um-field">
-                                <label>Annual Premium <span class="text-danger">*</span></label>
+                            <label class="sde-field">
+                                <span>Annual Premium <em>*</em></span>
                                 <InputNumber class="form-control" @bind-Value="_actionForm.AnnualPremium" />
                                 <ValidationMessage For="() => _actionForm.AnnualPremium" class="text-danger" />
-                            </div>
+                            </label>
+                            <label class="sde-field">
+                                <span>Effective Date <em>*</em></span>
+                                <InputDate class="form-control" @bind-Value="_actionForm.EffectiveDate" />
+                                <ValidationMessage For="() => _actionForm.EffectiveDate" class="text-danger" />
+                            </label>
                         }
                         @if (_pendingAction is "Copy")
                         {
-                            <div class="um-field">
-                                <label>Effective Date <span class="text-danger">*</span></label>
+                            <label class="sde-field">
+                                <span>Effective Date <em>*</em></span>
                                 <InputDate class="form-control" @bind-Value="_actionForm.EffectiveDate" />
                                 <ValidationMessage For="() => _actionForm.EffectiveDate" class="text-danger" />
-                            </div>
-                            <div class="um-field">
-                                <label>Line of Business <span class="text-danger">*</span></label>
+                            </label>
+                            <label class="sde-field">
+                                <span>Line of Business <em>*</em></span>
                                 <InputSelect class="form-select" @bind-Value="_actionForm.LineOfBusiness">
                                     <option value="">Use original</option>
                                     @foreach (var lob in SubmissionPageConstants.LinesOfBusiness)
@@ -67,18 +377,18 @@
                                     }
                                 </InputSelect>
                                 <ValidationMessage For="() => _actionForm.LineOfBusiness" class="text-danger" />
-                            </div>
+                            </label>
                         }
-                        <div class="um-field um-field-full">
-                            <label>@(_pendingAction == "Decline" ? "Reason" : "Notes") @if (_pendingAction == "Decline") { <span class="text-danger">*</span> }</label>
+                        <label class="sde-field sde-field--full">
+                            <span>@(_pendingAction == "Decline" ? "Reason" : "Notes") @if (_pendingAction == "Decline") { <em>*</em> }</span>
                             <InputTextArea class="form-control" rows="4" @bind-Value="_actionForm.Notes" />
                             <ValidationMessage For="() => _actionForm.Notes" class="text-danger" />
-                        </div>
+                        </label>
                     </div>
                 </div>
-                <div class="um-modal-footer">
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseActionDialog">Cancel</button>
-                    <button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy">
+                <div class="sde-modal__footer">
+                    <button type="button" class="sde-btn sde-btn--ghost" @onclick="CloseActionDialog">Cancel</button>
+                    <button type="submit" class="sde-btn sde-btn--primary" disabled="@_actionBusy">
                         @if (_actionBusy)
                         {
                             <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
@@ -90,27 +400,28 @@
         </div>
     </div>
 }
+
 @if (_showConfirmDialog)
 {
-    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseConfirmDialog">
-        <div class="mt-modal sr-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="sr-confirm-title" @onclick:stopPropagation="true">
-            <div class="um-modal-header">
+    <div class="sde-modal-backdrop" role="presentation" @onclick="CloseConfirmDialog">
+        <div class="sde-confirm" role="dialog" aria-modal="true" aria-labelledby="sde-confirm-title" @onclick:stopPropagation="true">
+            <div class="sde-modal__header">
                 <i class="bi @_confirmIcon" aria-hidden="true"></i>
                 <span>Confirm submission action</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseConfirmDialog" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button>
+                <button type="button" class="sde-icon-btn sde-icon-btn--light ms-auto" @onclick="CloseConfirmDialog" disabled="@_actionBusy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
             </div>
-            <div class="um-confirm-dialog">
-                <div class="um-confirm-icon @(_pendingAction == "Decline" ? "um-confirm-icon--danger" : "")">
+            <div class="sde-confirm__body">
+                <div class="@(_pendingAction == "Decline" ? "sde-confirm-icon sde-confirm-icon--danger" : "sde-confirm-icon")">
                     <i class="bi @_confirmIcon" aria-hidden="true"></i>
                 </div>
                 <div>
-                    <h3 id="sr-confirm-title">@_confirmTitle</h3>
+                    <h3 id="sde-confirm-title">@_confirmTitle</h3>
                     <p>@_confirmMessage</p>
                 </div>
             </div>
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseConfirmDialog" disabled="@_actionBusy">Cancel</button>
-                <button type="button" class="um-btn @(_pendingAction == "Decline" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteConfirmedActionAsync" disabled="@_actionBusy">
+            <div class="sde-modal__footer">
+                <button type="button" class="sde-btn sde-btn--ghost" @onclick="CloseConfirmDialog" disabled="@_actionBusy">Cancel</button>
+                <button type="button" class="@(_pendingAction == "Decline" ? "sde-btn sde-btn--danger" : "sde-btn sde-btn--primary")" @onclick="ExecuteConfirmedActionAsync" disabled="@_actionBusy">
                     @if (_actionBusy)
                     {
                         <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
@@ -121,285 +432,126 @@
         </div>
     </div>
 }
-<div class="sr-enterprise-page">
-    <div class="sr-header">
-        <div class="sr-header-left">
-            <div class="sr-lob-icon">
-                <i class="bi bi-send-fill" aria-hidden="true"></i>
-            </div>
-            <div class="sr-header-info">
-                <div class="sr-title-row">
-                    <h1 class="sr-sub-num">Submissions Register</h1>
-                    <span class="sr-status-pill">@FilteredRows.Count() active</span>
-                    @if (HasFilters)
-                    {
-                        <span class="sr-filter-pill">Filtered</span>
-                    }
-                </div>
-                <div class="sr-sub-row">
-                    <span class="sr-sub-chip"><i class="bi bi-stack" aria-hidden="true"></i>@_rows.Count total submissions</span>
-                    <span class="sr-sub-chip"><i class="bi bi-hourglass-split" aria-hidden="true"></i>@_rows.Count(r => r.Status == "In Review") in review</span>
-                    <span class="sr-sub-chip"><i class="bi bi-journal-text" aria-hidden="true"></i>@_rows.Count(r => r.Status == "Quoted") quoted</span>
-                    <span class="sr-sub-chip"><i class="bi bi-shield-check" aria-hidden="true"></i>@_rows.Count(r => r.Status == "Bound") bound</span>
-                </div>
-            </div>
-        </div>
-        <div class="sr-header-actions">
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "sr-spin" : "")"></i> Refresh</button>
-            <button class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/submissions/new")'><i class="bi bi-plus-lg"></i> New Submission</button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/submissions/quotes")'><i class="bi bi-file-text"></i> Quotes</button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/submissions/applications")'><i class="bi bi-clipboard"></i> Applications</button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/submissions/declines")'><i class="bi bi-x-circle"></i> Declines</button>
-        </div>
-    </div>
 
-    @if (_loadError is not null)
+<div class="sde-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
     {
-        <div class="alert alert-danger sr-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-            <i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError
+        <div class="sde-toast @toast.CssClass">
+            <i class="bi @(toast.CssClass.Contains("danger") ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i>
+            <span>@toast.Message</span>
+            <button type="button" @onclick="() => DismissToast(toast.Id)"><i class="bi bi-x" aria-hidden="true"></i></button>
         </div>
     }
-
-    <!-- KPI strip -->
-    <div class="sr-kpi-strip">
-        @KpiCard("bi-send",             "Total",          _rows.Count.ToString(),                                        "sr-kpi-total",   null)
-        @KpiCard("bi-pencil-square",    "New",            _rows.Count(r=>r.Status=="New").ToString(),                    "sr-kpi-new",     "New")
-        @KpiCard("bi-hourglass-split",  "In Review",      _rows.Count(r=>r.Status=="In Review").ToString(),             "sr-kpi-review",  "In Review")
-        @KpiCard("bi-journal-text",     "Quoted",         _rows.Count(r=>r.Status=="Quoted").ToString(),                "sr-kpi-quoted",  "Quoted")
-        @KpiCard("bi-shield-check",     "Bound",          _rows.Count(r=>r.Status=="Bound").ToString(),                 "sr-kpi-bound",   "Bound")
-        @KpiCard("bi-x-circle",         "Declined",       _rows.Count(r=>r.Status=="Declined").ToString(),              "sr-kpi-declined","Declined")
-        @KpiCard("bi-cash-stack",       "Quoted Premium", _rows.Where(r=>r.QuotedPremium>0).Sum(r=>r.QuotedPremium).ToString("C0"), "sr-kpi-prem", "__premium")
-    </div>
-
-    <div class="sr-enterprise-search" role="search" aria-label="Search submissions">
-        <div class="sr-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
-        <div class="sr-search-body">
-            <label for="sr-search-input">Enterprise search</label>
-            <input id="sr-search-input" class="sr-search-input" @bind="SearchText" @bind:event="oninput" placeholder="Search every submission field: submission #, account, insured, producer, CSR, status, premium, dates, priority, IDs…" />
-            <div class="sr-search-hint">
-                Searches all visible and supporting submission fields as you type.
-            </div>
-        </div>
-        <div class="sr-search-result">
-            <strong>@FilteredRows.Count()</strong>
-            <span>matches</span>
-        </div>
-        @if (!string.IsNullOrWhiteSpace(_searchText))
-        {
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm sr-search-clear" @onclick="ClearFilters">
-                <i class="bi bi-x-lg" aria-hidden="true"></i> Clear
-            </button>
-        }
-    </div>
-
-    <!-- View tabs -->
-    <div class="sr-view-tabs">
-        @foreach (var t in _tabs)
-        {
-            <button class="sr-view-tab @(_activeTab == t.Key ? "sr-view-tab--active" : "")"
-                    @onclick="() => SetActiveTab(t.Key)">
-                <i class="bi @t.Icon" aria-hidden="true"></i> @t.Label
-                <span class="sr-tab-count">@TabCount(t.Key)</span>
-            </button>
-        }
-    </div>
-
-    <!-- Grid -->
-    <div class="sr-grid-wrap">
-    @if (_loading)
-    {
-        <div class="sr-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
-    }
-    else
-    {
-        <div class="sr-grid-toolbar">
-            <div>
-                <strong>@FilteredRows.Count()</strong> submissions
-                @if (HasFilters)
-                {
-                    <span class="sr-filter-note">filtered</span>
-                }
-            </div>
-            <div class="sr-grid-tools">
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters" disabled="@(!HasFilters)">
-                    <i class="bi bi-x-lg" aria-hidden="true"></i> Reset
-                </button>
-            </div>
-        </div>
-        <div class="sr-table-scroll">
-            <table class="sr-table" aria-label="Submissions register">
-                <thead>
-                    <tr>
-                        <th>Submission #</th>
-                        <th>Account</th>
-                        <th>Named Insured</th>
-                        <th>LOB</th>
-                        <th>Status</th>
-                        <th>Producer</th>
-                        <th>Submitted</th>
-                        <th>Effective</th>
-                        <th>Due</th>
-                        <th>Quoted Prem</th>
-                        <th>Markets</th>
-                        <th>CSR</th>
-                        <th class="sr-actions-col"><span class="visually-hidden">Actions</span></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @if (!PagedRows.Any())
-                    {
-                        <tr>
-                            <td colspan="13">
-                                <div class="sr-empty-state">
-                                    <i class="bi bi-inbox" aria-hidden="true"></i>
-                                    <strong>No submissions found</strong>
-                                    <span>Adjust the current tab, KPI, or filter criteria.</span>
-                                </div>
-                            </td>
-                        </tr>
-                    }
-                    else
-                    {
-                        @foreach (var row in PagedRows)
-                        {
-                            <tr class="sr-table-row" @onclick="() => OpenSubmission(row)">
-                                <td>@SubNoLink(row)</td>
-                                <td>@row.Account</td>
-                                <td>@row.Insured</td>
-                                <td>@LobChip(row.Lob)</td>
-                                <td>@StatusChip(row.Status)</td>
-                                <td>@row.Producer</td>
-                                <td>@row.SubmitDate.ToString("MM/dd/yyyy")</td>
-                                <td>@row.EffDate.ToString("MM/dd/yyyy")</td>
-                                <td>@DueCell(row.DueDate)</td>
-                                <td>@PremCell(row.QuotedPremium)</td>
-                                <td>@MktCountCell(row.Markets)</td>
-                                <td>@row.Csr</td>
-                                <td class="sr-actions-col">@CtxBtn(row)</td>
-                            </tr>
-                        }
-                    }
-                </tbody>
-            </table>
-        </div>
-        <div class="sr-pager" aria-label="Submissions pagination">
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)">
-                <i class="bi bi-chevron-left" aria-hidden="true"></i> Previous
-            </button>
-            <span>Page @_page of @TotalPages</span>
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">
-                Next <i class="bi bi-chevron-right" aria-hidden="true"></i>
-            </button>
-        </div>
-    }
-    </div>
 </div>
 
 @code {
-    SfToast _toast = default!;
-
-    bool    _loading    = false;
-    bool    _showActionDialog = false;
-    bool    _showConfirmDialog = false;
-    bool    _actionBusy = false;
-    Guid?   _openActionMenuFor = null;
-    string  _activeTab  = "all";
-    string? _kpiFilter  = null;
-    string  _pendingAction = string.Empty;
+    bool _loading;
+    bool _showActionDialog;
+    bool _showConfirmDialog;
+    bool _actionBusy;
+    Guid? _openActionMenuFor;
+    string _activeTab = "all";
+    string _activeKpi = "all";
+    string _sortMode = "importance";
     string? _searchText;
-    int     _page = 1;
-    const int PageSize = 20;
-    string  _actionTitle = "Submission Action";
-    string  _actionIcon = "bi-send";
-    string  _actionButtonText = "Save";
-    string  _actionHelpText = "Review the submission action details, complete required fields, and confirm before changes are applied.";
-    string  _confirmTitle = "Confirm action";
-    string  _confirmMessage = "Confirm this submission action?";
-    string  _confirmIcon = "bi-question-circle";
-    SubRow  _selected   = new();
+    string? _statusFilter;
+    string? _lobFilter;
+    string? _importanceFilter;
+    int _page = 1;
+    const int PageSize = 18;
+    string? _loadError;
+    string _pendingAction = string.Empty;
+    string _actionTitle = "Submission Action";
+    string _actionIcon = "bi-send";
+    string _actionButtonText = "Save";
+    string _actionHelpText = "Review the submission action details, complete required fields, and confirm before changes are applied.";
+    string _confirmTitle = "Confirm action";
+    string _confirmMessage = "Confirm this submission action?";
+    string _confirmIcon = "bi-question-circle";
+    SubmissionDto? _selected;
     readonly SubmissionActionForm _actionForm = new();
+    readonly List<SubmissionDto> _rows = new();
+    readonly List<ToastMessage> _toasts = new();
 
-    sealed record ActionMenuItem(string Text, string IconCss);
+    readonly TabDef[] _tabs =
+    [
+        new("all", "All", "bi-stack"),
+        new("priority", "Priority", "bi-lightning-charge"),
+        new("markets", "Markets", "bi-diagram-3"),
+        new("quoted", "Quoted", "bi-file-earmark-check"),
+        new("bind", "Bind Queue", "bi-shield-plus"),
+        new("declined", "Declines", "bi-x-circle"),
+        new("producer", "By Producer", "bi-person-workspace"),
+        new("lob", "By LOB", "bi-layers")
+    ];
 
-    private sealed class SubRow : SubmissionRegisterRow { }
+    readonly ActionDef[] _actions =
+    [
+        new("Open", "Open", "bi-box-arrow-up-right", false),
+        new("Submit to Market", "Submit to Market", "bi-send", false),
+        new("Request Quote", "Request Quote", "bi-file-earmark-text", false),
+        new("Bind", "Bind", "bi-shield-check", false),
+        new("Copy", "Copy", "bi-copy", false),
+        new("Create Policy", "Create Policy", "bi-shield-plus", false),
+        new("Initiate Workflow", "Initiate Workflow", "bi-diagram-3", false),
+        new("Decline", "Decline", "bi-x-circle", true)
+    ];
 
-    record TabDef(string Key, string Label, string Icon);
-
-    readonly TabDef[] _tabs = new[]
-    {
-        new TabDef("all",      "All",         "bi-stack"           ),
-        new TabDef("new",      "New",         "bi-pencil-square"   ),
-        new TabDef("review",   "In Review",   "bi-hourglass-split" ),
-        new TabDef("quoted",   "Quoted",      "bi-journal-text"    ),
-        new TabDef("bound",    "Bound",       "bi-shield-check"    ),
-        new TabDef("declined", "Declined",    "bi-x-circle"        ),
-        new TabDef("producer", "By Producer", "bi-person-workspace"),
-        new TabDef("lob",      "By LOB",      "bi-layers"          ),
-    };
-
-    IEnumerable<SubRow> BaseTabRows => _activeTab switch
-    {
-        "new"      => _rows.Where(r => r.Status == "New"),
-        "review"   => _rows.Where(r => r.Status == "In Review"),
-        "quoted"   => _rows.Where(r => r.Status == "Quoted"),
-        "bound"    => _rows.Where(r => r.Status == "Bound"),
-        "declined" => _rows.Where(r => r.Status is "Declined" or "Withdrawn"),
-        _          => _rows,
-    };
-
-    IEnumerable<SubRow> KpiRows => _kpiFilter switch
-    {
-        null           => BaseTabRows,
-        "__premium"    => BaseTabRows.Where(r => r.QuotedPremium > 0),
-        var f          => BaseTabRows.Where(r => r.Status == f),
-    };
-
-    IEnumerable<SubRow> FilteredRows => ApplyEnterpriseFilters(KpiRows);
-
-    IEnumerable<SubRow> PagedRows => FilteredRows.Skip((_page - 1) * PageSize).Take(PageSize);
-
+    IEnumerable<SubmissionDto> CriticalRows => _rows.Where(r => ImportanceLevel(r) is "Critical" or "High");
+    IEnumerable<SubmissionDto> MarketedRows => _rows.Where(r => r.MarketCount > 0 || r.QuoteCount > 0 || IsReview(r));
+    decimal PipelinePremium => _rows.Where(r => !IsBound(r) && !IsDeclined(r)).Sum(r => r.TargetPremium ?? 0);
+    bool HasFilters => _activeKpi != "all" || !string.IsNullOrWhiteSpace(_searchText) || !string.IsNullOrWhiteSpace(_statusFilter) || !string.IsNullOrWhiteSpace(_lobFilter) || !string.IsNullOrWhiteSpace(_importanceFilter);
     int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRows.Count() / (double)PageSize));
+    string ActiveViewTitle => _tabs.FirstOrDefault(t => t.Key == _activeTab)?.Label ?? "All";
+    string? SearchText { get => _searchText; set { _searchText = value; _page = 1; } }
+    string? StatusFilter { get => _statusFilter; set { _statusFilter = value; _page = 1; } }
+    string? LobFilter { get => _lobFilter; set { _lobFilter = value; _page = 1; } }
+    string? ImportanceFilter { get => _importanceFilter; set { _importanceFilter = value; _page = 1; } }
+    string SortMode { get => _sortMode; set { _sortMode = value; _page = 1; } }
 
-    bool HasFilters => !string.IsNullOrWhiteSpace(_searchText) || _kpiFilter is not null;
-    string? SearchText
+    IEnumerable<string> StatusOptions => _rows.Select(r => NormalizeStatus(r.Status)).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    IEnumerable<string> LobOptions => _rows.Select(r => r.LineOfBusiness).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+
+    IEnumerable<SubmissionDto> FilteredRows => SortRows(ApplyFilters(TabRows));
+    IEnumerable<SubmissionDto> PagedRows => FilteredRows.Skip((_page - 1) * PageSize).Take(PageSize);
+
+    IEnumerable<SubmissionDto> TabRows => _activeTab switch
     {
-        get => _searchText;
-        set
+        "priority" => CriticalRows,
+        "markets" => _rows.Where(r => r.MarketCount > 0 || IsReview(r)),
+        "quoted" => _rows.Where(IsQuoted),
+        "bind" => _rows.Where(r => IsQuoted(r) || (r.QuoteCount > 0 && !IsBound(r) && !IsDeclined(r))),
+        "declined" => _rows.Where(IsDeclined),
+        _ => _rows
+    };
+
+    IEnumerable<GroupSummary> ProducerRows => FilteredRows
+        .GroupBy(r => Safe(r.AssignedToUserName, "Unassigned"))
+        .Select(g => new GroupSummary(g.Key, g.Count(), g.Sum(x => x.TargetPremium ?? 0), g.Count(x => ImportanceLevel(x) is "Critical" or "High"), g.Sum(x => x.QuoteCount), 100))
+        .OrderByDescending(g => g.TargetPremium);
+
+    IEnumerable<GroupSummary> LobRows
+    {
+        get
         {
-            _searchText = value;
-            _page = 1;
+            var groups = FilteredRows.GroupBy(r => Safe(r.LineOfBusiness, "Unknown")).ToList();
+            var max = Math.Max(1, groups.Max(g => g.Count()));
+            return groups.Select(g => new GroupSummary(g.Key, g.Count(), g.Sum(x => x.TargetPremium ?? 0), g.Count(x => ImportanceLevel(x) is "Critical" or "High"), g.Sum(x => x.QuoteCount), Math.Max(8, (int)Math.Round(g.Count() * 100m / max))))
+                .OrderByDescending(g => g.TargetPremium);
         }
     }
 
-    string TabCount(string key) => key switch
-    {
-        "all"      => _rows.Count.ToString(),
-        "new"      => _rows.Count(r=>r.Status=="New").ToString(),
-        "review"   => _rows.Count(r=>r.Status=="In Review").ToString(),
-        "quoted"   => _rows.Count(r=>r.Status=="Quoted").ToString(),
-        "bound"    => _rows.Count(r=>r.Status=="Bound").ToString(),
-        "declined" => _rows.Count(r=>r.Status is "Declined" or "Withdrawn").ToString(),
-        _          => "",
-    };
-
-    readonly List<ActionMenuItem> _actionItems = new()
-    {
-        new("Open",             "bi bi-box-arrow-up-right"),
-        new("Submit to Market", "bi bi-send"              ),
-        new("Request Quote",    "bi bi-journal-text"      ),
-        new("Bind",             "bi bi-shield-check"      ),
-        new("Copy",             "bi bi-copy"              ),
-        new("Create Policy",    "bi bi-shield-plus"       ),
-        new("Initiate Workflow", "bi bi-diagram-3"          ),
-        new("Decline",          "bi bi-x-circle"          ),
-    };
-
-    readonly List<SubRow> _rows = new();
-    string? _loadError;
+    IEnumerable<InsightDef> Insights =>
+    [
+        new("Critical work", $"{CriticalRows.Count()} submissions need priority attention.", "bi-exclamation-diamond"),
+        new("Market readiness", $"{_rows.Count(r => r.MarketCount == 0 && !IsDeclined(r) && !IsBound(r))} active submissions have no markets recorded.", "bi-diagram-3"),
+        new("Quote conversion", $"{_rows.Count(r => r.QuoteCount > 0 && !IsBound(r))} quoted or quote-ready submissions remain unbound.", "bi-file-earmark-check"),
+        new("Unassigned work", $"{_rows.Count(r => string.IsNullOrWhiteSpace(r.AssignedToUserName))} submissions have no owner.", "bi-person-x")
+    ];
 
     protected override async Task OnInitializedAsync()
     {
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Submissions","/submissions"));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Submissions", "/submissions"));
         await LoadAsync();
     }
 
@@ -409,32 +561,16 @@
         _loadError = null;
         try
         {
-            var result = await Api.SearchSubmissionsAsync(SubmissionPageConstants.TenantId, pageSize: 100);
+            var result = await Api.SearchSubmissionsAsync(SubmissionPageConstants.TenantId, pageSize: 500);
             _rows.Clear();
-            _rows.AddRange((result?.Items ?? []).Select(SubmissionPageData.ToRegisterRow).Select(x => new SubRow
-            {
-                SubmissionNo = x.SubmissionNo,
-                SubId = x.SubId,
-                Account = x.Account,
-                Insured = x.Insured,
-                Lob = x.Lob,
-                Status = x.Status,
-                Producer = x.Producer,
-                Csr = x.Csr,
-                SubmitDate = x.SubmitDate,
-                EffDate = x.EffDate,
-                DueDate = x.DueDate,
-                QuotedPremium = x.QuotedPremium,
-                Markets = x.Markets,
-                QuoteCount = x.QuoteCount,
-                TargetPremium = x.TargetPremium,
-                Priority = x.Priority
-            }));
+            _rows.AddRange(result?.Items ?? []);
+            _selected = _selected is null ? _rows.OrderByDescending(ImportanceScore).FirstOrDefault() : _rows.FirstOrDefault(r => r.SubmissionId == _selected.SubmissionId) ?? _rows.OrderByDescending(ImportanceScore).FirstOrDefault();
+            _page = Math.Min(_page, TotalPages);
         }
         catch (Exception ex)
         {
             _loadError = $"Failed to load submissions: {ex.Message}";
-            await _toast.ShowAsync(new ToastModel { Content = $"Load failed: {ex.Message}", CssClass = "e-toast-danger" });
+            ShowToast($"Load failed: {ex.Message}", "sde-toast--danger");
         }
         finally
         {
@@ -442,46 +578,102 @@
         }
     }
 
-    void ClearFilters()
+    IEnumerable<SubmissionDto> ApplyFilters(IEnumerable<SubmissionDto> rows)
     {
-        _searchText = null;
-        _kpiFilter = null;
-        _page = 1;
-    }
+        rows = _activeKpi switch
+        {
+            "critical" => rows.Where(r => ImportanceLevel(r) is "Critical" or "High"),
+            "review" => rows.Where(IsReview),
+            "quoted" => rows.Where(IsQuoted),
+            "bound" => rows.Where(IsBound),
+            "premium" => rows.Where(r => (r.TargetPremium ?? 0) > 0),
+            _ => rows
+        };
 
-    IEnumerable<SubRow> ApplyEnterpriseFilters(IEnumerable<SubRow> rows)
-    {
+        if (!string.IsNullOrWhiteSpace(_statusFilter))
+        {
+            rows = rows.Where(r => string.Equals(NormalizeStatus(r.Status), _statusFilter, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_lobFilter))
+        {
+            rows = rows.Where(r => string.Equals(r.LineOfBusiness, _lobFilter, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_importanceFilter))
+        {
+            rows = rows.Where(r => string.Equals(ImportanceLevel(r), _importanceFilter, StringComparison.OrdinalIgnoreCase));
+        }
+
         if (!string.IsNullOrWhiteSpace(_searchText))
         {
             var term = _searchText.Trim();
-            rows = rows.Where(r => Contains(r.SubmissionNo, term)
-                || Contains(r.Account, term)
-                || Contains(r.Insured, term)
-                || Contains(r.Lob, term)
+            rows = rows.Where(r => Contains(r.SubmissionNumber, term)
+                || Contains(r.AccountName, term)
+                || Contains(r.OpportunityName, term)
+                || Contains(r.LineOfBusiness, term)
                 || Contains(r.Status, term)
-                || Contains(r.Producer, term)
-                || Contains(r.Csr, term)
-                || Contains(r.SubId.ToString(), term)
-                || Contains(r.SubmitDate.ToString("MM/dd/yyyy"), term)
-                || Contains(r.SubmitDate.ToString("yyyy-MM-dd"), term)
-                || Contains(r.EffDate.ToString("MM/dd/yyyy"), term)
-                || Contains(r.EffDate.ToString("yyyy-MM-dd"), term)
-                || Contains(r.DueDate.ToString("MM/dd/yyyy"), term)
-                || Contains(r.DueDate.ToString("yyyy-MM-dd"), term)
-                || Contains(r.QuotedPremium.ToString("C0"), term)
-                || Contains(r.QuotedPremium.ToString("0.##"), term)
-                || Contains(r.TargetPremium.ToString("C0"), term)
-                || Contains(r.TargetPremium.ToString("0.##"), term)
-                || Contains(r.Markets.ToString(), term)
-                || Contains(r.QuoteCount.ToString(), term)
-                || Contains(r.Priority, term));
+                || Contains(r.Priority, term)
+                || Contains(r.AssignedToUserName, term)
+                || Contains(r.SubmissionId.ToString(), term)
+                || Contains(r.EffectiveDate.ToString("MM/dd/yyyy"), term)
+                || Contains(r.EffectiveDate.ToString("yyyy-MM-dd"), term)
+                || Contains((r.TargetPremium ?? 0).ToString("C0"), term)
+                || Contains(r.MarketCount.ToString(), term)
+                || Contains(r.QuoteCount.ToString(), term));
         }
 
         return rows;
     }
 
-    static bool Contains(string? source, string term) =>
-        !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
+    IEnumerable<SubmissionDto> SortRows(IEnumerable<SubmissionDto> rows) => _sortMode switch
+    {
+        "effective" => rows.OrderBy(r => r.EffectiveDate),
+        "premium" => rows.OrderByDescending(r => r.TargetPremium ?? 0),
+        "status" => rows.OrderBy(r => NormalizeStatus(r.Status)).ThenByDescending(ImportanceScore),
+        "markets" => rows.OrderByDescending(r => r.MarketCount + r.QuoteCount).ThenByDescending(ImportanceScore),
+        _ => rows.OrderByDescending(ImportanceScore).ThenBy(r => r.EffectiveDate)
+    };
+
+    int ImportanceScore(SubmissionDto row)
+    {
+        var score = 0;
+        var status = NormalizeStatus(row.Status);
+        var daysToEffective = (row.EffectiveDate.Date - DateTime.Today).Days;
+        var premium = row.TargetPremium ?? 0;
+
+        score += status switch
+        {
+            "New" => 22,
+            "In Review" => 30,
+            "Quoted" => 34,
+            "Bound" => 5,
+            "Declined" or "Withdrawn" => 10,
+            _ => 14
+        };
+        score += row.Priority?.Contains("High", StringComparison.OrdinalIgnoreCase) == true ? 22 : row.Priority?.Contains("Urgent", StringComparison.OrdinalIgnoreCase) == true ? 28 : 8;
+        score += daysToEffective < 0 ? 30 : daysToEffective <= 7 ? 24 : daysToEffective <= 30 ? 14 : 6;
+        score += premium >= 100000 ? 24 : premium >= 50000 ? 16 : premium > 0 ? 8 : 0;
+        score += row.QuoteCount > 0 ? 10 : row.MarketCount > 0 ? 6 : 0;
+        score += string.IsNullOrWhiteSpace(row.AssignedToUserName) ? 8 : 0;
+        return Math.Min(score, 100);
+    }
+
+    string ImportanceLevel(SubmissionDto row) => ImportanceScore(row) switch
+    {
+        >= 80 => "Critical",
+        >= 62 => "High",
+        >= 42 => "Medium",
+        _ => "Standard"
+    };
+
+    void SetDashboardFocus(string tab, string kpi)
+    {
+        _activeTab = tab;
+        _activeKpi = kpi == "market" ? "all" : kpi;
+        _sortMode = "importance";
+        _page = 1;
+    }
 
     void SetActiveTab(string key)
     {
@@ -489,75 +681,88 @@
         _page = 1;
     }
 
-    void ToggleKpiFilter(string? filterKey)
+    void SetKpi(string key)
     {
-        _kpiFilter = filterKey is null || _kpiFilter == filterKey ? null : filterKey;
+        _activeKpi = _activeKpi == key ? "all" : key;
+        _page = 1;
+    }
+
+    void ClearFilters()
+    {
+        _activeKpi = "all";
+        _searchText = null;
+        _statusFilter = null;
+        _lobFilter = null;
+        _importanceFilter = null;
         _page = 1;
     }
 
     void PreviousPage()
     {
-        if (_page > 1)
-            _page--;
+        if (_page > 1) _page--;
     }
 
     void NextPage()
     {
-        if (_page < TotalPages)
-            _page++;
+        if (_page < TotalPages) _page++;
     }
 
-    void BuildStub()
+    int TabCount(string key) => key switch
     {
-        var rng      = new Random(19);
-        var lobs     = new[]{"General Liability","Commercial Property","Commercial Auto","Workers Comp","Umbrella / Excess","Professional Liab.","Home / Dwelling","Personal Auto"};
-        var statuses = new[]{"New","New","In Review","In Review","Quoted","Quoted","Quoted","Bound","Bound","Declined","Withdrawn"};
-        var accounts = new[]{"Sullivan Mfg. LLC","Bridgewater Hotels","Metro Freight Co.","PineCrest Builders","Omega Tech Corp.","BlueSky Aviation","Harbor Fresh Foods","Summit Properties LLC","Nguyen, Minh T.","James & Lisa Carter"};
-        var producers= new[]{"Thornton & Associates","Pacific Bridge Insurance","Allied Risk Group","Midwest Coverage Partners"};
-        var csrs     = new[]{"Maria Santos","James Patel","Chen Li","Aisha Williams"};
+        "priority" => CriticalRows.Count(),
+        "markets" => _rows.Count(r => r.MarketCount > 0 || IsReview(r)),
+        "quoted" => _rows.Count(IsQuoted),
+        "bind" => _rows.Count(r => IsQuoted(r) || (r.QuoteCount > 0 && !IsBound(r) && !IsDeclined(r))),
+        "declined" => _rows.Count(IsDeclined),
+        "producer" => _rows.Select(r => Safe(r.AssignedToUserName, "Unassigned")).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+        "lob" => _rows.Select(r => Safe(r.LineOfBusiness, "Unknown")).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+        _ => _rows.Count
+    };
 
-        for (int i = 1; i <= 65; i++)
-        {
-            var eff = DateTime.Today.AddDays(rng.Next(30,180));
-            var sub = DateTime.Today.AddDays(-rng.Next(0,60));
-            _rows.Add(new SubRow
-            {
-                SubmissionNo  = $"SUB-2025-{i:D4}",
-                Account       = accounts[rng.Next(accounts.Length)],
-                Insured       = accounts[rng.Next(accounts.Length)],
-                Lob           = lobs[rng.Next(lobs.Length)],
-                Status        = statuses[rng.Next(statuses.Length)],
-                Producer      = producers[rng.Next(producers.Length)],
-                Csr           = csrs[rng.Next(csrs.Length)],
-                SubmitDate    = sub,
-                EffDate       = eff,
-                DueDate       = sub.AddDays(rng.Next(7,21)),
-                QuotedPremium = rng.Next(3)==0 ? 0 : (decimal)rng.Next(5000,80000),
-                Markets       = rng.Next(2,6),
-            });
-        }
+    void SelectRow(SubmissionDto row)
+    {
+        _selected = row;
+        _openActionMenuFor = null;
     }
 
-    void OpenSubmission(SubRow row) =>
-        Nav.NavigateTo($"/submissions/{row.SubId}");
+    void OpenSubmission(SubmissionDto row) => Nav.NavigateTo($"/submissions/{row.SubmissionId}");
+
+    void ToggleActionMenu(SubmissionDto row)
+    {
+        _selected = row;
+        _openActionMenuFor = _openActionMenuFor == row.SubmissionId ? null : row.SubmissionId;
+    }
+
+    void FilterByOwner(string owner)
+    {
+        _searchText = owner == "Unassigned" ? "Unassigned" : owner;
+        _activeTab = "all";
+        _page = 1;
+    }
+
+    void FilterByLob(string lob)
+    {
+        _lobFilter = lob == "Unknown" ? null : lob;
+        _activeTab = "all";
+        _page = 1;
+    }
 
     async Task HandleActionAsync(string action)
     {
         _openActionMenuFor = null;
-
-        if (_selected.SubId == Guid.Empty)
+        if (_selected is null)
         {
-            await _toast.ShowAsync(new ToastModel { Content = "Select a submission before running an action.", CssClass = "e-toast-danger" });
+            ShowToast("Select a submission before running an action.", "sde-toast--danger");
             return;
         }
 
         switch (action)
         {
             case "Open":
-                Nav.NavigateTo($"/submissions/{_selected.SubId}");
+                OpenSubmission(_selected);
                 break;
             case "Initiate Workflow":
-                OpenConfirmDialog("Initiate Workflow");
+                OpenConfirmDialog(action);
                 break;
             case "Submit to Market":
             case "Request Quote":
@@ -568,20 +773,28 @@
                 OpenActionDialog(action);
                 break;
         }
+
+        await Task.CompletedTask;
     }
 
     void OpenActionDialog(string action)
     {
+        if (_selected is null)
+        {
+            ShowToast("Select a submission before running an action.", "sde-toast--danger");
+            return;
+        }
+
         _pendingAction = action;
         _actionForm.Reset(_selected, action);
         (_actionTitle, _actionIcon, _actionButtonText) = action switch
         {
-            "Submit to Market" => ($"Submit {_selected.SubmissionNo} to Market", "bi-send", "Submit"),
-            "Request Quote" => ($"Request Quote for {_selected.SubmissionNo}", "bi-journal-text", "Request Quote"),
-            "Bind" => ($"Bind {_selected.SubmissionNo}", "bi-shield-check", "Bind Policy"),
-            "Copy" => ($"Copy {_selected.SubmissionNo}", "bi-copy", "Create Copy"),
-            "Create Policy" => ($"Create Policy from {_selected.SubmissionNo}", "bi-shield-plus", "Create Policy"),
-            "Decline" => ($"Decline {_selected.SubmissionNo}", "bi-x-circle", "Decline"),
+            "Submit to Market" => ($"Submit {_selected.SubmissionNumber} to Market", "bi-send", "Submit"),
+            "Request Quote" => ($"Request Quote for {_selected.SubmissionNumber}", "bi-file-earmark-text", "Request Quote"),
+            "Bind" => ($"Bind {_selected.SubmissionNumber}", "bi-shield-check", "Bind Policy"),
+            "Copy" => ($"Copy {_selected.SubmissionNumber}", "bi-copy", "Create Copy"),
+            "Create Policy" => ($"Create Policy from {_selected.SubmissionNumber}", "bi-shield-plus", "Create Policy"),
+            "Decline" => ($"Decline {_selected.SubmissionNumber}", "bi-x-circle", "Decline"),
             _ => ("Submission Action", "bi-send", "Save")
         };
         _actionHelpText = action switch
@@ -611,21 +824,24 @@
 
     Task NotifyActionValidationAsync()
     {
-        return _toast.ShowAsync(new ToastModel { Content = "Please correct the highlighted fields before continuing.", CssClass = "e-toast-danger" });
+        ShowToast("Please correct the highlighted fields before continuing.", "sde-toast--danger");
+        return Task.CompletedTask;
     }
 
     void OpenConfirmDialog(string action)
     {
+        if (_selected is null) return;
+
         _pendingAction = action;
         (_confirmTitle, _confirmMessage, _confirmIcon) = action switch
         {
-            "Submit to Market" => ($"Submit {_selected.SubmissionNo} to market?", "This will add or update a carrier market record and move the submission into review.", "bi-send"),
-            "Request Quote" => ($"Request quote for {_selected.SubmissionNo}?", "This will create a quote request and update the submission quote count/status.", "bi-journal-text"),
-            "Bind" => ($"Bind {_selected.SubmissionNo}?", "This will create a bound policy from the best available quote and mark the submission as bound.", "bi-shield-check"),
-            "Copy" => ($"Copy {_selected.SubmissionNo}?", "This will create a new submission copy using the selected form values.", "bi-copy"),
-            "Create Policy" => ($"Create policy from {_selected.SubmissionNo}?", "This will create or resolve a quote and bind a policy for this submission.", "bi-shield-plus"),
-            "Initiate Workflow" => ($"Initiate workflow for {_selected.SubmissionNo}?", "This will start a workflow instance for the selected submission.", "bi-diagram-3"),
-            "Decline" => ($"Decline {_selected.SubmissionNo}?", "This will mark the submission and non-final market responses as declined.", "bi-exclamation-triangle"),
+            "Submit to Market" => ($"Submit {_selected.SubmissionNumber} to market?", "This will add or update a carrier market record and move the submission into review.", "bi-send"),
+            "Request Quote" => ($"Request quote for {_selected.SubmissionNumber}?", "This will create a quote request and update submission quote progress.", "bi-file-earmark-text"),
+            "Bind" => ($"Bind {_selected.SubmissionNumber}?", "This will create a bound policy from the selected submission workflow.", "bi-shield-check"),
+            "Copy" => ($"Copy {_selected.SubmissionNumber}?", "This will create a new submission copy using the selected form values.", "bi-copy"),
+            "Create Policy" => ($"Create policy from {_selected.SubmissionNumber}?", "This will create or resolve a quote and bind a policy for this submission.", "bi-shield-plus"),
+            "Initiate Workflow" => ($"Initiate workflow for {_selected.SubmissionNumber}?", "This will start a workflow instance for the selected submission.", "bi-diagram-3"),
+            "Decline" => ($"Decline {_selected.SubmissionNumber}?", "This will mark the submission and non-final market responses as declined.", "bi-exclamation-triangle"),
             _ => ("Confirm action", "Confirm this submission action?", "bi-question-circle")
         };
         _showConfirmDialog = true;
@@ -635,12 +851,6 @@
     {
         if (_actionBusy) return;
         _showConfirmDialog = false;
-    }
-
-    void CloseActionMenu()
-    {
-        if (_actionBusy) return;
-        _openActionMenuFor = null;
     }
 
     async Task ExecuteConfirmedActionAsync()
@@ -657,31 +867,30 @@
 
     async Task ExecuteActionAsync()
     {
-        if (_selected.SubId == Guid.Empty)
-            return;
+        if (_selected is null) return;
 
         _actionBusy = true;
         try
         {
             var carrierId = _actionForm.TryGetCarrierId();
-            SubmissionActionResult result = _pendingAction switch
+            var result = _pendingAction switch
             {
-                "Submit to Market" => await Api.SubmitSubmissionToMarketAsync(_selected.SubId, new SubmitSubmissionToMarketRequest(SubmissionPageConstants.TenantId, carrierId, _actionForm.Notes)),
-                "Request Quote" => await Api.RequestSubmissionQuoteAsync(_selected.SubId, new RequestSubmissionQuoteRequest(SubmissionPageConstants.TenantId, carrierId, _actionForm.AnnualPremium, null, null, _actionForm.Notes)),
-                "Bind" or "Create Policy" => await Api.CreatePolicyFromSubmissionAsync(_selected.SubId, new CreatePolicyFromSubmissionRequest(SubmissionPageConstants.TenantId, null, carrierId, _actionForm.AnnualPremium, _actionForm.EffectiveDate, _actionForm.EffectiveDate?.AddYears(1))),
-                "Copy" => await Api.CopySubmissionAsync(_selected.SubId, new CopySubmissionRequest(SubmissionPageConstants.TenantId, _actionForm.EffectiveDate, _actionForm.LineOfBusiness, _selected.Priority)),
-                "Decline" => await Api.DeclineSubmissionAsync(_selected.SubId, new DeclineSubmissionRequest(SubmissionPageConstants.TenantId, string.IsNullOrWhiteSpace(_actionForm.Notes) ? "Declined from submissions register." : _actionForm.Notes)),
-                _ => new SubmissionActionResult(_selected.SubId, "No action executed.")
+                "Submit to Market" => await Api.SubmitSubmissionToMarketAsync(_selected.SubmissionId, new SubmitSubmissionToMarketRequest(SubmissionPageConstants.TenantId, carrierId, _actionForm.Notes)),
+                "Request Quote" => await Api.RequestSubmissionQuoteAsync(_selected.SubmissionId, new RequestSubmissionQuoteRequest(SubmissionPageConstants.TenantId, carrierId, _actionForm.AnnualPremium, null, null, _actionForm.Notes)),
+                "Bind" or "Create Policy" => await Api.CreatePolicyFromSubmissionAsync(_selected.SubmissionId, new CreatePolicyFromSubmissionRequest(SubmissionPageConstants.TenantId, null, carrierId, _actionForm.AnnualPremium, _actionForm.EffectiveDate, _actionForm.EffectiveDate?.AddYears(1))),
+                "Copy" => await Api.CopySubmissionAsync(_selected.SubmissionId, new CopySubmissionRequest(SubmissionPageConstants.TenantId, _actionForm.EffectiveDate, _actionForm.LineOfBusiness, _selected.Priority)),
+                "Decline" => await Api.DeclineSubmissionAsync(_selected.SubmissionId, new DeclineSubmissionRequest(SubmissionPageConstants.TenantId, string.IsNullOrWhiteSpace(_actionForm.Notes) ? "Declined from submissions command center." : _actionForm.Notes)),
+                _ => new SubmissionActionResult(_selected.SubmissionId, "No action executed.")
             };
 
             _showActionDialog = false;
             _showConfirmDialog = false;
-            await _toast.ShowAsync(new ToastModel { Content = result.Message, CssClass = "e-toast-success" });
+            ShowToast(result.Message, "sde-toast--success");
             await LoadAsync();
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new ToastModel { Content = $"Action failed: {ex.Message}", CssClass = "e-toast-danger" });
+            ShowToast($"Action failed: {ex.Message}", "sde-toast--danger");
         }
         finally
         {
@@ -691,19 +900,18 @@
 
     async Task InitiateWorkflowAsync()
     {
-        if (_selected.SubId == Guid.Empty)
-            return;
+        if (_selected is null) return;
 
         _actionBusy = true;
         try
         {
-            await Api.InitiateWorkflowForSubmissionAsync(_selected.SubId, SubmissionPageConstants.TenantId);
-            await _toast.ShowAsync(new ToastModel { Content = "Workflow initiated.", CssClass = "e-toast-success" });
+            await Api.InitiateWorkflowForSubmissionAsync(_selected.SubmissionId, SubmissionPageConstants.TenantId);
+            ShowToast("Workflow initiated.", "sde-toast--success");
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new ToastModel { Content = $"Workflow initiation failed: {ex.Message}", CssClass = "e-toast-danger" });
-            Nav.NavigateTo($"/workflow?entity=Submission&entityId={_selected.SubId}");
+            ShowToast($"Workflow initiation failed: {ex.Message}", "sde-toast--danger");
+            Nav.NavigateTo($"/workflow?entity=Submission&entityId={_selected.SubmissionId}");
         }
         finally
         {
@@ -711,82 +919,70 @@
         }
     }
 
-    RenderFragment SubNoLink(SubRow r) =>
-        @<button class="sr-sub-link um-btn um-btn-ghost um-btn-xs"
-                 @onclick:stopPropagation="true"
-                 @onclick='() => Nav.NavigateTo($"/submissions/{r.SubId}")'>
-            @r.SubmissionNo
-        </button>;
-
-    RenderFragment LobChip(string lob) =>
-        @<span class="sr-lob-chip">@lob</span>;
-
-    RenderFragment StatusChip(string s) =>
-        @<span class="sr-status sr-status-@s.ToLower().Replace(" ","-")">@s</span>;
-
-    RenderFragment DueCell(DateTime d)
+    void ShowToast(string message, string cssClass)
     {
-        var days = (d - DateTime.Today).TotalDays;
-        var css  = days < 0 ? "sr-due-late" : days <= 3 ? "sr-due-soon" : "";
-        return @<span class="@css">@d.ToString("MM/dd/yyyy")</span>;
+        var toast = new ToastMessage(Guid.NewGuid(), message, cssClass);
+        _toasts.Add(toast);
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(5000);
+            await InvokeAsync(() => DismissToast(toast.Id));
+        });
     }
 
-    RenderFragment PremCell(decimal v) =>
-        v == 0
-            ? @<span class="sr-prem-none">—</span>
-            : @<span class="sr-prem">@v.ToString("C0")</span>;
+    void DismissToast(Guid id) => _toasts.RemoveAll(t => t.Id == id);
 
-    RenderFragment MktCountCell(int n) =>
-        @<span class="sr-mkt-cnt">@n</span>;
-
-    RenderFragment CtxBtn(SubRow row) =>
-        @<div class="um-action-menu-wrap sr-action-menu-wrap" @onclick:stopPropagation="true">
-            <button type="button"
-                    class="um-btn um-btn-ghost um-btn-xs sr-ctx-btn"
-                    aria-haspopup="menu"
-                    aria-expanded="@(_openActionMenuFor == row.SubId)"
-                    title="Submission actions"
-                    @onclick="() => ToggleActionMenu(row)">
-                <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
-            </button>
-            @if (_openActionMenuFor == row.SubId)
-            {
-                <div class="sr-action-menu" role="menu" aria-label="Submission actions">
-                    <div class="sr-action-menu-summary">
-                        <strong>@row.SubmissionNo</strong>
-                        <span>@row.Account</span>
-                    </div>
-                    @foreach (var item in _actionItems)
-                    {
-                        <button type="button"
-                                class="um-action-menu-item @(item.Text == "Decline" ? "um-action-menu-item--danger" : null)"
-                                role="menuitem"
-                                @onclick="() => HandleActionAsync(item.Text)">
-                            <i class="@item.IconCss" aria-hidden="true"></i>
-                            <span>@item.Text</span>
-                        </button>
-                    }
-                </div>
-            }
-        </div>;
-
-    void ToggleActionMenu(SubRow row)
+    RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string tone)
     {
-        _selected = row;
-        _openActionMenuFor = _openActionMenuFor == row.SubId ? null : row.SubId;
-    }
-
-    RenderFragment KpiCard(string icon, string label, string val, string css, string? filterKey)
-    {
-        var isActive = _kpiFilter == filterKey;
-        return @<button type="button"
-                        class="sr-kpi-card @css @(isActive ? "sr-kpi-active" : "")"
-                        @onclick="() => ToggleKpiFilter(filterKey)"
-                        title="@(filterKey is null ? "Show all" : (isActive ? "Clear filter" : $"Filter by {label}"))">
-            <div class="sr-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
-            <div class="sr-kpi-val">@val</div>
+        var active = _activeKpi == key;
+        return @<button type="button" class="sde-kpi sde-kpi--@tone @(active ? "sde-kpi--active" : null)" @onclick="() => SetKpi(key)" title="@(active ? "Clear KPI filter" : subtitle)">
+            <span><i class="bi @icon" aria-hidden="true"></i>@label</span>
+            <strong>@value</strong>
+            <small>@subtitle</small>
         </button>;
     }
+
+    RenderFragment WorkflowButton(string title, string description, string icon, System.Action callback) => @<button type="button" class="sde-workflow" @onclick="() => callback()">
+        <i class="bi @icon" aria-hidden="true"></i>
+        <span><strong>@title</strong><small>@description</small></span>
+    </button>;
+
+    RenderFragment StatusBadge(SubmissionDto row)
+    {
+        var status = NormalizeStatus(row.Status);
+        return @<span class="sde-status sde-status--@Slug(status)">@status</span>;
+    }
+
+    RenderFragment ImportanceBadge(SubmissionDto row) => @<span class="sde-importance sde-importance--@Slug(ImportanceLevel(row))">@ImportanceLevel(row)<small>@ImportanceScore(row)</small></span>;
+
+    RenderFragment DueBadge(SubmissionDto row)
+    {
+        var days = (row.EffectiveDate.Date - DateTime.Today).Days;
+        var label = days < 0 ? $"{Math.Abs(days)}d late" : days == 0 ? "Today" : $"{days}d";
+        var css = days < 0 ? "late" : days <= 7 ? "soon" : "normal";
+        return @<span class="sde-due sde-due--@css">@label</span>;
+    }
+
+    RenderFragment PremiumCell(SubmissionDto row)
+    {
+        var value = row.TargetPremium ?? 0;
+        return value <= 0 ? @<span class="sde-muted">—</span> : @<strong class="sde-premium">@value.ToString("C0")</strong>;
+    }
+
+    static bool IsReview(SubmissionDto row) => NormalizeStatus(row.Status) == "In Review";
+    static bool IsQuoted(SubmissionDto row) => NormalizeStatus(row.Status) == "Quoted";
+    static bool IsBound(SubmissionDto row) => NormalizeStatus(row.Status) == "Bound";
+    static bool IsDeclined(SubmissionDto row) => NormalizeStatus(row.Status) is "Declined" or "Withdrawn";
+    static string NormalizeStatus(string? status) => SubmissionPageConstants.NormalizeStatus(string.IsNullOrWhiteSpace(status) ? "New" : status);
+    static bool Contains(string? source, string term) => !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
+    static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    static string Slug(string value) => value.ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
+
+    sealed record TabDef(string Key, string Label, string Icon);
+    sealed record ActionDef(string Key, string Label, string Icon, bool IsDanger);
+    sealed record GroupSummary(string Name, int Count, decimal TargetPremium, int CriticalCount, int QuoteCount, int Percent);
+    sealed record InsightDef(string Title, string Description, string Icon);
+    sealed record ToastMessage(Guid Id, string Message, string CssClass);
 
     sealed class SubmissionActionForm : IValidatableObject
     {
@@ -797,13 +993,13 @@
         [StringLength(1000)] public string? Notes { get; set; }
         string _action = string.Empty;
 
-        public void Reset(SubRow row, string action)
+        public void Reset(SubmissionDto row, string action)
         {
             _action = action;
             CarrierIdText = null;
-            AnnualPremium = row.TargetPremium > 0 ? row.TargetPremium : row.QuotedPremium > 0 ? row.QuotedPremium : null;
-            EffectiveDate = row.EffDate == default ? DateTime.Today.AddDays(30) : row.EffDate;
-            LineOfBusiness = row.Lob;
+            AnnualPremium = row.TargetPremium;
+            EffectiveDate = row.EffectiveDate == default ? DateTime.Today.AddDays(30) : row.EffectiveDate;
+            LineOfBusiness = row.LineOfBusiness;
             Notes = action == "Decline" ? "Carrier declined or account withdrawn." : string.Empty;
         }
 

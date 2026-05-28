@@ -1,16 +1,459 @@
 @page "/crm/opportunities/new"
 @namespace Ams.Web.Components.Pages.Crm
-@inject ApiClient Api
-@inject NavigationManager Nav
-@inject BreadcrumbService Breadcrumbs
+@using System.Globalization
 @using Ams.Application.Common.Dtos
 @using Ams.Application.Features.Opportunities
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
 
 <PageTitle>New Opportunity — CRM</PageTitle>
 
-<AppPageHeader Title="New Opportunity" Subtitle="Create a sales opportunity tied to an account" Icon="bi-plus-circle"><Actions><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/opportunities")'><i class="bi bi-arrow-left"></i> Opportunities</button></Actions></AppPageHeader>
-<section class="ma-hero opp-hero"><div><span class="ma-eyebrow">CRM · Opportunities</span><h2>Create Opportunity</h2><p>Capture opportunity amount, close date, forecast category, and account relationship.</p></div><div class="ma-hero-actions"><button class="um-btn um-btn-primary" type="button" @onclick="SubmitAsync" disabled="@_saving"><i class="bi bi-check-lg"></i> Create Opportunity</button></div></section>
-@if (_loadError is not null) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div> }
-<div class="acct-form-card"><EditForm EditContext="_editContext" OnValidSubmit="SubmitAsync"><DataAnnotationsValidator /><div class="um-modal-body"><div class="um-form-grid"><div class="um-field"><label>Opportunity Number <span class="text-danger">*</span></label><InputText @bind-Value="_form.OpportunityNumber" class="um-input" /><ValidationMessage For="() => _form.OpportunityNumber" class="text-danger" /></div><div class="um-field"><label>Opportunity Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.OpportunityName" class="um-input" /><ValidationMessage For="() => _form.OpportunityName" class="text-danger" /></div><div class="um-field"><label>Account <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.AccountId" class="um-input"><option value="">Select account</option>@foreach (var account in _accounts) { <option value="@account.AccountId">@account.AccountName</option> }</InputSelect><ValidationMessage For="() => _form.AccountId" class="text-danger" /></div><div class="um-field"><label>Estimated Amount</label><InputNumber @bind-Value="_form.EstimatedAmount" class="um-input" /><ValidationMessage For="() => _form.EstimatedAmount" class="text-danger" /></div><div class="um-field"><label>Win Probability</label><InputNumber @bind-Value="_form.WinProbability" class="um-input" /><ValidationMessage For="() => _form.WinProbability" class="text-danger" /></div><div class="um-field"><label>Close Date</label><InputDate @bind-Value="_form.CloseDate" class="um-input" /></div><div class="um-field"><label>Forecast Category <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.ForecastCategoryCode" class="um-input">@foreach (var cat in OpportunityPageConstants.ForecastCategories) { <option value="@cat">@cat</option> }</InputSelect><ValidationMessage For="() => _form.ForecastCategoryCode" class="text-danger" /></div></div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/opportunities")'>Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_saving ? "Creating…" : "Create Opportunity")</button></div></EditForm></div>
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
-@code { OpportunityFormModel _form = new(); EditContext _editContext = default!; List<AccountDto> _accounts = []; SfToast _toast = default!; string? _loadError; bool _saving; protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("CRM", "/crm/opportunities"), new("New Opportunity")); _editContext = new(_form); await LoadAccountsAsync(); } async Task LoadAccountsAsync() { try { _accounts = (await Api.SearchAccountsAsync(OpportunityPageConstants.TenantId))?.Items.ToList() ?? []; } catch (Exception ex) { _loadError = $"Failed to load accounts: {ex.Message}"; } } async Task SubmitAsync() { if (!_editContext.Validate()) return; _saving = true; try { var id = await Api.CreateOpportunityAsync(new CreateOpportunityRequest { TenantId = OpportunityPageConstants.TenantId, OpportunityNumber = _form.OpportunityNumber, AccountId = _form.AccountId!.Value, OpportunityName = _form.OpportunityName, EstimatedAmount = _form.EstimatedAmount, OwnerUserId = _form.OwnerUserId, CloseDate = _form.CloseDate, LeadId = _form.LeadId, WinProbability = _form.WinProbability, ForecastCategoryCode = _form.ForecastCategoryCode }); await _toast.ShowAsync(new() { Content = "Opportunity created", CssClass = "e-toast-success" }); Nav.NavigateTo($"/crm/opportunities/{id}"); } catch (Exception ex) { _loadError = $"Create failed: {ex.Message}"; await _toast.ShowAsync(new() { Content = $"Create failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } } }
+@if (_toastVisible)
+{
+    <div class="opn-toast opn-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="opn-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+<div class="opn-enterprise-page">
+    <section class="opn-hero">
+        <div class="opn-hero-left">
+            <span class="opn-hero-icon"><i class="bi bi-plus-circle" aria-hidden="true"></i></span>
+            <div>
+                <div class="opn-title-row">
+                    <h1>New Opportunity Command Center</h1>
+                    <span><i class="bi bi-building" aria-hidden="true"></i> Account linked</span>
+                    <span><i class="bi bi-graph-up-arrow" aria-hidden="true"></i> Forecast ready</span>
+                    <span><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+                </div>
+                <p>Create a revenue opportunity with account context, owner assignment, weighted forecast signals, close timing, and validation aligned to the CRM opportunity contract.</p>
+            </div>
+        </div>
+        <div class="opn-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadContextAsync" disabled="@(_loading || _saving)"><i class="bi @(_loading ? "bi-arrow-repeat opn-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh Context</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/opportunities/board")'><i class="bi bi-kanban" aria-hidden="true"></i> Board</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/opportunities/pipeline")'><i class="bi bi-funnel" aria-hidden="true"></i> Pipeline</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="SubmitAsync" disabled="@(_saving || _loading)"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_saving ? "Creating…" : "Create Opportunity")</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger opn-error-banner" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    <section class="opn-kpi-strip" aria-label="Opportunity creation readiness">
+        <button type="button" class="@MetricCardClass("account")" title="Select and verify the account relationship before creating the opportunity." @onclick='() => SetSection("account")'>
+            <span class="opn-kpi-icon"><i class="bi bi-building" aria-hidden="true"></i></span>
+            <span><span class="opn-kpi-val">@AccountStatus</span><span class="opn-kpi-lbl">Account</span><small>@(_accounts.Count.ToString("N0", CultureInfo.CurrentCulture)) available</small></span>
+        </button>
+        <button type="button" class="@MetricCardClass("forecast")" title="Estimated and probability-adjusted revenue from the draft." @onclick='() => SetSection("forecast")'>
+            <span class="opn-kpi-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
+            <span><span class="opn-kpi-val">@FormatCurrency(_form.EstimatedAmount)</span><span class="opn-kpi-lbl">Estimated</span><small>@FormatCurrency(WeightedDraftAmount) weighted</small></span>
+        </button>
+        <button type="button" class="@MetricCardClass("forecast")" title="Current forecast category and win probability." @onclick='() => SetSection("forecast")'>
+            <span class="opn-kpi-icon"><i class="bi bi-percent" aria-hidden="true"></i></span>
+            <span><span class="opn-kpi-val">@_form.WinProbability.ToString("F0", CultureInfo.CurrentCulture)%</span><span class="opn-kpi-lbl">Win Probability</span><small>@_form.ForecastCategoryCode forecast</small></span>
+        </button>
+        <button type="button" class="@MetricCardClass("review")" title="Review validation and creation readiness." @onclick='() => SetSection("review")'>
+            <span class="opn-kpi-icon"><i class="bi bi-clipboard-check" aria-hidden="true"></i></span>
+            <span><span class="opn-kpi-val">@ReadinessScore%</span><span class="opn-kpi-lbl">Readiness</span><small>@ReadinessLabel</small></span>
+        </button>
+        <button type="button" class="@MetricCardClass("owner")" title="Assign an opportunity owner for accountability." @onclick='() => SetSection("owner")'>
+            <span class="opn-kpi-icon"><i class="bi bi-person-badge" aria-hidden="true"></i></span>
+            <span><span class="opn-kpi-val">@OwnerStatus</span><span class="opn-kpi-lbl">Owner</span><small>@(_users.Count.ToString("N0", CultureInfo.CurrentCulture)) available</small></span>
+        </button>
+    </section>
+
+    <section class="opn-workflow-strip" aria-label="Opportunity creation workflows">
+        <button type="button" class="opn-workflow-card opn-workflow-primary" @onclick='() => SetSection("account")'><i class="bi bi-building-check" aria-hidden="true"></i><span><strong>Qualify account</strong><span>Link the opportunity to the correct client or prospect.</span></span></button>
+        <button type="button" class="opn-workflow-card" @onclick='() => ApplyScenario("commit")'><i class="bi bi-check2-circle" aria-hidden="true"></i><span><strong>Commit scenario</strong><span>Set high-confidence forecast defaults.</span></span></button>
+        <button type="button" class="opn-workflow-card" @onclick='() => ApplyScenario("pipeline")'><i class="bi bi-funnel" aria-hidden="true"></i><span><strong>Pipeline scenario</strong><span>Set early-stage opportunity defaults.</span></span></button>
+        <button type="button" class="opn-workflow-card" @onclick='() => SetSection("review")'><i class="bi bi-clipboard-data" aria-hidden="true"></i><span><strong>Review and create</strong><span>Confirm required fields and submit.</span></span></button>
+    </section>
+
+    @if (_loading)
+    {
+        <section class="opn-loading-state"><i class="bi bi-arrow-repeat opn-spin" aria-hidden="true"></i><strong>Loading creation context...</strong><span>Syncing accounts, owners, and active opportunity data for this tenant.</span></section>
+    }
+    else
+    {
+        <section class="opn-view-tabs" aria-label="Creation sections">
+            @foreach (var section in _sections)
+            {
+                <button type="button" class="@SectionButtonClass(section)" @onclick="@(() => SetSection(section.Id))"><i class="bi @section.Icon" aria-hidden="true"></i> @section.Label <span>@SectionStatus(section.Id)</span></button>
+            }
+        </section>
+
+        <section class="opn-content-layout">
+            <main class="opn-main-card">
+                <EditForm EditContext="_editContext" OnValidSubmit="SubmitAsync">
+                    <DataAnnotationsValidator />
+
+                    @if (_section == "compose")
+                    {
+                        <div class="opn-section-head"><div><h2>Opportunity profile</h2><p>Define the core opportunity identity and initial revenue shape.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="GenerateOpportunityNumber"><i class="bi bi-magic" aria-hidden="true"></i> Regenerate Number</button></div>
+                        <div class="opn-form-grid">
+                            <div class="opn-field">
+                                <label for="opportunityNumber">Opportunity Number <span class="text-danger">*</span></label>
+                                <InputText id="opportunityNumber" @bind-Value="_form.OpportunityNumber" class="opn-input" />
+                                <ValidationMessage For="() => _form.OpportunityNumber" class="text-danger" />
+                            </div>
+                            <div class="opn-field">
+                                <label for="opportunityName">Opportunity Name <span class="text-danger">*</span></label>
+                                <InputText id="opportunityName" @bind-Value="_form.OpportunityName" class="opn-input" placeholder="Example: Workers Comp renewal - Acme" />
+                                <ValidationMessage For="() => _form.OpportunityName" class="text-danger" />
+                            </div>
+                            <div class="opn-field">
+                                <label for="estimatedAmount">Estimated Amount</label>
+                                <div class="opn-money-input"><span>$</span><InputNumber id="estimatedAmount" @bind-Value="_form.EstimatedAmount" class="opn-input" /></div>
+                                <ValidationMessage For="() => _form.EstimatedAmount" class="text-danger" />
+                            </div>
+                            <div class="opn-field">
+                                <label for="closeDate">Target Close Date</label>
+                                <InputDate id="closeDate" @bind-Value="_form.CloseDate" class="opn-input" />
+                                <ValidationMessage For="() => _form.CloseDate" class="text-danger" />
+                            </div>
+                        </div>
+                    }
+                    else if (_section == "account")
+                    {
+                        <div class="opn-section-head"><div><h2>Account relationship</h2><p>Choose the client or prospect that owns this opportunity.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/accounts")'><i class="bi bi-building" aria-hidden="true"></i> Accounts</button></div>
+                        <div class="opn-filter-row">
+                            <label class="opn-search-field"><span><i class="bi bi-search" aria-hidden="true"></i></span><input value="@_accountSearch" @oninput="OnAccountSearchChanged" placeholder="Search account name, number, industry, email, segment..." /></label>
+                            <button type="button" class="um-btn um-btn-ghost" @onclick="ClearAccountSelection"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button>
+                        </div>
+                        <div class="opn-account-grid">
+                            @foreach (var account in FilteredAccounts.Take(12))
+                            {
+                                <button type="button" class="@AccountCardClass(account)" @onclick="@(() => SelectAccount(account))">
+                                    <span class="opn-account-avatar">@Initials(account.AccountName)</span>
+                                    <span><strong>@account.AccountName</strong><small>@account.AccountNumber · @(account.Industry ?? account.AccountTypeCode)</small><em>@AccountSubtext(account)</em></span>
+                                    <i class="bi @(account.AccountId == _form.AccountId ? "bi-check-circle-fill" : "bi-circle")" aria-hidden="true"></i>
+                                </button>
+                            }
+                        </div>
+                        <div class="opn-field opn-field-full">
+                            <label for="accountSelect">Selected Account <span class="text-danger">*</span></label>
+                            <InputSelect id="accountSelect" @bind-Value="_form.AccountId" class="opn-input">
+                                <option value="">Select account</option>
+                                @foreach (var account in _accounts.OrderBy(a => a.AccountName))
+                                {
+                                    <option value="@account.AccountId">@account.AccountName</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.AccountId" class="text-danger" />
+                        </div>
+                    }
+                    else if (_section == "forecast")
+                    {
+                        <div class="opn-section-head"><div><h2>Forecast and close strategy</h2><p>Set probability, forecast category, and expected close timing for weighted pipeline visibility.</p></div><span class="opn-pill"><i class="bi bi-calculator" aria-hidden="true"></i> @FormatCurrency(WeightedDraftAmount) weighted</span></div>
+                        <div class="opn-form-grid">
+                            <div class="opn-field">
+                                <label for="winProbability">Win Probability</label>
+                                <div class="opn-percent-input"><InputNumber id="winProbability" @bind-Value="_form.WinProbability" class="opn-input" /><span>%</span></div>
+                                <ValidationMessage For="() => _form.WinProbability" class="text-danger" />
+                            </div>
+                            <div class="opn-field">
+                                <label for="forecastCategory">Forecast Category <span class="text-danger">*</span></label>
+                                <InputSelect id="forecastCategory" @bind-Value="_form.ForecastCategoryCode" class="opn-input">
+                                    @foreach (var cat in OpportunityPageConstants.ForecastCategories)
+                                    {
+                                        <option value="@cat">@cat</option>
+                                    }
+                                </InputSelect>
+                                <ValidationMessage For="() => _form.ForecastCategoryCode" class="text-danger" />
+                            </div>
+                        </div>
+                        <div class="opn-scenario-grid">
+                            <button type="button" class="opn-scenario-card" @onclick='() => ApplyScenario("pipeline")'><i class="bi bi-funnel" aria-hidden="true"></i><strong>Pipeline</strong><span>Early opportunity · 35% probability</span></button>
+                            <button type="button" class="opn-scenario-card" @onclick='() => ApplyScenario("bestcase")'><i class="bi bi-stars" aria-hidden="true"></i><strong>Best Case</strong><span>Qualified upside · 60% probability</span></button>
+                            <button type="button" class="opn-scenario-card" @onclick='() => ApplyScenario("commit")'><i class="bi bi-check2-circle" aria-hidden="true"></i><strong>Commit</strong><span>High confidence · 85% probability</span></button>
+                        </div>
+                    }
+                    else if (_section == "owner")
+                    {
+                        <div class="opn-section-head"><div><h2>Owner assignment</h2><p>Assign accountability to a producer, CSR, service manager, or tenant user from existing IAM data.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="AutoAssignOwner"><i class="bi bi-lightning-charge" aria-hidden="true"></i> Auto Assign</button></div>
+                        <div class="opn-owner-grid">
+                            @foreach (var user in _users.Take(16))
+                            {
+                                <button type="button" class="@OwnerCardClass(user)" @onclick="@(() => SelectOwner(user))">
+                                    <span class="opn-owner-avatar">@Initials(DisplayUser(user))</span>
+                                    <span><strong>@DisplayUser(user)</strong><small>@(user.JobTitle ?? user.Department ?? user.UserTypeCode)</small><em>@OwnerLoadText(user.UserId)</em></span>
+                                    <i class="bi @(user.UserId == _form.OwnerUserId ? "bi-check-circle-fill" : "bi-circle")" aria-hidden="true"></i>
+                                </button>
+                            }
+                        </div>
+                        <div class="opn-field opn-field-full">
+                            <label for="ownerSelect">Selected Owner</label>
+                            <InputSelect id="ownerSelect" @bind-Value="_form.OwnerUserId" class="opn-input">
+                                <option value="">Unassigned</option>
+                                @foreach (var user in _users.OrderBy(DisplayUser))
+                                {
+                                    <option value="@user.UserId">@DisplayUser(user)</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.OwnerUserId" class="text-danger" />
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="opn-section-head"><div><h2>Review and create</h2><p>Confirm required information and submit the opportunity to the existing CRM workflow.</p></div><span class="opn-pill"><i class="bi bi-shield-check" aria-hidden="true"></i> @ReadinessLabel</span></div>
+                        <div class="opn-review-grid">
+                            @foreach (var item in ReviewItems)
+                            {
+                                <div class="opn-review-item">
+                                    <span><i class="bi @item.Icon" aria-hidden="true"></i> @item.Label</span>
+                                    <strong>@item.Value</strong>
+                                    <small>@item.Caption</small>
+                                </div>
+                            }
+                        </div>
+                        <div class="opn-submit-panel">
+                            <div><strong>Ready to create?</strong><p>The opportunity will be saved with the selected account, owner, amount, close date, and forecast category.</p></div>
+                            <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_saving ? "Creating…" : "Create Opportunity")</button>
+                        </div>
+                    }
+                </EditForm>
+            </main>
+
+            <aside class="opn-detail-panel">
+                <div class="opn-detail-head">
+                    <div><span><i class="bi bi-clipboard-data" aria-hidden="true"></i> Draft intelligence</span><h2>@DraftTitle</h2><p>@DraftSubtitle</p></div>
+                    <span class="opn-badge @ForecastBadgeClass(_form.ForecastCategoryCode)">@_form.ForecastCategoryCode</span>
+                </div>
+                <div class="opn-score-ring"><strong>@ReadinessScore%</strong><span>readiness</span></div>
+                <div class="opn-detail-summary">
+                    <div><span>Estimated</span><strong>@FormatCurrency(_form.EstimatedAmount)</strong></div>
+                    <div><span>Weighted</span><strong>@FormatCurrency(WeightedDraftAmount)</strong></div>
+                    <div><span>Close</span><strong>@FormatDate(_form.CloseDate)</strong></div>
+                    <div><span>Owner</span><strong>@SelectedOwnerName</strong></div>
+                </div>
+                <div class="opn-note-card"><strong>Next best action</strong><p>@NextBestAction</p></div>
+                <div class="opn-rules-card">
+                    <header><strong>Creation checks</strong><span>@ValidationSignals.Count(s => s.Ready)/@ValidationSignals.Count</span></header>
+                    @foreach (var signal in ValidationSignals)
+                    {
+                        <p><em>@signal.Label</em><span class="@(signal.Ready ? "opn-check-ready" : "opn-check-gap")">@(signal.Ready ? "ready" : "needed")</span></p>
+                    }
+                </div>
+                <div class="opn-detail-actions">
+                    <button type="button" class="um-btn um-btn-primary" @onclick="SubmitAsync" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Create</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="ResetDraft"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/opportunities")'><i class="bi bi-arrow-left" aria-hidden="true"></i> Cancel</button>
+                </div>
+            </aside>
+        </section>
+    }
+</div>
+
+@code {
+    private Guid _tenantId;
+    private Guid? _currentUserId;
+    private OpportunityFormModel _form = new();
+    private EditContext _editContext = default!;
+    private bool _loading = true;
+    private bool _saving;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string _section = "compose";
+    private string _accountSearch = string.Empty;
+    private List<AccountDto> _accounts = [];
+    private List<UserDto> _users = [];
+    private List<OpportunityDto> _opportunities = [];
+
+    private readonly SectionDef[] _sections = [new("compose", "Profile", "bi-pencil-square"), new("account", "Account", "bi-building"), new("forecast", "Forecast", "bi-graph-up-arrow"), new("owner", "Owner", "bi-person-badge"), new("review", "Review", "bi-clipboard-check")];
+
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
+    private decimal WeightedDraftAmount => _form.EstimatedAmount * _form.WinProbability / 100m;
+    private AccountDto? SelectedAccount => _accounts.FirstOrDefault(a => a.AccountId == _form.AccountId);
+    private UserDto? SelectedOwner => _users.FirstOrDefault(u => u.UserId == _form.OwnerUserId);
+    private string AccountStatus => SelectedAccount is null ? "Needed" : "Linked";
+    private string OwnerStatus => SelectedOwner is null ? "Optional" : "Assigned";
+    private string SelectedOwnerName => SelectedOwner is null ? "Unassigned" : DisplayUser(SelectedOwner);
+    private string DraftTitle => string.IsNullOrWhiteSpace(_form.OpportunityName) ? "Untitled opportunity" : _form.OpportunityName;
+    private string DraftSubtitle => SelectedAccount is null ? "Select an account to complete the relationship." : $"{SelectedAccount.AccountName} · {SelectedAccount.AccountNumber}";
+    private int ReadinessScore => ValidationSignals.Count == 0 ? 0 : (int)Math.Round(ValidationSignals.Count(s => s.Ready) * 100m / ValidationSignals.Count);
+    private string ReadinessLabel => ReadinessScore >= 100 ? "Ready to create" : ReadinessScore >= 70 ? "Nearly ready" : "Needs detail";
+    private string NextBestAction => !_editContext.Validate() ? "Complete required fields, then review the weighted forecast and close timing before creating." : _form.OwnerUserId is null ? "Owner is optional, but assigning one improves accountability before the opportunity is created." : "Create the opportunity and continue qualification from the detail page.";
+
+    private IEnumerable<AccountDto> FilteredAccounts
+    {
+        get
+        {
+            var query = _accounts.AsEnumerable();
+            if (!string.IsNullOrWhiteSpace(_accountSearch))
+            {
+                var term = _accountSearch.Trim();
+                query = query.Where(a => Contains(a.AccountName, term) || Contains(a.AccountNumber, term) || Contains(a.Industry, term) || Contains(a.MainEmail, term) || Contains(a.SegmentCode, term) || Contains(a.AccountTypeCode, term));
+            }
+
+            return query.OrderByDescending(a => a.AccountId == _form.AccountId).ThenBy(a => a.AccountName);
+        }
+    }
+
+    private IReadOnlyList<CheckSignal> ValidationSignals =>
+    [
+        new("Opportunity number", !string.IsNullOrWhiteSpace(_form.OpportunityNumber)),
+        new("Opportunity name", !string.IsNullOrWhiteSpace(_form.OpportunityName)),
+        new("Account relationship", _form.AccountId.HasValue),
+        new("Forecast category", !string.IsNullOrWhiteSpace(_form.ForecastCategoryCode)),
+        new("Probability range", _form.WinProbability is >= 0 and <= 100),
+        new("Amount is valid", _form.EstimatedAmount >= 0)
+    ];
+
+    private IReadOnlyList<ReviewItem> ReviewItems =>
+    [
+        new("Opportunity", DraftTitle, _form.OpportunityNumber, "bi-trophy"),
+        new("Account", SelectedAccount?.AccountName ?? "Not selected", SelectedAccount?.AccountNumber ?? "Required", "bi-building"),
+        new("Owner", SelectedOwnerName, _form.OwnerUserId.HasValue ? "Assigned" : "Optional", "bi-person-badge"),
+        new("Forecast", _form.ForecastCategoryCode, $"{_form.WinProbability:F0}% probability", "bi-graph-up-arrow"),
+        new("Estimated", FormatCurrency(_form.EstimatedAmount), $"{FormatCurrency(WeightedDraftAmount)} weighted", "bi-cash-coin"),
+        new("Close date", FormatDate(_form.CloseDate), CloseDateSignal, "bi-calendar-event")
+    ];
+
+    private string CloseDateSignal => _form.CloseDate.HasValue && _form.CloseDate.Value.Date < DateTime.UtcNow.Date ? "Past close date" : "Target close";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _editContext = new(_form);
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/opportunities"), new("Opportunities", "/crm/opportunities"), new("New Opportunity"));
+        await ResolveCurrentUserContextAsync();
+        await LoadContextAsync();
+    }
+
+    private async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _currentUserId = context.UserId;
+        _form.OwnerUserId ??= context.UserId;
+    }
+
+    private async Task LoadContextAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            if (_tenantId == Guid.Empty)
+            {
+                await ResolveCurrentUserContextAsync();
+            }
+
+            var accounts = await Api.SearchAccountsAsync(_tenantId, pageSize: 500);
+            var users = await Api.SearchUsersAsync(_tenantId, pageSize: 500);
+            var opportunities = await Api.SearchOpportunitiesAsync(_tenantId, pageSize: 500);
+            _accounts = accounts?.Items.ToList() ?? [];
+            _users = users?.Items.ToList() ?? [];
+            _opportunities = opportunities?.Items.ToList() ?? [];
+            ShowToast("Opportunity creation context synced.", "success");
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load opportunity creation context: {ex.Message}";
+            ShowToast($"Context load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (!_editContext.Validate())
+        {
+            _section = "review";
+            ShowToast("Complete required opportunity fields before creating.", "warning");
+            return;
+        }
+
+        if (!_form.AccountId.HasValue)
+        {
+            _section = "account";
+            ShowToast("Select an account before creating the opportunity.", "warning");
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            var id = await Api.CreateOpportunityAsync(new CreateOpportunityRequest
+            {
+                TenantId = _tenantId,
+                OpportunityNumber = _form.OpportunityNumber.Trim(),
+                AccountId = _form.AccountId.Value,
+                OpportunityName = _form.OpportunityName.Trim(),
+                EstimatedAmount = _form.EstimatedAmount,
+                OwnerUserId = _form.OwnerUserId,
+                CloseDate = _form.CloseDate,
+                LeadId = _form.LeadId,
+                WinProbability = _form.WinProbability,
+                ForecastCategoryCode = _form.ForecastCategoryCode,
+                CreatedByUserId = _currentUserId
+            });
+
+            ShowToast("Opportunity created successfully.", "success");
+            Nav.NavigateTo($"/crm/opportunities/{id}");
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Create failed: {ex.Message}";
+            ShowToast($"Create failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void SetSection(string section) => _section = section;
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message.Length <= 160 ? message : $"{message[..157]}..."; _toastKind = ToastKind(kind); _toastVisible = true; }
+    private void OnAccountSearchChanged(BlazorChangeEventArgs e) => _accountSearch = e.Value?.ToString() ?? string.Empty;
+    private void SelectAccount(AccountDto account) { _form.AccountId = account.AccountId; if (string.IsNullOrWhiteSpace(_form.OpportunityName)) _form.OpportunityName = $"New opportunity - {account.AccountName}"; _editContext.NotifyFieldChanged(FieldIdentifier.Create(() => _form.AccountId)); }
+    private void ClearAccountSelection() { _form.AccountId = null; _accountSearch = string.Empty; _editContext.NotifyFieldChanged(FieldIdentifier.Create(() => _form.AccountId)); }
+    private void SelectOwner(UserDto user) { _form.OwnerUserId = user.UserId; _editContext.NotifyFieldChanged(FieldIdentifier.Create(() => _form.OwnerUserId)); }
+    private void AutoAssignOwner() { var user = _users.OrderBy(u => OwnerOpportunityCount(u.UserId)).ThenBy(DisplayUser).FirstOrDefault(); if (user is not null) SelectOwner(user); }
+    private void GenerateOpportunityNumber() { _form.OpportunityNumber = $"OPP-{DateTime.UtcNow:yyyyMMddHHmmss}"; _editContext.NotifyFieldChanged(FieldIdentifier.Create(() => _form.OpportunityNumber)); }
+    private void ResetDraft() { _form = new() { OwnerUserId = _currentUserId }; _editContext = new(_form); _section = "compose"; _accountSearch = string.Empty; }
+
+    private void ApplyScenario(string scenario)
+    {
+        (_form.ForecastCategoryCode, _form.WinProbability) = scenario switch
+        {
+            "commit" => ("Commit", 85),
+            "bestcase" => ("Best Case", 60),
+            _ => ("Pipeline", 35)
+        };
+        _section = "forecast";
+    }
+
+    private int OwnerOpportunityCount(Guid userId) => _opportunities.Count(o => o.OwnerUserId == userId && o.StatusCode is not 5 and not 6);
+    private string OwnerLoadText(Guid userId) => $"{OwnerOpportunityCount(userId).ToString("N0", CultureInfo.CurrentCulture)} active opportunity(s)";
+    private string AccountSubtext(AccountDto account) => account.AnnualRevenue.HasValue ? $"Revenue {FormatCurrency(account.AnnualRevenue.Value)}" : account.MainEmail ?? account.StatusCode;
+    private string SectionStatus(string section) => section switch { "account" => AccountStatus, "forecast" => $"{_form.WinProbability:F0}%", "owner" => OwnerStatus, "review" => ReadinessLabel, _ => string.IsNullOrWhiteSpace(_form.OpportunityName) ? "Draft" : "Named" };
+    private string MetricCardClass(string section) => $"opn-kpi-card {(_section == section ? "opn-kpi-card-active" : string.Empty)}";
+    private string SectionButtonClass(SectionDef section) => $"opn-view-btn {(section.Id == _section ? "opn-view-btn-active" : string.Empty)}";
+    private string AccountCardClass(AccountDto account) => $"opn-account-card {(account.AccountId == _form.AccountId ? "opn-account-card-selected" : string.Empty)}";
+    private string OwnerCardClass(UserDto user) => $"opn-owner-card {(user.UserId == _form.OwnerUserId ? "opn-owner-card-selected" : string.Empty)}";
+    private static string ForecastBadgeClass(string forecast) => forecast switch { "Commit" => "opn-badge-success", "Best Case" => "opn-badge-info", "Closed" => "opn-badge-purple", _ => "opn-badge-neutral" };
+    private static string DisplayUser(UserDto user) => !string.IsNullOrWhiteSpace(user.DisplayName) ? user.DisplayName : !string.IsNullOrWhiteSpace(user.FullName) ? user.FullName : user.UserName;
+    private static string Initials(string name) { var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : parts.Length == 1 ? parts[0][..1] : "?"; }
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static string FormatCurrency(decimal value) => value.ToString("C0", CultureInfo.CurrentCulture);
+    private static string FormatDate(DateTime? value) => value.HasValue ? value.Value.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture) : "Not set";
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : "success";
+
+    private sealed record SectionDef(string Id, string Label, string Icon);
+    private sealed record CheckSignal(string Label, bool Ready);
+    private sealed record ReviewItem(string Label, string Value, string Caption, string Icon);
+}
