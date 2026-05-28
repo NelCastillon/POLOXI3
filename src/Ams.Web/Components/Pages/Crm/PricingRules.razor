@@ -1,307 +1,433 @@
 @page "/crm/pricing-rules"
 @namespace Ams.Web.Components.Pages.Crm
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.PricingRules
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
-@using Ams.Application.Features.PricingRules
 
-<PageTitle>Pricing Rules — CRM</PageTitle>
+<PageTitle>Enterprise Pricing Rules â€” CRM</PageTitle>
 
-<AppPageHeader Title="Pricing Rules"
-               Subtitle="Tenant admin controls for service discounts, segment pricing, approvals, and effective dates"
-               Icon="bi-tags-fill">
-    <Actions>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Pricing Rule
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<section class="ma-hero pmr-hero">
-    <div>
-        <span class="ma-eyebrow">Pricing & Market Rules</span>
-        <h2>Pricing Rule Command Center</h2>
-        <p>Manage discount schedules, segment offers, approval gates, and effective windows from a single tenant admin workspace.</p>
-    </div>
-    <div class="ma-hero-actions">
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Add Pricing Rule</button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
-    </div>
-</section>
-
-<div class="ma-view-tabs pmr-view-tabs">
-    <button class="ma-view-tab ma-view-tab--active"><i class="bi bi-tags"></i> Pricing Rules</button>
-    <button class="ma-view-tab" @onclick='() => Nav.NavigateTo("/crm/pricing/classes")'><i class="bi bi-diagram-3"></i> Price by Class</button>
-    <button class="ma-view-tab" @onclick='() => Nav.NavigateTo("/crm/appetite")'><i class="bi bi-grid-3x3"></i> Market Appetite</button>
-    <button class="ma-view-tab" @onclick='() => Nav.NavigateTo("/crm/carrier-mapping")'><i class="bi bi-broadcast"></i> Carrier Mapping</button>
-</div>
-
-<div class="pc-kpi-strip">
-    <div class="pc-kpi-card @(_activeFilter == null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)' title="Show all pricing rules">
-        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-tags-fill" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total Rules</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "active" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("active")' title="Filter: Active rules">
-        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.IsActive)</div><div class="pc-kpi-label">Active</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "approval" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("approval")' title="Filter: Requires approval">
-        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.RequiresApproval)</div><div class="pc-kpi-label">Needs Approval</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "promo" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("promo")' title="Filter: Promotional rules">
-        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-percent" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.RuleTypeCode.Equals("PROMO", StringComparison.OrdinalIgnoreCase))</div><div class="pc-kpi-label">Promotional</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "expired" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("expired")' title="Filter: Expired rules">
-        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-calendar-x" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(IsExpired)</div><div class="pc-kpi-label">Expired</div></div>
-    </div>
-</div>
-
-<div class="ma-filter-bar pmr-filter-bar">
-    <div class="ma-search-wrap">
-        <i class="bi bi-search" aria-hidden="true"></i>
-        <input class="ma-search" value="@_search" @oninput="OnSearchChanged" placeholder="Search code, name, type, service, segment…" />
-    </div>
-    <div class="ma-type-pills">
-        <button class="ma-pill @(_activeFilter is null ? "ma-pill-active" : "")" @onclick='() => SetFilter(null)'>All</button>
-        <button class="ma-pill @(_activeFilter == "active" ? "ma-pill-active" : "")" @onclick='() => SetFilter("active")'>Active</button>
-        <button class="ma-pill @(_activeFilter == "approval" ? "ma-pill-active" : "")" @onclick='() => SetFilter("approval")'>Approval</button>
-        <button class="ma-pill @(_activeFilter == "promo" ? "ma-pill-active" : "")" @onclick='() => SetFilter("promo")'>Promo</button>
-        <button class="ma-pill @(_activeFilter == "expired" ? "ma-pill-active" : "")" @onclick='() => SetFilter("expired")'>Expired</button>
-    </div>
-    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button>
-    <span class="ma-filter-count">@_filtered.Count rules</span>
-</div>
-
-@if (_loadError is not null)
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    <div class="pr-toast pr-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="pr-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-<div class="um-grid-card">
-    @if (_loading)
-    {
-        <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading pricing rules…</span></div>
-    }
-    <SfGrid TValue="PricingRuleDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-        <GridEvents TValue="PricingRuleDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="25" PageSizes="@(new[] { 25, 50, 100 })" />
-        <GridColumns>
-            <GridColumn Field="RuleCode" HeaderText="Code" Width="120" />
-            <GridColumn Field="RuleName" HeaderText="Rule Name" Width="230" />
-            <GridColumn Field="RuleTypeCode" HeaderText="Type" Width="120">
-                <Template>
-                    @{ var r = (PricingRuleDto)context; }
-                    <span class="um-badge um-badge-info">@r.RuleTypeCode</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="ServiceCode" HeaderText="Service" Width="120">
-                <Template>
-                    @{ var r = (PricingRuleDto)context; }
-                    <span>@(string.IsNullOrWhiteSpace(r.ServiceCode) ? "—" : r.ServiceCode)</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="SegmentCode" HeaderText="Segment" Width="130">
-                <Template>
-                    @{ var r = (PricingRuleDto)context; }
-                    <span>@(string.IsNullOrWhiteSpace(r.SegmentCode) ? "—" : r.SegmentCode)</span>
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="Discount" Width="100" TextAlign="TextAlign.Right">
-                <Template>
-                    @{ var r = (PricingRuleDto)context; }
-                    <strong>@r.DiscountPercent.ToString("0.##")%</strong>
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="Effective" Width="170">
-                <Template>
-                    @{ var r = (PricingRuleDto)context; }
-                    <span>@r.EffectiveStartDate.ToString("MMM d, yyyy")</span>
-                    <span class="text-muted"> — @(r.EffectiveEndDate?.ToString("MMM d, yyyy") ?? "Open")</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="Priority" HeaderText="Priority" Width="90" TextAlign="TextAlign.Center" />
-            <GridColumn HeaderText="Status" Width="110" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (PricingRuleDto)context; }
-                    <span class="um-badge @(r.IsActive ? "um-badge-success" : "um-badge-neutral")">@(r.IsActive ? "Active" : "Inactive")</span>
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="Approval" Width="115" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (PricingRuleDto)context; }
-                    <span class="um-badge @(r.RequiresApproval ? "um-badge-warning" : "um-badge-neutral")">@(r.RequiresApproval ? "Required" : "None")</span>
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="Actions" Width="110" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (PricingRuleDto)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true" title="Edit"><i class="bi bi-pencil"></i></button>
-                    <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true" title="Delete"><i class="bi bi-trash"></i></button>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
-
-<SfDialog @bind-Visible="_showForm" Width="760px" IsModal="true" ShowCloseIcon="false">
-    <DialogEvents Closed="ResetForm" />
-    <DialogContent>
-        <div class="um-modal-header">
-            <i class="bi bi-tags-fill"></i>
-            <span>@(_editId.HasValue ? "Edit Pricing Rule" : "Add Pricing Rule")</span>
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button>
-        </div>
-        <EditForm Model="_form" OnValidSubmit="SaveAsync">
-            <DataAnnotationsValidator />
-            <div class="um-modal-body">
-                <div class="um-form-grid">
-                    <div class="um-field">
-                        <label>Rule Code <span class="text-danger">*</span></label>
-                        <InputText @bind-Value="_form.RuleCode" class="um-input" placeholder="e.g. VOL-10" />
-                        <ValidationMessage For="() => _form.RuleCode" class="text-danger" />
-                    </div>
-                    <div class="um-field">
-                        <label>Rule Name <span class="text-danger">*</span></label>
-                        <InputText @bind-Value="_form.RuleName" class="um-input" placeholder="e.g. Volume discount" />
-                        <ValidationMessage For="() => _form.RuleName" class="text-danger" />
-                    </div>
-                    <div class="um-field">
-                        <label>Rule Type <span class="text-danger">*</span></label>
-                        <SfDropDownList TValue="string" TItem="string" @bind-Value="_form.RuleTypeCode" DataSource="_ruleTypes" Placeholder="Select type" />
-                        <ValidationMessage For="() => _form.RuleTypeCode" class="text-danger" />
-                    </div>
-                    <div class="um-field">
-                        <label>Service Code</label>
-                        <InputText @bind-Value="_form.ServiceCode" class="um-input" placeholder="Optional service" />
-                        <ValidationMessage For="() => _form.ServiceCode" class="text-danger" />
-                    </div>
-                    <div class="um-field">
-                        <label>Segment Code</label>
-                        <InputText @bind-Value="_form.SegmentCode" class="um-input" placeholder="Optional segment" />
-                        <ValidationMessage For="() => _form.SegmentCode" class="text-danger" />
-                    </div>
-                    <div class="um-field">
-                        <label>Minimum Quantity</label>
-                        <InputNumber @bind-Value="_form.MinQuantity" class="um-input" />
-                        <ValidationMessage For="() => _form.MinQuantity" class="text-danger" />
-                    </div>
-                    <div class="um-field">
-                        <label>Maximum Quantity</label>
-                        <InputNumber @bind-Value="_form.MaxQuantity" class="um-input" />
-                        <ValidationMessage For="() => _form.MaxQuantity" class="text-danger" />
-                    </div>
-                    <div class="um-field">
-                        <label>Discount Percent <span class="text-danger">*</span></label>
-                        <InputNumber @bind-Value="_form.DiscountPercent" class="um-input" />
-                        <ValidationMessage For="() => _form.DiscountPercent" class="text-danger" />
-                    </div>
-                    <div class="um-field">
-                        <label>Adjusted Unit Price</label>
-                        <InputNumber @bind-Value="_form.AdjustedUnitPrice" class="um-input" />
-                        <ValidationMessage For="() => _form.AdjustedUnitPrice" class="text-danger" />
-                    </div>
-                    <div class="um-field">
-                        <label>Effective Start <span class="text-danger">*</span></label>
-                        <InputDate @bind-Value="_form.EffectiveStartDate" class="um-input" />
-                        <ValidationMessage For="() => _form.EffectiveStartDate" class="text-danger" />
-                    </div>
-                    <div class="um-field">
-                        <label>Effective End</label>
-                        <InputDate @bind-Value="_form.EffectiveEndDate" class="um-input" />
-                        <ValidationMessage For="() => _form.EffectiveEndDate" class="text-danger" />
-                    </div>
-                    <div class="um-field">
-                        <label>Priority <span class="text-danger">*</span></label>
-                        <InputNumber @bind-Value="_form.Priority" class="um-input" />
-                        <ValidationMessage For="() => _form.Priority" class="text-danger" />
-                    </div>
-                    <div class="um-field um-field--checkbox">
-                        <label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label>
-                    </div>
-                    <div class="um-field um-field--checkbox">
-                        <label><InputCheckbox @bind-Value="_form.RequiresApproval" /> Requires Approval</label>
-                    </div>
-                </div>
-            </div>
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
-                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
-                    @if (_saving) { <span class="um-spinner-sm"></span> } @(_editId.HasValue ? "Save Changes" : "Create")
+@if (_showDelete && _deleteTarget is not null)
+{
+    <div class="pr-modal-backdrop" role="presentation" @onclick="CancelDelete">
+        <div class="pr-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="pricingDeleteTitle" @onclick:stopPropagation="true">
+            <div class="pr-confirm-icon pr-confirm-danger"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
+            <h2 id="pricingDeleteTitle">Delete Pricing Rule?</h2>
+            <p>You are about to delete <strong>@_deleteTarget.RuleName</strong>. This existing workflow soft-deletes and deactivates the rule.</p>
+            <div class="pr-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete" disabled="@_saving">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">
+                    @if (_saving)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    Delete
                 </button>
             </div>
-        </EditForm>
-    </DialogContent>
-</SfDialog>
+        </div>
+    </div>
+}
 
-<SfDialog @bind-Visible="_showDelete" Width="440px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
-        <div class="um-confirm-dialog">
-            <div class="um-confirm-icon um-confirm-icon--danger">
-                <i class="bi bi-trash3-fill"></i>
-            </div>
-            <div class="um-confirm-message">
-                <h6>Delete Pricing Rule?</h6>
-                <p>You are about to delete <strong>@_deleteTarget?.RuleName</strong>. This action cannot be undone.</p>
-            </div>
-            <div class="um-modal-footer w-100">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
-                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
+@if (_showForm)
+{
+    <div class="pr-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="pr-form-modal" role="dialog" aria-modal="true" aria-labelledby="pricingFormTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="pr-modal-header">
+                    <span class="pr-modal-icon"><i class="bi bi-tags-fill" aria-hidden="true"></i></span>
+                    <div><h2 id="pricingFormTitle">@(_editId.HasValue ? "Edit Pricing Rule" : "Add Pricing Rule")</h2><p>Configure discount, approval, priority, segment, service, and effective window controls.</p></div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_saving" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="pr-modal-body">
+                    <div class="pr-form-banner"><i class="bi bi-shield-check" aria-hidden="true"></i><span><strong>Pricing governance</strong><span>Rules are tenant scoped and synchronized to the existing CRM.PricingRule workflow.</span></span></div>
+                    <div class="pr-form-grid">
+                        <div class="pr-field">
+                            <label for="ruleCode">Rule Code <span>*</span></label>
+                            <InputText id="ruleCode" class="pr-input" @bind-Value="_form.RuleCode" placeholder="e.g. VOL-10" />
+                            <ValidationMessage For="() => _form.RuleCode" class="text-danger" />
+                        </div>
+                        <div class="pr-field">
+                            <label for="ruleName">Rule Name <span>*</span></label>
+                            <InputText id="ruleName" class="pr-input" @bind-Value="_form.RuleName" placeholder="e.g. Volume discount" />
+                            <ValidationMessage For="() => _form.RuleName" class="text-danger" />
+                        </div>
+                        <div class="pr-field">
+                            <label for="ruleType">Rule Type <span>*</span></label>
+                            <InputSelect id="ruleType" class="pr-input" @bind-Value="_form.RuleTypeCode">
+                                @foreach (var type in _ruleTypes)
+                                {
+                                    <option value="@type">@type</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.RuleTypeCode" class="text-danger" />
+                        </div>
+                        <div class="pr-field">
+                            <label for="serviceCode">Service Code</label>
+                            <InputText id="serviceCode" class="pr-input" @bind-Value="_form.ServiceCode" placeholder="Optional service" />
+                            <ValidationMessage For="() => _form.ServiceCode" class="text-danger" />
+                        </div>
+                        <div class="pr-field">
+                            <label for="segmentCode">Segment Code</label>
+                            <InputText id="segmentCode" class="pr-input" @bind-Value="_form.SegmentCode" placeholder="Optional segment" />
+                            <ValidationMessage For="() => _form.SegmentCode" class="text-danger" />
+                        </div>
+                        <div class="pr-field">
+                            <label for="minQuantity">Minimum Quantity</label>
+                            <InputNumber id="minQuantity" class="pr-input" @bind-Value="_form.MinQuantity" />
+                            <ValidationMessage For="() => _form.MinQuantity" class="text-danger" />
+                        </div>
+                        <div class="pr-field">
+                            <label for="maxQuantity">Maximum Quantity</label>
+                            <InputNumber id="maxQuantity" class="pr-input" @bind-Value="_form.MaxQuantity" />
+                            <ValidationMessage For="() => _form.MaxQuantity" class="text-danger" />
+                        </div>
+                        <div class="pr-field">
+                            <label for="discountPercent">Discount Percent <span>*</span></label>
+                            <InputNumber id="discountPercent" class="pr-input" @bind-Value="_form.DiscountPercent" />
+                            <ValidationMessage For="() => _form.DiscountPercent" class="text-danger" />
+                        </div>
+                        <div class="pr-field">
+                            <label for="adjustedUnitPrice">Adjusted Unit Price</label>
+                            <InputNumber id="adjustedUnitPrice" class="pr-input" @bind-Value="_form.AdjustedUnitPrice" />
+                            <ValidationMessage For="() => _form.AdjustedUnitPrice" class="text-danger" />
+                        </div>
+                        <div class="pr-field">
+                            <label for="effectiveStart">Effective Start <span>*</span></label>
+                            <InputDate id="effectiveStart" class="pr-input" @bind-Value="_form.EffectiveStartDate" />
+                            <ValidationMessage For="() => _form.EffectiveStartDate" class="text-danger" />
+                        </div>
+                        <div class="pr-field">
+                            <label for="effectiveEnd">Effective End</label>
+                            <InputDate id="effectiveEnd" class="pr-input" @bind-Value="_form.EffectiveEndDate" />
+                            <ValidationMessage For="() => _form.EffectiveEndDate" class="text-danger" />
+                        </div>
+                        <div class="pr-field">
+                            <label for="priority">Priority <span>*</span></label>
+                            <InputNumber id="priority" class="pr-input" @bind-Value="_form.Priority" />
+                            <ValidationMessage For="() => _form.Priority" class="text-danger" />
+                        </div>
+                        <label class="pr-check-card">
+                            <InputCheckbox @bind-Value="_form.IsActive" />
+                            <span><strong>Active</strong><small>Rule can participate in pricing evaluation.</small></span>
+                        </label>
+                        <label class="pr-check-card">
+                            <InputCheckbox @bind-Value="_form.RequiresApproval" />
+                            <span><strong>Requires approval</strong><small>Pricing changes require administrative approval.</small></span>
+                        </label>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(_formError))
+                    {
+                        <div class="pr-form-error"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_formError</div>
+                    }
+                </div>
+                <div class="pr-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_saving">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        @(_editId.HasValue ? "Save Changes" : "Create Rule")
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="pr-enterprise-page">
+    <section class="pr-hero">
+        <div class="pr-hero-left">
+            <span class="pr-hero-icon"><i class="bi bi-tags-fill" aria-hidden="true"></i></span>
+            <div>
+                <div class="pr-title-row">
+                    <h1>Pricing Rules Command Center</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> Live CRM pricing</span>
+                    <span><i class="bi bi-shield-check" aria-hidden="true"></i> Tenant scoped</span>
+                    <span><i class="bi bi-percent" aria-hidden="true"></i> Approval governed</span>
+                </div>
+                <p>Manage discount schedules, segment pricing, service offers, approval gates, priority ordering, and effective windows from a full enterprise dashboard.</p>
             </div>
         </div>
-    </DialogContent>
-</SfDialog>
+        <div class="pr-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh pricing rules"><i class="bi @(_loading ? "bi-arrow-repeat pr-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => GoTo("/crm/pricing/classes")'><i class="bi bi-diagram-3" aria-hidden="true"></i> Price Classes</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => GoTo("/crm/appetite")'><i class="bi bi-grid-3x3" aria-hidden="true"></i> Appetite</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Rule</button>
+        </div>
+    </section>
 
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger pr-error-banner" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    @if (_loading)
+    {
+        <section class="pr-loading-state"><i class="bi bi-arrow-repeat pr-spin" aria-hidden="true"></i><strong>Loading enterprise pricing rules...</strong><span>Syncing active, approval, promotional, expiring, service, segment, and discount controls.</span></section>
+    }
+    else
+    {
+        <section class="pr-kpi-strip" aria-label="Pricing rule KPI filters">
+            @foreach (var metric in Metrics)
+            {
+                <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="@(() => SetFilter(metric.Filter))">
+                    <span class="pr-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                    <span><span class="pr-kpi-val">@metric.Value</span><span class="pr-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
+                </button>
+            }
+        </section>
+
+        <section class="pr-workflow-strip" aria-label="Pricing rule workflow actions">
+            <button type="button" class="pr-workflow-card pr-workflow-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i><span><strong>Create pricing rule</strong><span>Add a governed discount or offer.</span></span></button>
+            <button type="button" class="pr-workflow-card" @onclick='() => SetFilter("approval")'><i class="bi bi-shield-exclamation" aria-hidden="true"></i><span><strong>Approval gates</strong><span>Review rules requiring approval.</span></span></button>
+            <button type="button" class="pr-workflow-card" @onclick='() => SetFilter("expiring")'><i class="bi bi-calendar-event" aria-hidden="true"></i><span><strong>Renew expiring</strong><span>Inspect windows ending soon.</span></span></button>
+            <button type="button" class="pr-workflow-card" @onclick='() => SetView("analytics")'><i class="bi bi-bar-chart-line" aria-hidden="true"></i><span><strong>Analyze mix</strong><span>Monitor type and service concentration.</span></span></button>
+        </section>
+
+        <section class="pr-filter-panel">
+            <div class="pr-search-wrap">
+                <span class="pr-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+                <div class="pr-search-body">
+                    <label for="pricingRulesSearch">Search pricing rules</label>
+                    <input id="pricingRulesSearch" class="pr-search-input" value="@_search" @oninput="OnSearchChanged" placeholder="Search code, name, type, service, segment, discount, priority, or effective window..." />
+                    <span>Filters pricing rules, KPI views, cards, analytics, and table immediately.</span>
+                </div>
+            </div>
+            <label class="pr-sort-field">Type
+                <select class="pr-filter-select" value="@_typeFilter" @onchange="OnTypeChanged">
+                    <option value="">All types</option>
+                    @foreach (var type in TypeOptions)
+                    {
+                        <option value="@type">@type</option>
+                    }
+                </select>
+            </label>
+            <label class="pr-sort-field">Status
+                <select class="pr-filter-select" value="@_statusFilter" @onchange="OnStatusChanged">
+                    <option value="">All statuses</option>
+                    <option value="active">Active</option>
+                    <option value="inactive">Inactive</option>
+                    <option value="expired">Expired</option>
+                    <option value="upcoming">Upcoming</option>
+                </select>
+            </label>
+            <label class="pr-sort-field">Sort by
+                <select class="pr-filter-select" value="@_sort" @onchange="OnSortChanged">
+                    <option value="importance">Importance</option>
+                    <option value="discount">Discount</option>
+                    <option value="priority">Priority</option>
+                    <option value="ending">End date</option>
+                    <option value="name">Name</option>
+                </select>
+            </label>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-cloud-arrow-down" aria-hidden="true"></i> Sync</button>
+            <div class="pr-filter-result"><strong>@SearchResultCount.ToString("N0", CultureInfo.CurrentCulture)</strong><span>shown</span></div>
+        </section>
+
+        <section class="pr-view-tabs" aria-label="Pricing rule views">
+            @foreach (var view in _views)
+            {
+                <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label <span>@ViewCount(view.Id)</span></button>
+            }
+        </section>
+
+        @if (_items.Count == 0)
+        {
+            <section class="pr-empty-state"><i class="bi bi-tags" aria-hidden="true"></i><strong>No pricing rules available</strong><span>No CRM pricing rules matched this tenant. Create a rule or run database seed/migration if pricing governance data has not been initialized.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">Create pricing rule</button></section>
+        }
+        else
+        {
+            <section class="pr-content-layout">
+                <main class="pr-main-card">
+                    @if (_view == "overview")
+                    {
+                        <div class="pr-section-head"><div><h2>Executive pricing overview</h2><p>Most important pricing signals by approval requirement, effective windows, discount exposure, priority, service, and segment scope.</p></div><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => SetView("table")'><i class="bi bi-table" aria-hidden="true"></i> Table View</button></div>
+                        <div class="pr-overview-grid">
+                            <section class="pr-spotlight-card"><span><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Highest importance rule</span><strong>@(TopRule?.RuleName ?? "â€”")</strong><p>@(TopRule is null ? "No matching pricing rules require attention." : $"{TopRule.RuleTypeCode} rule with {TopRule.DiscountPercent:0.##}% discount, priority {TopRule.Priority}, and {StatusLabel(TopRule)} status.")</p><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="SelectTopRule">Inspect rule</button></section>
+                            <section class="pr-guidance-card"><h3><i class="bi bi-stars" aria-hidden="true"></i> Pricing guidance</h3><p>@GuidanceText</p><div class="pr-guidance-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("approval")'>Approval</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("expiring")'>Expiring</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("highdiscount")'>High Discount</button></div></section>
+                        </div>
+                        @ImportanceRankPanel
+                    }
+                    else if (_view == "active")
+                    {
+                        <div class="pr-section-head"><div><h2>Active pricing rules</h2><p>Rules currently available for pricing evaluation, ranked by importance.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("active")'>Active Filter</button></div>
+                        <div class="pr-card-grid">@foreach (var item in ActiveRows) { @RuleCard(item) }</div>
+                    }
+                    else if (_view == "approval")
+                    {
+                        <div class="pr-section-head"><div><h2>Approval rule queue</h2><p>Pricing rules that require administrative approval or carry elevated discount governance.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("approval")'>Approval Filter</button></div>
+                        <div class="pr-card-grid">@foreach (var item in ApprovalRows) { @RuleCard(item) }</div>
+                    }
+                    else if (_view == "expiring")
+                    {
+                        <div class="pr-section-head"><div><h2>Effective window watch</h2><p>Expired, upcoming, and expiring rules that need renewal or deactivation review.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("expiring")'>Expiring Filter</button></div>
+                        <div class="pr-card-grid">@foreach (var item in WindowRows) { @RuleCard(item) }</div>
+                    }
+                    else if (_view == "analytics")
+                    {
+                        <div class="pr-section-head"><div><h2>Pricing analytics</h2><p>Pricing rule distribution by type, service, segment, status, and discount governance concentration.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Refresh</button></div>
+                        <div class="pr-analytics-grid">
+                            @AnalyticsPanel("Rule type distribution", TypeDistribution, "bi-tags", "pr-tone-blue")
+                            @AnalyticsPanel("Service concentration", ServiceDistribution, "bi-hdd-network", "pr-tone-purple")
+                            @AnalyticsPanel("Segment concentration", SegmentDistribution, "bi-diagram-3", "pr-tone-green")
+                            @InsightPanel
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="pr-section-head"><div><h2>Pricing operating table</h2><p>Native pricing rule table synchronized from the existing CRM pricing rules API.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters">Reset</button></div>
+                        <div class="pr-table-wrap">
+                            <table class="pr-table">
+                                <thead><tr><th>Rule</th><th>Type</th><th>Scope</th><th class="pr-num">Discount</th><th>Window</th><th class="pr-num">Priority</th><th>Status</th><th>Actions</th></tr></thead>
+                                <tbody>
+                                    @foreach (var item in FilteredRows)
+                                    {
+                                        <tr class="@(IsSelected(item) ? "pr-row-selected" : string.Empty)" @onclick="@(() => SelectRule(item))">
+                                            <td><strong>@item.RuleName</strong><small>@item.RuleCode</small></td>
+                                            <td><span class="pr-badge @TypeBadgeClass(item.RuleTypeCode)">@item.RuleTypeCode</span></td>
+                                            <td>@ScopeLabel(item)<small>@QuantityLabel(item)</small></td>
+                                            <td class="pr-num"><strong>@item.DiscountPercent.ToString("0.##", CultureInfo.CurrentCulture)%</strong><small>@(item.AdjustedUnitPrice.HasValue ? item.AdjustedUnitPrice.Value.ToString("C2", CultureInfo.CurrentCulture) : "No unit override")</small></td>
+                                            <td>@FormatDate(item.EffectiveStartDate)<small>to @(item.EffectiveEndDate.HasValue ? FormatDate(item.EffectiveEndDate.Value) : "Open")</small></td>
+                                            <td class="pr-num">@item.Priority</td>
+                                            <td><span class="pr-badge @StatusBadgeClass(item)">@StatusLabel(item)</span><small>@(item.RequiresApproval ? "Approval required" : "No approval")</small></td>
+                                            <td><div class="pr-row-actions"><button type="button" title="Edit" @onclick="@(() => OpenEdit(item))" @onclick:stopPropagation="true"><i class="bi bi-pencil"></i></button><button type="button" title="Toggle active" @onclick="@(() => ToggleActiveAsync(item))" @onclick:stopPropagation="true"><i class="bi @(item.IsActive ? "bi-pause" : "bi-play")"></i></button><button type="button" title="Delete" @onclick="@(() => ConfirmDelete(item))" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button></div></td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </main>
+
+                <aside class="pr-detail-panel">
+                    @if (_selected is null)
+                    {
+                        <div class="pr-detail-empty"><i class="bi bi-tags" aria-hidden="true"></i><strong>Select a pricing rule</strong><span>Inspect discount, scope, approval, priority, effective window, and workflow actions.</span></div>
+                    }
+                    else
+                    {
+                        <div class="pr-detail-head"><div><span><i class="bi @RuleIcon(_selected)" aria-hidden="true"></i> @_selected.RuleTypeCode rule</span><h2>@_selected.RuleName</h2><p>@_selected.RuleCode Â· @ScopeLabel(_selected)</p></div><span class="pr-badge @StatusBadgeClass(_selected)">@StatusLabel(_selected)</span></div>
+                        <div class="pr-detail-summary">
+                            <div><span>Discount</span><strong>@_selected.DiscountPercent.ToString("0.##", CultureInfo.CurrentCulture)%</strong></div>
+                            <div><span>Priority</span><strong>@_selected.Priority</strong></div>
+                            <div><span>Approval</span><strong>@(_selected.RequiresApproval ? "Required" : "None")</strong></div>
+                            <div><span>Window</span><strong>@WindowLabel(_selected)</strong></div>
+                            <div><span>Service</span><strong>@(_selected.ServiceCode ?? "All")</strong></div>
+                            <div><span>Segment</span><strong>@(_selected.SegmentCode ?? "All")</strong></div>
+                        </div>
+                        <div class="pr-rules-card"><header><strong>Recommended actions</strong><span>@PriorityLabel(_selected)</span></header>@foreach (var action in RecommendedActions(_selected)) { <p><em>@action</em><span>active</span></p> }</div>
+                        <div class="pr-notes-card"><strong>Effective scope</strong><p>@QuantityLabel(_selected). @(_selected.AdjustedUnitPrice.HasValue ? $"Adjusted unit price override is {_selected.AdjustedUnitPrice.Value.ToString("C2", CultureInfo.CurrentCulture)}." : "No adjusted unit price override is configured.")</p><small>Created @FormatDateTime(_selected.CreatedDateUtc)</small></div>
+                        <div class="pr-detail-actions">
+                            <button type="button" class="um-btn um-btn-ghost" @onclick='() => OpenEdit(_selected)'><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                            <button type="button" class="um-btn um-btn-ghost" @onclick='() => ToggleActiveAsync(_selected)'><i class="bi @(_selected.IsActive ? "bi-pause" : "bi-play")" aria-hidden="true"></i> @(_selected.IsActive ? "Deactivate" : "Activate")</button>
+                            <button type="button" class="um-btn um-btn-ghost" @onclick='() => GoTo("/crm/pricing/classes")'><i class="bi bi-diagram-3" aria-hidden="true"></i> Classes</button>
+                            <button type="button" class="um-btn um-btn-danger" @onclick='() => ConfirmDelete(_selected)'><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
+                        </div>
+                    }
+                </aside>
+            </section>
+        }
+    }
+</div>
 
 @code {
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
     private Guid _tenantId;
     private Guid _tenantAdminUserId;
-    Guid TenantId { get; set; }
-    readonly string[] _ruleTypes = ["VOLUME", "SEGMENT", "TIERED", "PROMO", "DISCOUNT"];
+    private List<PricingRuleDto> _items = [];
+    private PricingRuleDto? _selected;
+    private PricingRuleDto? _deleteTarget;
+    private PricingRuleFormModel _form = new();
+    private bool _loading = true;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private string _activeFilter = "all";
+    private string _view = "overview";
+    private string _search = string.Empty;
+    private string _typeFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _sort = "importance";
+    private Guid? _editId;
+    private readonly string[] _ruleTypes = ["VOLUME", "SEGMENT", "TIERED", "PROMO", "DISCOUNT"];
+    private readonly ViewOption[] _views = [new("overview", "Overview", "bi-speedometer2"), new("active", "Active", "bi-check-circle"), new("approval", "Approval", "bi-shield-exclamation"), new("expiring", "Expiring", "bi-calendar-event"), new("analytics", "Analytics", "bi-bar-chart-line"), new("table", "Table", "bi-table")];
 
-    List<PricingRuleDto> _items = [], _filtered = [];
-    string? _activeFilter;
-    bool _loading, _saving;
-    string _search = string.Empty;
-    string? _loadError;
-    bool _showForm, _showDelete;
-    Guid? _editId;
-    PricingRuleDto? _deleteTarget;
-    SfToast _toast = default!;
-    PricingRuleFormModel _form = new();
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
+    private int SearchResultCount => _view switch { "active" => ActiveRows.Count, "approval" => ApprovalRows.Count, "expiring" => WindowRows.Count, _ => FilteredRows.Count };
+    private int ActiveCount => _items.Count(IsEffective);
+    private int ApprovalCount => _items.Count(r => r.RequiresApproval);
+    private int PromoCount => _items.Count(r => r.RuleTypeCode.Equals("PROMO", StringComparison.OrdinalIgnoreCase));
+    private int ExpiringCount => _items.Count(IsExpiring);
+    private int ExpiredCount => _items.Count(IsExpired);
+    private decimal AverageDiscount => _items.Count == 0 ? 0 : _items.Average(r => r.DiscountPercent);
+    private PricingRuleDto? TopRule => FilteredRows.OrderByDescending(ImportanceScore).ThenBy(r => r.Priority).FirstOrDefault();
+    private string GuidanceText => ApprovalCount > 0 ? $"{ApprovalCount.ToString("N0", CultureInfo.CurrentCulture)} pricing rule(s) require approval. Review discount scope, priority, and effective dates before activation." : ExpiringCount > 0 ? $"{ExpiringCount.ToString("N0", CultureInfo.CurrentCulture)} active pricing rule(s) expire within 30 days. Renew or replace before pricing gaps occur." : ExpiredCount > 0 ? $"{ExpiredCount.ToString("N0", CultureInfo.CurrentCulture)} expired rule(s) remain in the workspace. Deactivate or delete obsolete pricing controls." : "Pricing governance is healthy. Continue monitoring high-discount rules, priority order, and segment/service concentration.";
+
+    private IEnumerable<string> TypeOptions => _items.Select(r => r.RuleTypeCode).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    private IReadOnlyList<Metric> Metrics =>
+    [
+        new("all", _items.Count.ToString("N0", CultureInfo.CurrentCulture), "Total Rules", "Tenant pricing controls", "bi-tags-fill", "pr-kpi-blue"),
+        new("active", ActiveCount.ToString("N0", CultureInfo.CurrentCulture), "Active", "Currently effective rules", "bi-check-circle-fill", "pr-kpi-green"),
+        new("approval", ApprovalCount.ToString("N0", CultureInfo.CurrentCulture), "Needs Approval", "Governed pricing changes", "bi-shield-exclamation", "pr-kpi-amber"),
+        new("promo", PromoCount.ToString("N0", CultureInfo.CurrentCulture), "Promotional", "Campaign-driven offers", "bi-percent", "pr-kpi-purple"),
+        new("expiring", ExpiringCount.ToString("N0", CultureInfo.CurrentCulture), "Expiring", "Ends within 30 days", "bi-calendar-event", "pr-kpi-red"),
+        new("highdiscount", AverageDiscount.ToString("0.##", CultureInfo.CurrentCulture) + "%", "Avg Discount", "Discount governance signal", "bi-graph-down-arrow", "pr-kpi-cyan")
+    ];
+
+    private IReadOnlyList<PricingRuleDto> FilteredRows => ApplyRuleFilters(_items).ToList();
+    private IReadOnlyList<PricingRuleDto> ActiveRows => ApplyRuleFilters(_items.Where(IsEffective)).ToList();
+    private IReadOnlyList<PricingRuleDto> ApprovalRows => ApplyRuleFilters(_items.Where(r => r.RequiresApproval || r.DiscountPercent >= 20)).ToList();
+    private IReadOnlyList<PricingRuleDto> WindowRows => ApplyRuleFilters(_items.Where(r => IsExpired(r) || IsExpiring(r) || IsUpcoming(r))).ToList();
+    private IReadOnlyList<DistributionRow> TypeDistribution => BuildDistribution(_items, r => string.IsNullOrWhiteSpace(r.RuleTypeCode) ? "Unknown" : r.RuleTypeCode, TypeBadgeClass);
+    private IReadOnlyList<DistributionRow> ServiceDistribution => BuildDistribution(_items, r => string.IsNullOrWhiteSpace(r.ServiceCode) ? "All Services" : r.ServiceCode!, _ => "pr-badge-info").Take(8).ToList();
+    private IReadOnlyList<DistributionRow> SegmentDistribution => BuildDistribution(_items, r => string.IsNullOrWhiteSpace(r.SegmentCode) ? "All Segments" : r.SegmentCode!, _ => "pr-badge-success").Take(8).ToList();
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", null), new("Pricing Rules", "/crm/pricing-rules"));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Pricing Rules", "/crm/pricing-rules"));
         await LoadAsync();
     }
 
-    async Task LoadAsync()
+    private async Task LoadAsync()
     {
         _loading = true;
         _loadError = null;
         try
         {
-            var result = await Api.SearchPricingRulesAsync(TenantId, pageSize: 200);
-            _items = result?.Items.ToList() ?? [];
-            ApplyFilter();
+            if (_tenantId == Guid.Empty) await ResolveCurrentUserContextAsync();
+            var result = await Api.SearchPricingRulesAsync(_tenantId, pageSize: 250);
+            _items = result?.Items?.ToList() ?? [];
+            _selected = _selected is null ? FilteredRows.FirstOrDefault() : _items.FirstOrDefault(r => r.PricingRuleId == _selected.PricingRuleId) ?? FilteredRows.FirstOrDefault();
+            ShowToast("Pricing rules synced successfully.", "success");
         }
         catch (Exception ex)
         {
             _loadError = $"Failed to load pricing rules: {ex.Message}";
+            _items = [];
+            _selected = null;
+            ShowToast($"Pricing rules load failed: {ex.Message}", "danger");
         }
         finally
         {
@@ -309,52 +435,71 @@
         }
     }
 
-    void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    private IEnumerable<PricingRuleDto> ApplyRuleFilters(IEnumerable<PricingRuleDto> rules)
     {
-        _search = e.Value?.ToString() ?? string.Empty;
-        ApplyFilter();
-    }
-
-    void ApplyFilter()
-    {
-        var rows = _activeFilter switch
+        var query = rules;
+        if (!string.IsNullOrWhiteSpace(_search))
         {
-            "active" => _items.Where(x => x.IsActive),
-            "approval" => _items.Where(x => x.RequiresApproval),
-            "promo" => _items.Where(x => x.RuleTypeCode.Equals("PROMO", StringComparison.OrdinalIgnoreCase)),
-            "expired" => _items.Where(IsExpired),
-            _ => _items.AsEnumerable()
+            var term = _search.Trim();
+            query = query.Where(r => Contains(r.RuleCode, term) || Contains(r.RuleName, term) || Contains(r.RuleTypeCode, term) || Contains(r.ServiceCode, term) || Contains(r.SegmentCode, term) || r.DiscountPercent.ToString(CultureInfo.CurrentCulture).Contains(term, StringComparison.OrdinalIgnoreCase) || r.Priority.ToString(CultureInfo.CurrentCulture).Contains(term, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_typeFilter)) query = query.Where(r => r.RuleTypeCode.Equals(_typeFilter, StringComparison.OrdinalIgnoreCase));
+        query = _statusFilter switch { "active" => query.Where(IsEffective), "inactive" => query.Where(r => !r.IsActive), "expired" => query.Where(IsExpired), "upcoming" => query.Where(IsUpcoming), _ => query };
+
+        query = _activeFilter switch
+        {
+            "active" => query.Where(IsEffective),
+            "approval" => query.Where(r => r.RequiresApproval),
+            "promo" => query.Where(r => r.RuleTypeCode.Equals("PROMO", StringComparison.OrdinalIgnoreCase)),
+            "expiring" => query.Where(IsExpiring),
+            "expired" => query.Where(IsExpired),
+            "highdiscount" => query.Where(r => r.DiscountPercent >= Math.Max(15, AverageDiscount)),
+            _ => query
         };
 
-        _filtered = rows.Where(SearchMatches).ToList();
+        return _sort switch
+        {
+            "discount" => query.OrderByDescending(r => r.DiscountPercent).ThenBy(r => r.Priority),
+            "priority" => query.OrderBy(r => r.Priority).ThenByDescending(r => r.DiscountPercent),
+            "ending" => query.OrderBy(r => r.EffectiveEndDate ?? DateTime.MaxValue).ThenBy(r => r.Priority),
+            "name" => query.OrderBy(r => r.RuleName),
+            _ => query.OrderByDescending(ImportanceScore).ThenBy(r => r.Priority).ThenBy(r => r.RuleName)
+        };
     }
 
-    void SetFilter(string? key) { _activeFilter = key; ApplyFilter(); }
-    void ResetFilters() { _activeFilter = null; _search = string.Empty; ApplyFilter(); }
-    void OnRowSelected(RowSelectEventArgs<PricingRuleDto> args) => OpenEdit(args.Data);
-    static bool IsExpired(PricingRuleDto item) => item.EffectiveEndDate.HasValue && item.EffectiveEndDate.Value.Date < DateTime.Today;
-    bool SearchMatches(PricingRuleDto item)
+    private void SetFilter(string filter)
     {
-        if (string.IsNullOrWhiteSpace(_search)) return true;
-        var q = _search.Trim();
-        return item.RuleCode.Contains(q, StringComparison.OrdinalIgnoreCase)
-            || item.RuleName.Contains(q, StringComparison.OrdinalIgnoreCase)
-            || item.RuleTypeCode.Contains(q, StringComparison.OrdinalIgnoreCase)
-            || (item.ServiceCode?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
-            || (item.SegmentCode?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false);
+        _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter;
+        _view = filter switch { "active" => "active", "approval" => "approval", "expiring" or "expired" => "expiring", "promo" or "highdiscount" => "table", _ => _view };
+        _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault();
     }
 
-    void OpenCreate()
+    private void SetView(string view) => _view = view;
+    private void ResetFilters() { _activeFilter = "all"; _search = string.Empty; _typeFilter = string.Empty; _statusFilter = string.Empty; _sort = "importance"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void SelectRule(PricingRuleDto item) => _selected = item;
+    private void SelectTopRule() { if (TopRule is not null) { _selected = TopRule; _view = "table"; } }
+    private void GoTo(string url) => Nav.NavigateTo(url);
+    private void OnSearchChanged(BlazorChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnTypeChanged(BlazorChangeEventArgs e) { _typeFilter = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnStatusChanged(BlazorChangeEventArgs e) { _statusFilter = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnSortChanged(BlazorChangeEventArgs e) { _sort = e.Value?.ToString() ?? "importance"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void ShowToast(string message, string kind) { _toastMessage = message.Length <= 140 ? message : $"{message[..137]}..."; _toastKind = ToastKind(kind); _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+
+    private void OpenCreate()
     {
         _editId = null;
-        _form = new();
+        _form = new PricingRuleFormModel();
+        _formError = null;
         _showForm = true;
     }
 
-    void OpenEdit(PricingRuleDto item)
+    private void OpenEdit(PricingRuleDto item)
     {
+        _selected = item;
         _editId = item.PricingRuleId;
-        _form = new()
+        _form = new PricingRuleFormModel
         {
             RuleCode = item.RuleCode,
             RuleName = item.RuleName,
@@ -371,21 +516,42 @@
             Priority = item.Priority,
             IsActive = item.IsActive
         };
+        _formError = null;
         _showForm = true;
     }
 
-    async Task SaveAsync()
+    private void CloseForm()
+    {
+        if (_saving) return;
+        _showForm = false;
+        ResetForm();
+    }
+
+    private async Task SaveAsync()
     {
         _saving = true;
+        _formError = null;
         try
         {
+            if (_form.EffectiveEndDate.HasValue && _form.EffectiveEndDate.Value.Date < _form.EffectiveStartDate.Date)
+            {
+                _formError = "Effective end date cannot be before the effective start date.";
+                return;
+            }
+
+            if (_form.MaxQuantity.HasValue && _form.MinQuantity.HasValue && _form.MaxQuantity.Value < _form.MinQuantity.Value)
+            {
+                _formError = "Maximum quantity cannot be less than minimum quantity.";
+                return;
+            }
+
             if (_editId.HasValue)
             {
                 await Api.UpdatePricingRuleAsync(_editId.Value, new UpdatePricingRuleRequest
                 {
-                    RuleCode = _form.RuleCode,
-                    RuleName = _form.RuleName,
-                    RuleTypeCode = _form.RuleTypeCode,
+                    RuleCode = _form.RuleCode.Trim(),
+                    RuleName = _form.RuleName.Trim(),
+                    RuleTypeCode = _form.RuleTypeCode.Trim(),
                     ServiceCode = Normalize(_form.ServiceCode),
                     SegmentCode = Normalize(_form.SegmentCode),
                     MinQuantity = _form.MinQuantity,
@@ -396,17 +562,18 @@
                     EffectiveEndDate = _form.EffectiveEndDate,
                     RequiresApproval = _form.RequiresApproval,
                     Priority = _form.Priority,
-                    IsActive = _form.IsActive
+                    IsActive = _form.IsActive,
+                    ModifiedByUserId = _tenantAdminUserId
                 });
             }
             else
             {
                 await Api.CreatePricingRuleAsync(new CreatePricingRuleRequest
                 {
-                    TenantId = TenantId,
-                    RuleCode = _form.RuleCode,
-                    RuleName = _form.RuleName,
-                    RuleTypeCode = _form.RuleTypeCode,
+                    TenantId = _tenantId,
+                    RuleCode = _form.RuleCode.Trim(),
+                    RuleName = _form.RuleName.Trim(),
+                    RuleTypeCode = _form.RuleTypeCode.Trim(),
                     ServiceCode = Normalize(_form.ServiceCode),
                     SegmentCode = Normalize(_form.SegmentCode),
                     MinQuantity = _form.MinQuantity,
@@ -416,17 +583,20 @@
                     EffectiveStartDate = _form.EffectiveStartDate,
                     EffectiveEndDate = _form.EffectiveEndDate,
                     RequiresApproval = _form.RequiresApproval,
-                    Priority = _form.Priority
+                    Priority = _form.Priority,
+                    CreatedByUserId = _tenantAdminUserId
                 });
             }
 
             _showForm = false;
-            await _toast.ShowAsync(new() { Content = "Pricing rule saved", CssClass = "e-toast-success" });
+            ResetForm();
             await LoadAsync();
+            ShowToast("Pricing rule saved.", "success");
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" });
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast($"Save failed: {ex.Message}", "danger");
         }
         finally
         {
@@ -434,21 +604,61 @@
         }
     }
 
-    void ConfirmDelete(PricingRuleDto item) { _deleteTarget = item; _showDelete = true; }
+    private void ConfirmDelete(PricingRuleDto item) { _deleteTarget = item; _showDelete = true; }
+    private void CancelDelete() { if (!_saving) { _showDelete = false; _deleteTarget = null; } }
 
-    async Task ExecuteDeleteAsync()
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            var deletedName = _deleteTarget.RuleName;
+            await Api.DeletePricingRuleAsync(_deleteTarget.PricingRuleId);
+            _showDelete = false;
+            _deleteTarget = null;
+            await LoadAsync();
+            ShowToast($"{deletedName} deleted.", "success");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ToggleActiveAsync(PricingRuleDto item)
     {
         _saving = true;
         try
         {
-            await Api.DeletePricingRuleAsync(_deleteTarget!.PricingRuleId);
-            _showDelete = false;
-            await _toast.ShowAsync(new() { Content = "Pricing rule deleted", CssClass = "e-toast-success" });
+            await Api.UpdatePricingRuleAsync(item.PricingRuleId, new UpdatePricingRuleRequest
+            {
+                RuleCode = item.RuleCode,
+                RuleName = item.RuleName,
+                RuleTypeCode = item.RuleTypeCode,
+                ServiceCode = item.ServiceCode,
+                SegmentCode = item.SegmentCode,
+                MinQuantity = item.MinQuantity,
+                MaxQuantity = item.MaxQuantity,
+                DiscountPercent = item.DiscountPercent,
+                AdjustedUnitPrice = item.AdjustedUnitPrice,
+                EffectiveStartDate = item.EffectiveStartDate,
+                EffectiveEndDate = item.EffectiveEndDate,
+                RequiresApproval = item.RequiresApproval,
+                Priority = item.Priority,
+                IsActive = !item.IsActive,
+                ModifiedByUserId = _tenantAdminUserId
+            });
             await LoadAsync();
+            ShowToast($"{item.RuleName} {(item.IsActive ? "deactivated" : "activated")}.", "success");
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" });
+            ShowToast($"Status update failed: {ex.Message}", "danger");
         }
         finally
         {
@@ -456,10 +666,81 @@
         }
     }
 
-    void ResetForm() { _form = new(); _editId = null; }
-    static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private void ResetForm() { _form = new PricingRuleFormModel(); _editId = null; _formError = null; }
 
-    sealed class PricingRuleFormModel
+    private RenderFragment ImportanceRankPanel => @<section class="pr-panel"><h3><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Pricing importance ranking</h3><div class="pr-rank-stack">@foreach (var item in FilteredRows.Take(8)) { <button type="button" class="@(IsSelected(item) ? "pr-rank-row pr-rank-active" : "pr-rank-row")" @onclick="@(() => SelectRule(item))"><span>@item.RuleName</span><div><i style="width:@WidthPct(ImportanceScore(item), MaxImportance)"></i></div><strong>@item.DiscountPercent.ToString("0.##", CultureInfo.CurrentCulture)%</strong><small>P@item.Priority</small></button> }</div></section>;
+    private RenderFragment RuleCard(PricingRuleDto item) => @<article class="@(IsSelected(item) ? "pr-rule-card pr-rule-card-selected" : "pr-rule-card")" @onclick="@(() => SelectRule(item))"><div class="pr-rule-top"><span class="pr-rule-icon"><i class="bi @RuleIcon(item)" aria-hidden="true"></i></span><span class="pr-badge @StatusBadgeClass(item)">@StatusLabel(item)</span></div><h3>@item.RuleName</h3><p>@item.RuleCode Â· @ScopeLabel(item)</p><div class="pr-rule-stats"><div><span>Discount</span><strong>@item.DiscountPercent.ToString("0.##", CultureInfo.CurrentCulture)%</strong></div><div><span>Priority</span><strong>@item.Priority</strong></div><div><span>Window</span><strong>@WindowLabel(item)</strong></div></div><div class="pr-rule-actions" @onclick:stopPropagation="true"><button type="button" @onclick="@(() => OpenEdit(item))">Edit</button><button type="button" @onclick="@(() => ToggleActiveAsync(item))">@(item.IsActive ? "Deactivate" : "Activate")</button><button type="button" @onclick="@(() => ConfirmDelete(item))">Delete</button></div></article>;
+    private RenderFragment AnalyticsPanel(string title, IReadOnlyList<DistributionRow> rows, string icon, string tone) => @<section class="pr-analytics-panel @tone"><h3><i class="bi @icon" aria-hidden="true"></i> @title</h3><div class="pr-analytics-list">@foreach (var row in rows) { <button type="button" @onclick="@(() => ApplyDistribution(row.Label, title))"><span>@row.Label</span><div><i style="width:@row.Width"></i></div><strong>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><small>@row.Percent.ToString("P0", CultureInfo.CurrentCulture)</small></button> }</div></section>;
+    private RenderFragment InsightPanel => @<section class="pr-analytics-panel pr-tone-amber"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Executive insight</h3><div class="pr-insight-grid"><div><span>Approval ratio</span><strong>@Ratio(ApprovalCount, _items.Count)</strong><small>approval / all rules</small></div><div><span>Active ratio</span><strong>@Ratio(ActiveCount, _items.Count)</strong><small>effective / all rules</small></div><div><span>Average discount</span><strong>@AverageDiscount.ToString("0.##", CultureInfo.CurrentCulture)%</strong><small>across rules</small></div><div><span>Expiring</span><strong>@ExpiringCount.ToString("N0", CultureInfo.CurrentCulture)</strong><small>within 30 days</small></div></div><p>@GuidanceText</p></section>;
+
+    private void ApplyDistribution(string label, string title)
+    {
+        if (title.Contains("type", StringComparison.OrdinalIgnoreCase)) _typeFilter = _typeFilter == label ? string.Empty : label;
+        else _search = _search == label ? string.Empty : label;
+        _view = "table";
+        _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault();
+    }
+
+    private double MaxImportance => Math.Max(1, FilteredRows.Select(ImportanceScore).DefaultIfEmpty(1).Max());
+    private string MetricCardClass(Metric metric) => $"pr-kpi-card {metric.Tone} {(_activeFilter == metric.Filter ? "pr-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewOption view) => $"pr-view-btn {(view.Id == _view ? "pr-view-btn-active" : string.Empty)}";
+    private int ViewCount(string view) => view switch { "active" => ActiveRows.Count, "approval" => ApprovalRows.Count, "expiring" => WindowRows.Count, "analytics" => _items.Count, "table" => FilteredRows.Count, _ => FilteredRows.Count };
+    private bool IsSelected(PricingRuleDto item) => _selected?.PricingRuleId == item.PricingRuleId;
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static bool IsExpired(PricingRuleDto item) => item.EffectiveEndDate.HasValue && item.EffectiveEndDate.Value.Date < DateTime.Today;
+    private static bool IsUpcoming(PricingRuleDto item) => item.EffectiveStartDate.Date > DateTime.Today;
+    private static bool IsExpiring(PricingRuleDto item) => item.IsActive && item.EffectiveEndDate.HasValue && item.EffectiveEndDate.Value.Date >= DateTime.Today && item.EffectiveEndDate.Value.Date <= DateTime.Today.AddDays(30);
+    private static bool IsEffective(PricingRuleDto item) => item.IsActive && item.EffectiveStartDate.Date <= DateTime.Today && !IsExpired(item);
+    private static double ImportanceScore(PricingRuleDto item)
+    {
+        var discountScore = decimal.ToDouble(item.DiscountPercent) >= 20d ? 30d : decimal.ToDouble(item.DiscountPercent);
+        return (item.IsActive ? 50 : 0) + (item.RequiresApproval ? 35 : 0) + discountScore + (IsExpiring(item) ? 25 : 0) + (IsExpired(item) ? 12 : 0) + Math.Max(0, 25 - item.Priority);
+    }
+    private static string WidthPct(double value, double max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, value / max * 100))).ToString("F1", CultureInfo.InvariantCulture) + "%";
+    private static string Ratio(int value, int total) => total <= 0 ? "0%" : ((decimal)value / total).ToString("P0", CultureInfo.CurrentCulture);
+    private static string FormatDate(DateTime value) => value.ToString("MMM d, yyyy", CultureInfo.CurrentCulture);
+    private static string FormatDateTime(DateTime value) => value.ToLocalTime().ToString("MMM d, yyyy h:mm tt", CultureInfo.CurrentCulture);
+    private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : "success";
+    private static string ScopeLabel(PricingRuleDto item) => $"{(string.IsNullOrWhiteSpace(item.ServiceCode) ? "All services" : item.ServiceCode)} Â· {(string.IsNullOrWhiteSpace(item.SegmentCode) ? "All segments" : item.SegmentCode)}";
+    private static string QuantityLabel(PricingRuleDto item) => item.MinQuantity.HasValue || item.MaxQuantity.HasValue ? $"Qty {item.MinQuantity?.ToString("0.##", CultureInfo.CurrentCulture) ?? "0"} - {item.MaxQuantity?.ToString("0.##", CultureInfo.CurrentCulture) ?? "âˆž"}" : "No quantity bounds";
+    private static string WindowLabel(PricingRuleDto item) => IsExpired(item) ? "Expired" : IsExpiring(item) ? "Expiring" : IsUpcoming(item) ? "Upcoming" : item.EffectiveEndDate.HasValue ? "Current" : "Open-ended";
+    private static string StatusLabel(PricingRuleDto item) => !item.IsActive ? "Inactive" : IsExpired(item) ? "Expired" : IsUpcoming(item) ? "Upcoming" : "Active";
+    private static string PriorityLabel(PricingRuleDto item) => item.RequiresApproval || item.DiscountPercent >= 20 || IsExpiring(item) ? "High priority" : IsExpired(item) ? "Cleanup" : "Monitor";
+    private static IEnumerable<string> RecommendedActions(PricingRuleDto item)
+    {
+        if (item.RequiresApproval) yield return "Validate approval gate and document pricing authority.";
+        if (item.DiscountPercent >= 20) yield return "Review high discount impact and margin controls.";
+        if (IsExpiring(item)) yield return "Renew, replace, or retire this rule before the end date.";
+        if (IsExpired(item)) yield return "Deactivate or delete expired pricing control if no longer needed.";
+        if (item.Priority <= 5) yield return "Confirm priority order does not override more specific rules.";
+        yield return "Confirm service, segment, and quantity scope match the intended market workflow.";
+    }
+
+    private static string RuleIcon(PricingRuleDto item) => item.RuleTypeCode.ToUpperInvariant() switch { "PROMO" => "bi-percent", "VOLUME" => "bi-boxes", "SEGMENT" => "bi-diagram-3", "TIERED" => "bi-layers", _ => "bi-tags" };
+    private static string TypeBadgeClass(string type) => type.ToUpperInvariant() switch { "PROMO" => "pr-badge-purple", "VOLUME" => "pr-badge-info", "SEGMENT" => "pr-badge-success", "TIERED" => "pr-badge-warning", _ => "pr-badge-muted" };
+    private static string StatusBadgeClass(PricingRuleDto item) => !item.IsActive ? "pr-badge-muted" : IsExpired(item) ? "pr-badge-danger" : IsExpiring(item) ? "pr-badge-warning" : IsUpcoming(item) ? "pr-badge-info" : "pr-badge-success";
+
+    private static IReadOnlyList<DistributionRow> BuildDistribution(IEnumerable<PricingRuleDto> rules, Func<PricingRuleDto, string> labelSelector, Func<string, string> badgeSelector)
+    {
+        var rows = rules.GroupBy(labelSelector).Select(g => new DistributionRow(g.Key, g.Count(), 0, badgeSelector(g.Key), "0%")).OrderByDescending(r => r.Count).ThenBy(r => r.Label).ToList();
+        var total = Math.Max(1, rows.Sum(r => r.Count));
+        var max = Math.Max(1, rows.Select(r => r.Count).DefaultIfEmpty(1).Max());
+        return rows.Select(r => r with { Percent = (double)r.Count / total, Width = WidthPct(r.Count, max) }).ToList();
+    }
+
+    private async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+    }
+
+    private sealed record ViewOption(string Id, string Label, string Icon);
+    private sealed record Metric(string Filter, string Value, string Label, string Caption, string Icon, string Tone);
+    private sealed record DistributionRow(string Label, int Count, double Percent, string BadgeClass, string Width);
+
+    private sealed class PricingRuleFormModel
     {
         [Required(ErrorMessage = "Rule Code is required.")]
         [StringLength(80, ErrorMessage = "Rule Code cannot exceed 80 characters.")]
@@ -501,16 +782,5 @@
         public int Priority { get; set; } = 10;
 
         public bool IsActive { get; set; } = true;
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
     }
 }

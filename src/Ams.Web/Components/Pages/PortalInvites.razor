@@ -1,21 +1,445 @@
 @page "/client/portal-invites"
 @namespace Ams.Web.Components.Pages
-@inject ApiClient Api
-@inject NavigationManager Nav
-@inject BreadcrumbService Breadcrumbs
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
 @using Ams.Application.Common.Dtos
 @using Ams.Application.Features.PortalInvites
-@using Ams.Web.Components.Pages.Accounts
-@using System.ComponentModel.DataAnnotations
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Portal Invites — Tenant Admin</PageTitle>
+<PageTitle>Enterprise Portal Invites</PageTitle>
 
-<AppPageHeader Title="Portal Invites" Subtitle="Tenant Admin portal access invitation center" Icon="bi-envelope"><Actions><button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-send"></i> Send Invite</button><button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button></Actions></AppPageHeader>
-<section class="ma-hero acct-hero"><div><span class="ma-eyebrow">Tenant Admin · Account Intelligence</span><h2>Portal Invitation Desk</h2><p>Issue, monitor, and resend client portal access invitations by account and contact.</p></div><div class="ma-hero-actions"><button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-envelope-plus"></i> Send Invite</button></div></section>
-<div class="pc-kpi-strip acct-kpi-strip"><div class="pc-kpi-card @(_activeFilter is null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)'><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-envelope"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Invites</div></div></div><div class="pc-kpi-card @(_activeFilter == "Accepted" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Accepted")'><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.StatusCode == "Accepted")</div><div class="pc-kpi-label">Accepted</div></div></div><div class="pc-kpi-card @(_activeFilter == "Pending" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Pending")'><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-clock"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.StatusCode == "Pending")</div><div class="pc-kpi-label">Pending</div></div></div><div class="pc-kpi-card @(_activeFilter == "Expired" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Expired")'><span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-exclamation-circle"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.StatusCode == "Expired")</div><div class="pc-kpi-label">Expired</div></div></div></div>
-<div class="ma-filter-bar acct-filter-bar"><div class="ma-search-wrap"><i class="bi bi-search"></i><input class="ma-search" value="@_search" @oninput="OnSearchChanged" placeholder="Search account, contact, email…" /></div><button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button><span class="ma-filter-count">@Filtered.Count() invites</span></div>
-@if (_loadError is not null) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div> }
-<div class="um-grid-card">@if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading portal invites…</span></div> }<SfGrid TValue="PortalInviteDto" DataSource="@Filtered.ToList()" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="56"><GridPageSettings PageSize="25" /><GridColumns><GridColumn Field="AccountName" HeaderText="Account" MinWidth="200" /><GridColumn Field="ContactName" HeaderText="Contact" Width="190" /><GridColumn Field="InviteEmail" HeaderText="Email" Width="230" /><GridColumn Field="StatusCode" HeaderText="Status" Width="115"><Template>@{ var i=(PortalInviteDto)context; }<span class="um-badge @InviteBadge(i.StatusCode)">@i.StatusCode</span></Template></GridColumn><GridColumn Field="SentDateUtc" HeaderText="Sent" Width="130" Format="d" /><GridColumn Field="ExpiresDateUtc" HeaderText="Expires" Width="130" Format="d" /><GridColumn HeaderText="Actions" Width="90" TextAlign="TextAlign.Center"><Template>@{ var i=(PortalInviteDto)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ResendAsync(i)" title="Resend"><i class="bi bi-arrow-repeat"></i></button></Template></GridColumn></GridColumns></SfGrid></div>
-<SfDialog @bind-Visible="_showForm" Width="640px" IsModal="true" ShowCloseIcon="false"><DialogContent><div class="um-modal-header"><i class="bi bi-envelope"></i><span>Send Portal Invite</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button></div><EditForm Model="_inviteForm" OnValidSubmit="SendAsync"><DataAnnotationsValidator /><div class="um-modal-body"><div class="um-form-grid"><div class="um-field"><label>Account <span class="text-danger">*</span></label><InputSelect @bind-Value="_inviteForm.AccountId" class="um-input"><option value="">Select account</option>@foreach (var a in _accounts) { <option value="@a.AccountId">@a.AccountName</option> }</InputSelect><ValidationMessage For="() => _inviteForm.AccountId" class="text-danger" /></div><div class="um-field"><label>Contact <span class="text-danger">*</span></label><InputSelect @bind-Value="_inviteForm.ContactId" class="um-input"><option value="">Select contact</option>@foreach (var c in _contacts) { <option value="@c.ContactId">@ContactName(c)</option> }</InputSelect><ValidationMessage For="() => _inviteForm.ContactId" class="text-danger" /></div><div class="um-field"><label>Email <span class="text-danger">*</span></label><InputText @bind-Value="_inviteForm.Email" class="um-input" /><ValidationMessage For="() => _inviteForm.Email" class="text-danger" /></div><div class="um-field"><label>Expires Days</label><InputNumber @bind-Value="_inviteForm.ExpiresDays" class="um-input" /><ValidationMessage For="() => _inviteForm.ExpiresDays" class="text-danger" /></div></div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Send</button></div></EditForm></DialogContent></SfDialog>
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
-@code { List<PortalInviteDto> _items = []; List<AccountDto> _accounts = []; List<ContactDto> _contacts = []; string _search = string.Empty; InviteForm _inviteForm = new(); string? _activeFilter, _loadError; bool _loading, _saving, _showForm; SfToast _toast = default!; IEnumerable<PortalInviteDto> Filtered => _items.Where(x => (_activeFilter is null || x.StatusCode == _activeFilter) && (string.IsNullOrWhiteSpace(_search) || x.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.ContactName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.InviteEmail.Contains(_search, StringComparison.OrdinalIgnoreCase))); protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Accounts", "/accounts"), new("Portal Invites")); await LoadAsync(); } async Task LoadAsync() { _loading = true; _loadError = null; try { _items = (await Api.SearchPortalInvitesAsync(AccountPageConstants.TenantId))?.Items.ToList() ?? []; _accounts = (await Api.SearchAccountsAsync(AccountPageConstants.TenantId))?.Items.ToList() ?? []; _contacts = (await Api.SearchContactsAsync(AccountPageConstants.TenantId))?.Items.ToList() ?? []; } catch (Exception ex) { _loadError = $"Failed to load portal invites: {ex.Message}"; } finally { _loading = false; } } void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; } void SetFilter(string? key) { _activeFilter = key; } void ResetFilters() { _activeFilter = null; _search = string.Empty; } void OpenCreate() { _inviteForm = new(); _showForm = true; } async Task SendAsync() { _saving = true; try { await Api.CreatePortalInviteAsync(new CreatePortalInviteRequest { TenantId = AccountPageConstants.TenantId, AccountId = _inviteForm.AccountId!.Value, ContactId = _inviteForm.ContactId!.Value, InviteEmail = _inviteForm.Email, ExpiresDateUtc = DateTime.UtcNow.AddDays(_inviteForm.ExpiresDays) }); _showForm = false; await _toast.ShowAsync(new() { Content = "Portal invite sent", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Send failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } } async Task ResendAsync(PortalInviteDto invite) { _saving = true; try { await Api.CreatePortalInviteAsync(new CreatePortalInviteRequest { TenantId = AccountPageConstants.TenantId, AccountId = invite.AccountId, ContactId = invite.ContactId, InviteEmail = invite.InviteEmail, ExpiresDateUtc = DateTime.UtcNow.AddDays(30) }); await _toast.ShowAsync(new() { Content = "Invite resent", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Resend failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } } static string InviteBadge(string status) => status switch { "Accepted" => "um-badge-success", "Pending" => "um-badge-info", "Expired" => "um-badge-warning", "Revoked" => "um-badge-danger", _ => "um-badge-neutral" }; static string ContactName(ContactDto c) => $"{c.FirstName} {c.LastName}".Trim(); sealed class InviteForm { [Required(ErrorMessage = "Account is required.")] public Guid? AccountId { get; set; } [Required(ErrorMessage = "Contact is required.")] public Guid? ContactId { get; set; } [Required(ErrorMessage = "Email is required."), EmailAddress(ErrorMessage = "Enter a valid email address."), StringLength(200)] public string Email { get; set; } = string.Empty; [Range(1, 365, ErrorMessage = "Expires Days must be between 1 and 365.")] public int ExpiresDays { get; set; } = 30; } }
+@if (_toastVisible)
+{
+    <div class="pin-toast pin-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="pin-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showConfirm && _confirmAction is not null)
+{
+    <div class="pin-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="pin-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="portalInviteConfirmTitle" @onclick:stopPropagation="true">
+            <span class="pin-confirm-icon pin-confirm-@_confirmAction.Kind"><i class="bi @_confirmAction.Icon" aria-hidden="true"></i></span>
+            <h2 id="portalInviteConfirmTitle">@_confirmAction.Title</h2>
+            <p>@_confirmAction.Message</p>
+            <div class="pin-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_saving">Cancel</button>
+                <button type="button" class="um-btn @_confirmAction.ButtonClass" @onclick="ExecuteConfirmedAsync" disabled="@_saving">
+                    @if (_saving)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    @_confirmAction.ButtonText
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="pin-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="pin-form-modal" role="dialog" aria-modal="true" aria-labelledby="portalInviteFormTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_inviteForm" OnValidSubmit="SendAsync">
+                <DataAnnotationsValidator />
+                <div class="pin-modal-header">
+                    <span class="pin-modal-icon"><i class="bi bi-envelope-plus" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 id="portalInviteFormTitle">Send Portal Invite</h2>
+                        <p>Invite a client contact to portal access using the existing tenant invite workflow.</p>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_saving" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="pin-modal-body">
+                    <div class="pin-form-banner"><i class="bi bi-shield-lock" aria-hidden="true"></i><span><strong>Secure invite workflow</strong><span>Portal invitation tokens are created by the API and scoped to the current tenant.</span></span></div>
+                    <div class="pin-form-grid">
+                        <div class="pin-field pin-field-wide">
+                            <label for="inviteAccount">Account <span>*</span></label>
+                            <InputSelect id="inviteAccount" class="pin-input" @bind-Value="_inviteForm.AccountId">
+                                <option value="">Select account</option>
+                                @foreach (var account in AccountOptions)
+                                {
+                                    <option value="@account.AccountId">@account.AccountName</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _inviteForm.AccountId" class="text-danger" />
+                        </div>
+                        <div class="pin-field">
+                            <label for="inviteContact">Contact <span>*</span></label>
+                            <InputSelect id="inviteContact" class="pin-input" @bind-Value="_inviteForm.ContactId">
+                                <option value="">Select contact</option>
+                                @foreach (var contact in ContactOptions)
+                                {
+                                    <option value="@contact.ContactId">@ContactName(contact)</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _inviteForm.ContactId" class="text-danger" />
+                        </div>
+                        <div class="pin-field">
+                            <label for="inviteEmail">Email <span>*</span></label>
+                            <InputText id="inviteEmail" class="pin-input" @bind-Value="_inviteForm.Email" />
+                            <ValidationMessage For="() => _inviteForm.Email" class="text-danger" />
+                        </div>
+                        <div class="pin-field">
+                            <label for="expiresDays">Expires Days <span>*</span></label>
+                            <InputNumber id="expiresDays" class="pin-input" @bind-Value="_inviteForm.ExpiresDays" />
+                            <ValidationMessage For="() => _inviteForm.ExpiresDays" class="text-danger" />
+                        </div>
+                        <div class="pin-field">
+                            <label for="expiresPreview">Expires On</label>
+                            <input id="expiresPreview" class="pin-input" value="@DateTime.UtcNow.AddDays(_inviteForm.ExpiresDays).ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture)" readonly />
+                        </div>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(_formError))
+                    {
+                        <div class="pin-form-error"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_formError</div>
+                    }
+                </div>
+                <div class="pin-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_saving">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        Send Invite
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="pin-enterprise-page">
+    <section class="pin-hero">
+        <div class="pin-hero-left">
+            <span class="pin-hero-icon"><i class="bi bi-envelope-paper" aria-hidden="true"></i></span>
+            <div>
+                <div class="pin-title-row">
+                    <h1>Portal Invitation Command Center</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> Live invite workflow</span>
+                    <span><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+                    <span><i class="bi bi-stars" aria-hidden="true"></i> Urgency ranked</span>
+                </div>
+                <p>Send, monitor, resend, and prioritize client portal invitations across accounts and contacts with a full-width enterprise workspace.</p>
+            </div>
+        </div>
+        <div class="pin-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh portal invites"><i class="bi @(_loading ? "bi-arrow-repeat pin-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/accounts")' title="Open accounts"><i class="bi bi-building" aria-hidden="true"></i> Accounts</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/contacts")' title="Open contacts"><i class="bi bi-person-lines-fill" aria-hidden="true"></i> Contacts</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-send" aria-hidden="true"></i> Send Invite</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger pin-error-banner" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    @if (_loading)
+    {
+        <section class="pin-loading-state"><i class="bi bi-arrow-repeat pin-spin" aria-hidden="true"></i><strong>Loading enterprise portal invitations...</strong><span>Syncing invites, accounts, contacts, acceptance status, and expiration windows.</span></section>
+    }
+    else
+    {
+        <section class="pin-kpi-strip" aria-label="Portal invite KPI filters">
+            @foreach (var metric in Metrics)
+            {
+                <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="@(() => SetFilter(metric.Filter))">
+                    <span class="pin-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                    <span><span class="pin-kpi-val">@metric.Value</span><span class="pin-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
+                </button>
+            }
+        </section>
+
+        <section class="pin-workflow-strip" aria-label="Portal invite workflow actions">
+            <button type="button" class="pin-workflow-card pin-workflow-primary" @onclick="OpenCreate"><i class="bi bi-envelope-plus" aria-hidden="true"></i><span><strong>Send invite</strong><span>Create a tenant-scoped portal invitation.</span></span></button>
+            <button type="button" class="pin-workflow-card" @onclick='() => SetFilter("Pending")'><i class="bi bi-hourglass-split" aria-hidden="true"></i><span><strong>Pending follow-up</strong><span>Review unaccepted invitations.</span></span></button>
+            <button type="button" class="pin-workflow-card" @onclick='() => SetFilter("Expiring")'><i class="bi bi-alarm" aria-hidden="true"></i><span><strong>Expiring soon</strong><span>Prioritize invites near expiration.</span></span></button>
+            <button type="button" class="pin-workflow-card" @onclick='() => SetView("analytics")'><i class="bi bi-graph-up-arrow" aria-hidden="true"></i><span><strong>Analytics</strong><span>Monitor acceptance and risk.</span></span></button>
+        </section>
+
+        <section class="pin-filter-panel">
+            <div class="pin-search-wrap">
+                <span class="pin-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+                <div class="pin-search-body">
+                    <label for="portalInviteSearch">Search portal invites</label>
+                    <input id="portalInviteSearch" class="pin-search-input" value="@_search" @oninput="OnSearchChanged" placeholder="Search account, contact, email, status, or expiration..." />
+                    <span>Search filters every view, KPI, table, chart, and detail card in memory.</span>
+                </div>
+            </div>
+            <label class="pin-filter-field">Status<select class="pin-filter-select" value="@_statusFilter" @onchange="OnStatusChanged"><option value="">All statuses</option>@foreach (var status in StatusOptions) { <option value="@status">@status</option> }</select></label>
+            <label class="pin-filter-field">Account<select class="pin-filter-select" value="@_accountFilter" @onchange="OnAccountChanged"><option value="">All accounts</option>@foreach (var account in AccountFilterOptions) { <option value="@account">@account</option> }</select></label>
+            <label class="pin-filter-field">Sort by<select class="pin-filter-select" value="@_sort" @onchange="OnSortChanged"><option value="importance">Importance</option><option value="recent">Recent</option><option value="expires">Expiration</option><option value="account">Account</option></select></label>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-cloud-arrow-down" aria-hidden="true"></i> Sync</button>
+            <div class="pin-filter-result"><strong>@SearchResultCount.ToString("N0", CultureInfo.CurrentCulture)</strong><span>shown</span></div>
+        </section>
+
+        <section class="pin-view-tabs" aria-label="Portal invite views">
+            @foreach (var view in _views)
+            {
+                <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label <span>@ViewCount(view.Id)</span></button>
+            }
+        </section>
+
+        @if (_items.Count == 0)
+        {
+            <section class="pin-empty-state"><i class="bi bi-envelope-paper" aria-hidden="true"></i><strong>No portal invites available</strong><span>No portal invites matched this tenant. Send an invite after account and contact records are available.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">Send Portal Invite</button></section>
+        }
+        else
+        {
+            <section class="pin-content-layout">
+                <main class="pin-main-card">
+                    @if (_view == "overview")
+                    {
+                        <div class="pin-section-head"><div><h2>Executive portal invitation overview</h2><p>Most important portal access activity by acceptance status, expiration urgency, account concentration, and recent sends.</p></div><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => SetView("invites")'><i class="bi bi-envelope" aria-hidden="true"></i> Invites</button></div>
+                        <div class="pin-overview-grid"><section class="pin-spotlight-card"><span><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Highest urgency invite</span><strong>@(TopInvite?.AccountName ?? "—")</strong><p>@(TopInvite is null ? "No matching invites require attention." : $"{TopInvite.StatusCode} invite for {TopInvite.ContactName} expires {FormatDate(TopInvite.ExpiresDateUtc)}: {TopInvite.InviteEmail}")</p><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="SelectTopInvite">Inspect invite</button></section><section class="pin-guidance-card"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Portal adoption guidance</h3><p>@GuidanceText</p><div class="pin-guidance-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("Pending")'>Pending</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("Expiring")'>Expiring</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("Accepted")'>Accepted</button></div></section></div>
+                        <section class="pin-panel"><h3><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Invite urgency ranking</h3><div class="pin-rank-stack">@foreach (var invite in FilteredRows.Take(8)) { <button type="button" class="@(IsSelected(invite) ? "pin-rank-row pin-rank-active" : "pin-rank-row")" @onclick="@(() => SelectInvite(invite))"><span>@invite.AccountName</span><div><i style="width:@WidthPct(ImportanceScore(invite), MaxImportance)"></i></div><strong>@invite.StatusCode</strong><small>@ExpirationLabel(invite)</small></button> }</div></section>
+                    }
+                    else if (_view == "invites")
+                    {
+                        <div class="pin-section-head"><div><h2>Portal invitation cards</h2><p>Prioritized invitation cards with resend workflow and account context.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenCreate">Send Invite</button></div>
+                        <div class="pin-card-grid">@foreach (var invite in FilteredRows) { <article class="@(IsSelected(invite) ? "pin-invite-card pin-invite-card-selected" : "pin-invite-card")" @onclick="@(() => SelectInvite(invite))"><div class="pin-invite-top"><span class="pin-invite-icon @StatusToneClass(invite)"><i class="bi @InviteIcon(invite)" aria-hidden="true"></i></span><span class="pin-badge @StatusBadgeClass(invite)">@DisplayStatus(invite)</span></div><h3>@invite.AccountName</h3><p>@invite.ContactName · @invite.InviteEmail</p><div class="pin-invite-stats"><div><span>Expires</span><strong>@ExpirationLabel(invite)</strong></div><div><span>Importance</span><strong>@ImportanceScore(invite).ToString("N0", CultureInfo.CurrentCulture)</strong></div></div><div class="pin-card-actions" @onclick:stopPropagation="true"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => ConfirmResend(invite))"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Resend</button></div></article> }</div>
+                    }
+                    else if (_view == "pending")
+                    {
+                        <div class="pin-section-head"><div><h2>Pending and expiring watchlist</h2><p>Portal invitations that still need acceptance, follow-up, or resend action.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("Expiring")'>Expiring</button></div>
+                        <div class="pin-timeline">@foreach (var invite in PendingRows) { <article class="@(IsSelected(invite) ? "pin-timeline-item pin-timeline-item-selected" : "pin-timeline-item")" @onclick="@(() => SelectInvite(invite))"><span class="pin-timeline-icon @StatusToneClass(invite)"><i class="bi @InviteIcon(invite)" aria-hidden="true"></i></span><div class="pin-timeline-body"><header><strong>@invite.AccountName</strong><span class="pin-badge @StatusBadgeClass(invite)">@DisplayStatus(invite)</span></header><p>@invite.ContactName · @invite.InviteEmail</p><footer><span><i class="bi bi-send" aria-hidden="true"></i> Sent @FormatDateTime(invite.SentDateUtc ?? invite.CreatedDateUtc)</span><span><i class="bi bi-alarm" aria-hidden="true"></i> @ExpirationLabel(invite)</span></footer></div></article> }</div>
+                    }
+                    else if (_view == "accounts")
+                    {
+                        <div class="pin-section-head"><div><h2>Account invitation concentration</h2><p>Accounts with portal invitation volume, pending invite pressure, and recent invite activity.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/accounts")'>Open Accounts</button></div>
+                        <div class="pin-account-grid">@foreach (var row in AccountRows) { <button type="button" class="@(row.AccountName == _accountFilter ? "pin-account-row pin-active" : "pin-account-row")" @onclick="@(() => SelectAccount(row.AccountName))"><span>@row.AccountName</span><div><i style="width:@row.Width"></i></div><strong>@row.Count</strong><small>@row.Pending pending</small></button> }</div>
+                    }
+                    else if (_view == "analytics")
+                    {
+                        <div class="pin-section-head"><div><h2>Portal invite analytics</h2><p>Acceptance status, expiration risk, and account distribution across portal invitations.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Refresh</button></div>
+                        <div class="pin-analytics-grid"><section class="pin-analytics-panel pin-tone-blue"><h3><i class="bi bi-pie-chart" aria-hidden="true"></i> Status distribution</h3><div class="pin-analytics-list">@foreach (var row in StatusDistribution) { <button type="button" @onclick="@(() => ApplyStatusDistribution(row.Label))"><span>@row.Label</span><div><i style="width:@row.Width"></i></div><strong>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><small>@row.Percent.ToString("P0", CultureInfo.CurrentCulture)</small></button> }</div></section><section class="pin-analytics-panel pin-tone-green"><h3><i class="bi bi-calendar-check" aria-hidden="true"></i> Expiration bands</h3><div class="pin-analytics-list">@foreach (var row in ExpirationDistribution) { <button type="button" @onclick="@(() => ApplyExpirationDistribution(row.Label))"><span>@row.Label</span><div><i style="width:@row.Width"></i></div><strong>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><small>@row.Percent.ToString("P0", CultureInfo.CurrentCulture)</small></button> }</div></section><section class="pin-analytics-panel pin-tone-amber"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Executive insight</h3><div class="pin-insight-grid"><div><span>Acceptance</span><strong>@AcceptanceRateText</strong><small>accepted invites</small></div><div><span>Pending</span><strong>@PendingCount.ToString("N0", CultureInfo.CurrentCulture)</strong><small>open invites</small></div><div><span>Expiring</span><strong>@ExpiringCount.ToString("N0", CultureInfo.CurrentCulture)</strong><small>next 7 days</small></div><div><span>Accounts</span><strong>@AccountRows.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><small>with invites</small></div></div><p>@GuidanceText</p></section></div>
+                    }
+                    else
+                    {
+                        <div class="pin-section-head"><div><h2>Portal invites operating table</h2><p>Native table synchronized from the existing portal invite API.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters">Reset</button></div>
+                        <div class="pin-table-wrap"><table class="pin-table"><thead><tr><th>Account</th><th>Contact</th><th>Email</th><th>Status</th><th>Sent</th><th>Expires</th><th>Action</th></tr></thead><tbody>@foreach (var invite in FilteredRows) { <tr class="@(IsSelected(invite) ? "pin-row-selected" : string.Empty)" @onclick="@(() => SelectInvite(invite))"><td><strong>@invite.AccountName</strong><small>@invite.AccountId</small></td><td>@invite.ContactName<small>@invite.ContactId</small></td><td>@invite.InviteEmail</td><td><span class="pin-badge @StatusBadgeClass(invite)">@DisplayStatus(invite)</span></td><td>@FormatDateTime(invite.SentDateUtc ?? invite.CreatedDateUtc)</td><td>@FormatDate(invite.ExpiresDateUtc)<small>@ExpirationLabel(invite)</small></td><td @onclick:stopPropagation="true"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => ConfirmResend(invite))"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></button></td></tr> }</tbody></table></div>
+                    }
+                </main>
+
+                <aside class="pin-detail-panel">
+                    @if (_selected is null)
+                    {
+                        <div class="pin-detail-empty"><i class="bi bi-envelope-paper" aria-hidden="true"></i><strong>Select an invite</strong><span>Inspect contact, account, expiration, acceptance state, urgency, and available workflow actions.</span></div>
+                    }
+                    else
+                    {
+                        <div class="pin-detail-head"><div><span><i class="bi @InviteIcon(_selected)" aria-hidden="true"></i> Portal invite</span><h2>@_selected.AccountName</h2><p>@_selected.ContactName · @_selected.InviteEmail</p></div><span class="pin-badge @StatusBadgeClass(_selected)">@DisplayStatus(_selected)</span></div>
+                        <div class="pin-detail-summary"><div><span>Urgency</span><strong>@ImportanceScore(_selected).ToString("N0", CultureInfo.CurrentCulture)</strong></div><div><span>Expires</span><strong>@ExpirationLabel(_selected)</strong></div><div><span>Sent</span><strong>@FormatDate(_selected.SentDateUtc ?? _selected.CreatedDateUtc)</strong></div><div><span>Accepted</span><strong>@FormatDate(_selected.AcceptedDateUtc)</strong></div></div>
+                        <div class="pin-invite-note"><strong>Invitation target</strong><p>@_selected.ContactName at @_selected.InviteEmail for @_selected.AccountName.</p></div>
+                        <div class="pin-rules-card"><header><strong>Recommended actions</strong><span>@DisplayStatus(_selected)</span></header>@foreach (var action in RecommendedActions(_selected)) { <p><em>@action</em><span>active</span></p> }</div>
+                        <div class="pin-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-send" aria-hidden="true"></i> New Invite</button><button type="button" class="um-btn um-btn-ghost" @onclick="@(() => ConfirmResend(_selected))"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Resend</button><button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/accounts")'><i class="bi bi-building" aria-hidden="true"></i> Accounts</button></div>
+                    }
+                </aside>
+            </section>
+        }
+    }
+</div>
+
+@code {
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private bool _loading = true;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showConfirm;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private string _search = string.Empty;
+    private string _activeFilter = "all";
+    private string _statusFilter = string.Empty;
+    private string _accountFilter = string.Empty;
+    private string _sort = "importance";
+    private string _view = "overview";
+    private ConfirmAction? _confirmAction;
+    private InviteForm _inviteForm = new();
+    private PortalInviteDto? _selected;
+    private List<PortalInviteDto> _items = [];
+    private List<AccountDto> _accounts = [];
+    private List<ContactDto> _contacts = [];
+    private readonly ViewOption[] _views = [new("overview", "Overview", "bi-speedometer2"), new("invites", "Invites", "bi-envelope"), new("pending", "Pending", "bi-hourglass-split"), new("accounts", "Accounts", "bi-building"), new("analytics", "Analytics", "bi-graph-up-arrow"), new("table", "Table", "bi-table")];
+
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
+    private int PendingCount => _items.Count(i => i.StatusCode == "Pending" && !IsExpired(i));
+    private int AcceptedCount => _items.Count(i => i.StatusCode == "Accepted");
+    private int ExpiredCount => _items.Count(IsExpired);
+    private int ExpiringCount => _items.Count(IsExpiringSoon);
+    private string AcceptanceRateText => _items.Count == 0 ? "N/A" : ((double)AcceptedCount / _items.Count).ToString("P0", CultureInfo.CurrentCulture);
+    private string GuidanceText => ExpiringCount > 0 ? $"{ExpiringCount.ToString("N0", CultureInfo.CurrentCulture)} pending invite(s) expire within 7 days and should be resent or followed up." : PendingCount > 0 ? $"{PendingCount.ToString("N0", CultureInfo.CurrentCulture)} pending invite(s) are waiting for client action." : ExpiredCount > 0 ? $"{ExpiredCount.ToString("N0", CultureInfo.CurrentCulture)} expired invite(s) should be reviewed for resend." : "Portal invitation workflow is healthy. Continue inviting key contacts and monitoring acceptance.";
+    private int SearchResultCount => _view == "pending" ? PendingRows.Count : FilteredRows.Count;
+    private PortalInviteDto? TopInvite => FilteredRows.OrderByDescending(ImportanceScore).ThenBy(x => x.ExpiresDateUtc).FirstOrDefault();
+    private decimal MaxImportance => Math.Max(1m, FilteredRows.Select(ImportanceScore).DefaultIfEmpty(1m).Max());
+    private IEnumerable<AccountDto> AccountOptions => _accounts.OrderBy(x => x.AccountName);
+    private IEnumerable<ContactDto> ContactOptions => _inviteForm.AccountId.HasValue ? _contacts.Where(c => c.AccountId == _inviteForm.AccountId.Value).OrderBy(ContactName) : _contacts.OrderBy(ContactName);
+    private IEnumerable<string> StatusOptions => _items.Select(DisplayStatus).Concat(["Pending", "Accepted", "Expired", "Expiring", "Revoked"]).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    private IEnumerable<string> AccountFilterOptions => _items.Select(x => x.AccountName).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private IReadOnlyList<PortalInviteDto> FilteredRows => ApplyInviteFilters(_items).ToList();
+    private IReadOnlyList<PortalInviteDto> PendingRows => ApplyInviteFilters(_items.Where(i => i.StatusCode == "Pending" || IsExpired(i) || IsExpiringSoon(i))).ToList();
+    private IReadOnlyList<AccountRow> AccountRows => BuildAccountRows();
+    private IReadOnlyList<DistributionRow> StatusDistribution => BuildDistribution(_items, DisplayStatus);
+    private IReadOnlyList<DistributionRow> ExpirationDistribution => BuildDistribution(_items, ExpirationBucket);
+    private IReadOnlyList<Metric> Metrics => [new("all", _items.Count.ToString("N0", CultureInfo.CurrentCulture), "Invites", "Tenant portal invitations", "bi-envelope", "pin-kpi-blue"), new("Pending", PendingCount.ToString("N0", CultureInfo.CurrentCulture), "Pending", "Waiting for client acceptance", "bi-hourglass-split", "pin-kpi-amber"), new("Accepted", AcceptedCount.ToString("N0", CultureInfo.CurrentCulture), "Accepted", "Portal access accepted", "bi-check2-circle", "pin-kpi-green"), new("Expiring", ExpiringCount.ToString("N0", CultureInfo.CurrentCulture), "Expiring", "Pending within 7 days", "bi-alarm", "pin-kpi-red"), new("Expired", ExpiredCount.ToString("N0", CultureInfo.CurrentCulture), "Expired", "Needs resend review", "bi-exclamation-circle", "pin-kpi-purple"), new("accounts", AccountRows.Count.ToString("N0", CultureInfo.CurrentCulture), "Accounts", "Accounts with invites", "bi-building", "pin-kpi-cyan")];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Accounts", "/accounts"), new("Portal Invites", "/client/portal-invites"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            if (_tenantId == Guid.Empty) await ResolveCurrentUserContextAsync();
+            _items = (await Api.SearchPortalInvitesAsync(_tenantId, pageSize: 250))?.Items.ToList() ?? [];
+            _accounts = (await Api.SearchAccountsAsync(_tenantId, pageSize: 250))?.Items.ToList() ?? [];
+            _contacts = (await Api.SearchContactsAsync(_tenantId, pageSize: 500))?.Items.ToList() ?? [];
+            _selected = _selected is null ? FilteredRows.FirstOrDefault() : _items.FirstOrDefault(i => i.PortalInviteId == _selected.PortalInviteId) ?? FilteredRows.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load portal invites: {ex.Message}";
+            _items = [];
+            _accounts = [];
+            _contacts = [];
+            _selected = null;
+            ShowToast($"Portal invites load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private IEnumerable<PortalInviteDto> ApplyInviteFilters(IEnumerable<PortalInviteDto> invites)
+    {
+        var query = invites;
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var term = _search.Trim();
+            query = query.Where(i => Contains(i.AccountName, term) || Contains(i.ContactName, term) || Contains(i.InviteEmail, term) || Contains(DisplayStatus(i), term) || FormatDate(i.ExpiresDateUtc).Contains(term, StringComparison.OrdinalIgnoreCase));
+        }
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(i => StatusMatches(i, _statusFilter));
+        if (!string.IsNullOrWhiteSpace(_accountFilter)) query = query.Where(i => i.AccountName.Equals(_accountFilter, StringComparison.OrdinalIgnoreCase));
+        query = _activeFilter switch { "Pending" => query.Where(i => i.StatusCode == "Pending" && !IsExpired(i)), "Accepted" => query.Where(i => i.StatusCode == "Accepted"), "Expired" => query.Where(IsExpired), "Expiring" => query.Where(IsExpiringSoon), "accounts" => query, _ => query };
+        return _sort switch { "recent" => query.OrderByDescending(i => i.SentDateUtc ?? i.CreatedDateUtc), "expires" => query.OrderBy(i => i.ExpiresDateUtc), "account" => query.OrderBy(i => i.AccountName).ThenBy(i => i.ContactName), _ => query.OrderByDescending(ImportanceScore).ThenBy(i => i.ExpiresDateUtc) };
+    }
+
+    private void SetFilter(string filter)
+    {
+        _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter;
+        _view = filter switch { "Pending" or "Expiring" or "Expired" => "pending", "accounts" => "accounts", _ => _view };
+        _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault();
+    }
+
+    private void SetView(string view) => _view = view;
+    private void SelectInvite(PortalInviteDto invite) => _selected = invite;
+    private void SelectTopInvite() { if (TopInvite is not null) { _selected = TopInvite; _view = "table"; } }
+    private void SelectAccount(string accountName) { _accountFilter = _accountFilter == accountName ? string.Empty : accountName; _view = "invites"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void ResetFilters() { _activeFilter = "all"; _search = string.Empty; _statusFilter = string.Empty; _accountFilter = string.Empty; _sort = "importance"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnSearchChanged(BlazorChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnStatusChanged(BlazorChangeEventArgs e) { _statusFilter = e.Value?.ToString() ?? string.Empty; _activeFilter = "all"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnAccountChanged(BlazorChangeEventArgs e) { _accountFilter = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnSortChanged(BlazorChangeEventArgs e) { _sort = e.Value?.ToString() ?? "importance"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void ApplyStatusDistribution(string status) { _statusFilter = _statusFilter == status ? string.Empty : status; _activeFilter = "all"; _view = "table"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void ApplyExpirationDistribution(string label) { _activeFilter = label is "Expiring Soon" ? "Expiring" : label is "Expired" ? "Expired" : "all"; _view = "table"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OpenCreate() { _inviteForm = new(); _formError = null; _showForm = true; }
+    private void CloseForm() { if (_saving) return; _showForm = false; _inviteForm = new(); _formError = null; }
+    private void ConfirmResend(PortalInviteDto invite) => OpenConfirm(new("Resend portal invite", $"Create a new portal invite for {invite.ContactName} at {invite.InviteEmail}?", "Resend", "um-btn-primary", "bi-arrow-repeat", "warning", () => ResendAsync(invite)));
+    private void OpenConfirm(ConfirmAction action) { _confirmAction = action; _showConfirm = true; }
+    private void CancelConfirm() { if (!_saving) { _showConfirm = false; _confirmAction = null; } }
+    private async Task ExecuteConfirmedAsync() { if (_confirmAction is null) return; _saving = true; try { var action = _confirmAction; await action.ExecuteAsync(); _showConfirm = false; _confirmAction = null; } catch (Exception ex) { ShowToast($"Action failed: {ex.Message}", "danger"); } finally { _saving = false; } }
+
+    private async Task SendAsync()
+    {
+        _saving = true;
+        _formError = null;
+        try
+        {
+            if (!_inviteForm.AccountId.HasValue || !_inviteForm.ContactId.HasValue)
+            {
+                _formError = "Select an account and contact.";
+                return;
+            }
+            await Api.CreatePortalInviteAsync(new CreatePortalInviteRequest { TenantId = _tenantId, AccountId = _inviteForm.AccountId.Value, ContactId = _inviteForm.ContactId.Value, InviteEmail = _inviteForm.Email.Trim(), ExpiresDateUtc = DateTime.UtcNow.AddDays(_inviteForm.ExpiresDays), CreatedByUserId = _tenantAdminUserId });
+            _showForm = false;
+            _inviteForm = new();
+            await LoadAsync();
+            ShowToast("Portal invite sent.", "success");
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Send failed: {ex.Message}";
+            ShowToast($"Send failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ResendAsync(PortalInviteDto invite)
+    {
+        await Api.CreatePortalInviteAsync(new CreatePortalInviteRequest { TenantId = _tenantId, AccountId = invite.AccountId, ContactId = invite.ContactId, InviteEmail = invite.InviteEmail, ExpiresDateUtc = DateTime.UtcNow.AddDays(30), CreatedByUserId = _tenantAdminUserId });
+        await LoadAsync();
+        ShowToast("Portal invite resent.", "success");
+    }
+
+    private void ShowToast(string message, string kind) { _toastMessage = message.Length <= 140 ? message : $"{message[..137]}..."; _toastKind = ToastKind(kind); _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+    private string MetricCardClass(Metric metric) => $"pin-kpi-card {metric.Tone} {(_activeFilter == metric.Filter ? "pin-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewOption view) => $"pin-view-btn {(view.Id == _view ? "pin-view-btn-active" : string.Empty)}";
+    private int ViewCount(string view) => view switch { "pending" => PendingRows.Count, "accounts" => AccountRows.Count, "analytics" => _items.Count, _ => FilteredRows.Count };
+    private bool IsSelected(PortalInviteDto invite) => _selected?.PortalInviteId == invite.PortalInviteId;
+    private IReadOnlyList<AccountRow> BuildAccountRows() { var rows = _items.GroupBy(i => i.AccountName).Select(g => new AccountRow(g.Key, g.Count(), g.Count(i => i.StatusCode == "Pending" && !IsExpired(i)))).OrderByDescending(r => r.Count).ThenBy(r => r.AccountName).ToList(); var max = Math.Max(1, rows.Select(r => r.Count).DefaultIfEmpty(1).Max()); return rows.Select(r => r with { Width = WidthPct(r.Count, max) }).ToList(); }
+    private static IReadOnlyList<DistributionRow> BuildDistribution(IEnumerable<PortalInviteDto> items, Func<PortalInviteDto, string> labelSelector) { var rows = items.GroupBy(labelSelector).Select(g => new DistributionRow(g.Key, g.Count(), 0, "0%")).OrderByDescending(r => r.Count).ThenBy(r => r.Label).ToList(); var total = Math.Max(1, rows.Sum(r => r.Count)); var max = Math.Max(1, rows.Select(r => r.Count).DefaultIfEmpty(1).Max()); return rows.Select(r => r with { Percent = (double)r.Count / total, Width = WidthPct(r.Count, max) }).ToList(); }
+    private static bool StatusMatches(PortalInviteDto invite, string status) => status == "Expiring" ? IsExpiringSoon(invite) : status == "Expired" ? IsExpired(invite) : DisplayStatus(invite).Equals(status, StringComparison.OrdinalIgnoreCase);
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static bool IsExpired(PortalInviteDto invite) => invite.StatusCode == "Expired" || (invite.StatusCode == "Pending" && invite.ExpiresDateUtc < DateTime.UtcNow);
+    private static bool IsExpiringSoon(PortalInviteDto invite) => invite.StatusCode == "Pending" && !IsExpired(invite) && invite.ExpiresDateUtc <= DateTime.UtcNow.AddDays(7);
+    private static string DisplayStatus(PortalInviteDto invite) => IsExpired(invite) ? "Expired" : IsExpiringSoon(invite) ? "Expiring" : invite.StatusCode;
+    private static string ExpirationBucket(PortalInviteDto invite) => IsExpired(invite) ? "Expired" : IsExpiringSoon(invite) ? "Expiring Soon" : invite.ExpiresDateUtc <= DateTime.UtcNow.AddDays(30) ? "Next 30 Days" : "Future";
+    private static decimal ImportanceScore(PortalInviteDto invite) => StatusScore(invite) + ExpirationScore(invite) + RecencyScore(invite.SentDateUtc ?? invite.CreatedDateUtc);
+    private static decimal StatusScore(PortalInviteDto invite) => IsExpired(invite) ? 80m : IsExpiringSoon(invite) ? 70m : invite.StatusCode switch { "Pending" => 55m, "Accepted" => 20m, "Revoked" => 45m, _ => 30m };
+    private static decimal ExpirationScore(PortalInviteDto invite) { var days = (invite.ExpiresDateUtc.Date - DateTime.UtcNow.Date).Days; return days switch { < 0 => 25m, <= 3 => 22m, <= 7 => 18m, <= 30 => 8m, _ => 0m }; }
+    private static decimal RecencyScore(DateTime value) => (DateTime.UtcNow.Date - value.Date).Days switch { <= 1 => 12m, <= 7 => 8m, <= 30 => 4m, _ => 0m };
+    private static string ExpirationLabel(PortalInviteDto invite) { if (IsExpired(invite)) return "Expired"; var days = (invite.ExpiresDateUtc.Date - DateTime.UtcNow.Date).Days; return days <= 0 ? "Expires today" : days == 1 ? "Expires tomorrow" : $"Expires in {days} days"; }
+    private static string WidthPct(decimal value, decimal max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, (double)(value / max * 100)))).ToString("F1", CultureInfo.InvariantCulture) + "%";
+    private static string WidthPct(int value, int max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, (double)value / max * 100))).ToString("F1", CultureInfo.InvariantCulture) + "%";
+    private static string FormatDate(DateTime? value) => value.HasValue ? value.Value.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture) : "—";
+    private static string FormatDateTime(DateTime value) => value.ToLocalTime().ToString("MMM d, yyyy h:mm tt", CultureInfo.CurrentCulture);
+    private static string ContactName(ContactDto contact) => $"{contact.FirstName} {contact.LastName}".Trim();
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : "success";
+    private static string InviteIcon(PortalInviteDto invite) => DisplayStatus(invite) switch { "Accepted" => "bi-check2-circle", "Expired" => "bi-exclamation-circle", "Expiring" => "bi-alarm", "Revoked" => "bi-x-circle", _ => "bi-hourglass-split" };
+    private static string StatusBadgeClass(PortalInviteDto invite) => DisplayStatus(invite) switch { "Accepted" => "pin-badge-success", "Expired" => "pin-badge-danger", "Expiring" => "pin-badge-warning", "Revoked" => "pin-badge-muted", _ => "pin-badge-info" };
+    private static string StatusToneClass(PortalInviteDto invite) => DisplayStatus(invite) switch { "Accepted" => "pin-tone-green", "Expired" => "pin-tone-danger", "Expiring" => "pin-tone-warning", "Revoked" => "pin-tone-muted", _ => "pin-tone-blue" };
+    private static IEnumerable<string> RecommendedActions(PortalInviteDto invite) { if (IsExpired(invite)) yield return "Resend a fresh portal invite and confirm the recipient email."; else if (IsExpiringSoon(invite)) yield return "Follow up with the contact before the invitation expires."; else if (invite.StatusCode == "Pending") yield return "Monitor acceptance and resend if the client cannot locate the invite."; else if (invite.StatusCode == "Accepted") yield return "Confirm the contact has the correct portal access and account visibility."; yield return "Keep account and contact records synchronized before sending additional invites."; }
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+
+    private sealed record ViewOption(string Id, string Label, string Icon);
+    private sealed record Metric(string Filter, string Value, string Label, string Caption, string Icon, string Tone);
+    private sealed record ConfirmAction(string Title, string Message, string ButtonText, string ButtonClass, string Icon, string Kind, Func<Task> ExecuteAsync);
+    private sealed record DistributionRow(string Label, int Count, double Percent, string Width);
+    private sealed record AccountRow(string AccountName, int Count, int Pending) { public string Width { get; init; } = "0%"; }
+    private sealed class InviteForm { [Required(ErrorMessage = "Account is required.")] public Guid? AccountId { get; set; } [Required(ErrorMessage = "Contact is required.")] public Guid? ContactId { get; set; } [Required(ErrorMessage = "Email is required."), EmailAddress(ErrorMessage = "Enter a valid email address."), StringLength(200)] public string Email { get; set; } = string.Empty; [Range(1, 365, ErrorMessage = "Expires Days must be between 1 and 365.")] public int ExpiresDays { get; set; } = 30; }
+}

@@ -1,150 +1,266 @@
 @page "/crm/pricing/classes"
 @namespace Ams.Web.Components.Pages.Crm
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
 @inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
-@using Ams.Application.Common.Dtos
 
-<PageTitle>Price by Class — CRM</PageTitle>
+<PageTitle>Enterprise Price Classes — CRM</PageTitle>
 
-<AppPageHeader Title="Price by Class"
-               Subtitle="Tenant admin controls for class-based rates, risk tiers, and premium bands"
-               Icon="bi-diagram-3">
-    <Actions>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Add Class</button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
-    </Actions>
-</AppPageHeader>
-
-<section class="ma-hero pmr-hero">
-    <div>
-        <span class="ma-eyebrow">Pricing & Market Rules</span>
-        <h2>Class Rating Workspace</h2>
-        <p>Review risk tiers, premium bands, and base rates with fast filtering across class codes, LOBs, and descriptions.</p>
-    </div>
-    <div class="ma-hero-actions">
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Add Class</button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
-    </div>
-</section>
-
-<div class="ma-view-tabs pmr-view-tabs">
-    <button class="ma-view-tab" @onclick='() => Nav.NavigateTo("/crm/pricing-rules")'><i class="bi bi-tags"></i> Pricing Rules</button>
-    <button class="ma-view-tab ma-view-tab--active"><i class="bi bi-diagram-3"></i> Price by Class</button>
-    <button class="ma-view-tab" @onclick='() => Nav.NavigateTo("/crm/appetite")'><i class="bi bi-grid-3x3"></i> Market Appetite</button>
-    <button class="ma-view-tab" @onclick='() => Nav.NavigateTo("/crm/carrier-mapping")'><i class="bi bi-broadcast"></i> Carrier Mapping</button>
-</div>
-
-<div class="pc-kpi-strip">
-    <div class="pc-kpi-card @(_activeFilter == null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)' title="Show all price classes">
-        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-diagram-3" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Classes</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "active" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("active")' title="Filter: Active">
-        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.IsActive)</div><div class="pc-kpi-label">Active</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "commercial" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("commercial")' title="Filter: Commercial">
-        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-building" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.LobCode.Contains("Commercial", StringComparison.OrdinalIgnoreCase))</div><div class="pc-kpi-label">Commercial</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "preferred" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("preferred")' title="Filter: Preferred risk tier">
-        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-star-fill" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.RiskTierCode == "Preferred")</div><div class="pc-kpi-label">Preferred</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "highrate" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("highrate")' title="Filter: Base rate over 2%">
-        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.BaseRate >= 0.02m)</div><div class="pc-kpi-label">High Rate</div></div>
-    </div>
-</div>
-
-<div class="ma-filter-bar pmr-filter-bar">
-    <div class="ma-search-wrap">
-        <i class="bi bi-search" aria-hidden="true"></i>
-        <input class="ma-search" value="@_search" @oninput="OnSearchChanged" placeholder="Search class, code, LOB, risk tier, description…" />
-    </div>
-    <div class="ma-type-pills">
-        <button class="ma-pill @(_activeFilter is null ? "ma-pill-active" : "")" @onclick='() => SetFilter(null)'>All</button>
-        <button class="ma-pill @(_activeFilter == "active" ? "ma-pill-active" : "")" @onclick='() => SetFilter("active")'>Active</button>
-        <button class="ma-pill @(_activeFilter == "commercial" ? "ma-pill-active" : "")" @onclick='() => SetFilter("commercial")'>Commercial</button>
-        <button class="ma-pill @(_activeFilter == "preferred" ? "ma-pill-active" : "")" @onclick='() => SetFilter("preferred")'>Preferred</button>
-        <button class="ma-pill @(_activeFilter == "highrate" ? "ma-pill-active" : "")" @onclick='() => SetFilter("highrate")'>High Rate</button>
-    </div>
-    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button>
-    <span class="ma-filter-count">@_filtered.Count classes</span>
-</div>
-
-@if (_loadError is not null)
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div>
+    <div class="pcx-toast pcx-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="pcx-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
 }
 
-<div class="um-grid-card">
-    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading price classes…</span></div> }
-    <SfGrid TValue="PriceClassDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-        <GridEvents TValue="PriceClassDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="25" PageSizes="@(new[] { 25, 50, 100 })" />
-        <GridColumns>
-            <GridColumn Field="ClassCode" HeaderText="Code" Width="120" />
-            <GridColumn Field="ClassName" HeaderText="Class Name" Width="220" />
-            <GridColumn Field="LobCode" HeaderText="LOB" Width="160"><Template>@{ var r=(PriceClassDto)context; }<span class="um-badge um-badge-info">@r.LobCode</span></Template></GridColumn>
-            <GridColumn Field="RiskTierCode" HeaderText="Risk Tier" Width="120"><Template>@{ var r=(PriceClassDto)context; }@(r.RiskTierCode ?? "—")</Template></GridColumn>
-            <GridColumn HeaderText="Base Rate" Width="110" TextAlign="TextAlign.Right"><Template>@{ var r=(PriceClassDto)context; }<strong>@((r.BaseRate * 100).ToString("0.###"))%</strong></Template></GridColumn>
-            <GridColumn HeaderText="Premium Band" Width="180"><Template>@{ var r=(PriceClassDto)context; }@(r.MinPremium?.ToString("C0") ?? "—") — @(r.MaxPremium?.ToString("C0") ?? "Unlimited")</Template></GridColumn>
-            <GridColumn Field="Priority" HeaderText="Priority" Width="90" TextAlign="TextAlign.Center" />
-            <GridColumn HeaderText="Status" Width="100" TextAlign="TextAlign.Center"><Template>@{ var r=(PriceClassDto)context; }<span class="um-badge @(r.IsActive ? "um-badge-success" : "um-badge-neutral")">@(r.IsActive ? "Active" : "Inactive")</span></Template></GridColumn>
-            <GridColumn HeaderText="Actions" Width="110" TextAlign="TextAlign.Center"><Template>@{ var r=(PriceClassDto)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true" title="Edit"><i class="bi bi-pencil"></i></button><button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true" title="Delete"><i class="bi bi-trash"></i></button></Template></GridColumn>
-        </GridColumns>
-    </SfGrid>
+@if (_showDelete && _deleteTarget is not null)
+{
+    <div class="pcx-modal-backdrop" role="presentation" @onclick="CancelDelete">
+        <div class="pcx-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="priceClassDeleteTitle" @onclick:stopPropagation="true">
+            <div class="pcx-confirm-icon pcx-confirm-danger"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
+            <h2 id="priceClassDeleteTitle">Delete Price Class?</h2>
+            <p>You are about to delete <strong>@_deleteTarget.ClassName</strong>. The existing workflow soft-deletes and deactivates the class.</p>
+            <div class="pcx-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete" disabled="@_saving">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">
+                    @if (_saving) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                    Delete
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="pcx-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="pcx-form-modal" role="dialog" aria-modal="true" aria-labelledby="priceClassFormTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="pcx-modal-header">
+                    <span class="pcx-modal-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span>
+                    <div><h2 id="priceClassFormTitle">@(_editId.HasValue ? "Edit Price Class" : "Add Price Class")</h2><p>Configure class rating, LOB, risk tier, base rate, premium band, and priority.</p></div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_saving" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="pcx-modal-body">
+                    <div class="pcx-form-banner"><i class="bi bi-shield-check" aria-hidden="true"></i><span><strong>Class rating governance</strong><span>Price classes are tenant scoped and synchronized to CRM.PriceClass.</span></span></div>
+                    <div class="pcx-form-grid">
+                        <div class="pcx-field"><label for="classCode">Class Code <span>*</span></label><InputText id="classCode" class="pcx-input" @bind-Value="_form.ClassCode" /><ValidationMessage For="() => _form.ClassCode" class="text-danger" /></div>
+                        <div class="pcx-field"><label for="className">Class Name <span>*</span></label><InputText id="className" class="pcx-input" @bind-Value="_form.ClassName" /><ValidationMessage For="() => _form.ClassName" class="text-danger" /></div>
+                        <div class="pcx-field"><label for="lobCode">Line of Business <span>*</span></label><InputSelect id="lobCode" class="pcx-input" @bind-Value="_form.LobCode">@foreach (var lob in PricingMarketRulePageConstants.LobCodes) { <option value="@lob">@lob</option> }</InputSelect><ValidationMessage For="() => _form.LobCode" class="text-danger" /></div>
+                        <div class="pcx-field"><label for="riskTier">Risk Tier</label><InputSelect id="riskTier" class="pcx-input" @bind-Value="_form.RiskTierCode"><option value="">None</option>@foreach (var tier in PricingMarketRulePageConstants.RiskTiers) { <option value="@tier">@tier</option> }</InputSelect><ValidationMessage For="() => _form.RiskTierCode" class="text-danger" /></div>
+                        <div class="pcx-field"><label for="baseRate">Base Rate <span>*</span></label><InputNumber id="baseRate" class="pcx-input" @bind-Value="_form.BaseRate" /><ValidationMessage For="() => _form.BaseRate" class="text-danger" /></div>
+                        <div class="pcx-field"><label for="minPremium">Minimum Premium</label><InputNumber id="minPremium" class="pcx-input" @bind-Value="_form.MinPremium" /><ValidationMessage For="() => _form.MinPremium" class="text-danger" /></div>
+                        <div class="pcx-field"><label for="maxPremium">Maximum Premium</label><InputNumber id="maxPremium" class="pcx-input" @bind-Value="_form.MaxPremium" /><ValidationMessage For="() => _form.MaxPremium" class="text-danger" /></div>
+                        <div class="pcx-field"><label for="priority">Priority <span>*</span></label><InputNumber id="priority" class="pcx-input" @bind-Value="_form.Priority" /><ValidationMessage For="() => _form.Priority" class="text-danger" /></div>
+                        <div class="pcx-field pcx-field-wide"><label for="description">Description</label><InputTextArea id="description" class="pcx-input" rows="3" @bind-Value="_form.Description" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
+                        <label class="pcx-check-card"><InputCheckbox @bind-Value="_form.IsActive" /><span><strong>Active</strong><small>Class can participate in rating selection.</small></span></label>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(_formError))
+                    {
+                        <div class="pcx-form-error"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_formError</div>
+                    }
+                </div>
+                <div class="pcx-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_saving">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@if (_saving) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editId.HasValue ? "Save Changes" : "Create Class")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="pcx-enterprise-page">
+    <section class="pcx-hero">
+        <div class="pcx-hero-left"><span class="pcx-hero-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span><div><div class="pcx-title-row"><h1>Price by Class Command Center</h1><span><i class="bi bi-database-check" aria-hidden="true"></i> Live class rating</span><span><i class="bi bi-shield-check" aria-hidden="true"></i> Tenant scoped</span><span><i class="bi bi-graph-up-arrow" aria-hidden="true"></i> Rate governed</span></div><p>Manage class codes, risk tiers, LOB rating, premium bands, base rates, and priority order from one enterprise workspace.</p></div></div>
+        <div class="pcx-hero-actions"><button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat pcx-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button><button type="button" class="um-btn um-btn-ghost" @onclick='() => GoTo("/crm/pricing-rules")'><i class="bi bi-tags" aria-hidden="true"></i> Pricing Rules</button><button type="button" class="um-btn um-btn-ghost" @onclick='() => GoTo("/crm/appetite")'><i class="bi bi-grid-3x3" aria-hidden="true"></i> Appetite</button><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Class</button></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger pcx-error-banner" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    @if (_loading)
+    {
+        <section class="pcx-loading-state"><i class="bi bi-arrow-repeat pcx-spin" aria-hidden="true"></i><strong>Loading enterprise price classes...</strong><span>Syncing class codes, LOBs, risk tiers, rates, premium bands, and priority controls.</span></section>
+    }
+    else
+    {
+        <section class="pcx-kpi-strip" aria-label="Price class KPI filters">@foreach (var metric in Metrics) { <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="@(() => SetFilter(metric.Filter))"><span class="pcx-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span><span><span class="pcx-kpi-val">@metric.Value</span><span class="pcx-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span></button> }</section>
+
+        <section class="pcx-workflow-strip" aria-label="Price class workflow actions"><button type="button" class="pcx-workflow-card pcx-workflow-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i><span><strong>Create class</strong><span>Add a governed class rating.</span></span></button><button type="button" class="pcx-workflow-card" @onclick='() => SetFilter("preferred")'><i class="bi bi-star-fill" aria-hidden="true"></i><span><strong>Preferred risk</strong><span>Review preferred tier classes.</span></span></button><button type="button" class="pcx-workflow-card" @onclick='() => SetFilter("highrate")'><i class="bi bi-graph-up-arrow" aria-hidden="true"></i><span><strong>High rate watch</strong><span>Inspect base rates over 2%.</span></span></button><button type="button" class="pcx-workflow-card" @onclick='() => SetView("analytics")'><i class="bi bi-bar-chart-line" aria-hidden="true"></i><span><strong>Analyze mix</strong><span>Monitor LOB and tier distribution.</span></span></button></section>
+
+        <section class="pcx-filter-panel">
+            <div class="pcx-search-wrap"><span class="pcx-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span><div class="pcx-search-body"><label for="priceClassSearch">Search price classes</label><input id="priceClassSearch" class="pcx-search-input" value="@_search" @oninput="OnSearchChanged" placeholder="Search class, code, LOB, risk tier, premium, rate, or description..." /><span>Filters classes, cards, analytics, and table immediately.</span></div></div>
+            <label class="pcx-sort-field">LOB<select class="pcx-filter-select" value="@_lobFilter" @onchange="OnLobChanged"><option value="">All LOBs</option>@foreach (var lob in LobOptions) { <option value="@lob">@lob</option> }</select></label>
+            <label class="pcx-sort-field">Risk<select class="pcx-filter-select" value="@_riskFilter" @onchange="OnRiskChanged"><option value="">All risks</option>@foreach (var risk in RiskOptions) { <option value="@risk">@risk</option> }</select></label>
+            <label class="pcx-sort-field">Sort by<select class="pcx-filter-select" value="@_sort" @onchange="OnSortChanged"><option value="importance">Importance</option><option value="rate">Base rate</option><option value="premium">Premium band</option><option value="priority">Priority</option><option value="name">Name</option></select></label>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button><button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-cloud-arrow-down" aria-hidden="true"></i> Sync</button><div class="pcx-filter-result"><strong>@SearchResultCount.ToString("N0", CultureInfo.CurrentCulture)</strong><span>shown</span></div>
+        </section>
+
+        <section class="pcx-view-tabs" aria-label="Price class views">@foreach (var view in _views) { <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label <span>@ViewCount(view.Id)</span></button> }</section>
+
+        @if (_items.Count == 0)
+        {
+            <section class="pcx-empty-state"><i class="bi bi-diagram-3" aria-hidden="true"></i><strong>No price classes available</strong><span>No class rating records matched this tenant. Create a price class or run seed/migration if class data has not been initialized.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">Create price class</button></section>
+        }
+        else
+        {
+            <section class="pcx-content-layout">
+                <main class="pcx-main-card">
+                    @if (_view == "overview")
+                    {
+                        <div class="pcx-section-head"><div><h2>Executive class rating overview</h2><p>Most important class signals by active rating, base rate, premium band, risk tier, LOB, and priority.</p></div><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => SetView("table")'><i class="bi bi-table" aria-hidden="true"></i> Table View</button></div>
+                        <div class="pcx-overview-grid"><section class="pcx-spotlight-card"><span><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Highest importance class</span><strong>@(TopClass?.ClassName ?? "—")</strong><p>@(TopClass is null ? "No matching price classes require attention." : $"{TopClass.LobCode} class with {RateText(TopClass.BaseRate)} base rate, {RiskLabel(TopClass)} risk tier, and priority {TopClass.Priority}.")</p><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="SelectTopClass">Inspect class</button></section><section class="pcx-guidance-card"><h3><i class="bi bi-stars" aria-hidden="true"></i> Rating guidance</h3><p>@GuidanceText</p><div class="pcx-guidance-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("highrate")'>High Rate</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("preferred")'>Preferred</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("premium")'>Premium Bands</button></div></section></div>
+                        @ImportanceRankPanel
+                    }
+                    else if (_view == "active") { <div class="pcx-section-head"><div><h2>Active class ratings</h2><p>Active classes currently available for class rating selection.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("active")'>Active Filter</button></div><div class="pcx-card-grid">@foreach (var item in ActiveRows) { @ClassCard(item) }</div> }
+                    else if (_view == "risk") { <div class="pcx-section-head"><div><h2>Risk tier cockpit</h2><p>Preferred, standard, non-standard, and legacy risk tier classes ranked by importance.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("preferred")'>Preferred</button></div><div class="pcx-card-grid">@foreach (var item in RiskRows) { @ClassCard(item) }</div> }
+                    else if (_view == "premium") { <div class="pcx-section-head"><div><h2>Premium band watch</h2><p>Classes with explicit minimum or maximum premium ranges.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("premium")'>Premium Filter</button></div><div class="pcx-card-grid">@foreach (var item in PremiumRows) { @ClassCard(item) }</div> }
+                    else if (_view == "analytics") { <div class="pcx-section-head"><div><h2>Class rating analytics</h2><p>LOB, risk tier, and status distribution across class pricing data.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Refresh</button></div><div class="pcx-analytics-grid">@AnalyticsPanel("LOB distribution", LobDistribution, "bi-collection", "pcx-tone-blue") @AnalyticsPanel("Risk tier distribution", RiskDistribution, "bi-star", "pcx-tone-purple") @AnalyticsPanel("Status distribution", StatusDistribution, "bi-check2-circle", "pcx-tone-green") @InsightPanel</div> }
+                    else
+                    {
+                        <div class="pcx-section-head"><div><h2>Class rating operating table</h2><p>Native price class table synchronized from the existing pricing market rules API.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters">Reset</button></div>
+                        <div class="pcx-table-wrap"><table class="pcx-table"><thead><tr><th>Class</th><th>LOB</th><th>Risk</th><th class="pcx-num">Base Rate</th><th>Premium Band</th><th class="pcx-num">Priority</th><th>Status</th><th>Actions</th></tr></thead><tbody>@foreach (var item in FilteredRows) { <tr class="@(IsSelected(item) ? "pcx-row-selected" : string.Empty)" @onclick="@(() => SelectClass(item))"><td><strong>@item.ClassName</strong><small>@item.ClassCode</small></td><td><span class="pcx-badge pcx-badge-info">@item.LobCode</span></td><td>@RiskLabel(item)<small>@(item.Description ?? "No description")</small></td><td class="pcx-num"><strong>@RateText(item.BaseRate)</strong></td><td>@PremiumBand(item)</td><td class="pcx-num">@item.Priority</td><td><span class="pcx-badge @StatusBadgeClass(item)">@(item.IsActive ? "Active" : "Inactive")</span></td><td><div class="pcx-row-actions"><button type="button" title="Edit" @onclick="@(() => OpenEdit(item))" @onclick:stopPropagation="true"><i class="bi bi-pencil"></i></button><button type="button" title="Toggle active" @onclick="@(() => ToggleActiveAsync(item))" @onclick:stopPropagation="true"><i class="bi @(item.IsActive ? "bi-pause" : "bi-play")"></i></button><button type="button" title="Delete" @onclick="@(() => ConfirmDelete(item))" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button></div></td></tr> }</tbody></table></div>
+                    }
+                </main>
+
+                <aside class="pcx-detail-panel">
+                    @if (_selected is null) { <div class="pcx-detail-empty"><i class="bi bi-diagram-3" aria-hidden="true"></i><strong>Select a price class</strong><span>Inspect base rate, premium band, LOB, risk tier, priority, and workflow actions.</span></div> }
+                    else
+                    {
+                        <div class="pcx-detail-head"><div><span><i class="bi @ClassIcon(_selected)" aria-hidden="true"></i> @_selected.LobCode class</span><h2>@_selected.ClassName</h2><p>@_selected.ClassCode · @RiskLabel(_selected)</p></div><span class="pcx-badge @StatusBadgeClass(_selected)">@(_selected.IsActive ? "Active" : "Inactive")</span></div>
+                        <div class="pcx-detail-summary"><div><span>Base Rate</span><strong>@RateText(_selected.BaseRate)</strong></div><div><span>Priority</span><strong>@_selected.Priority</strong></div><div><span>Risk Tier</span><strong>@RiskLabel(_selected)</strong></div><div><span>Min Premium</span><strong>@PremiumText(_selected.MinPremium)</strong></div><div><span>Max Premium</span><strong>@(_selected.MaxPremium.HasValue ? PremiumText(_selected.MaxPremium) : "Unlimited")</strong></div><div><span>LOB</span><strong>@_selected.LobCode</strong></div></div>
+                        <div class="pcx-rules-card"><header><strong>Recommended actions</strong><span>@PriorityLabel(_selected)</span></header>@foreach (var action in RecommendedActions(_selected)) { <p><em>@action</em><span>active</span></p> }</div>
+                        <div class="pcx-notes-card"><strong>Description</strong><p>@(_selected.Description ?? "No class description recorded.")</p><small>Created @FormatDateTime(_selected.CreatedDateUtc)</small></div>
+                        <div class="pcx-detail-actions"><button type="button" class="um-btn um-btn-ghost" @onclick='() => OpenEdit(_selected)'><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost" @onclick='() => ToggleActiveAsync(_selected)'><i class="bi @(_selected.IsActive ? "bi-pause" : "bi-play")" aria-hidden="true"></i> @(_selected.IsActive ? "Deactivate" : "Activate")</button><button type="button" class="um-btn um-btn-ghost" @onclick='() => GoTo("/crm/pricing-rules")'><i class="bi bi-tags" aria-hidden="true"></i> Rules</button><button type="button" class="um-btn um-btn-danger" @onclick='() => ConfirmDelete(_selected)'><i class="bi bi-trash" aria-hidden="true"></i> Delete</button></div>
+                    }
+                </aside>
+            </section>
+        }
+    }
 </div>
 
-<SfDialog @bind-Visible="_showForm" Width="720px" IsModal="true" ShowCloseIcon="false">
-    <DialogEvents Closed="ResetForm" />
-    <DialogContent>
-        <div class="um-modal-header"><i class="bi bi-diagram-3"></i><span>@(_editId.HasValue ? "Edit Price Class" : "Add Price Class")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button></div>
-        <EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator />
-            <div class="um-modal-body"><div class="um-form-grid">
-                <div class="um-field"><label>Class Code <span class="text-danger">*</span></label><InputText @bind-Value="_form.ClassCode" class="um-input" /><ValidationMessage For="() => _form.ClassCode" class="text-danger" /></div>
-                <div class="um-field"><label>Class Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.ClassName" class="um-input" /><ValidationMessage For="() => _form.ClassName" class="text-danger" /></div>
-                <div class="um-field"><label>Line of Business <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.LobCode" class="um-input">@foreach (var lob in PricingMarketRulePageConstants.LobCodes) { <option value="@lob">@lob</option> }</InputSelect><ValidationMessage For="() => _form.LobCode" class="text-danger" /></div>
-                <div class="um-field"><label>Risk Tier</label><InputSelect @bind-Value="_form.RiskTierCode" class="um-input"><option value="">None</option>@foreach (var tier in PricingMarketRulePageConstants.RiskTiers) { <option value="@tier">@tier</option> }</InputSelect><ValidationMessage For="() => _form.RiskTierCode" class="text-danger" /></div>
-                <div class="um-field"><label>Base Rate <span class="text-danger">*</span></label><InputNumber @bind-Value="_form.BaseRate" class="um-input" /><ValidationMessage For="() => _form.BaseRate" class="text-danger" /></div>
-                <div class="um-field"><label>Minimum Premium</label><InputNumber @bind-Value="_form.MinPremium" class="um-input" /><ValidationMessage For="() => _form.MinPremium" class="text-danger" /></div>
-                <div class="um-field"><label>Maximum Premium</label><InputNumber @bind-Value="_form.MaxPremium" class="um-input" /><ValidationMessage For="() => _form.MaxPremium" class="text-danger" /></div>
-                <div class="um-field"><label>Priority <span class="text-danger">*</span></label><InputNumber @bind-Value="_form.Priority" class="um-input" /><ValidationMessage For="() => _form.Priority" class="text-danger" /></div>
-                <div class="um-field"><label>Description</label><InputTextArea @bind-Value="_form.Description" class="um-input" rows="2" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
-                <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label></div>
-            </div></div>
-            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button></div>
-        </EditForm>
-    </DialogContent>
-</SfDialog>
-
-<SfDialog @bind-Visible="_showDelete" Width="440px" IsModal="true" ShowCloseIcon="false"><DialogContent><div class="um-confirm-dialog"><div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3-fill"></i></div><div class="um-confirm-message"><h6>Delete Price Class?</h6><p>You are about to delete <strong>@_deleteTarget?.ClassName</strong>. This action cannot be undone.</p></div><div class="um-modal-footer w-100"><button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div></div></DialogContent></SfDialog>
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
-
 @code {
-    List<PriceClassDto> _items = [], _filtered = [];
-    string? _activeFilter, _loadError;
-    string _search = string.Empty;
-    bool _loading, _saving, _showForm, _showDelete;
-    Guid? _editId;
-    PriceClassDto? _deleteTarget;
-    SfToast _toast = default!;
-    PriceClassFormModel _form = new();
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private List<PriceClassDto> _items = [];
+    private PriceClassDto? _selected;
+    private PriceClassDto? _deleteTarget;
+    private PriceClassFormModel _form = new();
+    private bool _loading = true;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private string _activeFilter = "all";
+    private string _view = "overview";
+    private string _search = string.Empty;
+    private string _lobFilter = string.Empty;
+    private string _riskFilter = string.Empty;
+    private string _sort = "importance";
+    private Guid? _editId;
+    private readonly ViewOption[] _views = [new("overview", "Overview", "bi-speedometer2"), new("active", "Active", "bi-check-circle"), new("risk", "Risk", "bi-star"), new("premium", "Premium", "bi-cash-stack"), new("analytics", "Analytics", "bi-bar-chart-line"), new("table", "Table", "bi-table")];
 
-    protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("CRM", "/crm"), new("Pricing", "/crm/pricing-rules"), new("Price by Class")); await LoadAsync(); }
-    async Task LoadAsync() { _loading = true; _loadError = null; try { var r = await Api.SearchPriceClassesAsync(PricingMarketRulePageConstants.TenantId); _items = r?.Items.ToList() ?? []; ApplyFilter(); } catch (Exception ex) { _loadError = $"Failed to load price classes: {ex.Message}"; } finally { _loading = false; } }
-    void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; ApplyFilter(); }
-    void ApplyFilter() { var rows = _activeFilter switch { "active" => _items.Where(x => x.IsActive), "commercial" => _items.Where(x => x.LobCode.Contains("Commercial", StringComparison.OrdinalIgnoreCase)), "preferred" => _items.Where(x => x.RiskTierCode == "Preferred"), "highrate" => _items.Where(x => x.BaseRate >= 0.02m), _ => _items.AsEnumerable() }; _filtered = rows.Where(SearchMatches).ToList(); }
-    void SetFilter(string? key) { _activeFilter = key; ApplyFilter(); }
-    void ResetFilters() { _activeFilter = null; _search = string.Empty; ApplyFilter(); }
-    bool SearchMatches(PriceClassDto item) { if (string.IsNullOrWhiteSpace(_search)) return true; var q = _search.Trim(); return item.ClassCode.Contains(q, StringComparison.OrdinalIgnoreCase) || item.ClassName.Contains(q, StringComparison.OrdinalIgnoreCase) || item.LobCode.Contains(q, StringComparison.OrdinalIgnoreCase) || (item.RiskTierCode?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) || (item.Description?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false); }
-    void OnRowSelected(RowSelectEventArgs<PriceClassDto> args) => OpenEdit(args.Data);
-    void OpenCreate() { _editId = null; _form = new(); _showForm = true; }
-    void OpenEdit(PriceClassDto item) { _editId = item.PriceClassId; _form = new() { ClassCode = item.ClassCode, ClassName = item.ClassName, LobCode = item.LobCode, RiskTierCode = item.RiskTierCode, Description = item.Description, BaseRate = item.BaseRate, MinPremium = item.MinPremium, MaxPremium = item.MaxPremium, Priority = item.Priority, IsActive = item.IsActive }; _showForm = true; }
-    async Task SaveAsync() { _saving = true; try { var req = new UpsertPriceClassRequest { TenantId = PricingMarketRulePageConstants.TenantId, ClassCode = _form.ClassCode, ClassName = _form.ClassName, LobCode = _form.LobCode, RiskTierCode = PricingMarketRulePageConstants.Normalize(_form.RiskTierCode), Description = PricingMarketRulePageConstants.Normalize(_form.Description), BaseRate = _form.BaseRate, MinPremium = _form.MinPremium, MaxPremium = _form.MaxPremium, Priority = _form.Priority, IsActive = _form.IsActive }; if (_editId.HasValue) await Api.UpdatePriceClassAsync(_editId.Value, req); else await Api.CreatePriceClassAsync(req); _showForm = false; await _toast.ShowAsync(new() { Content = "Price class saved", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } }
-    void ConfirmDelete(PriceClassDto item) { _deleteTarget = item; _showDelete = true; }
-    async Task ExecuteDeleteAsync() { _saving = true; try { await Api.DeletePriceClassAsync(_deleteTarget!.PriceClassId); _showDelete = false; await _toast.ShowAsync(new() { Content = "Price class deleted", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } }
-    void ResetForm() { _form = new(); _editId = null; }
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
+    private int SearchResultCount => _view switch { "active" => ActiveRows.Count, "risk" => RiskRows.Count, "premium" => PremiumRows.Count, _ => FilteredRows.Count };
+    private int ActiveCount => _items.Count(x => x.IsActive);
+    private int CommercialCount => _items.Count(x => x.LobCode.Contains("Commercial", StringComparison.OrdinalIgnoreCase));
+    private int PreferredCount => _items.Count(x => string.Equals(x.RiskTierCode, "Preferred", StringComparison.OrdinalIgnoreCase));
+    private int HighRateCount => _items.Count(x => x.BaseRate >= .02m);
+    private int PremiumBandCount => _items.Count(x => x.MinPremium.HasValue || x.MaxPremium.HasValue);
+    private decimal AverageRate => _items.Count == 0 ? 0m : _items.Average(x => x.BaseRate);
+    private PriceClassDto? TopClass => FilteredRows.OrderByDescending(ImportanceScore).ThenBy(x => x.Priority).FirstOrDefault();
+    private string GuidanceText => HighRateCount > 0 ? $"{HighRateCount.ToString("N0", CultureInfo.CurrentCulture)} class(es) have base rates at or above 2%. Review rate adequacy, LOB fit, and premium bands." : PremiumBandCount > 0 ? $"{PremiumBandCount.ToString("N0", CultureInfo.CurrentCulture)} class(es) use premium bands. Confirm min/max limits match underwriting appetite." : "Class rating posture is stable. Continue monitoring active classes, preferred tiers, and priority order.";
+    private IEnumerable<string> LobOptions => _items.Select(x => x.LobCode).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private IEnumerable<string> RiskOptions => _items.Select(x => x.RiskTierCode).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private IReadOnlyList<Metric> Metrics => [new("all", _items.Count.ToString("N0", CultureInfo.CurrentCulture), "Classes", "Tenant class rating controls", "bi-diagram-3", "pcx-kpi-blue"), new("active", ActiveCount.ToString("N0", CultureInfo.CurrentCulture), "Active", "Available for rating", "bi-check-circle-fill", "pcx-kpi-green"), new("commercial", CommercialCount.ToString("N0", CultureInfo.CurrentCulture), "Commercial", "Commercial LOB classes", "bi-building", "pcx-kpi-purple"), new("preferred", PreferredCount.ToString("N0", CultureInfo.CurrentCulture), "Preferred", "Preferred risk tier", "bi-star-fill", "pcx-kpi-amber"), new("highrate", HighRateCount.ToString("N0", CultureInfo.CurrentCulture), "High Rate", "Base rate at least 2%", "bi-graph-up-arrow", "pcx-kpi-red"), new("premium", PremiumBandCount.ToString("N0", CultureInfo.CurrentCulture), "Premium Bands", "Min/max premium classes", "bi-cash-stack", "pcx-kpi-cyan")];
+    private IReadOnlyList<PriceClassDto> FilteredRows => ApplyClassFilters(_items).ToList();
+    private IReadOnlyList<PriceClassDto> ActiveRows => ApplyClassFilters(_items.Where(x => x.IsActive)).ToList();
+    private IReadOnlyList<PriceClassDto> RiskRows => ApplyClassFilters(_items.Where(x => !string.IsNullOrWhiteSpace(x.RiskTierCode))).ToList();
+    private IReadOnlyList<PriceClassDto> PremiumRows => ApplyClassFilters(_items.Where(x => x.MinPremium.HasValue || x.MaxPremium.HasValue)).ToList();
+    private IReadOnlyList<DistributionRow> LobDistribution => BuildDistribution(_items, x => string.IsNullOrWhiteSpace(x.LobCode) ? "Unknown" : x.LobCode, _ => "pcx-badge-info");
+    private IReadOnlyList<DistributionRow> RiskDistribution => BuildDistribution(_items, x => string.IsNullOrWhiteSpace(x.RiskTierCode) ? "No Tier" : x.RiskTierCode!, RiskBadgeClass);
+    private IReadOnlyList<DistributionRow> StatusDistribution => BuildDistribution(_items, x => x.IsActive ? "Active" : "Inactive", x => x == "Active" ? "pcx-badge-success" : "pcx-badge-muted");
+
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Pricing", "/crm/pricing-rules"), new("Price by Class", "/crm/pricing/classes")); await LoadAsync(); }
+    private async Task LoadAsync() { _loading = true; _loadError = null; try { if (_tenantId == Guid.Empty) await ResolveCurrentUserContextAsync(); var result = await Api.SearchPriceClassesAsync(_tenantId, pageSize: 250); _items = result?.Items?.ToList() ?? []; _selected = _selected is null ? FilteredRows.FirstOrDefault() : _items.FirstOrDefault(x => x.PriceClassId == _selected.PriceClassId) ?? FilteredRows.FirstOrDefault(); ShowToast("Price classes synced successfully.", "success"); } catch (Exception ex) { _loadError = $"Failed to load price classes: {ex.Message}"; _items = []; _selected = null; ShowToast($"Price class load failed: {ex.Message}", "danger"); } finally { _loading = false; } }
+
+    private IEnumerable<PriceClassDto> ApplyClassFilters(IEnumerable<PriceClassDto> classes)
+    {
+        var query = classes;
+        if (!string.IsNullOrWhiteSpace(_search)) { var term = _search.Trim(); query = query.Where(x => Contains(x.ClassCode, term) || Contains(x.ClassName, term) || Contains(x.LobCode, term) || Contains(x.RiskTierCode, term) || Contains(x.Description, term) || x.BaseRate.ToString(CultureInfo.CurrentCulture).Contains(term, StringComparison.OrdinalIgnoreCase) || x.Priority.ToString(CultureInfo.CurrentCulture).Contains(term, StringComparison.OrdinalIgnoreCase)); }
+        if (!string.IsNullOrWhiteSpace(_lobFilter)) query = query.Where(x => x.LobCode.Equals(_lobFilter, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(_riskFilter)) query = query.Where(x => string.Equals(x.RiskTierCode, _riskFilter, StringComparison.OrdinalIgnoreCase));
+        query = _activeFilter switch { "active" => query.Where(x => x.IsActive), "commercial" => query.Where(x => x.LobCode.Contains("Commercial", StringComparison.OrdinalIgnoreCase)), "preferred" => query.Where(x => string.Equals(x.RiskTierCode, "Preferred", StringComparison.OrdinalIgnoreCase)), "highrate" => query.Where(x => x.BaseRate >= .02m), "premium" => query.Where(x => x.MinPremium.HasValue || x.MaxPremium.HasValue), _ => query };
+        return _sort switch { "rate" => query.OrderByDescending(x => x.BaseRate).ThenBy(x => x.Priority), "premium" => query.OrderByDescending(PremiumBandValue).ThenBy(x => x.Priority), "priority" => query.OrderBy(x => x.Priority).ThenByDescending(x => x.BaseRate), "name" => query.OrderBy(x => x.ClassName), _ => query.OrderByDescending(ImportanceScore).ThenBy(x => x.Priority).ThenBy(x => x.ClassName) };
+    }
+
+    private void SetFilter(string filter) { _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter; _view = filter switch { "active" => "active", "preferred" => "risk", "premium" => "premium", "commercial" or "highrate" => "table", _ => _view }; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void SetView(string view) => _view = view;
+    private void ResetFilters() { _activeFilter = "all"; _search = string.Empty; _lobFilter = string.Empty; _riskFilter = string.Empty; _sort = "importance"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void SelectClass(PriceClassDto item) => _selected = item;
+    private void SelectTopClass() { if (TopClass is not null) { _selected = TopClass; _view = "table"; } }
+    private void GoTo(string url) => Nav.NavigateTo(url);
+    private void OnSearchChanged(BlazorChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnLobChanged(BlazorChangeEventArgs e) { _lobFilter = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnRiskChanged(BlazorChangeEventArgs e) { _riskFilter = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnSortChanged(BlazorChangeEventArgs e) { _sort = e.Value?.ToString() ?? "importance"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void ShowToast(string message, string kind) { _toastMessage = message.Length <= 140 ? message : $"{message[..137]}..."; _toastKind = ToastKind(kind); _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+    private void OpenCreate() { _editId = null; _form = new(); _formError = null; _showForm = true; }
+    private void OpenEdit(PriceClassDto item) { _selected = item; _editId = item.PriceClassId; _form = new() { ClassCode = item.ClassCode, ClassName = item.ClassName, LobCode = item.LobCode, RiskTierCode = item.RiskTierCode, Description = item.Description, BaseRate = item.BaseRate, MinPremium = item.MinPremium, MaxPremium = item.MaxPremium, Priority = item.Priority, IsActive = item.IsActive }; _formError = null; _showForm = true; }
+    private void CloseForm() { if (_saving) return; _showForm = false; ResetForm(); }
+    private async Task SaveAsync() { _saving = true; _formError = null; try { if (_form.MaxPremium.HasValue && _form.MinPremium.HasValue && _form.MaxPremium.Value < _form.MinPremium.Value) { _formError = "Maximum premium cannot be less than minimum premium."; return; } var req = BuildRequest(_form); if (_editId.HasValue) await Api.UpdatePriceClassAsync(_editId.Value, req); else await Api.CreatePriceClassAsync(req); _showForm = false; ResetForm(); await LoadAsync(); ShowToast("Price class saved.", "success"); } catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; ShowToast($"Save failed: {ex.Message}", "danger"); } finally { _saving = false; } }
+    private UpsertPriceClassRequest BuildRequest(PriceClassFormModel form) => new() { TenantId = _tenantId, ClassCode = form.ClassCode.Trim(), ClassName = form.ClassName.Trim(), LobCode = form.LobCode.Trim(), RiskTierCode = Normalize(form.RiskTierCode), Description = Normalize(form.Description), BaseRate = form.BaseRate, MinPremium = form.MinPremium, MaxPremium = form.MaxPremium, Priority = form.Priority, IsActive = form.IsActive, UserId = _tenantAdminUserId };
+    private void ConfirmDelete(PriceClassDto item) { _deleteTarget = item; _showDelete = true; }
+    private void CancelDelete() { if (!_saving) { _showDelete = false; _deleteTarget = null; } }
+    private async Task ExecuteDeleteAsync() { if (_deleteTarget is null) return; _saving = true; try { var deletedName = _deleteTarget.ClassName; await Api.DeletePriceClassAsync(_deleteTarget.PriceClassId, _tenantAdminUserId); _showDelete = false; _deleteTarget = null; await LoadAsync(); ShowToast($"{deletedName} deleted.", "success"); } catch (Exception ex) { ShowToast($"Delete failed: {ex.Message}", "danger"); } finally { _saving = false; } }
+    private async Task ToggleActiveAsync(PriceClassDto item) { _saving = true; try { var req = new UpsertPriceClassRequest { TenantId = _tenantId, ClassCode = item.ClassCode, ClassName = item.ClassName, LobCode = item.LobCode, RiskTierCode = item.RiskTierCode, Description = item.Description, BaseRate = item.BaseRate, MinPremium = item.MinPremium, MaxPremium = item.MaxPremium, Priority = item.Priority, IsActive = !item.IsActive, UserId = _tenantAdminUserId }; await Api.UpdatePriceClassAsync(item.PriceClassId, req); await LoadAsync(); ShowToast($"{item.ClassName} {(item.IsActive ? "deactivated" : "activated")}.", "success"); } catch (Exception ex) { ShowToast($"Status update failed: {ex.Message}", "danger"); } finally { _saving = false; } }
+    private void ResetForm() { _form = new(); _editId = null; _formError = null; }
+
+    private RenderFragment ImportanceRankPanel => @<section class="pcx-panel"><h3><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Class rating importance ranking</h3><div class="pcx-rank-stack">@foreach (var item in FilteredRows.Take(8)) { <button type="button" class="@(IsSelected(item) ? "pcx-rank-row pcx-rank-active" : "pcx-rank-row")" @onclick="@(() => SelectClass(item))"><span>@item.ClassName</span><div><i style="width:@WidthPct(ImportanceScore(item), MaxImportance)"></i></div><strong>@RateText(item.BaseRate)</strong><small>P@item.Priority</small></button> }</div></section>;
+    private RenderFragment ClassCard(PriceClassDto item) => @<article class="@(IsSelected(item) ? "pcx-class-card pcx-class-card-selected" : "pcx-class-card")" @onclick="@(() => SelectClass(item))"><div class="pcx-class-top"><span class="pcx-class-icon"><i class="bi @ClassIcon(item)" aria-hidden="true"></i></span><span class="pcx-badge @StatusBadgeClass(item)">@(item.IsActive ? "Active" : "Inactive")</span></div><h3>@item.ClassName</h3><p>@item.ClassCode · @item.LobCode</p><div class="pcx-class-stats"><div><span>Base Rate</span><strong>@RateText(item.BaseRate)</strong></div><div><span>Risk</span><strong>@RiskLabel(item)</strong></div><div><span>Premium</span><strong>@PremiumBand(item)</strong></div></div><div class="pcx-class-actions" @onclick:stopPropagation="true"><button type="button" @onclick="@(() => OpenEdit(item))">Edit</button><button type="button" @onclick="@(() => ToggleActiveAsync(item))">@(item.IsActive ? "Deactivate" : "Activate")</button><button type="button" @onclick="@(() => ConfirmDelete(item))">Delete</button></div></article>;
+    private RenderFragment AnalyticsPanel(string title, IReadOnlyList<DistributionRow> rows, string icon, string tone) => @<section class="pcx-analytics-panel @tone"><h3><i class="bi @icon" aria-hidden="true"></i> @title</h3><div class="pcx-analytics-list">@foreach (var row in rows) { <button type="button" @onclick="@(() => ApplyDistribution(row.Label, title))"><span>@row.Label</span><div><i style="width:@row.Width"></i></div><strong>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><small>@row.Percent.ToString("P0", CultureInfo.CurrentCulture)</small></button> }</div></section>;
+    private RenderFragment InsightPanel => @<section class="pcx-analytics-panel pcx-tone-amber"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Executive insight</h3><div class="pcx-insight-grid"><div><span>Active ratio</span><strong>@Ratio(ActiveCount, _items.Count)</strong><small>active / all classes</small></div><div><span>Average rate</span><strong>@RateText(AverageRate)</strong><small>mean base rate</small></div><div><span>Premium bands</span><strong>@PremiumBandCount.ToString("N0", CultureInfo.CurrentCulture)</strong><small>configured bands</small></div><div><span>High rate</span><strong>@HighRateCount.ToString("N0", CultureInfo.CurrentCulture)</strong><small>at least 2%</small></div></div><p>@GuidanceText</p></section>;
+    private void ApplyDistribution(string label, string title) { if (title.Contains("LOB", StringComparison.OrdinalIgnoreCase)) _lobFilter = _lobFilter == label ? string.Empty : label; else if (title.Contains("Risk", StringComparison.OrdinalIgnoreCase)) _riskFilter = label == "No Tier" ? string.Empty : label; else _activeFilter = label == "Active" ? "active" : "all"; _view = "table"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+
+    private decimal MaxImportance => Math.Max(1m, FilteredRows.Select(ImportanceScore).DefaultIfEmpty(1m).Max());
+    private string MetricCardClass(Metric metric) => $"pcx-kpi-card {metric.Tone} {(_activeFilter == metric.Filter ? "pcx-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewOption view) => $"pcx-view-btn {(view.Id == _view ? "pcx-view-btn-active" : string.Empty)}";
+    private int ViewCount(string view) => view switch { "active" => ActiveRows.Count, "risk" => RiskRows.Count, "premium" => PremiumRows.Count, "analytics" => _items.Count, "table" => FilteredRows.Count, _ => FilteredRows.Count };
+    private bool IsSelected(PriceClassDto item) => _selected?.PriceClassId == item.PriceClassId;
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static decimal PremiumBandValue(PriceClassDto item) => (item.MaxPremium ?? item.MinPremium ?? 0m) - (item.MinPremium ?? 0m);
+    private static decimal ImportanceScore(PriceClassDto item) => (item.IsActive ? 50m : 0m) + (item.BaseRate >= .02m ? 30m : item.BaseRate * 1000m) + (string.Equals(item.RiskTierCode, "Preferred", StringComparison.OrdinalIgnoreCase) ? 20m : 0m) + (item.MinPremium.HasValue || item.MaxPremium.HasValue ? 12m : 0m) + Math.Max(0, 25 - item.Priority);
+    private static string WidthPct(decimal value, decimal max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, (double)(value / max * 100)))).ToString("F1", CultureInfo.InvariantCulture) + "%";
+    private static string Ratio(int value, int total) => total <= 0 ? "0%" : ((decimal)value / total).ToString("P0", CultureInfo.CurrentCulture);
+    private static string RateText(decimal value) => value.ToString("P3", CultureInfo.CurrentCulture);
+    private static string PremiumText(decimal? value) => value.HasValue ? value.Value.ToString("C0", CultureInfo.CurrentCulture) : "—";
+    private static string PremiumBand(PriceClassDto item) => $"{PremiumText(item.MinPremium)} - {(item.MaxPremium.HasValue ? PremiumText(item.MaxPremium) : "Unlimited")}";
+    private static string RiskLabel(PriceClassDto item) => string.IsNullOrWhiteSpace(item.RiskTierCode) ? "No Tier" : item.RiskTierCode;
+    private static string FormatDateTime(DateTime value) => value.ToLocalTime().ToString("MMM d, yyyy h:mm tt", CultureInfo.CurrentCulture);
+    private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : "success";
+    private static string PriorityLabel(PriceClassDto item) => item.BaseRate >= .02m || item.Priority <= 5 ? "High priority" : item.MinPremium.HasValue || item.MaxPremium.HasValue ? "Premium governed" : "Monitor";
+    private static IEnumerable<string> RecommendedActions(PriceClassDto item) { if (item.BaseRate >= .02m) yield return "Review high base rate for rate adequacy and market competitiveness."; if (item.Priority <= 5) yield return "Confirm priority order does not override more specific class logic."; if (item.MinPremium.HasValue || item.MaxPremium.HasValue) yield return "Validate premium band against carrier and underwriting appetite."; if (!item.IsActive) yield return "Activate only after class rating scope is verified."; yield return "Confirm LOB, risk tier, and description match production workflow."; }
+    private static string ClassIcon(PriceClassDto item) => item.LobCode.Contains("Commercial", StringComparison.OrdinalIgnoreCase) ? "bi-building" : item.LobCode.Contains("Auto", StringComparison.OrdinalIgnoreCase) ? "bi-car-front" : item.LobCode.Contains("Home", StringComparison.OrdinalIgnoreCase) ? "bi-house" : "bi-diagram-3";
+    private static string StatusBadgeClass(PriceClassDto item) => item.IsActive ? "pcx-badge-success" : "pcx-badge-muted";
+    private static string RiskBadgeClass(string risk) => risk.ToLowerInvariant() switch { "preferred" => "pcx-badge-success", "standard" => "pcx-badge-info", "nonstandard" => "pcx-badge-warning", "legacy" => "pcx-badge-muted", _ => "pcx-badge-muted" };
+    private static IReadOnlyList<DistributionRow> BuildDistribution(IEnumerable<PriceClassDto> items, Func<PriceClassDto, string> labelSelector, Func<string, string> badgeSelector) { var rows = items.GroupBy(labelSelector).Select(g => new DistributionRow(g.Key, g.Count(), 0, badgeSelector(g.Key), "0%")).OrderByDescending(x => x.Count).ThenBy(x => x.Label).ToList(); var total = Math.Max(1, rows.Sum(x => x.Count)); var max = Math.Max(1, rows.Select(x => x.Count).DefaultIfEmpty(1).Max()); return rows.Select(x => x with { Percent = (double)x.Count / total, Width = WidthPct(x.Count, max) }).ToList(); }
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+    private sealed record ViewOption(string Id, string Label, string Icon);
+    private sealed record Metric(string Filter, string Value, string Label, string Caption, string Icon, string Tone);
+    private sealed record DistributionRow(string Label, int Count, double Percent, string BadgeClass, string Width);
 }

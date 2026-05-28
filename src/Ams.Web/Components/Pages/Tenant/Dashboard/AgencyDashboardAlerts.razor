@@ -1,203 +1,512 @@
 @page "/tenant/dashboard/alerts"
 @namespace Ams.Web.Components.Pages.Tenant.Dashboard
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Alerts
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
 
-<PageTitle>Alerts — Agency Dashboard</PageTitle>
+<PageTitle>Enterprise Alerts Command Center — AMS</PageTitle>
 
-<AppPageHeader Title="Alerts"
-               Subtitle="Active agency alerts by severity — system, operational and compliance notifications"
-               Icon="bi-bell">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise @(_loading ? "ad-spin" : "")" aria-hidden="true"></i> Refresh
-        </button>
-    </Actions>
-</AppPageHeader>
-
-@if (_loading)
+@if (_toastVisible)
 {
-    <div class="ad-loading-banner" aria-live="polite">
-        <div class="um-spinner" aria-hidden="true"></div>
-        <span>Loading alerts…</span>
+    <div class="al-toast al-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="al-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
-else if (!string.IsNullOrWhiteSpace(_loadError))
+
+@if (_showConfirm && _confirmAction is not null)
 {
-    <div class="alert alert-danger ad-alert-danger" role="alert"><i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i> @_loadError</div>
+    <div class="al-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="al-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="alertConfirmTitle" @onclick:stopPropagation="true">
+            <span class="al-confirm-icon al-confirm-@_confirmAction.Kind"><i class="bi @_confirmAction.Icon" aria-hidden="true"></i></span>
+            <h2 id="alertConfirmTitle">@_confirmAction.Title</h2>
+            <p>@_confirmAction.Message</p>
+            <div class="al-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_busy">Cancel</button>
+                <button type="button" class="um-btn @_confirmAction.ButtonClass" @onclick="ExecuteConfirmedAsync" disabled="@_busy">
+                    @if (_busy)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    @_confirmAction.ButtonText
+                </button>
+            </div>
+        </div>
+    </div>
 }
-else
-{
-    <!-- ── Severity summary strip ─────────────────────────────── -->
-    <div class="ad-kpi-strip">
-        <button type="button" class="ad-kpi-card ad-kpi--claims @KpiClass("Critical")" @onclick='() => SetFilter("Critical")' title="Show critical alerts">
-            <div class="ad-kpi-icon"><i class="bi bi-exclamation-octagon-fill" aria-hidden="true"></i></div>
-            <div class="ad-kpi-body">
-                <div class="ad-kpi-val">@_critical</div>
-                <div class="ad-kpi-lbl">Critical</div>
-            </div>
-        </button>
-        <button type="button" class="ad-kpi-card ad-kpi--leads @KpiClass("High")" @onclick='() => SetFilter("High")' title="Show high alerts">
-            <div class="ad-kpi-icon"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></div>
-            <div class="ad-kpi-body">
-                <div class="ad-kpi-val">@_high</div>
-                <div class="ad-kpi-lbl">High</div>
-            </div>
-        </button>
-        <button type="button" class="ad-kpi-card ad-kpi--policies @KpiClass("Medium")" @onclick='() => SetFilter("Medium")' title="Show medium alerts">
-            <div class="ad-kpi-icon"><i class="bi bi-info-circle-fill" aria-hidden="true"></i></div>
-            <div class="ad-kpi-body">
-                <div class="ad-kpi-val">@_medium</div>
-                <div class="ad-kpi-lbl">Medium</div>
-            </div>
-        </button>
-        <button type="button" class="ad-kpi-card ad-kpi--ar @KpiClass("All")" @onclick='() => SetFilter("All")' title="Show all open alerts">
-            <div class="ad-kpi-icon"><i class="bi bi-bell-fill" aria-hidden="true"></i></div>
-            <div class="ad-kpi-body">
-                <div class="ad-kpi-val">@_total</div>
-                <div class="ad-kpi-lbl">Total Open</div>
-            </div>
-        </button>
-    </div>
 
-    <!-- ── Filter tabs ────────────────────────────────────────── -->
-    <div class="ad-tab-bar">
-        @foreach (var sev in _severities)
-        {
-            <button class="ad-tab @(_filter == sev ? "ad-tab--active" : "")"
-                    @onclick="() => SetFilter(sev)">
-                @sev
-            </button>
-        }
-    </div>
-
-    <!-- ── Alert list ─────────────────────────────────────────── -->
-    <div class="ad-card">
-        @{
-            var visible = _alerts.Where(a =>
-                _filter == "All" || a.SeverityCode.Equals(_filter, StringComparison.OrdinalIgnoreCase)).ToList();
-        }
-        @if (visible.Count == 0)
-        {
-            <div class="ad-empty" style="padding:2rem">
-                <i class="bi bi-check-circle" style="font-size:2rem;color:#10b981" aria-hidden="true"></i>
-                <span>No @(_filter == "All" ? "" : _filter.ToLower() + " ")alerts — all clear.</span>
+<div class="al-enterprise-page">
+    <section class="al-hero">
+        <div class="al-hero-left">
+            <span class="al-hero-icon"><i class="bi bi-bell-fill" aria-hidden="true"></i></span>
+            <div>
+                <div class="al-title-row">
+                    <h1>Alerts Command Center</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> Live alert data</span>
+                    <span><i class="bi bi-shield-check" aria-hidden="true"></i> Tenant scoped</span>
+                    <span><i class="bi bi-lightning-charge" aria-hidden="true"></i> Actionable workflow</span>
+                </div>
+                <p>Prioritize critical agency alerts, acknowledge ownership, resolve operational risk, escalate severity, and monitor alert concentration across service, region, and status.</p>
             </div>
+        </div>
+        <div class="al-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh alerts"><i class="bi @(_loading ? "bi-arrow-repeat al-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => GoTo("/tenant/dashboard")'><i class="bi bi-speedometer2" aria-hidden="true"></i> Dashboard</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => SetFilter("critical")'><i class="bi bi-exclamation-octagon" aria-hidden="true"></i> Critical</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick='() => SetView("analytics")'><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Analytics</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger al-error-banner" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    @if (_loading)
+    {
+        <section class="al-loading-state"><i class="bi bi-arrow-repeat al-spin" aria-hidden="true"></i><strong>Loading enterprise alerts...</strong><span>Syncing open, acknowledged, resolved, assigned, escalated, service, region, and severity data.</span></section>
+    }
+    else
+    {
+        <section class="al-kpi-strip" aria-label="Alert KPI filters">
+            @foreach (var metric in Metrics)
+            {
+                <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="@(() => SetFilter(metric.Filter))">
+                    <span class="al-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                    <span><span class="al-kpi-val">@metric.Value</span><span class="al-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
+                </button>
+            }
+        </section>
+
+        <section class="al-workflow-strip" aria-label="Alert workflow actions">
+            <button type="button" class="al-workflow-card al-workflow-danger" @onclick='() => SetFilter("critical")'><i class="bi bi-exclamation-octagon" aria-hidden="true"></i><span><strong>Work critical alerts</strong><span>Focus the highest operational risk first.</span></span></button>
+            <button type="button" class="al-workflow-card" @onclick='() => SetFilter("unassigned")'><i class="bi bi-person-plus" aria-hidden="true"></i><span><strong>Claim ownership</strong><span>Find alerts with no accountable owner.</span></span></button>
+            <button type="button" class="al-workflow-card" @onclick='() => SetFilter("stale")'><i class="bi bi-hourglass-split" aria-hidden="true"></i><span><strong>Review stale items</strong><span>Inspect alerts older than one business day.</span></span></button>
+            <button type="button" class="al-workflow-card" @onclick='() => SetView("table")'><i class="bi bi-list-check" aria-hidden="true"></i><span><strong>Operate queue</strong><span>Acknowledge, assign, escalate, or resolve.</span></span></button>
+        </section>
+
+        <section class="al-filter-panel">
+            <div class="al-search-wrap">
+                <span class="al-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+                <div class="al-search-body">
+                    <label for="alertsSearch">Search alerts</label>
+                    <input id="alertsSearch" class="al-search-input" value="@_searchTerm" @oninput="OnSearchChanged" placeholder="Search alert, service, message, type, status, severity, region, or notes..." />
+                    <span>Filters the live alert queue and dashboard cards immediately.</span>
+                </div>
+            </div>
+            <label class="al-sort-field">Severity
+                <select class="al-filter-select" value="@_severityFilter" @onchange="OnSeverityChanged">
+                    <option value="">All severities</option>
+                    @foreach (var severity in SeverityOptions)
+                    {
+                        <option value="@severity">@severity</option>
+                    }
+                </select>
+            </label>
+            <label class="al-sort-field">Status
+                <select class="al-filter-select" value="@_statusFilter" @onchange="OnStatusChanged">
+                    <option value="">All statuses</option>
+                    @foreach (var status in StatusOptions)
+                    {
+                        <option value="@status">@status</option>
+                    }
+                </select>
+            </label>
+            <label class="al-sort-field">Sort by
+                <select class="al-filter-select" value="@_sort" @onchange="OnSortChanged">
+                    <option value="importance">Importance</option>
+                    <option value="age">Age</option>
+                    <option value="service">Service</option>
+                    <option value="status">Status</option>
+                </select>
+            </label>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-cloud-arrow-down" aria-hidden="true"></i> Sync</button>
+            <div class="al-filter-result"><strong>@SearchResultCount.ToString("N0", CultureInfo.CurrentCulture)</strong><span>shown</span></div>
+        </section>
+
+        <section class="al-view-tabs" aria-label="Alert views">
+            @foreach (var view in _views)
+            {
+                <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label <span>@ViewCount(view.Id)</span></button>
+            }
+        </section>
+
+        @if (_alerts.Count == 0)
+        {
+            <section class="al-empty-state"><i class="bi bi-check-circle" aria-hidden="true"></i><strong>No alerts available</strong><span>No alert records matched this tenant. Sync tenant monitoring data or seed alert records to activate the command center.</span><button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync">Retry sync</button></section>
         }
         else
         {
-            <div class="ad-alert-list">
-                @foreach (var a in visible.OrderBy(x => SeverityOrder(x.SeverityCode)).ThenByDescending(x => x.TriggeredDateUtc))
-                {
-                    <div class="ad-alert-row ad-alert-row--@a.SeverityCode.ToLower()">
-                        <div class="ad-alert-left">
-                            <span class="ad-dot ad-dot--@a.SeverityCode.ToLower()" aria-hidden="true"></span>
-                            <div>
-                                <div class="ad-alert-name">@a.AlertName</div>
-                                @if (!string.IsNullOrEmpty(a.Message))
-                                {
-                                    <div class="ad-alert-msg">@a.Message</div>
-                                }
-                                <div class="ad-alert-meta">
-                                    <span>@a.ServiceName</span>
-                                    @if (!string.IsNullOrEmpty(a.AlertTypeCode))
+            <section class="al-content-layout">
+                <main class="al-main-card">
+                    @if (_view == "overview")
+                    {
+                        <div class="al-section-head"><div><h2>Executive alert overview</h2><p>Most important alerts by severity, ownership, age, escalation, and service concentration.</p></div><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => SetView("table")'><i class="bi bi-table" aria-hidden="true"></i> Table View</button></div>
+                        <div class="al-overview-grid">
+                            <section class="al-spotlight-card"><span><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Highest importance alert</span><strong>@(TopAlert?.AlertName ?? "—")</strong><p>@(TopAlert is null ? "No matching alerts require action." : $"{TopAlert.SeverityCode} {TopAlert.StatusCode} alert from {TopAlert.ServiceName}, triggered {RelativeAge(TopAlert.TriggeredDateUtc)}.")</p><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="SelectTopAlert">Inspect alert</button></section>
+                            <section class="al-guidance-card"><h3><i class="bi bi-stars" aria-hidden="true"></i> Alert guidance</h3><p>@GuidanceText</p><div class="al-guidance-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("critical")'>Critical</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("unassigned")'>Unassigned</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("stale")'>Stale</button></div></section>
+                        </div>
+                        @ImportanceRankPanel
+                    }
+                    else if (_view == "critical")
+                    {
+                        <div class="al-section-head"><div><h2>Critical and high alerts</h2><p>Urgent alerts ranked by severity, status, escalation, and age.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("critical")'>Critical Filter</button></div>
+                        <div class="al-card-grid">
+                            @foreach (var alert in CriticalRows)
+                            {
+                                @AlertCard(alert)
+                            }
+                        </div>
+                    }
+                    else if (_view == "assigned")
+                    {
+                        <div class="al-section-head"><div><h2>Ownership queue</h2><p>Assigned, unassigned, and acknowledged alerts that need clear accountable handling.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("unassigned")'>Unassigned</button></div>
+                        <div class="al-card-grid">
+                            @foreach (var alert in OwnershipRows)
+                            {
+                                @AlertCard(alert)
+                            }
+                        </div>
+                    }
+                    else if (_view == "analytics")
+                    {
+                        <div class="al-section-head"><div><h2>Alert analytics</h2><p>Severity, status, service, and region distribution across synchronized alert data.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Refresh</button></div>
+                        <div class="al-analytics-grid">
+                            @AnalyticsPanel("Severity distribution", SeverityDistribution, "bi-exclamation-diamond", "al-tone-red")
+                            @AnalyticsPanel("Status distribution", StatusDistribution, "bi-kanban", "al-tone-blue")
+                            @AnalyticsPanel("Service concentration", ServiceDistribution, "bi-hdd-network", "al-tone-purple")
+                            @InsightPanel
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="al-section-head"><div><h2>Alert operating table</h2><p>Actionable queue synchronized from the existing alert API and tenant alert workflow.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters">Reset</button></div>
+                        <div class="al-table-wrap">
+                            <table class="al-table">
+                                <thead><tr><th>Alert</th><th>Service</th><th>Severity</th><th>Status</th><th>Age</th><th>Owner</th><th>Actions</th></tr></thead>
+                                <tbody>
+                                    @foreach (var alert in FilteredAlerts)
                                     {
-                                        <span class="ad-badge ad-badge--info">@a.AlertTypeCode</span>
+                                        <tr class="@(IsSelected(alert) ? "al-row-selected" : string.Empty)" @onclick="@(() => SelectAlert(alert))">
+                                            <td><strong>@alert.AlertName</strong><small>@(alert.Message ?? alert.AlertTypeCode)</small></td>
+                                            <td>@alert.ServiceName<small>@(alert.RegionCode ?? "Tenant")</small></td>
+                                            <td><span class="al-badge @SeverityBadgeClass(alert.SeverityCode)">@alert.SeverityCode</span></td>
+                                            <td><span class="al-badge @StatusBadgeClass(alert.StatusCode)">@alert.StatusCode</span></td>
+                                            <td>@RelativeAge(alert.TriggeredDateUtc)<small>@FormatDateTime(alert.TriggeredDateUtc)</small></td>
+                                            <td>@OwnerLabel(alert)<small>@(alert.EscalatedDateUtc.HasValue ? "Escalated" : "Standard")</small></td>
+                                            <td><div class="al-row-actions"><button type="button" title="Inspect" @onclick="@(() => SelectAlert(alert))" @onclick:stopPropagation="true">✓</button><button type="button" title="Acknowledge" disabled="@IsResolved(alert)" @onclick="@(() => ConfirmAcknowledge(alert))" @onclick:stopPropagation="true">A</button><button type="button" title="Resolve" disabled="@IsResolved(alert)" @onclick="@(() => ConfirmResolve(alert))" @onclick:stopPropagation="true">R</button></div></td>
+                                        </tr>
                                     }
-                                    <span>@a.TriggeredDateUtc.ToLocalTime().ToString("MMM d, h:mm tt")</span>
-                                </div>
-                            </div>
+                                </tbody>
+                            </table>
                         </div>
-                        <div class="ad-alert-right">
-                            <span class="ad-badge @SeverityBadgeClass(a.SeverityCode)">@a.SeverityCode</span>
-                            <span class="ad-badge @StatusBadgeClass(a.StatusCode)">@a.StatusCode</span>
+                    }
+                </main>
+
+                <aside class="al-detail-panel">
+                    @if (_selected is null)
+                    {
+                        <div class="al-detail-empty"><i class="bi bi-bell" aria-hidden="true"></i><strong>Select an alert</strong><span>Inspect severity, status, owner, timing, notes, and workflow actions.</span></div>
+                    }
+                    else
+                    {
+                        <div class="al-detail-head"><div><span><i class="bi @AlertIcon(_selected)" aria-hidden="true"></i> @_selected.AlertTypeCode alert</span><h2>@_selected.AlertName</h2><p>@_selected.Message</p></div><span class="al-badge @SeverityBadgeClass(_selected.SeverityCode)">@_selected.SeverityCode</span></div>
+                        <div class="al-detail-summary">
+                            <div><span>Status</span><strong>@_selected.StatusCode</strong></div>
+                            <div><span>Service</span><strong>@_selected.ServiceName</strong></div>
+                            <div><span>Age</span><strong>@RelativeAge(_selected.TriggeredDateUtc)</strong></div>
+                            <div><span>Region</span><strong>@(_selected.RegionCode ?? "Tenant")</strong></div>
+                            <div><span>Owner</span><strong>@OwnerLabel(_selected)</strong></div>
+                            <div><span>Escalated</span><strong>@(_selected.EscalatedDateUtc.HasValue ? FormatDateTime(_selected.EscalatedDateUtc.Value) : "No")</strong></div>
                         </div>
-                    </div>
-                }
-            </div>
+                        <div class="al-rules-card"><header><strong>Recommended actions</strong><span>@PriorityLabel(_selected)</span></header>@foreach (var action in RecommendedActions(_selected)) { <p><em>@action</em><span>active</span></p> }</div>
+                        <div class="al-notes-card"><strong>Workflow notes</strong><p>@(_selected.Notes ?? "No workflow notes recorded for this alert.")</p><small>Triggered @FormatDateTime(_selected.TriggeredDateUtc)</small></div>
+                        <div class="al-detail-actions">
+                            <button type="button" class="um-btn um-btn-ghost" @onclick='() => ConfirmAssignToMe(_selected)' disabled="@IsResolved(_selected)"><i class="bi bi-person-check" aria-hidden="true"></i> Assign to me</button>
+                            <button type="button" class="um-btn um-btn-ghost" @onclick='() => ConfirmAcknowledge(_selected)' disabled="@IsResolved(_selected)"><i class="bi bi-check2-circle" aria-hidden="true"></i> Acknowledge</button>
+                            <button type="button" class="um-btn um-btn-ghost" @onclick='() => ConfirmEscalate(_selected)' disabled="@IsResolved(_selected)"><i class="bi bi-arrow-up-circle" aria-hidden="true"></i> Escalate</button>
+                            <button type="button" class="um-btn um-btn-primary" @onclick='() => ConfirmResolve(_selected)' disabled="@IsResolved(_selected)"><i class="bi bi-check-circle" aria-hidden="true"></i> Resolve</button>
+                        </div>
+                    }
+                </aside>
+            </section>
         }
-    </div>
-}
+    }
+</div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
     private Guid _tenantId;
+    private Guid _tenantAdminUserId;
     private List<AlertDto> _alerts = [];
-    private bool _loading;
+    private AlertDto? _selected;
+    private bool _loading = true;
+    private bool _busy;
+    private bool _toastVisible;
+    private bool _showConfirm;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
     private string? _loadError;
-    private string _filter = "All";
-    private static readonly string[] _severities = ["All", "Critical", "High", "Medium", "Low"];
-    private int _critical, _high, _medium, _total;
+    private string _activeFilter = "all";
+    private string _view = "overview";
+    private string _searchTerm = string.Empty;
+    private string _severityFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _sort = "importance";
+    private ConfirmAction? _confirmAction;
+
+    private readonly ViewOption[] _views = [new("overview", "Overview", "bi-speedometer2"), new("critical", "Critical", "bi-exclamation-octagon"), new("assigned", "Ownership", "bi-person-check"), new("analytics", "Analytics", "bi-bar-chart-line"), new("table", "Table", "bi-table")];
+
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
+    private int SearchResultCount => _view switch { "critical" => CriticalRows.Count, "assigned" => OwnershipRows.Count, _ => FilteredAlerts.Count };
+    private int OpenCount => _alerts.Count(a => IsOpenStatus(a.StatusCode));
+    private int CriticalCount => _alerts.Count(a => a.SeverityCode.Equals("Critical", StringComparison.OrdinalIgnoreCase));
+    private int HighCount => _alerts.Count(a => a.SeverityCode.Equals("High", StringComparison.OrdinalIgnoreCase));
+    private int UnassignedCount => _alerts.Count(a => a.OwnerUserId is null && !IsResolved(a));
+    private int EscalatedCount => _alerts.Count(a => a.EscalatedDateUtc.HasValue);
+    private int StaleCount => _alerts.Count(a => !IsResolved(a) && AlertAgeHours(a) >= 24);
+    private AlertDto? TopAlert => FilteredAlerts.OrderByDescending(ImportanceScore).ThenBy(a => a.TriggeredDateUtc).FirstOrDefault();
+    private string? SelectedKey => _selected?.AlertId.ToString();
+    private string GuidanceText => CriticalCount > 0 ? $"{CriticalCount.ToString("N0", CultureInfo.CurrentCulture)} critical alert(s) need immediate triage. Assign owners, acknowledge action, and resolve or escalate blockers." : UnassignedCount > 0 ? $"{UnassignedCount.ToString("N0", CultureInfo.CurrentCulture)} alert(s) do not have an owner. Claim ownership before SLA windows age out." : StaleCount > 0 ? $"{StaleCount.ToString("N0", CultureInfo.CurrentCulture)} alert(s) are older than 24 hours. Review resolution notes and escalation status." : "Alert posture is stable. Continue monitoring new open alerts and service concentration.";
+
+    private IEnumerable<string> SeverityOptions => _alerts.Select(a => a.SeverityCode).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(SeverityOrder);
+    private IEnumerable<string> StatusOptions => _alerts.Select(a => a.StatusCode).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+
+    private IReadOnlyList<Metric> Metrics =>
+    [
+        new("open", OpenCount.ToString("N0", CultureInfo.CurrentCulture), "Open Alerts", "Active alerts requiring follow-up", "bi-bell", "al-kpi-blue"),
+        new("critical", CriticalCount.ToString("N0", CultureInfo.CurrentCulture), "Critical", $"{HighCount.ToString("N0", CultureInfo.CurrentCulture)} high severity", "bi-exclamation-octagon", "al-kpi-red"),
+        new("unassigned", UnassignedCount.ToString("N0", CultureInfo.CurrentCulture), "Unassigned", "Need accountable ownership", "bi-person-plus", "al-kpi-amber"),
+        new("stale", StaleCount.ToString("N0", CultureInfo.CurrentCulture), "Stale", "Older than 24 hours", "bi-hourglass-split", "al-kpi-purple"),
+        new("escalated", EscalatedCount.ToString("N0", CultureInfo.CurrentCulture), "Escalated", "Executive attention required", "bi-arrow-up-circle", "al-kpi-cyan"),
+        new("all", _alerts.Count.ToString("N0", CultureInfo.CurrentCulture), "Total Synced", "All tenant alert records", "bi-database-check", "al-kpi-green")
+    ];
+
+    private IReadOnlyList<AlertDto> FilteredAlerts => ApplyAlertFilters(_alerts).ToList();
+    private IReadOnlyList<AlertDto> CriticalRows => ApplyAlertFilters(_alerts.Where(a => SeverityOrder(a.SeverityCode) <= 1)).ToList();
+    private IReadOnlyList<AlertDto> OwnershipRows => ApplyAlertFilters(_alerts.Where(a => a.OwnerUserId is null || a.OwnerUserId == _tenantAdminUserId || a.StatusCode.Equals("Acknowledged", StringComparison.OrdinalIgnoreCase))).ToList();
+    private IReadOnlyList<DistributionRow> SeverityDistribution => BuildDistribution(_alerts, a => string.IsNullOrWhiteSpace(a.SeverityCode) ? "Unknown" : a.SeverityCode, SeverityBadgeClass);
+    private IReadOnlyList<DistributionRow> StatusDistribution => BuildDistribution(_alerts, a => string.IsNullOrWhiteSpace(a.StatusCode) ? "Unknown" : a.StatusCode, StatusBadgeClass);
+    private IReadOnlyList<DistributionRow> ServiceDistribution => BuildDistribution(_alerts, a => string.IsNullOrWhiteSpace(a.ServiceName) ? "Unknown" : a.ServiceName, _ => "al-badge-info").Take(8).ToList();
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Agency Dashboard", "/tenant/dashboard"), new("Alerts"));
+        Breadcrumbs.SetCrumbs(new("Agency Dashboard", "/tenant/dashboard"), new("Alerts", "/tenant/dashboard/alerts"));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
         _loading = true;
+        _loadError = null;
         try
         {
-            _loadError = null;
-            var result = await Api.SearchAlertsAsync(tenantId: _tenantId, openOnly: true, pageSize: 100);
-            _alerts   = result?.Items.ToList() ?? [];
-            _critical = _alerts.Count(a => a.SeverityCode.Equals("Critical", StringComparison.OrdinalIgnoreCase));
-            _high     = _alerts.Count(a => a.SeverityCode.Equals("High",     StringComparison.OrdinalIgnoreCase));
-            _medium   = _alerts.Count(a => a.SeverityCode.Equals("Medium",   StringComparison.OrdinalIgnoreCase));
-            _total    = _alerts.Count;
+            if (_tenantId == Guid.Empty) await ResolveCurrentUserContextAsync();
+            var result = await Api.SearchAlertsAsync(tenantId: _tenantId, pageSize: 250);
+            _alerts = result?.Items?.ToList() ?? [];
+            _selected = _selected is null ? FilteredAlerts.FirstOrDefault() : _alerts.FirstOrDefault(a => a.AlertId == _selected.AlertId) ?? FilteredAlerts.FirstOrDefault();
+            ShowToast("Alerts synced successfully.", "success");
         }
         catch (Exception ex)
         {
             _loadError = $"Failed to load alerts: {ex.Message}";
             _alerts = [];
-            _critical = _high = _medium = _total = 0;
+            _selected = null;
+            ShowToast($"Alert sync failed: {ex.Message}", "danger");
         }
-        finally { _loading = false; }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    private void SetFilter(string filter) => _filter = _filter == filter && filter != "All" ? "All" : filter;
-    private string KpiClass(string filter) => _filter == filter ? "ad-kpi-card--active" : string.Empty;
-
-    private static int SeverityOrder(string s) => s.ToLower() switch
+    private IEnumerable<AlertDto> ApplyAlertFilters(IEnumerable<AlertDto> alerts)
     {
-        "critical" => 0,
-        "high"     => 1,
-        "medium"   => 2,
-        _          => 3
-    };
+        var query = alerts;
+        if (!string.IsNullOrWhiteSpace(_searchTerm))
+        {
+            var term = _searchTerm.Trim();
+            query = query.Where(a => Contains(a.AlertName, term) || Contains(a.ServiceName, term) || Contains(a.Message, term) || Contains(a.AlertTypeCode, term) || Contains(a.StatusCode, term) || Contains(a.SeverityCode, term) || Contains(a.RegionCode, term) || Contains(a.Notes, term));
+        }
 
-    private static string SeverityBadgeClass(string s) => s.ToLower() switch
+        if (!string.IsNullOrWhiteSpace(_severityFilter)) query = query.Where(a => a.SeverityCode.Equals(_severityFilter, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(a => a.StatusCode.Equals(_statusFilter, StringComparison.OrdinalIgnoreCase));
+
+        query = _activeFilter switch
+        {
+            "open" => query.Where(a => IsOpenStatus(a.StatusCode)),
+            "critical" => query.Where(a => a.SeverityCode.Equals("Critical", StringComparison.OrdinalIgnoreCase) || a.SeverityCode.Equals("High", StringComparison.OrdinalIgnoreCase)),
+            "unassigned" => query.Where(a => a.OwnerUserId is null && !IsResolved(a)),
+            "stale" => query.Where(a => !IsResolved(a) && AlertAgeHours(a) >= 24),
+            "escalated" => query.Where(a => a.EscalatedDateUtc.HasValue),
+            _ => query
+        };
+
+        return _sort switch
+        {
+            "age" => query.OrderBy(a => a.TriggeredDateUtc),
+            "service" => query.OrderBy(a => a.ServiceName).ThenByDescending(ImportanceScore),
+            "status" => query.OrderBy(a => a.StatusCode).ThenByDescending(ImportanceScore),
+            _ => query.OrderByDescending(ImportanceScore).ThenBy(a => a.TriggeredDateUtc)
+        };
+    }
+
+    private void SetFilter(string filter)
     {
-        "critical" => "ad-badge--overdue",
-        "high"     => "ad-badge--warn",
-        "medium"   => "ad-badge--pending",
-        _          => "ad-badge--info"
-    };
+        _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter;
+        _view = filter switch { "critical" => "critical", "unassigned" => "assigned", "stale" or "escalated" or "open" => "table", _ => _view };
+        _selected = FilteredAlerts.FirstOrDefault() ?? _alerts.FirstOrDefault();
+    }
 
-    private static string StatusBadgeClass(string s) => s.ToLower() switch
+    private void SetView(string view) => _view = view;
+    private void ResetFilters() { _activeFilter = "all"; _searchTerm = string.Empty; _severityFilter = string.Empty; _statusFilter = string.Empty; _sort = "importance"; _selected = FilteredAlerts.FirstOrDefault() ?? _alerts.FirstOrDefault(); }
+    private void SelectAlert(AlertDto alert) => _selected = alert;
+    private void SelectTopAlert() { if (TopAlert is not null) { _selected = TopAlert; _view = "table"; } }
+    private void GoTo(string url) => Nav.NavigateTo(url);
+    private void OnSearchChanged(BlazorChangeEventArgs e) { _searchTerm = e.Value?.ToString() ?? string.Empty; _selected = FilteredAlerts.FirstOrDefault() ?? _alerts.FirstOrDefault(); }
+    private void OnSeverityChanged(BlazorChangeEventArgs e) { _severityFilter = e.Value?.ToString() ?? string.Empty; _selected = FilteredAlerts.FirstOrDefault() ?? _alerts.FirstOrDefault(); }
+    private void OnStatusChanged(BlazorChangeEventArgs e) { _statusFilter = e.Value?.ToString() ?? string.Empty; _selected = FilteredAlerts.FirstOrDefault() ?? _alerts.FirstOrDefault(); }
+    private void OnSortChanged(BlazorChangeEventArgs e) { _sort = e.Value?.ToString() ?? "importance"; _selected = FilteredAlerts.FirstOrDefault() ?? _alerts.FirstOrDefault(); }
+    private void ShowToast(string message, string kind) { _toastMessage = message.Length <= 140 ? message : $"{message[..137]}..."; _toastKind = ToastKind(kind); _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+
+    private void ConfirmAcknowledge(AlertDto alert) => OpenConfirm(new("Acknowledge alert", $"Acknowledge {alert.AlertName} and mark it as owned for follow-up?", "Acknowledge", "um-btn-primary", "bi-check2-circle", "success", () => AcknowledgeAsync(alert)));
+    private void ConfirmResolve(AlertDto alert) => OpenConfirm(new("Resolve alert", $"Resolve {alert.AlertName}? This will close the active alert workflow.", "Resolve", "um-btn-primary", "bi-check-circle", "success", () => ResolveAsync(alert)));
+    private void ConfirmAssignToMe(AlertDto alert) => OpenConfirm(new("Assign alert", $"Assign {alert.AlertName} to you for ownership?", "Assign to me", "um-btn-primary", "bi-person-check", "info", () => AssignToMeAsync(alert)));
+    private void ConfirmEscalate(AlertDto alert) => OpenConfirm(new("Escalate alert", $"Escalate {alert.AlertName} to Critical severity?", "Escalate", "um-btn-danger", "bi-arrow-up-circle", "danger", () => EscalateAsync(alert)));
+    private void OpenConfirm(ConfirmAction action) { _confirmAction = action; _showConfirm = true; }
+    private void CancelConfirm() { if (!_busy) { _showConfirm = false; _confirmAction = null; } }
+
+    private async Task ExecuteConfirmedAsync()
     {
-        "open"          => "ad-badge--open",
-        "acknowledged"  => "ad-badge--pending",
-        "resolved"      => "ad-badge--closed",
-        _               => "ad-badge--info"
-    };
+        if (_confirmAction is null) return;
+        _busy = true;
+        try
+        {
+            var action = _confirmAction;
+            await action.ExecuteAsync();
+            _showConfirm = false;
+            _confirmAction = null;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Alert action failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
 
-    async Task ResolveCurrentUserContextAsync()
+    private async Task AcknowledgeAsync(AlertDto alert)
+    {
+        await Api.AcknowledgeAlertAsync(alert.AlertId, new AcknowledgeAlertRequest { AcknowledgedByUserId = _tenantAdminUserId, Notes = $"Acknowledged from tenant alerts command center on {DateTime.UtcNow:O}." });
+        await LoadAsync();
+        ShowToast($"{alert.AlertName} acknowledged.", "success");
+    }
+
+    private async Task ResolveAsync(AlertDto alert)
+    {
+        await Api.ResolveAlertAsync(alert.AlertId, new ResolveAlertRequest { ResolvedByUserId = _tenantAdminUserId, Notes = $"Resolved from tenant alerts command center on {DateTime.UtcNow:O}." });
+        await LoadAsync();
+        ShowToast($"{alert.AlertName} resolved.", "success");
+    }
+
+    private async Task AssignToMeAsync(AlertDto alert)
+    {
+        await Api.AssignAlertAsync(alert.AlertId, new AssignAlertRequest { OwnerUserId = _tenantAdminUserId, Notes = $"Assigned from tenant alerts command center on {DateTime.UtcNow:O}." });
+        await LoadAsync();
+        ShowToast($"{alert.AlertName} assigned to you.", "success");
+    }
+
+    private async Task EscalateAsync(AlertDto alert)
+    {
+        await Api.EscalateAlertAsync(alert.AlertId, new EscalateAlertRequest { SeverityCode = "Critical", Notes = $"Escalated from tenant alerts command center on {DateTime.UtcNow:O}." });
+        await LoadAsync();
+        ShowToast($"{alert.AlertName} escalated to Critical.", "warning");
+    }
+
+    private RenderFragment ImportanceRankPanel => @<section class="al-panel"><h3><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Alert importance ranking</h3><div class="al-rank-stack">@foreach (var alert in FilteredAlerts.Take(8)) { <button type="button" class="@(IsSelected(alert) ? "al-rank-row al-rank-active" : "al-rank-row")" @onclick="@(() => SelectAlert(alert))"><span>@alert.AlertName</span><div><i style="width:@WidthPct(ImportanceScore(alert), MaxImportance)"></i></div><strong>@alert.SeverityCode</strong><small>@RelativeAge(alert.TriggeredDateUtc)</small></button> }</div></section>;
+    private RenderFragment AlertCard(AlertDto alert) => @<article class="@(IsSelected(alert) ? "al-alert-card al-alert-card-selected" : "al-alert-card")" @onclick="@(() => SelectAlert(alert))"><div class="al-alert-top"><span class="al-alert-icon"><i class="bi @AlertIcon(alert)" aria-hidden="true"></i></span><span class="al-badge @SeverityBadgeClass(alert.SeverityCode)">@alert.SeverityCode</span></div><h3>@alert.AlertName</h3><p>@(alert.Message ?? alert.ServiceName)</p><div class="al-alert-stats"><div><span>Status</span><strong>@alert.StatusCode</strong></div><div><span>Age</span><strong>@RelativeAge(alert.TriggeredDateUtc)</strong></div><div><span>Owner</span><strong>@OwnerLabel(alert)</strong></div></div><div class="al-alert-actions" @onclick:stopPropagation="true"><button type="button" @onclick="@(() => ConfirmAcknowledge(alert))" disabled="@IsResolved(alert)">Ack</button><button type="button" @onclick="@(() => ConfirmAssignToMe(alert))" disabled="@IsResolved(alert)">Assign</button><button type="button" @onclick="@(() => ConfirmResolve(alert))" disabled="@IsResolved(alert)">Resolve</button></div></article>;
+    private RenderFragment AnalyticsPanel(string title, IReadOnlyList<DistributionRow> rows, string icon, string tone) => @<section class="al-analytics-panel @tone"><h3><i class="bi @icon" aria-hidden="true"></i> @title</h3><div class="al-analytics-list">@foreach (var row in rows) { <button type="button" @onclick="@(() => ApplyDistribution(row.Label, title))"><span>@row.Label</span><div><i style="width:@row.Width"></i></div><strong>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><small>@row.Percent.ToString("P0", CultureInfo.CurrentCulture)</small></button> }</div></section>;
+    private RenderFragment InsightPanel => @<section class="al-analytics-panel al-tone-amber"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Executive insight</h3><div class="al-insight-grid"><div><span>Open ratio</span><strong>@Ratio(OpenCount, _alerts.Count)</strong><small>open / all alerts</small></div><div><span>Critical ratio</span><strong>@Ratio(CriticalCount, Math.Max(1, OpenCount))</strong><small>critical / open alerts</small></div><div><span>Owner gap</span><strong>@UnassignedCount.ToString("N0", CultureInfo.CurrentCulture)</strong><small>unassigned alerts</small></div><div><span>Average age</span><strong>@AverageAgeLabel</strong><small>active alert age</small></div></div><p>@GuidanceText</p></section>;
+
+    private void ApplyDistribution(string label, string title)
+    {
+        if (title.Contains("Severity", StringComparison.OrdinalIgnoreCase)) _severityFilter = _severityFilter == label ? string.Empty : label;
+        else if (title.Contains("Status", StringComparison.OrdinalIgnoreCase)) _statusFilter = _statusFilter == label ? string.Empty : label;
+        else _searchTerm = _searchTerm == label ? string.Empty : label;
+
+        _view = "table";
+        _selected = FilteredAlerts.FirstOrDefault() ?? _alerts.FirstOrDefault();
+    }
+
+    private double MaxImportance => Math.Max(1, FilteredAlerts.Select(ImportanceScore).DefaultIfEmpty(1).Max());
+    private string AverageAgeLabel => OpenCount == 0 ? "—" : TimeSpan.FromHours(_alerts.Where(a => !IsResolved(a)).Select(AlertAgeHours).DefaultIfEmpty(0).Average()).TotalHours switch { < 1 => "<1h", < 24 => $"{TimeSpan.FromHours(_alerts.Where(a => !IsResolved(a)).Select(AlertAgeHours).DefaultIfEmpty(0).Average()).TotalHours:F0}h", var h => $"{h / 24:F1}d" };
+
+    private string MetricCardClass(Metric metric) => $"al-kpi-card {metric.Tone} {(_activeFilter == metric.Filter ? "al-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewOption view) => $"al-view-btn {(view.Id == _view ? "al-view-btn-active" : string.Empty)}";
+    private int ViewCount(string view) => view switch { "critical" => CriticalRows.Count, "assigned" => OwnershipRows.Count, "analytics" => _alerts.Count, "table" => FilteredAlerts.Count, _ => FilteredAlerts.Count };
+    private bool IsSelected(AlertDto alert) => _selected?.AlertId == alert.AlertId;
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static bool IsResolved(AlertDto alert) => alert.StatusCode.Equals("Resolved", StringComparison.OrdinalIgnoreCase) || alert.ResolvedDateUtc.HasValue;
+    private static bool IsOpenStatus(string status) => !status.Equals("Resolved", StringComparison.OrdinalIgnoreCase) && !status.Equals("Closed", StringComparison.OrdinalIgnoreCase);
+    private static double AlertAgeHours(AlertDto alert) => Math.Max(0, (DateTime.UtcNow - alert.TriggeredDateUtc).TotalHours);
+    private static string WidthPct(double value, double max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, value / max * 100))).ToString("F1", CultureInfo.InvariantCulture) + "%";
+    private static string Ratio(int value, int total) => total <= 0 ? "0%" : ((decimal)value / total).ToString("P0", CultureInfo.CurrentCulture);
+    private static string FormatDateTime(DateTime value) => value.ToLocalTime().ToString("MMM d, h:mm tt", CultureInfo.CurrentCulture);
+    private static string RelativeAge(DateTime value)
+    {
+        var span = DateTime.UtcNow - value;
+        if (span.TotalMinutes < 1) return "just now";
+        if (span.TotalHours < 1) return $"{span.TotalMinutes:F0}m";
+        if (span.TotalDays < 1) return $"{span.TotalHours:F0}h";
+        return $"{span.TotalDays:F1}d";
+    }
+
+    private static int SeverityOrder(string severity) => severity.ToLowerInvariant() switch { "critical" => 0, "high" => 1, "medium" => 2, "low" => 3, _ => 4 };
+    private static double ImportanceScore(AlertDto alert) => (5 - SeverityOrder(alert.SeverityCode)) * 100 + (IsOpenStatus(alert.StatusCode) ? 35 : 0) + (alert.OwnerUserId is null ? 20 : 0) + (alert.EscalatedDateUtc.HasValue ? 25 : 0) + Math.Min(48, AlertAgeHours(alert));
+    private static string OwnerLabel(AlertDto alert) => alert.OwnerUserId.HasValue ? "Assigned" : "Unassigned";
+    private static string PriorityLabel(AlertDto alert) => alert.SeverityCode.Equals("Critical", StringComparison.OrdinalIgnoreCase) || alert.EscalatedDateUtc.HasValue ? "Immediate" : alert.OwnerUserId is null || AlertAgeHours(alert) >= 24 ? "High priority" : "Monitor";
+    private static IEnumerable<string> RecommendedActions(AlertDto alert)
+    {
+        if (alert.OwnerUserId is null && !IsResolved(alert)) yield return "Assign an accountable owner before additional triage.";
+        if (alert.SeverityCode.Equals("Critical", StringComparison.OrdinalIgnoreCase)) yield return "Work this alert first and confirm customer or service impact.";
+        if (AlertAgeHours(alert) >= 24 && !IsResolved(alert)) yield return "Review stale alert notes and escalate if blocked.";
+        if (!alert.StatusCode.Equals("Acknowledged", StringComparison.OrdinalIgnoreCase) && !IsResolved(alert)) yield return "Acknowledge the alert once active review starts.";
+        if (IsResolved(alert)) yield return "Verify closure notes and monitor for recurrence.";
+        else yield return "Resolve the alert after the operating risk is cleared.";
+    }
+
+    private static string AlertIcon(AlertDto alert) => alert.SeverityCode.ToLowerInvariant() switch { "critical" => "bi-exclamation-octagon", "high" => "bi-exclamation-triangle", "medium" => "bi-info-circle", _ => "bi-bell" };
+    private static string SeverityBadgeClass(string severity) => severity.ToLowerInvariant() switch { "critical" => "al-badge-danger", "high" => "al-badge-warning", "medium" => "al-badge-info", "low" => "al-badge-success", _ => "al-badge-muted" };
+    private static string StatusBadgeClass(string status) => status.ToLowerInvariant() switch { "open" => "al-badge-danger", "acknowledged" => "al-badge-warning", "resolved" => "al-badge-success", "closed" => "al-badge-success", _ => "al-badge-info" };
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : "success";
+
+    private static IReadOnlyList<DistributionRow> BuildDistribution(IEnumerable<AlertDto> alerts, Func<AlertDto, string> labelSelector, Func<string, string> badgeSelector)
+    {
+        var rows = alerts.GroupBy(labelSelector).Select(g => new DistributionRow(g.Key, g.Count(), 0, badgeSelector(g.Key), "0%")).OrderByDescending(r => r.Count).ThenBy(r => r.Label).ToList();
+        var total = Math.Max(1, rows.Sum(r => r.Count));
+        var max = Math.Max(1, rows.Select(r => r.Count).DefaultIfEmpty(1).Max());
+        return rows.Select(r => r with { Percent = (double)r.Count / total, Width = WidthPct(r.Count, max) }).ToList();
+    }
+
+    private async Task ResolveCurrentUserContextAsync()
     {
         var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
         _tenantId = context.TenantId;
         _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
     }
+
+    private sealed record ViewOption(string Id, string Label, string Icon);
+    private sealed record Metric(string Filter, string Value, string Label, string Caption, string Icon, string Tone);
+    private sealed record ConfirmAction(string Title, string Message, string ButtonText, string ButtonClass, string Icon, string Kind, Func<Task> ExecuteAsync);
+    private sealed record DistributionRow(string Label, int Count, double Percent, string BadgeClass, string Width);
 }

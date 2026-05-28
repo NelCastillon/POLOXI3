@@ -1,17 +1,275 @@
 @page "/client/account-health"
 @namespace Ams.Web.Components.Pages
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
 @inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
-@using Ams.Application.Common.Dtos
-@using Ams.Web.Components.Pages.Accounts
 
-<PageTitle>Account Health — Tenant Admin</PageTitle>
+<PageTitle>Enterprise Account Health</PageTitle>
 
-<AppPageHeader Title="Account Health" Subtitle="Tenant Admin health scoring across customer accounts" Icon="bi-heart-pulse"><Actions><button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button></Actions></AppPageHeader>
-<section class="ma-hero acct-hero"><div><span class="ma-eyebrow">Tenant Admin · Account Intelligence</span><h2>Account Health Monitor</h2><p>Prioritize account attention using activity, portal, revenue, lifecycle, and relationship signals.</p></div><div class="ma-hero-actions"><button class="um-btn um-btn-primary" @onclick='() => SetFilter("risk")'><i class="bi bi-exclamation-triangle"></i> At Risk</button></div></section>
-<div class="pc-kpi-strip acct-kpi-strip"><div class="pc-kpi-card @(_activeFilter is null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)'><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-heart-pulse"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Accounts</div></div></div><div class="pc-kpi-card @(_activeFilter == "healthy" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("healthy")'><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.Score >= 75)</div><div class="pc-kpi-label">Healthy</div></div></div><div class="pc-kpi-card @(_activeFilter == "watch" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("watch")'><span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-eye"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.Score is >= 50 and < 75)</div><div class="pc-kpi-label">Watch</div></div></div><div class="pc-kpi-card @(_activeFilter == "risk" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("risk")'><span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-exclamation-triangle"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.Score < 50)</div><div class="pc-kpi-label">At Risk</div></div></div></div>
-<div class="ma-filter-bar acct-filter-bar"><div class="ma-search-wrap"><i class="bi bi-search"></i><input class="ma-search" value="@_search" @oninput="OnSearchChanged" placeholder="Search accounts, segment, lifecycle…" /></div><button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button><span class="ma-filter-count">@Filtered.Count() accounts</span></div>
-@if (_loadError is not null) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div> }
-<div class="um-grid-card">@if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading account health…</span></div> }<SfGrid TValue="AccountHealthItem" DataSource="@Filtered.ToList()" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="56"><GridEvents TValue="AccountHealthItem" RowSelected="OnRowSelected" /><GridPageSettings PageSize="25" /><GridColumns><GridColumn HeaderText="Account" MinWidth="240"><Template>@{ var h=(AccountHealthItem)context; }<div class="acct-name-cell"><div class="acct-avatar">@AccountPageConstants.Initials(h.AccountName)</div><div><strong>@h.AccountName</strong><div class="text-muted">@h.AccountNumber · @h.Segment</div></div></div></Template></GridColumn><GridColumn Field="Score" HeaderText="Score" Width="110" TextAlign="TextAlign.Center"><Template>@{ var h=(AccountHealthItem)context; }<strong class="acct-health-score acct-health-@h.Tone">@h.Score</strong></Template></GridColumn><GridColumn Field="Status" HeaderText="Health" Width="130"><Template>@{ var h=(AccountHealthItem)context; }<span class="um-badge @h.Badge">@h.Status</span></Template></GridColumn><GridColumn Field="Signal" HeaderText="Top Signal" MinWidth="240" /><GridColumn Field="AnnualRevenue" HeaderText="Revenue" Width="130" TextAlign="TextAlign.Right"><Template>@{ var h=(AccountHealthItem)context; }@(h.AnnualRevenue?.ToString("C0") ?? "—")</Template></GridColumn><GridColumn Field="Lifecycle" HeaderText="Lifecycle" Width="130" /></GridColumns></SfGrid></div>
-@code { sealed record AccountHealthItem(Guid AccountId, string AccountName, string AccountNumber, string Segment, string Lifecycle, decimal? AnnualRevenue, int Score, string Status, string Signal, string Tone, string Badge); List<AccountHealthItem> _items = []; string _search = string.Empty; string? _activeFilter, _loadError; bool _loading; IEnumerable<AccountHealthItem> Filtered => _items.Where(x => (_activeFilter switch { "healthy" => x.Score >= 75, "watch" => x.Score is >= 50 and < 75, "risk" => x.Score < 50, _ => true }) && (string.IsNullOrWhiteSpace(_search) || x.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.AccountNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Segment.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Lifecycle.Contains(_search, StringComparison.OrdinalIgnoreCase))); protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Accounts", "/accounts"), new("Account Health")); await LoadAsync(); } async Task LoadAsync() { _loading = true; _loadError = null; try { var accounts = (await Api.SearchAccountsAsync(AccountPageConstants.TenantId))?.Items.ToList() ?? []; var notes = (await Api.SearchAccountNotesAsync(AccountPageConstants.TenantId))?.Items.ToList() ?? []; var invites = (await Api.SearchPortalInvitesAsync(AccountPageConstants.TenantId))?.Items.ToList() ?? []; _items = accounts.Select(a => BuildHealth(a, notes.Count(n => n.AccountId == a.AccountId && n.NoteTypeCode == "Critical"), invites.Count(i => i.AccountId == a.AccountId && i.StatusCode == "Accepted"))).ToList(); } catch (Exception ex) { _loadError = $"Failed to load account health: {ex.Message}"; } finally { _loading = false; } } static AccountHealthItem BuildHealth(AccountDto a, int criticalNotes, int acceptedInvites) { var score = 55 + (a.StatusCode == "Active" ? 15 : 0) + (a.AnnualRevenue >= 1000000 ? 10 : 0) + (acceptedInvites > 0 ? 10 : 0) - (criticalNotes * 20); score = Math.Clamp(score, 0, 100); var status = score >= 75 ? "Healthy" : score >= 50 ? "Watch" : "At Risk"; var tone = score >= 75 ? "success" : score >= 50 ? "warning" : "danger"; var badge = score >= 75 ? "um-badge-success" : score >= 50 ? "um-badge-warning" : "um-badge-danger"; var signal = criticalNotes > 0 ? $"{criticalNotes} critical note(s) require attention" : acceptedInvites > 0 ? "Portal relationship established" : "Needs engagement signal"; return new(a.AccountId, a.AccountName, a.AccountNumber, a.SegmentCode ?? "Unsegmented", a.LifecycleStageCode ?? "Unknown", a.AnnualRevenue, score, status, signal, tone, badge); } void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; } void SetFilter(string? key) { _activeFilter = key; } void ResetFilters() { _activeFilter = null; _search = string.Empty; } void OnRowSelected(RowSelectEventArgs<AccountHealthItem> args) => Nav.NavigateTo($"/accounts/{args.Data.AccountId}"); }
+@if (_toastVisible)
+{
+    <div class="ahl-toast ahl-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ahl-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+<div class="ahl-enterprise-page">
+    <section class="ahl-hero">
+        <div class="ahl-hero-left">
+            <span class="ahl-hero-icon"><i class="bi bi-heart-pulse" aria-hidden="true"></i></span>
+            <div>
+                <div class="ahl-title-row">
+                    <h1>Account Health Command Center</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> Live computed workflow</span>
+                    <span><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+                    <span><i class="bi bi-stars" aria-hidden="true"></i> Risk ranked</span>
+                </div>
+                <p>Prioritize account attention using lifecycle, revenue, note risk, portal engagement, and account status signals.</p>
+            </div>
+        </div>
+        <div class="ahl-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat ahl-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/accounts")'><i class="bi bi-building" aria-hidden="true"></i> Accounts</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/client/account-notes")'><i class="bi bi-sticky" aria-hidden="true"></i> Notes</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick='() => SetFilter("risk")'><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> At Risk</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger ahl-error-banner" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    @if (_loading)
+    {
+        <section class="ahl-loading-state"><i class="bi bi-arrow-repeat ahl-spin" aria-hidden="true"></i><strong>Loading enterprise account health...</strong><span>Syncing accounts, critical notes, portal acceptance, revenue, lifecycle, and engagement signals.</span></section>
+    }
+    else
+    {
+        <section class="ahl-kpi-strip" aria-label="Account health KPI filters">
+            @foreach (var metric in Metrics)
+            {
+                <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="@(() => SetFilter(metric.Filter))">
+                    <span class="ahl-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                    <span><span class="ahl-kpi-val">@metric.Value</span><span class="ahl-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
+                </button>
+            }
+        </section>
+
+        <section class="ahl-workflow-strip" aria-label="Account health workflow actions">
+            <button type="button" class="ahl-workflow-card ahl-workflow-primary" @onclick='() => SetFilter("risk")'><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span><strong>Risk triage</strong><span>Review the lowest health accounts first.</span></span></button>
+            <button type="button" class="ahl-workflow-card" @onclick='() => SetFilter("watch")'><i class="bi bi-eye" aria-hidden="true"></i><span><strong>Watchlist</strong><span>Inspect accounts trending toward risk.</span></span></button>
+            <button type="button" class="ahl-workflow-card" @onclick='() => SetFilter("portal")'><i class="bi bi-envelope-check" aria-hidden="true"></i><span><strong>Portal engaged</strong><span>Find portal relationship signals.</span></span></button>
+            <button type="button" class="ahl-workflow-card" @onclick='() => SetView("analytics")'><i class="bi bi-graph-up-arrow" aria-hidden="true"></i><span><strong>Analytics</strong><span>Monitor health distribution.</span></span></button>
+        </section>
+
+        <section class="ahl-filter-panel">
+            <div class="ahl-search-wrap">
+                <span class="ahl-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+                <div class="ahl-search-body">
+                    <label for="healthSearch">Search account health</label>
+                    <input id="healthSearch" class="ahl-search-input" value="@_search" @oninput="OnSearchChanged" placeholder="Search account, account number, segment, lifecycle, health, or signal..." />
+                    <span>Search filters every view, KPI, risk list, analytics panel, and table.</span>
+                </div>
+            </div>
+            <label class="ahl-filter-field">Health<select class="ahl-filter-select" value="@_healthFilter" @onchange="OnHealthChanged"><option value="">All health</option><option value="Healthy">Healthy</option><option value="Watch">Watch</option><option value="At Risk">At Risk</option></select></label>
+            <label class="ahl-filter-field">Segment<select class="ahl-filter-select" value="@_segmentFilter" @onchange="OnSegmentChanged"><option value="">All segments</option>@foreach (var segment in SegmentOptions) { <option value="@segment">@segment</option> }</select></label>
+            <label class="ahl-filter-field">Sort by<select class="ahl-filter-select" value="@_sort" @onchange="OnSortChanged"><option value="risk">Risk priority</option><option value="score">Health score</option><option value="revenue">Revenue</option><option value="account">Account</option></select></label>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-cloud-arrow-down" aria-hidden="true"></i> Sync</button>
+            <div class="ahl-filter-result"><strong>@SearchResultCount.ToString("N0", CultureInfo.CurrentCulture)</strong><span>shown</span></div>
+        </section>
+
+        <section class="ahl-view-tabs" aria-label="Account health views">
+            @foreach (var view in _views)
+            {
+                <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label <span>@ViewCount(view.Id)</span></button>
+            }
+        </section>
+
+        @if (_items.Count == 0)
+        {
+            <section class="ahl-empty-state"><i class="bi bi-heart-pulse" aria-hidden="true"></i><strong>No account health records available</strong><span>No account records were available for this tenant.</span><button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync">Refresh Health</button></section>
+        }
+        else
+        {
+            <section class="ahl-content-layout">
+                <main class="ahl-main-card">
+                    @if (_view == "overview")
+                    {
+                        <div class="ahl-section-head"><div><h2>Executive account health overview</h2><p>Accounts prioritized by risk, engagement, revenue, critical note pressure, and lifecycle quality.</p></div><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => SetView("risk")'><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Risk List</button></div>
+                        <div class="ahl-overview-grid"><section class="ahl-spotlight-card"><span><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Highest risk account</span><strong>@(HighestRisk?.AccountName ?? "—")</strong><p>@(HighestRisk is null ? "No matching account requires attention." : $"Score {HighestRisk.Score}: {HighestRisk.Signal}")</p><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="SelectHighestRisk">Inspect account</button></section><section class="ahl-guidance-card"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Account health guidance</h3><p>@GuidanceText</p><div class="ahl-guidance-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("risk")'>At Risk</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("critical")'>Critical Notes</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("portal")'>Portal</button></div></section></div>
+                        <section class="ahl-panel"><h3><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Risk priority ranking</h3><div class="ahl-rank-stack">@foreach (var item in FilteredRows.Take(8)) { <button type="button" class="@(IsSelected(item) ? "ahl-rank-row ahl-rank-active" : "ahl-rank-row")" @onclick="@(() => SelectItem(item))"><span>@item.AccountName</span><div><i style="width:@WidthPct(100 - item.Score, 100)"></i></div><strong>@item.Score</strong><small>@item.Status</small></button> }</div></section>
+                    }
+                    else if (_view == "risk")
+                    {
+                        <div class="ahl-section-head"><div><h2>Risk and watchlist cards</h2><p>Accounts requiring proactive service, retention, portal, or relationship action.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("risk")'>At Risk</button></div>
+                        <div class="ahl-card-grid">@foreach (var item in RiskRows) { @HealthCard(item) }</div>
+                    }
+                    else if (_view == "segments")
+                    {
+                        <div class="ahl-section-head"><div><h2>Segment health distribution</h2><p>Average health and risk count by account segment.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/client/segments")'>Segments</button></div>
+                        <div class="ahl-account-grid">@foreach (var row in SegmentRows) { <button type="button" class="@(row.Segment == _segmentFilter ? "ahl-account-row ahl-active" : "ahl-account-row")" @onclick="@(() => SelectSegment(row.Segment))"><span>@row.Segment</span><div><i style="width:@row.Width"></i></div><strong>@row.AverageScore</strong><small>@row.RiskCount risk</small></button> }</div>
+                    }
+                    else if (_view == "analytics")
+                    {
+                        <div class="ahl-section-head"><div><h2>Account health analytics</h2><p>Health band, segment, and engagement distribution across account relationships.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Refresh</button></div>
+                        <div class="ahl-analytics-grid">@AnalyticsPanel("Health distribution", HealthDistribution, "bi-heart-pulse", "ahl-tone-blue") @AnalyticsPanel("Segment distribution", SegmentDistribution, "bi-diagram-3", "ahl-tone-green") @InsightPanel</div>
+                    }
+                    else
+                    {
+                        <div class="ahl-section-head"><div><h2>Account health operating table</h2><p>Native table synchronized from account, note, and portal invite source data.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters">Reset</button></div>
+                        <div class="ahl-table-wrap"><table class="ahl-table"><thead><tr><th>Account</th><th>Score</th><th>Health</th><th>Top Signal</th><th>Revenue</th><th>Lifecycle</th></tr></thead><tbody>@foreach (var item in FilteredRows) { <tr class="@(IsSelected(item) ? "ahl-row-selected" : string.Empty)" @onclick="@(() => SelectItem(item))"><td><strong>@item.AccountName</strong><small>@item.AccountNumber · @item.Segment</small></td><td><strong class="ahl-score ahl-score-@item.Tone">@item.Score</strong></td><td><span class="ahl-badge @BadgeClass(item)">@item.Status</span></td><td>@item.Signal</td><td>@FormatCurrency(item.AnnualRevenue)</td><td>@item.Lifecycle</td></tr> }</tbody></table></div>
+                    }
+                </main>
+
+                <aside class="ahl-detail-panel">
+                    @if (_selected is null) { <div class="ahl-detail-empty"><i class="bi bi-heart-pulse" aria-hidden="true"></i><strong>Select an account</strong><span>Inspect health score, signals, risk drivers, and recommended account actions.</span></div> }
+                    else
+                    {
+                        <div class="ahl-detail-head"><div><span><i class="bi bi-heart-pulse" aria-hidden="true"></i> Account health</span><h2>@_selected.AccountName</h2><p>@_selected.AccountNumber · @_selected.Segment · @_selected.Lifecycle</p></div><span class="ahl-badge @BadgeClass(_selected)">@_selected.Status</span></div>
+                        <div class="ahl-score-ring ahl-score-@_selected.Tone"><strong>@_selected.Score</strong><span>health score</span></div>
+                        <div class="ahl-detail-summary"><div><span>Critical notes</span><strong>@_selected.CriticalNotes</strong></div><div><span>Portal accepted</span><strong>@_selected.AcceptedInvites</strong></div><div><span>Revenue</span><strong>@FormatCurrency(_selected.AnnualRevenue)</strong></div><div><span>Status</span><strong>@_selected.AccountStatus</strong></div></div>
+                        <div class="ahl-note-card"><strong>Top signal</strong><p>@_selected.Signal</p></div>
+                        <div class="ahl-rules-card"><header><strong>Score drivers</strong><span>@_selected.Status</span></header>@foreach (var driver in ScoreDrivers(_selected)) { <p><em>@driver</em><span>active</span></p> }</div>
+                        <div class="ahl-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="@(() => NavigateAccount(_selected.AccountId))"><i class="bi bi-building" aria-hidden="true"></i> Account</button><button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/client/account-notes")'><i class="bi bi-sticky" aria-hidden="true"></i> Notes</button><button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Sync</button></div>
+                    }
+                </aside>
+            </section>
+        }
+    }
+</div>
+
+@code {
+    private Guid _tenantId;
+    private bool _loading = true;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string _search = string.Empty;
+    private string _activeFilter = "all";
+    private string _healthFilter = string.Empty;
+    private string _segmentFilter = string.Empty;
+    private string _sort = "risk";
+    private string _view = "overview";
+    private AccountHealthItem? _selected;
+    private List<AccountHealthItem> _items = [];
+    private readonly ViewOption[] _views = [new("overview", "Overview", "bi-speedometer2"), new("risk", "Risk List", "bi-exclamation-triangle"), new("segments", "Segments", "bi-diagram-3"), new("analytics", "Analytics", "bi-graph-up-arrow"), new("table", "Table", "bi-table")];
+
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
+    private int HealthyCount => _items.Count(x => x.Score >= 75);
+    private int WatchCount => _items.Count(x => x.Score is >= 50 and < 75);
+    private int RiskCount => _items.Count(x => x.Score < 50);
+    private int CriticalCount => _items.Count(x => x.CriticalNotes > 0);
+    private int PortalCount => _items.Count(x => x.AcceptedInvites > 0);
+    private int SearchResultCount => FilteredRows.Count;
+    private AccountHealthItem? HighestRisk => FilteredRows.OrderBy(x => x.Score).ThenByDescending(x => x.CriticalNotes).ThenByDescending(x => x.AnnualRevenue ?? 0).FirstOrDefault();
+    private string GuidanceText => RiskCount > 0 ? $"{RiskCount.ToString("N0", CultureInfo.CurrentCulture)} account(s) are at risk and should be prioritized for retention or service action." : WatchCount > 0 ? $"{WatchCount.ToString("N0", CultureInfo.CurrentCulture)} account(s) are on watch and need proactive engagement." : "Account health is strong. Continue monitoring note risk and portal engagement signals.";
+    private IEnumerable<string> SegmentOptions => _items.Select(x => x.Segment).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private IReadOnlyList<AccountHealthItem> FilteredRows => ApplyHealthFilters(_items).ToList();
+    private IReadOnlyList<AccountHealthItem> RiskRows => ApplyHealthFilters(_items.Where(x => x.Score < 75 || x.CriticalNotes > 0)).ToList();
+    private IReadOnlyList<SegmentRow> SegmentRows => BuildSegmentRows();
+    private IReadOnlyList<DistributionRow> HealthDistribution => BuildDistribution(_items, x => x.Status);
+    private IReadOnlyList<DistributionRow> SegmentDistribution => BuildDistribution(_items, x => x.Segment);
+    private IReadOnlyList<Metric> Metrics => [new("all", _items.Count.ToString("N0", CultureInfo.CurrentCulture), "Accounts", "Health-scored accounts", "bi-heart-pulse", "ahl-kpi-blue"), new("healthy", HealthyCount.ToString("N0", CultureInfo.CurrentCulture), "Healthy", "Score 75+", "bi-check2-circle", "ahl-kpi-green"), new("watch", WatchCount.ToString("N0", CultureInfo.CurrentCulture), "Watch", "Score 50-74", "bi-eye", "ahl-kpi-amber"), new("risk", RiskCount.ToString("N0", CultureInfo.CurrentCulture), "At Risk", "Score below 50", "bi-exclamation-triangle", "ahl-kpi-red"), new("critical", CriticalCount.ToString("N0", CultureInfo.CurrentCulture), "Critical Notes", "Accounts with critical notes", "bi-sticky", "ahl-kpi-purple"), new("portal", PortalCount.ToString("N0", CultureInfo.CurrentCulture), "Portal", "Accepted portal invites", "bi-envelope-check", "ahl-kpi-cyan")];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Accounts", "/accounts"), new("Account Health", "/client/account-health"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            if (_tenantId == Guid.Empty) await ResolveCurrentUserContextAsync();
+            var accounts = (await Api.SearchAccountsAsync(_tenantId, pageSize: 500))?.Items.ToList() ?? [];
+            var notes = (await Api.SearchAccountNotesAsync(_tenantId, pageSize: 500))?.Items.ToList() ?? [];
+            var invites = (await Api.SearchPortalInvitesAsync(_tenantId, pageSize: 500))?.Items.ToList() ?? [];
+            _items = accounts.Select(a => BuildHealth(a, notes.Count(n => n.AccountId == a.AccountId && n.NoteTypeCode == "Critical"), notes.Count(n => n.AccountId == a.AccountId && n.NoteTypeCode is "Risk" or "Issue"), invites.Count(i => i.AccountId == a.AccountId && i.StatusCode == "Accepted"), invites.Count(i => i.AccountId == a.AccountId && i.StatusCode == "Pending"))).OrderBy(x => x.Score).ToList();
+            _selected = _selected is null ? FilteredRows.FirstOrDefault() : _items.FirstOrDefault(x => x.AccountId == _selected.AccountId) ?? FilteredRows.FirstOrDefault();
+            ShowToast("Account health synced.", "success");
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load account health: {ex.Message}";
+            _items = [];
+            _selected = null;
+            ShowToast($"Account health load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private IEnumerable<AccountHealthItem> ApplyHealthFilters(IEnumerable<AccountHealthItem> items)
+    {
+        var query = items;
+        if (!string.IsNullOrWhiteSpace(_search)) { var term = _search.Trim(); query = query.Where(x => Contains(x.AccountName, term) || Contains(x.AccountNumber, term) || Contains(x.Segment, term) || Contains(x.Lifecycle, term) || Contains(x.Status, term) || Contains(x.Signal, term)); }
+        if (!string.IsNullOrWhiteSpace(_healthFilter)) query = query.Where(x => x.Status == _healthFilter);
+        if (!string.IsNullOrWhiteSpace(_segmentFilter)) query = query.Where(x => x.Segment == _segmentFilter);
+        query = _activeFilter switch { "healthy" => query.Where(x => x.Score >= 75), "watch" => query.Where(x => x.Score is >= 50 and < 75), "risk" => query.Where(x => x.Score < 50), "critical" => query.Where(x => x.CriticalNotes > 0), "portal" => query.Where(x => x.AcceptedInvites > 0), _ => query };
+        return _sort switch { "score" => query.OrderByDescending(x => x.Score), "revenue" => query.OrderByDescending(x => x.AnnualRevenue ?? 0), "account" => query.OrderBy(x => x.AccountName), _ => query.OrderBy(x => x.Score).ThenByDescending(x => x.CriticalNotes).ThenByDescending(x => x.AnnualRevenue ?? 0) };
+    }
+
+    private static AccountHealthItem BuildHealth(AccountDto account, int criticalNotes, int riskNotes, int acceptedInvites, int pendingInvites)
+    {
+        var score = 55 + (account.StatusCode == "Active" ? 15 : 0) + (account.AnnualRevenue >= 1000000 ? 10 : 0) + (acceptedInvites > 0 ? 10 : 0) + (account.LifecycleStageCode is "Customer" or "Active" ? 5 : 0) - (criticalNotes * 20) - (riskNotes * 10) - (pendingInvites > 0 && acceptedInvites == 0 ? 5 : 0);
+        score = Math.Clamp(score, 0, 100);
+        var status = score >= 75 ? "Healthy" : score >= 50 ? "Watch" : "At Risk";
+        var tone = score >= 75 ? "success" : score >= 50 ? "warning" : "danger";
+        var signal = criticalNotes > 0 ? $"{criticalNotes} critical note(s) require attention" : riskNotes > 0 ? $"{riskNotes} risk or issue note(s) require review" : acceptedInvites > 0 ? "Portal relationship established" : pendingInvites > 0 ? "Portal invite pending acceptance" : "Needs engagement signal";
+        return new(account.AccountId, account.AccountName, account.AccountNumber, account.SegmentCode ?? "Unsegmented", account.LifecycleStageCode ?? "Unknown", account.StatusCode, account.AnnualRevenue, criticalNotes, riskNotes, acceptedInvites, pendingInvites, score, status, signal, tone);
+    }
+
+    private void SetFilter(string filter) { _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter; _view = filter is "risk" or "watch" or "critical" ? "risk" : _view; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void SetView(string view) => _view = view;
+    private void SelectItem(AccountHealthItem item) => _selected = item;
+    private void SelectHighestRisk() { if (HighestRisk is not null) { _selected = HighestRisk; _view = "table"; } }
+    private void SelectSegment(string segment) { _segmentFilter = _segmentFilter == segment ? string.Empty : segment; _view = "table"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void ResetFilters() { _activeFilter = "all"; _healthFilter = string.Empty; _segmentFilter = string.Empty; _search = string.Empty; _sort = "risk"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void NavigateAccount(Guid accountId) => Nav.NavigateTo($"/accounts/{accountId}");
+    private void OnSearchChanged(BlazorChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnHealthChanged(BlazorChangeEventArgs e) { _healthFilter = e.Value?.ToString() ?? string.Empty; _activeFilter = "all"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnSegmentChanged(BlazorChangeEventArgs e) { _segmentFilter = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnSortChanged(BlazorChangeEventArgs e) { _sort = e.Value?.ToString() ?? "risk"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void ApplyDistribution(string label, string title) { if (title.Contains("Health", StringComparison.OrdinalIgnoreCase)) _healthFilter = _healthFilter == label ? string.Empty : label; else _segmentFilter = _segmentFilter == label ? string.Empty : label; _activeFilter = "all"; _view = "table"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void ShowToast(string message, string kind) { _toastMessage = message.Length <= 140 ? message : $"{message[..137]}..."; _toastKind = ToastKind(kind); _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+
+    private RenderFragment HealthCard(AccountHealthItem item) => @<article class="@(IsSelected(item) ? "ahl-health-card ahl-health-card-selected" : "ahl-health-card")" @onclick="@(() => SelectItem(item))"><div class="ahl-card-top"><span class="ahl-card-icon ahl-tone-@item.Tone"><i class="bi bi-heart-pulse" aria-hidden="true"></i></span><span class="ahl-badge @BadgeClass(item)">@item.Status</span></div><h3>@item.AccountName</h3><p>@item.Signal</p><div class="ahl-card-stats"><div><span>Score</span><strong>@item.Score</strong></div><div><span>Segment</span><strong>@item.Segment</strong></div></div></article>;
+    private RenderFragment AnalyticsPanel(string title, IReadOnlyList<DistributionRow> rows, string icon, string tone) => @<section class="ahl-analytics-panel @tone"><h3><i class="bi @icon" aria-hidden="true"></i> @title</h3><div class="ahl-analytics-list">@foreach (var row in rows) { <button type="button" @onclick="@(() => ApplyDistribution(row.Label, title))"><span>@row.Label</span><div><i style="width:@row.Width"></i></div><strong>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><small>@row.Percent.ToString("P0", CultureInfo.CurrentCulture)</small></button> }</div></section>;
+    private RenderFragment InsightPanel => @<section class="ahl-analytics-panel ahl-tone-amber"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Executive insight</h3><div class="ahl-insight-grid"><div><span>Healthy</span><strong>@HealthyCount</strong><small>score 75+</small></div><div><span>Watch</span><strong>@WatchCount</strong><small>score 50-74</small></div><div><span>Risk</span><strong>@RiskCount</strong><small>score under 50</small></div><div><span>Critical</span><strong>@CriticalCount</strong><small>note pressure</small></div></div><p>@GuidanceText</p></section>;
+
+    private string MetricCardClass(Metric metric) => $"ahl-kpi-card {metric.Tone} {(_activeFilter == metric.Filter ? "ahl-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewOption view) => $"ahl-view-btn {(view.Id == _view ? "ahl-view-btn-active" : string.Empty)}";
+    private int ViewCount(string view) => view switch { "risk" => RiskRows.Count, "segments" => SegmentRows.Count, _ => FilteredRows.Count };
+    private bool IsSelected(AccountHealthItem item) => _selected?.AccountId == item.AccountId;
+    private IReadOnlyList<SegmentRow> BuildSegmentRows() { var rows = _items.GroupBy(x => x.Segment).Select(g => new SegmentRow(g.Key, (int)Math.Round(g.Average(x => x.Score)), g.Count(x => x.Score < 50))).OrderBy(r => r.AverageScore).ThenBy(r => r.Segment).ToList(); var max = Math.Max(1, rows.Select(r => r.RiskCount).DefaultIfEmpty(1).Max()); return rows.Select(r => r with { Width = WidthPct(Math.Max(1, r.RiskCount), max) }).ToList(); }
+    private static IReadOnlyList<DistributionRow> BuildDistribution(IEnumerable<AccountHealthItem> items, Func<AccountHealthItem, string> labelSelector) { var rows = items.GroupBy(labelSelector).Select(g => new DistributionRow(g.Key, g.Count(), 0, "0%")).OrderByDescending(r => r.Count).ThenBy(r => r.Label).ToList(); var total = Math.Max(1, rows.Sum(r => r.Count)); var max = Math.Max(1, rows.Select(r => r.Count).DefaultIfEmpty(1).Max()); return rows.Select(r => r with { Percent = (double)r.Count / total, Width = WidthPct(r.Count, max) }).ToList(); }
+    private static IEnumerable<string> ScoreDrivers(AccountHealthItem item) { yield return $"Base score adjusted by account status: {item.AccountStatus}."; if (item.CriticalNotes > 0) yield return $"Critical note penalty: {item.CriticalNotes} critical note(s)."; if (item.RiskNotes > 0) yield return $"Risk/issue note penalty: {item.RiskNotes} note(s)."; if (item.AcceptedInvites > 0) yield return "Portal acceptance bonus applied."; if (item.AnnualRevenue >= 1000000) yield return "High revenue bonus applied."; }
+    private static string BadgeClass(AccountHealthItem item) => item.Tone switch { "success" => "ahl-badge-success", "warning" => "ahl-badge-warning", _ => "ahl-badge-danger" };
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static string WidthPct(int value, int max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, (double)value / max * 100))).ToString("F1", CultureInfo.InvariantCulture) + "%";
+    private static string FormatCurrency(decimal? value) => value.HasValue ? value.Value.ToString("C0", CultureInfo.CurrentCulture) : "—";
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : "success";
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; }
+
+    private sealed record ViewOption(string Id, string Label, string Icon);
+    private sealed record Metric(string Filter, string Value, string Label, string Caption, string Icon, string Tone);
+    private sealed record DistributionRow(string Label, int Count, double Percent, string Width);
+    private sealed record SegmentRow(string Segment, int AverageScore, int RiskCount) { public string Width { get; init; } = "0%"; }
+    private sealed record AccountHealthItem(Guid AccountId, string AccountName, string AccountNumber, string Segment, string Lifecycle, string AccountStatus, decimal? AnnualRevenue, int CriticalNotes, int RiskNotes, int AcceptedInvites, int PendingInvites, int Score, string Status, string Signal, string Tone);
+}

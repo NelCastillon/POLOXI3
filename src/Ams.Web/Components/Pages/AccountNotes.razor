@@ -1,19 +1,265 @@
 @page "/client/account-notes"
 @namespace Ams.Web.Components.Pages
-@inject ApiClient Api
-@inject BreadcrumbService Breadcrumbs
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
 @using Ams.Application.Common.Dtos
 @using Ams.Application.Features.AccountNotes
-@using Ams.Web.Components.Pages.Accounts
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
 
-<PageTitle>Account Notes — Tenant Admin</PageTitle>
+<PageTitle>Enterprise Account Notes</PageTitle>
 
-<AppPageHeader Title="Account Notes" Subtitle="Tenant Admin notes and account observations" Icon="bi-sticky"><Actions><button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> New Note</button><button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button></Actions></AppPageHeader>
-<section class="ma-hero acct-hero"><div><span class="ma-eyebrow">Tenant Admin · Account Intelligence</span><h2>Account Notes Workspace</h2><p>Track critical observations, follow-up items, risk flags, and account context across the tenant.</p></div></section>
-<div class="pc-kpi-strip acct-kpi-strip"><div class="pc-kpi-card @(_activeFilter is null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)'><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-sticky"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Notes</div></div></div><div class="pc-kpi-card @(_activeFilter == "Critical" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Critical")'><span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-exclamation-circle"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.NoteTypeCode == "Critical")</div><div class="pc-kpi-label">Critical</div></div></div><div class="pc-kpi-card @(_activeFilter == "Risk" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Risk")'><span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-shield-exclamation"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.NoteTypeCode == "Risk")</div><div class="pc-kpi-label">Risk</div></div></div><div class="pc-kpi-card @(_activeFilter == "today" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("today")'><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-calendar-check"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.CreatedDateUtc.Date == DateTime.UtcNow.Date)</div><div class="pc-kpi-label">Today</div></div></div></div>
-<div class="ma-filter-bar acct-filter-bar"><div class="ma-search-wrap"><i class="bi bi-search"></i><input class="ma-search" value="@_search" @oninput="OnSearchChanged" placeholder="Search account or note text…" /></div><button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button><span class="ma-filter-count">@Filtered.Count() notes</span></div>
-@if (_loadError is not null) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div> }
-<div class="ma-content acct-timeline-card">@if (_loading) { <div class="mt-loading"><div class="um-spinner"></div><span>Loading notes…</span></div> }<div class="ma-feed">@foreach (var note in Filtered.OrderByDescending(x => x.CreatedDateUtc)) { <div class="ma-feed-item"><div class="ma-feed-icon acct-tone-@(note.NoteTypeCode == "Critical" ? "danger" : note.NoteTypeCode == "Risk" ? "warning" : "info")"><i class="bi bi-sticky"></i></div><div class="ma-feed-body"><div class="ma-feed-hdr"><span class="ma-feed-acct">@note.AccountName</span><span class="ma-type-chip acct-tone-info">@note.NoteTypeCode</span></div><div class="ma-feed-notes">@note.NoteText</div><div class="ma-feed-meta"><span><i class="bi bi-clock"></i> @note.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</span></div></div></div> } @if (!Filtered.Any()) { <div class="ma-empty"><i class="bi bi-sticky ma-empty-icon"></i><span>No notes match current filters.</span></div> }</div></div>
-<SfDialog @bind-Visible="_showForm" Width="640px" IsModal="true" ShowCloseIcon="false"><DialogContent><div class="um-modal-header"><i class="bi bi-sticky"></i><span>New Account Note</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button></div><div class="um-modal-body"><div class="um-form-grid"><div class="um-field"><label>Account <span class="text-danger">*</span></label><InputSelect @bind-Value="_accountId" class="um-input"><option value="">Select account</option>@foreach (var a in _accounts) { <option value="@a.AccountId">@a.AccountName</option> }</InputSelect></div><div class="um-field"><label>Type</label><InputSelect @bind-Value="_noteType" class="um-input"><option>General</option><option>FollowUp</option><option>Issue</option><option>Opportunity</option><option>Risk</option><option>Critical</option></InputSelect></div><div class="um-field um-field--full"><label>Note Text <span class="text-danger">*</span></label><InputTextArea @bind-Value="_noteText" class="um-input" rows="5" /></div></div></div><div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button><button class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">Save</button></div></DialogContent></SfDialog>
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
-@code { List<AccountNoteDto> _items = []; List<AccountDto> _accounts = []; Guid? _accountId; string _search = string.Empty, _noteText = string.Empty, _noteType = "General"; string? _activeFilter, _loadError; bool _loading, _saving, _showForm; SfToast _toast = default!; IEnumerable<AccountNoteDto> Filtered => _items.Where(x => (_activeFilter switch { "today" => x.CreatedDateUtc.Date == DateTime.UtcNow.Date, null => true, _ => x.NoteTypeCode == _activeFilter }) && (string.IsNullOrWhiteSpace(_search) || x.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.NoteText.Contains(_search, StringComparison.OrdinalIgnoreCase))); protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Accounts", "/accounts"), new("Account Notes")); await LoadAsync(); } async Task LoadAsync() { _loading = true; _loadError = null; try { _items = (await Api.SearchAccountNotesAsync(AccountPageConstants.TenantId))?.Items.ToList() ?? []; _accounts = (await Api.SearchAccountsAsync(AccountPageConstants.TenantId))?.Items.ToList() ?? []; } catch (Exception ex) { _loadError = $"Failed to load notes: {ex.Message}"; } finally { _loading = false; } } void OpenCreate() { _accountId = null; _noteText = string.Empty; _noteType = "General"; _showForm = true; } async Task SaveAsync() { if (!_accountId.HasValue || string.IsNullOrWhiteSpace(_noteText)) return; _saving = true; try { await Api.CreateAccountNoteAsync(new CreateAccountNoteRequest { TenantId = AccountPageConstants.TenantId, AccountId = _accountId.Value, NoteText = _noteText, NoteTypeCode = _noteType }); _showForm = false; await _toast.ShowAsync(new() { Content = "Note saved", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } } void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; } void SetFilter(string? key) { _activeFilter = key; } void ResetFilters() { _activeFilter = null; _search = string.Empty; } }
+@if (_toastVisible)
+{
+    <div class="acn-toast acn-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="acn-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="acn-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="acn-form-modal" role="dialog" aria-modal="true" aria-labelledby="accountNoteFormTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="acn-modal-header">
+                    <span class="acn-modal-icon"><i class="bi bi-sticky" aria-hidden="true"></i></span>
+                    <div><h2 id="accountNoteFormTitle">New Account Note</h2><p>Capture account observations, risk flags, follow-up items, and tenant-visible context.</p></div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_saving" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="acn-modal-body">
+                    <div class="acn-form-banner"><i class="bi bi-shield-check" aria-hidden="true"></i><span><strong>Account intelligence note</strong><span>Notes are tenant scoped and synchronized to Client.AccountNote.</span></span></div>
+                    <div class="acn-form-grid">
+                        <div class="acn-field acn-field-wide"><label for="accountId">Account <span>*</span></label><InputSelect id="accountId" class="acn-input" @bind-Value="_form.AccountId"><option value="">Select account</option>@foreach (var account in AccountOptions) { <option value="@account.AccountId.ToString()">@account.AccountName</option> }</InputSelect><ValidationMessage For="() => _form.AccountId" class="text-danger" /></div>
+                        <div class="acn-field"><label for="noteType">Type <span>*</span></label><InputSelect id="noteType" class="acn-input" @bind-Value="_form.NoteTypeCode">@foreach (var type in NoteTypeOptions) { <option value="@type">@type</option> }</InputSelect><ValidationMessage For="() => _form.NoteTypeCode" class="text-danger" /></div>
+                        <div class="acn-field"><label for="priorityPreview">Priority</label><input id="priorityPreview" class="acn-input" value="@PriorityLabel(_form.NoteTypeCode)" readonly /></div>
+                        <div class="acn-field acn-field-wide"><label for="noteText">Note Text <span>*</span></label><InputTextArea id="noteText" class="acn-input" rows="6" @bind-Value="_form.NoteText" /><ValidationMessage For="() => _form.NoteText" class="text-danger" /></div>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(_formError))
+                    {
+                        <div class="acn-form-error"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_formError</div>
+                    }
+                </div>
+                <div class="acn-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_saving">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@if (_saving) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } Save Note</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="acn-enterprise-page">
+    <section class="acn-hero">
+        <div class="acn-hero-left">
+            <span class="acn-hero-icon"><i class="bi bi-sticky" aria-hidden="true"></i></span>
+            <div>
+                <div class="acn-title-row">
+                    <h1>Account Notes Command Center</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> Live account workflow</span>
+                    <span><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+                    <span><i class="bi bi-stars" aria-hidden="true"></i> Importance ranked</span>
+                </div>
+                <p>Track critical observations, risk flags, follow-ups, opportunities, and account context across the tenant using a full-width enterprise workspace.</p>
+            </div>
+        </div>
+        <div class="acn-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat acn-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/accounts")'><i class="bi bi-building" aria-hidden="true"></i> Accounts</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Note</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger acn-error-banner" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    @if (_loading)
+    {
+        <section class="acn-loading-state"><i class="bi bi-arrow-repeat acn-spin" aria-hidden="true"></i><strong>Loading enterprise account notes...</strong><span>Syncing notes, accounts, note types, risk flags, and recent activity.</span></section>
+    }
+    else
+    {
+        <section class="acn-kpi-strip" aria-label="Account note KPI filters">@foreach (var metric in Metrics) { <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="@(() => SetFilter(metric.Filter))"><span class="acn-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span><span><span class="acn-kpi-val">@metric.Value</span><span class="acn-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span></button> }</section>
+
+        <section class="acn-workflow-strip" aria-label="Account note workflow actions"><button type="button" class="acn-workflow-card acn-workflow-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i><span><strong>Create note</strong><span>Capture new account context.</span></span></button><button type="button" class="acn-workflow-card" @onclick='() => SetFilter("Critical")'><i class="bi bi-exclamation-circle" aria-hidden="true"></i><span><strong>Critical review</strong><span>Inspect urgent account notes.</span></span></button><button type="button" class="acn-workflow-card" @onclick='() => SetFilter("Risk")'><i class="bi bi-shield-exclamation" aria-hidden="true"></i><span><strong>Risk watch</strong><span>Review account risk flags.</span></span></button><button type="button" class="acn-workflow-card" @onclick='() => SetView("analytics")'><i class="bi bi-bar-chart-line" aria-hidden="true"></i><span><strong>Analyze notes</strong><span>Monitor note type mix.</span></span></button></section>
+
+        <section class="acn-filter-panel">
+            <div class="acn-search-wrap"><span class="acn-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span><div class="acn-search-body"><label for="accountNotesSearch">Search account notes</label><input id="accountNotesSearch" class="acn-search-input" value="@_search" @oninput="OnSearchChanged" placeholder="Search account, note type, note text, date, or importance..." /><span>Search filters every view, card, timeline, analytics, and table.</span></div></div>
+            <label class="acn-filter-field">Type<select class="acn-filter-select" value="@_typeFilter" @onchange="OnTypeChanged"><option value="">All types</option>@foreach (var type in TypeOptions) { <option value="@type">@type</option> }</select></label>
+            <label class="acn-filter-field">Account<select class="acn-filter-select" value="@_accountFilter" @onchange="OnAccountChanged"><option value="">All accounts</option>@foreach (var account in AccountFilterOptions) { <option value="@account">@account</option> }</select></label>
+            <label class="acn-filter-field">Sort by<select class="acn-filter-select" value="@_sort" @onchange="OnSortChanged"><option value="importance">Importance</option><option value="recent">Recent</option><option value="account">Account</option><option value="type">Type</option></select></label>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button><button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-cloud-arrow-down" aria-hidden="true"></i> Sync</button><div class="acn-filter-result"><strong>@SearchResultCount.ToString("N0", CultureInfo.CurrentCulture)</strong><span>shown</span></div>
+        </section>
+
+        <section class="acn-view-tabs" aria-label="Account note views">@foreach (var view in _views) { <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label <span>@ViewCount(view.Id)</span></button> }</section>
+
+        @if (_items.Count == 0)
+        {
+            <section class="acn-empty-state"><i class="bi bi-sticky" aria-hidden="true"></i><strong>No account notes available</strong><span>No account notes matched this tenant. Create a note after account records are available.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">Create account note</button></section>
+        }
+        else
+        {
+            <section class="acn-content-layout">
+                <main class="acn-main-card">
+                    @if (_view == "overview")
+                    {
+                        <div class="acn-section-head"><div><h2>Executive account notes overview</h2><p>Most important account intelligence by note type, recency, risk category, and account concentration.</p></div><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => SetView("timeline")'><i class="bi bi-clock-history" aria-hidden="true"></i> Timeline</button></div>
+                        <div class="acn-overview-grid"><section class="acn-spotlight-card"><span><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Highest importance note</span><strong>@(TopNote?.AccountName ?? "—")</strong><p>@(TopNote is null ? "No matching notes require attention." : $"{TopNote.NoteTypeCode} note created {RelativeAge(TopNote.CreatedDateUtc)}: {Truncate(TopNote.NoteText, 120)}")</p><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="SelectTopNote">Inspect note</button></section><section class="acn-guidance-card"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Account intelligence guidance</h3><p>@GuidanceText</p><div class="acn-guidance-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("Critical")'>Critical</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("Risk")'>Risk</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("today")'>Today</button></div></section></div>
+                        @ImportanceRankPanel
+                    }
+                    else if (_view == "timeline") { <div class="acn-section-head"><div><h2>Account notes timeline</h2><p>Chronological activity stream across the tenant.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenCreate">Add Note</button></div><div class="acn-timeline">@foreach (var note in FilteredRows) { @TimelineItem(note) }</div> }
+                    else if (_view == "priority") { <div class="acn-section-head"><div><h2>Priority watchlist</h2><p>Critical, risk, issue, and follow-up notes ranked by importance.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("Critical")'>Critical</button></div><div class="acn-card-grid">@foreach (var note in PriorityRows) { @NoteCard(note) }</div> }
+                    else if (_view == "accounts") { <div class="acn-section-head"><div><h2>Account concentration</h2><p>Accounts with note volume and recent account context.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/accounts")'>Open Accounts</button></div><div class="acn-account-grid">@foreach (var row in AccountRows) { <button type="button" class="@(row.AccountName == _accountFilter ? "acn-account-row acn-active" : "acn-account-row")" @onclick="@(() => SelectAccount(row.AccountName))"><span>@row.AccountName</span><div><i style="width:@row.Width"></i></div><strong>@row.Count</strong><small>@row.Latest</small></button> }</div> }
+                    else if (_view == "analytics") { <div class="acn-section-head"><div><h2>Account notes analytics</h2><p>Note type, recency, and account distribution across tenant account intelligence.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Refresh</button></div><div class="acn-analytics-grid">@AnalyticsPanel("Type distribution", TypeDistribution, "bi-tags", "acn-tone-blue") @AnalyticsPanel("Recency distribution", RecencyDistribution, "bi-calendar-check", "acn-tone-green") @InsightPanel</div> }
+                    else
+                    {
+                        <div class="acn-section-head"><div><h2>Account notes operating table</h2><p>Native notes table synchronized from the existing account notes API.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters">Reset</button></div>
+                        <div class="acn-table-wrap"><table class="acn-table"><thead><tr><th>Account</th><th>Type</th><th>Note</th><th>Created</th><th>Importance</th></tr></thead><tbody>@foreach (var note in FilteredRows) { <tr class="@(IsSelected(note) ? "acn-row-selected" : string.Empty)" @onclick="@(() => SelectNote(note))"><td><strong>@note.AccountName</strong><small>@note.AccountId</small></td><td><span class="acn-badge @TypeBadgeClass(note.NoteTypeCode)">@note.NoteTypeCode</span></td><td>@Truncate(note.NoteText, 160)</td><td>@FormatDateTime(note.CreatedDateUtc)<small>@RelativeAge(note.CreatedDateUtc)</small></td><td><strong>@ImportanceScore(note).ToString("N0", CultureInfo.CurrentCulture)</strong></td></tr> }</tbody></table></div>
+                    }
+                </main>
+
+                <aside class="acn-detail-panel">
+                    @if (_selected is null) { <div class="acn-detail-empty"><i class="bi bi-sticky" aria-hidden="true"></i><strong>Select a note</strong><span>Inspect account context, note type, created date, importance, and recommended actions.</span></div> }
+                    else
+                    {
+                        <div class="acn-detail-head"><div><span><i class="bi @NoteIcon(_selected.NoteTypeCode)" aria-hidden="true"></i> @_selected.NoteTypeCode note</span><h2>@_selected.AccountName</h2><p>@FormatDateTime(_selected.CreatedDateUtc) · @RelativeAge(_selected.CreatedDateUtc)</p></div><span class="acn-badge @TypeBadgeClass(_selected.NoteTypeCode)">@_selected.NoteTypeCode</span></div>
+                        <div class="acn-detail-summary"><div><span>Importance</span><strong>@ImportanceScore(_selected).ToString("N0", CultureInfo.CurrentCulture)</strong></div><div><span>Created</span><strong>@FormatDate(_selected.CreatedDateUtc)</strong></div><div><span>Account</span><strong>@_selected.AccountName</strong></div><div><span>Type</span><strong>@_selected.NoteTypeCode</strong></div></div>
+                        <div class="acn-note-card"><strong>Note Text</strong><p>@_selected.NoteText</p></div>
+                        <div class="acn-rules-card"><header><strong>Recommended actions</strong><span>@PriorityLabel(_selected.NoteTypeCode)</span></header>@foreach (var action in RecommendedActions(_selected)) { <p><em>@action</em><span>active</span></p> }</div>
+                        <div class="acn-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Note</button><button type="button" class="um-btn um-btn-ghost" @onclick='() => OpenAccount(_selected.AccountId)'><i class="bi bi-building" aria-hidden="true"></i> Account</button></div>
+                    }
+                </aside>
+            </section>
+        }
+    }
+</div>
+
+@code {
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private List<AccountNoteDto> _items = [];
+    private List<AccountDto> _accounts = [];
+    private AccountNoteDto? _selected;
+    private NoteFormModel _form = new();
+    private bool _loading = true;
+    private bool _saving;
+    private bool _showForm;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private string _activeFilter = "all";
+    private string _view = "overview";
+    private string _search = string.Empty;
+    private string _typeFilter = string.Empty;
+    private string _accountFilter = string.Empty;
+    private string _sort = "importance";
+    private readonly ViewOption[] _views = [new("overview", "Overview", "bi-speedometer2"), new("timeline", "Timeline", "bi-clock-history"), new("priority", "Priority", "bi-exclamation-triangle"), new("accounts", "Accounts", "bi-building"), new("analytics", "Analytics", "bi-bar-chart-line"), new("table", "Table", "bi-table")];
+    private static readonly string[] NoteTypeOptions = ["General", "FollowUp", "Issue", "Opportunity", "Risk", "Critical"];
+
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
+    private int SearchResultCount => _view switch { "priority" => PriorityRows.Count, _ => FilteredRows.Count };
+    private int CriticalCount => _items.Count(x => x.NoteTypeCode == "Critical");
+    private int RiskCount => _items.Count(x => x.NoteTypeCode == "Risk");
+    private int FollowUpCount => _items.Count(x => x.NoteTypeCode == "FollowUp");
+    private int TodayCount => _items.Count(x => x.CreatedDateUtc.Date == DateTime.UtcNow.Date);
+    private int AccountCount => _items.Select(x => x.AccountId).Distinct().Count();
+    private AccountNoteDto? TopNote => FilteredRows.OrderByDescending(ImportanceScore).ThenByDescending(x => x.CreatedDateUtc).FirstOrDefault();
+    private string GuidanceText => CriticalCount > 0 ? $"{CriticalCount.ToString("N0", CultureInfo.CurrentCulture)} critical note(s) need immediate account review." : RiskCount > 0 ? $"{RiskCount.ToString("N0", CultureInfo.CurrentCulture)} risk note(s) should be reviewed before renewal or placement activity." : FollowUpCount > 0 ? $"{FollowUpCount.ToString("N0", CultureInfo.CurrentCulture)} follow-up note(s) are ready for account action." : "Account notes are stable. Continue capturing observations and follow-up context.";
+    private IEnumerable<AccountDto> AccountOptions => _accounts.OrderBy(x => x.AccountName);
+    private IEnumerable<string> TypeOptions => _items.Select(x => x.NoteTypeCode).Where(x => !string.IsNullOrWhiteSpace(x)).Concat(NoteTypeOptions).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private IEnumerable<string> AccountFilterOptions => _items.Select(x => x.AccountName).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private IReadOnlyList<Metric> Metrics => [new("all", _items.Count.ToString("N0", CultureInfo.CurrentCulture), "Notes", "Tenant account notes", "bi-sticky", "acn-kpi-blue"), new("Critical", CriticalCount.ToString("N0", CultureInfo.CurrentCulture), "Critical", "Immediate review", "bi-exclamation-circle", "acn-kpi-red"), new("Risk", RiskCount.ToString("N0", CultureInfo.CurrentCulture), "Risk", "Risk observations", "bi-shield-exclamation", "acn-kpi-amber"), new("FollowUp", FollowUpCount.ToString("N0", CultureInfo.CurrentCulture), "Follow-Up", "Action needed", "bi-flag", "acn-kpi-purple"), new("today", TodayCount.ToString("N0", CultureInfo.CurrentCulture), "Today", "Created today", "bi-calendar-check", "acn-kpi-green"), new("accounts", AccountCount.ToString("N0", CultureInfo.CurrentCulture), "Accounts", "Accounts with notes", "bi-building", "acn-kpi-cyan")];
+    private IReadOnlyList<AccountNoteDto> FilteredRows => ApplyNoteFilters(_items).ToList();
+    private IReadOnlyList<AccountNoteDto> PriorityRows => ApplyNoteFilters(_items.Where(x => x.NoteTypeCode is "Critical" or "Risk" or "Issue" or "FollowUp")).ToList();
+    private IReadOnlyList<DistributionRow> TypeDistribution => BuildDistribution(_items, x => x.NoteTypeCode, TypeBadgeClass);
+    private IReadOnlyList<DistributionRow> RecencyDistribution => BuildDistribution(_items, RecencyBucket, _ => "acn-badge-info");
+    private IReadOnlyList<AccountRow> AccountRows => BuildAccountRows();
+
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Accounts", "/accounts"), new("Account Notes", "/client/account-notes")); await LoadAsync(); }
+    private async Task LoadAsync() { _loading = true; _loadError = null; try { if (_tenantId == Guid.Empty) await ResolveCurrentUserContextAsync(); _items = (await Api.SearchAccountNotesAsync(_tenantId, pageSize: 250))?.Items.ToList() ?? []; _accounts = (await Api.SearchAccountsAsync(_tenantId, pageSize: 250))?.Items.ToList() ?? []; _selected = _selected is null ? FilteredRows.FirstOrDefault() : _items.FirstOrDefault(x => x.AccountNoteId == _selected.AccountNoteId) ?? FilteredRows.FirstOrDefault(); ShowToast("Account notes synced successfully.", "success"); } catch (Exception ex) { _loadError = $"Failed to load account notes: {ex.Message}"; _items = []; _accounts = []; _selected = null; ShowToast($"Account notes load failed: {ex.Message}", "danger"); } finally { _loading = false; } }
+
+    private IEnumerable<AccountNoteDto> ApplyNoteFilters(IEnumerable<AccountNoteDto> notes)
+    {
+        var query = notes;
+        if (!string.IsNullOrWhiteSpace(_search)) { var term = _search.Trim(); query = query.Where(x => Contains(x.AccountName, term) || Contains(x.NoteTypeCode, term) || Contains(x.NoteText, term) || FormatDateTime(x.CreatedDateUtc).Contains(term, StringComparison.OrdinalIgnoreCase)); }
+        if (!string.IsNullOrWhiteSpace(_typeFilter)) query = query.Where(x => x.NoteTypeCode.Equals(_typeFilter, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(_accountFilter)) query = query.Where(x => x.AccountName.Equals(_accountFilter, StringComparison.OrdinalIgnoreCase));
+        query = _activeFilter switch { "today" => query.Where(x => x.CreatedDateUtc.Date == DateTime.UtcNow.Date), "accounts" => query, "Critical" or "Risk" or "FollowUp" or "Issue" or "Opportunity" or "General" => query.Where(x => x.NoteTypeCode == _activeFilter), _ => query };
+        return _sort switch { "recent" => query.OrderByDescending(x => x.CreatedDateUtc), "account" => query.OrderBy(x => x.AccountName).ThenByDescending(x => x.CreatedDateUtc), "type" => query.OrderBy(x => x.NoteTypeCode).ThenByDescending(x => x.CreatedDateUtc), _ => query.OrderByDescending(ImportanceScore).ThenByDescending(x => x.CreatedDateUtc) };
+    }
+
+    private void SetFilter(string filter) { _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter; _view = filter switch { "Critical" or "Risk" or "FollowUp" => "priority", "today" => "timeline", "accounts" => "accounts", _ => _view }; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void SetView(string view) => _view = view;
+    private void ResetFilters() { _activeFilter = "all"; _search = string.Empty; _typeFilter = string.Empty; _accountFilter = string.Empty; _sort = "importance"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void SelectNote(AccountNoteDto note) => _selected = note;
+    private void SelectTopNote() { if (TopNote is not null) { _selected = TopNote; _view = "table"; } }
+    private void SelectAccount(string accountName) { _accountFilter = _accountFilter == accountName ? string.Empty : accountName; _view = "timeline"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OpenAccount(Guid accountId) => Nav.NavigateTo($"/accounts/{accountId}");
+    private void OnSearchChanged(BlazorChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnTypeChanged(BlazorChangeEventArgs e) { _typeFilter = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnAccountChanged(BlazorChangeEventArgs e) { _accountFilter = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnSortChanged(BlazorChangeEventArgs e) { _sort = e.Value?.ToString() ?? "importance"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OpenCreate() { _form = new(); _formError = null; _showForm = true; }
+    private void CloseForm() { if (_saving) return; _showForm = false; _form = new(); _formError = null; }
+    private async Task SaveAsync()
+    {
+        _saving = true; _formError = null;
+        try
+        {
+            if (!Guid.TryParse(_form.AccountId, out var accountId)) { _formError = "Select an account."; return; }
+            await Api.CreateAccountNoteAsync(new CreateAccountNoteRequest { TenantId = _tenantId, AccountId = accountId, NoteText = _form.NoteText.Trim(), NoteTypeCode = _form.NoteTypeCode, CreatedByUserId = _tenantAdminUserId });
+            _showForm = false; _form = new(); await LoadAsync(); ShowToast("Account note saved.", "success");
+        }
+        catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; ShowToast($"Save failed: {ex.Message}", "danger"); }
+        finally { _saving = false; }
+    }
+    private void ShowToast(string message, string kind) { _toastMessage = message.Length <= 140 ? message : $"{message[..137]}..."; _toastKind = ToastKind(kind); _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+
+    private RenderFragment ImportanceRankPanel => @<section class="acn-panel"><h3><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Note importance ranking</h3><div class="acn-rank-stack">@foreach (var note in FilteredRows.Take(8)) { <button type="button" class="@(IsSelected(note) ? "acn-rank-row acn-rank-active" : "acn-rank-row")" @onclick="@(() => SelectNote(note))"><span>@note.AccountName</span><div><i style="width:@WidthPct(ImportanceScore(note), MaxImportance)"></i></div><strong>@note.NoteTypeCode</strong><small>@RelativeAge(note.CreatedDateUtc)</small></button> }</div></section>;
+    private RenderFragment TimelineItem(AccountNoteDto note) => @<article class="@(IsSelected(note) ? "acn-timeline-item acn-timeline-item-selected" : "acn-timeline-item")" @onclick="@(() => SelectNote(note))"><span class="acn-timeline-icon @TypeToneClass(note.NoteTypeCode)"><i class="bi @NoteIcon(note.NoteTypeCode)" aria-hidden="true"></i></span><div class="acn-timeline-body"><header><strong>@note.AccountName</strong><span class="acn-badge @TypeBadgeClass(note.NoteTypeCode)">@note.NoteTypeCode</span></header><p>@note.NoteText</p><footer><span><i class="bi bi-clock" aria-hidden="true"></i> @FormatDateTime(note.CreatedDateUtc)</span><span>@RelativeAge(note.CreatedDateUtc)</span></footer></div></article>;
+    private RenderFragment NoteCard(AccountNoteDto note) => @<article class="@(IsSelected(note) ? "acn-note-card acn-note-card-selected" : "acn-note-card")" @onclick="@(() => SelectNote(note))"><div class="acn-note-top"><span class="acn-note-icon @TypeToneClass(note.NoteTypeCode)"><i class="bi @NoteIcon(note.NoteTypeCode)" aria-hidden="true"></i></span><span class="acn-badge @TypeBadgeClass(note.NoteTypeCode)">@note.NoteTypeCode</span></div><h3>@note.AccountName</h3><p>@Truncate(note.NoteText, 160)</p><div class="acn-note-stats"><div><span>Created</span><strong>@RelativeAge(note.CreatedDateUtc)</strong></div><div><span>Importance</span><strong>@ImportanceScore(note).ToString("N0", CultureInfo.CurrentCulture)</strong></div></div></article>;
+    private RenderFragment AnalyticsPanel(string title, IReadOnlyList<DistributionRow> rows, string icon, string tone) => @<section class="acn-analytics-panel @tone"><h3><i class="bi @icon" aria-hidden="true"></i> @title</h3><div class="acn-analytics-list">@foreach (var row in rows) { <button type="button" @onclick="@(() => ApplyDistribution(row.Label, title))"><span>@row.Label</span><div><i style="width:@row.Width"></i></div><strong>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><small>@row.Percent.ToString("P0", CultureInfo.CurrentCulture)</small></button> }</div></section>;
+    private RenderFragment InsightPanel => @<section class="acn-analytics-panel acn-tone-amber"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Executive insight</h3><div class="acn-insight-grid"><div><span>Accounts</span><strong>@AccountCount.ToString("N0", CultureInfo.CurrentCulture)</strong><small>with notes</small></div><div><span>Today</span><strong>@TodayCount.ToString("N0", CultureInfo.CurrentCulture)</strong><small>new notes</small></div><div><span>Critical</span><strong>@CriticalCount.ToString("N0", CultureInfo.CurrentCulture)</strong><small>urgent</small></div><div><span>Risk</span><strong>@RiskCount.ToString("N0", CultureInfo.CurrentCulture)</strong><small>watchlist</small></div></div><p>@GuidanceText</p></section>;
+    private void ApplyDistribution(string label, string title) { if (title.Contains("Type", StringComparison.OrdinalIgnoreCase)) _typeFilter = _typeFilter == label ? string.Empty : label; else _activeFilter = label == "Today" ? "today" : "all"; _view = "table"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+
+    private decimal MaxImportance => Math.Max(1m, FilteredRows.Select(ImportanceScore).DefaultIfEmpty(1m).Max());
+    private string MetricCardClass(Metric metric) => $"acn-kpi-card {metric.Tone} {(_activeFilter == metric.Filter ? "acn-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewOption view) => $"acn-view-btn {(view.Id == _view ? "acn-view-btn-active" : string.Empty)}";
+    private int ViewCount(string view) => view switch { "priority" => PriorityRows.Count, "accounts" => AccountRows.Count, "analytics" => _items.Count, "table" => FilteredRows.Count, _ => FilteredRows.Count };
+    private bool IsSelected(AccountNoteDto note) => _selected?.AccountNoteId == note.AccountNoteId;
+    private IReadOnlyList<AccountRow> BuildAccountRows() { var rows = _items.GroupBy(x => x.AccountName).Select(g => new AccountRow(g.Key, g.Count(), g.Max(x => x.CreatedDateUtc))).OrderByDescending(x => x.Count).ThenBy(x => x.AccountName).ToList(); var max = Math.Max(1, rows.Select(x => x.Count).DefaultIfEmpty(1).Max()); return rows.Select(x => x with { Width = WidthPct(x.Count, max), Latest = RelativeAge(x.LastNoteUtc) }).ToList(); }
+    private static IReadOnlyList<DistributionRow> BuildDistribution(IEnumerable<AccountNoteDto> items, Func<AccountNoteDto, string> labelSelector, Func<string, string> badgeSelector) { var rows = items.GroupBy(labelSelector).Select(g => new DistributionRow(g.Key, g.Count(), 0, badgeSelector(g.Key), "0%")).OrderByDescending(x => x.Count).ThenBy(x => x.Label).ToList(); var total = Math.Max(1, rows.Sum(x => x.Count)); var max = Math.Max(1, rows.Select(x => x.Count).DefaultIfEmpty(1).Max()); return rows.Select(x => x with { Percent = (double)x.Count / total, Width = WidthPct(x.Count, max) }).ToList(); }
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static decimal ImportanceScore(AccountNoteDto note) => NoteTypeScore(note.NoteTypeCode) + RecencyScore(note.CreatedDateUtc) + Math.Min(20, note.NoteText.Length / 80m);
+    private static decimal NoteTypeScore(string type) => type switch { "Critical" => 80m, "Risk" => 65m, "Issue" => 55m, "FollowUp" => 45m, "Opportunity" => 35m, _ => 20m };
+    private static decimal RecencyScore(DateTime value) => (DateTime.UtcNow.Date - value.Date).TotalDays switch { <= 0 => 25m, <= 7 => 18m, <= 30 => 10m, _ => 0m };
+    private static string RecencyBucket(AccountNoteDto note) => (DateTime.UtcNow.Date - note.CreatedDateUtc.Date).TotalDays switch { <= 0 => "Today", <= 7 => "Last 7 Days", <= 30 => "Last 30 Days", _ => "Older" };
+    private static string WidthPct(decimal value, decimal max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, (double)(value / max * 100)))).ToString("F1", CultureInfo.InvariantCulture) + "%";
+    private static string WidthPct(int value, int max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, (double)value / max * 100))).ToString("F1", CultureInfo.InvariantCulture) + "%";
+    private static string FormatDate(DateTime value) => value.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture);
+    private static string FormatDateTime(DateTime value) => value.ToLocalTime().ToString("MMM d, yyyy h:mm tt", CultureInfo.CurrentCulture);
+    private static string RelativeAge(DateTime value) { var days = (DateTime.UtcNow.Date - value.Date).Days; return days <= 0 ? "Today" : days == 1 ? "Yesterday" : $"{days} days ago"; }
+    private static string Truncate(string value, int length) => value.Length <= length ? value : $"{value[..Math.Max(0, length - 3)]}...";
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : "success";
+    private static string PriorityLabel(string type) => type switch { "Critical" => "Immediate", "Risk" => "High", "Issue" => "High", "FollowUp" => "Action", "Opportunity" => "Growth", _ => "Monitor" };
+    private static IEnumerable<string> RecommendedActions(AccountNoteDto note) { if (note.NoteTypeCode == "Critical") yield return "Review this account immediately and coordinate with the assigned owner."; if (note.NoteTypeCode == "Risk") yield return "Assess risk impact before renewal, placement, or coverage changes."; if (note.NoteTypeCode == "FollowUp") yield return "Schedule or complete the next account follow-up action."; if (note.NoteTypeCode == "Opportunity") yield return "Review cross-sell, upsell, or account expansion potential."; yield return "Confirm the note remains accurate and visible to the account workflow."; }
+    private static string NoteIcon(string type) => type switch { "Critical" => "bi-exclamation-circle", "Risk" => "bi-shield-exclamation", "Issue" => "bi-exclamation-triangle", "FollowUp" => "bi-flag", "Opportunity" => "bi-graph-up-arrow", _ => "bi-sticky" };
+    private static string TypeBadgeClass(string type) => type switch { "Critical" => "acn-badge-danger", "Risk" => "acn-badge-warning", "Issue" => "acn-badge-orange", "FollowUp" => "acn-badge-info", "Opportunity" => "acn-badge-success", _ => "acn-badge-muted" };
+    private static string TypeToneClass(string type) => type switch { "Critical" => "acn-tone-danger", "Risk" => "acn-tone-warning", "Issue" => "acn-tone-orange", "FollowUp" => "acn-tone-blue", "Opportunity" => "acn-tone-green", _ => "acn-tone-muted" };
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+    private sealed record ViewOption(string Id, string Label, string Icon);
+    private sealed record Metric(string Filter, string Value, string Label, string Caption, string Icon, string Tone);
+    private sealed record DistributionRow(string Label, int Count, double Percent, string BadgeClass, string Width);
+    private sealed record AccountRow(string AccountName, int Count, DateTime LastNoteUtc) { public string Width { get; init; } = "0%"; public string Latest { get; init; } = string.Empty; }
+    private sealed class NoteFormModel { [Required(ErrorMessage = "Account is required.")] public string AccountId { get; set; } = string.Empty; [Required, StringLength(50)] public string NoteTypeCode { get; set; } = "General"; [Required(ErrorMessage = "Note text is required."), StringLength(4000)] public string NoteText { get; set; } = string.Empty; }
+}

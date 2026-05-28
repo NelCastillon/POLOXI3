@@ -1,18 +1,310 @@
 @page "/client/account-events"
 @namespace Ams.Web.Components.Pages
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
 @inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
-@using Ams.Application.Common.Dtos
-@using Ams.Web.Components.Pages.Accounts
 
-<PageTitle>Account Events — Tenant Admin</PageTitle>
+<PageTitle>Enterprise Account Events</PageTitle>
 
-<AppPageHeader Title="Account Events" Subtitle="Tenant Admin event stream across account records" Icon="bi-lightning"><Actions><button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button></Actions></AppPageHeader>
-<section class="ma-hero acct-hero"><div><span class="ma-eyebrow">Tenant Admin · Account Intelligence</span><h2>Account Event Stream</h2><p>Review account creation, lifecycle, ownership, notes, portal, and relationship events in one operational feed.</p></div><div class="ma-hero-actions"><button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/accounts")'><i class="bi bi-building"></i> Account Directory</button></div></section>
-<div class="pc-kpi-strip acct-kpi-strip"><div class="pc-kpi-card @(_activeFilter is null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)'><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-lightning"></i></span><div><div class="pc-kpi-value">@_events.Count</div><div class="pc-kpi-label">Events</div></div></div><div class="pc-kpi-card @(_activeFilter == "Account" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Account")'><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-building"></i></span><div><div class="pc-kpi-value">@_events.Count(x => x.Type == "Account")</div><div class="pc-kpi-label">Account</div></div></div><div class="pc-kpi-card @(_activeFilter == "Note" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Note")'><span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-sticky"></i></span><div><div class="pc-kpi-value">@_events.Count(x => x.Type == "Note")</div><div class="pc-kpi-label">Notes</div></div></div><div class="pc-kpi-card @(_activeFilter == "Portal" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Portal")'><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-envelope"></i></span><div><div class="pc-kpi-value">@_events.Count(x => x.Type == "Portal")</div><div class="pc-kpi-label">Portal</div></div></div></div>
-<div class="ma-filter-bar acct-filter-bar"><div class="ma-search-wrap"><i class="bi bi-search"></i><input class="ma-search" value="@_search" @oninput="OnSearchChanged" placeholder="Search account events…" /></div><button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button><span class="ma-filter-count">@Filtered.Count() events</span></div>
-@if (_loadError is not null) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div> }
-@if (_loading) { <div class="mt-loading"><div class="um-spinner"></div><span>Loading account events…</span></div> }
-<div class="ma-content acct-timeline-card"><div class="ma-feed">@foreach (var group in Filtered.GroupBy(x => x.DateUtc.Date).OrderByDescending(g => g.Key)) { <div class="ma-date-sep"><span>@group.Key.ToString("MMM d, yyyy")</span></div>@foreach (var item in group.OrderByDescending(x => x.DateUtc)) { <div class="ma-feed-item" @onclick="() => NavigateAccount(item.AccountId)"><div class="ma-feed-icon acct-tone-@item.Tone"><i class="bi @item.Icon"></i></div><div class="ma-feed-body"><div class="ma-feed-hdr"><span class="ma-feed-acct">@item.Title</span><span class="ma-type-chip acct-tone-@item.Tone">@item.Type</span></div><div class="ma-feed-notes">@item.Description</div><div class="ma-feed-meta"><span><i class="bi bi-building"></i> @item.AccountName</span><span><i class="bi bi-clock"></i> @item.DateUtc.ToLocalTime().ToString("h:mm tt")</span></div></div></div> } } @if (!Filtered.Any()) { <div class="ma-empty"><i class="bi bi-lightning ma-empty-icon"></i><span>No account events match current filters.</span></div> }</div></div>
-@code { sealed record AccountEventItem(Guid? AccountId, string AccountName, string Type, string Title, string Description, DateTime DateUtc, string Icon, string Tone); List<AccountEventItem> _events = []; string _search = string.Empty; string? _activeFilter, _loadError; bool _loading; IEnumerable<AccountEventItem> Filtered => _events.Where(x => (_activeFilter is null || x.Type == _activeFilter) && (string.IsNullOrWhiteSpace(_search) || x.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Title.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Description.Contains(_search, StringComparison.OrdinalIgnoreCase))); protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Accounts", "/accounts"), new("Account Events")); await LoadAsync(); } async Task LoadAsync() { _loading = true; _loadError = null; try { var accounts = (await Api.SearchAccountsAsync(AccountPageConstants.TenantId))?.Items.ToList() ?? []; var notes = (await Api.SearchAccountNotesAsync(AccountPageConstants.TenantId))?.Items.ToList() ?? []; var invites = (await Api.SearchPortalInvitesAsync(AccountPageConstants.TenantId))?.Items.ToList() ?? []; _events = accounts.Take(100).Select(a => new AccountEventItem(a.AccountId, a.AccountName, "Account", "Account created", $"{a.AccountTypeCode} account in {a.StatusCode} status.", a.CreatedDateUtc, "bi-building", "info")).Concat(notes.Select(n => new AccountEventItem(n.AccountId, n.AccountName, "Note", n.NoteTypeCode, n.NoteText, n.CreatedDateUtc, "bi-sticky", n.NoteTypeCode == "Critical" ? "danger" : "warning"))).Concat(invites.Select(i => new AccountEventItem(i.AccountId, i.AccountName, "Portal", $"Portal invite {i.StatusCode}", $"{i.ContactName} invited at {i.InviteEmail}.", i.CreatedDateUtc, "bi-envelope", i.StatusCode == "Accepted" ? "success" : "info"))).OrderByDescending(x => x.DateUtc).ToList(); } catch (Exception ex) { _loadError = $"Failed to load account events: {ex.Message}"; } finally { _loading = false; } } void NavigateAccount(Guid? accountId) { if (accountId.HasValue) Nav.NavigateTo($"/accounts/{accountId.Value}"); } void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; } void SetFilter(string? key) { _activeFilter = key; } void ResetFilters() { _activeFilter = null; _search = string.Empty; } }
+@if (_toastVisible)
+{
+    <div class="aev-toast aev-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="aev-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+<div class="aev-enterprise-page">
+    <section class="aev-hero">
+        <div class="aev-hero-left">
+            <span class="aev-hero-icon"><i class="bi bi-lightning-charge" aria-hidden="true"></i></span>
+            <div>
+                <div class="aev-title-row">
+                    <h1>Account Events Command Center</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> Live derived workflow</span>
+                    <span><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+                    <span><i class="bi bi-stars" aria-hidden="true"></i> Importance ranked</span>
+                </div>
+                <p>Review account creation, lifecycle, note, portal, and relationship signals in one enterprise event stream.</p>
+            </div>
+        </div>
+        <div class="aev-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat aev-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/accounts")'><i class="bi bi-building" aria-hidden="true"></i> Accounts</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/client/account-notes")'><i class="bi bi-sticky" aria-hidden="true"></i> Notes</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick='() => SetView("timeline")'><i class="bi bi-clock-history" aria-hidden="true"></i> Event Stream</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger aev-error-banner" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    @if (_loading)
+    {
+        <section class="aev-loading-state"><i class="bi bi-arrow-repeat aev-spin" aria-hidden="true"></i><strong>Loading enterprise account events...</strong><span>Composing events from accounts, account notes, and portal invitations.</span></section>
+    }
+    else
+    {
+        <section class="aev-kpi-strip" aria-label="Account event KPI filters">
+            @foreach (var metric in Metrics)
+            {
+                <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="@(() => SetFilter(metric.Filter))">
+                    <span class="aev-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                    <span><span class="aev-kpi-val">@metric.Value</span><span class="aev-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
+                </button>
+            }
+        </section>
+
+        <section class="aev-workflow-strip" aria-label="Account event workflow actions">
+            <button type="button" class="aev-workflow-card aev-workflow-primary" @onclick='() => SetView("timeline")'><i class="bi bi-clock-history" aria-hidden="true"></i><span><strong>Timeline</strong><span>Review the full event stream.</span></span></button>
+            <button type="button" class="aev-workflow-card" @onclick='() => SetFilter("Critical")'><i class="bi bi-exclamation-circle" aria-hidden="true"></i><span><strong>Critical signals</strong><span>Prioritize risk and urgent notes.</span></span></button>
+            <button type="button" class="aev-workflow-card" @onclick='() => SetFilter("Portal")'><i class="bi bi-envelope" aria-hidden="true"></i><span><strong>Portal activity</strong><span>Monitor invitation events.</span></span></button>
+            <button type="button" class="aev-workflow-card" @onclick='() => SetView("analytics")'><i class="bi bi-graph-up-arrow" aria-hidden="true"></i><span><strong>Analytics</strong><span>Measure event mix and recency.</span></span></button>
+        </section>
+
+        <section class="aev-filter-panel">
+            <div class="aev-search-wrap">
+                <span class="aev-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+                <div class="aev-search-body">
+                    <label for="eventSearch">Search account events</label>
+                    <input id="eventSearch" class="aev-search-input" value="@_search" @oninput="OnSearchChanged" placeholder="Search account, event type, title, status, note, email, or date..." />
+                    <span>Search filters timeline, priority, analytics, table, and account concentration.</span>
+                </div>
+            </div>
+            <label class="aev-filter-field">Type<select class="aev-filter-select" value="@_typeFilter" @onchange="OnTypeChanged"><option value="">All types</option>@foreach (var type in TypeOptions) { <option value="@type">@type</option> }</select></label>
+            <label class="aev-filter-field">Tone<select class="aev-filter-select" value="@_toneFilter" @onchange="OnToneChanged"><option value="">All tones</option>@foreach (var tone in ToneOptions) { <option value="@tone">@tone</option> }</select></label>
+            <label class="aev-filter-field">Sort by<select class="aev-filter-select" value="@_sort" @onchange="OnSortChanged"><option value="importance">Importance</option><option value="recent">Recent</option><option value="account">Account</option><option value="type">Type</option></select></label>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-cloud-arrow-down" aria-hidden="true"></i> Sync</button>
+            <div class="aev-filter-result"><strong>@SearchResultCount.ToString("N0", CultureInfo.CurrentCulture)</strong><span>shown</span></div>
+        </section>
+
+        <section class="aev-view-tabs" aria-label="Account event views">
+            @foreach (var view in _views)
+            {
+                <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label <span>@ViewCount(view.Id)</span></button>
+            }
+        </section>
+
+        @if (_events.Count == 0)
+        {
+            <section class="aev-empty-state"><i class="bi bi-lightning-charge" aria-hidden="true"></i><strong>No account events available</strong><span>No account, note, or portal invite records were available for this tenant.</span><button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync">Refresh Events</button></section>
+        }
+        else
+        {
+            <section class="aev-content-layout">
+                <main class="aev-main-card">
+                    @if (_view == "overview")
+                    {
+                        <div class="aev-section-head"><div><h2>Executive account event overview</h2><p>Most important account signals ranked by workflow impact, urgency, recency, and event type.</p></div><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => SetView("timeline")'><i class="bi bi-clock-history" aria-hidden="true"></i> Timeline</button></div>
+                        <div class="aev-overview-grid"><section class="aev-spotlight-card"><span><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Highest importance event</span><strong>@(TopEvent?.Title ?? "—")</strong><p>@(TopEvent is null ? "No matching event requires attention." : $"{TopEvent.AccountName} · {TopEvent.Type} · {RelativeAge(TopEvent.DateUtc)}: {TopEvent.Description}")</p><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="SelectTopEvent">Inspect event</button></section><section class="aev-guidance-card"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Event intelligence guidance</h3><p>@GuidanceText</p><div class="aev-guidance-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("Critical")'>Critical</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("today")'>Today</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("Portal")'>Portal</button></div></section></div>
+                        <section class="aev-panel"><h3><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Event importance ranking</h3><div class="aev-rank-stack">@foreach (var item in FilteredRows.Take(8)) { <button type="button" class="@(IsSelected(item) ? "aev-rank-row aev-rank-active" : "aev-rank-row")" @onclick="@(() => SelectEvent(item))"><span>@item.Title</span><div><i style="width:@WidthPct(ImportanceScore(item), MaxImportance)"></i></div><strong>@item.Type</strong><small>@RelativeAge(item.DateUtc)</small></button> }</div></section>
+                    }
+                    else if (_view == "timeline")
+                    {
+                        <div class="aev-section-head"><div><h2>Account event timeline</h2><p>Chronological stream synthesized from account, note, and portal invite records.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync">Refresh</button></div>
+                        <div class="aev-timeline">@foreach (var group in FilteredRows.GroupBy(e => e.DateUtc.Date).OrderByDescending(g => g.Key)) { <div class="aev-date-sep"><span>@group.Key.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture)</span></div>@foreach (var item in group.OrderByDescending(e => e.DateUtc)) { @TimelineItem(item) } }</div>
+                    }
+                    else if (_view == "priority")
+                    {
+                        <div class="aev-section-head"><div><h2>Priority event watchlist</h2><p>Critical, warning, risk, and unresolved portal signals sorted by impact.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("Critical")'>Critical</button></div>
+                        <div class="aev-card-grid">@foreach (var item in PriorityRows) { @EventCard(item) }</div>
+                    }
+                    else if (_view == "accounts")
+                    {
+                        <div class="aev-section-head"><div><h2>Account event concentration</h2><p>Accounts with the highest event volume and recent operational activity.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/accounts")'>Open Accounts</button></div>
+                        <div class="aev-account-grid">@foreach (var row in AccountRows) { <button type="button" class="@(row.AccountName == _accountFilter ? "aev-account-row aev-active" : "aev-account-row")" @onclick="@(() => SelectAccount(row.AccountName))"><span>@row.AccountName</span><div><i style="width:@row.Width"></i></div><strong>@row.Count</strong><small>@row.Latest</small></button> }</div>
+                    }
+                    else if (_view == "analytics")
+                    {
+                        <div class="aev-section-head"><div><h2>Account event analytics</h2><p>Event type, tone, recency, and source distribution across tenant account activity.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Refresh</button></div>
+                        <div class="aev-analytics-grid">@AnalyticsPanel("Type distribution", TypeDistribution, "bi-tags", "aev-tone-blue") @AnalyticsPanel("Tone distribution", ToneDistribution, "bi-activity", "aev-tone-green") @InsightPanel</div>
+                    }
+                    else
+                    {
+                        <div class="aev-section-head"><div><h2>Account events operating table</h2><p>Native table of derived events synchronized from existing account workflows.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters">Reset</button></div>
+                        <div class="aev-table-wrap"><table class="aev-table"><thead><tr><th>Event</th><th>Account</th><th>Type</th><th>Description</th><th>Date</th><th>Importance</th></tr></thead><tbody>@foreach (var item in FilteredRows) { <tr class="@(IsSelected(item) ? "aev-row-selected" : string.Empty)" @onclick="@(() => SelectEvent(item))"><td><strong>@item.Title</strong><small>@item.Source</small></td><td>@item.AccountName</td><td><span class="aev-badge @ToneBadgeClass(item.Tone)">@item.Type</span></td><td>@Truncate(item.Description, 150)</td><td>@FormatDateTime(item.DateUtc)<small>@RelativeAge(item.DateUtc)</small></td><td><strong>@ImportanceScore(item).ToString("N0", CultureInfo.CurrentCulture)</strong></td></tr> }</tbody></table></div>
+                    }
+                </main>
+
+                <aside class="aev-detail-panel">
+                    @if (_selected is null) { <div class="aev-detail-empty"><i class="bi bi-lightning-charge" aria-hidden="true"></i><strong>Select an event</strong><span>Inspect account context, event type, source, urgency, and workflow navigation.</span></div> }
+                    else
+                    {
+                        <div class="aev-detail-head"><div><span><i class="bi @_selected.Icon" aria-hidden="true"></i> @_selected.Type event</span><h2>@_selected.Title</h2><p>@_selected.AccountName · @FormatDateTime(_selected.DateUtc)</p></div><span class="aev-badge @ToneBadgeClass(_selected.Tone)">@_selected.Tone</span></div>
+                        <div class="aev-detail-summary"><div><span>Importance</span><strong>@ImportanceScore(_selected).ToString("N0", CultureInfo.CurrentCulture)</strong></div><div><span>Type</span><strong>@_selected.Type</strong></div><div><span>Source</span><strong>@_selected.Source</strong></div><div><span>Age</span><strong>@RelativeAge(_selected.DateUtc)</strong></div></div>
+                        <div class="aev-note-card"><strong>Event detail</strong><p>@_selected.Description</p></div>
+                        <div class="aev-rules-card"><header><strong>Recommended actions</strong><span>@_selected.Tone</span></header>@foreach (var action in RecommendedActions(_selected)) { <p><em>@action</em><span>active</span></p> }</div>
+                        <div class="aev-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="@(() => NavigateAccount(_selected.AccountId))"><i class="bi bi-building" aria-hidden="true"></i> Account</button><button type="button" class="um-btn um-btn-ghost" @onclick='() => SetView("timeline")'><i class="bi bi-clock-history" aria-hidden="true"></i> Timeline</button><button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Sync</button></div>
+                    }
+                </aside>
+            </section>
+        }
+    }
+</div>
+
+@code {
+    private Guid _tenantId;
+    private bool _loading = true;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string _search = string.Empty;
+    private string _activeFilter = "all";
+    private string _typeFilter = string.Empty;
+    private string _toneFilter = string.Empty;
+    private string _accountFilter = string.Empty;
+    private string _sort = "importance";
+    private string _view = "overview";
+    private AccountEventItem? _selected;
+    private List<AccountEventItem> _events = [];
+    private readonly ViewOption[] _views = [new("overview", "Overview", "bi-speedometer2"), new("timeline", "Timeline", "bi-clock-history"), new("priority", "Priority", "bi-exclamation-triangle"), new("accounts", "Accounts", "bi-building"), new("analytics", "Analytics", "bi-graph-up-arrow"), new("table", "Table", "bi-table")];
+
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
+    private int CriticalCount => _events.Count(e => e.Tone == "danger" || e.Title.Contains("Critical", StringComparison.OrdinalIgnoreCase));
+    private int TodayCount => _events.Count(e => e.DateUtc.Date == DateTime.UtcNow.Date);
+    private int PortalCount => _events.Count(e => e.Type == "Portal");
+    private int NoteCount => _events.Count(e => e.Type == "Note");
+    private int AccountCount => _events.Select(e => e.AccountId).Where(id => id.HasValue).Distinct().Count();
+    private int SearchResultCount => _view == "priority" ? PriorityRows.Count : FilteredRows.Count;
+    private decimal MaxImportance => Math.Max(1m, FilteredRows.Select(ImportanceScore).DefaultIfEmpty(1m).Max());
+    private AccountEventItem? TopEvent => FilteredRows.OrderByDescending(ImportanceScore).ThenByDescending(e => e.DateUtc).FirstOrDefault();
+    private string GuidanceText => CriticalCount > 0 ? $"{CriticalCount.ToString("N0", CultureInfo.CurrentCulture)} critical or danger event(s) require immediate review." : TodayCount > 0 ? $"{TodayCount.ToString("N0", CultureInfo.CurrentCulture)} event(s) occurred today and should be reviewed for account activity." : PortalCount > 0 ? $"{PortalCount.ToString("N0", CultureInfo.CurrentCulture)} portal event(s) show client access workflow activity." : "Account event activity is stable. Continue monitoring account, note, and portal signals.";
+    private IEnumerable<string> TypeOptions => _events.Select(e => e.Type).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(e => e);
+    private IEnumerable<string> ToneOptions => _events.Select(e => e.Tone).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(e => e);
+    private IReadOnlyList<AccountEventItem> FilteredRows => ApplyEventFilters(_events).ToList();
+    private IReadOnlyList<AccountEventItem> PriorityRows => ApplyEventFilters(_events.Where(e => e.Tone is "danger" or "warning" || e.Type == "Portal" && !e.Title.Contains("Accepted", StringComparison.OrdinalIgnoreCase))).ToList();
+    private IReadOnlyList<AccountRow> AccountRows => BuildAccountRows();
+    private IReadOnlyList<DistributionRow> TypeDistribution => BuildDistribution(_events, e => e.Type);
+    private IReadOnlyList<DistributionRow> ToneDistribution => BuildDistribution(_events, e => e.Tone);
+    private IReadOnlyList<Metric> Metrics => [new("all", _events.Count.ToString("N0", CultureInfo.CurrentCulture), "Events", "Derived account events", "bi-lightning-charge", "aev-kpi-blue"), new("Account", _events.Count(e => e.Type == "Account").ToString("N0", CultureInfo.CurrentCulture), "Account", "Account lifecycle events", "bi-building", "aev-kpi-cyan"), new("Note", NoteCount.ToString("N0", CultureInfo.CurrentCulture), "Notes", "Account note events", "bi-sticky", "aev-kpi-amber"), new("Portal", PortalCount.ToString("N0", CultureInfo.CurrentCulture), "Portal", "Portal invite events", "bi-envelope", "aev-kpi-purple"), new("Critical", CriticalCount.ToString("N0", CultureInfo.CurrentCulture), "Critical", "Urgent signals", "bi-exclamation-circle", "aev-kpi-red"), new("today", TodayCount.ToString("N0", CultureInfo.CurrentCulture), "Today", "Events today", "bi-calendar-check", "aev-kpi-green")];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Accounts", "/accounts"), new("Account Events", "/client/account-events"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            if (_tenantId == Guid.Empty) await ResolveCurrentUserContextAsync();
+            var accounts = (await Api.SearchAccountsAsync(_tenantId, pageSize: 250))?.Items.ToList() ?? [];
+            var notes = (await Api.SearchAccountNotesAsync(_tenantId, pageSize: 250))?.Items.ToList() ?? [];
+            var invites = (await Api.SearchPortalInvitesAsync(_tenantId, pageSize: 250))?.Items.ToList() ?? [];
+            _events = BuildEvents(accounts, notes, invites).OrderByDescending(e => e.DateUtc).ToList();
+            _selected = _selected is null ? FilteredRows.FirstOrDefault() : _events.FirstOrDefault(e => e.EventId == _selected.EventId) ?? FilteredRows.FirstOrDefault();
+            ShowToast("Account events synced.", "success");
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load account events: {ex.Message}";
+            _events = [];
+            _selected = null;
+            ShowToast($"Account events load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private IEnumerable<AccountEventItem> BuildEvents(IEnumerable<AccountDto> accounts, IEnumerable<AccountNoteDto> notes, IEnumerable<PortalInviteDto> invites)
+    {
+        foreach (var account in accounts)
+        {
+            yield return new(Guid.NewGuid(), account.AccountId, account.AccountName, "Account", "Account created", $"{account.AccountTypeCode} account in {account.StatusCode} status. Segment: {account.SegmentCode}. Stage: {account.LifecycleStageCode}.", account.CreatedDateUtc, "bi-building", AccountTone(account.StatusCode), "Account");
+            if (account.ModifiedDateUtc.HasValue && account.ModifiedDateUtc.Value.Date != account.CreatedDateUtc.Date)
+            {
+                yield return new(Guid.NewGuid(), account.AccountId, account.AccountName, "Account", "Account updated", $"Account profile updated. Current status: {account.StatusCode}. Industry: {account.Industry ?? "—"}.", account.ModifiedDateUtc.Value, "bi-pencil-square", "info", "Account");
+            }
+        }
+        foreach (var note in notes)
+        {
+            yield return new(Guid.NewGuid(), note.AccountId, note.AccountName, "Note", note.NoteTypeCode, note.NoteText, note.CreatedDateUtc, NoteIcon(note.NoteTypeCode), NoteTone(note.NoteTypeCode), "AccountNote");
+        }
+        foreach (var invite in invites)
+        {
+            yield return new(Guid.NewGuid(), invite.AccountId, invite.AccountName, "Portal", $"Portal invite {InviteStatus(invite)}", $"{invite.ContactName} invited at {invite.InviteEmail}. Expires {FormatDate(invite.ExpiresDateUtc)}.", invite.SentDateUtc ?? invite.CreatedDateUtc, InviteIcon(invite), InviteTone(invite), "PortalInvite");
+        }
+    }
+
+    private IEnumerable<AccountEventItem> ApplyEventFilters(IEnumerable<AccountEventItem> events)
+    {
+        var query = events;
+        if (!string.IsNullOrWhiteSpace(_search)) { var term = _search.Trim(); query = query.Where(e => Contains(e.AccountName, term) || Contains(e.Type, term) || Contains(e.Title, term) || Contains(e.Description, term) || Contains(e.Source, term) || FormatDateTime(e.DateUtc).Contains(term, StringComparison.OrdinalIgnoreCase)); }
+        if (!string.IsNullOrWhiteSpace(_typeFilter)) query = query.Where(e => e.Type == _typeFilter);
+        if (!string.IsNullOrWhiteSpace(_toneFilter)) query = query.Where(e => e.Tone == _toneFilter);
+        if (!string.IsNullOrWhiteSpace(_accountFilter)) query = query.Where(e => e.AccountName == _accountFilter);
+        query = _activeFilter switch { "today" => query.Where(e => e.DateUtc.Date == DateTime.UtcNow.Date), "Critical" => query.Where(e => e.Tone == "danger" || e.Title.Contains("Critical", StringComparison.OrdinalIgnoreCase)), "Account" or "Note" or "Portal" => query.Where(e => e.Type == _activeFilter), _ => query };
+        return _sort switch { "recent" => query.OrderByDescending(e => e.DateUtc), "account" => query.OrderBy(e => e.AccountName).ThenByDescending(e => e.DateUtc), "type" => query.OrderBy(e => e.Type).ThenByDescending(e => e.DateUtc), _ => query.OrderByDescending(ImportanceScore).ThenByDescending(e => e.DateUtc) };
+    }
+
+    private void SetFilter(string filter) { _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter; _view = filter switch { "Critical" => "priority", "today" => "timeline", _ => _view }; _selected = FilteredRows.FirstOrDefault() ?? _events.FirstOrDefault(); }
+    private void SetView(string view) => _view = view;
+    private void ResetFilters() { _activeFilter = "all"; _typeFilter = string.Empty; _toneFilter = string.Empty; _accountFilter = string.Empty; _search = string.Empty; _sort = "importance"; _selected = FilteredRows.FirstOrDefault() ?? _events.FirstOrDefault(); }
+    private void SelectEvent(AccountEventItem item) => _selected = item;
+    private void SelectTopEvent() { if (TopEvent is not null) { _selected = TopEvent; _view = "table"; } }
+    private void SelectAccount(string accountName) { _accountFilter = _accountFilter == accountName ? string.Empty : accountName; _view = "timeline"; _selected = FilteredRows.FirstOrDefault() ?? _events.FirstOrDefault(); }
+    private void NavigateAccount(Guid? accountId) { if (accountId.HasValue) Nav.NavigateTo($"/accounts/{accountId.Value}"); else Nav.NavigateTo("/accounts"); }
+    private void OnSearchChanged(BlazorChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _events.FirstOrDefault(); }
+    private void OnTypeChanged(BlazorChangeEventArgs e) { _typeFilter = e.Value?.ToString() ?? string.Empty; _activeFilter = "all"; _selected = FilteredRows.FirstOrDefault() ?? _events.FirstOrDefault(); }
+    private void OnToneChanged(BlazorChangeEventArgs e) { _toneFilter = e.Value?.ToString() ?? string.Empty; _activeFilter = "all"; _selected = FilteredRows.FirstOrDefault() ?? _events.FirstOrDefault(); }
+    private void OnSortChanged(BlazorChangeEventArgs e) { _sort = e.Value?.ToString() ?? "importance"; _selected = FilteredRows.FirstOrDefault() ?? _events.FirstOrDefault(); }
+    private void ApplyDistribution(string label, string title) { if (title.Contains("Type", StringComparison.OrdinalIgnoreCase)) _typeFilter = _typeFilter == label ? string.Empty : label; else _toneFilter = _toneFilter == label ? string.Empty : label; _activeFilter = "all"; _view = "table"; _selected = FilteredRows.FirstOrDefault() ?? _events.FirstOrDefault(); }
+    private void ShowToast(string message, string kind) { _toastMessage = message.Length <= 140 ? message : $"{message[..137]}..."; _toastKind = ToastKind(kind); _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+
+    private RenderFragment TimelineItem(AccountEventItem item) => @<article class="@(IsSelected(item) ? "aev-timeline-item aev-timeline-item-selected" : "aev-timeline-item")" @onclick="@(() => SelectEvent(item))"><span class="aev-timeline-icon @ToneClass(item.Tone)"><i class="bi @item.Icon" aria-hidden="true"></i></span><div class="aev-timeline-body"><header><strong>@item.Title</strong><span class="aev-badge @ToneBadgeClass(item.Tone)">@item.Type</span></header><p>@item.Description</p><footer><span><i class="bi bi-building" aria-hidden="true"></i> @item.AccountName</span><span><i class="bi bi-clock" aria-hidden="true"></i> @FormatDateTime(item.DateUtc)</span><span>@RelativeAge(item.DateUtc)</span></footer></div></article>;
+    private RenderFragment EventCard(AccountEventItem item) => @<article class="@(IsSelected(item) ? "aev-event-card aev-event-card-selected" : "aev-event-card")" @onclick="@(() => SelectEvent(item))"><div class="aev-card-top"><span class="aev-card-icon @ToneClass(item.Tone)"><i class="bi @item.Icon" aria-hidden="true"></i></span><span class="aev-badge @ToneBadgeClass(item.Tone)">@item.Type</span></div><h3>@item.Title</h3><p>@Truncate(item.Description, 160)</p><div class="aev-card-stats"><div><span>Account</span><strong>@item.AccountName</strong></div><div><span>Importance</span><strong>@ImportanceScore(item).ToString("N0", CultureInfo.CurrentCulture)</strong></div></div></article>;
+    private RenderFragment AnalyticsPanel(string title, IReadOnlyList<DistributionRow> rows, string icon, string tone) => @<section class="aev-analytics-panel @tone"><h3><i class="bi @icon" aria-hidden="true"></i> @title</h3><div class="aev-analytics-list">@foreach (var row in rows) { <button type="button" @onclick="@(() => ApplyDistribution(row.Label, title))"><span>@row.Label</span><div><i style="width:@row.Width"></i></div><strong>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><small>@row.Percent.ToString("P0", CultureInfo.CurrentCulture)</small></button> }</div></section>;
+    private RenderFragment InsightPanel => @<section class="aev-analytics-panel aev-tone-amber"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Executive insight</h3><div class="aev-insight-grid"><div><span>Accounts</span><strong>@AccountCount.ToString("N0", CultureInfo.CurrentCulture)</strong><small>with events</small></div><div><span>Today</span><strong>@TodayCount.ToString("N0", CultureInfo.CurrentCulture)</strong><small>new events</small></div><div><span>Notes</span><strong>@NoteCount.ToString("N0", CultureInfo.CurrentCulture)</strong><small>note events</small></div><div><span>Critical</span><strong>@CriticalCount.ToString("N0", CultureInfo.CurrentCulture)</strong><small>urgent</small></div></div><p>@GuidanceText</p></section>;
+
+    private string MetricCardClass(Metric metric) => $"aev-kpi-card {metric.Tone} {(_activeFilter == metric.Filter ? "aev-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewOption view) => $"aev-view-btn {(view.Id == _view ? "aev-view-btn-active" : string.Empty)}";
+    private int ViewCount(string view) => view switch { "priority" => PriorityRows.Count, "accounts" => AccountRows.Count, _ => FilteredRows.Count };
+    private bool IsSelected(AccountEventItem item) => _selected?.EventId == item.EventId;
+    private IReadOnlyList<AccountRow> BuildAccountRows() { var rows = _events.GroupBy(e => e.AccountName).Select(g => new AccountRow(g.Key, g.Count(), g.Max(e => e.DateUtc))).OrderByDescending(r => r.Count).ThenBy(r => r.AccountName).ToList(); var max = Math.Max(1, rows.Select(r => r.Count).DefaultIfEmpty(1).Max()); return rows.Select(r => r with { Width = WidthPct(r.Count, max), Latest = RelativeAge(r.LastEventUtc) }).ToList(); }
+    private static IReadOnlyList<DistributionRow> BuildDistribution(IEnumerable<AccountEventItem> items, Func<AccountEventItem, string> labelSelector) { var rows = items.GroupBy(labelSelector).Select(g => new DistributionRow(g.Key, g.Count(), 0, "0%")).OrderByDescending(r => r.Count).ThenBy(r => r.Label).ToList(); var total = Math.Max(1, rows.Sum(r => r.Count)); var max = Math.Max(1, rows.Select(r => r.Count).DefaultIfEmpty(1).Max()); return rows.Select(r => r with { Percent = (double)r.Count / total, Width = WidthPct(r.Count, max) }).ToList(); }
+    private static decimal ImportanceScore(AccountEventItem item) => ToneScore(item.Tone) + TypeScore(item.Type) + RecencyScore(item.DateUtc);
+    private static decimal ToneScore(string tone) => tone switch { "danger" => 70m, "warning" => 52m, "success" => 25m, _ => 35m };
+    private static decimal TypeScore(string type) => type switch { "Note" => 25m, "Portal" => 20m, "Account" => 15m, _ => 10m };
+    private static decimal RecencyScore(DateTime value) => (DateTime.UtcNow.Date - value.Date).Days switch { <= 0 => 25m, <= 7 => 18m, <= 30 => 10m, _ => 0m };
+    private static IEnumerable<string> RecommendedActions(AccountEventItem item) { if (item.Tone == "danger") yield return "Review this event immediately and coordinate the next account action."; if (item.Type == "Portal") yield return "Confirm client portal invitation or acceptance status with the account team."; if (item.Type == "Note") yield return "Review the related account note and validate any follow-up requirement."; yield return "Open the account record to inspect current account context and ownership."; }
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static string AccountTone(string status) => status.Contains("Inactive", StringComparison.OrdinalIgnoreCase) ? "warning" : "info";
+    private static string NoteTone(string type) => type switch { "Critical" => "danger", "Risk" or "Issue" or "FollowUp" => "warning", _ => "info" };
+    private static string NoteIcon(string type) => type switch { "Critical" => "bi-exclamation-circle", "Risk" => "bi-shield-exclamation", "Issue" => "bi-exclamation-triangle", "FollowUp" => "bi-flag", _ => "bi-sticky" };
+    private static bool IsExpired(PortalInviteDto invite) => invite.StatusCode == "Expired" || (invite.StatusCode == "Pending" && invite.ExpiresDateUtc < DateTime.UtcNow);
+    private static string InviteStatus(PortalInviteDto invite) => IsExpired(invite) ? "Expired" : invite.StatusCode;
+    private static string InviteTone(PortalInviteDto invite) => InviteStatus(invite) switch { "Accepted" => "success", "Expired" => "warning", "Revoked" => "danger", _ => "info" };
+    private static string InviteIcon(PortalInviteDto invite) => InviteStatus(invite) switch { "Accepted" => "bi-check2-circle", "Expired" => "bi-exclamation-circle", _ => "bi-envelope" };
+    private static string ToneClass(string tone) => tone switch { "danger" => "aev-tone-danger", "warning" => "aev-tone-warning", "success" => "aev-tone-green", _ => "aev-tone-blue" };
+    private static string ToneBadgeClass(string tone) => tone switch { "danger" => "aev-badge-danger", "warning" => "aev-badge-warning", "success" => "aev-badge-success", _ => "aev-badge-info" };
+    private static string WidthPct(decimal value, decimal max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, (double)(value / max * 100)))).ToString("F1", CultureInfo.InvariantCulture) + "%";
+    private static string WidthPct(int value, int max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, (double)value / max * 100))).ToString("F1", CultureInfo.InvariantCulture) + "%";
+    private static string FormatDate(DateTime value) => value.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture);
+    private static string FormatDateTime(DateTime value) => value.ToLocalTime().ToString("MMM d, yyyy h:mm tt", CultureInfo.CurrentCulture);
+    private static string RelativeAge(DateTime value) { var days = (DateTime.UtcNow.Date - value.Date).Days; return days <= 0 ? "Today" : days == 1 ? "Yesterday" : $"{days} days ago"; }
+    private static string Truncate(string value, int length) => value.Length <= length ? value : $"{value[..Math.Max(0, length - 3)]}...";
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : "success";
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; }
+
+    private sealed record ViewOption(string Id, string Label, string Icon);
+    private sealed record Metric(string Filter, string Value, string Label, string Caption, string Icon, string Tone);
+    private sealed record DistributionRow(string Label, int Count, double Percent, string Width);
+    private sealed record AccountRow(string AccountName, int Count, DateTime LastEventUtc) { public string Width { get; init; } = "0%"; public string Latest { get; init; } = string.Empty; }
+    private sealed record AccountEventItem(Guid EventId, Guid? AccountId, string AccountName, string Type, string Title, string Description, DateTime DateUtc, string Icon, string Tone, string Source);
+}

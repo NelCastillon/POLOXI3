@@ -1,136 +1,268 @@
 @page "/crm/carrier-mapping"
 @namespace Ams.Web.Components.Pages.Crm
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
 @inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
-@using Ams.Application.Common.Dtos
 
-<PageTitle>Carrier Mapping — CRM</PageTitle>
+<PageTitle>Enterprise Carrier Mapping — CRM</PageTitle>
 
-<AppPageHeader Title="Carrier Mapping"
-               Subtitle="Tenant admin controls for internal carrier codes, download formats, and integration keys"
-               Icon="bi-broadcast">
-    <Actions>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Add Mapping</button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
-    </Actions>
-</AppPageHeader>
-
-<section class="ma-hero pmr-hero">
-    <div>
-        <span class="ma-eyebrow">Pricing & Market Rules</span>
-        <h2>Carrier Mapping Operations</h2>
-        <p>Maintain internal and external carrier identifiers, download formats, and integration keys with fast test visibility.</p>
-    </div>
-    <div class="ma-hero-actions">
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Add Mapping</button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
-    </div>
-</section>
-
-<div class="ma-view-tabs pmr-view-tabs">
-    <button class="ma-view-tab" @onclick='() => Nav.NavigateTo("/crm/pricing-rules")'><i class="bi bi-tags"></i> Pricing Rules</button>
-    <button class="ma-view-tab" @onclick='() => Nav.NavigateTo("/crm/pricing/classes")'><i class="bi bi-diagram-3"></i> Price by Class</button>
-    <button class="ma-view-tab" @onclick='() => Nav.NavigateTo("/crm/appetite")'><i class="bi bi-grid-3x3"></i> Market Appetite</button>
-    <button class="ma-view-tab ma-view-tab--active"><i class="bi bi-broadcast"></i> Carrier Mapping</button>
-</div>
-
-<div class="pc-kpi-strip">
-    <div class="pc-kpi-card @(_activeFilter == null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)' title="Show all mappings"><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-broadcast"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Mappings</div></div></div>
-    <div class="pc-kpi-card @(_activeFilter == "active" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("active")' title="Filter: Active"><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsActive)</div><div class="pc-kpi-label">Active</div></div></div>
-    <div class="pc-kpi-card @(_activeFilter == "IVANS" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("IVANS")' title="Filter: IVANS"><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-cloud-download-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.DownloadFormatCode == "IVANS")</div><div class="pc-kpi-label">IVANS</div></div></div>
-    <div class="pc-kpi-card @(_activeFilter == "AL3" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("AL3")' title="Filter: AL3"><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-file-earmark-code-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.DownloadFormatCode == "AL3")</div><div class="pc-kpi-label">AL3</div></div></div>
-    <div class="pc-kpi-card @(_activeFilter == "failed" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("failed")' title="Filter: Failed tests"><span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-plug"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.LastTestStatusCode == "Failed")</div><div class="pc-kpi-label">Failed Tests</div></div></div>
-</div>
-
-<div class="ma-filter-bar pmr-filter-bar">
-    <div class="ma-search-wrap">
-        <i class="bi bi-search" aria-hidden="true"></i>
-        <input class="ma-search" value="@_search" @oninput="OnSearchChanged" placeholder="Search carrier, NAIC, internal/external code, LOB, format…" />
-    </div>
-    <div class="ma-type-pills">
-        <button class="ma-pill @(_activeFilter is null ? "ma-pill-active" : "")" @onclick='() => SetFilter(null)'>All</button>
-        <button class="ma-pill @(_activeFilter == "active" ? "ma-pill-active" : "")" @onclick='() => SetFilter("active")'>Active</button>
-        <button class="ma-pill @(_activeFilter == "IVANS" ? "ma-pill-active" : "")" @onclick='() => SetFilter("IVANS")'>IVANS</button>
-        <button class="ma-pill @(_activeFilter == "AL3" ? "ma-pill-active" : "")" @onclick='() => SetFilter("AL3")'>AL3</button>
-        <button class="ma-pill @(_activeFilter == "failed" ? "ma-pill-active" : "")" @onclick='() => SetFilter("failed")'>Failed</button>
-    </div>
-    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button>
-    <span class="ma-filter-count">@_filtered.Count mappings</span>
-</div>
-
-@if (_loadError is not null)
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div>
+    <div class="cmp-toast cmp-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="cmp-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
 }
 
-<div class="um-grid-card">
-    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading carrier mappings…</span></div> }
-    <SfGrid TValue="CarrierMappingDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-        <GridEvents TValue="CarrierMappingDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="25" PageSizes="@(new[] { 25, 50, 100 })" />
-        <GridColumns>
-            <GridColumn Field="CarrierName" HeaderText="Carrier" Width="180" />
-            <GridColumn Field="CarrierNaic" HeaderText="NAIC" Width="90"><Template>@{ var r=(CarrierMappingDto)context; }@(r.CarrierNaic ?? "—")</Template></GridColumn>
-            <GridColumn Field="InternalCode" HeaderText="Internal" Width="110"><Template>@{ var r=(CarrierMappingDto)context; }@(r.InternalCode ?? "—")</Template></GridColumn>
-            <GridColumn Field="ExternalCode" HeaderText="External" Width="110"><Template>@{ var r=(CarrierMappingDto)context; }@(r.ExternalCode ?? "—")</Template></GridColumn>
-            <GridColumn Field="LobCode" HeaderText="LOB" Width="130"><Template>@{ var r=(CarrierMappingDto)context; }@(r.LobCode ?? "All")</Template></GridColumn>
-            <GridColumn Field="DownloadFormatCode" HeaderText="Format" Width="110"><Template>@{ var r=(CarrierMappingDto)context; }<span class="um-badge um-badge-info">@r.DownloadFormatCode</span></Template></GridColumn>
-            <GridColumn HeaderText="Last Test" Width="140"><Template>@{ var r=(CarrierMappingDto)context; }<span class="um-badge @TestBadge(r.LastTestStatusCode)">@(r.LastTestStatusCode ?? "NotTested")</span></Template></GridColumn>
-            <GridColumn HeaderText="Status" Width="100" TextAlign="TextAlign.Center"><Template>@{ var r=(CarrierMappingDto)context; }<span class="um-badge @(r.IsActive ? "um-badge-success" : "um-badge-neutral")">@(r.IsActive ? "Active" : "Inactive")</span></Template></GridColumn>
-            <GridColumn HeaderText="Actions" Width="145" TextAlign="TextAlign.Center"><Template>@{ var r=(CarrierMappingDto)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true" title="Edit"><i class="bi bi-pencil"></i></button><button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => TestAsync(r)" @onclick:stopPropagation="true" title="Test"><i class="bi bi-plug"></i></button><button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true" title="Delete"><i class="bi bi-trash"></i></button></Template></GridColumn>
-        </GridColumns>
-    </SfGrid>
+@if (_showDelete && _deleteTarget is not null)
+{
+    <div class="cmp-modal-backdrop" role="presentation" @onclick="CancelDelete">
+        <div class="cmp-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="carrierMappingDeleteTitle" @onclick:stopPropagation="true">
+            <div class="cmp-confirm-icon"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
+            <h2 id="carrierMappingDeleteTitle">Delete Carrier Mapping?</h2>
+            <p>You are about to delete <strong>@_deleteTarget.CarrierName</strong>. The existing workflow soft-deletes and deactivates the mapping.</p>
+            <div class="cmp-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete" disabled="@_saving">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">@if (_saving) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } Delete</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="cmp-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="cmp-form-modal" role="dialog" aria-modal="true" aria-labelledby="carrierMappingFormTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="cmp-modal-header">
+                    <span class="cmp-modal-icon"><i class="bi bi-broadcast" aria-hidden="true"></i></span>
+                    <div><h2 id="carrierMappingFormTitle">@(_editId.HasValue ? "Edit Carrier Mapping" : "Add Carrier Mapping")</h2><p>Map internal and external carrier codes, download format, integration key, and LOB scope.</p></div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_saving" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="cmp-modal-body">
+                    <div class="cmp-form-banner"><i class="bi bi-shield-check" aria-hidden="true"></i><span><strong>Integration mapping governance</strong><span>Mappings are tenant scoped and synchronized to CRM.CarrierMapping.</span></span></div>
+                    <div class="cmp-form-grid">
+                        <div class="cmp-field"><label for="carrierName">Carrier Name <span>*</span></label><InputText id="carrierName" class="cmp-input" @bind-Value="_form.CarrierName" /><ValidationMessage For="() => _form.CarrierName" class="text-danger" /></div>
+                        <div class="cmp-field"><label for="carrierNaic">NAIC</label><InputText id="carrierNaic" class="cmp-input" @bind-Value="_form.CarrierNaic" /><ValidationMessage For="() => _form.CarrierNaic" class="text-danger" /></div>
+                        <div class="cmp-field"><label for="internalCode">Internal Code</label><InputText id="internalCode" class="cmp-input" @bind-Value="_form.InternalCode" /><ValidationMessage For="() => _form.InternalCode" class="text-danger" /></div>
+                        <div class="cmp-field"><label for="externalCode">External Code</label><InputText id="externalCode" class="cmp-input" @bind-Value="_form.ExternalCode" /><ValidationMessage For="() => _form.ExternalCode" class="text-danger" /></div>
+                        <div class="cmp-field"><label for="lobCode">Line of Business</label><InputSelect id="lobCode" class="cmp-input" @bind-Value="_form.LobCode"><option value="">All</option>@foreach (var lob in PricingMarketRulePageConstants.LobCodes) { <option value="@lob">@lob</option> }</InputSelect><ValidationMessage For="() => _form.LobCode" class="text-danger" /></div>
+                        <div class="cmp-field"><label for="downloadFormat">Download Format <span>*</span></label><InputSelect id="downloadFormat" class="cmp-input" @bind-Value="_form.DownloadFormatCode">@foreach (var format in PricingMarketRulePageConstants.DownloadFormats) { <option value="@format">@format</option> }</InputSelect><ValidationMessage For="() => _form.DownloadFormatCode" class="text-danger" /></div>
+                        <div class="cmp-field cmp-field-wide"><label for="integrationKey">Integration Key</label><InputText id="integrationKey" class="cmp-input" @bind-Value="_form.IntegrationKey" /><ValidationMessage For="() => _form.IntegrationKey" class="text-danger" /></div>
+                        <div class="cmp-field cmp-field-wide"><label for="notes">Notes</label><InputTextArea id="notes" class="cmp-input" rows="3" @bind-Value="_form.Notes" /><ValidationMessage For="() => _form.Notes" class="text-danger" /></div>
+                        <label class="cmp-check-card"><InputCheckbox @bind-Value="_form.IsActive" /><span><strong>Active</strong><small>Mapping is available for download, import, and integration workflows.</small></span></label>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(_formError))
+                    {
+                        <div class="cmp-form-error"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_formError</div>
+                    }
+                </div>
+                <div class="cmp-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_saving">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@if (_saving) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editId.HasValue ? "Save Changes" : "Create Mapping")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="cmp-enterprise-page">
+    <section class="cmp-hero">
+        <div class="cmp-hero-left"><span class="cmp-hero-icon"><i class="bi bi-broadcast" aria-hidden="true"></i></span><div><div class="cmp-title-row"><h1>Carrier Mapping Command Center</h1><span><i class="bi bi-database-check" aria-hidden="true"></i> Live mapping workflow</span><span><i class="bi bi-shield-check" aria-hidden="true"></i> Tenant scoped</span><span><i class="bi bi-plug-fill" aria-hidden="true"></i> Test ready</span></div><p>Manage carrier identifiers, internal and external codes, download formats, integration keys, LOB scope, and testing from one enterprise workspace.</p></div></div>
+        <div class="cmp-hero-actions"><button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat cmp-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button><button type="button" class="um-btn um-btn-ghost" @onclick='() => GoTo("/crm/pricing-rules")'><i class="bi bi-tags" aria-hidden="true"></i> Pricing Rules</button><button type="button" class="um-btn um-btn-ghost" @onclick='() => GoTo("/crm/appetite")'><i class="bi bi-grid-3x3" aria-hidden="true"></i> Appetite</button><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Mapping</button></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger cmp-error-banner" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    @if (_loading)
+    {
+        <section class="cmp-loading-state"><i class="bi bi-arrow-repeat cmp-spin" aria-hidden="true"></i><strong>Loading enterprise carrier mappings...</strong><span>Syncing carriers, codes, download formats, integration keys, test status, and LOB scope.</span></section>
+    }
+    else
+    {
+        <section class="cmp-kpi-strip" aria-label="Carrier mapping KPI filters">@foreach (var metric in Metrics) { <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="@(() => SetFilter(metric.Filter))"><span class="cmp-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span><span><span class="cmp-kpi-val">@metric.Value</span><span class="cmp-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span></button> }</section>
+
+        <section class="cmp-workflow-strip" aria-label="Carrier mapping workflow actions"><button type="button" class="cmp-workflow-card cmp-workflow-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i><span><strong>Create mapping</strong><span>Add carrier code mapping.</span></span></button><button type="button" class="cmp-workflow-card" @onclick='() => SetFilter("failed")'><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span><strong>Failed tests</strong><span>Review broken mappings.</span></span></button><button type="button" class="cmp-workflow-card" @onclick="TestSelectedAsync" disabled="@(_selected is null || _saving)"><i class="bi bi-plug" aria-hidden="true"></i><span><strong>Test selected</strong><span>Run existing test workflow.</span></span></button><button type="button" class="cmp-workflow-card" @onclick='() => SetView("analytics")'><i class="bi bi-bar-chart-line" aria-hidden="true"></i><span><strong>Analyze formats</strong><span>Monitor mapping coverage.</span></span></button></section>
+
+        <section class="cmp-filter-panel">
+            <div class="cmp-search-wrap"><span class="cmp-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span><div class="cmp-search-body"><label for="carrierMappingSearch">Search carrier mappings</label><input id="carrierMappingSearch" class="cmp-search-input" value="@_search" @oninput="OnSearchChanged" placeholder="Search carrier, NAIC, internal code, external code, LOB, format, integration key, or notes..." /><span>Search filters every view, KPI drill-in, analytics, cards, and table.</span></div></div>
+            <label class="cmp-filter-field">LOB<select class="cmp-filter-select" value="@_lobFilter" @onchange="OnLobChanged"><option value="">All LOBs</option>@foreach (var lob in LobOptions) { <option value="@lob">@lob</option> }</select></label>
+            <label class="cmp-filter-field">Format<select class="cmp-filter-select" value="@_formatFilter" @onchange="OnFormatChanged"><option value="">All formats</option>@foreach (var format in FormatOptions) { <option value="@format">@format</option> }</select></label>
+            <label class="cmp-filter-field">Sort by<select class="cmp-filter-select" value="@_sort" @onchange="OnSortChanged"><option value="importance">Importance</option><option value="test">Test status</option><option value="format">Format</option><option value="carrier">Carrier</option><option value="activity">Last tested</option></select></label>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button><button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-cloud-arrow-down" aria-hidden="true"></i> Sync</button><div class="cmp-filter-result"><strong>@SearchResultCount.ToString("N0", CultureInfo.CurrentCulture)</strong><span>shown</span></div>
+        </section>
+
+        <section class="cmp-view-tabs" aria-label="Carrier mapping views">@foreach (var view in _views) { <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label <span>@ViewCount(view.Id)</span></button> }</section>
+
+        @if (_items.Count == 0)
+        {
+            <section class="cmp-empty-state"><i class="bi bi-broadcast" aria-hidden="true"></i><strong>No carrier mappings available</strong><span>No carrier mapping records matched this tenant. Create a mapping or run the existing CRM pricing market rules seed/migration if data has not been initialized.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">Create carrier mapping</button></section>
+        }
+        else
+        {
+            <section class="cmp-content-layout">
+                <main class="cmp-main-card">
+                    @if (_view == "overview")
+                    {
+                        <div class="cmp-section-head"><div><h2>Executive mapping overview</h2><p>Most important carrier mapping signals by test status, active status, format, code completeness, LOB scope, and integration key coverage.</p></div><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => SetView("table")'><i class="bi bi-table" aria-hidden="true"></i> Table View</button></div>
+                        <div class="cmp-overview-grid"><section class="cmp-spotlight-card"><span><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Highest importance mapping</span><strong>@(TopMapping?.CarrierName ?? "—")</strong><p>@(TopMapping is null ? "No matching carrier mappings require attention." : $"{FormatText(TopMapping)} mapping for {LobText(TopMapping)} with {TestStatusText(TopMapping)} test status and {CodeCompleteness(TopMapping)} code completeness.")</p><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="SelectTopMapping">Inspect mapping</button></section><section class="cmp-guidance-card"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Integration guidance</h3><p>@GuidanceText</p><div class="cmp-guidance-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("failed")'>Failed</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("untested")'>Untested</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("keyed")'>Keyed</button></div></section></div>
+                        @ImportanceRankPanel
+                    }
+                    else if (_view == "active") { <div class="cmp-section-head"><div><h2>Active mapping operations</h2><p>Mappings available to integration and download workflows.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("active")'>Active Filter</button></div><div class="cmp-card-grid">@foreach (var item in ActiveRows) { @MappingCard(item) }</div> }
+                    else if (_view == "tests") { <div class="cmp-section-head"><div><h2>Test status command center</h2><p>Failed, passed, and untested mappings prioritized for integration readiness.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("failed")'>Failed</button></div><div class="cmp-card-grid">@foreach (var item in TestRows) { @MappingCard(item) }</div> }
+                    else if (_view == "formats") { <div class="cmp-section-head"><div><h2>Download format coverage</h2><p>IVANS, AL3, and custom mapping coverage by carrier and LOB.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("IVANS")'>IVANS</button></div><div class="cmp-card-grid">@foreach (var item in FormatRows) { @MappingCard(item) }</div> }
+                    else if (_view == "analytics") { <div class="cmp-section-head"><div><h2>Carrier mapping analytics</h2><p>Format, test status, LOB, and active status distribution across carrier mappings.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Refresh</button></div><div class="cmp-analytics-grid">@AnalyticsPanel("Format distribution", FormatDistribution, "bi-cloud-download", "cmp-tone-blue") @AnalyticsPanel("Test status distribution", TestDistribution, "bi-plug", "cmp-tone-purple") @AnalyticsPanel("LOB distribution", LobDistribution, "bi-collection", "cmp-tone-green") @InsightPanel</div> }
+                    else
+                    {
+                        <div class="cmp-section-head"><div><h2>Carrier mapping operating table</h2><p>Native carrier mapping table synchronized from the existing pricing market rules API.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters">Reset</button></div>
+                        <div class="cmp-table-wrap"><table class="cmp-table"><thead><tr><th>Carrier</th><th>Codes</th><th>LOB</th><th>Format</th><th>Integration</th><th>Last Test</th><th>Status</th><th>Actions</th></tr></thead><tbody>@foreach (var item in FilteredRows) { <tr class="@(IsSelected(item) ? "cmp-row-selected" : string.Empty)" @onclick="@(() => SelectMapping(item))"><td><strong>@item.CarrierName</strong><small>@(item.CarrierNaic ?? "No NAIC")</small></td><td><strong>@(item.InternalCode ?? "—")</strong><small>External @(item.ExternalCode ?? "—")</small></td><td>@LobText(item)</td><td><span class="cmp-badge cmp-badge-info">@FormatText(item)</span></td><td>@IntegrationText(item)</td><td><span class="cmp-badge @TestBadgeClass(item.LastTestStatusCode)">@TestStatusText(item)</span><small>@FormatDateTime(item.LastTestedDateUtc)</small></td><td><span class="cmp-badge @StatusBadgeClass(item)">@(item.IsActive ? "Active" : "Inactive")</span></td><td><div class="cmp-row-actions"><button type="button" title="Edit" @onclick="@(() => OpenEdit(item))" @onclick:stopPropagation="true"><i class="bi bi-pencil"></i></button><button type="button" title="Test" @onclick="@(() => TestAsync(item))" @onclick:stopPropagation="true"><i class="bi bi-plug"></i></button><button type="button" title="Delete" @onclick="@(() => ConfirmDelete(item))" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button></div></td></tr> }</tbody></table></div>
+                    }
+                </main>
+
+                <aside class="cmp-detail-panel">
+                    @if (_selected is null) { <div class="cmp-detail-empty"><i class="bi bi-broadcast" aria-hidden="true"></i><strong>Select a mapping</strong><span>Inspect carrier codes, format, integration key, test status, LOB scope, and workflow actions.</span></div> }
+                    else
+                    {
+                        <div class="cmp-detail-head"><div><span><i class="bi @MappingIcon(_selected)" aria-hidden="true"></i> @FormatText(_selected) mapping</span><h2>@_selected.CarrierName</h2><p>@(_selected.CarrierNaic ?? "No NAIC") · @LobText(_selected)</p></div><span class="cmp-badge @TestBadgeClass(_selected.LastTestStatusCode)">@TestStatusText(_selected)</span></div>
+                        <div class="cmp-detail-summary"><div><span>Internal</span><strong>@(_selected.InternalCode ?? "—")</strong></div><div><span>External</span><strong>@(_selected.ExternalCode ?? "—")</strong></div><div><span>Format</span><strong>@FormatText(_selected)</strong></div><div><span>LOB</span><strong>@LobText(_selected)</strong></div><div><span>Last Test</span><strong>@FormatDate(_selected.LastTestedDateUtc)</strong></div><div><span>Status</span><strong>@(_selected.IsActive ? "Active" : "Inactive")</strong></div></div>
+                        <div class="cmp-rules-card"><header><strong>Recommended actions</strong><span>@PriorityLabel(_selected)</span></header>@foreach (var action in RecommendedActions(_selected)) { <p><em>@action</em><span>active</span></p> }</div>
+                        <div class="cmp-notes-card"><strong>Integration key</strong><p>@IntegrationText(_selected)</p><strong>Notes</strong><p>@(_selected.Notes ?? "No mapping notes recorded.")</p><small>Created @FormatDateTime(_selected.CreatedDateUtc)</small></div>
+                        <div class="cmp-detail-actions"><button type="button" class="um-btn um-btn-ghost" @onclick='() => OpenEdit(_selected)'><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-primary" @onclick='() => TestAsync(_selected)'><i class="bi bi-plug" aria-hidden="true"></i> Test</button><button type="button" class="um-btn um-btn-ghost" @onclick='() => ToggleActiveAsync(_selected)'><i class="bi @(_selected.IsActive ? "bi-pause" : "bi-play")" aria-hidden="true"></i> @(_selected.IsActive ? "Deactivate" : "Activate")</button><button type="button" class="um-btn um-btn-danger" @onclick='() => ConfirmDelete(_selected)'><i class="bi bi-trash" aria-hidden="true"></i> Delete</button></div>
+                    }
+                </aside>
+            </section>
+        }
+    }
 </div>
 
-<SfDialog @bind-Visible="_showForm" Width="760px" IsModal="true" ShowCloseIcon="false">
-    <DialogEvents Closed="ResetForm" />
-    <DialogContent>
-        <div class="um-modal-header"><i class="bi bi-broadcast"></i><span>@(_editId.HasValue ? "Edit Carrier Mapping" : "Add Carrier Mapping")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button></div>
-        <EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator />
-            <div class="um-modal-body"><div class="um-form-grid">
-                <div class="um-field"><label>Carrier Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.CarrierName" class="um-input" /><ValidationMessage For="() => _form.CarrierName" class="text-danger" /></div>
-                <div class="um-field"><label>NAIC</label><InputText @bind-Value="_form.CarrierNaic" class="um-input" /><ValidationMessage For="() => _form.CarrierNaic" class="text-danger" /></div>
-                <div class="um-field"><label>Internal Code</label><InputText @bind-Value="_form.InternalCode" class="um-input" /><ValidationMessage For="() => _form.InternalCode" class="text-danger" /></div>
-                <div class="um-field"><label>External Code</label><InputText @bind-Value="_form.ExternalCode" class="um-input" /><ValidationMessage For="() => _form.ExternalCode" class="text-danger" /></div>
-                <div class="um-field"><label>Line of Business</label><InputSelect @bind-Value="_form.LobCode" class="um-input"><option value="">All</option>@foreach (var lob in PricingMarketRulePageConstants.LobCodes) { <option value="@lob">@lob</option> }</InputSelect><ValidationMessage For="() => _form.LobCode" class="text-danger" /></div>
-                <div class="um-field"><label>Download Format <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.DownloadFormatCode" class="um-input">@foreach (var format in PricingMarketRulePageConstants.DownloadFormats) { <option value="@format">@format</option> }</InputSelect><ValidationMessage For="() => _form.DownloadFormatCode" class="text-danger" /></div>
-                <div class="um-field"><label>Integration Key</label><InputText @bind-Value="_form.IntegrationKey" class="um-input" /><ValidationMessage For="() => _form.IntegrationKey" class="text-danger" /></div>
-                <div class="um-field"><label>Notes</label><InputTextArea @bind-Value="_form.Notes" class="um-input" rows="2" /><ValidationMessage For="() => _form.Notes" class="text-danger" /></div>
-                <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label></div>
-            </div></div>
-            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button></div>
-        </EditForm>
-    </DialogContent>
-</SfDialog>
-
-<SfDialog @bind-Visible="_showDelete" Width="440px" IsModal="true" ShowCloseIcon="false"><DialogContent><div class="um-confirm-dialog"><div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3-fill"></i></div><div class="um-confirm-message"><h6>Delete Carrier Mapping?</h6><p>You are about to delete <strong>@_deleteTarget?.CarrierName</strong>. This action cannot be undone.</p></div><div class="um-modal-footer w-100"><button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div></div></DialogContent></SfDialog>
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
-
 @code {
-    List<CarrierMappingDto> _items = [], _filtered = [];
-    string? _activeFilter, _loadError;
-    string _search = string.Empty;
-    bool _loading, _saving, _showForm, _showDelete;
-    Guid? _editId;
-    CarrierMappingDto? _deleteTarget;
-    SfToast _toast = default!;
-    CarrierMappingFormModel _form = new();
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private List<CarrierMappingDto> _items = [];
+    private CarrierMappingDto? _selected;
+    private CarrierMappingDto? _deleteTarget;
+    private CarrierMappingFormModel _form = new();
+    private bool _loading = true;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private string _activeFilter = "all";
+    private string _view = "overview";
+    private string _search = string.Empty;
+    private string _lobFilter = string.Empty;
+    private string _formatFilter = string.Empty;
+    private string _sort = "importance";
+    private Guid? _editId;
+    private readonly ViewOption[] _views = [new("overview", "Overview", "bi-speedometer2"), new("active", "Active", "bi-check-circle"), new("tests", "Tests", "bi-plug"), new("formats", "Formats", "bi-cloud-download"), new("analytics", "Analytics", "bi-bar-chart-line"), new("table", "Table", "bi-table")];
 
-    protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("CRM", "/crm"), new("Pricing", "/crm/pricing-rules"), new("Carrier Mapping")); await LoadAsync(); }
-    async Task LoadAsync() { _loading = true; _loadError = null; try { var r = await Api.SearchCarrierMappingsAsync(PricingMarketRulePageConstants.TenantId); _items = r?.Items.ToList() ?? []; ApplyFilter(); } catch (Exception ex) { _loadError = $"Failed to load carrier mappings: {ex.Message}"; } finally { _loading = false; } }
-    void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; ApplyFilter(); }
-    void ApplyFilter() { var rows = _activeFilter switch { "active" => _items.Where(x => x.IsActive), "failed" => _items.Where(x => x.LastTestStatusCode == "Failed"), "IVANS" => _items.Where(x => x.DownloadFormatCode == "IVANS"), "AL3" => _items.Where(x => x.DownloadFormatCode == "AL3"), _ => _items.AsEnumerable() }; _filtered = rows.Where(SearchMatches).ToList(); }
-    void SetFilter(string? key) { _activeFilter = key; ApplyFilter(); }
-    void ResetFilters() { _activeFilter = null; _search = string.Empty; ApplyFilter(); }
-    bool SearchMatches(CarrierMappingDto item) { if (string.IsNullOrWhiteSpace(_search)) return true; var q = _search.Trim(); return item.CarrierName.Contains(q, StringComparison.OrdinalIgnoreCase) || item.DownloadFormatCode.Contains(q, StringComparison.OrdinalIgnoreCase) || (item.CarrierNaic?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) || (item.InternalCode?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) || (item.ExternalCode?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) || (item.LobCode?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) || (item.IntegrationKey?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false); }
-    void OnRowSelected(RowSelectEventArgs<CarrierMappingDto> args) => OpenEdit(args.Data);
-    static string TestBadge(string? status) => status switch { "Passed" => "um-badge-success", "Failed" => "um-badge-danger", _ => "um-badge-neutral" };
-    void OpenCreate() { _editId = null; _form = new(); _showForm = true; }
-    void OpenEdit(CarrierMappingDto item) { _editId = item.CarrierMappingId; _form = new() { CarrierName = item.CarrierName, CarrierNaic = item.CarrierNaic, InternalCode = item.InternalCode, ExternalCode = item.ExternalCode, LobCode = item.LobCode, DownloadFormatCode = item.DownloadFormatCode, IntegrationKey = item.IntegrationKey, Notes = item.Notes, IsActive = item.IsActive }; _showForm = true; }
-    async Task SaveAsync() { _saving = true; try { var req = new UpsertCarrierMappingRequest { TenantId = PricingMarketRulePageConstants.TenantId, CarrierName = _form.CarrierName, CarrierNaic = PricingMarketRulePageConstants.Normalize(_form.CarrierNaic), InternalCode = PricingMarketRulePageConstants.Normalize(_form.InternalCode), ExternalCode = PricingMarketRulePageConstants.Normalize(_form.ExternalCode), LobCode = PricingMarketRulePageConstants.Normalize(_form.LobCode), DownloadFormatCode = _form.DownloadFormatCode, IntegrationKey = PricingMarketRulePageConstants.Normalize(_form.IntegrationKey), Notes = PricingMarketRulePageConstants.Normalize(_form.Notes), IsActive = _form.IsActive }; if (_editId.HasValue) await Api.UpdateCarrierMappingAsync(_editId.Value, req); else await Api.CreateCarrierMappingAsync(req); _showForm = false; await _toast.ShowAsync(new() { Content = "Carrier mapping saved", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } }
-    async Task TestAsync(CarrierMappingDto item) { try { await Api.TestCarrierMappingAsync(item.CarrierMappingId); await _toast.ShowAsync(new() { Content = "Carrier mapping test passed", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Test failed: {ex.Message}", CssClass = "e-toast-danger" }); } }
-    void ConfirmDelete(CarrierMappingDto item) { _deleteTarget = item; _showDelete = true; }
-    async Task ExecuteDeleteAsync() { _saving = true; try { await Api.DeleteCarrierMappingAsync(_deleteTarget!.CarrierMappingId); _showDelete = false; await _toast.ShowAsync(new() { Content = "Carrier mapping deleted", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } }
-    void ResetForm() { _form = new(); _editId = null; }
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
+    private int SearchResultCount => _view switch { "active" => ActiveRows.Count, "tests" => TestRows.Count, "formats" => FormatRows.Count, _ => FilteredRows.Count };
+    private int ActiveCount => _items.Count(x => x.IsActive);
+    private int IvansCount => _items.Count(x => x.DownloadFormatCode == "IVANS");
+    private int Al3Count => _items.Count(x => x.DownloadFormatCode == "AL3");
+    private int PassedCount => _items.Count(x => x.LastTestStatusCode == "Passed");
+    private int FailedCount => _items.Count(x => x.LastTestStatusCode == "Failed");
+    private int UntestedCount => _items.Count(x => string.IsNullOrWhiteSpace(x.LastTestStatusCode));
+    private int KeyedCount => _items.Count(x => !string.IsNullOrWhiteSpace(x.IntegrationKey));
+    private CarrierMappingDto? TopMapping => FilteredRows.OrderByDescending(ImportanceScore).ThenBy(x => x.CarrierName).FirstOrDefault();
+    private string GuidanceText => FailedCount > 0 ? $"{FailedCount.ToString("N0", CultureInfo.CurrentCulture)} mapping test(s) failed. Review codes, format, and integration keys before routing downloads." : UntestedCount > 0 ? $"{UntestedCount.ToString("N0", CultureInfo.CurrentCulture)} mapping(s) have not been tested. Run tests to confirm readiness." : "Carrier mapping coverage is healthy. Continue monitoring test status, format distribution, and code completeness.";
+    private IEnumerable<string> LobOptions => _items.Select(LobText).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private IEnumerable<string> FormatOptions => _items.Select(x => x.DownloadFormatCode).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private IReadOnlyList<Metric> Metrics => [new("all", _items.Count.ToString("N0", CultureInfo.CurrentCulture), "Mappings", "Tenant carrier mappings", "bi-broadcast", "cmp-kpi-blue"), new("active", ActiveCount.ToString("N0", CultureInfo.CurrentCulture), "Active", "Available for integration", "bi-check-circle-fill", "cmp-kpi-green"), new("IVANS", IvansCount.ToString("N0", CultureInfo.CurrentCulture), "IVANS", "IVANS download mappings", "bi-cloud-download-fill", "cmp-kpi-cyan"), new("AL3", Al3Count.ToString("N0", CultureInfo.CurrentCulture), "AL3", "AL3 format mappings", "bi-file-earmark-code-fill", "cmp-kpi-purple"), new("failed", FailedCount.ToString("N0", CultureInfo.CurrentCulture), "Failed Tests", "Mappings needing review", "bi-exclamation-triangle", "cmp-kpi-red"), new("untested", UntestedCount.ToString("N0", CultureInfo.CurrentCulture), "Untested", "Never tested mappings", "bi-plug", "cmp-kpi-amber")];
+    private IReadOnlyList<CarrierMappingDto> FilteredRows => ApplyMappingFilters(_items).ToList();
+    private IReadOnlyList<CarrierMappingDto> ActiveRows => ApplyMappingFilters(_items.Where(x => x.IsActive)).ToList();
+    private IReadOnlyList<CarrierMappingDto> TestRows => ApplyMappingFilters(_items.Where(x => x.LastTestStatusCode == "Failed" || string.IsNullOrWhiteSpace(x.LastTestStatusCode))).ToList();
+    private IReadOnlyList<CarrierMappingDto> FormatRows => ApplyMappingFilters(_items.Where(x => !string.IsNullOrWhiteSpace(x.DownloadFormatCode))).ToList();
+    private IReadOnlyList<DistributionRow> FormatDistribution => BuildDistribution(_items, x => x.DownloadFormatCode, _ => "cmp-badge-info");
+    private IReadOnlyList<DistributionRow> TestDistribution => BuildDistribution(_items, TestStatusText, TestBadgeClass);
+    private IReadOnlyList<DistributionRow> LobDistribution => BuildDistribution(_items, LobText, _ => "cmp-badge-muted");
+
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Pricing", "/crm/pricing-rules"), new("Carrier Mapping", "/crm/carrier-mapping")); await LoadAsync(); }
+    private async Task LoadAsync() { _loading = true; _loadError = null; try { if (_tenantId == Guid.Empty) await ResolveCurrentUserContextAsync(); var result = await Api.SearchCarrierMappingsAsync(_tenantId, pageSize: 250); _items = result?.Items?.ToList() ?? []; _selected = _selected is null ? FilteredRows.FirstOrDefault() : _items.FirstOrDefault(x => x.CarrierMappingId == _selected.CarrierMappingId) ?? FilteredRows.FirstOrDefault(); ShowToast("Carrier mappings synced successfully.", "success"); } catch (Exception ex) { _loadError = $"Failed to load carrier mappings: {ex.Message}"; _items = []; _selected = null; ShowToast($"Carrier mapping load failed: {ex.Message}", "danger"); } finally { _loading = false; } }
+
+    private IEnumerable<CarrierMappingDto> ApplyMappingFilters(IEnumerable<CarrierMappingDto> mappings)
+    {
+        var query = mappings;
+        if (!string.IsNullOrWhiteSpace(_search)) { var term = _search.Trim(); query = query.Where(x => Contains(x.CarrierName, term) || Contains(x.CarrierNaic, term) || Contains(x.InternalCode, term) || Contains(x.ExternalCode, term) || Contains(x.LobCode, term) || Contains(x.DownloadFormatCode, term) || Contains(x.IntegrationKey, term) || Contains(x.Notes, term) || Contains(x.LastTestStatusCode, term)); }
+        if (!string.IsNullOrWhiteSpace(_lobFilter)) query = query.Where(x => LobText(x).Equals(_lobFilter, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(_formatFilter)) query = query.Where(x => x.DownloadFormatCode.Equals(_formatFilter, StringComparison.OrdinalIgnoreCase));
+        query = _activeFilter switch { "active" => query.Where(x => x.IsActive), "failed" => query.Where(x => x.LastTestStatusCode == "Failed"), "untested" => query.Where(x => string.IsNullOrWhiteSpace(x.LastTestStatusCode)), "keyed" => query.Where(x => !string.IsNullOrWhiteSpace(x.IntegrationKey)), "IVANS" or "AL3" or "Custom" => query.Where(x => x.DownloadFormatCode == _activeFilter), _ => query };
+        return _sort switch { "test" => query.OrderByDescending(TestImportance).ThenBy(x => x.CarrierName), "format" => query.OrderBy(x => x.DownloadFormatCode).ThenBy(x => x.CarrierName), "carrier" => query.OrderBy(x => x.CarrierName).ThenBy(x => x.DownloadFormatCode), "activity" => query.OrderByDescending(x => x.LastTestedDateUtc).ThenBy(x => x.CarrierName), _ => query.OrderByDescending(ImportanceScore).ThenBy(x => x.CarrierName) };
+    }
+
+    private void SetFilter(string filter) { _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter; _view = filter switch { "active" => "active", "failed" or "untested" => "tests", "IVANS" or "AL3" or "Custom" => "formats", _ => _view }; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void SetView(string view) => _view = view;
+    private void ResetFilters() { _activeFilter = "all"; _search = string.Empty; _lobFilter = string.Empty; _formatFilter = string.Empty; _sort = "importance"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void SelectMapping(CarrierMappingDto item) => _selected = item;
+    private void SelectTopMapping() { if (TopMapping is not null) { _selected = TopMapping; _view = "table"; } }
+    private void GoTo(string url) => Nav.NavigateTo(url);
+    private void OnSearchChanged(BlazorChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnLobChanged(BlazorChangeEventArgs e) { _lobFilter = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnFormatChanged(BlazorChangeEventArgs e) { _formatFilter = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnSortChanged(BlazorChangeEventArgs e) { _sort = e.Value?.ToString() ?? "importance"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void ShowToast(string message, string kind) { _toastMessage = message.Length <= 140 ? message : $"{message[..137]}..."; _toastKind = ToastKind(kind); _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+    private void OpenCreate() { _editId = null; _form = new(); _formError = null; _showForm = true; }
+    private void OpenEdit(CarrierMappingDto item) { _selected = item; _editId = item.CarrierMappingId; _form = new() { CarrierName = item.CarrierName, CarrierNaic = item.CarrierNaic, InternalCode = item.InternalCode, ExternalCode = item.ExternalCode, LobCode = item.LobCode, DownloadFormatCode = item.DownloadFormatCode, IntegrationKey = item.IntegrationKey, Notes = item.Notes, IsActive = item.IsActive }; _formError = null; _showForm = true; }
+    private void CloseForm() { if (_saving) return; _showForm = false; ResetForm(); }
+    private async Task SaveAsync() { _saving = true; _formError = null; try { var req = BuildRequest(_form); if (_editId.HasValue) await Api.UpdateCarrierMappingAsync(_editId.Value, req); else await Api.CreateCarrierMappingAsync(req); _showForm = false; ResetForm(); await LoadAsync(); ShowToast("Carrier mapping saved.", "success"); } catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; ShowToast($"Save failed: {ex.Message}", "danger"); } finally { _saving = false; } }
+    private UpsertCarrierMappingRequest BuildRequest(CarrierMappingFormModel form) => new() { TenantId = _tenantId, CarrierName = form.CarrierName.Trim(), CarrierNaic = Normalize(form.CarrierNaic), InternalCode = Normalize(form.InternalCode), ExternalCode = Normalize(form.ExternalCode), LobCode = Normalize(form.LobCode), DownloadFormatCode = form.DownloadFormatCode.Trim(), IntegrationKey = Normalize(form.IntegrationKey), Notes = Normalize(form.Notes), IsActive = form.IsActive, UserId = _tenantAdminUserId };
+    private async Task TestSelectedAsync() { if (_selected is not null) await TestAsync(_selected); }
+    private async Task TestAsync(CarrierMappingDto item) { _saving = true; try { await Api.TestCarrierMappingAsync(item.CarrierMappingId, _tenantAdminUserId); await LoadAsync(); ShowToast($"{item.CarrierName} test passed.", "success"); } catch (Exception ex) { ShowToast($"Test failed: {ex.Message}", "danger"); } finally { _saving = false; } }
+    private async Task ToggleActiveAsync(CarrierMappingDto item) { _saving = true; try { var req = new UpsertCarrierMappingRequest { TenantId = _tenantId, CarrierName = item.CarrierName, CarrierNaic = item.CarrierNaic, InternalCode = item.InternalCode, ExternalCode = item.ExternalCode, LobCode = item.LobCode, DownloadFormatCode = item.DownloadFormatCode, IntegrationKey = item.IntegrationKey, Notes = item.Notes, IsActive = !item.IsActive, UserId = _tenantAdminUserId }; await Api.UpdateCarrierMappingAsync(item.CarrierMappingId, req); await LoadAsync(); ShowToast($"{item.CarrierName} {(item.IsActive ? "deactivated" : "activated")}.", "success"); } catch (Exception ex) { ShowToast($"Status update failed: {ex.Message}", "danger"); } finally { _saving = false; } }
+    private void ConfirmDelete(CarrierMappingDto item) { _deleteTarget = item; _showDelete = true; }
+    private void CancelDelete() { if (!_saving) { _showDelete = false; _deleteTarget = null; } }
+    private async Task ExecuteDeleteAsync() { if (_deleteTarget is null) return; _saving = true; try { var deletedName = _deleteTarget.CarrierName; await Api.DeleteCarrierMappingAsync(_deleteTarget.CarrierMappingId, _tenantAdminUserId); _showDelete = false; _deleteTarget = null; await LoadAsync(); ShowToast($"{deletedName} deleted.", "success"); } catch (Exception ex) { ShowToast($"Delete failed: {ex.Message}", "danger"); } finally { _saving = false; } }
+    private void ResetForm() { _form = new(); _editId = null; _formError = null; }
+
+    private RenderFragment ImportanceRankPanel => @<section class="cmp-panel"><h3><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Mapping importance ranking</h3><div class="cmp-rank-stack">@foreach (var item in FilteredRows.Take(8)) { <button type="button" class="@(IsSelected(item) ? "cmp-rank-row cmp-rank-active" : "cmp-rank-row")" @onclick="@(() => SelectMapping(item))"><span>@item.CarrierName</span><div><i style="width:@WidthPct(ImportanceScore(item), MaxImportance)"></i></div><strong>@TestStatusText(item)</strong><small>@FormatText(item)</small></button> }</div></section>;
+    private RenderFragment MappingCard(CarrierMappingDto item) => @<article class="@(IsSelected(item) ? "cmp-mapping-card cmp-mapping-card-selected" : "cmp-mapping-card")" @onclick="@(() => SelectMapping(item))"><div class="cmp-mapping-top"><span class="cmp-mapping-icon"><i class="bi @MappingIcon(item)" aria-hidden="true"></i></span><span class="cmp-badge @TestBadgeClass(item.LastTestStatusCode)">@TestStatusText(item)</span></div><h3>@item.CarrierName</h3><p>@(item.CarrierNaic ?? "No NAIC") · @FormatText(item) · @LobText(item)</p><div class="cmp-mapping-stats"><div><span>Internal</span><strong>@(item.InternalCode ?? "—")</strong></div><div><span>External</span><strong>@(item.ExternalCode ?? "—")</strong></div><div><span>Key</span><strong>@(string.IsNullOrWhiteSpace(item.IntegrationKey) ? "Missing" : "Set")</strong></div></div><div class="cmp-mapping-actions" @onclick:stopPropagation="true"><button type="button" @onclick="@(() => OpenEdit(item))">Edit</button><button type="button" @onclick="@(() => TestAsync(item))">Test</button><button type="button" @onclick="@(() => ConfirmDelete(item))">Delete</button></div></article>;
+    private RenderFragment AnalyticsPanel(string title, IReadOnlyList<DistributionRow> rows, string icon, string tone) => @<section class="cmp-analytics-panel @tone"><h3><i class="bi @icon" aria-hidden="true"></i> @title</h3><div class="cmp-analytics-list">@foreach (var row in rows) { <button type="button" @onclick="@(() => ApplyDistribution(row.Label, title))"><span>@row.Label</span><div><i style="width:@row.Width"></i></div><strong>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><small>@row.Percent.ToString("P0", CultureInfo.CurrentCulture)</small></button> }</div></section>;
+    private RenderFragment InsightPanel => @<section class="cmp-analytics-panel cmp-tone-amber"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Executive insight</h3><div class="cmp-insight-grid"><div><span>Active ratio</span><strong>@Ratio(ActiveCount, _items.Count)</strong><small>active / all mappings</small></div><div><span>Pass ratio</span><strong>@Ratio(PassedCount, _items.Count)</strong><small>passed / all mappings</small></div><div><span>Integration keys</span><strong>@KeyedCount.ToString("N0", CultureInfo.CurrentCulture)</strong><small>keyed mappings</small></div><div><span>Failed tests</span><strong>@FailedCount.ToString("N0", CultureInfo.CurrentCulture)</strong><small>needs review</small></div></div><p>@GuidanceText</p></section>;
+    private void ApplyDistribution(string label, string title) { if (title.Contains("Format", StringComparison.OrdinalIgnoreCase)) _formatFilter = _formatFilter == label ? string.Empty : label; else if (title.Contains("Test", StringComparison.OrdinalIgnoreCase)) _activeFilter = label switch { "Failed" => "failed", "NotTested" => "untested", _ => "all" }; else _lobFilter = _lobFilter == label ? string.Empty : label; _view = "table"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+
+    private decimal MaxImportance => Math.Max(1m, FilteredRows.Select(ImportanceScore).DefaultIfEmpty(1m).Max());
+    private string MetricCardClass(Metric metric) => $"cmp-kpi-card {metric.Tone} {(_activeFilter == metric.Filter ? "cmp-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewOption view) => $"cmp-view-btn {(view.Id == _view ? "cmp-view-btn-active" : string.Empty)}";
+    private int ViewCount(string view) => view switch { "active" => ActiveRows.Count, "tests" => TestRows.Count, "formats" => FormatRows.Count, "analytics" => _items.Count, "table" => FilteredRows.Count, _ => FilteredRows.Count };
+    private bool IsSelected(CarrierMappingDto item) => _selected?.CarrierMappingId == item.CarrierMappingId;
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static decimal TestImportance(CarrierMappingDto item) => item.LastTestStatusCode switch { "Failed" => 70m, null => 45m, "Passed" => 15m, _ => 35m };
+    private static decimal ImportanceScore(CarrierMappingDto item) => TestImportance(item) + (item.IsActive ? 20m : 0m) + (!string.IsNullOrWhiteSpace(item.InternalCode) ? 8m : 0m) + (!string.IsNullOrWhiteSpace(item.ExternalCode) ? 8m : 0m) + (!string.IsNullOrWhiteSpace(item.IntegrationKey) ? 10m : 0m) + (item.DownloadFormatCode == "IVANS" ? 8m : 4m);
+    private static string WidthPct(decimal value, decimal max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, (double)(value / max * 100)))).ToString("F1", CultureInfo.InvariantCulture) + "%";
+    private static string WidthPct(int value, int max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, (double)value / max * 100))).ToString("F1", CultureInfo.InvariantCulture) + "%";
+    private static string Ratio(int value, int total) => total <= 0 ? "0%" : ((decimal)value / total).ToString("P0", CultureInfo.CurrentCulture);
+    private static string LobText(CarrierMappingDto item) => string.IsNullOrWhiteSpace(item.LobCode) ? "All" : item.LobCode;
+    private static string FormatText(CarrierMappingDto item) => string.IsNullOrWhiteSpace(item.DownloadFormatCode) ? "Unknown" : item.DownloadFormatCode;
+    private static string TestStatusText(CarrierMappingDto item) => string.IsNullOrWhiteSpace(item.LastTestStatusCode) ? "NotTested" : item.LastTestStatusCode;
+    private static string IntegrationText(CarrierMappingDto item) => string.IsNullOrWhiteSpace(item.IntegrationKey) ? "No integration key configured" : item.IntegrationKey;
+    private static string CodeCompleteness(CarrierMappingDto item) => !string.IsNullOrWhiteSpace(item.InternalCode) && !string.IsNullOrWhiteSpace(item.ExternalCode) ? "complete" : "partial";
+    private static string FormatDate(DateTime? value) => value.HasValue ? value.Value.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture) : "Never";
+    private static string FormatDateTime(DateTime? value) => value.HasValue ? value.Value.ToLocalTime().ToString("MMM d, yyyy h:mm tt", CultureInfo.CurrentCulture) : "Never";
+    private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : "success";
+    private static string PriorityLabel(CarrierMappingDto item) => item.LastTestStatusCode == "Failed" ? "Failed test" : string.IsNullOrWhiteSpace(item.LastTestStatusCode) ? "Untested" : string.IsNullOrWhiteSpace(item.IntegrationKey) ? "Missing key" : "Ready";
+    private static IEnumerable<string> RecommendedActions(CarrierMappingDto item) { if (item.LastTestStatusCode == "Failed") yield return "Run a mapping review and retest before using this carrier in downloads."; if (string.IsNullOrWhiteSpace(item.LastTestStatusCode)) yield return "Run the existing carrier mapping test workflow to verify readiness."; if (string.IsNullOrWhiteSpace(item.InternalCode) || string.IsNullOrWhiteSpace(item.ExternalCode)) yield return "Complete internal and external carrier code coverage."; if (string.IsNullOrWhiteSpace(item.IntegrationKey)) yield return "Add an integration key if this carrier requires keyed exchange."; if (!item.IsActive) yield return "Reactivate only after mapping details and test status are verified."; yield return "Confirm LOB scope and download format match carrier configuration."; }
+    private static string MappingIcon(CarrierMappingDto item) => item.LastTestStatusCode switch { "Failed" => "bi-exclamation-triangle", "Passed" => "bi-check2-circle", _ => item.DownloadFormatCode == "AL3" ? "bi-file-earmark-code" : "bi-cloud-download" };
+    private static string StatusBadgeClass(CarrierMappingDto item) => item.IsActive ? "cmp-badge-success" : "cmp-badge-muted";
+    private static string TestBadgeClass(string? status) => status switch { "Passed" => "cmp-badge-success", "Failed" => "cmp-badge-danger", _ => "cmp-badge-muted" };
+    private static IReadOnlyList<DistributionRow> BuildDistribution(IEnumerable<CarrierMappingDto> items, Func<CarrierMappingDto, string> labelSelector, Func<string, string> badgeSelector) { var rows = items.GroupBy(labelSelector).Select(g => new DistributionRow(g.Key, g.Count(), 0, badgeSelector(g.Key), "0%")).OrderByDescending(x => x.Count).ThenBy(x => x.Label).ToList(); var total = Math.Max(1, rows.Sum(x => x.Count)); var max = Math.Max(1, rows.Select(x => x.Count).DefaultIfEmpty(1).Max()); return rows.Select(x => x with { Percent = (double)x.Count / total, Width = WidthPct(x.Count, max) }).ToList(); }
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+    private sealed record ViewOption(string Id, string Label, string Icon);
+    private sealed record Metric(string Filter, string Value, string Label, string Caption, string Icon, string Tone);
+    private sealed record DistributionRow(string Label, int Count, double Percent, string BadgeClass, string Width);
 }

@@ -1,214 +1,365 @@
 @page "/tenant/dashboard/claims-summary"
 @namespace Ams.Web.Components.Pages.Tenant.Dashboard
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
 
-<PageTitle>Claims Summary — Agency Dashboard</PageTitle>
+<PageTitle>Enterprise Claims Summary — AMS</PageTitle>
 
-<AppPageHeader Title="Claims Summary"
-               Subtitle="Open claims, reserves, payouts, litigation and frequency by line of business"
-               Icon="bi-exclamation-circle">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise @(_loading ? "ad-spin" : "")" aria-hidden="true"></i> Refresh
-        </button>
-        <a class="um-btn um-btn-ghost" href="/claims">
-            <i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Claims Register
-        </a>
-    </Actions>
-</AppPageHeader>
-
-@if (_loading)
+@if (_toastVisible)
 {
-    <div class="ad-loading-banner" aria-live="polite">
-        <div class="um-spinner" aria-hidden="true"></div>
-        <span>Loading claims data…</span>
+    <div class="cs-toast cs-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="cs-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
-else if (!string.IsNullOrWhiteSpace(_loadError))
-{
-    <div class="alert alert-danger ad-alert-danger" role="alert"><i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i> @_loadError</div>
-}
-else if (_data is null)
-{
-    <div class="ad-empty"><i class="bi bi-exclamation-circle" aria-hidden="true"></i><span>No claims data available.</span></div>
-}
-else
-{
-    <!-- ── KPI strip ───────────────────────────────────────────── -->
-    <div class="ad-kpi-strip">
-        <button type="button" class="ad-kpi-card ad-kpi--claims @KpiClass("open")" @onclick='() => SetFilter("open")' title="Show open claim statuses">
-            <div class="ad-kpi-icon"><i class="bi bi-exclamation-circle" aria-hidden="true"></i></div>
-            <div class="ad-kpi-body">
-                <div class="ad-kpi-val">@_data.TotalOpenClaims</div>
-                <div class="ad-kpi-lbl">Open Claims</div>
-                <div class="ad-kpi-sub">+@_data.NewClaimsMtd new MTD</div>
+
+<div class="cs-enterprise-page">
+    <section class="cs-hero">
+        <div class="cs-hero-left">
+            <span class="cs-hero-icon"><i class="bi bi-exclamation-octagon-fill" aria-hidden="true"></i></span>
+            <div>
+                <div class="cs-title-row">
+                    <h1>Claims Summary Command Center</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> Live claims data</span>
+                    <span><i class="bi bi-shield-check" aria-hidden="true"></i> Tenant scoped</span>
+                    <span><i class="bi bi-activity" aria-hidden="true"></i> Service governed</span>
+                </div>
+                <p>Monitor open claims, reserve exposure, MTD claim flow, litigation pressure, severity concentration, and line-of-business trends from a single enterprise dashboard.</p>
             </div>
-        </button>
-        <button type="button" class="ad-kpi-card ad-kpi--premium @KpiClass("reserved")" @onclick='() => SetFilter("reserved")' title="Show statuses with reserves">
-            <div class="ad-kpi-icon"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></div>
-            <div class="ad-kpi-body">
-                <div class="ad-kpi-val">@_data.TotalReservedAmount.ToString("C0")</div>
-                <div class="ad-kpi-lbl">Total Reserves</div>
-            </div>
-        </button>
-        <button type="button" class="ad-kpi-card ad-kpi--ar @KpiClass("paid")" @onclick='() => SetFilter("paid")' title="Show line of business summary">
-            <div class="ad-kpi-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></div>
-            <div class="ad-kpi-body">
-                <div class="ad-kpi-val">@_data.TotalPaidMtd.ToString("C0")</div>
-                <div class="ad-kpi-lbl">Paid MTD</div>
-                <div class="ad-kpi-sub">@_data.ClosedClaimsMtd closed MTD</div>
-            </div>
-        </button>
-        <button type="button" class="ad-kpi-card @(_data.LitigatedClaims > 0 ? "ad-kpi--claims" : "ad-kpi--policies") @KpiClass("litigated")" @onclick='() => SetFilter("litigated")' title="Show litigation-sensitive claims metrics">
-            <div class="ad-kpi-icon"><i class="bi bi-briefcase" aria-hidden="true"></i></div>
-            <div class="ad-kpi-body">
-                <div class="ad-kpi-val">@_data.LitigatedClaims</div>
-                <div class="ad-kpi-lbl">Litigated Claims</div>
-                <div class="ad-kpi-sub">Avg close @_data.AvgDaysToClose.ToString("F0") days</div>
-            </div>
-        </button>
-    </div>
-    @if (_activeFilter != "all")
+        </div>
+        <div class="cs-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh claims summary"><i class="bi @(_loading ? "bi-arrow-repeat cs-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => GoTo("/tenant/dashboard")'><i class="bi bi-speedometer2" aria-hidden="true"></i> Dashboard</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => OpenClaimsRegister()'><i class="bi bi-list-check" aria-hidden="true"></i> Claims Register</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick='() => SetView("analytics")'><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Analytics</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
     {
-        <div class="ad-filter-bar"><span class="ad-filter-chip"><i class="bi bi-funnel" aria-hidden="true"></i> @FilterLabel(_activeFilter)</span><button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => SetFilter("all")'><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button></div>
+        <div class="alert alert-danger cs-error-banner" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
     }
 
-    <!-- ── By status + By LOB ─────────────────────────────────── -->
-    <div class="ad-two-col">
-        @if (ShowStatusCard)
-        {
-        <div class="ad-card">
-            <div class="ad-card-hd"><i class="bi bi-tags" aria-hidden="true"></i> Claims by Status</div>
-            @if (_data.ByStatus.Count == 0)
+    @if (_loading)
+    {
+        <section class="cs-loading-state"><i class="bi bi-arrow-repeat cs-spin" aria-hidden="true"></i><strong>Loading enterprise claims summary...</strong><span>Syncing open claims, reserves, paid activity, litigation signals, status mix, and line-of-business exposure.</span></section>
+    }
+    else if (_data is null)
+    {
+        <section class="cs-empty-state"><i class="bi bi-exclamation-circle" aria-hidden="true"></i><strong>No claims data available</strong><span>Sync tenant claims data or add claims records to activate claims summary analytics.</span><button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync">Retry sync</button></section>
+    }
+    else
+    {
+        <section class="cs-kpi-strip" aria-label="Claims KPI filters">
+            @foreach (var metric in Metrics)
             {
-                <div class="ad-empty" style="padding:1rem"><span>No data.</span></div>
+                <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="@(() => SetFilter(metric.Filter))">
+                    <span class="cs-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                    <span><span class="cs-kpi-val">@metric.Value</span><span class="cs-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
+                </button>
             }
-            else
-            {
-                <div class="ad-table-wrap">
-                    <table class="ad-table">
-                        <thead>
-                            <tr>
-                                <th>Status</th>
-                                <th class="ad-num">Count</th>
-                                <th class="ad-num">Reserves</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var s in FilteredStatuses.OrderByDescending(x => x.Count))
-                            {
-                                <tr class="ad-click-row" title="Open claims register filtered to @s.StatusCode" @onclick="() => OpenClaimsByStatus(s.StatusCode)">
-                                    <td>
-                                        <span class="ad-badge @StatusBadgeClass(s.StatusCode)">@s.StatusCode</span>
-                                    </td>
-                                    <td class="ad-num" style="font-weight:600">@s.Count</td>
-                                    <td class="ad-num">@s.Reserved.ToString("C0")</td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
-                </div>
-            }
-        </div>
-        }
+        </section>
 
-        @if (ShowLobCard)
-        {
-        <div class="ad-card">
-            <div class="ad-card-hd"><i class="bi bi-pie-chart" aria-hidden="true"></i> Claims by Line of Business</div>
-            @if (_data.ByLob.Count == 0)
-            {
-                <div class="ad-empty" style="padding:1rem"><span>No data.</span></div>
-            }
-            else
-            {
-                <div class="ad-table-wrap">
-                    <table class="ad-table">
-                        <thead>
-                            <tr>
-                                <th>Line of Business</th>
-                                <th class="ad-num">Count</th>
-                                <th class="ad-num">Reserves</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var l in _data.ByLob.OrderByDescending(x => x.Reserved))
-                            {
-                                <tr class="ad-click-row" title="Open claims register filtered to @l.LobName" @onclick="() => OpenClaimsByLob(l.LobName)">
-                                    <td style="font-weight:500">@l.LobName</td>
-                                    <td class="ad-num">@l.Count</td>
-                                    <td class="ad-num" style="font-weight:600">@l.Reserved.ToString("C0")</td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
+        <section class="cs-workflow-strip" aria-label="Claims workflow actions">
+            <button type="button" class="cs-workflow-card cs-workflow-danger" @onclick='() => SetFilter("open")'><i class="bi bi-exclamation-circle" aria-hidden="true"></i><span><strong>Work open claims</strong><span>Focus active claim inventory.</span></span></button>
+            <button type="button" class="cs-workflow-card" @onclick='() => SetFilter("reserved")'><i class="bi bi-shield-exclamation" aria-hidden="true"></i><span><strong>Review reserves</strong><span>Prioritize reserve exposure.</span></span></button>
+            <button type="button" class="cs-workflow-card" @onclick='() => SetView("lob")'><i class="bi bi-pie-chart" aria-hidden="true"></i><span><strong>LOB pressure</strong><span>Compare line-of-business concentration.</span></span></button>
+            <button type="button" class="cs-workflow-card" @onclick='() => SetFilter("litigated")'><i class="bi bi-briefcase" aria-hidden="true"></i><span><strong>Litigation watch</strong><span>Inspect severe open claims.</span></span></button>
+        </section>
+
+        <section class="cs-filter-panel">
+            <div class="cs-search-wrap">
+                <span class="cs-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+                <div class="cs-search-body">
+                    <label for="claimsSummarySearch">Search claims summary</label>
+                    <input id="claimsSummarySearch" class="cs-search-input" value="@_searchTerm" @oninput="OnSearchChanged" placeholder="Search status, line of business, reserve type, or claim metric..." />
+                    <span>Filters status and line-of-business aggregates immediately.</span>
                 </div>
+            </div>
+            <label class="cs-sort-field">Sort by
+                <select class="cs-filter-select" value="@_sort" @onchange="OnSortChanged">
+                    <option value="reserved">Reserve exposure</option>
+                    <option value="count">Claim count</option>
+                    <option value="name">Name</option>
+                </select>
+            </label>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-cloud-arrow-down" aria-hidden="true"></i> Sync</button>
+            <div class="cs-filter-result"><strong>@SearchResultCount.ToString("N0", CultureInfo.CurrentCulture)</strong><span>shown</span></div>
+        </section>
+
+        <section class="cs-view-tabs" aria-label="Claims summary views">
+            @foreach (var view in _views)
+            {
+                <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label <span>@ViewCount(view.Id)</span></button>
             }
-        </div>
-        }
-    </div>
-}
+        </section>
+
+        <section class="cs-content-layout">
+            <main class="cs-main-card">
+                @if (_view == "overview")
+                {
+                    <div class="cs-section-head"><div><h2>Executive claims overview</h2><p>Most important claim signals by volume, reserve severity, paid activity, litigation pressure, and cycle time.</p></div><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => SetView("table")'><i class="bi bi-table" aria-hidden="true"></i> Table View</button></div>
+                    <div class="cs-overview-grid">
+                        <section class="cs-spotlight-card"><span><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Highest reserve concentration</span><strong>@(TopExposure?.Label ?? "—")</strong><p>@(TopExposure is null ? "No open claims exposure available." : $"{TopExposure.Reserved.ToString("C0", CultureInfo.CurrentCulture)} reserved across {TopExposure.Count.ToString("N0", CultureInfo.CurrentCulture)} open claim(s).")</p><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="SelectTopExposure">Inspect exposure</button></section>
+                        <section class="cs-guidance-card"><h3><i class="bi bi-stars" aria-hidden="true"></i> Claims guidance</h3><p>@GuidanceText</p><div class="cs-guidance-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("reserved")'>Reserves</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("litigated")'>Litigation</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetView("lob")'>LOB</button></div></section>
+                    </div>
+                    @ExposureRankPanel
+                }
+                else if (_view == "status")
+                {
+                    <div class="cs-section-head"><div><h2>Claims by status</h2><p>Open claim statuses ranked by count and reserve exposure.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => OpenClaimsRegister()'>Claims Register</button></div>
+                    <div class="cs-card-grid">
+                        @foreach (var item in FilteredStatusRows)
+                        {
+                            @AggregateCard(item)
+                        }
+                    </div>
+                }
+                else if (_view == "lob")
+                {
+                    <div class="cs-section-head"><div><h2>Line-of-business pressure</h2><p>Reserve and frequency concentration by line of business.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetView("analytics")'>Analytics</button></div>
+                    <div class="cs-card-grid">
+                        @foreach (var item in FilteredLobRows)
+                        {
+                            @AggregateCard(item)
+                        }
+                    </div>
+                }
+                else if (_view == "analytics")
+                {
+                    <div class="cs-section-head"><div><h2>Claims analytics</h2><p>Severity, frequency, reserve share, status mix, and line-of-business distribution.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Refresh</button></div>
+                    <div class="cs-analytics-grid">
+                        @AnalyticsPanel("Status reserve mix", StatusRows, "bi-tags", "cs-tone-blue")
+                        @AnalyticsPanel("LOB reserve mix", LobRows, "bi-pie-chart", "cs-tone-purple")
+                        @InsightPanel
+                    </div>
+                }
+                else
+                {
+                    <div class="cs-section-head"><div><h2>Claims operating table</h2><p>Status and line-of-business aggregates synchronized from the claims summary API.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters">Reset</button></div>
+                    <div class="cs-table-wrap">
+                        <table class="cs-table">
+                            <thead><tr><th>Type</th><th>Name</th><th class="cs-num">Count</th><th class="cs-num">Reserved</th><th class="cs-num">Share</th><th>Actions</th></tr></thead>
+                            <tbody>
+                                @foreach (var row in FilteredAggregateRows)
+                                {
+                                    <tr class="@(SelectedKey == row.Key ? "cs-row-selected" : string.Empty)" @onclick="@(() => SelectAggregate(row))">
+                                        <td><span class="cs-badge @row.BadgeClass">@row.Kind</span></td>
+                                        <td><strong>@row.Label</strong><small>@row.Caption</small></td>
+                                        <td class="cs-num">@row.Count.ToString("N0", CultureInfo.CurrentCulture)</td>
+                                        <td class="cs-num"><strong>@row.Reserved.ToString("C0", CultureInfo.CurrentCulture)</strong></td>
+                                        <td class="cs-num">@ShareLabel(row.Reserved, TotalReserveBasis)</td>
+                                        <td><div class="cs-row-actions"><button type="button" title="Open claims" @onclick="@(() => OpenAggregate(row))" @onclick:stopPropagation="true">↗</button><button type="button" title="Inspect" @onclick="@(() => SelectAggregate(row))" @onclick:stopPropagation="true">✓</button></div></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </main>
+
+            <aside class="cs-detail-panel">
+                @if (_selected is null)
+                {
+                    <div class="cs-detail-empty"><i class="bi bi-exclamation-octagon" aria-hidden="true"></i><strong>Select a claims aggregate</strong><span>Choose a status or line of business to inspect reserve share, claim count, severity, and drill-down actions.</span></div>
+                }
+                else
+                {
+                    <div class="cs-detail-head"><div><span><i class="bi @_selected.Icon" aria-hidden="true"></i> @_selected.Kind detail</span><h2>@_selected.Label</h2><p>@_selected.Caption</p></div><span class="cs-badge @_selected.BadgeClass">@_selected.Kind</span></div>
+                    <div class="cs-detail-summary">
+                        <div><span>Claim count</span><strong>@_selected.Count.ToString("N0", CultureInfo.CurrentCulture)</strong></div>
+                        <div><span>Reserved</span><strong>@_selected.Reserved.ToString("C0", CultureInfo.CurrentCulture)</strong></div>
+                        <div><span>Reserve share</span><strong>@ShareLabel(_selected.Reserved, TotalReserveBasis)</strong></div>
+                        <div><span>Severity</span><strong>@SeverityLabel(_selected)</strong></div>
+                        <div><span>Avg reserve</span><strong>@AverageReserve(_selected).ToString("C0", CultureInfo.CurrentCulture)</strong></div>
+                        <div><span>Priority</span><strong>@PriorityLabel(_selected)</strong></div>
+                    </div>
+                    <div class="cs-rules-card"><header><strong>Recommended actions</strong><span>@PriorityLabel(_selected)</span></header>@foreach (var action in RecommendedActions(_selected)) { <p><em>@action</em><span>active</span></p> }</div>
+                    <div class="cs-detail-actions">
+                        <button type="button" class="um-btn um-btn-ghost" @onclick='() => OpenAggregate(_selected)'><i class="bi bi-list-check" aria-hidden="true"></i> Claims</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick='() => SetView(_selected.Kind == "Status" ? "status" : "lob")'><i class="bi bi-columns-gap" aria-hidden="true"></i> Compare</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick='() => GoTo("/tenant/dashboard/branch-performance")'><i class="bi bi-diagram-3" aria-hidden="true"></i> Branches</button>
+                        <button type="button" class="um-btn um-btn-primary" @onclick='() => SetView("analytics")'><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Analytics</button>
+                    </div>
+                }
+            </aside>
+        </section>
+    }
+</div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
     private Guid _tenantId;
+    private Guid _tenantAdminUserId;
     private ClaimsSummaryDto? _data;
-    private bool _loading;
+    private AggregateRow? _selected;
+    private bool _loading = true;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
     private string? _loadError;
     private string _activeFilter = "all";
-    private bool ShowStatusCard => _activeFilter is "all" or "open" or "reserved" or "litigated";
-    private bool ShowLobCard => _activeFilter is "all" or "paid";
-    private IEnumerable<ClaimsByStatusDto> FilteredStatuses => (_data?.ByStatus ?? []).Where(s => _activeFilter switch
-    {
-        "reserved" => s.Reserved > 0,
-        _ => true,
-    });
+    private string _view = "overview";
+    private string _searchTerm = string.Empty;
+    private string _sort = "reserved";
+
+    private readonly ViewOption[] _views = [new("overview", "Overview", "bi-speedometer2"), new("status", "Status", "bi-tags"), new("lob", "Line", "bi-pie-chart"), new("analytics", "Analytics", "bi-bar-chart-line"), new("table", "Table", "bi-table")];
+
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
+    private int SearchResultCount => _view == "lob" ? FilteredLobRows.Count : _view == "status" ? FilteredStatusRows.Count : FilteredAggregateRows.Count;
+    private decimal TotalReserveBasis => Math.Max(1m, AggregateRows.Sum(r => r.Reserved));
+    private int OpenClaimCount => _data?.TotalOpenClaims ?? 0;
+    private decimal TotalReserved => _data?.TotalReservedAmount ?? 0m;
+    private decimal PaidMtd => _data?.TotalPaidMtd ?? 0m;
+    private int LitigatedCount => _data?.LitigatedClaims ?? 0;
+    private double AvgCloseDays => _data?.AvgDaysToClose ?? 0;
+    private AggregateRow? TopExposure => AggregateRows.OrderByDescending(r => r.Reserved).ThenByDescending(r => r.Count).FirstOrDefault();
+    private string? SelectedKey => _selected?.Key;
+    private string GuidanceText => LitigatedCount > 0 ? $"{LitigatedCount.ToString("N0", CultureInfo.CurrentCulture)} litigated or severe claim(s) require leadership review. Reserve exposure is {TotalReserved.ToString("C0", CultureInfo.CurrentCulture)}." : OpenClaimCount > 0 ? $"{OpenClaimCount.ToString("N0", CultureInfo.CurrentCulture)} open claim(s) are active with {TotalReserved.ToString("C0", CultureInfo.CurrentCulture)} reserved. Keep adjuster follow-up and cycle time moving." : "Claims inventory is healthy. Continue monitoring new MTD activity and severity trends.";
+
+    private IReadOnlyList<Metric> Metrics =>
+    [
+        new("open", OpenClaimCount.ToString("N0", CultureInfo.CurrentCulture), "Open Claims", $"+{(_data?.NewClaimsMtd ?? 0).ToString("N0", CultureInfo.CurrentCulture)} new MTD", "bi-exclamation-circle", "cs-kpi-red"),
+        new("reserved", TotalReserved.ToString("C0", CultureInfo.CurrentCulture), "Total Reserves", "Open reserve exposure", "bi-shield-exclamation", "cs-kpi-blue"),
+        new("paid", PaidMtd.ToString("C0", CultureInfo.CurrentCulture), "Paid MTD", $"{(_data?.ClosedClaimsMtd ?? 0).ToString("N0", CultureInfo.CurrentCulture)} closed MTD", "bi-cash-coin", "cs-kpi-green"),
+        new("litigated", LitigatedCount.ToString("N0", CultureInfo.CurrentCulture), "Litigated", "Severe open claim watch", "bi-briefcase", "cs-kpi-purple"),
+        new("cycle", AvgCloseDays.ToString("F0", CultureInfo.CurrentCulture), "Avg Close Days", "Closed claim cycle time", "bi-stopwatch", "cs-kpi-amber"),
+        new("lob", (_data?.ByLob.Count ?? 0).ToString("N0", CultureInfo.CurrentCulture), "Lines", "LOBs with open claims", "bi-layers", "cs-kpi-cyan")
+    ];
+
+    private IReadOnlyList<AggregateRow> StatusRows => (_data?.ByStatus ?? []).Select(s => new AggregateRow($"status:{s.StatusCode}", "Status", s.StatusCode, $"{s.Count.ToString("N0", CultureInfo.CurrentCulture)} open claim(s)", s.Count, s.Reserved, StatusBadgeClass(s.StatusCode), StatusIcon(s.StatusCode), s.StatusCode, null)).ToList();
+    private IReadOnlyList<AggregateRow> LobRows => (_data?.ByLob ?? []).Select(l => new AggregateRow($"lob:{l.LobName}", "Line", l.LobName, $"{l.Count.ToString("N0", CultureInfo.CurrentCulture)} open claim(s)", l.Count, l.Reserved, "cs-badge-info", "bi-layers", null, l.LobName)).ToList();
+    private IReadOnlyList<AggregateRow> AggregateRows => [.. StatusRows, .. LobRows];
+    private IReadOnlyList<AggregateRow> FilteredStatusRows => ApplyAggregateFilters(StatusRows).ToList();
+    private IReadOnlyList<AggregateRow> FilteredLobRows => ApplyAggregateFilters(LobRows).ToList();
+    private IReadOnlyList<AggregateRow> FilteredAggregateRows => ApplyAggregateFilters(AggregateRows).ToList();
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Agency Dashboard", "/tenant/dashboard"), new("Claims Summary"));
+        Breadcrumbs.SetCrumbs(new("Agency Dashboard", "/tenant/dashboard"), new("Claims Summary", "/tenant/dashboard/claims-summary"));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
-        _loading = true; _loadError = null;
-        try { _data = await Api.GetClaimsSummaryAsync(_tenantId); }
-        catch (Exception ex) { _loadError = $"Failed to load claims summary: {ex.Message}"; _data = null; }
-        finally { _loading = false; }
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            if (_tenantId == Guid.Empty) await ResolveCurrentUserContextAsync();
+            _data = await Api.GetClaimsSummaryAsync(_tenantId);
+            _selected = _selected is null ? AggregateRows.FirstOrDefault() : AggregateRows.FirstOrDefault(r => r.Key == _selected.Key) ?? AggregateRows.FirstOrDefault();
+            ShowToast("Claims summary synced successfully.", "success");
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load claims summary: {ex.Message}";
+            _data = null;
+            _selected = null;
+            ShowToast($"Claims summary load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    private void SetFilter(string filter) => _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter;
-    private string KpiClass(string filter) => _activeFilter == filter ? "ad-kpi-card--active" : string.Empty;
-    private static string FilterLabel(string filter) => filter switch { "open" => "Open claims", "reserved" => "Claims with reserves", "paid" => "LOB summary", "litigated" => "Litigation metrics", _ => "All claims" };
+    private IEnumerable<AggregateRow> ApplyAggregateFilters(IEnumerable<AggregateRow> rows)
+    {
+        var query = rows;
+        if (!string.IsNullOrWhiteSpace(_searchTerm))
+        {
+            var term = _searchTerm.Trim();
+            query = query.Where(r => Contains(r.Label, term) || Contains(r.Kind, term) || Contains(r.Caption, term) || Contains(r.Status, term) || Contains(r.Lob, term));
+        }
 
+        query = _activeFilter switch
+        {
+            "open" => query.Where(r => r.Count > 0),
+            "reserved" => query.Where(r => r.Reserved > 0),
+            "paid" => query.Where(r => r.Kind == "Line"),
+            "litigated" => query.Where(r => r.Reserved >= LitigationReserveThreshold || Contains(r.Label, "Litigat")),
+            "lob" => query.Where(r => r.Kind == "Line"),
+            "cycle" => query.Where(r => r.Kind == "Status"),
+            _ => query
+        };
+
+        return _sort switch
+        {
+            "count" => query.OrderByDescending(r => r.Count).ThenByDescending(r => r.Reserved),
+            "name" => query.OrderBy(r => r.Label),
+            _ => query.OrderByDescending(r => r.Reserved).ThenByDescending(r => r.Count)
+        };
+    }
+
+    private void SetFilter(string filter)
+    {
+        _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter;
+        _view = filter switch { "paid" or "lob" => "lob", "cycle" => "status", _ when filter != "all" => "table", _ => _view };
+        _selected = FilteredAggregateRows.FirstOrDefault() ?? AggregateRows.FirstOrDefault();
+    }
+
+    private void SetView(string view) => _view = view;
+    private void ResetFilters() { _activeFilter = "all"; _searchTerm = string.Empty; _sort = "reserved"; _selected = AggregateRows.FirstOrDefault(); }
+    private void SelectAggregate(AggregateRow row) => _selected = row;
+    private void SelectTopExposure() { if (TopExposure is not null) { _selected = TopExposure; _view = "table"; } }
+    private void OpenAggregate(AggregateRow row) { if (!string.IsNullOrWhiteSpace(row.Status)) OpenClaimsByStatus(row.Status); else if (!string.IsNullOrWhiteSpace(row.Lob)) OpenClaimsByLob(row.Lob); else OpenClaimsRegister(); }
+    private void OpenClaimsRegister() => Nav.NavigateTo("/claims");
     private void OpenClaimsByStatus(string status) => Nav.NavigateTo($"/claims?status={Uri.EscapeDataString(status)}");
     private void OpenClaimsByLob(string lob) => Nav.NavigateTo($"/claims?lob={Uri.EscapeDataString(lob)}");
+    private void GoTo(string url) => Nav.NavigateTo(url);
+    private void OnSearchChanged(BlazorChangeEventArgs e) { _searchTerm = e.Value?.ToString() ?? string.Empty; _selected = FilteredAggregateRows.FirstOrDefault() ?? AggregateRows.FirstOrDefault(); }
+    private void OnSortChanged(BlazorChangeEventArgs e) { _sort = e.Value?.ToString() ?? "reserved"; _selected = FilteredAggregateRows.FirstOrDefault() ?? AggregateRows.FirstOrDefault(); }
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
 
-    private static string StatusBadgeClass(string status) => status.ToLower() switch
+    private RenderFragment ExposureRankPanel => @<section class="cs-panel"><h3><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Reserve exposure ranking</h3><div class="cs-rank-stack">@foreach (var row in FilteredAggregateRows.Take(8)) { <button type="button" class="@(SelectedKey == row.Key ? "cs-rank-row cs-rank-active" : "cs-rank-row")" @onclick="@(() => SelectAggregate(row))"><span>@row.Label</span><div><i style="width:@WidthPct(row.Reserved, MaxReserve)"></i></div><strong>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><small>@row.Reserved.ToString("C0", CultureInfo.CurrentCulture)</small></button> }</div></section>;
+    private RenderFragment AggregateCard(AggregateRow row) => @<article class="@(SelectedKey == row.Key ? "cs-aggregate-card cs-aggregate-card-selected" : "cs-aggregate-card")" @onclick="@(() => SelectAggregate(row))"><div class="cs-aggregate-top"><span class="cs-aggregate-icon"><i class="bi @row.Icon" aria-hidden="true"></i></span><span class="cs-badge @row.BadgeClass">@row.Kind</span></div><h3>@row.Label</h3><p>@row.Caption</p><div class="cs-aggregate-stats"><div><span>Claims</span><strong>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</strong></div><div><span>Reserved</span><strong>@row.Reserved.ToString("C0", CultureInfo.CurrentCulture)</strong></div><div><span>Share</span><strong>@ShareLabel(row.Reserved, TotalReserveBasis)</strong></div></div><div class="cs-aggregate-actions" @onclick:stopPropagation="true"><button type="button" @onclick="@(() => OpenAggregate(row))">Open</button><button type="button" @onclick="@(() => SelectAggregate(row))">Inspect</button></div></article>;
+    private RenderFragment AnalyticsPanel(string title, IReadOnlyList<AggregateRow> rows, string icon, string tone) => @<section class="cs-analytics-panel @tone"><h3><i class="bi @icon" aria-hidden="true"></i> @title</h3><div class="cs-analytics-list">@foreach (var row in rows.OrderByDescending(r => r.Reserved).Take(8)) { <button type="button" @onclick="@(() => SelectAggregate(row))"><span>@row.Label</span><div><i style="width:@WidthPct(row.Reserved, MaxReserve)"></i></div><strong>@row.Reserved.ToString("C0", CultureInfo.CurrentCulture)</strong><small>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</small></button> }</div></section>;
+    private RenderFragment InsightPanel => @<section class="cs-analytics-panel cs-tone-amber"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Executive insight</h3><div class="cs-insight-grid"><div><span>Severity index</span><strong>@SeverityIndex</strong><small>reserve / open claim</small></div><div><span>MTD velocity</span><strong>@MtdVelocity</strong><small>new vs closed claims</small></div><div><span>Cycle time</span><strong>@AvgCloseDays.ToString("F0", CultureInfo.CurrentCulture)d</strong><small>average close</small></div><div><span>Litigation ratio</span><strong>@LitigationRatio</strong><small>severe claims / open</small></div></div><p>@GuidanceText</p></section>;
+
+    private decimal MaxReserve => Math.Max(1m, AggregateRows.Max(r => r.Reserved));
+    private decimal LitigationReserveThreshold => Math.Max(75_000m, TotalReserved * .25m);
+    private string SeverityIndex => OpenClaimCount == 0 ? "—" : (TotalReserved / OpenClaimCount).ToString("C0", CultureInfo.CurrentCulture);
+    private string MtdVelocity => _data is null ? "—" : $"{_data.NewClaimsMtd.ToString("N0", CultureInfo.CurrentCulture)} in / {_data.ClosedClaimsMtd.ToString("N0", CultureInfo.CurrentCulture)} closed";
+    private string LitigationRatio => OpenClaimCount == 0 ? "0%" : ((decimal)LitigatedCount / OpenClaimCount).ToString("P0", CultureInfo.CurrentCulture);
+
+    private string MetricCardClass(Metric metric) => $"cs-kpi-card {metric.Tone} {(_activeFilter == metric.Filter ? "cs-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewOption view) => $"cs-view-btn {(view.Id == _view ? "cs-view-btn-active" : string.Empty)}";
+    private int ViewCount(string view) => view switch { "status" => FilteredStatusRows.Count, "lob" => FilteredLobRows.Count, "analytics" => AggregateRows.Count, "table" => FilteredAggregateRows.Count, _ => AggregateRows.Count };
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static string WidthPct(decimal value, decimal max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, (double)(value / max * 100)))).ToString("F1", CultureInfo.InvariantCulture) + "%";
+    private static string ShareLabel(decimal value, decimal total) => total <= 0 ? "0%" : (value / total).ToString("P0", CultureInfo.CurrentCulture);
+    private static decimal AverageReserve(AggregateRow row) => row.Count <= 0 ? 0 : row.Reserved / row.Count;
+    private static string SeverityLabel(AggregateRow row) => AverageReserve(row) >= 75_000m ? "High" : AverageReserve(row) >= 25_000m ? "Watch" : "Normal";
+    private static string PriorityLabel(AggregateRow row) => row.Reserved >= 75_000m || row.Count >= 10 ? "High priority" : row.Reserved > 0 || row.Count > 0 ? "Monitor" : "Normal";
+    private static IEnumerable<string> RecommendedActions(AggregateRow row)
     {
-        "open"    => "ad-badge--open",
-        "closed"  => "ad-badge--closed",
-        "pending" => "ad-badge--pending",
-        _         => "ad-badge--info"
-    };
+        if (row.Reserved >= 75_000m) yield return "Review reserve adequacy with claims lead.";
+        if (row.Count >= 10) yield return "Audit claim frequency and service staffing.";
+        if (row.Kind == "Line") yield return "Compare LOB loss drivers and underwriting appetite.";
+        if (row.Kind == "Status") yield return "Open claims register and inspect oldest active files.";
+        yield return "Confirm follow-up plan and diary dates are current.";
+    }
 
-    async Task ResolveCurrentUserContextAsync()
+    private static string StatusBadgeClass(string status) => status.ToLowerInvariant() switch { "open" => "cs-badge-danger", "closed" => "cs-badge-success", "pending" => "cs-badge-warning", "denied" => "cs-badge-muted", _ => "cs-badge-info" };
+    private static string StatusIcon(string status) => status.ToLowerInvariant() switch { "open" => "bi-exclamation-circle", "pending" => "bi-hourglass-split", "closed" => "bi-check-circle", "denied" => "bi-slash-circle", _ => "bi-tag" };
+
+    private async Task ResolveCurrentUserContextAsync()
     {
         var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
         _tenantId = context.TenantId;
         _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
     }
+
+    private sealed record ViewOption(string Id, string Label, string Icon);
+    private sealed record Metric(string Filter, string Value, string Label, string Caption, string Icon, string Tone);
+    private sealed record AggregateRow(string Key, string Kind, string Label, string Caption, int Count, decimal Reserved, string BadgeClass, string Icon, string? Status, string? Lob);
 }
