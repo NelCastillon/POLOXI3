@@ -1201,8 +1201,14 @@ public sealed partial class ApiClient
     public Task<PagedResult<PortalAdminDocumentDto>?> SearchPortalAdminDocumentsAsync(Guid tenantId, string? searchTerm = null, CancellationToken ct = default)
         => _httpClient.GetFromJsonAsync<PagedResult<PortalAdminDocumentDto>>($"api/portal-admin/documents?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", ct);
 
-    public Task<PagedResult<PortalAdminActivityDto>?> SearchPortalAdminActivityAsync(Guid tenantId, string? searchTerm = null, CancellationToken ct = default)
-        => _httpClient.GetFromJsonAsync<PagedResult<PortalAdminActivityDto>>($"api/portal-admin/activity?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", ct);
+    public Task<PagedResult<PortalActivityEventDto>?> SearchPortalAdminActivityAsync(Guid tenantId, string? searchTerm = null, CancellationToken ct = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PortalActivityEventDto>>($"api/portal-admin/activity?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", ct);
+
+    public async Task UpdatePortalActivityStatusAsync(Guid id, UpdatePortalActivityEventRequest request, CancellationToken ct = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/portal-admin/activity/{id}/status", request, ct);
+        response.EnsureSuccessStatusCode();
+    }
 
     public Task<PagedResult<PortalCapabilityDto>?> GetPortalCapabilitiesAsync(Guid tenantId, CancellationToken ct = default)
         => _httpClient.GetFromJsonAsync<PagedResult<PortalCapabilityDto>>($"api/portal-admin/capabilities?tenantId={tenantId}", ct);
@@ -1222,8 +1228,38 @@ public sealed partial class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
+    public Task<PortalWhiteLabelConfigurationDto?> GetPortalWhiteLabelConfigurationAsync(Guid tenantId, CancellationToken ct = default)
+        => _httpClient.GetFromJsonAsync<PortalWhiteLabelConfigurationDto>($"api/portal-admin/white-label?tenantId={tenantId}", ct);
+
+    public async Task UpdatePortalWhiteLabelConfigurationAsync(UpdatePortalWhiteLabelConfigurationRequest request, CancellationToken ct = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync("api/portal-admin/white-label", request, ct);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task PublishPortalWhiteLabelAsync(Guid tenantId, CancellationToken ct = default)
+    {
+        var response = await _httpClient.PostAsync($"api/portal-admin/white-label/publish?tenantId={tenantId}", null, ct);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task RunPortalWhiteLabelActionAsync(Guid tenantId, string action, CancellationToken ct = default)
+    {
+        var response = await _httpClient.PostAsync($"api/portal-admin/white-label/action?tenantId={tenantId}&action={Uri.EscapeDataString(action)}", null, ct);
+        response.EnsureSuccessStatusCode();
+    }
+
     public Task<PagedResult<PortalMetricRecordDto>?> SearchPortalMetricRecordsAsync(Guid tenantId, string kind, string? searchTerm = null, CancellationToken ct = default)
         => _httpClient.GetFromJsonAsync<PagedResult<PortalMetricRecordDto>>($"api/portal-admin/metrics/{Uri.EscapeDataString(kind)}?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", ct);
+
+    public Task<PagedResult<PortalChatSessionDto>?> SearchPortalChatSessionsAsync(Guid tenantId, string? searchTerm = null, CancellationToken ct = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PortalChatSessionDto>>($"api/portal-admin/chat-sessions?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", ct);
+
+    public async Task UpdatePortalChatSessionStatusAsync(Guid id, UpdatePortalChatSessionStatusRequest request, CancellationToken ct = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/portal-admin/chat-sessions/{id}/status", request, ct);
+        response.EnsureSuccessStatusCode();
+    }
 
     public Task<PagedResult<PortalAdminRecordDto>?> SearchPortalAdminRecordsAsync(Guid tenantId, string kind, string? searchTerm = null, CancellationToken ct = default)
         => _httpClient.GetFromJsonAsync<PagedResult<PortalAdminRecordDto>>($"api/portal-admin/records?tenantId={tenantId}&kind={Uri.EscapeDataString(kind)}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", ct);

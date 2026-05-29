@@ -1,235 +1,600 @@
 @page "/portal/requests"
 @namespace Ams.Web.Components.Pages
+@using System.Text.Json
+@using Ams.Application.Common.Dtos
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Self-Service Requests — AMS</PageTitle>
+<PageTitle>Portal Requests — AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+@if (_toastVisible)
+{
+    <div class="pr-toast pr-toast--@_toastKind" role="status" aria-live="polite">
+        <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
 
-<AppPageHeader Title="Self-Service Requests"
-               Subtitle="Inbound requests submitted by clients through the insured portal — review, assign, and fulfill"
-               Icon="bi-inbox-fill">
-    <Actions>
-        <button class="um-btn um-btn-ghost">
-            <i class="bi bi-download" aria-hidden="true"></i> Export
-        </button>
-    </Actions>
-</AppPageHeader>
+@if (_showConfirm)
+{
+    <div class="pr-modal-backdrop" role="presentation" @onclick="CloseConfirm">
+        <div class="pr-confirm" role="dialog" aria-modal="true" aria-labelledby="pr-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingAction is "Close" or "Fulfill" ? "" : null)">
+                    <i class="bi @_confirmIcon" aria-hidden="true"></i>
+                </div>
+                <div>
+                    <h3 id="pr-confirm-title">@_confirmTitle</h3>
+                    <p>@_confirmMessage</p>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseConfirm" disabled="@_busy">Cancel</button>
+                <button type="button" class="um-btn um-btn-primary" @onclick="ExecuteConfirmedAsync" disabled="@_busy">
+                    @if (_busy)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    Confirm
+                </button>
+            </div>
+        </div>
+    </div>
+}
 
-<!-- KPI strip -->
-<div class="pr-kpi-strip">
-    <div class="pr-kpi-card">
-        <div class="pr-kpi-icon pr-ki-amber"><i class="bi bi-clock" aria-hidden="true"></i></div>
-        <div><div class="pr-kv">@_requests.Count(r => r.Status == "Open")</div><div class="pr-kl">Open</div></div>
-    </div>
-    <div class="pr-kpi-card">
-        <div class="pr-kpi-icon pr-ki-blue"><i class="bi bi-hourglass-split" aria-hidden="true"></i></div>
-        <div><div class="pr-kv">@_requests.Count(r => r.Status == "In Progress")</div><div class="pr-kl">In Progress</div></div>
-    </div>
-    <div class="pr-kpi-card">
-        <div class="pr-kpi-icon pr-ki-green"><i class="bi bi-check-circle" aria-hidden="true"></i></div>
-        <div><div class="pr-kv">@_requests.Count(r => r.Status == "Fulfilled")</div><div class="pr-kl">Fulfilled Today</div></div>
-    </div>
-    <div class="pr-kpi-card">
-        <div class="pr-kpi-icon pr-ki-red"><i class="bi bi-exclamation-circle" aria-hidden="true"></i></div>
-        <div><div class="pr-kv">@_requests.Count(r => r.Priority == "Urgent" && r.Status != "Fulfilled")</div><div class="pr-kl">Urgent</div></div>
-    </div>
-    <div class="pr-kpi-card">
-        <div class="pr-kpi-icon pr-ki-green"><i class="bi bi-stopwatch" aria-hidden="true"></i></div>
-        <div><div class="pr-kv">2.4h</div><div class="pr-kl">Avg. Response Time</div></div>
-    </div>
-</div>
+<div class="pr-page" @onclick="CloseActionMenu">
+    <section class="pr-hero">
+        <div class="pr-hero__content">
+            <span class="pr-hero__eyebrow"><i class="bi bi-inbox-fill" aria-hidden="true"></i> Client self-service command center</span>
+            <h1>Portal Requests</h1>
+            <p>Review, prioritize, assign, fulfill, and audit client self-service requests submitted through the insured portal.</p>
+            <div class="pr-hero__meta">
+                <span><i class="bi bi-inbox" aria-hidden="true"></i>@_requests.Count requests</span>
+                <span><i class="bi bi-clock" aria-hidden="true"></i>@_requests.Count(r => r.Status == "Open") open</span>
+                <span><i class="bi bi-exclamation-circle" aria-hidden="true"></i>@UrgentOpenCount urgent</span>
+                <span><i class="bi bi-stopwatch" aria-hidden="true"></i>@AverageAgeHours.ToString("0.0")h avg age</span>
+            </div>
+        </div>
+        <div class="pr-hero__actions">
+            <button type="button" class="pr-btn pr-btn--light" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "pr-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="pr-btn pr-btn--light" @onclick="AssignOpenToMe"><i class="bi bi-person-check" aria-hidden="true"></i> Claim Open</button>
+            <button type="button" class="pr-btn pr-btn--light" @onclick="EscalateUrgent"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Escalate Urgent</button>
+            <button type="button" class="pr-btn pr-btn--primary" @onclick="ExportAsync" disabled="@(!FilteredRequests.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+        </div>
+    </section>
 
-<!-- Tabs + filter -->
-<div class="pr-filter-bar">
-    <div class="pr-tab-group">
-        <button class="pr-tab @(_statusTab=="All"?"pr-tab--active":"")" @onclick='()=>_statusTab="All"'>All</button>
-        <button class="pr-tab @(_statusTab=="Open"?"pr-tab--active":"")" @onclick='()=>_statusTab="Open"'>Open</button>
-        <button class="pr-tab @(_statusTab=="In Progress"?"pr-tab--active":"")" @onclick='()=>_statusTab="In Progress"'>In Progress</button>
-        <button class="pr-tab @(_statusTab=="Fulfilled"?"pr-tab--active":"")" @onclick='()=>_statusTab="Fulfilled"'>Fulfilled</button>
-    </div>
-    <div class="pr-search-wrap">
-        <i class="bi bi-search" aria-hidden="true"></i>
-        <input class="pr-search" placeholder="Search requests…" @bind="_search" @bind:event="oninput" />
-    </div>
-    <select class="pr-sel" @bind="_typeFilter">
-        <option value="">All Types</option>
-        <option value="COI Request">COI Request</option>
-        <option value="Policy Change">Policy Change</option>
-        <option value="Document Upload">Document Upload</option>
-        <option value="Payment">Payment</option>
-        <option value="Claim Intake">Claim Intake</option>
-        <option value="Renewal Questionnaire">Renewal Questionnaire</option>
-        <option value="Secure Message">Secure Message</option>
-    </select>
-</div>
+    <section class="pr-kpi-strip" aria-label="Portal request KPIs">
+        @KpiCard("all", "Total", _requests.Count.ToString(), "All inbound requests", "bi-stack", "pr-kpi--blue")
+        @KpiCard("open", "Open", _requests.Count(r => r.Status == "Open").ToString(), "Waiting for intake", "bi-clock", "pr-kpi--amber")
+        @KpiCard("progress", "In Progress", _requests.Count(r => r.Status == "In Progress").ToString(), "Assigned workflows", "bi-hourglass-split", "pr-kpi--cyan")
+        @KpiCard("fulfilled", "Fulfilled", _requests.Count(r => r.Status == "Fulfilled").ToString(), "Completed requests", "bi-check-circle", "pr-kpi--green")
+        @KpiCard("urgent", "Urgent", UrgentOpenCount.ToString(), "Needs immediate action", "bi-exclamation-circle", "pr-kpi--red")
+        @KpiCard("unassigned", "Unassigned", _requests.Count(r => IsUnassigned(r) && r.Status != "Fulfilled").ToString(), "Needs owner", "bi-person-x", "pr-kpi--purple")
+    </section>
 
-<!-- Grid -->
-<div class="pr-grid-wrap">
-    <SfGrid TValue="SsRequest" DataSource="Filtered" AllowSorting="true" AllowFiltering="true"
-            EnableHover="true" RowHeight="58">
-        <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
-        <GridColumns>
-            <GridColumn Field="@nameof(SsRequest.SubmittedAt)" HeaderText="Submitted" Width="155" Type="ColumnType.DateTime" Format="MMM d, h:mm tt" />
-            <GridColumn HeaderText="Client" MinWidth="180" Field="@nameof(SsRequest.ClientName)">
-                <Template>
-                    @{ var r = (SsRequest)context; }
-                    <div class="pr-client-cell">
-                        <div class="pr-av">@Initials(r.ClientName)</div>
-                        <div>
-                            <div class="pr-cname">@r.ClientName</div>
-                            <div class="pr-account">@r.AccountName</div>
-                        </div>
+    <section class="pr-workflows" aria-label="Portal request workflows">
+        <button type="button" class="pr-workflow" @onclick="AssignOpenToMe"><i class="bi bi-person-check" aria-hidden="true"></i><span><strong>Claim open</strong><small>Assign open requests to me</small></span></button>
+        <button type="button" class="pr-workflow" @onclick="EscalateUrgent"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span><strong>Escalate urgent</strong><small>Push urgent items forward</small></span></button>
+        <button type="button" class="pr-workflow" @onclick="OpenCoiQueue"><i class="bi bi-file-earmark-text" aria-hidden="true"></i><span><strong>COI queue</strong><small>Filter certificate requests</small></span></button>
+        <button type="button" class="pr-workflow" @onclick="OpenPortalDocuments"><i class="bi bi-folder2-open" aria-hidden="true"></i><span><strong>Documents</strong><small>Open portal documents</small></span></button>
+        <button type="button" class="pr-workflow" @onclick="OpenPortalActivity"><i class="bi bi-clock-history" aria-hidden="true"></i><span><strong>Activity</strong><small>Open audit activity</small></span></button>
+    </section>
+
+    <section class="pr-filter-panel">
+        <div class="pr-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input aria-label="Search portal requests" placeholder="Search client, account, request type, summary, priority, assigned user, status…" @bind="SearchText" @bind:event="oninput" />
+        </div>
+        <div class="pr-filter-actions">
+            <select class="pr-select" @bind="TypeFilter">
+                <option value="">All types</option>
+                @foreach (var type in RequestTypes)
+                {
+                    <option value="@type">@type</option>
+                }
+            </select>
+            <select class="pr-select" @bind="PriorityFilter">
+                <option value="">All priorities</option>
+                @foreach (var priority in Priorities)
+                {
+                    <option value="@priority">@priority</option>
+                }
+            </select>
+            <span>@FilteredRequests.Count() visible</span>
+            <button type="button" class="pr-btn pr-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger pr-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError
+        </div>
+    }
+
+    <section class="pr-tabs" aria-label="Request views">
+        @foreach (var tab in Tabs)
+        {
+            <button type="button" class="pr-tab @(_activeTab == tab.Key ? "pr-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </section>
+
+    <section class="pr-dashboard">
+        <div class="pr-main-card">
+            <div class="pr-card-header">
+                <div>
+                    <span class="pr-section-kicker"><i class="bi bi-list-task" aria-hidden="true"></i> Request register</span>
+                    <h2>@ActiveViewTitle</h2>
+                    <p>Prioritized by urgency, age, unassigned ownership, status, and operational service impact.</p>
+                </div>
+                <div class="pr-card-actions">
+                    <button type="button" class="pr-btn pr-btn--ghost" @onclick="ToggleView"><i class="bi @(_cardView ? "bi-table" : "bi-grid-3x3-gap")" aria-hidden="true"></i> @(_cardView ? "Table" : "Cards")</button>
+                    <button type="button" class="pr-btn pr-btn--primary" @onclick="ExportAsync" disabled="@(!FilteredRequests.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="pr-loading"><span class="pr-spinner" aria-hidden="true"></span> Loading portal requests…</div>
+            }
+            else if (!FilteredRequests.Any())
+            {
+                <div class="pr-empty"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No requests found</strong><span>Adjust filters or refresh seeded self-service request data.</span></div>
+            }
+            else if (_cardView)
+            {
+                <div class="pr-card-grid">
+                    @foreach (var request in PagedRequests)
+                    {
+                        @RequestCard(request)
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="pr-table-scroll">
+                    <table class="pr-table" aria-label="Portal self-service requests">
+                        <thead><tr><th>Submitted</th><th>Client</th><th>Type</th><th>Summary</th><th>Priority</th><th>Assigned</th><th>Status</th><th>Age</th><th class="pr-actions-col"><span class="visually-hidden">Actions</span></th></tr></thead>
+                        <tbody>
+                            @foreach (var request in PagedRequests)
+                            {
+                                <tr class="pr-table-row @(_selected?.Id == request.Id ? "pr-table-row--selected" : null)" @onclick="() => SelectRequest(request)">
+                                    <td>@request.SubmittedAt.ToLocalTime().ToString("MMM d, h:mm tt")</td>
+                                    <td>@ClientCell(request)</td>
+                                    <td><span class="pr-type pr-type--@CssSafe(request.RequestType)">@request.RequestType</span></td>
+                                    <td class="pr-summary">@request.Summary</td>
+                                    <td><span class="pr-priority pr-priority--@CssSafe(request.Priority)">@request.Priority</span></td>
+                                    <td>@request.AssignedTo</td>
+                                    <td><span class="pr-status pr-status--@CssSafe(request.Status)">@request.Status</span></td>
+                                    <td>@AgeText(request)</td>
+                                    <td class="pr-actions-col">@ActionMenu(request)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+
+            <div class="pr-pager">
+                <button type="button" class="pr-btn pr-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Previous</button>
+                <span>Page @_page of @TotalPages</span>
+                <button type="button" class="pr-btn pr-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+            </div>
+        </div>
+
+        <aside class="pr-side-panel">
+            <div class="pr-panel-card">
+                <span class="pr-section-kicker"><i class="bi bi-stars" aria-hidden="true"></i> SLA readiness</span>
+                <div class="pr-score-card"><span>Service posture</span><strong>@ReadinessScore</strong><small>/100</small></div>
+                <div class="pr-readiness"><span style="width:@ReadinessScore%"></span></div>
+                <div class="pr-importance-list">
+                    @foreach (var item in ImportanceSignals)
+                    {
+                        <div><i class="bi @item.Icon" aria-hidden="true"></i><span>@item.Text</span></div>
+                    }
+                </div>
+            </div>
+
+            <div class="pr-panel-card">
+                <span class="pr-section-kicker"><i class="bi bi-inbox" aria-hidden="true"></i> Selected request</span>
+                @if (_selected is null)
+                {
+                    <div class="pr-empty pr-empty--compact"><span>Select a request to review assignment, status, and workflow actions.</span></div>
+                }
+                else
+                {
+                    var selected = _selected;
+                    <div class="pr-selected-head"><span class="pr-avatar">@Initials(selected.ClientName)</span><div><strong>@selected.ClientName</strong><span>@selected.AccountName</span></div></div>
+                    <p class="pr-selected-summary">@selected.Summary</p>
+                    <div class="pr-detail-list">
+                        <div><span>Type</span><strong>@selected.RequestType</strong></div>
+                        <div><span>Priority</span><strong>@selected.Priority</strong></div>
+                        <div><span>Status</span><strong>@selected.Status</strong></div>
+                        <div><span>Assigned</span><strong>@selected.AssignedTo</strong></div>
+                        <div><span>Age</span><strong>@AgeText(selected)</strong></div>
                     </div>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(SsRequest.RequestType)" HeaderText="Type" Width="180">
-                <Template>@{ var r = (SsRequest)context; }<span class="@TypeBadge(r.RequestType)">@r.RequestType</span></Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(SsRequest.Summary)" HeaderText="Summary" MinWidth="220" />
-            <GridColumn Field="@nameof(SsRequest.Priority)" HeaderText="Priority" Width="100">
-                <Template>@{ var r = (SsRequest)context; }<span class="@PrioBadge(r.Priority)">@r.Priority</span></Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(SsRequest.AssignedTo)" HeaderText="Assigned To" Width="140" />
-            <GridColumn Field="@nameof(SsRequest.Status)" HeaderText="Status" Width="120">
-                <Template>@{ var r = (SsRequest)context; }<span class="@StatusBadge(r.Status)">@r.Status</span></Template>
-            </GridColumn>
-            <GridColumn HeaderText="" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                <Template>
-                    @{ var r = (SsRequest)context; }
-                    <div class="pr-row-actions">
-                        @if (r.Status == "Open")
-                        {
-                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Claim(r)" title="Claim">
-                                <i class="bi bi-person-check" aria-hidden="true"></i>
-                            </button>
-                        }
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Fulfill(r)" title="Mark fulfilled" disabled="@(r.Status == "Fulfilled")">
-                            <i class="bi bi-check-circle" aria-hidden="true"></i>
-                        </button>
+                    <div class="pr-selected-actions">
+                        <button type="button" class="pr-btn pr-btn--primary" @onclick="() => ClaimRequest(selected)" disabled="@(selected.Status == "Fulfilled")"><i class="bi bi-person-check" aria-hidden="true"></i> Claim</button>
+                        <button type="button" class="pr-btn pr-btn--ghost" @onclick="() => OpenFulfillmentConfirm(selected)"><i class="bi bi-check-circle" aria-hidden="true"></i> @FulfillmentActionLabel(selected)</button>
                     </div>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
+                }
+            </div>
+
+            <div class="pr-panel-card">
+                <span class="pr-section-kicker"><i class="bi bi-pie-chart" aria-hidden="true"></i> Type mix</span>
+                <div class="pr-mix-list">
+                    @foreach (var type in RequestTypes.Take(6))
+                    {
+                        <div><span><i class="bi bi-tag" aria-hidden="true"></i>@type</span><strong>@_requests.Count(r => r.RequestType == type)</strong></div>
+                    }
+                </div>
+            </div>
+        </aside>
+    </section>
 </div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private readonly List<PortalRequest> _requests = [];
     private Guid _tenantId;
-    private SfToast? _toast;
-    private string _statusTab  = "All";
-    private string _search     = string.Empty;
-    private string _typeFilter = string.Empty;
+    private bool _loading;
+    private bool _busy;
+    private bool _toastVisible;
+    private bool _showConfirm;
+    private bool _cardView;
+    private string _currentAssignee = "Tenant Admin";
+    private string _toastKind = "success";
+    private string _toastMessage = string.Empty;
+    private string _activeTab = "all";
+    private string? _kpiFilter;
+    private string? _searchText;
+    private string? _typeFilter;
+    private string? _priorityFilter;
+    private string? _loadError;
+    private Guid? _openActionMenuFor;
+    private int _page = 1;
+    private const int PageSize = 12;
+    private PortalRequest? _selected;
+    private PortalRequest? _pendingRequest;
+    private string _pendingAction = string.Empty;
+    private string _confirmTitle = "Confirm action";
+    private string _confirmMessage = "Confirm this request action?";
+    private string _confirmIcon = "bi-question-circle";
 
-    private List<SsRequest> _requests = [];
+    private string? SearchText { get => _searchText; set { _searchText = value; _page = 1; } }
+    private string? TypeFilter { get => _typeFilter; set { _typeFilter = value; _page = 1; } }
+    private string? PriorityFilter { get => _priorityFilter; set { _priorityFilter = value; _page = 1; } }
+    private bool HasFilters => !string.IsNullOrWhiteSpace(_searchText) || !string.IsNullOrWhiteSpace(_typeFilter) || !string.IsNullOrWhiteSpace(_priorityFilter) || _kpiFilter is not null || _activeTab != "all";
+    private IEnumerable<string> RequestTypes => _requests.Select(r => r.RequestType).Where(t => !string.IsNullOrWhiteSpace(t)).Distinct().OrderBy(t => t);
+    private IEnumerable<string> Priorities => _requests.Select(r => r.Priority).Where(p => !string.IsNullOrWhiteSpace(p)).Distinct().OrderByDescending(PriorityWeight);
+    private TabDef[] Tabs => [new("all", "All", "bi-stack"), new("open", "Open", "bi-clock"), new("progress", "In Progress", "bi-hourglass-split"), new("urgent", "Urgent", "bi-exclamation-circle"), new("fulfilled", "Fulfilled", "bi-check-circle")];
+    private int UrgentOpenCount => _requests.Count(r => r.Priority == "Urgent" && r.Status != "Fulfilled");
+    private double AverageAgeHours => _requests.Count == 0 ? 0 : _requests.Where(r => r.Status != "Fulfilled").DefaultIfEmpty().Average(r => r is null ? 0 : Math.Max(0, (DateTime.UtcNow - r.SubmittedAt).TotalHours));
+    private int ReadinessScore => _requests.Count == 0 ? 100 : Math.Clamp(100 - (UrgentOpenCount * 18) - (_requests.Count(r => r.Status == "Open") * 8) - (_requests.Count(r => IsUnassigned(r) && r.Status != "Fulfilled") * 10), 0, 100);
+    private string ActiveViewTitle => _activeTab switch { "open" => "Open intake queue", "progress" => "In-progress service work", "urgent" => "Urgent escalations", "fulfilled" => "Fulfilled requests", _ => "All portal requests" };
+    private IEnumerable<Signal> ImportanceSignals => BuildImportanceSignals();
 
-    private IEnumerable<SsRequest> Filtered => _requests.Where(r =>
-        (_statusTab == "All" || r.Status == _statusTab) &&
-        (string.IsNullOrEmpty(_search) || r.ClientName.Contains(_search, StringComparison.OrdinalIgnoreCase) || r.Summary.Contains(_search, StringComparison.OrdinalIgnoreCase) || r.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase)) &&
-        (string.IsNullOrEmpty(_typeFilter) || r.RequestType == _typeFilter));
+    private IEnumerable<PortalRequest> TabRequests => _activeTab switch
+    {
+        "open" => _requests.Where(r => r.Status == "Open"),
+        "progress" => _requests.Where(r => r.Status == "In Progress"),
+        "urgent" => _requests.Where(r => r.Priority == "Urgent" && r.Status != "Fulfilled"),
+        "fulfilled" => _requests.Where(r => r.Status == "Fulfilled"),
+        _ => _requests
+    };
+
+    private IEnumerable<PortalRequest> KpiRequests => _kpiFilter switch
+    {
+        "open" => TabRequests.Where(r => r.Status == "Open"),
+        "progress" => TabRequests.Where(r => r.Status == "In Progress"),
+        "fulfilled" => TabRequests.Where(r => r.Status == "Fulfilled"),
+        "urgent" => TabRequests.Where(r => r.Priority == "Urgent" && r.Status != "Fulfilled"),
+        "unassigned" => TabRequests.Where(r => IsUnassigned(r) && r.Status != "Fulfilled"),
+        _ => TabRequests
+    };
+
+    private IEnumerable<PortalRequest> FilteredRequests => ApplyFilters(KpiRequests).OrderByDescending(ImportanceScore).ThenBy(r => r.SubmittedAt);
+    private IEnumerable<PortalRequest> PagedRequests => FilteredRequests.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRequests.Count() / (double)PageSize));
 
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Portal","/portal/users"), new("Requests",""));
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _currentAssignee = "Tenant Admin";
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Portal", "/portal/users"), new("Requests", ""));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
-        var result = await Api.SearchPortalAdminRequestsAsync(_tenantId, _search);
-        _requests = result?.Items.Select(r => new SsRequest
+        _loading = true;
+        _loadError = null;
+        try
         {
-            Id = r.Id,
-            SubmittedAt = r.SubmittedAt,
-            ClientName = r.ClientName,
-            AccountName = r.AccountName,
-            RequestType = r.RequestType,
-            Summary = r.Summary,
-            Priority = r.Priority,
-            AssignedTo = r.AssignedTo,
-            Status = r.Status
-        }).ToList() ?? [];
+            var result = await Api.SearchPortalAdminRequestsAsync(_tenantId, _searchText);
+            _requests.Clear();
+            _requests.AddRange((result?.Items ?? []).Select(PortalRequest.FromDto));
+            _selected = _requests.FirstOrDefault(r => r.Id == _selected?.Id) ?? _requests.OrderByDescending(ImportanceScore).FirstOrDefault();
+            _page = Math.Min(_page, TotalPages);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load portal requests: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    private async Task Claim(SsRequest r)
+    private IEnumerable<PortalRequest> ApplyFilters(IEnumerable<PortalRequest> requests)
     {
-        r.Status = "In Progress"; r.AssignedTo = "Me";
-        await Api.SetPortalAdminRecordStatusAsync(r.Id, r.Status);
-        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Request #{r.Id} claimed.", CssClass = "e-toast-success" });
-        await LoadAsync();
+        if (!string.IsNullOrWhiteSpace(_typeFilter)) requests = requests.Where(r => r.RequestType == _typeFilter);
+        if (!string.IsNullOrWhiteSpace(_priorityFilter)) requests = requests.Where(r => r.Priority == _priorityFilter);
+        if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            var term = _searchText.Trim();
+            requests = requests.Where(r => Contains(r.ClientName, term) || Contains(r.AccountName, term) || Contains(r.RequestType, term) || Contains(r.Summary, term) || Contains(r.Priority, term) || Contains(r.AssignedTo, term) || Contains(r.Status, term));
+        }
+        return requests;
     }
 
-    private async Task Fulfill(SsRequest r)
+    private async Task UpdateRequestAsync(PortalRequest request, string status, string? assignedTo = null, string? priority = null)
     {
-        r.Status = "Fulfilled";
-        await Api.SetPortalAdminRecordStatusAsync(r.Id, r.Status);
-        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Request #{r.Id} marked fulfilled.", CssClass = "e-toast-success" });
-        await LoadAsync();
+        request.Status = status;
+        if (assignedTo is not null) request.AssignedTo = assignedTo;
+        if (priority is not null) request.Priority = priority;
+        var dto = request.ToDto();
+        var json = JsonSerializer.Serialize(dto, JsonOptions);
+        await Api.UpdatePortalAdminRecordAsync(request.Id, new UpsertPortalAdminRecordRequest(_tenantId, "SelfServiceRequest", Slug($"{request.RequestType}-{request.AccountName}-{request.ClientName}"), request.Name, request.Status, json));
     }
 
-    private static string TypeBadge(string t) => t switch
+    private async Task ClaimRequest(PortalRequest request)
     {
-        "COI Request"           => "pr-type pr-type--coi",
-        "Policy Change"         => "pr-type pr-type--change",
-        "Document Upload"       => "pr-type pr-type--doc",
-        "Payment"               => "pr-type pr-type--pay",
-        "Claim Intake"          => "pr-type pr-type--claim",
-        "Renewal Questionnaire" => "pr-type pr-type--renew",
-        _                       => "pr-type",
+        _busy = true;
+        try
+        {
+            await UpdateRequestAsync(request, "In Progress", _currentAssignee);
+            ShowToast($"{request.RequestType} claimed for {request.ClientName}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Claim failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task AssignOpenToMe()
+    {
+        _busy = true;
+        try
+        {
+            foreach (var request in _requests.Where(r => r.Status == "Open"))
+            {
+                await UpdateRequestAsync(request, "In Progress", _currentAssignee);
+            }
+            ShowToast("Open portal requests claimed in draft and saved.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Claim open failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task EscalateUrgent()
+    {
+        _busy = true;
+        try
+        {
+            foreach (var request in _requests.Where(r => r.Priority == "Urgent" && r.Status != "Fulfilled"))
+            {
+                await UpdateRequestAsync(request, request.Status == "Open" ? "In Progress" : request.Status, string.IsNullOrWhiteSpace(request.AssignedTo) || request.AssignedTo == "—" ? _currentAssignee : request.AssignedTo, "Urgent");
+            }
+            ShowToast("Urgent requests escalated and assigned where needed.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Escalation failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void OpenConfirm(PortalRequest request, string action)
+    {
+        _pendingRequest = request;
+        _pendingAction = action;
+        _selected = request;
+        (_confirmTitle, _confirmMessage, _confirmIcon) = action switch
+        {
+            "Fulfill" => ($"Fulfill {request.RequestType}?", "This marks the client portal request as fulfilled and keeps the request in the audit trail.", "bi-check-circle"),
+            "Reopen" => ($"Reopen {request.RequestType}?", "This moves the request back to In Progress for additional servicing.", "bi-arrow-counterclockwise"),
+            _ => ("Confirm action", "Confirm this portal request action?", "bi-question-circle")
+        };
+        _showConfirm = true;
+    }
+
+    private void OpenFulfillmentConfirm(PortalRequest request) => OpenConfirm(request, FulfillmentActionLabel(request));
+
+    private static string FulfillmentActionLabel(PortalRequest request) => request.Status == "Fulfilled" ? "Reopen" : "Fulfill";
+
+    private void CloseConfirm() { if (!_busy) _showConfirm = false; }
+
+    private async Task ExecuteConfirmedAsync()
+    {
+        if (_pendingRequest is null) return;
+        _busy = true;
+        try
+        {
+            if (_pendingAction == "Fulfill")
+            {
+                await UpdateRequestAsync(_pendingRequest, "Fulfilled", _pendingRequest.AssignedTo == "—" ? _currentAssignee : _pendingRequest.AssignedTo);
+                ShowToast($"{_pendingRequest.RequestType} fulfilled.");
+            }
+            else if (_pendingAction == "Reopen")
+            {
+                await UpdateRequestAsync(_pendingRequest, "In Progress", _currentAssignee);
+                ShowToast($"{_pendingRequest.RequestType} reopened.");
+            }
+            _showConfirm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Action failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void SelectRequest(PortalRequest request) => _selected = request;
+    private void ToggleView() => _cardView = !_cardView;
+    private void OpenCoiQueue() => SetTypeFilter("COI Request");
+    private void OpenPortalDocuments() => Nav.NavigateTo("/portal/documents");
+    private void OpenPortalActivity() => Nav.NavigateTo("/portal/activity");
+    private void SetTab(string key) { _activeTab = key; _page = 1; }
+    private void SetKpiFilter(string key) { _kpiFilter = key == "all" || _kpiFilter == key ? null : key; _page = 1; }
+    private void SetTypeFilter(string type) { _typeFilter = type; _page = 1; }
+    private void ClearFilters() { _searchText = null; _typeFilter = null; _priorityFilter = null; _kpiFilter = null; _activeTab = "all"; _page = 1; }
+    private void PreviousPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+
+    private string TabCount(string key) => key switch
+    {
+        "all" => _requests.Count.ToString(),
+        "open" => _requests.Count(r => r.Status == "Open").ToString(),
+        "progress" => _requests.Count(r => r.Status == "In Progress").ToString(),
+        "urgent" => _requests.Count(r => r.Priority == "Urgent" && r.Status != "Fulfilled").ToString(),
+        "fulfilled" => _requests.Count(r => r.Status == "Fulfilled").ToString(),
+        _ => string.Empty
     };
 
-    private static string PrioBadge(string p) => p switch
+    private IEnumerable<Signal> BuildImportanceSignals()
     {
-        "Urgent" => "pr-prio pr-prio--urgent",
-        "Low"    => "pr-prio pr-prio--low",
-        _        => "pr-prio pr-prio--normal",
-    };
-
-    private static string StatusBadge(string s) => s switch
-    {
-        "Open"        => "pr-status pr-status--open",
-        "In Progress" => "pr-status pr-status--wip",
-        "Fulfilled"   => "pr-status pr-status--done",
-        _             => "pr-status",
-    };
-
-    private static string Initials(string name)
-    {
-        var p = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        return p.Length >= 2 ? $"{p[0][0]}{p[^1][0]}" : name.Length > 0 ? name[..1] : "?";
+        yield return new("bi-exclamation-circle", $"{UrgentOpenCount} urgent requests need same-day service.");
+        yield return new("bi-person-x", $"{_requests.Count(r => IsUnassigned(r) && r.Status != "Fulfilled")} active requests need an owner.");
+        yield return new("bi-clock-history", $"Average active request age is {AverageAgeHours:0.0} hours.");
+        yield return new("bi-check-circle", $"{_requests.Count(r => r.Status == "Fulfilled")} requests have been fulfilled.");
     }
 
-    private sealed class SsRequest
+    private async Task ExportAsync()
     {
-        public Guid     Id          { get; set; }
+        var csv = new System.Text.StringBuilder();
+        csv.AppendLine("Submitted,Client,Account,Type,Summary,Priority,AssignedTo,Status,AgeHours");
+        foreach (var request in FilteredRequests)
+        {
+            csv.AppendLine(string.Join(',', Csv(request.SubmittedAt.ToLocalTime().ToString("s")), Csv(request.ClientName), Csv(request.AccountName), Csv(request.RequestType), Csv(request.Summary), Csv(request.Priority), Csv(request.AssignedTo), Csv(request.Status), Csv(Math.Max(0, (DateTime.UtcNow - request.SubmittedAt).TotalHours).ToString("0.0"))));
+        }
+        Nav.NavigateTo("data:text/csv;charset=utf-8," + Uri.EscapeDataString(csv.ToString()), forceLoad: true);
+        ShowToast("Portal requests export generated.");
+        await Task.CompletedTask;
+    }
+
+    private RenderFragment KpiCard(string key, string label, string value, string detail, string icon, string css) => @<button type="button" class="pr-kpi @css @((_kpiFilter == key || (key == "all" && _kpiFilter is null)) ? "pr-kpi--active" : null)" @onclick="@(() => SetKpiFilter(key))" title="Filter by @label">
+        <span><i class="bi @icon" aria-hidden="true"></i>@label</span><strong>@value</strong><small>@detail</small>
+    </button>;
+
+    private RenderFragment ClientCell(PortalRequest request) => @<div class="pr-client-cell"><span class="pr-avatar">@Initials(request.ClientName)</span><div><strong>@request.ClientName</strong><span>@request.AccountName</span></div></div>;
+
+    private RenderFragment RequestCard(PortalRequest request) => @<article class="pr-request-card @(_selected?.Id == request.Id ? "pr-request-card--active" : null)" @onclick="@(() => SelectRequest(request))">
+        <div class="pr-request-card__top"><div>@ClientCell(request)</div><span class="pr-priority pr-priority--@CssSafe(request.Priority)">@request.Priority</span></div>
+        <div class="pr-request-card__summary"><strong>@request.RequestType</strong><span>@request.Summary</span></div>
+        <div class="pr-request-card__meta"><span><i class="bi bi-clock"></i>@AgeText(request)</span><span><i class="bi bi-person"></i>@request.AssignedTo</span><span class="pr-status pr-status--@CssSafe(request.Status)">@request.Status</span></div>
+        <div class="pr-request-card__actions" @onclick:stopPropagation="true">
+            <button type="button" class="pr-btn pr-btn--ghost" @onclick="@(() => ClaimRequest(request))" disabled="@(request.Status == "Fulfilled")"><i class="bi bi-person-check"></i> Claim</button>
+            <button type="button" class="pr-btn pr-btn--ghost" @onclick="@(() => OpenConfirm(request, request.Status == "Fulfilled" ? "Reopen" : "Fulfill"))"><i class="bi bi-check-circle"></i> @(request.Status == "Fulfilled" ? "Reopen" : "Fulfill")</button>
+        </div>
+    </article>;
+
+    private RenderFragment ActionMenu(PortalRequest request) => @<div class="pr-action-menu-wrap" @onclick:stopPropagation="true">
+        <button type="button" class="pr-icon-btn" @onclick="@(() => ToggleActionMenu(request))" aria-haspopup="menu" aria-expanded="@(_openActionMenuFor == request.Id)" title="Request actions"><i class="bi bi-three-dots-vertical"></i></button>
+        @if (_openActionMenuFor == request.Id)
+        {
+            <div class="pr-action-menu" role="menu">
+                <div class="pr-action-menu__summary"><strong>@request.RequestType</strong><span>@request.ClientName · @request.Status</span></div>
+                <button type="button" class="pr-action-menu__item" @onclick="@(() => ClaimRequest(request))" disabled="@(request.Status == "Fulfilled")"><i class="bi bi-person-check"></i>Claim</button>
+                <button type="button" class="pr-action-menu__item" @onclick="@(() => OpenConfirm(request, request.Status == "Fulfilled" ? "Reopen" : "Fulfill"))"><i class="bi bi-check-circle"></i>@(request.Status == "Fulfilled" ? "Reopen" : "Fulfill")</button>
+                <button type="button" class="pr-action-menu__item" @onclick="@(() => Nav.NavigateTo("/portal/activity"))"><i class="bi bi-clock-history"></i>Activity</button>
+            </div>
+        }
+    </div>;
+
+    private void ToggleActionMenu(PortalRequest request) { _selected = request; _openActionMenuFor = _openActionMenuFor == request.Id ? null : request.Id; }
+    private void CloseActionMenu() { if (!_busy) _openActionMenuFor = null; }
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+
+    private static bool Contains(string? source, string term) => !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static bool IsUnassigned(PortalRequest request) => string.IsNullOrWhiteSpace(request.AssignedTo) || request.AssignedTo == "—";
+    private static int ImportanceScore(PortalRequest request) => (request.Priority == "Urgent" ? 60 : request.Priority == "Normal" ? 25 : 10) + (request.Status == "Open" ? 35 : request.Status == "In Progress" ? 15 : 0) + (IsUnassigned(request) ? 25 : 0) + Math.Min(30, (int)Math.Max(0, (DateTime.UtcNow - request.SubmittedAt).TotalHours));
+    private static int PriorityWeight(string priority) => priority switch { "Urgent" => 3, "Normal" => 2, "Low" => 1, _ => 0 };
+    private static string AgeText(PortalRequest request) { var hours = Math.Max(0, (DateTime.UtcNow - request.SubmittedAt).TotalHours); return hours < 24 ? $"{hours:0.0}h" : $"{hours / 24:0.0}d"; }
+    private static string CssSafe(string value) => string.IsNullOrWhiteSpace(value) ? "unknown" : value.Trim().ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
+    private static string Slug(string value) => CssSafe(value);
+    private static string Initials(string name) { var p = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return p.Length >= 2 ? $"{p[0][0]}{p[^1][0]}" : name.Length > 0 ? name[..1] : "?"; }
+    private static string Csv(string? value) => string.Concat("\"", (value ?? string.Empty).Replace("\"", "\"\""), "\"");
+
+    private sealed record TabDef(string Key, string Label, string Icon);
+    private sealed record Signal(string Icon, string Text);
+
+    private sealed class PortalRequest
+    {
+        public Guid Id { get; set; }
         public DateTime SubmittedAt { get; set; }
-        public string   ClientName  { get; set; } = string.Empty;
-        public string   AccountName { get; set; } = string.Empty;
-        public string   RequestType { get; set; } = string.Empty;
-        public string   Summary     { get; set; } = string.Empty;
-        public string   Priority    { get; set; } = "Normal";
-        public string   AssignedTo  { get; set; } = "—";
-        public string   Status      { get; set; } = "Open";
-    }
+        public string ClientName { get; set; } = string.Empty;
+        public string AccountName { get; set; } = string.Empty;
+        public string RequestType { get; set; } = string.Empty;
+        public string Summary { get; set; } = string.Empty;
+        public string Priority { get; set; } = "Normal";
+        public string AssignedTo { get; set; } = "—";
+        public string Status { get; set; } = "Open";
+        public string Name => $"{RequestType} - {AccountName}";
 
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        public static PortalRequest FromDto(PortalAdminRequestDto dto) => new()
+        {
+            Id = dto.Id,
+            SubmittedAt = dto.SubmittedAt == default ? DateTime.UtcNow : dto.SubmittedAt,
+            ClientName = dto.ClientName,
+            AccountName = dto.AccountName,
+            RequestType = dto.RequestType,
+            Summary = dto.Summary,
+            Priority = string.IsNullOrWhiteSpace(dto.Priority) ? "Normal" : dto.Priority,
+            AssignedTo = string.IsNullOrWhiteSpace(dto.AssignedTo) ? "—" : dto.AssignedTo,
+            Status = string.IsNullOrWhiteSpace(dto.Status) ? "Open" : dto.Status
+        };
+
+        public PortalAdminRequestDto ToDto() => new()
+        {
+            Id = Id,
+            SubmittedAt = SubmittedAt,
+            ClientName = ClientName,
+            AccountName = AccountName,
+            RequestType = RequestType,
+            Summary = Summary,
+            Priority = Priority,
+            AssignedTo = AssignedTo,
+            Status = Status
+        };
     }
 }

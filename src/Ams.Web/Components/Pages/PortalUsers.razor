@@ -1,5 +1,8 @@
 @page "/portal/users"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using System.Text.Json
+@using Ams.Application.Common.Dtos
 @using Ams.Application.Common.Validation
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
@@ -8,353 +11,887 @@
 
 <PageTitle>Portal Users — AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+@if (_toastVisible)
+{
+    <div class="pu-toast pu-toast--@_toastKind" role="status" aria-live="polite">
+        <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
 
-<AppPageHeader Title="Portal Users"
-               Subtitle="Manage insured and client accounts with self-service portal access"
-               Icon="bi-people-fill">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="() => _showInvite = true">
-            <i class="bi bi-envelope-plus" aria-hidden="true"></i> Send Invite
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="() => _showInvite = true">
-            <i class="bi bi-person-plus" aria-hidden="true"></i> Add Portal User
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<!-- KPI strip -->
-<div class="pu-kpi-strip">
-    <div class="pu-kpi-card">
-        <div class="pu-kpi-icon pu-ki-blue"><i class="bi bi-people" aria-hidden="true"></i></div>
-        <div><div class="pu-kv">@_users.Count</div><div class="pu-kl">Total Portal Users</div></div>
-    </div>
-    <div class="pu-kpi-card">
-        <div class="pu-kpi-icon pu-ki-green"><i class="bi bi-person-check" aria-hidden="true"></i></div>
-        <div><div class="pu-kv">@_users.Count(u => u.Status == "Active")</div><div class="pu-kl">Active</div></div>
-    </div>
-    <div class="pu-kpi-card">
-        <div class="pu-kpi-icon pu-ki-amber"><i class="bi bi-hourglass" aria-hidden="true"></i></div>
-        <div><div class="pu-kv">@_users.Count(u => u.Status == "Pending")</div><div class="pu-kl">Pending Invite</div></div>
-    </div>
-    <div class="pu-kpi-card">
-        <div class="pu-kpi-icon pu-ki-red"><i class="bi bi-person-slash" aria-hidden="true"></i></div>
-        <div><div class="pu-kv">@_users.Count(u => u.Status == "Suspended")</div><div class="pu-kl">Suspended</div></div>
-    </div>
-    <div class="pu-kpi-card">
-        <div class="pu-kpi-icon pu-ki-green"><i class="bi bi-calendar-check" aria-hidden="true"></i></div>
-        <div><div class="pu-kv">@_users.Count(u => u.LastLogin >= DateTime.Today.AddDays(-30))</div><div class="pu-kl">Active 30 Days</div></div>
-    </div>
-</div>
-
-<!-- Filter bar -->
-<div class="pu-filter-bar">
-    <div class="pu-search-wrap">
-        <i class="bi bi-search" aria-hidden="true"></i>
-        <input class="pu-search" placeholder="Search users…" @bind="_search" @bind:event="oninput" />
-    </div>
-    <select class="pu-sel" @bind="_statusFilter">
-        <option value="">All Statuses</option>
-        <option value="Active">Active</option>
-        <option value="Pending">Pending</option>
-        <option value="Suspended">Suspended</option>
-    </select>
-    <select class="pu-sel" @bind="_roleFilter">
-        <option value="">All Roles</option>
-        <option value="Policyholder">Policyholder</option>
-        <option value="Contact">Contact</option>
-        <option value="Admin">Admin</option>
-    </select>
-</div>
-
-<!-- Grid -->
-<div class="pu-grid-wrap">
-    <SfGrid TValue="PortalUser" DataSource="Filtered" AllowSorting="true" AllowFiltering="true"
-            AllowTextWrap="true" EnableHover="true" RowHeight="64">
-        <GridTextWrapSettings WrapMode="WrapMode.Content" />
-        <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
-        <GridColumns>
-            <GridColumn HeaderText="User" MinWidth="280" Field="@nameof(PortalUser.Name)">
-                <Template>
-                    @{ var u = (PortalUser)context; }
-                    <div class="pu-user-cell">
-                        <div class="pu-av @AvatarCss(u.Role)">@Initials(u.Name)</div>
-                            <div class="pu-user-text">
-                            <div class="pu-name">@u.Name</div>
-                            <div class="pu-email">@u.Email</div>
-                        </div>
-                    </div>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(PortalUser.AccountName)" HeaderText="Account" MinWidth="220" />
-            <GridColumn Field="@nameof(PortalUser.Role)" HeaderText="Role" Width="130">
-                <Template>@{ var u = (PortalUser)context; }<span class="@RoleBadge(u.Role)">@u.Role</span></Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(PortalUser.Status)" HeaderText="Status" Width="110">
-                <Template>@{ var u = (PortalUser)context; }<span class="@StatusBadge(u.Status)">@u.Status</span></Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(PortalUser.LastLogin)" HeaderText="Last Login" Width="150" Type="ColumnType.DateTime" Format="MMM d, yyyy" />
-            <GridColumn Field="@nameof(PortalUser.MfaEnabled)" HeaderText="MFA" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
-                <Template>@{ var u = (PortalUser)context; }<i class="bi @(u.MfaEnabled ? "bi-shield-check pu-yes" : "bi-shield-x pu-no")" aria-hidden="true"></i></Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(PortalUser.Logins30d)" HeaderText="Logins (30d)" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                <Template>@{ var u = (PortalUser)context; }<span class="pu-mono">@u.Logins30d</span></Template>
-            </GridColumn>
-            <GridColumn HeaderText="" Width="150" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                <Template>
-                    @{ var u = (PortalUser)context; }
-                    <div class="pu-row-actions">
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => EditUser(u)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ToggleSuspend(u)" title="@(u.Status=="Suspended"?"Reactivate":"Suspend")">
-                            <i class="bi @(u.Status=="Suspended" ? "bi-person-check" : "bi-person-slash")" aria-hidden="true"></i>
-                        </button>
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Resend(u)" title="Resend invite" disabled="@(u.Status != "Pending")">
-                            <i class="bi bi-envelope-arrow-up" aria-hidden="true"></i>
-                        </button>
-                    </div>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
-
-<!-- Invite / Add dialog -->
-<SfDialog @bind-Visible="_showInvite" Width="620px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <EditForm Model="_newUser" OnValidSubmit="CommitAddUser" OnInvalidSubmit="HandleInvalidSubmit">
+@if (_showForm)
+{
+    <div class="pu-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="pu-modal" role="dialog" aria-modal="true" aria-labelledby="pu-form-title" @onclick:stopPropagation="true">
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="HandleInvalidSubmit">
                 <DataAnnotationsValidator />
                 <div class="um-modal-header">
-                    <i class="bi bi-person-plus" aria-hidden="true"></i>
-                    <span>Add Portal User</span>
-                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseInvite"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                    <i class="bi @(_editing is null ? "bi-person-plus" : "bi-person-gear")" aria-hidden="true"></i>
+                    <span id="pu-form-title">@(_editing is null ? "Add Portal User" : $"Edit {_form.Name}")</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button>
                 </div>
                 <div class="um-modal-body">
+                    <div class="pu-modal-intro">
+                        <strong>Portal access profile</strong>
+                        <span>Manage client portal identity, account visibility, role, status, MFA, and invitation workflow.</span>
+                    </div>
                     <div class="um-form-grid">
                         <div class="um-field">
-                            <label>Full Name <span class="um-required">*</span></label>
-                            <SfTextBox Placeholder="Full name" @bind-Value="_newUser.Name" />
-                            <ValidationMessage For="() => _newUser.Name" class="text-danger" />
+                            <label>Full Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.Name" />
+                            <ValidationMessage For="() => _form.Name" class="text-danger" />
                         </div>
                         <div class="um-field">
-                            <label>Email Address <span class="um-required">*</span></label>
-                            <SfTextBox Placeholder="email@domain.com" @bind-Value="_newUser.Email" />
-                            <ValidationMessage For="() => _newUser.Email" class="text-danger" />
+                            <label>Email Address <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.Email" />
+                            <ValidationMessage For="() => _form.Email" class="text-danger" />
                         </div>
                         <div class="um-field">
                             <label>Account Name</label>
-                            <SfTextBox Placeholder="Account name" @bind-Value="_newUser.AccountName" />
-                            <ValidationMessage For="() => _newUser.AccountName" class="text-danger" />
+                            <InputText class="form-control" @bind-Value="_form.AccountName" />
+                            <ValidationMessage For="() => _form.AccountName" class="text-danger" />
                         </div>
                         <div class="um-field">
-                            <label>Portal Role <span class="um-required">*</span></label>
-                            <SfDropDownList TValue="string" TItem="Lv" DataSource="_roleOpts" Placeholder="Portal role"
-                                            Width="100%" @bind-Value="_newUser.Role">
-                                <DropDownListFieldSettings Value="V" Text="L" />
-                            </SfDropDownList>
-                            <ValidationMessage For="() => _newUser.Role" class="text-danger" />
+                            <label>Portal Role <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.Role">
+                                @foreach (var role in Roles)
+                                {
+                                    <option value="@role">@role</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.Role" class="text-danger" />
                         </div>
                         <div class="um-field">
+                            <label>Status <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.Status">
+                                @foreach (var status in Statuses)
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.Status" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Logins Last 30 Days</label>
+                            <InputNumber class="form-control" @bind-Value="_form.Logins30d" />
+                            <ValidationMessage For="() => _form.Logins30d" class="text-danger" />
+                        </div>
+                        <div class="um-field pu-check-field">
                             <label>Security</label>
-                            <SfCheckBox @bind-Checked="_newUser.MfaEnabled" Label="Require MFA" />
+                            <label class="pu-check"><InputCheckbox @bind-Value="_form.MfaEnabled" /> <span>Require MFA</span></label>
                         </div>
-                        <div class="um-field">
+                        <div class="um-field pu-check-field">
                             <label>Invite</label>
-                            <SfCheckBox @bind-Checked="_sendWelcome" Label="Send welcome email" />
+                            <label class="pu-check"><InputCheckbox @bind-Value="_sendWelcome" /> <span>Send welcome email</span></label>
                         </div>
                     </div>
-                    @if (!string.IsNullOrEmpty(_formError))
+                    @if (!string.IsNullOrWhiteSpace(_formError))
                     {
-                        <div class="text-danger" style="margin-top:.75rem;"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_formError</div>
+                        <div class="alert alert-danger pu-inline-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+                            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_formError
+                        </div>
                     }
                 </div>
                 <div class="um-modal-footer">
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseInvite">Cancel</button>
-                    <button type="submit" class="um-btn um-btn-primary">
-                        <i class="bi bi-check-lg" aria-hidden="true"></i> Add User
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_actionBusy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy">
+                        @if (_actionBusy)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        Save User
                     </button>
                 </div>
             </EditForm>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+    </div>
+}
+
+@if (_showConfirm)
+{
+    <div class="pu-modal-backdrop" role="presentation" @onclick="CloseConfirm">
+        <div class="pu-confirm" role="dialog" aria-modal="true" aria-labelledby="pu-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingAction is "Suspend" or "Delete" ? "um-confirm-icon--danger" : null)">
+                    <i class="bi @_confirmIcon" aria-hidden="true"></i>
+                </div>
+                <div>
+                    <h3 id="pu-confirm-title">@_confirmTitle</h3>
+                    <p>@_confirmMessage</p>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseConfirm" disabled="@_actionBusy">Cancel</button>
+                <button type="button" class="um-btn @(_pendingAction is "Suspend" or "Delete" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteConfirmedAsync" disabled="@_actionBusy">
+                    @if (_actionBusy)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    Confirm
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="pu-page" @onclick="CloseActionMenu">
+    <section class="pu-hero">
+        <div class="pu-hero__content">
+            <span class="pu-hero__eyebrow"><i class="bi bi-shield-lock" aria-hidden="true"></i> Client portal identity command center</span>
+            <h1>Portal Users</h1>
+            <p>Manage insured and client contacts with portal access, invitation status, account visibility, MFA coverage, and service readiness from one full-width workspace.</p>
+            <div class="pu-hero__meta">
+                <span><i class="bi bi-people" aria-hidden="true"></i>@_rows.Count users</span>
+                <span><i class="bi bi-person-check" aria-hidden="true"></i>@_rows.Count(r => r.Status == "Active") active</span>
+                <span><i class="bi bi-shield-check" aria-hidden="true"></i>@MfaCoverage.ToString("0")% MFA</span>
+                <span><i class="bi bi-activity" aria-hidden="true"></i>@_rows.Sum(r => r.Logins30d) logins / 30d</span>
+            </div>
+        </div>
+        <div class="pu-hero__actions">
+            <button type="button" class="pu-btn pu-btn--light" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "pu-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="pu-btn pu-btn--primary" @onclick="OpenCreate"><i class="bi bi-person-plus" aria-hidden="true"></i> Add Portal User</button>
+            <button type="button" class="pu-btn pu-btn--light" @onclick='() => Nav.NavigateTo("/portal/invites")'><i class="bi bi-envelope-paper" aria-hidden="true"></i> Invites</button>
+            <button type="button" class="pu-btn pu-btn--light" @onclick='() => Nav.NavigateTo("/portal/activity")'><i class="bi bi-clock-history" aria-hidden="true"></i> Activity</button>
+        </div>
+    </section>
+
+    <section class="pu-kpi-strip" aria-label="Portal user KPIs">
+        @KpiCard("all", "Total Users", _rows.Count.ToString(), "All portal identities", "bi-people", "pu-kpi--blue")
+        @KpiCard("active", "Active", _rows.Count(r => r.Status == "Active").ToString(), "Can access self-service", "bi-person-check", "pu-kpi--green")
+        @KpiCard("pending", "Pending", _rows.Count(r => r.Status == "Pending").ToString(), "Invite follow-up queue", "bi-hourglass-split", "pu-kpi--amber")
+        @KpiCard("suspended", "Suspended", _rows.Count(r => r.Status == "Suspended").ToString(), "Blocked from access", "bi-person-slash", "pu-kpi--red")
+        @KpiCard("mfa", "MFA Enabled", _rows.Count(r => r.MfaEnabled).ToString(), "Security coverage", "bi-shield-check", "pu-kpi--purple")
+        @KpiCard("engaged", "Engaged", _rows.Count(IsEngaged).ToString(), "Logged in during 30 days", "bi-graph-up-arrow", "pu-kpi--cyan")
+    </section>
+
+    <section class="pu-workflows" aria-label="Portal workflows">
+        @WorkflowButton("bi-envelope-plus", "Invite clients", "Create access and send welcome", OpenCreate)
+        @WorkflowButton("bi-shield-lock", "Security review", "Filter MFA gaps", () => SetKpiFilter("mfa-missing"))
+        @WorkflowButton("bi-person-lines-fill", "Pending follow-up", "Review invite backlog", () => SetKpiFilter("pending"))
+        @WorkflowButton("bi-folder2-open", "Documents", "Open portal document center", () => Nav.NavigateTo("/portal/documents"))
+        @WorkflowButton("bi-headset", "Requests", "Open self-service queue", () => Nav.NavigateTo("/portal/requests"))
+    </section>
+
+    <section class="pu-filter-panel">
+        <div class="pu-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input aria-label="Search portal users" placeholder="Search name, email, account, role, status, security, engagement…" @bind="SearchText" @bind:event="oninput" />
+        </div>
+        <div class="pu-filter-actions">
+            <select class="pu-select" @bind="RoleFilter">
+                <option value="">All roles</option>
+                @foreach (var role in Roles)
+                {
+                    <option value="@role">@role</option>
+                }
+            </select>
+            <select class="pu-select" @bind="StatusFilter">
+                <option value="">All statuses</option>
+                @foreach (var status in Statuses)
+                {
+                    <option value="@status">@status</option>
+                }
+            </select>
+            <span>@FilteredRows.Count() visible</span>
+            <button type="button" class="pu-btn pu-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger pu-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError
+        </div>
+    }
+
+    <section class="pu-tabs" aria-label="Portal user views">
+        @foreach (var tab in Tabs)
+        {
+            <button type="button" class="pu-tab @(_activeTab == tab.Key ? "pu-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </section>
+
+    <section class="pu-dashboard">
+        <div class="pu-main-card">
+            <div class="pu-card-header">
+                <div>
+                    <span class="pu-section-kicker"><i class="bi bi-person-vcard" aria-hidden="true"></i> Identity register</span>
+                    <h2>@ActiveViewTitle</h2>
+                    <p>Prioritized by access risk, recent engagement, invite aging, MFA posture, and account service importance.</p>
+                </div>
+                <div class="pu-card-actions">
+                    <button type="button" class="pu-btn pu-btn--ghost" @onclick="ExportAsync" disabled="@(!FilteredRows.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+                    <button type="button" class="pu-btn pu-btn--ghost" @onclick="ToggleView"><i class="bi @(_cardView ? "bi-table" : "bi-grid-3x3-gap")" aria-hidden="true"></i> @(_cardView ? "Table" : "Cards")</button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="pu-loading"><span class="pu-spinner" aria-hidden="true"></span> Loading portal users…</div>
+            }
+            else if (!FilteredRows.Any())
+            {
+                <div class="pu-empty">
+                    <i class="bi bi-inbox" aria-hidden="true"></i>
+                    <strong>No portal users found</strong>
+                    <span>Adjust filters or add a portal user to start the client access workflow.</span>
+                    <button type="button" class="pu-btn pu-btn--primary" @onclick="OpenCreate"><i class="bi bi-person-plus" aria-hidden="true"></i> Add Portal User</button>
+                </div>
+            }
+            else if (_cardView)
+            {
+                <div class="pu-card-grid">
+                    @foreach (var row in PagedRows)
+                    {
+                        @UserCard(row)
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="pu-table-scroll">
+                    <table class="pu-table" aria-label="Portal users">
+                        <thead>
+                            <tr>
+                                <th>User</th>
+                                <th>Account</th>
+                                <th>Role</th>
+                                <th>Status</th>
+                                <th>Security</th>
+                                <th class="pu-num">30d Logins</th>
+                                <th>Last Login</th>
+                                <th>Priority</th>
+                                <th class="pu-actions-col"><span class="visually-hidden">Actions</span></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in PagedRows)
+                            {
+                                <tr class="pu-table-row @(_selected?.RecordId == row.RecordId ? "pu-table-row--selected" : null)" @onclick="() => SelectUser(row)">
+                                    <td>@UserCell(row)</td>
+                                    <td>@(string.IsNullOrWhiteSpace(row.AccountName) ? "—" : row.AccountName)</td>
+                                    <td><span class="pu-role pu-role--@CssSafe(row.Role)">@row.Role</span></td>
+                                    <td><span class="pu-status pu-status--@CssSafe(row.Status)">@row.Status</span></td>
+                                    <td>@SecurityCell(row)</td>
+                                    <td class="pu-num"><strong>@row.Logins30d</strong></td>
+                                    <td>@LastLoginText(row)</td>
+                                    <td><span class="pu-priority pu-priority--@PriorityLevel(row).ToLowerInvariant()">@PriorityLevel(row)</span></td>
+                                    <td class="pu-actions-col">@ActionMenu(row)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+
+            <div class="pu-pager">
+                <button type="button" class="pu-btn pu-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Previous</button>
+                <span>Page @_page of @TotalPages</span>
+                <button type="button" class="pu-btn pu-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+            </div>
+        </div>
+
+        <aside class="pu-side-panel">
+            <div class="pu-panel-card">
+                <span class="pu-section-kicker"><i class="bi bi-stars" aria-hidden="true"></i> Importance score</span>
+                <div class="pu-score-card">
+                    <span>Portfolio readiness</span>
+                    <strong>@ReadinessScore</strong>
+                    <small>/100</small>
+                </div>
+                <div class="pu-readiness"><span style="width:@ReadinessScore%"></span></div>
+                <div class="pu-importance-list">
+                    @foreach (var item in ImportanceSignals)
+                    {
+                        <div><i class="bi @item.Icon" aria-hidden="true"></i><span>@item.Text</span></div>
+                    }
+                </div>
+            </div>
+
+            <div class="pu-panel-card">
+                <span class="pu-section-kicker"><i class="bi bi-person-badge" aria-hidden="true"></i> Selected user</span>
+                @if (_selected is null)
+                {
+                    <div class="pu-empty pu-empty--compact"><span>Select a portal user to review account access, security, and workflow actions.</span></div>
+                }
+                else
+                {
+                    var selected = _selected!;
+                    <div class="pu-selected-head">
+                        <span class="pu-avatar pu-avatar--@CssSafe(selected.Role)">@Initials(selected.Name)</span>
+                        <div><strong>@selected.Name</strong><span>@selected.Email</span></div>
+                    </div>
+                    <div class="pu-detail-list">
+                        <div><span>Account</span><strong>@(string.IsNullOrWhiteSpace(selected.AccountName) ? "—" : selected.AccountName)</strong></div>
+                        <div><span>Role</span><strong>@selected.Role</strong></div>
+                        <div><span>Status</span><strong>@selected.Status</strong></div>
+                        <div><span>MFA</span><strong>@(selected.MfaEnabled ? "Enabled" : "Missing")</strong></div>
+                        <div><span>30d Logins</span><strong>@selected.Logins30d</strong></div>
+                        <div><span>Last Login</span><strong>@LastLoginText(selected)</strong></div>
+                    </div>
+                    <div class="pu-selected-actions">
+                        <button type="button" class="pu-btn pu-btn--primary" @onclick="@(() => OpenEdit(selected))"><i class="bi bi-pencil" aria-hidden="true"></i> Edit User</button>
+                        <button type="button" class="pu-btn pu-btn--ghost" @onclick="@(() => OpenConfirm(selected, ToggleStatusAction(selected)))"><i class="bi bi-shield-exclamation" aria-hidden="true"></i> @ToggleStatusAction(selected)</button>
+                    </div>
+                }
+            </div>
+
+            <div class="pu-panel-card">
+                <span class="pu-section-kicker"><i class="bi bi-pie-chart" aria-hidden="true"></i> Role mix</span>
+                <div class="pu-mix-list">
+                    @foreach (var role in Roles)
+                    {
+                        <div><span><i class="bi bi-person" aria-hidden="true"></i>@role</span><strong>@_rows.Count(r => r.Role == role)</strong></div>
+                    }
+                </div>
+            </div>
+        </aside>
+    </section>
+</div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
-    private Guid _tenantId;
-    private SfToast? _toast;
-    private string _search = string.Empty;
-    private string _statusFilter = string.Empty;
-    private string _roleFilter = string.Empty;
-    private bool _showInvite;
-    private bool _sendWelcome = true;
-    private string? _formError;
-    private PortalUser _newUser = new();
-
-    private List<PortalUser> _users = [];
-
-    private static readonly List<Lv> _roleOpts =
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly string[] Roles = ["Policyholder", "Contact", "Admin"];
+    private static readonly string[] Statuses = ["Active", "Pending", "Suspended"];
+    private static readonly TabDef[] Tabs =
     [
-        new("Policyholder","Policyholder"), new("Contact","Contact"), new("Admin","Admin"),
+        new("all", "All", "bi-stack"),
+        new("active", "Active", "bi-person-check"),
+        new("pending", "Pending", "bi-hourglass-split"),
+        new("suspended", "Suspended", "bi-person-slash"),
+        new("mfa", "MFA", "bi-shield-check"),
+        new("risk", "Needs Attention", "bi-exclamation-triangle"),
+        new("engaged", "Engaged", "bi-activity"),
+        new("admins", "Admins", "bi-person-gear")
     ];
 
-    private IEnumerable<PortalUser> Filtered => _users.Where(u =>
-        (string.IsNullOrEmpty(_search) || u.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || u.Email.Contains(_search, StringComparison.OrdinalIgnoreCase) || u.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase)) &&
-        (string.IsNullOrEmpty(_statusFilter) || u.Status == _statusFilter) &&
-        (string.IsNullOrEmpty(_roleFilter) || u.Role == _roleFilter));
+    private readonly List<PortalUserRow> _rows = [];
+    private Guid _tenantId;
+    private bool _loading;
+    private bool _actionBusy;
+    private bool _showForm;
+    private bool _showConfirm;
+    private bool _toastVisible;
+    private bool _sendWelcome = true;
+    private bool _cardView;
+    private string _toastKind = "success";
+    private string _toastMessage = string.Empty;
+    private string _activeTab = "all";
+    private string? _kpiFilter;
+    private string? _searchText;
+    private string? _roleFilter;
+    private string? _statusFilter;
+    private string? _loadError;
+    private string? _formError;
+    private Guid? _openActionMenuFor;
+    private int _page = 1;
+    private const int PageSize = 12;
+
+    private PortalUserRow? _selected;
+    private PortalUserRow? _editing;
+    private PortalUserForm _form = new();
+    private PortalUserRow? _pendingUser;
+    private string _pendingAction = string.Empty;
+    private string _confirmTitle = "Confirm action";
+    private string _confirmMessage = "Confirm this portal user action?";
+    private string _confirmIcon = "bi-question-circle";
+
+    private string? SearchText { get => _searchText; set { _searchText = value; _page = 1; } }
+    private string? RoleFilter { get => _roleFilter; set { _roleFilter = value; _page = 1; } }
+    private string? StatusFilter { get => _statusFilter; set { _statusFilter = value; _page = 1; } }
+    private bool HasFilters => !string.IsNullOrWhiteSpace(_searchText) || !string.IsNullOrWhiteSpace(_roleFilter) || !string.IsNullOrWhiteSpace(_statusFilter) || _kpiFilter is not null || _activeTab != "all";
+    private decimal MfaCoverage => _rows.Count == 0 ? 0 : _rows.Count(r => r.MfaEnabled) * 100m / _rows.Count;
+    private int ReadinessScore => _rows.Count == 0 ? 100 : Math.Clamp((int)Math.Round((_rows.Count(r => r.Status == "Active") * 38m + _rows.Count(r => r.MfaEnabled) * 32m + _rows.Count(IsEngaged) * 30m) / _rows.Count), 0, 100);
+    private string ActiveViewTitle => _activeTab switch
+    {
+        "active" => "Active portal access",
+        "pending" => "Pending invitation queue",
+        "suspended" => "Suspended access controls",
+        "mfa" => "MFA-secured users",
+        "risk" => "Users needing attention",
+        "engaged" => "Recently engaged users",
+        "admins" => "Portal administrators",
+        _ => "All portal users"
+    };
+
+    private IEnumerable<PortalUserRow> TabRows => _activeTab switch
+    {
+        "active" => _rows.Where(r => r.Status == "Active"),
+        "pending" => _rows.Where(r => r.Status == "Pending"),
+        "suspended" => _rows.Where(r => r.Status == "Suspended"),
+        "mfa" => _rows.Where(r => r.MfaEnabled),
+        "risk" => _rows.Where(NeedsAttention),
+        "engaged" => _rows.Where(IsEngaged),
+        "admins" => _rows.Where(r => r.Role == "Admin"),
+        _ => _rows
+    };
+
+    private IEnumerable<PortalUserRow> KpiRows => _kpiFilter switch
+    {
+        "active" => TabRows.Where(r => r.Status == "Active"),
+        "pending" => TabRows.Where(r => r.Status == "Pending"),
+        "suspended" => TabRows.Where(r => r.Status == "Suspended"),
+        "mfa" => TabRows.Where(r => r.MfaEnabled),
+        "mfa-missing" => TabRows.Where(r => !r.MfaEnabled),
+        "engaged" => TabRows.Where(IsEngaged),
+        _ => TabRows
+    };
+
+    private IEnumerable<PortalUserRow> FilteredRows => ApplyFilters(KpiRows).OrderByDescending(ImportanceScore).ThenBy(r => r.Name);
+    private IEnumerable<PortalUserRow> PagedRows => FilteredRows.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRows.Count() / (double)PageSize));
+    private IEnumerable<Signal> ImportanceSignals => BuildImportanceSignals();
 
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Portal","/portal/users"), new("Users",""));
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Portal", "/portal/users"), new("Users", ""));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
+        _loading = true;
+        _loadError = null;
         try
         {
-            var result = await Api.SearchPortalAdminUsersAsync(_tenantId, _search);
-            _users = result?.Items.Select(u => new PortalUser
+            var result = await Api.SearchPortalAdminRecordsAsync(_tenantId, "PortalUser", _searchText);
+            _rows.Clear();
+            foreach (var record in result?.Items ?? [])
             {
-                Id = u.Id,
-                Name = u.Name,
-                Email = u.Email,
-                AccountName = u.AccountName,
-                Role = u.Role,
-                Status = u.Status,
-                LastLogin = u.LastLogin,
-                MfaEnabled = u.MfaEnabled,
-                Logins30d = u.Logins30d
-            }).ToList() ?? [];
+                var user = DeserializeUser(record);
+                if (user is not null)
+                {
+                    _rows.Add(PortalUserRow.From(record, user));
+                }
+            }
+            _selected = _rows.FirstOrDefault(r => _selected?.RecordId == r.RecordId) ?? _rows.OrderByDescending(ImportanceScore).FirstOrDefault();
+            _page = Math.Min(_page, TotalPages);
         }
         catch (Exception ex)
         {
-            if (_toast is not null)
-                await _toast.ShowAsync(new ToastModel { Content = $"Load failed: {ex.Message}", CssClass = "e-toast-danger" });
+            _loadError = $"Failed to load portal users: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
         }
     }
 
-    private void EditUser(PortalUser u) { /* open edit dialog in full impl */ }
-
-    private async Task ToggleSuspend(PortalUser u)
+    private static PortalAdminUserDto? DeserializeUser(PortalAdminRecordDto record)
     {
-        u.Status = u.Status == "Suspended" ? "Active" : "Suspended";
-        await Api.SetPortalAdminRecordStatusAsync(u.Id, u.Status);
-        await ShowToast(u.Status == "Active" ? $"{u.Name} reactivated." : $"{u.Name} suspended.");
-        await LoadAsync();
-    }
-
-    private async Task Resend(PortalUser u)
-    {
-        await ShowToast($"Invite resent to {u.Email}.");
-    }
-
-    private async Task CommitAddUser()
-    {
-        _formError = null;
-        _newUser.Id = Guid.NewGuid();
-        _newUser.Status = "Pending";
-        _newUser.LastLogin = DateTime.MinValue;
-        var json = System.Text.Json.JsonSerializer.Serialize(new
+        try
         {
-            name = _newUser.Name,
-            email = _newUser.Email,
-            accountName = _newUser.AccountName,
-            role = _newUser.Role,
-            status = _newUser.Status,
-            lastLogin = _newUser.LastLogin,
-            mfaEnabled = _newUser.MfaEnabled,
-            logins30d = _newUser.Logins30d
-        });
-        await Api.CreatePortalAdminRecordAsync(new UpsertPortalAdminRecordRequest(_tenantId, "PortalUser", _newUser.Email, _newUser.Name, _newUser.Status, json));
-        CloseInvite();
-        await ShowToast($"Portal user {_newUser.Name} added{(_sendWelcome ? " — invite sent." : ".")}");
-        _newUser = new();
-        await LoadAsync();
+            var user = JsonSerializer.Deserialize<PortalAdminUserDto>(record.JsonData ?? "{}", JsonOptions) ?? new();
+            user.Id = record.PortalAdminRecordId;
+            if (string.IsNullOrWhiteSpace(user.Name)) user.Name = record.Name;
+            if (string.IsNullOrWhiteSpace(user.Email)) user.Email = record.Code;
+            if (string.IsNullOrWhiteSpace(user.Status)) user.Status = record.Status;
+            return user;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
-    private void HandleInvalidSubmit(EditContext editContext)
+    private IEnumerable<PortalUserRow> ApplyFilters(IEnumerable<PortalUserRow> rows)
     {
-        _formError = "Fix the highlighted validation errors before adding this portal user.";
+        if (!string.IsNullOrWhiteSpace(_roleFilter)) rows = rows.Where(r => r.Role == _roleFilter);
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) rows = rows.Where(r => r.Status == _statusFilter);
+        if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            var term = _searchText.Trim();
+            rows = rows.Where(r => Contains(r.Name, term) || Contains(r.Email, term) || Contains(r.AccountName, term) || Contains(r.Role, term) || Contains(r.Status, term) || Contains(r.SecurityText, term) || Contains(LastLoginText(r), term));
+        }
+        return rows;
     }
 
-    private void CloseInvite() { _showInvite = false; _newUser = new(); _formError = null; }
-
-    private async Task ShowToast(string msg)
+    private string TabCount(string key) => key switch
     {
-        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = "e-toast-success" });
-    }
-
-    private static string AvatarCss(string role) => role switch
-    {
-        "Admin"        => "pu-av-admin",
-        "Policyholder" => "pu-av-ph",
-        _              => "pu-av-contact",
+        "all" => _rows.Count.ToString(),
+        "active" => _rows.Count(r => r.Status == "Active").ToString(),
+        "pending" => _rows.Count(r => r.Status == "Pending").ToString(),
+        "suspended" => _rows.Count(r => r.Status == "Suspended").ToString(),
+        "mfa" => _rows.Count(r => r.MfaEnabled).ToString(),
+        "risk" => _rows.Count(NeedsAttention).ToString(),
+        "engaged" => _rows.Count(IsEngaged).ToString(),
+        "admins" => _rows.Count(r => r.Role == "Admin").ToString(),
+        _ => string.Empty
     };
 
-    private static string RoleBadge(string r) => r switch
-    {
-        "Admin"        => "pu-badge pu-badge--admin",
-        "Policyholder" => "pu-badge pu-badge--ph",
-        _              => "pu-badge",
-    };
+    private void SetTab(string key) { _activeTab = key; _page = 1; }
+    private void SetKpiFilter(string key) { _kpiFilter = _kpiFilter == key || key == "all" ? null : key; _page = 1; }
+    private void ClearFilters() { _searchText = null; _roleFilter = null; _statusFilter = null; _kpiFilter = null; _activeTab = "all"; _page = 1; }
+    private void ToggleView() => _cardView = !_cardView;
+    private void PreviousPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void SelectUser(PortalUserRow row) => _selected = row;
 
-    private static string StatusBadge(string s) => s switch
+    private void OpenCreate()
     {
-        "Active"    => "pu-status pu-status--active",
-        "Pending"   => "pu-status pu-status--pending",
-        "Suspended" => "pu-status pu-status--susp",
-        _           => "pu-status",
-    };
-
-    private static string Initials(string name)
-    {
-        var p = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        return p.Length >= 2 ? $"{p[0][0]}{p[^1][0]}" : name.Length > 0 ? name[..1] : "?";
+        _editing = null;
+        _form = new PortalUserForm();
+        _sendWelcome = true;
+        _formError = null;
+        _showForm = true;
     }
 
-    private sealed class PortalUser
+    private void OpenEdit(PortalUserRow row)
     {
-        public Guid     Id          { get; set; }
+        _selected = row;
+        _editing = row;
+        _form = row.ToForm();
+        _sendWelcome = false;
+        _formError = null;
+        _showForm = true;
+    }
 
+    private void CloseForm()
+    {
+        if (_actionBusy) return;
+        _showForm = false;
+        _formError = null;
+    }
+
+    private async Task SaveAsync()
+    {
+        _actionBusy = true;
+        _formError = null;
+        try
+        {
+            var user = _form.ToDto(_editing?.LastLogin, _editing?.RecordId ?? Guid.Empty);
+            var json = JsonSerializer.Serialize(user, JsonOptions);
+            if (_editing is null)
+            {
+                await Api.CreatePortalAdminRecordAsync(new UpsertPortalAdminRecordRequest(_tenantId, "PortalUser", user.Email, user.Name, user.Status, json));
+                ShowToast($"Portal user {user.Name} added{(_sendWelcome ? " and invite queued." : ".")}");
+            }
+            else
+            {
+                await Api.UpdatePortalAdminRecordAsync(_editing.RecordId, new UpsertPortalAdminRecordRequest(_tenantId, "PortalUser", user.Email, user.Name, user.Status, json));
+                ShowToast($"Portal user {user.Name} updated.");
+            }
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    private void HandleInvalidSubmit(EditContext editContext) => _formError = "Fix the highlighted validation errors before saving this portal user.";
+
+    private void OpenConfirm(PortalUserRow row, string action)
+    {
+        _selected = row;
+        _pendingUser = row;
+        _pendingAction = action;
+        (_confirmTitle, _confirmMessage, _confirmIcon) = action switch
+        {
+            "Reactivate" => ($"Reactivate {row.Name}?", "This restores portal access for the client after confirming account and security posture.", "bi-person-check"),
+            "Suspend" => ($"Suspend {row.Name}?", "This immediately blocks portal access while preserving audit history and user configuration.", "bi-person-slash"),
+            "Resend" => ($"Resend invite to {row.Email}?", "This keeps the user pending and queues a new welcome invitation notification.", "bi-envelope-arrow-up"),
+            "Delete" => ($"Delete {row.Name}?", "This removes the portal user administration record. Use suspend if access may need to be restored later.", "bi-trash"),
+            _ => ("Confirm action", "Confirm this portal user action?", "bi-question-circle")
+        };
+        _showConfirm = true;
+    }
+
+    private void CloseConfirm()
+    {
+        if (_actionBusy) return;
+        _showConfirm = false;
+    }
+
+    private async Task ExecuteConfirmedAsync()
+    {
+        if (_pendingUser is null) return;
+        _actionBusy = true;
+        try
+        {
+            switch (_pendingAction)
+            {
+                case "Reactivate":
+                    await UpdateStatusAsync(_pendingUser, "Active");
+                    ShowToast($"{_pendingUser.Name} reactivated.");
+                    break;
+                case "Suspend":
+                    await UpdateStatusAsync(_pendingUser, "Suspended");
+                    ShowToast($"{_pendingUser.Name} suspended.");
+                    break;
+                case "Resend":
+                    await UpdateStatusAsync(_pendingUser, "Pending");
+                    ShowToast($"Invite resent to {_pendingUser.Email}.");
+                    break;
+                case "Delete":
+                    await Api.DeletePortalAdminRecordAsync(_pendingUser.RecordId);
+                    ShowToast($"{_pendingUser.Name} removed.");
+                    break;
+            }
+            _showConfirm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Action failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    private async Task UpdateStatusAsync(PortalUserRow row, string status)
+    {
+        var dto = row.ToDto();
+        dto.Status = status;
+        var json = JsonSerializer.Serialize(dto, JsonOptions);
+        await Api.UpdatePortalAdminRecordAsync(row.RecordId, new UpsertPortalAdminRecordRequest(_tenantId, "PortalUser", dto.Email, dto.Name, status, json));
+    }
+
+    private async Task HandleActionAsync(PortalUserRow row, string action)
+    {
+        _openActionMenuFor = null;
+        _selected = row;
+        switch (action)
+        {
+            case "Edit": OpenEdit(row); break;
+            case "Activity": Nav.NavigateTo($"/portal/activity?searchTerm={Uri.EscapeDataString(row.Email)}"); break;
+            case "Documents": Nav.NavigateTo($"/portal/documents?searchTerm={Uri.EscapeDataString(row.AccountName)}"); break;
+            case "Requests": Nav.NavigateTo($"/portal/requests?searchTerm={Uri.EscapeDataString(row.AccountName)}"); break;
+            case "Resend": OpenConfirm(row, "Resend"); break;
+            case "Reactivate": OpenConfirm(row, "Reactivate"); break;
+            case "Suspend": OpenConfirm(row, "Suspend"); break;
+            case "Delete": OpenConfirm(row, "Delete"); break;
+            default: await Task.CompletedTask; break;
+        }
+    }
+
+    private async Task ExportAsync()
+    {
+        var csv = new System.Text.StringBuilder();
+        csv.AppendLine("Name,Email,Account,Role,Status,MFA,Logins30d,LastLogin,Priority");
+        foreach (var row in FilteredRows)
+        {
+            csv.AppendLine(string.Join(',', Csv(row.Name), Csv(row.Email), Csv(row.AccountName), Csv(row.Role), Csv(row.Status), Csv(row.MfaEnabled ? "Enabled" : "Missing"), Csv(row.Logins30d.ToString()), Csv(LastLoginText(row)), Csv(PriorityLevel(row))));
+        }
+        Nav.NavigateTo("data:text/csv;charset=utf-8," + Uri.EscapeDataString(csv.ToString()), forceLoad: true);
+        ShowToast("Portal users export generated.");
+        await Task.CompletedTask;
+    }
+
+    private void ToggleActionMenu(PortalUserRow row)
+    {
+        _selected = row;
+        _openActionMenuFor = _openActionMenuFor == row.RecordId ? null : row.RecordId;
+    }
+
+    private void CloseActionMenu()
+    {
+        if (_actionBusy) return;
+        _openActionMenuFor = null;
+    }
+
+    private IEnumerable<Signal> BuildImportanceSignals()
+    {
+        yield return new("bi-shield-exclamation", $"{_rows.Count(r => !r.MfaEnabled)} users missing MFA should be reviewed first.");
+        yield return new("bi-hourglass-split", $"{_rows.Count(r => r.Status == "Pending")} pending invites need follow-up.");
+        yield return new("bi-person-slash", $"{_rows.Count(r => r.Status == "Suspended")} suspended users are blocked from access.");
+        yield return new("bi-activity", $"{_rows.Sum(r => r.Logins30d)} portal logins occurred during the last 30 days.");
+    }
+
+    private RenderFragment KpiCard(string key, string label, string value, string detail, string icon, string css) => @<button type="button" class="pu-kpi @css @((_kpiFilter == key || (key == "all" && _kpiFilter is null)) ? "pu-kpi--active" : null)" @onclick="() => SetKpiFilter(key)" title="Filter by @label">
+        <span><i class="bi @icon" aria-hidden="true"></i>@label</span>
+        <strong>@value</strong>
+        <small>@detail</small>
+    </button>;
+
+    private RenderFragment WorkflowButton(string icon, string title, string detail, System.Action action) => @<button type="button" class="pu-workflow" @onclick="@(() => action())">
+        <i class="bi @icon" aria-hidden="true"></i>
+        <span><strong>@title</strong><small>@detail</small></span>
+    </button>;
+
+    private RenderFragment UserCell(PortalUserRow row) => @<div class="pu-user-cell">
+        <span class="pu-avatar pu-avatar--@CssSafe(row.Role)">@Initials(row.Name)</span>
+        <div><strong>@row.Name</strong><span>@row.Email</span></div>
+    </div>;
+
+    private RenderFragment SecurityCell(PortalUserRow row) => @<span class="pu-security @(row.MfaEnabled ? "pu-security--ok" : "pu-security--risk")"><i class="bi @(row.MfaEnabled ? "bi-shield-check" : "bi-shield-x")" aria-hidden="true"></i>@row.SecurityText</span>;
+
+    private RenderFragment UserCard(PortalUserRow row) => @<article class="pu-user-card @(_selected?.RecordId == row.RecordId ? "pu-user-card--active" : null)" @onclick="@(() => SelectUser(row))">
+        <div class="pu-user-card__top">
+            @UserCell(row)
+            <span class="pu-priority pu-priority--@PriorityLevel(row).ToLowerInvariant()">@PriorityLevel(row)</span>
+        </div>
+        <div class="pu-user-card__meta">
+            <span><i class="bi bi-building" aria-hidden="true"></i>@(string.IsNullOrWhiteSpace(row.AccountName) ? "No account assigned" : row.AccountName)</span>
+            <span><i class="bi bi-person-badge" aria-hidden="true"></i>@row.Role · @row.Status</span>
+            <span><i class="bi bi-shield-lock" aria-hidden="true"></i>@row.SecurityText</span>
+            <span><i class="bi bi-clock-history" aria-hidden="true"></i>@LastLoginText(row)</span>
+        </div>
+        <div class="pu-user-card__actions" @onclick:stopPropagation="true">
+            <button type="button" class="pu-btn pu-btn--ghost" @onclick="@(() => OpenEdit(row))"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+            <button type="button" class="pu-btn pu-btn--ghost" @onclick="@(() => OpenConfirm(row, ToggleStatusAction(row)))"><i class="bi bi-shield-exclamation" aria-hidden="true"></i> @ToggleStatusAction(row)</button>
+        </div>
+    </article>;
+
+    private RenderFragment ActionMenu(PortalUserRow row) => @<div class="pu-action-menu-wrap" @onclick:stopPropagation="true">
+        <button type="button" class="pu-icon-btn" @onclick="@(() => ToggleActionMenu(row))" aria-haspopup="menu" aria-expanded="@(_openActionMenuFor == row.RecordId)" title="Portal user actions"><i class="bi bi-three-dots-vertical" aria-hidden="true"></i></button>
+        @if (_openActionMenuFor == row.RecordId)
+        {
+            <div class="pu-action-menu" role="menu">
+                <div class="pu-action-menu__summary"><strong>@row.Name</strong><span>@row.Email</span></div>
+                @foreach (var action in ActionsFor(row))
+                {
+                    <button type="button" class="pu-action-menu__item @(action is "Delete" or "Suspend" ? "pu-action-menu__item--danger" : null)" role="menuitem" @onclick="@(() => HandleActionAsync(row, action))">
+                        <i class="bi @ActionIcon(action)" aria-hidden="true"></i>@action
+                    </button>
+                }
+            </div>
+        }
+    </div>;
+
+    private static IEnumerable<string> ActionsFor(PortalUserRow row)
+    {
+        yield return "Edit";
+        yield return "Activity";
+        yield return "Documents";
+        yield return "Requests";
+        if (row.Status == "Pending") yield return "Resend";
+        yield return row.Status == "Suspended" ? "Reactivate" : "Suspend";
+        yield return "Delete";
+    }
+
+    private static string ActionIcon(string action) => action switch
+    {
+        "Edit" => "bi-pencil",
+        "Activity" => "bi-clock-history",
+        "Documents" => "bi-folder2-open",
+        "Requests" => "bi-headset",
+        "Resend" => "bi-envelope-arrow-up",
+        "Reactivate" => "bi-person-check",
+        "Suspend" => "bi-person-slash",
+        "Delete" => "bi-trash",
+        _ => "bi-circle"
+    };
+
+    private static bool Contains(string? source, string term) => !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static bool IsEngaged(PortalUserRow row) => row.Status == "Active" && row.LastLogin >= DateTime.Today.AddDays(-30);
+    private static bool NeedsAttention(PortalUserRow row) => row.Status == "Pending" || row.Status == "Suspended" || !row.MfaEnabled;
+    private static int ImportanceScore(PortalUserRow row) => (row.Status == "Pending" ? 40 : 0) + (row.Status == "Suspended" ? 35 : 0) + (!row.MfaEnabled ? 30 : 0) + (row.Role == "Admin" ? 20 : 0) + Math.Min(row.Logins30d, 20);
+    private static string PriorityLevel(PortalUserRow row) => ImportanceScore(row) >= 60 ? "High" : ImportanceScore(row) >= 30 ? "Medium" : "Normal";
+    private static string ToggleStatusAction(PortalUserRow row) => row.Status == "Suspended" ? "Reactivate" : "Suspend";
+    private static string LastLoginText(PortalUserRow row) => row.LastLogin <= DateTime.MinValue.AddDays(1) ? "Never" : row.LastLogin.ToLocalTime().ToString("MMM d, yyyy");
+    private static string CssSafe(string value) => string.IsNullOrWhiteSpace(value) ? "unknown" : value.Trim().ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
+    private static string Initials(string name) { var p = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return p.Length >= 2 ? $"{p[0][0]}{p[^1][0]}" : name.Length > 0 ? name[..1] : "?"; }
+    private static string Csv(string? value) => string.Concat("\"", (value ?? string.Empty).Replace("\"", "\"\""), "\"");
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+
+    private sealed record TabDef(string Key, string Label, string Icon);
+    private sealed record Signal(string Icon, string Text);
+
+    private sealed class PortalUserRow
+    {
+        public Guid RecordId { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+        public string AccountName { get; set; } = string.Empty;
+        public string Role { get; set; } = "Policyholder";
+        public string Status { get; set; } = "Pending";
+        public DateTime LastLogin { get; set; }
+        public bool MfaEnabled { get; set; }
+        public int Logins30d { get; set; }
+        public string SecurityText => MfaEnabled ? "MFA enabled" : "MFA missing";
+
+        public static PortalUserRow From(PortalAdminRecordDto record, PortalAdminUserDto dto) => new()
+        {
+            RecordId = record.PortalAdminRecordId,
+            Name = dto.Name,
+            Email = dto.Email,
+            AccountName = dto.AccountName,
+            Role = string.IsNullOrWhiteSpace(dto.Role) ? "Policyholder" : dto.Role,
+            Status = string.IsNullOrWhiteSpace(dto.Status) ? record.Status : dto.Status,
+            LastLogin = dto.LastLogin,
+            MfaEnabled = dto.MfaEnabled,
+            Logins30d = dto.Logins30d
+        };
+
+        public PortalAdminUserDto ToDto() => new()
+        {
+            Id = RecordId,
+            Name = Name,
+            Email = Email,
+            AccountName = AccountName,
+            Role = Role,
+            Status = Status,
+            LastLogin = LastLogin,
+            MfaEnabled = MfaEnabled,
+            Logins30d = Logins30d
+        };
+
+        public PortalUserForm ToForm() => new()
+        {
+            Name = Name,
+            Email = Email,
+            AccountName = AccountName,
+            Role = Role,
+            Status = Status,
+            MfaEnabled = MfaEnabled,
+            Logins30d = Logins30d
+        };
+    }
+
+    private sealed class PortalUserForm
+    {
         [Required(ErrorMessage = "Full name is required.")]
         [StringLength(160, ErrorMessage = "Full name cannot exceed 160 characters.")]
-        public string   Name        { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
 
         [Required(ErrorMessage = "Email address is required.")]
         [AmsEmailAddress]
         [StringLength(320, ErrorMessage = "Email address cannot exceed 320 characters.")]
-        public string   Email       { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
 
         [StringLength(200, ErrorMessage = "Account name cannot exceed 200 characters.")]
-        public string   AccountName { get; set; } = string.Empty;
+        public string AccountName { get; set; } = string.Empty;
 
         [Required(ErrorMessage = "Portal role is required.")]
         [StringLength(50, ErrorMessage = "Portal role cannot exceed 50 characters.")]
-        public string   Role        { get; set; } = "Policyholder";
-        public string   Status      { get; set; } = "Pending";
-        public DateTime LastLogin   { get; set; }
-        public bool     MfaEnabled  { get; set; }
-        public int      Logins30d   { get; set; }
-    }
+        public string Role { get; set; } = "Policyholder";
 
-    private sealed record Lv(string V, string L);
+        [Required(ErrorMessage = "Status is required.")]
+        [StringLength(50, ErrorMessage = "Status cannot exceed 50 characters.")]
+        public string Status { get; set; } = "Pending";
 
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        public bool MfaEnabled { get; set; }
+
+        [Range(0, 100000, ErrorMessage = "Logins must be zero or greater.")]
+        public int Logins30d { get; set; }
+
+        public PortalAdminUserDto ToDto(DateTime? lastLogin, Guid id) => new()
+        {
+            Id = id,
+            Name = Name,
+            Email = Email,
+            AccountName = AccountName,
+            Role = Role,
+            Status = Status,
+            LastLogin = Status == "Pending" ? DateTime.MinValue : lastLogin.GetValueOrDefault(DateTime.UtcNow),
+            MfaEnabled = MfaEnabled,
+            Logins30d = Logins30d
+        };
     }
 }

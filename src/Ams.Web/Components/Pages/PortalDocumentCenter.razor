@@ -6,6 +6,7 @@
 @using Ams.Application.Common.Dtos
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
 <PageTitle>Portal Document Center — AMS Enterprise</PageTitle>
@@ -243,6 +244,9 @@
             <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
                 <i class="bi @(_loading ? "bi-arrow-repeat pd-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh
             </button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!Filtered.Any())">
+                <i class="bi bi-download" aria-hidden="true"></i> Export
+            </button>
             <button type="button" class="um-btn um-btn-primary" @onclick="OpenShare">
                 <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Share Document
             </button>
@@ -308,80 +312,96 @@
         }
     </section>
 
-    <section class="pd-grid-wrap">
-        <div class="pd-grid-toolbar">
-            <div>
-                <strong>Portal documents</strong>
-                <span>@Filtered.Count() of @_docs.Count documents match the current filters</span>
-            </div>
-            <div class="pd-toolbar-actions">
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters"><i class="bi bi-x-circle" aria-hidden="true"></i> Clear filters</button>
-                <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenShare"><i class="bi bi-plus-lg" aria-hidden="true"></i> Share</button>
-            </div>
-        </div>
-
-        @if (_loading)
+    <section class="pd-tabs" aria-label="Portal document views">
+        @foreach (var tab in Tabs)
         {
-            <div class="pd-loading"><i class="bi bi-arrow-repeat pd-spin" aria-hidden="true"></i><span>Loading portal documents...</span></div>
-        }
-        else if (!Filtered.Any())
-        {
-            <div class="pd-empty-state"><i class="bi bi-folder-x" aria-hidden="true"></i><strong>No portal documents found</strong><span>Adjust filters or share a new document with client portal users.</span></div>
-        }
-        else
-        {
-            <div class="pd-table-scroll">
-                <table class="pd-table">
-                    <thead>
-                        <tr>
-                            <th>Document</th>
-                            <th>Account</th>
-                            <th>Category</th>
-                            <th>Visibility</th>
-                            <th>Shared</th>
-                            <th>Views</th>
-                            <th>Downloads</th>
-                            <th class="pd-actions-col">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var doc in Filtered)
-                        {
-                            <tr class="pd-table-row @(_selected?.Id == doc.Id ? "pd-table-row--selected" : null)" @onclick="() => SelectDoc(doc)">
-                                <td>
-                                    <div class="pd-doc-cell">
-                                        <div class="pd-doc-icon @DocIconCss(doc.Category)"><i class="bi @DocIcon(doc.Category)" aria-hidden="true"></i></div>
-                                        <div>
-                                            <strong>@doc.Name</strong>
-                                            <span>@doc.FileType · @doc.FileSizeKb.ToString("N0") KB</span>
-                                        </div>
-                                    </div>
-                                </td>
-                                <td>@doc.AccountName</td>
-                                <td><span class="pd-cat @CatCss(doc.Category)">@doc.Category</span></td>
-                                <td><span class="pd-vis @VisCss(doc.Visibility)">@doc.Visibility</span></td>
-                                <td>@doc.SharedAt.ToString("MMM d, yyyy")</td>
-                                <td class="pd-number">@doc.ViewCount.ToString("N0")</td>
-                                <td class="pd-number">@doc.DownloadCount.ToString("N0")</td>
-                                <td class="pd-actions-col">
-                                    <div class="pd-row-actions">
-                                        <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Preview" @onclick="() => SelectDoc(doc)" @onclick:stopPropagation="true"><i class="bi bi-layout-sidebar-inset-reverse" aria-hidden="true"></i></button>
-                                        <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="@(doc.Visibility == "Shared" ? "Hide from portal" : "Share to portal")" @onclick="() => ConfirmToggleVisibility(doc)" @onclick:stopPropagation="true"><i class="bi @(doc.Visibility == "Shared" ? "bi-eye-slash" : "bi-eye")" aria-hidden="true"></i></button>
-                                        <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick="() => OpenEdit(doc)" @onclick:stopPropagation="true"><i class="bi bi-pencil" aria-hidden="true"></i></button>
-                                        <button type="button" class="um-btn um-btn-ghost um-btn-xs text-danger" title="Remove" @onclick="() => ConfirmRemove(doc)" @onclick:stopPropagation="true"><i class="bi bi-trash" aria-hidden="true"></i></button>
-                                    </div>
-                                </td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-            </div>
+            <button type="button" class="pd-tab @(_activeTab == tab.Key ? "pd-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
         }
     </section>
 
-    @if (_selected is not null)
-    {
-        <aside class="pd-detail-panel" aria-label="Selected portal document detail">
+    <section class="pd-dashboard">
+        <div class="pd-main-column">
+            <section class="pd-grid-wrap">
+                <div class="pd-grid-toolbar">
+                    <div>
+                        <strong>@ActiveViewTitle</strong>
+                        <span>@Filtered.Count() of @_docs.Count documents match the current filters, sorted by enterprise importance</span>
+                    </div>
+                    <div class="pd-toolbar-actions">
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ToggleView"><i class="bi @(_cardView ? "bi-table" : "bi-grid-3x3-gap")" aria-hidden="true"></i> @(_cardView ? "Table" : "Cards")</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters"><i class="bi bi-x-circle" aria-hidden="true"></i> Clear filters</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ExportAsync" disabled="@(!Filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+                        <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenShare"><i class="bi bi-plus-lg" aria-hidden="true"></i> Share</button>
+                    </div>
+                </div>
+
+                @if (_loading)
+                {
+                    <div class="pd-loading"><i class="bi bi-arrow-repeat pd-spin" aria-hidden="true"></i><span>Loading portal documents...</span></div>
+                }
+                else if (!Filtered.Any())
+                {
+                    <div class="pd-empty-state"><i class="bi bi-folder-x" aria-hidden="true"></i><strong>No portal documents found</strong><span>Adjust filters or share a new document with client portal users.</span></div>
+                }
+                else if (_cardView)
+                {
+                    <div class="pd-card-grid">
+                        @foreach (var doc in Filtered)
+                        {
+                            @DocumentCard(doc)
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="pd-table-scroll">
+                        <table class="pd-table">
+                            <thead>
+                                <tr>
+                                    <th>Document</th>
+                                    <th>Account</th>
+                                    <th>Category</th>
+                                    <th>Visibility</th>
+                                    <th>Shared</th>
+                                    <th>Views</th>
+                                    <th>Downloads</th>
+                                    <th class="pd-actions-col">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var doc in Filtered)
+                                {
+                                    <tr class="pd-table-row @(_selected?.Id == doc.Id ? "pd-table-row--selected" : null)" @onclick="() => SelectDoc(doc)">
+                                        <td>@DocumentCell(doc)</td>
+                                        <td>@doc.AccountName</td>
+                                        <td><span class="pd-cat @CatCss(doc.Category)">@doc.Category</span></td>
+                                        <td><span class="pd-vis @VisCss(doc.Visibility)">@doc.Visibility</span></td>
+                                        <td>@doc.SharedAt.ToString("MMM d, yyyy")</td>
+                                        <td class="pd-number">@doc.ViewCount.ToString("N0")</td>
+                                        <td class="pd-number">@doc.DownloadCount.ToString("N0")</td>
+                                        <td class="pd-actions-col">
+                                            <div class="pd-row-actions">
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Preview" @onclick="() => SelectDoc(doc)" @onclick:stopPropagation="true"><i class="bi bi-layout-sidebar-inset-reverse" aria-hidden="true"></i></button>
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="@(doc.Visibility == "Shared" ? "Hide from portal" : "Share to portal")" @onclick="() => ConfirmToggleVisibility(doc)" @onclick:stopPropagation="true"><i class="bi @(doc.Visibility == "Shared" ? "bi-eye-slash" : "bi-eye")" aria-hidden="true"></i></button>
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick="() => OpenEdit(doc)" @onclick:stopPropagation="true"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-xs text-danger" title="Remove" @onclick="() => ConfirmRemove(doc)" @onclick:stopPropagation="true"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </section>
+
+            @if (_selected is not null)
+            {
+                <aside class="pd-detail-panel" aria-label="Selected portal document detail">
             <div class="pd-detail-head">
                 <div class="pd-detail-title-block">
                     <span class="pd-detail-eyebrow"><i class="bi bi-file-earmark-check" aria-hidden="true"></i> Portal document</span>
@@ -408,8 +428,41 @@
                     <button type="button" class="um-btn um-btn-danger" @onclick="() => ConfirmRemove(_selected)"><i class="bi bi-trash" aria-hidden="true"></i> Remove</button>
                 </div>
             </div>
+                </aside>
+            }
+        </div>
+
+        <aside class="pd-side-rail" aria-label="Portal document intelligence">
+            <section class="pd-intel-card">
+                <span class="pd-intel-kicker"><i class="bi bi-stars" aria-hidden="true"></i> Importance signals</span>
+                <div class="pd-score"><span>Document readiness</span><strong>@ReadinessScore</strong><small>/100</small></div>
+                <div class="pd-score-bar"><span style="width:@ReadinessScore%"></span></div>
+                <div class="pd-signal-list">
+                    @foreach (var signal in ImportanceSignals)
+                    {
+                        <div><i class="bi @signal.Icon" aria-hidden="true"></i><span>@signal.Text</span></div>
+                    }
+                </div>
+            </section>
+            <section class="pd-intel-card">
+                <span class="pd-intel-kicker"><i class="bi bi-pie-chart" aria-hidden="true"></i> Category mix</span>
+                <div class="pd-mix-list">
+                    @foreach (var category in CategoryOptions)
+                    {
+                        <button type="button" @onclick="() => SetFilter(category)"><span>@category</span><strong>@_docs.Count(d => d.Category == category)</strong></button>
+                    }
+                </div>
+            </section>
+            <section class="pd-intel-card">
+                <span class="pd-intel-kicker"><i class="bi bi-lightning-charge" aria-hidden="true"></i> Quick actions</span>
+                <div class="pd-quick-actions">
+                    <button type="button" class="um-btn um-btn-primary" @onclick="OpenShare"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Share Document</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="ShowSharedOnly"><i class="bi bi-cloud-check" aria-hidden="true"></i> Shared Queue</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="OpenPortalRequests"><i class="bi bi-inbox" aria-hidden="true"></i> Requests</button>
+                </div>
+            </section>
         </aside>
-    }
+    </section>
 </div>
 
 @code {
@@ -426,9 +479,11 @@
     private string _categoryFilter = string.Empty;
     private string _visibilityFilter = string.Empty;
     private string _activeFilter = string.Empty;
+    private string _activeTab = "all";
     private string? _loadError;
     private bool _loading;
     private bool _saving;
+    private bool _cardView;
     private bool _showShare;
     private bool _showEdit;
     private string? _selectedFileName;
@@ -439,18 +494,39 @@
     private DocumentFormModel _shareForm = new();
     private DocumentFormModel _editForm = new();
 
-    private IEnumerable<PortalAdminDocumentDto> Filtered => _docs
+    private IEnumerable<PortalAdminDocumentDto> Filtered => TabbedDocs
         .Where(MatchesSearch)
         .Where(d => string.IsNullOrWhiteSpace(_categoryFilter) || d.Category == _categoryFilter)
         .Where(d => string.IsNullOrWhiteSpace(_visibilityFilter) || d.Visibility == _visibilityFilter)
         .Where(MatchesActiveFilter)
-        .OrderByDescending(d => d.SharedAt)
+        .OrderByDescending(ImportanceScore)
+        .ThenByDescending(d => d.SharedAt)
         .ThenBy(d => d.AccountName)
         .ThenBy(d => d.Name);
+
+    private IEnumerable<PortalAdminDocumentDto> TabbedDocs => _activeTab switch
+    {
+        "shared" => _docs.Where(d => d.Visibility == "Shared"),
+        "agency" => _docs.Where(d => d.Visibility == "Agency Only"),
+        "certificates" => _docs.Where(d => d.Category == "Certificate"),
+        "engaged" => _docs.Where(d => d.ViewCount > 0 || d.DownloadCount > 0),
+        _ => _docs
+    };
 
     private int TotalViews => _docs.Sum(d => d.ViewCount);
     private int TotalDownloads => _docs.Sum(d => d.DownloadCount);
     private int AccountCount => _docs.Select(d => d.AccountName).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    private int ReadinessScore => _docs.Count == 0 ? 100 : Math.Clamp(100 - (_docs.Count(d => d.Visibility == "Agency Only") * 8) - (_docs.Count(d => d.ViewCount == 0 && d.Visibility == "Shared") * 5) - (_docs.Count(d => d.SharedAt < DateTime.Today.AddDays(-30)) * 3), 0, 100);
+    private string ActiveViewTitle => _activeTab switch
+    {
+        "shared" => "Shared client portal documents",
+        "agency" => "Agency-only document control",
+        "certificates" => "Certificate delivery queue",
+        "engaged" => "Viewed and downloaded documents",
+        _ => "Portal document register"
+    };
+    private TabDef[] Tabs => [new("all", "All", "bi-folder2-open"), new("shared", "Shared", "bi-cloud-check"), new("agency", "Agency Only", "bi-lock"), new("certificates", "Certificates", "bi-file-earmark-text"), new("engaged", "Engaged", "bi-eye")];
+    private IEnumerable<Signal> ImportanceSignals => BuildImportanceSignals();
     private KpiCard[] Kpis =>
     [
         new("Total Documents", _docs.Count.ToString("N0"), "All portal documents", "Full portal inventory", "bi-folder2-open", "pd-ki-blue", string.Empty),
@@ -536,12 +612,25 @@
         _categoryFilter = string.Empty;
         _visibilityFilter = string.Empty;
         _activeFilter = string.Empty;
+        _activeTab = "all";
     }
 
     private void SetFilter(string filter)
     {
         _activeFilter = _activeFilter == filter ? string.Empty : filter;
     }
+
+    private void SetTab(string key) => _activeTab = key;
+
+    private void ToggleView() => _cardView = !_cardView;
+
+    private void ShowSharedOnly()
+    {
+        _activeTab = "shared";
+        _activeFilter = "Shared";
+    }
+
+    private void OpenPortalRequests() => Nav.NavigateTo("/portal/requests");
 
     private void OnFileSelected(InputFileChangeEventArgs args)
     {
@@ -553,6 +642,19 @@
         {
             _shareForm.Name = Path.GetFileNameWithoutExtension(file.Name);
         }
+    }
+
+    private async Task ExportAsync()
+    {
+        var csv = new System.Text.StringBuilder();
+        csv.AppendLine("Name,Account,Category,FileType,FileSizeKb,Visibility,SharedAt,Views,Downloads");
+        foreach (var doc in Filtered)
+        {
+            csv.AppendLine(string.Join(',', Csv(doc.Name), Csv(doc.AccountName), Csv(doc.Category), Csv(doc.FileType), doc.FileSizeKb.ToString(), Csv(doc.Visibility), Csv(doc.SharedAt.ToString("s")), doc.ViewCount.ToString(), doc.DownloadCount.ToString()));
+        }
+        Nav.NavigateTo("data:text/csv;charset=utf-8," + Uri.EscapeDataString(csv.ToString()), forceLoad: true);
+        ShowToast("Portal documents export generated.");
+        await Task.CompletedTask;
     }
 
     private async Task ShareDocumentAsync()
@@ -710,6 +812,24 @@
         _ => doc.Category == _activeFilter || doc.Visibility == _activeFilter
     };
 
+    private string TabCount(string key) => key switch
+    {
+        "all" => _docs.Count.ToString("N0"),
+        "shared" => _docs.Count(d => d.Visibility == "Shared").ToString("N0"),
+        "agency" => _docs.Count(d => d.Visibility == "Agency Only").ToString("N0"),
+        "certificates" => _docs.Count(d => d.Category == "Certificate").ToString("N0"),
+        "engaged" => _docs.Count(d => d.ViewCount > 0 || d.DownloadCount > 0).ToString("N0"),
+        _ => string.Empty
+    };
+
+    private IEnumerable<Signal> BuildImportanceSignals()
+    {
+        yield return new("bi-cloud-check", $"{_docs.Count(d => d.Visibility == "Shared")} documents are visible to clients.");
+        yield return new("bi-lock", $"{_docs.Count(d => d.Visibility == "Agency Only")} documents are agency-only and controlled.");
+        yield return new("bi-eye", $"{TotalViews:N0} client views across shared documents.");
+        yield return new("bi-download", $"{TotalDownloads:N0} document downloads recorded.");
+    }
+
     private UpsertPortalAdminRecordRequest ToRequest(PortalAdminDocumentDto doc) =>
         new(_tenantId, "PortalDocument", BuildCode(doc), doc.Name, doc.Visibility, JsonSerializer.Serialize(doc, JsonOptions));
 
@@ -794,6 +914,36 @@
 
     private static string VisCss(string visibility) => visibility == "Shared" ? "pd-vis--shared" : "pd-vis--agency";
 
+    private static int ImportanceScore(PortalAdminDocumentDto doc) => (doc.Visibility == "Shared" ? 40 : 12) + (doc.Category == "Certificate" ? 30 : doc.Category == "Policy" ? 24 : 16) + Math.Min(30, doc.ViewCount + doc.DownloadCount * 2) + (doc.SharedAt >= DateTime.Today.AddDays(-14) ? 12 : 0);
+
+    private static string Csv(string? value) => string.Concat("\"", (value ?? string.Empty).Replace("\"", "\"\""), "\"");
+
+    private static RenderFragment DocumentCell(PortalAdminDocumentDto doc) => @<div class="pd-doc-cell">
+        <div class="pd-doc-icon @DocIconCss(doc.Category)"><i class="bi @DocIcon(doc.Category)" aria-hidden="true"></i></div>
+        <div>
+            <strong>@doc.Name</strong>
+            <span>@doc.FileType · @doc.FileSizeKb.ToString("N0") KB</span>
+        </div>
+    </div>;
+
+    private RenderFragment DocumentCard(PortalAdminDocumentDto doc) => @<article class="pd-doc-card @(_selected?.Id == doc.Id ? "pd-doc-card--active" : null)" @onclick="@(() => SelectDoc(doc))">
+        <div class="pd-doc-card-top">
+            @DocumentCell(doc)
+            <span class="pd-vis @VisCss(doc.Visibility)">@doc.Visibility</span>
+        </div>
+        <div class="pd-doc-card-meta">
+            <span><i class="bi bi-building" aria-hidden="true"></i>@doc.AccountName</span>
+            <span><i class="bi bi-calendar2-check" aria-hidden="true"></i>@doc.SharedAt.ToString("MMM d, yyyy")</span>
+            <span><i class="bi bi-eye" aria-hidden="true"></i>@doc.ViewCount.ToString("N0") views</span>
+            <span><i class="bi bi-download" aria-hidden="true"></i>@doc.DownloadCount.ToString("N0") downloads</span>
+        </div>
+        <div class="pd-doc-card-actions" @onclick:stopPropagation="true">
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => ConfirmDownload(doc))"><i class="bi bi-download" aria-hidden="true"></i> Download</button>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => ConfirmToggleVisibility(doc))"><i class="bi @(doc.Visibility == "Shared" ? "bi-eye-slash" : "bi-eye")" aria-hidden="true"></i> @(doc.Visibility == "Shared" ? "Hide" : "Share")</button>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenEdit(doc))"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+        </div>
+    </article>;
+
     private static RenderFragment Meta(string label, string value) => builder =>
     {
         var sequence = 0;
@@ -824,6 +974,8 @@
 
     private sealed record KpiCard(string Label, string Value, string Title, string Caption, string Icon, string Tone, string Filter);
     private sealed record WorkflowCardModel(string Title, string Status, string Detail, string Icon, string Filter, string Tone);
+    private sealed record TabDef(string Key, string Label, string Icon);
+    private sealed record Signal(string Icon, string Text);
 
     private async Task ResolveCurrentUserContextAsync()
     {

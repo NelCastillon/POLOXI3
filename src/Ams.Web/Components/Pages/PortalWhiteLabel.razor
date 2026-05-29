@@ -4,538 +4,564 @@
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>White-Label &amp; Embedded Experience — AMS</PageTitle>
-
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Top" />
-</SfToast>
+<PageTitle>White-Label Portal — AMS</PageTitle>
 
 <AppPageHeader Title="White-Label Portal &amp; Embedded Experience"
-               Subtitle="Full agency-branded insured portal, native mobile app, and embedded AI chat assistant — unified configuration"
+               Subtitle="Enterprise control center for client portal branding, mobile apps, embedded chat, access policy, and launch readiness."
                Icon="bi-stars">
     <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="() => _showPublishConfirm = true">
-            <i class="bi bi-cloud-upload" aria-hidden="true"></i> Publish Changes
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_busy">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
         </button>
-        <button class="um-btn um-btn-primary" @onclick="SaveAsync">
-            <i class="bi bi-check-lg" aria-hidden="true"></i> Save All
+        <button class="um-btn um-btn-ghost" type="button" @onclick="() => _showPublishConfirm = true" disabled="@(_busy || _form.TenantId == Guid.Empty)">
+            <i class="bi bi-cloud-upload" aria-hidden="true"></i> Publish
+        </button>
+        <button class="um-btn um-btn-primary" type="button" @onclick="SaveAsync" disabled="@_busy">
+            <i class="bi bi-check-lg" aria-hidden="true"></i> Save configuration
         </button>
     </Actions>
 </AppPageHeader>
 
-<!-- Status strip -->
-<div class="pwl-status-strip">
-    <div class="pwl-status-card pwl-status-card--@(_portalStatus == "Live" ? "live" : "draft")">
-        <i class="bi bi-globe2" aria-hidden="true"></i>
-        <div>
-            <div class="pwl-sv">Insured Portal</div>
-            <span class="pwl-sl">@_portalStatus</span>
-        </div>
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
+{
+    <div class="pwl-toast @_toastClass" role="status">
+        <i class="bi @(_toastClass == "pwl-toast--danger" ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="pwl-toast-close" @onclick="ClearToast" aria-label="Dismiss message"><i class="bi bi-x-lg"></i></button>
     </div>
-    <div class="pwl-status-card pwl-status-card--@(_appStatus == "Published" ? "live" : "draft")">
-        <i class="bi bi-phone" aria-hidden="true"></i>
-        <div>
-            <div class="pwl-sv">Mobile App</div>
-            <span class="pwl-sl">@_appStatus</span>
+}
+
+<div class="pwl-page">
+    <section class="pwl-hero" style="--pwl-primary:@_form.PrimaryColor; --pwl-accent:@_form.AccentColor; --pwl-nav:@_form.NavBackgroundColor; --pwl-nav-text:@_form.NavTextColor">
+        <div class="pwl-hero-main">
+            <div class="pwl-eyebrow"><i class="bi bi-broadcast-pin" aria-hidden="true"></i> Live enterprise experience</div>
+            <h2>@_form.DisplayName</h2>
+            <p>@_form.WelcomeMessage</p>
+            <div class="pwl-hero-meta">
+                <span><i class="bi bi-globe2"></i> @_form.PortalDomain</span>
+                <span><i class="bi bi-shield-check"></i> @_form.DomainStatus</span>
+                <span><i class="bi bi-cloud-check"></i> @_form.PublishStatus</span>
+                <span><i class="bi bi-clock-history"></i> @LastPublishedText</span>
+            </div>
         </div>
-    </div>
-    <div class="pwl-status-card pwl-status-card--@(_chatStatus == "Active" ? "live" : "draft")">
-        <i class="bi bi-robot" aria-hidden="true"></i>
-        <div>
-            <div class="pwl-sv">Chat Assistant</div>
-            <span class="pwl-sl">@_chatStatus</span>
+        <div class="pwl-hero-preview">
+            <div class="pwl-browser">
+                <div class="pwl-browser-bar"><span></span><span></span><span></span><strong>@_form.PortalDomain</strong></div>
+                <div class="pwl-preview-nav">
+                    <div class="pwl-preview-logo">@Initials</div>
+                    <span>Dashboard</span><span>Policies</span><span>Requests</span><span>Documents</span>
+                </div>
+                <div class="pwl-preview-body">
+                    <div>
+                        <small>Welcome back</small>
+                        <strong>@_account.AgencyName Client Portal</strong>
+                        <p>Manage policies, request certificates, upload documents, and chat with support.</p>
+                    </div>
+                    <div class="pwl-preview-card"><i class="bi bi-file-earmark-text"></i><span>Request certificate</span></div>
+                    <div class="pwl-preview-card"><i class="bi bi-cloud-arrow-up"></i><span>Upload documents</span></div>
+                </div>
+            </div>
         </div>
-    </div>
-    <div class="pwl-status-card">
-        <i class="bi bi-people" aria-hidden="true"></i>
-        <div>
-            <div class="pwl-sv">@_account.ActivePortalUsers.ToString("N0")</div>
-            <span class="pwl-sl">Active Portal Users</span>
+    </section>
+
+    <section class="pwl-kpi-strip" aria-label="White-label performance filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="pwl-kpi-card @(IsActiveKpi(kpi.Key) ? "pwl-kpi-card--active" : null)" title="@kpi.Tooltip" @onclick="() => SetKpi(kpi.Key)">
+                <span class="pwl-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="pwl-kpi-label">@kpi.Label</span>
+                <strong>@kpi.Value</strong>
+                <small>@kpi.Detail</small>
+            </button>
+        }
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger pwl-load-error" role="alert">
+            <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+            @_loadError
         </div>
-    </div>
-    <div class="pwl-status-card">
-        <i class="bi bi-phone-vibrate" aria-hidden="true"></i>
+    }
+
+    <section class="pwl-command-bar">
         <div>
-            <div class="pwl-sv">@_account.MobileInstalls.ToString("N0")</div>
-            <span class="pwl-sl">Mobile App Installs</span>
+            <strong>Enterprise workflow</strong>
+            <span>@WorkflowSummary</span>
         </div>
-    </div>
-    <div class="pwl-status-card">
-        <i class="bi bi-chat-dots" aria-hidden="true"></i>
-        <div>
-            <div class="pwl-sv">@_chatSessions</div>
-            <span class="pwl-sl">Chat Sessions (30d)</span>
+        <div class="pwl-command-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => RunActionAsync("verify-domain")' disabled="@_busy"><i class="bi bi-patch-check"></i> Verify domain</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => RunActionAsync("enable-sso")' disabled="@_busy"><i class="bi bi-shield-lock"></i> Enable SSO</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => RunActionAsync("enable-chat")' disabled="@_busy"><i class="bi bi-robot"></i> Enable chat</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => RunActionAsync("force-mobile-update")' disabled="@_busy"><i class="bi bi-phone-vibrate"></i> Force mobile update</button>
         </div>
+    </section>
+
+    <div class="pwl-tabs" role="tablist" aria-label="White-label configuration tabs">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" role="tab" class="pwl-tab @(_activeTab == tab.Key ? "pwl-tab--active" : null)" @onclick="() => _activeTab = tab.Key">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+            </button>
+        }
     </div>
+
+    @if (_loading)
+    {
+        <div class="pwl-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Loading white-label configuration...</div>
+    }
+    else
+    {
+        <EditForm Model="_form" OnValidSubmit="SaveAsync">
+            <DataAnnotationsValidator />
+
+            @if (_activeTab == "overview")
+            {
+                <section class="pwl-grid pwl-grid--overview">
+                    <article class="pwl-panel pwl-panel--large">
+                        <div class="pwl-panel-header"><i class="bi bi-activity"></i><div><strong>Readiness by importance</strong><span>Highest-impact launch items first.</span></div></div>
+                        <div class="pwl-readiness-list">
+                            @foreach (var item in ReadinessItems)
+                            {
+                                <button type="button" class="pwl-readiness-item" @onclick="() => _activeTab = item.TargetTab">
+                                    <span class="pwl-score @item.Css">@item.Score</span>
+                                    <div><strong>@item.Title</strong><span>@item.Detail</span></div>
+                                    <i class="bi bi-chevron-right"></i>
+                                </button>
+                            }
+                        </div>
+                    </article>
+                    <article class="pwl-panel">
+                        <div class="pwl-panel-header"><i class="bi bi-list-check"></i><div><strong>Self-service capabilities</strong><span>Client-facing portal functions.</span></div></div>
+                        <div class="pwl-capabilities">
+                            @foreach (var cap in Capabilities)
+                            {
+                                <label class="pwl-toggle-card @(cap.Enabled ? "pwl-toggle-card--on" : null)">
+                                    <input type="checkbox" checked="@cap.Enabled" @onchange="() => cap.Enabled = !cap.Enabled" />
+                                    <i class="bi @cap.Icon"></i>
+                                    <span>@cap.Name</span>
+                                    <small>@(cap.Enabled ? "Active" : "Off")</small>
+                                </label>
+                            }
+                        </div>
+                    </article>
+                    <article class="pwl-panel">
+                        <div class="pwl-panel-header"><i class="bi bi-clock-history"></i><div><strong>Workflow activity</strong><span>Synced from portal data.</span></div></div>
+                        <div class="pwl-metric-list">
+                            @foreach (var metric in WorkflowMetrics)
+                            {
+                                <div class="pwl-metric-row"><span>@metric.Label</span><strong>@metric.Value</strong></div>
+                            }
+                        </div>
+                    </article>
+                </section>
+            }
+            else if (_activeTab == "portal")
+            {
+                <section class="pwl-grid">
+                    <article class="pwl-panel pwl-panel--large">
+                        <div class="pwl-panel-header"><i class="bi bi-palette"></i><div><strong>Portal brand system</strong><span>Domain, color, navigation, logo, and core messaging.</span></div></div>
+                        <div class="pwl-form-grid">
+                            <div class="pwl-field pwl-field--full"><label>Portal title</label><InputText class="pwl-input" @bind-Value="_form.DisplayName" /><ValidationMessage For="() => _form.DisplayName" class="text-danger" /></div>
+                            <div class="pwl-field"><label>Custom domain</label><InputText class="pwl-input" @bind-Value="_form.PortalDomain" /><ValidationMessage For="() => _form.PortalDomain" class="text-danger" /><small>CNAME to tenant.agencybinder.com</small></div>
+                            <div class="pwl-field"><label>Domain status</label><InputSelect class="pwl-input" @bind-Value="_form.DomainStatus"><option>Pending DNS</option><option>Verified</option><option>Needs Review</option></InputSelect><ValidationMessage For="() => _form.DomainStatus" class="text-danger" /></div>
+                            <div class="pwl-field"><label>Primary color</label><div class="pwl-color-row"><input type="color" @bind="_form.PrimaryColor" /><InputText class="pwl-input" @bind-Value="_form.PrimaryColor" /></div><ValidationMessage For="() => _form.PrimaryColor" class="text-danger" /></div>
+                            <div class="pwl-field"><label>Accent color</label><div class="pwl-color-row"><input type="color" @bind="_form.AccentColor" /><InputText class="pwl-input" @bind-Value="_form.AccentColor" /></div><ValidationMessage For="() => _form.AccentColor" class="text-danger" /></div>
+                            <div class="pwl-field"><label>Navigation background</label><div class="pwl-color-row"><input type="color" @bind="_form.NavBackgroundColor" /><InputText class="pwl-input" @bind-Value="_form.NavBackgroundColor" /></div><ValidationMessage For="() => _form.NavBackgroundColor" class="text-danger" /></div>
+                            <div class="pwl-field"><label>Navigation text</label><div class="pwl-color-row"><input type="color" @bind="_form.NavTextColor" /><InputText class="pwl-input" @bind-Value="_form.NavTextColor" /></div><ValidationMessage For="() => _form.NavTextColor" class="text-danger" /></div>
+                            <div class="pwl-field"><label>Logo URL</label><InputText class="pwl-input" @bind-Value="_form.LogoUrl" /><ValidationMessage For="() => _form.LogoUrl" class="text-danger" /></div>
+                            <div class="pwl-field"><label>Favicon URL</label><InputText class="pwl-input" @bind-Value="_form.FaviconUrl" /><ValidationMessage For="() => _form.FaviconUrl" class="text-danger" /></div>
+                            <div class="pwl-field pwl-field--full"><label>Welcome message</label><InputTextArea class="pwl-input pwl-textarea" @bind-Value="_form.WelcomeMessage" /><ValidationMessage For="() => _form.WelcomeMessage" class="text-danger" /></div>
+                            <div class="pwl-field"><label>Support email</label><InputText class="pwl-input" @bind-Value="_form.SupportEmail" /><ValidationMessage For="() => _form.SupportEmail" class="text-danger" /></div>
+                            <div class="pwl-field"><label>Support phone</label><InputText class="pwl-input" @bind-Value="_form.SupportPhone" /><ValidationMessage For="() => _form.SupportPhone" class="text-danger" /></div>
+                        </div>
+                    </article>
+                    <article class="pwl-panel"><div class="pwl-panel-header"><i class="bi bi-sliders"></i><div><strong>Portal modules</strong><span>Launch-ready client experience toggles.</span></div></div><div class="pwl-switch-list">@PortalSwitches</div></article>
+                </section>
+            }
+            else if (_activeTab == "mobile")
+            {
+                <section class="pwl-grid">
+                    <article class="pwl-panel pwl-panel--large">
+                        <div class="pwl-panel-header"><i class="bi bi-phone"></i><div><strong>Native mobile app</strong><span>Store configuration, version gating, and device capabilities.</span></div></div>
+                        <div class="pwl-form-grid">
+                            <div class="pwl-field pwl-field--full"><label>App name</label><InputText class="pwl-input" @bind-Value="_form.MobileAppName" /><ValidationMessage For="() => _form.MobileAppName" class="text-danger" /></div>
+                            <div class="pwl-field"><label>Bundle / package ID</label><InputText class="pwl-input" @bind-Value="_form.MobileBundleId" /><ValidationMessage For="() => _form.MobileBundleId" class="text-danger" /></div>
+                            <div class="pwl-field"><label>Current version</label><InputText class="pwl-input" @bind-Value="_form.MobileVersion" /><ValidationMessage For="() => _form.MobileVersion" class="text-danger" /></div>
+                            <div class="pwl-field"><label>Minimum version</label><InputText class="pwl-input" @bind-Value="_form.MinimumMobileVersion" /><ValidationMessage For="() => _form.MinimumMobileVersion" class="text-danger" /></div>
+                            <div class="pwl-field"><label>iOS App Store URL</label><InputText class="pwl-input" @bind-Value="_form.IosStoreUrl" /><ValidationMessage For="() => _form.IosStoreUrl" class="text-danger" /></div>
+                            <div class="pwl-field"><label>Google Play URL</label><InputText class="pwl-input" @bind-Value="_form.AndroidStoreUrl" /><ValidationMessage For="() => _form.AndroidStoreUrl" class="text-danger" /></div>
+                        </div>
+                    </article>
+                    <article class="pwl-panel"><div class="pwl-panel-header"><i class="bi bi-phone-vibrate"></i><div><strong>Mobile controls</strong><span>Security and offline features.</span></div></div><div class="pwl-switch-list">@MobileSwitches</div></article>
+                </section>
+            }
+            else if (_activeTab == "chat")
+            {
+                <section class="pwl-grid">
+                    <article class="pwl-panel pwl-panel--large">
+                        <div class="pwl-panel-header"><i class="bi bi-robot"></i><div><strong>Embedded chat assistant</strong><span>AI support, live handoff, and conversation controls.</span></div></div>
+                        <div class="pwl-form-grid">
+                            <div class="pwl-field"><label>Assistant name</label><InputText class="pwl-input" @bind-Value="_form.AssistantName" /><ValidationMessage For="() => _form.AssistantName" class="text-danger" /></div>
+                            <div class="pwl-field"><label>Widget position</label><InputSelect class="pwl-input" @bind-Value="_form.ChatPosition"><option value="bottom-right">Bottom right</option><option value="bottom-left">Bottom left</option></InputSelect><ValidationMessage For="() => _form.ChatPosition" class="text-danger" /></div>
+                            <div class="pwl-field"><label>Widget color</label><div class="pwl-color-row"><input type="color" @bind="_form.ChatWidgetColor" /><InputText class="pwl-input" @bind-Value="_form.ChatWidgetColor" /></div><ValidationMessage For="() => _form.ChatWidgetColor" class="text-danger" /></div>
+                            <div class="pwl-field"><label>Escalation email</label><InputText class="pwl-input" @bind-Value="_form.ChatEscalationEmail" /><ValidationMessage For="() => _form.ChatEscalationEmail" class="text-danger" /></div>
+                            <div class="pwl-field"><label>Office hours</label><InputText class="pwl-input" @bind-Value="_form.OfficeHours" /><ValidationMessage For="() => _form.OfficeHours" class="text-danger" /></div>
+                            <div class="pwl-field pwl-field--full"><label>Assistant welcome message</label><InputTextArea class="pwl-input pwl-textarea" @bind-Value="_form.AssistantWelcomeMessage" /><ValidationMessage For="() => _form.AssistantWelcomeMessage" class="text-danger" /></div>
+                        </div>
+                    </article>
+                    <article class="pwl-panel"><div class="pwl-panel-header"><i class="bi bi-chat-dots"></i><div><strong>Chat preview</strong><span>Client-facing widget state.</span></div></div>@ChatPreview<div class="pwl-switch-list pwl-switch-list--compact">@ChatSwitches</div></article>
+                </section>
+            }
+            else if (_activeTab == "access")
+            {
+                <section class="pwl-grid">
+                    <article class="pwl-panel pwl-panel--large">
+                        <div class="pwl-panel-header"><i class="bi bi-shield-lock"></i><div><strong>Access and SSO</strong><span>Identity provider, redirect URIs, MFA, and provisioning.</span></div></div>
+                        <div class="pwl-form-grid">
+                            <div class="pwl-field"><label>Identity provider</label><InputSelect class="pwl-input" @bind-Value="_form.IdentityProvider"><option value="none">None — password only</option><option value="okta">Okta</option><option value="azure">Microsoft Entra ID</option><option value="google">Google Workspace</option><option value="saml">Generic SAML 2.0</option><option value="oidc">Generic OIDC</option></InputSelect><ValidationMessage For="() => _form.IdentityProvider" class="text-danger" /></div>
+                            <div class="pwl-field"><label>SSO client ID</label><InputText class="pwl-input" @bind-Value="_form.SsoClientId" /><ValidationMessage For="() => _form.SsoClientId" class="text-danger" /></div>
+                            <div class="pwl-field pwl-field--full"><label>SSO metadata URL</label><InputText class="pwl-input" @bind-Value="_form.SsoMetadataUrl" /><ValidationMessage For="() => _form.SsoMetadataUrl" class="text-danger" /></div>
+                            <div class="pwl-field pwl-field--full"><label>Allowed redirect URIs</label><InputTextArea class="pwl-input pwl-textarea" @bind-Value="_form.RedirectUris" /><ValidationMessage For="() => _form.RedirectUris" class="text-danger" /></div>
+                        </div>
+                    </article>
+                    <article class="pwl-panel"><div class="pwl-panel-header"><i class="bi bi-key"></i><div><strong>Security policy</strong><span>Password, session, and account lockout rules.</span></div></div><div class="pwl-form-grid pwl-form-grid--single"><div class="pwl-field"><label>Password minimum length</label><InputNumber class="pwl-input" @bind-Value="_form.PasswordMinLength" /><ValidationMessage For="() => _form.PasswordMinLength" class="text-danger" /></div><div class="pwl-field"><label>Session timeout minutes</label><InputNumber class="pwl-input" @bind-Value="_form.SessionTimeoutMinutes" /><ValidationMessage For="() => _form.SessionTimeoutMinutes" class="text-danger" /></div><div class="pwl-field"><label>Max failed attempts</label><InputNumber class="pwl-input" @bind-Value="_form.MaxFailedLoginAttempts" /><ValidationMessage For="() => _form.MaxFailedLoginAttempts" class="text-danger" /></div><div class="pwl-field"><label>Lockout minutes</label><InputNumber class="pwl-input" @bind-Value="_form.LockoutMinutes" /><ValidationMessage For="() => _form.LockoutMinutes" class="text-danger" /></div></div><div class="pwl-switch-list pwl-switch-list--compact">@AccessSwitches</div></article>
+                </section>
+            }
+        </EditForm>
+    }
 </div>
 
-<!-- Section tabs -->
-<div class="pwl-tabs">
-    <button class="pwl-tab @(_activeTab=="portal"?"pwl-tab--active":"")" @onclick='()=>_activeTab="portal"'>
-        <i class="bi bi-globe2" aria-hidden="true"></i> Insured Portal
-    </button>
-    <button class="pwl-tab @(_activeTab=="mobile"?"pwl-tab--active":"")" @onclick='()=>_activeTab="mobile"'>
-        <i class="bi bi-phone" aria-hidden="true"></i> Mobile App
-    </button>
-    <button class="pwl-tab @(_activeTab=="chat"?"pwl-tab--active":"")" @onclick='()=>_activeTab="chat"'>
-        <i class="bi bi-robot" aria-hidden="true"></i> Chat &amp; Help Assistant
-    </button>
-    <button class="pwl-tab @(_activeTab=="access"?"pwl-tab--active":"")" @onclick='()=>_activeTab="access"'>
-        <i class="bi bi-shield-lock" aria-hidden="true"></i> Access &amp; SSO
-    </button>
-</div>
-
-@if (_activeTab == "portal")
+@if (_showPublishConfirm)
 {
-    <div class="pwl-tab-content">
-        <div class="pwl-two-col">
-            <div class="pwl-panel">
-                <div class="pwl-panel-hdr"><i class="bi bi-palette" aria-hidden="true"></i> Portal White-Label Settings</div>
-                <div class="pwl-form-grid">
-                    <div class="pwl-field pwl-field--full">
-                        <label class="pwl-lbl">Custom Domain</label>
-                        <SfTextBox @bind-Value="_portal.Domain" Placeholder="portal.youragency.com" />
-                        <div class="pwl-hint">Add CNAME: portal.youragency.com → <code>tenant.agencybinder.com</code></div>
-                    </div>
-                    <div class="pwl-field pwl-field--full">
-                        <label class="pwl-lbl">Portal Title</label>
-                        <SfTextBox @bind-Value="_portal.Title" />
-                    </div>
-                    <div class="pwl-field">
-                        <label class="pwl-lbl">Primary Brand Color</label>
-                        <div class="pwl-color-row">
-                            <input type="color" class="pwl-color-inp" @bind="_portal.PrimaryColor" />
-                            <SfTextBox @bind-Value="_portal.PrimaryColor" />
-                        </div>
-                    </div>
-                    <div class="pwl-field">
-                        <label class="pwl-lbl">Accent Color</label>
-                        <div class="pwl-color-row">
-                            <input type="color" class="pwl-color-inp" @bind="_portal.AccentColor" />
-                            <SfTextBox @bind-Value="_portal.AccentColor" />
-                        </div>
-                    </div>
-                    <div class="pwl-field">
-                        <label class="pwl-lbl">Favicon URL</label>
-                        <SfTextBox @bind-Value="_portal.FaviconUrl" Placeholder="https://…/favicon.ico" />
-                    </div>
-                    <div class="pwl-field">
-                        <label class="pwl-lbl">Logo URL</label>
-                        <SfTextBox @bind-Value="_portal.LogoUrl" Placeholder="https://…/logo.png" />
-                    </div>
-                </div>
-                <div class="pwl-toggle-section">
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_portal.HidePoweredBy" /> Hide "Powered by AgencyBinder" branding</label>
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_portal.EnableAnnouncements" /> Enable agency announcement banner</label>
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_portal.EnableNewsFeed" /> Show agency news feed on dashboard</label>
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_portal.EnableCrossSellWidget" /> Show cross-sell recommendation widget</label>
-                </div>
+    <div class="pwl-modal-backdrop" role="presentation">
+        <div class="pwl-modal" role="dialog" aria-modal="true" aria-labelledby="publish-title">
+            <div class="um-modal-header">
+                <i class="bi bi-cloud-upload" aria-hidden="true"></i>
+                <span id="publish-title">Publish white-label configuration</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showPublishConfirm = false"><i class="bi bi-x-lg"></i></button>
             </div>
-            <div class="pwl-panel">
-                <div class="pwl-panel-hdr"><i class="bi bi-list-check" aria-hidden="true"></i> Enabled Self-Service Capabilities</div>
-                <div class="pwl-cap-list">
-                    @foreach (var cap in _portalCaps)
-                    {
-                        <label class="pwl-cap-row @(cap.On ? "pwl-cap-row--on" : "")">
-                            <input type="checkbox" class="pwl-chk" checked="@cap.On" @onchange="() => cap.On = !cap.On" />
-                            <i class="bi @cap.Icon pwl-cap-icon" aria-hidden="true"></i>
-                            <span>@cap.Name</span>
-                            @if (cap.On) { <span class="pwl-cap-on">Active</span> }
-                        </label>
-                    }
-                </div>
+            <div class="um-modal-body">
+                <p>Publish the saved portal, mobile, chat, and access configuration to the live client experience.</p>
+                <div class="pwl-publish-summary"><span>Domain</span><strong>@_form.PortalDomain</strong><span>Status</span><strong>@_form.DomainStatus</strong></div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showPublishConfirm = false">Cancel</button>
+                <button type="button" class="um-btn um-btn-primary" @onclick="PublishAsync" disabled="@_busy"><i class="bi bi-cloud-upload"></i> Publish now</button>
             </div>
         </div>
     </div>
 }
-else if (_activeTab == "mobile")
-{
-    <div class="pwl-tab-content">
-        <div class="pwl-two-col">
-            <div class="pwl-panel">
-                <div class="pwl-panel-hdr"><i class="bi bi-phone" aria-hidden="true"></i> Native Mobile App — Agency Branded</div>
-                <div class="pwl-form-grid">
-                    <div class="pwl-field pwl-field--full">
-                        <label class="pwl-lbl">App Name (stores)</label>
-                        <SfTextBox @bind-Value="_mobile.AppName" />
-                    </div>
-                    <div class="pwl-field">
-                        <label class="pwl-lbl">iOS Bundle ID</label>
-                        <SfTextBox @bind-Value="_mobile.IosBundleId" />
-                    </div>
-                    <div class="pwl-field">
-                        <label class="pwl-lbl">Android Package</label>
-                        <SfTextBox @bind-Value="_mobile.AndroidPackage" />
-                    </div>
-                    <div class="pwl-field">
-                        <label class="pwl-lbl">iOS App Store Link</label>
-                        <SfTextBox @bind-Value="_mobile.IosLink" Placeholder="https://apps.apple.com/…" />
-                    </div>
-                    <div class="pwl-field">
-                        <label class="pwl-lbl">Google Play Link</label>
-                        <SfTextBox @bind-Value="_mobile.AndroidLink" Placeholder="https://play.google.com/…" />
-                    </div>
-                    <div class="pwl-field">
-                        <label class="pwl-lbl">Current Version</label>
-                        <SfTextBox @bind-Value="_mobile.Version" Placeholder="2.4.1" />
-                    </div>
-                    <div class="pwl-field">
-                        <label class="pwl-lbl">Min Required Version</label>
-                        <SfTextBox @bind-Value="_mobile.MinVersion" Placeholder="2.0.0" />
-                    </div>
-                </div>
-                <div class="pwl-toggle-section">
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_mobile.BiometricEnabled" /> Enable biometric login</label>
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_mobile.PushEnabled" /> Enable push notifications</label>
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_mobile.OfflineMode" /> Enable offline policy view</label>
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_mobile.ForceUpdate" /> Force update when min version not met</label>
-                </div>
-            </div>
-            <div class="pwl-panel">
-                <div class="pwl-panel-hdr"><i class="bi bi-bar-chart" aria-hidden="true"></i> Mobile App Metrics</div>
-                <div class="pwl-metric-list">
-                    <div class="pwl-metric-row"><span class="pwl-metric-lbl">Total Installs</span><span class="pwl-metric-val">@_account.MobileInstalls.ToString("N0")</span></div>
-                    <div class="pwl-metric-row"><span class="pwl-metric-lbl">iOS / Android Split</span><span class="pwl-metric-val">61% / 39%</span></div>
-                    <div class="pwl-metric-row"><span class="pwl-metric-lbl">DAU (Last 30d avg)</span><span class="pwl-metric-val">214</span></div>
-                    <div class="pwl-metric-row"><span class="pwl-metric-lbl">Push Opt-In Rate</span><span class="pwl-metric-val">78%</span></div>
-                    <div class="pwl-metric-row"><span class="pwl-metric-lbl">Biometric Adoption</span><span class="pwl-metric-val">64%</span></div>
-                    <div class="pwl-metric-row"><span class="pwl-metric-lbl">Avg Session Length</span><span class="pwl-metric-val">3m 12s</span></div>
-                    <div class="pwl-metric-row"><span class="pwl-metric-lbl">COI Requests via App</span><span class="pwl-metric-val">312</span></div>
-                    <div class="pwl-metric-row"><span class="pwl-metric-lbl">Payments via App</span><span class="pwl-metric-val">$148,200</span></div>
-                    <div class="pwl-metric-row"><span class="pwl-metric-lbl">App Store Rating (iOS)</span><span class="pwl-metric-val">4.8 ★</span></div>
-                </div>
-            </div>
-        </div>
-    </div>
-}
-else if (_activeTab == "chat")
-{
-    <div class="pwl-tab-content">
-        <div class="pwl-two-col">
-            <div class="pwl-panel">
-                <div class="pwl-panel-hdr"><i class="bi bi-robot" aria-hidden="true"></i> Embedded Chat &amp; AI Help Assistant</div>
-                <div class="pwl-form-grid">
-                    <div class="pwl-field pwl-field--full">
-                        <label class="pwl-lbl">Assistant Name</label>
-                        <SfTextBox @bind-Value="_chat.AssistantName" Placeholder="e.g. Aria, Alex, Agency Assistant" />
-                    </div>
-                    <div class="pwl-field pwl-field--full">
-                        <label class="pwl-lbl">Welcome Message</label>
-                        <SfTextBox @bind-Value="_chat.WelcomeMessage" Multiline="true" />
-                    </div>
-                    <div class="pwl-field">
-                        <label class="pwl-lbl">Chat Widget Color</label>
-                        <div class="pwl-color-row">
-                            <input type="color" class="pwl-color-inp" @bind="_chat.WidgetColor" />
-                            <SfTextBox @bind-Value="_chat.WidgetColor" />
-                        </div>
-                    </div>
-                    <div class="pwl-field">
-                        <label class="pwl-lbl">Widget Position</label>
-                        <SfDropDownList TValue="string" TItem="Lv" DataSource="_posOpts" Width="100%" @bind-Value="_chat.Position">
-                            <DropDownListFieldSettings Value="V" Text="L" />
-                        </SfDropDownList>
-                    </div>
-                    <div class="pwl-field">
-                        <label class="pwl-lbl">Escalation Email</label>
-                        <SfTextBox @bind-Value="_chat.EscalationEmail" Placeholder="support@agency.com" />
-                    </div>
-                    <div class="pwl-field">
-                        <label class="pwl-lbl">Office Hours (for live handoff)</label>
-                        <SfTextBox @bind-Value="_chat.OfficeHours" Placeholder="Mon–Fri, 8am–5pm CT" />
-                    </div>
-                </div>
-                <div class="pwl-toggle-section">
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_chat.Enabled" /> Enable chat widget on portal</label>
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_chat.AiEnabled" /> Enable AI-powered responses (AgencyBinder AI)</label>
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_chat.LiveHandoff" /> Enable live agent handoff</label>
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_chat.ShowOnMobile" /> Show on mobile app</label>
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_chat.AllowFileAttachments" /> Allow file attachments in chat</label>
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_chat.TranscriptEmail" /> Email chat transcript to client after session</label>
-                </div>
-                <div class="pwl-panel-sub-hdr">AI Knowledge Base Sources</div>
-                <div class="pwl-cap-list">
-                    @foreach (var kb in _kbSources)
-                    {
-                        <label class="pwl-cap-row @(kb.On ? "pwl-cap-row--on" : "")">
-                            <input type="checkbox" class="pwl-chk" checked="@kb.On" @onchange="() => kb.On = !kb.On" />
-                            <i class="bi @kb.Icon pwl-cap-icon" aria-hidden="true"></i>
-                            <span>@kb.Name</span>
-                        </label>
-                    }
-                </div>
-            </div>
-            <div class="pwl-panel">
-                <div class="pwl-panel-hdr"><i class="bi bi-bar-chart" aria-hidden="true"></i> Chat Performance (Last 30 Days)</div>
-                <div class="pwl-metric-list">
-                    <div class="pwl-metric-row"><span class="pwl-metric-lbl">Total Sessions</span><span class="pwl-metric-val">@_chatSessions</span></div>
-                    <div class="pwl-metric-row"><span class="pwl-metric-lbl">AI Resolved (no handoff)</span><span class="pwl-metric-val">74%</span></div>
-                    <div class="pwl-metric-row"><span class="pwl-metric-lbl">Live Handoffs</span><span class="pwl-metric-val">182</span></div>
-                    <div class="pwl-metric-row"><span class="pwl-metric-lbl">Avg. Resolution Time</span><span class="pwl-metric-val">1m 48s</span></div>
-                    <div class="pwl-metric-row"><span class="pwl-metric-lbl">CSAT Score</span><span class="pwl-metric-val">4.6 / 5.0</span></div>
-                    <div class="pwl-metric-row"><span class="pwl-metric-lbl">Top Topic — COI Request</span><span class="pwl-metric-val">28%</span></div>
-                    <div class="pwl-metric-row"><span class="pwl-metric-lbl">Top Topic — Policy Question</span><span class="pwl-metric-val">22%</span></div>
-                    <div class="pwl-metric-row"><span class="pwl-metric-lbl">Top Topic — Billing</span><span class="pwl-metric-val">19%</span></div>
-                    <div class="pwl-metric-row"><span class="pwl-metric-lbl">Containment Rate</span><span class="pwl-metric-val">74%</span></div>
-                </div>
-                <div class="pwl-chat-preview">
-                    <div class="pwl-cp-hdr" style="background:@_chat.WidgetColor">
-                        <i class="bi bi-robot" aria-hidden="true"></i> @_chat.AssistantName
-                    </div>
-                    <div class="pwl-cp-body">
-                        <div class="pwl-cp-bubble pwl-cp-bubble--bot">@_chat.WelcomeMessage</div>
-                        <div class="pwl-cp-bubble pwl-cp-bubble--user">How do I request a certificate?</div>
-                        <div class="pwl-cp-bubble pwl-cp-bubble--bot">I can help! Go to <strong>Requests → COI Request</strong> in the portal or tap the button below. I'll pre-fill your account info. 🎉</div>
-                    </div>
-                    <div class="pwl-cp-footer"><input class="pwl-cp-input" placeholder="Type a message…" readonly /></div>
-                </div>
-            </div>
-        </div>
-    </div>
-}
-else if (_activeTab == "access")
-{
-    <div class="pwl-tab-content">
-        <div class="pwl-two-col">
-            <div class="pwl-panel">
-                <div class="pwl-panel-hdr"><i class="bi bi-box-arrow-in-right" aria-hidden="true"></i> SSO &amp; Authentication</div>
-                <div class="pwl-form-grid">
-                    <div class="pwl-field pwl-field--full">
-                        <label class="pwl-lbl">Identity Provider</label>
-                        <SfDropDownList TValue="string" TItem="Lv" DataSource="_idpOpts" Width="100%" @bind-Value="_access.Idp">
-                            <DropDownListFieldSettings Value="V" Text="L" />
-                        </SfDropDownList>
-                    </div>
-                    <div class="pwl-field">
-                        <label class="pwl-lbl">SSO Entity / Client ID</label>
-                        <SfTextBox @bind-Value="_access.ClientId" />
-                    </div>
-                    <div class="pwl-field">
-                        <label class="pwl-lbl">SSO Metadata URL</label>
-                        <SfTextBox @bind-Value="_access.MetadataUrl" Placeholder="https://idp.example.com/metadata" />
-                    </div>
-                    <div class="pwl-field pwl-field--full">
-                        <label class="pwl-lbl">Allowed Redirect URIs (comma-separated)</label>
-                        <SfTextBox @bind-Value="_access.RedirectUris" Multiline="true" />
-                    </div>
-                </div>
-                <div class="pwl-toggle-section">
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_access.SsoEnabled" /> Enable SSO for portal login</label>
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_access.MfaRequired" /> Require MFA for all portal users</label>
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_access.AllowSocialLogin" /> Allow Google / Microsoft social login</label>
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_access.AutoProvision" /> Auto-provision portal users from SSO claims</label>
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_access.SessionTimeout" /> Enable session timeout (30 min inactivity)</label>
-                </div>
-            </div>
-            <div class="pwl-panel">
-                <div class="pwl-panel-hdr"><i class="bi bi-shield-check" aria-hidden="true"></i> Security Policies</div>
-                <div class="pwl-form-grid">
-                    <div class="pwl-field">
-                        <label class="pwl-lbl">Password Min. Length</label>
-                        <SfNumericTextBox TValue="int" @bind-Value="_access.PwdMinLength" Min="8" Max="32" />
-                    </div>
-                    <div class="pwl-field">
-                        <label class="pwl-lbl">Session Timeout (minutes)</label>
-                        <SfNumericTextBox TValue="int" @bind-Value="_access.SessionTimeoutMins" Min="10" Max="480" />
-                    </div>
-                    <div class="pwl-field">
-                        <label class="pwl-lbl">Max Failed Login Attempts</label>
-                        <SfNumericTextBox TValue="int" @bind-Value="_access.MaxFailedAttempts" Min="3" Max="10" />
-                    </div>
-                    <div class="pwl-field">
-                        <label class="pwl-lbl">Account Lockout Duration (min)</label>
-                        <SfNumericTextBox TValue="int" @bind-Value="_access.LockoutMins" Min="5" Max="1440" />
-                    </div>
-                </div>
-                <div class="pwl-toggle-section">
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_access.RequireUppercase" /> Require uppercase in passwords</label>
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_access.RequireSpecialChar" /> Require special character in passwords</label>
-                    <label class="pwl-toggle-row"><input type="checkbox" class="pwl-chk" @bind="_access.IpWhitelistEnabled" /> Enable IP whitelist for admin portal users</label>
-                </div>
-            </div>
-        </div>
-    </div>
-}
-
-<!-- Publish confirm dialog -->
-<SfDialog @bind-Visible="_showPublishConfirm" Width="420px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="pwl-dlg-hdr"><i class="bi bi-cloud-upload" aria-hidden="true"></i> Publish Portal Changes</span></Header>
-        <Content>
-            <p style="padding:.4rem .2rem">This will apply all saved branding, capability, and chat settings to your <strong>live</strong> insured portal. Clients will see the new configuration immediately.</p>
-        </Content>
-        <FooterTemplate>
-            <div class="pwl-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showPublishConfirm = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="PublishAsync">
-                    <i class="bi bi-cloud-upload" aria-hidden="true"></i> Publish Now
-                </button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
-    private SfToast? _toast;
     private Guid _tenantId;
-    private string _activeTab = "portal";
+    private Guid _tenantAdminUserId;
+    private bool _loading = true;
+    private bool _busy;
     private bool _showPublishConfirm;
-
-    private string _portalStatus = "Live";
-    private string _appStatus    = "Published";
-    private string _chatStatus   = "Active";
-    private int    _chatSessions;
+    private string? _loadError;
+    private string? _toastMessage;
+    private string _toastClass = "pwl-toast--success";
+    private string _activeTab = "overview";
+    private string _activeKpi = "all";
     private PortalMyAccountDto _account = new();
+    private PortalWhiteLabelConfigurationDto? _configuration;
+    private UpdatePortalWhiteLabelConfigurationRequest _form = new();
 
-    private PortalConfig  _portal = new();
-    private MobileAppCfg  _mobile = new();
-    private ChatConfig    _chat   = new();
-    private AccessConfig  _access = new();
+    private readonly List<TabItem> _tabs =
+    [
+        new("overview", "Overview", "bi-speedometer2"),
+        new("portal", "Portal", "bi-globe2"),
+        new("mobile", "Mobile", "bi-phone"),
+        new("chat", "Chat", "bi-robot"),
+        new("access", "Access & SSO", "bi-shield-lock")
+    ];
 
-    private List<CapItem> _portalCaps = [];
-    private List<CapItem> _kbSources  = [];
+    private List<CapabilityItem> Capabilities { get; } =
+    [
+        new("Certificate requests", "bi-file-earmark-text", true),
+        new("Policy changes", "bi-pencil-square", true),
+        new("Document upload", "bi-cloud-arrow-up", true),
+        new("Invoice payment", "bi-credit-card", true),
+        new("ID card download", "bi-person-vcard", true),
+        new("Secure messaging", "bi-chat-lock", true),
+        new("Renewal questionnaires", "bi-clipboard-check", true),
+        new("Claim intake", "bi-exclamation-circle", false)
+    ];
 
-    private static readonly List<Lv> _posOpts = [new("bottom-right","Bottom Right"), new("bottom-left","Bottom Left")];
-    private static readonly List<Lv> _idpOpts = [new("none","None — Password only"), new("okta","Okta"), new("azure","Microsoft Entra ID"), new("google","Google Workspace"), new("saml","Generic SAML 2.0"), new("oidc","Generic OIDC")];
+    private IEnumerable<KpiItem> Kpis =>
+    [
+        new("all", "Launch readiness", $"{ReadinessScore}%", "Portal, mobile, chat, access", "bi-rocket-takeoff", "Show the full enterprise launch picture."),
+        new("portal", "Active portal users", ActivePortalUsers.ToString("N0"), $"{PendingInvites:N0} pending invites", "bi-people", "Focus the dashboard on portal adoption."),
+        new("mobile", "Mobile installs", MobileInstalls.ToString("N0"), _form.MobilePublished ? "Published" : "Draft", "bi-phone-vibrate", "Focus the dashboard on mobile performance."),
+        new("chat", "AI resolution", $"{AiResolutionRate}%", $"{LiveHandoffs30d:N0} handoffs", "bi-robot", "Focus the dashboard on chat and AI performance."),
+        new("risk", "Open service load", OpenRequests.ToString("N0"), $"{UrgentRequests:N0} urgent", "bi-exclamation-diamond", "Focus the dashboard on client service risk.")
+    ];
+
+    private IEnumerable<ReadinessItem> ReadinessItems =>
+    [
+        new("Domain and publishing", _form.DomainStatus == "Verified" && _form.PublishStatus == "Live" ? 100 : 72, $"{_form.DomainStatus} / {_form.PublishStatus}", "portal"),
+        new("Client adoption", Math.Min(100, ActivePortalUsers > 0 ? 88 : 55), $"{ActivePortalUsers:N0} active users and {PendingInvites:N0} pending invites", "overview"),
+        new("Security posture", SecurityScore, $"MFA {(_form.MfaRequired ? "required" : "optional")}, SSO {(_form.SsoEnabled ? "enabled" : "off")}", "access"),
+        new("Mobile readiness", _form.MobilePublished && !_form.ForceMobileUpdate ? 94 : 78, $"Version {_form.MobileVersion}, minimum {_form.MinimumMobileVersion}", "mobile"),
+        new("Chat containment", _form.ChatEnabled ? Math.Max(50, AiResolutionRate) : 35, $"{ChatSessions30d:N0} sessions, {AiResolutionRate}% AI resolution", "chat")
+    ];
+
+    private IEnumerable<MetricItem> WorkflowMetrics =>
+    [
+        new("Open requests", OpenRequests.ToString("N0")),
+        new("Urgent requests", UrgentRequests.ToString("N0")),
+        new("Shared documents", SharedDocuments.ToString("N0")),
+        new("API calls 30d", ApiCalls30d.ToString("N0")),
+        new("CSAT", CsATScore.ToString("0.00")),
+        new("Average response", $"{AverageResponseSeconds}s")
+    ];
+
+    private int SecurityScore => (_form.SsoEnabled ? 25 : 0) + (_form.MfaRequired ? 25 : 0) + (_form.RequireUppercase ? 15 : 0) + (_form.RequireSpecialCharacter ? 15 : 0) + (_form.PasswordMinLength >= 10 ? 10 : 0) + (_form.MaxFailedLoginAttempts <= 5 ? 10 : 0);
+    private int ReadinessScore => (ReadinessItems.Sum(x => x.Score) / Math.Max(1, ReadinessItems.Count()));
+    private int ActivePortalUsers => _configuration?.ActivePortalUsers ?? _account.ActivePortalUsers;
+    private int PendingInvites => _configuration?.PendingInvites ?? _account.PendingInvites;
+    private int MobileInstalls => _configuration?.MobileInstalls ?? _account.MobileInstalls;
+    private int ChatSessions30d => _configuration?.ChatSessions30d ?? _account.ChatSessions30d;
+    private int OpenRequests => _configuration?.OpenRequests ?? _account.OpenRequests;
+    private int UrgentRequests => _configuration?.UrgentRequests ?? _account.UrgentRequests;
+    private int SharedDocuments => _configuration?.SharedDocuments ?? _account.SharedDocuments;
+    private int ApiCalls30d => _configuration?.ApiCalls30d ?? _account.ApiCalls30d;
+    private decimal CsATScore => _configuration?.CsATScore ?? 4.60m;
+    private int AiResolutionRate => _configuration?.AiResolutionRate ?? 74;
+    private int LiveHandoffs30d => _configuration?.LiveHandoffs30d ?? 18;
+    private int AverageResponseSeconds => _configuration?.AverageResponseSeconds ?? 108;
+    private string Initials => string.Join(string.Empty, (_form.DisplayName.Length == 0 ? "AMS" : _form.DisplayName).Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(x => x[0])).ToUpperInvariant();
+    private string LastPublishedText => _configuration?.LastPublishedDateUtc is DateTime value ? value.ToLocalTime().ToString("MMM d, yyyy h:mm tt") : "Not published";
+    private string WorkflowSummary => _activeKpi switch { "portal" => "Portal adoption and invite workflow selected.", "mobile" => "Mobile app publishing and device readiness selected.", "chat" => "AI assistant and live handoff workflow selected.", "risk" => "Service risk and urgent requests selected.", _ => "Full launch readiness workflow selected." };
 
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Portal","/portal/users"), new("White-Label",""));
-        _account = await Api.GetPortalMyAccountAsync(_tenantId) ?? new PortalMyAccountDto { AgencyName = "First Insurance", SupportEmail = "support@firstinsurance.com", PortalDomain = "portal.firstinsurance.com" };
-        var branding = await Api.GetPortalBrandingSettingsAsync(_tenantId) ?? new PortalBrandingSettingsDto { DisplayName = $"{_account.AgencyName} Client Portal", Domain = _account.PortalDomain, SupportEmail = _account.SupportEmail, PrimaryColor = "#1d4ed8", AccentColor = "#059669" };
-        var mobile = await Api.GetPortalMobileSettingsAsync(_tenantId);
-        _chatSessions = _account.ChatSessions30d;
-        _portal = new PortalConfig { Domain=branding.Domain, Title=branding.DisplayName, PrimaryColor=branding.PrimaryColor, AccentColor=branding.AccentColor, HidePoweredBy=!branding.ShowPoweredBy, EnableAnnouncements=true, EnableCrossSellWidget=true };
-        _mobile = new MobileAppCfg { AppName=mobile?.AppName ?? $"{_account.AgencyName} Mobile", IosBundleId=mobile?.BundleId ?? "", AndroidPackage=mobile?.BundleId ?? "", IosLink=mobile?.IosUrl ?? "", AndroidLink=mobile?.AndroidUrl ?? "", Version=mobile?.AppVersion ?? "2.4.1", MinVersion="2.0.0", BiometricEnabled=mobile?.BiometricLogin ?? true, PushEnabled=true, OfflineMode=true };
-        _chat   = new ChatConfig { AssistantName="Aria", WelcomeMessage=$"Hi there! I'm Aria, your {_account.AgencyName} assistant. I can help with COI requests, policy questions, payments, and more. How can I help today?", WidgetColor=branding.PrimaryColor, Position="bottom-right", Enabled=_account.ChatEnabled, AiEnabled=true, LiveHandoff=true, ShowOnMobile=true, EscalationEmail=_account.SupportEmail, OfficeHours="Mon–Fri, 8am–5pm CT" };
-        _access = new AccessConfig { Idp="none", MfaRequired=false, AllowSocialLogin=true, SessionTimeout=true, PwdMinLength=10, SessionTimeoutMins=30, MaxFailedAttempts=5, LockoutMins=15, RequireUppercase=true, RequireSpecialChar=true };
-        _portalCaps =
-        [
-            new CapItem("Request COI",              "bi-file-earmark-text",   On:true),
-            new CapItem("Request Policy Change",    "bi-pencil-square",        On:true),
-            new CapItem("Upload Documents",          "bi-cloud-arrow-up",       On:true),
-            new CapItem("Pay Invoice",              "bi-credit-card",          On:true),
-            new CapItem("Download ID Card",         "bi-person-vcard",         On:true),
-            new CapItem("Secure Messaging",         "bi-chat-lock",            On:true),
-            new CapItem("Renewal Questionnaire",    "bi-clipboard-check",      On:true),
-            new CapItem("E-Sign Documents",         "bi-pen",                  On:true),
-            new CapItem("Claim Intake (FNOL)",      "bi-exclamation-circle",   On:false),
-            new CapItem("View Billing History",     "bi-receipt",              On:true),
-            new CapItem("Track Service Requests",   "bi-list-check",           On:true),
-        ];
-        _kbSources =
-        [
-            new CapItem("Policy FAQs",               "bi-question-circle",     On:true),
-            new CapItem("Coverage Definitions",      "bi-book",                On:true),
-            new CapItem("Agency Documents Library",  "bi-folder2",             On:true),
-            new CapItem("Carrier Knowledge Articles","bi-shield-check",        On:true),
-            new CapItem("Billing & Payment Help",    "bi-receipt",             On:true),
-            new CapItem("Claims Process Guide",      "bi-exclamation-circle",  On:false),
-        ];
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Portal", "/portal/users"), new("White-Label", ""));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _account = await Api.GetPortalMyAccountAsync(_tenantId) ?? new PortalMyAccountDto();
+            _configuration = await Api.GetPortalWhiteLabelConfigurationAsync(_tenantId);
+            _form = ToRequest(_configuration, _account);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Unable to load white-label configuration: {ex.Message}";
+            ShowToast(_loadError, danger: true);
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
     private async Task SaveAsync()
     {
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = "All portal settings saved.", CssClass = "e-toast-success" });
+        _busy = true;
+        try
+        {
+            await Api.UpdatePortalWhiteLabelConfigurationAsync(_form);
+            _configuration = await Api.GetPortalWhiteLabelConfigurationAsync(_tenantId);
+            _form = ToRequest(_configuration, _account);
+            ShowToast("White-label configuration saved.");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", danger: true);
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
     private async Task PublishAsync()
     {
+        _busy = true;
         _showPublishConfirm = false;
-        _portalStatus = "Live";
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = "Portal changes published — clients see your new configuration now.", CssClass = "e-toast-success" });
+        try
+        {
+            await Api.PublishPortalWhiteLabelAsync(_tenantId);
+            await LoadAsync();
+            ShowToast("White-label configuration published to the live portal.");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Publish failed: {ex.Message}", danger: true);
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
-    private sealed class PortalConfig
+    private async Task RunActionAsync(string action)
     {
-        public string Domain                { get; set; } = string.Empty;
-        public string Title                 { get; set; } = string.Empty;
-        public string PrimaryColor          { get; set; } = "#1d4ed8";
-        public string AccentColor           { get; set; } = "#059669";
-        public string FaviconUrl            { get; set; } = string.Empty;
-        public string LogoUrl               { get; set; } = string.Empty;
-        public bool   HidePoweredBy         { get; set; }
-        public bool   EnableAnnouncements   { get; set; }
-        public bool   EnableNewsFeed        { get; set; }
-        public bool   EnableCrossSellWidget { get; set; }
+        _busy = true;
+        try
+        {
+            await Api.RunPortalWhiteLabelActionAsync(_tenantId, action);
+            await LoadAsync();
+            ShowToast(ActionMessage(action));
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Action failed: {ex.Message}", danger: true);
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
-    private sealed class MobileAppCfg
+    private void SetKpi(string key)
     {
-        public string AppName          { get; set; } = string.Empty;
-        public string IosBundleId      { get; set; } = string.Empty;
-        public string AndroidPackage   { get; set; } = string.Empty;
-        public string IosLink          { get; set; } = string.Empty;
-        public string AndroidLink      { get; set; } = string.Empty;
-        public string Version          { get; set; } = string.Empty;
-        public string MinVersion       { get; set; } = string.Empty;
-        public bool   BiometricEnabled { get; set; }
-        public bool   PushEnabled      { get; set; }
-        public bool   OfflineMode      { get; set; }
-        public bool   ForceUpdate      { get; set; }
+        _activeKpi = key;
+        _activeTab = key switch { "portal" => "portal", "mobile" => "mobile", "chat" => "chat", "risk" => "overview", _ => "overview" };
     }
 
-    private sealed class ChatConfig
+    private bool IsActiveKpi(string key) => _activeKpi == key;
+    private void ShowToast(string message, bool danger = false) { _toastMessage = message; _toastClass = danger ? "pwl-toast--danger" : "pwl-toast--success"; }
+    private void ClearToast() => _toastMessage = null;
+
+    private static string ActionMessage(string action) => action switch
     {
-        public string AssistantName      { get; set; } = string.Empty;
-        public string WelcomeMessage     { get; set; } = string.Empty;
-        public string WidgetColor        { get; set; } = "#1d4ed8";
-        public string Position           { get; set; } = "bottom-right";
-        public string EscalationEmail    { get; set; } = string.Empty;
-        public string OfficeHours        { get; set; } = string.Empty;
-        public bool   Enabled            { get; set; }
-        public bool   AiEnabled          { get; set; }
-        public bool   LiveHandoff        { get; set; }
-        public bool   ShowOnMobile       { get; set; }
-        public bool   AllowFileAttachments{ get; set; }
-        public bool   TranscriptEmail    { get; set; }
+        "verify-domain" => "Domain verification workflow completed.",
+        "enable-sso" => "SSO has been enabled for the client portal.",
+        "enable-chat" => "Embedded chat has been enabled.",
+        "force-mobile-update" => "Mobile force-update workflow enabled.",
+        _ => "White-label action completed."
+    };
+
+    private static UpdatePortalWhiteLabelConfigurationRequest ToRequest(PortalWhiteLabelConfigurationDto? dto, PortalMyAccountDto account)
+    {
+        var agency = string.IsNullOrWhiteSpace(account.AgencyName) ? "Agency" : account.AgencyName;
+        return new()
+        {
+            TenantId = dto?.TenantId == Guid.Empty || dto is null ? account.TenantId : dto.TenantId,
+            DisplayName = dto?.DisplayName ?? $"{agency} Client Portal",
+            PortalDomain = dto?.PortalDomain ?? account.PortalDomain,
+            DomainStatus = dto?.DomainStatus ?? "Pending DNS",
+            PublishStatus = dto?.PublishStatus ?? "Draft",
+            PrimaryColor = dto?.PrimaryColor ?? "#1d4ed8",
+            AccentColor = dto?.AccentColor ?? "#059669",
+            NavBackgroundColor = dto?.NavBackgroundColor ?? "#1e293b",
+            NavTextColor = dto?.NavTextColor ?? "#f8fafc",
+            LogoUrl = dto?.LogoUrl ?? string.Empty,
+            FaviconUrl = dto?.FaviconUrl ?? string.Empty,
+            WelcomeMessage = dto?.WelcomeMessage ?? $"Manage policies, request certificates, upload documents, and message {agency} in one secure place.",
+            SupportEmail = dto?.SupportEmail ?? account.SupportEmail,
+            SupportPhone = dto?.SupportPhone ?? account.SupportPhone,
+            ShowAgencyLogo = dto?.ShowAgencyLogo ?? true,
+            HidePoweredBy = dto?.HidePoweredBy ?? false,
+            ShowNewsWidget = dto?.ShowNewsWidget ?? true,
+            ShowSupportChat = dto?.ShowSupportChat ?? true,
+            EnableAnnouncements = dto?.EnableAnnouncements ?? true,
+            EnableCrossSellWidget = dto?.EnableCrossSellWidget ?? true,
+            MobileAppName = dto?.MobileAppName ?? $"{agency} Mobile",
+            MobileBundleId = dto?.MobileBundleId ?? string.Empty,
+            IosStoreUrl = dto?.IosStoreUrl ?? string.Empty,
+            AndroidStoreUrl = dto?.AndroidStoreUrl ?? string.Empty,
+            MobileVersion = dto?.MobileVersion ?? "2.4.1",
+            MinimumMobileVersion = dto?.MinimumMobileVersion ?? "2.0.0",
+            MobilePublished = dto?.MobilePublished ?? account.MobileAppPublished,
+            BiometricLogin = dto?.BiometricLogin ?? true,
+            PushNotifications = dto?.PushNotifications ?? true,
+            OfflinePolicyView = dto?.OfflinePolicyView ?? true,
+            ForceMobileUpdate = dto?.ForceMobileUpdate ?? false,
+            RequireMfaOnMobile = dto?.RequireMfaOnMobile ?? true,
+            AssistantName = dto?.AssistantName ?? "Aria",
+            AssistantWelcomeMessage = dto?.AssistantWelcomeMessage ?? $"Hi there! I'm Aria, your {agency} assistant. I can help with COI requests, policy questions, payments, and more.",
+            ChatWidgetColor = dto?.ChatWidgetColor ?? "#1d4ed8",
+            ChatPosition = dto?.ChatPosition ?? "bottom-right",
+            ChatEscalationEmail = dto?.ChatEscalationEmail ?? account.SupportEmail,
+            OfficeHours = dto?.OfficeHours ?? "Mon-Fri, 8am-5pm CT",
+            ChatEnabled = dto?.ChatEnabled ?? account.ChatEnabled,
+            AiResponsesEnabled = dto?.AiResponsesEnabled ?? true,
+            LiveHandoffEnabled = dto?.LiveHandoffEnabled ?? true,
+            ShowChatOnMobile = dto?.ShowChatOnMobile ?? true,
+            AllowFileAttachments = dto?.AllowFileAttachments ?? true,
+            TranscriptEmailEnabled = dto?.TranscriptEmailEnabled ?? true,
+            IdentityProvider = dto?.IdentityProvider ?? "none",
+            SsoClientId = dto?.SsoClientId ?? string.Empty,
+            SsoMetadataUrl = dto?.SsoMetadataUrl ?? string.Empty,
+            RedirectUris = dto?.RedirectUris ?? string.Empty,
+            SsoEnabled = dto?.SsoEnabled ?? account.SsoEnabled,
+            MfaRequired = dto?.MfaRequired ?? account.MfaEnabled,
+            AllowSocialLogin = dto?.AllowSocialLogin ?? true,
+            AutoProvisionUsers = dto?.AutoProvisionUsers ?? false,
+            PasswordMinLength = dto?.PasswordMinLength > 0 ? dto.PasswordMinLength : 10,
+            SessionTimeoutMinutes = dto?.SessionTimeoutMinutes > 0 ? dto.SessionTimeoutMinutes : 30,
+            MaxFailedLoginAttempts = dto?.MaxFailedLoginAttempts > 0 ? dto.MaxFailedLoginAttempts : 5,
+            LockoutMinutes = dto?.LockoutMinutes > 0 ? dto.LockoutMinutes : 15,
+            RequireUppercase = dto?.RequireUppercase ?? true,
+            RequireSpecialCharacter = dto?.RequireSpecialCharacter ?? true,
+            IpWhitelistEnabled = dto?.IpWhitelistEnabled ?? false,
+            ConfigurationJson = dto?.ConfigurationJson ?? "{}"
+        };
     }
 
-    private sealed class AccessConfig
+    private RenderFragment PortalSwitches => @<div class="pwl-switch-fragment">
+        <label><input type="checkbox" @bind="_form.ShowAgencyLogo" /> Show agency logo</label>
+        <label><input type="checkbox" @bind="_form.HidePoweredBy" /> Hide powered-by branding</label>
+        <label><input type="checkbox" @bind="_form.ShowNewsWidget" /> Show news widget</label>
+        <label><input type="checkbox" @bind="_form.ShowSupportChat" /> Show support chat entry</label>
+        <label><input type="checkbox" @bind="_form.EnableAnnouncements" /> Enable announcements</label>
+        <label><input type="checkbox" @bind="_form.EnableCrossSellWidget" /> Enable cross-sell recommendations</label>
+    </div>;
+
+    private RenderFragment MobileSwitches => @<div class="pwl-switch-fragment">
+        <label><input type="checkbox" @bind="_form.MobilePublished" /> Published in app stores</label>
+        <label><input type="checkbox" @bind="_form.BiometricLogin" /> Biometric login</label>
+        <label><input type="checkbox" @bind="_form.PushNotifications" /> Push notifications</label>
+        <label><input type="checkbox" @bind="_form.OfflinePolicyView" /> Offline policy view</label>
+        <label><input type="checkbox" @bind="_form.ForceMobileUpdate" /> Force mobile update</label>
+        <label><input type="checkbox" @bind="_form.RequireMfaOnMobile" /> Require MFA on mobile</label>
+    </div>;
+
+    private RenderFragment ChatSwitches => @<div class="pwl-switch-fragment">
+        <label><input type="checkbox" @bind="_form.ChatEnabled" /> Enable chat widget</label>
+        <label><input type="checkbox" @bind="_form.AiResponsesEnabled" /> AI responses</label>
+        <label><input type="checkbox" @bind="_form.LiveHandoffEnabled" /> Live handoff</label>
+        <label><input type="checkbox" @bind="_form.ShowChatOnMobile" /> Show on mobile</label>
+        <label><input type="checkbox" @bind="_form.AllowFileAttachments" /> File attachments</label>
+        <label><input type="checkbox" @bind="_form.TranscriptEmailEnabled" /> Email transcripts</label>
+    </div>;
+
+    private RenderFragment AccessSwitches => @<div class="pwl-switch-fragment">
+        <label><input type="checkbox" @bind="_form.SsoEnabled" /> Enable SSO</label>
+        <label><input type="checkbox" @bind="_form.MfaRequired" /> Require MFA</label>
+        <label><input type="checkbox" @bind="_form.AllowSocialLogin" /> Allow social login</label>
+        <label><input type="checkbox" @bind="_form.AutoProvisionUsers" /> Auto-provision users</label>
+        <label><input type="checkbox" @bind="_form.RequireUppercase" /> Require uppercase</label>
+        <label><input type="checkbox" @bind="_form.RequireSpecialCharacter" /> Require special character</label>
+        <label><input type="checkbox" @bind="_form.IpWhitelistEnabled" /> Enable IP whitelist</label>
+    </div>;
+
+    private RenderFragment ChatPreview => @<div class="pwl-chat-preview" style="--chat-color:@_form.ChatWidgetColor"><div class="pwl-chat-head"><i class="bi bi-robot"></i><strong>@_form.AssistantName</strong></div><div class="pwl-chat-body"><div class="pwl-bubble pwl-bubble--bot">@_form.AssistantWelcomeMessage</div><div class="pwl-bubble pwl-bubble--user">Can I request a certificate?</div><div class="pwl-bubble pwl-bubble--bot">Yes. I can open a COI request, pre-fill your account, and route urgent items to the service team.</div></div><div class="pwl-chat-foot">Type a message...</div></div>;
+
+    private sealed record TabItem(string Key, string Label, string Icon);
+    private sealed record KpiItem(string Key, string Label, string Value, string Detail, string Icon, string Tooltip);
+    private sealed record ReadinessItem(string Title, int Score, string Detail, string TargetTab)
     {
-        public string Idp                { get; set; } = "none";
-        public string ClientId           { get; set; } = string.Empty;
-        public string MetadataUrl        { get; set; } = string.Empty;
-        public string RedirectUris       { get; set; } = string.Empty;
-        public bool   SsoEnabled         { get; set; }
-        public bool   MfaRequired        { get; set; }
-        public bool   AllowSocialLogin   { get; set; }
-        public bool   AutoProvision      { get; set; }
-        public bool   SessionTimeout     { get; set; }
-        public int    PwdMinLength       { get; set; } = 10;
-        public int    SessionTimeoutMins { get; set; } = 30;
-        public int    MaxFailedAttempts  { get; set; } = 5;
-        public int    LockoutMins        { get; set; } = 15;
-        public bool   RequireUppercase   { get; set; }
-        public bool   RequireSpecialChar { get; set; }
-        public bool   IpWhitelistEnabled { get; set; }
+        public string Css => Score >= 90 ? "pwl-score--good" : Score >= 70 ? "pwl-score--warn" : "pwl-score--bad";
     }
-
-    private sealed class CapItem(string Name, string Icon, bool On)
+    private sealed record MetricItem(string Label, string Value);
+    private sealed class CapabilityItem(string name, string icon, bool enabled)
     {
-        public string Name { get; set; } = Name;
-        public string Icon { get; set; } = Icon;
-        public bool   On   { get; set; } = On;
-    }
-
-    private sealed record Lv(string V, string L);
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        public string Name { get; } = name;
+        public string Icon { get; } = icon;
+        public bool Enabled { get; set; } = enabled;
     }
 }

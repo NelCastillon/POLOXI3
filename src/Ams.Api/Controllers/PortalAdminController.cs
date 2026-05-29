@@ -104,6 +104,422 @@ END;";
     private static UpsertPortalAdminRecordRequest Record<T>(Guid tenantId, string kind, string code, string name, string status, T data) =>
         new(tenantId, kind, code, name, status, JsonSerializer.Serialize(data, JsonOptions));
 
+    private async Task EnsurePortalChatSessionDataAsync(Guid tenantId, CancellationToken ct)
+    {
+        await EnsurePortalAdminDataAsync(tenantId, ct);
+
+        const string sql = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Portal') EXEC(N'CREATE SCHEMA Portal');
+
+IF OBJECT_ID(N'Portal.ChatSession', N'U') IS NULL
+BEGIN
+    CREATE TABLE Portal.ChatSession
+    (
+        ChatSessionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Portal_ChatSession PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SessionNumber NVARCHAR(40) NOT NULL,
+        ClientName NVARCHAR(200) NOT NULL,
+        AccountName NVARCHAR(200) NOT NULL,
+        ContactEmail NVARCHAR(320) NOT NULL CONSTRAINT DF_PortalChatSession_ContactEmail DEFAULT N'',
+        Channel NVARCHAR(80) NOT NULL CONSTRAINT DF_PortalChatSession_Channel DEFAULT N'Web Portal',
+        Topic NVARCHAR(120) NOT NULL,
+        Status NVARCHAR(80) NOT NULL,
+        Priority NVARCHAR(40) NOT NULL CONSTRAINT DF_PortalChatSession_Priority DEFAULT N'Normal',
+        Sentiment NVARCHAR(40) NOT NULL CONSTRAINT DF_PortalChatSession_Sentiment DEFAULT N'Neutral',
+        AssignedTo NVARCHAR(160) NOT NULL CONSTRAINT DF_PortalChatSession_AssignedTo DEFAULT N'Unassigned',
+        Summary NVARCHAR(1000) NOT NULL CONSTRAINT DF_PortalChatSession_Summary DEFAULT N'',
+        NextBestAction NVARCHAR(500) NOT NULL CONSTRAINT DF_PortalChatSession_NextBestAction DEFAULT N'',
+        StartedDateUtc DATETIME2 NOT NULL,
+        LastMessageDateUtc DATETIME2 NOT NULL,
+        ResolvedDateUtc DATETIME2 NULL,
+        MessageCount INT NOT NULL CONSTRAINT DF_PortalChatSession_MessageCount DEFAULT 0,
+        WaitSeconds INT NOT NULL CONSTRAINT DF_PortalChatSession_WaitSeconds DEFAULT 0,
+        SlaDueDateUtc DATETIME2 NULL,
+        AiHandled BIT NOT NULL CONSTRAINT DF_PortalChatSession_AiHandled DEFAULT 0,
+        HandoffRequired BIT NOT NULL CONSTRAINT DF_PortalChatSession_HandoffRequired DEFAULT 0,
+        ReviewedDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PortalChatSession_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PortalChatSession_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Portal.ChatSession') AND name = N'IX_Portal_ChatSession_TenantStatus')
+    CREATE INDEX IX_Portal_ChatSession_TenantStatus ON Portal.ChatSession(TenantId, IsDeleted, Status, Priority, LastMessageDateUtc DESC);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Portal.ChatSession') AND name = N'UX_Portal_ChatSession_Number')
+    CREATE UNIQUE INDEX UX_Portal_ChatSession_Number ON Portal.ChatSession(TenantId, SessionNumber) WHERE IsDeleted = 0;
+
+INSERT INTO Portal.ChatSession
+(ChatSessionId, TenantId, SessionNumber, ClientName, AccountName, ContactEmail, Channel, Topic, Status, Priority, Sentiment, AssignedTo, Summary, NextBestAction, StartedDateUtc, LastMessageDateUtc, ResolvedDateUtc, MessageCount, WaitSeconds, SlaDueDateUtc, AiHandled, HandoffRequired, ReviewedDateUtc, CreatedDateUtc, IsDeleted)
+SELECT ar.PortalAdminRecordId, ar.TenantId, LEFT(ar.Code, 40), ar.Name, ar.Name, N'', N'Web Portal',
+       COALESCE(NULLIF(JSON_VALUE(ar.JsonData, '$.category'), N''), N'General'),
+       COALESCE(NULLIF(JSON_VALUE(ar.JsonData, '$.status'), N''), ar.Status),
+       CASE WHEN ar.Status = N'Live Handoff' THEN N'High' ELSE N'Normal' END,
+       CASE WHEN ar.Status = N'Live Handoff' THEN N'Neutral' ELSE N'Positive' END,
+       COALESCE(NULLIF(JSON_VALUE(ar.JsonData, '$.owner'), N''), N'Unassigned'),
+       COALESCE(NULLIF(JSON_VALUE(ar.JsonData, '$.detail'), N''), ar.Name),
+       CASE WHEN ar.Status = N'Live Handoff' THEN N'Assign service owner and review transcript.' ELSE N'Quality review transcript and confirm no follow-up is required.' END,
+       COALESCE(TRY_CONVERT(DATETIME2, JSON_VALUE(ar.JsonData, '$.eventDateUtc')), ar.CreatedDateUtc),
+       COALESCE(TRY_CONVERT(DATETIME2, JSON_VALUE(ar.JsonData, '$.eventDateUtc')), ar.CreatedDateUtc),
+       CASE WHEN ar.Status = N'AI Resolved' THEN COALESCE(TRY_CONVERT(DATETIME2, JSON_VALUE(ar.JsonData, '$.eventDateUtc')), ar.CreatedDateUtc) ELSE NULL END,
+       COALESCE(TRY_CONVERT(INT, JSON_VALUE(ar.JsonData, '$.count')), 0),
+       CASE WHEN ar.Status = N'Live Handoff' THEN 420 ELSE 60 END,
+       CASE WHEN ar.Status = N'Live Handoff' THEN DATEADD(MINUTE, 45, SYSUTCDATETIME()) ELSE NULL END,
+       CASE WHEN ar.Status = N'AI Resolved' THEN 1 ELSE 0 END,
+       CASE WHEN ar.Status = N'Live Handoff' THEN 1 ELSE 0 END,
+       NULL,
+       SYSUTCDATETIME(),
+       0
+FROM Portal.AdminRecord ar
+WHERE ar.TenantId = @TenantId AND ar.Kind = N'PortalChatSession' AND ar.IsDeleted = 0 AND ISJSON(ar.JsonData) = 1
+  AND NOT EXISTS (SELECT 1 FROM Portal.ChatSession cs WHERE cs.TenantId = ar.TenantId AND cs.SessionNumber = LEFT(ar.Code, 40) AND cs.IsDeleted = 0);
+
+IF NOT EXISTS (SELECT 1 FROM Portal.ChatSession WHERE TenantId = @TenantId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Portal.ChatSession
+    (ChatSessionId, TenantId, SessionNumber, ClientName, AccountName, ContactEmail, Channel, Topic, Status, Priority, Sentiment, AssignedTo, Summary, NextBestAction, StartedDateUtc, LastMessageDateUtc, ResolvedDateUtc, MessageCount, WaitSeconds, SlaDueDateUtc, AiHandled, HandoffRequired, ReviewedDateUtc, CreatedDateUtc, IsDeleted)
+    VALUES
+    (NEWID(), @TenantId, N'PCS-1001', N'Beth Owens', N'Riverside Construction LLC', N'beth@riverside.example', N'Web Portal', N'Billing', N'Live Handoff', N'Urgent', N'Negative', N'Mia Santos', N'Client disputed invoice finance charge and asked for same-day billing review.', N'Escalate to billing queue and attach invoice history before callback.', DATEADD(HOUR, -9, SYSUTCDATETIME()), DATEADD(MINUTE, -18, SYSUTCDATETIME()), NULL, 18, 512, DATEADD(MINUTE, -30, SYSUTCDATETIME()), 0, 1, NULL, SYSUTCDATETIME(), 0),
+    (NEWID(), @TenantId, N'PCS-1002', N'Rachel Chen', N'Chen Family', N'rachel.chen@example.com', N'Mobile App', N'COI Request', N'AI Resolved', N'Normal', N'Positive', N'Aria', N'Assistant guided the client through certificate request submission.', N'Quality review only; no human follow-up required.', DATEADD(HOUR, -2, SYSUTCDATETIME()), DATEADD(MINUTE, -7, SYSUTCDATETIME()), DATEADD(HOUR, -1, SYSUTCDATETIME()), 12, 42, NULL, 1, 0, DATEADD(MINUTE, -30, SYSUTCDATETIME()), SYSUTCDATETIME(), 0),
+    (NEWID(), @TenantId, N'PCS-1003', N'David Kim', N'Kim Dental Group', N'david.kim@example.com', N'Web Portal', N'Login Support', N'Open', N'High', N'Negative', N'Unassigned', N'Suspended user attempted access and requested reinstatement assistance.', N'Assign security owner and verify account status before restoring access.', DATEADD(HOUR, -5, SYSUTCDATETIME()), DATEADD(MINUTE, -11, SYSUTCDATETIME()), NULL, 9, 371, DATEADD(MINUTE, 45, SYSUTCDATETIME()), 0, 1, NULL, SYSUTCDATETIME(), 0);
+END;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
+    }
+
+    private async Task EnsurePortalActivityEventDataAsync(Guid tenantId, CancellationToken ct)
+    {
+        await EnsurePortalAdminDataAsync(tenantId, ct);
+
+        const string sql = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Portal') EXEC(N'CREATE SCHEMA Portal');
+
+IF OBJECT_ID(N'Portal.ActivityEvent', N'U') IS NULL
+BEGIN
+    CREATE TABLE Portal.ActivityEvent
+    (
+        ActivityEventId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Portal_ActivityEvent PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        EventNumber NVARCHAR(40) NOT NULL,
+        OccurredAtUtc DATETIME2 NOT NULL,
+        UserName NVARCHAR(200) NOT NULL,
+        UserEmail NVARCHAR(320) NOT NULL CONSTRAINT DF_ActivityEvent_UserEmail DEFAULT N'',
+        AccountName NVARCHAR(200) NOT NULL CONSTRAINT DF_ActivityEvent_Account DEFAULT N'',
+        EventType NVARCHAR(100) NOT NULL,
+        Category NVARCHAR(80) NOT NULL CONSTRAINT DF_ActivityEvent_Category DEFAULT N'General',
+        Severity NVARCHAR(40) NOT NULL CONSTRAINT DF_ActivityEvent_Severity DEFAULT N'Info',
+        Status NVARCHAR(60) NOT NULL CONSTRAINT DF_ActivityEvent_Status DEFAULT N'Open',
+        Detail NVARCHAR(1000) NOT NULL CONSTRAINT DF_ActivityEvent_Detail DEFAULT N'',
+        WorkflowImpact NVARCHAR(500) NOT NULL CONSTRAINT DF_ActivityEvent_Impact DEFAULT N'',
+        RecommendedAction NVARCHAR(500) NOT NULL CONSTRAINT DF_ActivityEvent_Action DEFAULT N'',
+        AssignedTo NVARCHAR(160) NOT NULL CONSTRAINT DF_ActivityEvent_AssignedTo DEFAULT N'Unassigned',
+        IpAddress NVARCHAR(80) NOT NULL CONSTRAINT DF_ActivityEvent_Ip DEFAULT N'',
+        Device NVARCHAR(160) NOT NULL CONSTRAINT DF_ActivityEvent_Device DEFAULT N'',
+        Location NVARCHAR(160) NOT NULL CONSTRAINT DF_ActivityEvent_Location DEFAULT N'',
+        RiskScore INT NOT NULL CONSTRAINT DF_ActivityEvent_Risk DEFAULT 0,
+        DurationSeconds INT NOT NULL CONSTRAINT DF_ActivityEvent_Duration DEFAULT 0,
+        RequiresReview BIT NOT NULL CONSTRAINT DF_ActivityEvent_Review DEFAULT 0,
+        ReviewedDateUtc DATETIME2 NULL,
+        ReviewedBy NVARCHAR(160) NOT NULL CONSTRAINT DF_ActivityEvent_ReviewedBy DEFAULT N'',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ActivityEvent_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_ActivityEvent_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Portal.ActivityEvent') AND name = N'IX_ActivityEvent_Tenant_Occurred')
+    CREATE INDEX IX_ActivityEvent_Tenant_Occurred ON Portal.ActivityEvent(TenantId, OccurredAtUtc DESC, IsDeleted);
+
+INSERT INTO Portal.ActivityEvent
+(ActivityEventId, TenantId, EventNumber, OccurredAtUtc, UserName, UserEmail, AccountName, EventType, Category, Severity, Status, Detail, WorkflowImpact, RecommendedAction, AssignedTo, IpAddress, Device, Location, RiskScore, DurationSeconds, RequiresReview, ReviewedDateUtc, ReviewedBy, CreatedDateUtc, IsDeleted)
+SELECT ar.PortalAdminRecordId, ar.TenantId, LEFT(ar.Code, 40),
+       COALESCE(TRY_CONVERT(DATETIME2, JSON_VALUE(ar.JsonData, '$.occurredAt')), ar.CreatedDateUtc),
+       COALESCE(NULLIF(JSON_VALUE(ar.JsonData, '$.userName'), N''), ar.Name),
+       COALESCE(NULLIF(JSON_VALUE(ar.JsonData, '$.userEmail'), N''), N''),
+       COALESCE(NULLIF(JSON_VALUE(ar.JsonData, '$.accountName'), N''), N''),
+       COALESCE(NULLIF(JSON_VALUE(ar.JsonData, '$.eventType'), N''), ar.Name),
+       CASE WHEN ar.Status IN (N'Warning', N'Error') THEN N'Security' ELSE N'General' END,
+       COALESCE(NULLIF(JSON_VALUE(ar.JsonData, '$.severity'), N''), ar.Status),
+       CASE WHEN ar.Status IN (N'Warning', N'Error') THEN N'Open' ELSE N'Reviewed' END,
+       COALESCE(NULLIF(JSON_VALUE(ar.JsonData, '$.detail'), N''), ar.Name),
+       CASE WHEN ar.Status IN (N'Warning', N'Error') THEN N'Requires operations review.' ELSE N'Captured for audit trail.' END,
+       CASE WHEN ar.Status IN (N'Warning', N'Error') THEN N'Review and acknowledge the event.' ELSE N'No action required.' END,
+       CASE WHEN ar.Status IN (N'Warning', N'Error') THEN N'Security Team' ELSE N'Portal Ops' END,
+       COALESCE(NULLIF(JSON_VALUE(ar.JsonData, '$.ipAddress'), N''), N''),
+       N'Client Portal', N'Unknown',
+       CASE WHEN ar.Status = N'Error' THEN 90 WHEN ar.Status = N'Warning' THEN 70 ELSE 20 END,
+       0,
+       CASE WHEN ar.Status IN (N'Warning', N'Error') THEN 1 ELSE 0 END,
+       CASE WHEN ar.Status IN (N'Warning', N'Error') THEN NULL ELSE SYSUTCDATETIME() END,
+       CASE WHEN ar.Status IN (N'Warning', N'Error') THEN N'' ELSE N'Portal Ops' END,
+       SYSUTCDATETIME(), 0
+FROM Portal.AdminRecord ar
+WHERE ar.TenantId = @TenantId AND ar.Kind = N'PortalActivity' AND ar.IsDeleted = 0 AND ISJSON(ar.JsonData) = 1
+  AND NOT EXISTS (SELECT 1 FROM Portal.ActivityEvent ae WHERE ae.TenantId = ar.TenantId AND ae.EventNumber = LEFT(ar.Code, 40) AND ae.IsDeleted = 0);
+
+IF NOT EXISTS (SELECT 1 FROM Portal.ActivityEvent WHERE TenantId = @TenantId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Portal.ActivityEvent
+    (ActivityEventId, TenantId, EventNumber, OccurredAtUtc, UserName, UserEmail, AccountName, EventType, Category, Severity, Status, Detail, WorkflowImpact, RecommendedAction, AssignedTo, IpAddress, Device, Location, RiskScore, DurationSeconds, RequiresReview, ReviewedDateUtc, ReviewedBy, CreatedDateUtc, IsDeleted)
+    VALUES
+    (NEWID(), @TenantId, N'ACT-1001', DATEADD(MINUTE, -12, SYSUTCDATETIME()), N'Rachel Chen', N'rachel.chen@example.com', N'Chen Family', N'Login', N'Authentication', N'Info', N'Reviewed', N'Successful client portal login with MFA.', N'Confirms active client adoption and secure access.', N'No action required.', N'Portal Ops', N'72.14.20.18', N'Chrome on Windows', N'Austin, TX', 12, 4, 0, SYSUTCDATETIME(), N'Portal Ops', SYSUTCDATETIME(), 0),
+    (NEWID(), @TenantId, N'ACT-1002', DATEADD(MINUTE, -28, SYSUTCDATETIME()), N'Beth Owens', N'beth@riverside.example', N'Riverside Construction LLC', N'Request Submitted', N'Self-Service', N'Info', N'Open', N'Submitted urgent COI request for project owner.', N'Creates service workload with same-day SLA.', N'Assign to CSR and validate certificate holder details.', N'Unassigned', N'24.18.42.8', N'Safari on iPhone', N'Dallas, TX', 58, 96, 1, NULL, N'', SYSUTCDATETIME(), 0),
+    (NEWID(), @TenantId, N'ACT-1003', DATEADD(MINUTE, -44, SYSUTCDATETIME()), N'David Kim', N'david.kim@example.com', N'Kim Dental Group', N'Failed Login', N'Security', N'Warning', N'Open', N'Failed login attempt after account suspension.', N'Security review required before reactivation.', N'Review suspension reason and contact account owner.', N'Security Team', N'104.44.12.9', N'Edge on Windows', N'Plano, TX', 84, 7, 1, NULL, N'', SYSUTCDATETIME(), 0),
+    (NEWID(), @TenantId, N'ACT-1009', DATEADD(MINUTE, -310, SYSUTCDATETIME()), N'Unknown User', N'unknown@example.com', N'Unknown', N'Blocked Login', N'Security', N'Error', N'Escalated', N'Blocked login from unexpected geography.', N'Potential account takeover signal.', N'Escalate to security and verify user identity.', N'Security Team', N'185.199.108.21', N'Chrome on Linux', N'Unknown', 96, 3, 1, NULL, N'', SYSUTCDATETIME(), 0);
+END;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
+    }
+
+    private async Task EnsurePortalWhiteLabelDataAsync(Guid tenantId, CancellationToken ct)
+    {
+        await EnsurePortalAdminDataAsync(tenantId, ct);
+
+        const string sql = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Portal') EXEC(N'CREATE SCHEMA Portal');
+
+IF OBJECT_ID(N'Portal.WhiteLabelConfiguration', N'U') IS NULL
+BEGIN
+    CREATE TABLE Portal.WhiteLabelConfiguration
+    (
+        WhiteLabelConfigurationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Portal_WhiteLabelConfiguration PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DisplayName NVARCHAR(200) NOT NULL,
+        PortalDomain NVARCHAR(255) NOT NULL,
+        DomainStatus NVARCHAR(40) NOT NULL CONSTRAINT DF_WhiteLabel_DomainStatus DEFAULT N'Pending DNS',
+        PublishStatus NVARCHAR(40) NOT NULL CONSTRAINT DF_WhiteLabel_PublishStatus DEFAULT N'Draft',
+        LastPublishedDateUtc DATETIME2 NULL,
+        PrimaryColor NVARCHAR(20) NOT NULL CONSTRAINT DF_WhiteLabel_PrimaryColor DEFAULT N'#1d4ed8',
+        AccentColor NVARCHAR(20) NOT NULL CONSTRAINT DF_WhiteLabel_AccentColor DEFAULT N'#059669',
+        NavBackgroundColor NVARCHAR(20) NOT NULL CONSTRAINT DF_WhiteLabel_NavBg DEFAULT N'#1e293b',
+        NavTextColor NVARCHAR(20) NOT NULL CONSTRAINT DF_WhiteLabel_NavText DEFAULT N'#f8fafc',
+        LogoUrl NVARCHAR(500) NOT NULL CONSTRAINT DF_WhiteLabel_LogoUrl DEFAULT N'',
+        FaviconUrl NVARCHAR(500) NOT NULL CONSTRAINT DF_WhiteLabel_FaviconUrl DEFAULT N'',
+        WelcomeMessage NVARCHAR(1000) NOT NULL CONSTRAINT DF_WhiteLabel_Welcome DEFAULT N'',
+        SupportEmail NVARCHAR(320) NOT NULL,
+        SupportPhone NVARCHAR(50) NOT NULL CONSTRAINT DF_WhiteLabel_SupportPhone DEFAULT N'',
+        ShowAgencyLogo BIT NOT NULL CONSTRAINT DF_WhiteLabel_ShowAgencyLogo DEFAULT 1,
+        HidePoweredBy BIT NOT NULL CONSTRAINT DF_WhiteLabel_HidePoweredBy DEFAULT 0,
+        ShowNewsWidget BIT NOT NULL CONSTRAINT DF_WhiteLabel_ShowNews DEFAULT 1,
+        ShowSupportChat BIT NOT NULL CONSTRAINT DF_WhiteLabel_ShowChat DEFAULT 1,
+        EnableAnnouncements BIT NOT NULL CONSTRAINT DF_WhiteLabel_Announcements DEFAULT 1,
+        EnableCrossSellWidget BIT NOT NULL CONSTRAINT DF_WhiteLabel_CrossSell DEFAULT 1,
+        MobileAppName NVARCHAR(200) NOT NULL,
+        MobileBundleId NVARCHAR(160) NOT NULL CONSTRAINT DF_WhiteLabel_Bundle DEFAULT N'',
+        IosStoreUrl NVARCHAR(500) NOT NULL CONSTRAINT DF_WhiteLabel_IosUrl DEFAULT N'',
+        AndroidStoreUrl NVARCHAR(500) NOT NULL CONSTRAINT DF_WhiteLabel_AndroidUrl DEFAULT N'',
+        MobileVersion NVARCHAR(40) NOT NULL CONSTRAINT DF_WhiteLabel_MobileVersion DEFAULT N'2.4.1',
+        MinimumMobileVersion NVARCHAR(40) NOT NULL CONSTRAINT DF_WhiteLabel_MinMobileVersion DEFAULT N'2.0.0',
+        MobilePublished BIT NOT NULL CONSTRAINT DF_WhiteLabel_MobilePublished DEFAULT 1,
+        BiometricLogin BIT NOT NULL CONSTRAINT DF_WhiteLabel_Biometric DEFAULT 1,
+        PushNotifications BIT NOT NULL CONSTRAINT DF_WhiteLabel_Push DEFAULT 1,
+        OfflinePolicyView BIT NOT NULL CONSTRAINT DF_WhiteLabel_Offline DEFAULT 1,
+        ForceMobileUpdate BIT NOT NULL CONSTRAINT DF_WhiteLabel_ForceUpdate DEFAULT 0,
+        RequireMfaOnMobile BIT NOT NULL CONSTRAINT DF_WhiteLabel_MobileMfa DEFAULT 1,
+        AssistantName NVARCHAR(120) NOT NULL CONSTRAINT DF_WhiteLabel_Assistant DEFAULT N'Aria',
+        AssistantWelcomeMessage NVARCHAR(1000) NOT NULL CONSTRAINT DF_WhiteLabel_AssistantWelcome DEFAULT N'',
+        ChatWidgetColor NVARCHAR(20) NOT NULL CONSTRAINT DF_WhiteLabel_ChatColor DEFAULT N'#1d4ed8',
+        ChatPosition NVARCHAR(40) NOT NULL CONSTRAINT DF_WhiteLabel_ChatPosition DEFAULT N'bottom-right',
+        ChatEscalationEmail NVARCHAR(320) NOT NULL CONSTRAINT DF_WhiteLabel_ChatEmail DEFAULT N'',
+        OfficeHours NVARCHAR(120) NOT NULL CONSTRAINT DF_WhiteLabel_OfficeHours DEFAULT N'Mon-Fri, 8am-5pm CT',
+        ChatEnabled BIT NOT NULL CONSTRAINT DF_WhiteLabel_ChatEnabled DEFAULT 1,
+        AiResponsesEnabled BIT NOT NULL CONSTRAINT DF_WhiteLabel_AiResponses DEFAULT 1,
+        LiveHandoffEnabled BIT NOT NULL CONSTRAINT DF_WhiteLabel_Handoff DEFAULT 1,
+        ShowChatOnMobile BIT NOT NULL CONSTRAINT DF_WhiteLabel_MobileChat DEFAULT 1,
+        AllowFileAttachments BIT NOT NULL CONSTRAINT DF_WhiteLabel_Attachments DEFAULT 1,
+        TranscriptEmailEnabled BIT NOT NULL CONSTRAINT DF_WhiteLabel_Transcript DEFAULT 1,
+        IdentityProvider NVARCHAR(80) NOT NULL CONSTRAINT DF_WhiteLabel_Idp DEFAULT N'none',
+        SsoClientId NVARCHAR(255) NOT NULL CONSTRAINT DF_WhiteLabel_SsoClient DEFAULT N'',
+        SsoMetadataUrl NVARCHAR(500) NOT NULL CONSTRAINT DF_WhiteLabel_Metadata DEFAULT N'',
+        RedirectUris NVARCHAR(1000) NOT NULL CONSTRAINT DF_WhiteLabel_Redirects DEFAULT N'',
+        SsoEnabled BIT NOT NULL CONSTRAINT DF_WhiteLabel_SsoEnabled DEFAULT 0,
+        MfaRequired BIT NOT NULL CONSTRAINT DF_WhiteLabel_MfaRequired DEFAULT 0,
+        AllowSocialLogin BIT NOT NULL CONSTRAINT DF_WhiteLabel_Social DEFAULT 1,
+        AutoProvisionUsers BIT NOT NULL CONSTRAINT DF_WhiteLabel_AutoProvision DEFAULT 0,
+        PasswordMinLength INT NOT NULL CONSTRAINT DF_WhiteLabel_PwdMin DEFAULT 10,
+        SessionTimeoutMinutes INT NOT NULL CONSTRAINT DF_WhiteLabel_Timeout DEFAULT 30,
+        MaxFailedLoginAttempts INT NOT NULL CONSTRAINT DF_WhiteLabel_Failed DEFAULT 5,
+        LockoutMinutes INT NOT NULL CONSTRAINT DF_WhiteLabel_Lockout DEFAULT 15,
+        RequireUppercase BIT NOT NULL CONSTRAINT DF_WhiteLabel_Upper DEFAULT 1,
+        RequireSpecialCharacter BIT NOT NULL CONSTRAINT DF_WhiteLabel_Special DEFAULT 1,
+        IpWhitelistEnabled BIT NOT NULL CONSTRAINT DF_WhiteLabel_Ip DEFAULT 0,
+        ActivePortalUsers INT NOT NULL CONSTRAINT DF_WhiteLabel_ActiveUsers DEFAULT 0,
+        PendingInvites INT NOT NULL CONSTRAINT DF_WhiteLabel_PendingInvites DEFAULT 0,
+        MobileInstalls INT NOT NULL CONSTRAINT DF_WhiteLabel_MobileInstalls DEFAULT 0,
+        ChatSessions30d INT NOT NULL CONSTRAINT DF_WhiteLabel_ChatSessions DEFAULT 0,
+        OpenRequests INT NOT NULL CONSTRAINT DF_WhiteLabel_OpenRequests DEFAULT 0,
+        UrgentRequests INT NOT NULL CONSTRAINT DF_WhiteLabel_UrgentRequests DEFAULT 0,
+        SharedDocuments INT NOT NULL CONSTRAINT DF_WhiteLabel_SharedDocuments DEFAULT 0,
+        ApiCalls30d INT NOT NULL CONSTRAINT DF_WhiteLabel_ApiCalls DEFAULT 0,
+        CsATScore DECIMAL(4,2) NOT NULL CONSTRAINT DF_WhiteLabel_Csat DEFAULT 4.60,
+        AiResolutionRate INT NOT NULL CONSTRAINT DF_WhiteLabel_AiRate DEFAULT 74,
+        LiveHandoffs30d INT NOT NULL CONSTRAINT DF_WhiteLabel_Handoffs DEFAULT 0,
+        AverageResponseSeconds INT NOT NULL CONSTRAINT DF_WhiteLabel_Response DEFAULT 108,
+        ConfigurationJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_WhiteLabel_ConfigJson DEFAULT N'{}',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_WhiteLabel_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_WhiteLabel_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Portal.WhiteLabelConfiguration') AND name = N'UX_WhiteLabel_Tenant')
+    CREATE UNIQUE INDEX UX_WhiteLabel_Tenant ON Portal.WhiteLabelConfiguration(TenantId) WHERE IsDeleted = 0;
+
+DECLARE @AgencyName NVARCHAR(200) = COALESCE((SELECT TOP 1 TenantName FROM Core.Tenant WHERE TenantId = @TenantId), N'Tenant Agency');
+DECLARE @SupportEmail NVARCHAR(320) = COALESCE((SELECT TOP 1 ContactEmail FROM Agency.Profile WHERE TenantId = @TenantId AND IsDeleted = 0), N'admin@agency.local');
+DECLARE @SupportPhone NVARCHAR(50) = COALESCE((SELECT TOP 1 ContactPhone FROM Agency.Profile WHERE TenantId = @TenantId AND IsDeleted = 0), N'(555) 000-0000');
+DECLARE @PortalDomain NVARCHAR(255) = CONCAT(N'portal.', LOWER(REPLACE(REPLACE(@AgencyName, N' ', N''), N'.', N'')), N'.com');
+
+INSERT INTO Portal.WhiteLabelConfiguration
+(WhiteLabelConfigurationId, TenantId, DisplayName, PortalDomain, DomainStatus, PublishStatus, LastPublishedDateUtc, PrimaryColor, AccentColor, NavBackgroundColor, NavTextColor, WelcomeMessage, SupportEmail, SupportPhone, ShowAgencyLogo, HidePoweredBy, ShowNewsWidget, ShowSupportChat, EnableAnnouncements, EnableCrossSellWidget, MobileAppName, MobileBundleId, IosStoreUrl, AndroidStoreUrl, MobileVersion, MinimumMobileVersion, MobilePublished, BiometricLogin, PushNotifications, OfflinePolicyView, ForceMobileUpdate, RequireMfaOnMobile, AssistantName, AssistantWelcomeMessage, ChatWidgetColor, ChatPosition, ChatEscalationEmail, OfficeHours, ChatEnabled, AiResponsesEnabled, LiveHandoffEnabled, ShowChatOnMobile, AllowFileAttachments, TranscriptEmailEnabled, IdentityProvider, SsoEnabled, MfaRequired, AllowSocialLogin, AutoProvisionUsers, PasswordMinLength, SessionTimeoutMinutes, MaxFailedLoginAttempts, LockoutMinutes, RequireUppercase, RequireSpecialCharacter, IpWhitelistEnabled, ActivePortalUsers, PendingInvites, MobileInstalls, ChatSessions30d, OpenRequests, UrgentRequests, SharedDocuments, ApiCalls30d, CsATScore, AiResolutionRate, LiveHandoffs30d, AverageResponseSeconds, ConfigurationJson, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), @TenantId,
+       COALESCE(NULLIF(JSON_VALUE(b.JsonData, '$.displayName'), N''), CONCAT(@AgencyName, N' Client Portal')),
+       COALESCE(NULLIF(JSON_VALUE(b.JsonData, '$.domain'), N''), @PortalDomain),
+       N'Verified', N'Live', DATEADD(DAY, -4, SYSUTCDATETIME()),
+       COALESCE(NULLIF(JSON_VALUE(b.JsonData, '$.primaryColor'), N''), N'#1d4ed8'),
+       COALESCE(NULLIF(JSON_VALUE(b.JsonData, '$.accentColor'), N''), N'#059669'),
+       COALESCE(NULLIF(JSON_VALUE(b.JsonData, '$.navBg'), N''), N'#1e293b'),
+       COALESCE(NULLIF(JSON_VALUE(b.JsonData, '$.navText'), N''), N'#f8fafc'),
+       COALESCE(NULLIF(JSON_VALUE(b.JsonData, '$.welcomeMessage'), N''), CONCAT(N'Manage policies, request certificates, upload documents, and message ', @AgencyName, N' in one secure place.')),
+       COALESCE(NULLIF(JSON_VALUE(b.JsonData, '$.supportEmail'), N''), @SupportEmail),
+       COALESCE(NULLIF(JSON_VALUE(b.JsonData, '$.supportPhone'), N''), @SupportPhone),
+       COALESCE(TRY_CONVERT(BIT, JSON_VALUE(b.JsonData, '$.showAgencyLogo')), 1),
+       CASE WHEN COALESCE(TRY_CONVERT(BIT, JSON_VALUE(b.JsonData, '$.showPoweredBy')), 0) = 1 THEN 0 ELSE 1 END,
+       COALESCE(TRY_CONVERT(BIT, JSON_VALUE(b.JsonData, '$.showNewsWidget')), 1),
+       COALESCE(TRY_CONVERT(BIT, JSON_VALUE(b.JsonData, '$.showSupportChat')), 1),
+       1, 1,
+       COALESCE(NULLIF(JSON_VALUE(m.JsonData, '$.appName'), N''), CONCAT(@AgencyName, N' Mobile')),
+       COALESCE(NULLIF(JSON_VALUE(m.JsonData, '$.bundleId'), N''), N''),
+       COALESCE(NULLIF(JSON_VALUE(m.JsonData, '$.iosUrl'), N''), N''),
+       COALESCE(NULLIF(JSON_VALUE(m.JsonData, '$.androidUrl'), N''), N''),
+       COALESCE(NULLIF(JSON_VALUE(m.JsonData, '$.appVersion'), N''), N'2.4.1'),
+       N'2.0.0', 1,
+       COALESCE(TRY_CONVERT(BIT, JSON_VALUE(m.JsonData, '$.biometricLogin')), 1),
+       1, 1, 0,
+       COALESCE(TRY_CONVERT(BIT, JSON_VALUE(m.JsonData, '$.requireMfaOnMobile')), 1),
+       N'Aria', CONCAT(N'Hi there! I''m Aria, your ', @AgencyName, N' assistant. I can help with COI requests, policy questions, payments, and more.'), COALESCE(NULLIF(JSON_VALUE(b.JsonData, '$.primaryColor'), N''), N'#1d4ed8'), N'bottom-right', @SupportEmail, N'Mon-Fri, 8am-5pm CT',
+       COALESCE(TRY_CONVERT(BIT, JSON_VALUE(a.JsonData, '$.chatEnabled')), 1), 1, 1, 1, 1, 1, N'none',
+       COALESCE(TRY_CONVERT(BIT, JSON_VALUE(a.JsonData, '$.ssoEnabled')), 0),
+       COALESCE(TRY_CONVERT(BIT, JSON_VALUE(a.JsonData, '$.mfaEnabled')), 0),
+       1, 0, 10, 30, 5, 15, 1, 1, 0,
+       COALESCE(TRY_CONVERT(INT, JSON_VALUE(a.JsonData, '$.activePortalUsers')), 47),
+       COALESCE(TRY_CONVERT(INT, JSON_VALUE(a.JsonData, '$.pendingInvites')), 6),
+       COALESCE(TRY_CONVERT(INT, JSON_VALUE(a.JsonData, '$.mobileInstalls')), 23),
+       COALESCE(TRY_CONVERT(INT, JSON_VALUE(a.JsonData, '$.chatSessions30d')), 184),
+       COALESCE(TRY_CONVERT(INT, JSON_VALUE(a.JsonData, '$.openRequests')), 9),
+       COALESCE(TRY_CONVERT(INT, JSON_VALUE(a.JsonData, '$.urgentRequests')), 3),
+       COALESCE(TRY_CONVERT(INT, JSON_VALUE(a.JsonData, '$.sharedDocuments')), 42),
+       COALESCE(TRY_CONVERT(INT, JSON_VALUE(a.JsonData, '$.apiCalls30d')), 50410),
+       4.60, 74, 18, 108, N'{}', SYSUTCDATETIME(), 0
+FROM (SELECT 1 AS x) seed
+LEFT JOIN Portal.AdminRecord b ON b.TenantId = @TenantId AND b.Kind = N'PortalBranding' AND b.Code = N'branding' AND b.IsDeleted = 0 AND ISJSON(b.JsonData) = 1
+LEFT JOIN Portal.AdminRecord m ON m.TenantId = @TenantId AND m.Kind = N'PortalMobile' AND m.Code = N'mobile' AND m.IsDeleted = 0 AND ISJSON(m.JsonData) = 1
+LEFT JOIN Portal.AdminRecord a ON a.TenantId = @TenantId AND a.Kind = N'PortalMyAccount' AND a.Code = N'my-account' AND a.IsDeleted = 0 AND ISJSON(a.JsonData) = 1
+WHERE NOT EXISTS (SELECT 1 FROM Portal.WhiteLabelConfiguration WHERE TenantId = @TenantId AND IsDeleted = 0);
+
+UPDATE w
+SET ActivePortalUsers = COALESCE(NULLIF((SELECT COUNT(1) FROM Portal.AdminRecord u WHERE u.TenantId = @TenantId AND u.Kind = N'PortalUser' AND u.Status = N'Active' AND u.IsDeleted = 0), 0), w.ActivePortalUsers),
+    PendingInvites = COALESCE(NULLIF((SELECT COUNT(1) FROM Portal.AdminRecord u WHERE u.TenantId = @TenantId AND u.Kind = N'PortalUser' AND u.Status = N'Pending' AND u.IsDeleted = 0), 0), w.PendingInvites),
+    OpenRequests = COALESCE(NULLIF((SELECT COUNT(1) FROM Portal.AdminRecord r WHERE r.TenantId = @TenantId AND r.Kind = N'SelfServiceRequest' AND r.Status IN (N'Open', N'In Progress') AND r.IsDeleted = 0), 0), w.OpenRequests),
+    UrgentRequests = COALESCE(NULLIF((SELECT COUNT(1) FROM Portal.AdminRecord r WHERE r.TenantId = @TenantId AND r.Kind = N'SelfServiceRequest' AND r.JsonData LIKE N'%Urgent%' AND r.IsDeleted = 0), 0), w.UrgentRequests),
+    SharedDocuments = COALESCE(NULLIF((SELECT COUNT(1) FROM Portal.AdminRecord d WHERE d.TenantId = @TenantId AND d.Kind = N'PortalDocument' AND d.IsDeleted = 0), 0), w.SharedDocuments),
+    MobileInstalls = COALESCE(NULLIF((SELECT COUNT(1) FROM Portal.AdminRecord mi WHERE mi.TenantId = @TenantId AND mi.Kind = N'PortalMobileInstall' AND mi.IsDeleted = 0), 0), w.MobileInstalls),
+    ChatSessions30d = COALESCE(NULLIF((SELECT COUNT(1) FROM Portal.ChatSession cs WHERE cs.TenantId = @TenantId AND cs.IsDeleted = 0 AND cs.StartedDateUtc >= DATEADD(DAY, -30, SYSUTCDATETIME())), 0), w.ChatSessions30d),
+    LiveHandoffs30d = COALESCE(NULLIF((SELECT COUNT(1) FROM Portal.ChatSession cs WHERE cs.TenantId = @TenantId AND cs.IsDeleted = 0 AND cs.HandoffRequired = 1 AND cs.StartedDateUtc >= DATEADD(DAY, -30, SYSUTCDATETIME())), 0), w.LiveHandoffs30d),
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Portal.WhiteLabelConfiguration w
+WHERE w.TenantId = @TenantId AND w.IsDeleted = 0;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
+    }
+
+    private async Task EnsurePortalMyAccountProfileDataAsync(Guid tenantId, CancellationToken ct)
+    {
+        await EnsurePortalAdminDataAsync(tenantId, ct);
+
+        const string sql = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Portal') EXEC(N'CREATE SCHEMA Portal');
+
+IF OBJECT_ID(N'Portal.MyAccountProfile', N'U') IS NULL
+BEGIN
+    CREATE TABLE Portal.MyAccountProfile
+    (
+        MyAccountProfileId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Portal_MyAccountProfile PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AgencyName NVARCHAR(200) NOT NULL,
+        AdminName NVARCHAR(200) NOT NULL CONSTRAINT DF_MyAccount_AdminName DEFAULT N'Tenant Admin',
+        AdminEmail NVARCHAR(320) NOT NULL,
+        AdminRole NVARCHAR(80) NOT NULL CONSTRAINT DF_MyAccount_AdminRole DEFAULT N'Tenant Admin',
+        AdminPhone NVARCHAR(50) NOT NULL CONSTRAINT DF_MyAccount_AdminPhone DEFAULT N'',
+        TimeZone NVARCHAR(120) NOT NULL CONSTRAINT DF_MyAccount_TimeZone DEFAULT N'Central Standard Time',
+        Locale NVARCHAR(40) NOT NULL CONSTRAINT DF_MyAccount_Locale DEFAULT N'en-US',
+        PlanName NVARCHAR(120) NOT NULL CONSTRAINT DF_MyAccount_PlanName DEFAULT N'Enterprise',
+        PlanStatus NVARCHAR(80) NOT NULL CONSTRAINT DF_MyAccount_PlanStatus DEFAULT N'Active',
+        RenewalDateUtc DATETIME2 NOT NULL,
+        PortalUsers INT NOT NULL CONSTRAINT DF_MyAccount_PortalUsers DEFAULT 0,
+        ActivePortalUsers INT NOT NULL CONSTRAINT DF_MyAccount_ActiveUsers DEFAULT 0,
+        PendingInvites INT NOT NULL CONSTRAINT DF_MyAccount_PendingInvites DEFAULT 0,
+        OpenRequests INT NOT NULL CONSTRAINT DF_MyAccount_OpenRequests DEFAULT 0,
+        UrgentRequests INT NOT NULL CONSTRAINT DF_MyAccount_UrgentRequests DEFAULT 0,
+        SharedDocuments INT NOT NULL CONSTRAINT DF_MyAccount_SharedDocuments DEFAULT 0,
+        StorageUsedGb INT NOT NULL CONSTRAINT DF_MyAccount_StorageUsed DEFAULT 0,
+        StorageLimitGb INT NOT NULL CONSTRAINT DF_MyAccount_StorageLimit DEFAULT 250,
+        MonthlyLoginCount INT NOT NULL CONSTRAINT DF_MyAccount_LoginCount DEFAULT 0,
+        MobileInstalls INT NOT NULL CONSTRAINT DF_MyAccount_MobileInstalls DEFAULT 0,
+        ChatSessions30d INT NOT NULL CONSTRAINT DF_MyAccount_ChatSessions DEFAULT 0,
+        ApiCalls30d INT NOT NULL CONSTRAINT DF_MyAccount_ApiCalls DEFAULT 0,
+        LastPortalPublishUtc DATETIME2 NOT NULL,
+        LastAdminLoginUtc DATETIME2 NOT NULL,
+        MfaEnabled BIT NOT NULL CONSTRAINT DF_MyAccount_Mfa DEFAULT 1,
+        SsoEnabled BIT NOT NULL CONSTRAINT DF_MyAccount_Sso DEFAULT 0,
+        BrandingPublished BIT NOT NULL CONSTRAINT DF_MyAccount_Branding DEFAULT 1,
+        MobileAppPublished BIT NOT NULL CONSTRAINT DF_MyAccount_Mobile DEFAULT 1,
+        ChatEnabled BIT NOT NULL CONSTRAINT DF_MyAccount_Chat DEFAULT 1,
+        SupportEmail NVARCHAR(320) NOT NULL,
+        SupportPhone NVARCHAR(50) NOT NULL CONSTRAINT DF_MyAccount_SupportPhone DEFAULT N'',
+        PortalDomain NVARCHAR(255) NOT NULL,
+        HealthJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_MyAccount_Health DEFAULT N'[]',
+        ActivityJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_MyAccount_Activity DEFAULT N'[]',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_MyAccount_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_MyAccount_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Portal.MyAccountProfile') AND name = N'UX_MyAccount_Tenant')
+    CREATE UNIQUE INDEX UX_MyAccount_Tenant ON Portal.MyAccountProfile(TenantId) WHERE IsDeleted = 0;
+
+DECLARE @AgencyName NVARCHAR(200) = COALESCE((SELECT TOP 1 TenantName FROM Core.Tenant WHERE TenantId = @TenantId), N'Demo Agency');
+DECLARE @AdminEmail NVARCHAR(320) = COALESCE((SELECT TOP 1 Email FROM IAM.[User] WHERE TenantId = @TenantId ORDER BY CreatedDateUtc), N'admin@demoagency.com');
+DECLARE @SupportEmail NVARCHAR(320) = COALESCE((SELECT TOP 1 ContactEmail FROM Agency.Profile WHERE TenantId = @TenantId AND IsDeleted = 0), @AdminEmail);
+DECLARE @SupportPhone NVARCHAR(50) = COALESCE((SELECT TOP 1 ContactPhone FROM Agency.Profile WHERE TenantId = @TenantId AND IsDeleted = 0), N'(555) 000-0000');
+DECLARE @PortalDomain NVARCHAR(255) = CONCAT(N'portal.', LOWER(REPLACE(REPLACE(@AgencyName, N' ', N''), N'.', N'')), N'.com');
+
+INSERT INTO Portal.MyAccountProfile
+(MyAccountProfileId, TenantId, AgencyName, AdminName, AdminEmail, AdminRole, AdminPhone, TimeZone, Locale, PlanName, PlanStatus, RenewalDateUtc, PortalUsers, ActivePortalUsers, PendingInvites, OpenRequests, UrgentRequests, SharedDocuments, StorageUsedGb, StorageLimitGb, MonthlyLoginCount, MobileInstalls, ChatSessions30d, ApiCalls30d, LastPortalPublishUtc, LastAdminLoginUtc, MfaEnabled, SsoEnabled, BrandingPublished, MobileAppPublished, ChatEnabled, SupportEmail, SupportPhone, PortalDomain, HealthJson, ActivityJson, CreatedDateUtc, IsDeleted)
+SELECT @ExistingId, @TenantId, @AgencyName, N'Tenant Admin', @AdminEmail, N'Tenant Admin', @SupportPhone, N'Central Standard Time', N'en-US', N'Enterprise', N'Active', DATEADD(MONTH, 8, SYSUTCDATETIME()), 52, 47, 6, 23, 3, 184, 42, 250, 1260, 23, 184, 50410, DATEADD(DAY, -4, SYSUTCDATETIME()), DATEADD(HOUR, -2, SYSUTCDATETIME()), 1, 0, 1, 1, 1, @SupportEmail, @SupportPhone, @PortalDomain,
+       N'[{""name"":""Portal availability"",""status"":""Healthy"",""detail"":""All portal systems operational"",""icon"":""bi-check-circle""},{""name"":""Security posture"",""status"":""Watch"",""detail"":""SSO not enabled; MFA is active"",""icon"":""bi-shield-lock""},{""name"":""Storage capacity"",""status"":""Healthy"",""detail"":""42 GB of 250 GB used"",""icon"":""bi-hdd""}]',
+       N'[{""title"":""Branding published"",""detail"":""White-label portal configuration is live"",""severity"":""Healthy"",""icon"":""bi-palette""},{""title"":""Urgent request queue"",""detail"":""3 urgent self-service requests need review"",""severity"":""Watch"",""icon"":""bi-exclamation-triangle""},{""title"":""Admin login"",""detail"":""Tenant admin accessed portal console"",""severity"":""Info"",""icon"":""bi-person-check""}]',
+       SYSUTCDATETIME(), 0
+WHERE NOT EXISTS (SELECT 1 FROM Portal.MyAccountProfile WHERE TenantId = @TenantId AND IsDeleted = 0);";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var existingId = await cn.QuerySingleOrDefaultAsync<Guid?>(new CommandDefinition("SELECT TOP 1 PortalAdminRecordId FROM Portal.AdminRecord WHERE TenantId = @TenantId AND Kind = N'PortalMyAccount' AND Code = N'my-account' AND IsDeleted = 0", new { TenantId = tenantId }, cancellationToken: ct));
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId, ExistingId = existingId ?? Guid.NewGuid() }, cancellationToken: ct));
+    }
+
     private sealed record TenantPortalDefaults(string AgencyName, string Locale, string TimeZoneId, string SupportEmail, string SupportPhone, string PortalDomain, string BrandingDisplayName, string MobileBundleId, string AdminEmail);
 
     private static async Task<TenantPortalDefaults> GetTenantPortalDefaultsAsync(System.Data.IDbConnection cn, Guid tenantId, CancellationToken ct)
@@ -203,8 +619,65 @@ ORDER BY CreatedDateUtc DESC;";
     [HttpGet("activity")]
     public async Task<IActionResult> GetActivity([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, CancellationToken ct)
     {
-        await EnsurePortalAdminDataAsync(tenantId, ct);
-        return Ok(await ReadJsonRecordsAsync<PortalAdminActivityDto>(tenantId, "PortalActivity", searchTerm, ct));
+        await EnsurePortalActivityEventDataAsync(tenantId, ct);
+        const string sql = @"
+SELECT ActivityEventId AS Id,
+       TenantId,
+       EventNumber,
+       OccurredAtUtc,
+       UserName,
+       UserEmail,
+       AccountName,
+       EventType,
+       Category,
+       Severity,
+       Status,
+       Detail,
+       WorkflowImpact,
+       RecommendedAction,
+       AssignedTo,
+       IpAddress,
+       Device,
+       Location,
+       RiskScore,
+       DurationSeconds,
+       RequiresReview,
+       ReviewedDateUtc,
+       ReviewedBy,
+       CreatedDateUtc,
+       ModifiedDateUtc
+FROM Portal.ActivityEvent
+WHERE TenantId = @TenantId AND IsDeleted = 0
+  AND (@SearchTerm IS NULL OR @SearchTerm = '' OR UserName LIKE '%' + @SearchTerm + '%' OR UserEmail LIKE '%' + @SearchTerm + '%' OR AccountName LIKE '%' + @SearchTerm + '%' OR EventType LIKE '%' + @SearchTerm + '%' OR Detail LIKE '%' + @SearchTerm + '%')
+ORDER BY OccurredAtUtc DESC;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var items = (await cn.QueryAsync<PortalActivityEventDto>(new CommandDefinition(sql, new { TenantId = tenantId, SearchTerm = searchTerm }, cancellationToken: ct))).AsList();
+        return Ok(new PagedResult<PortalActivityEventDto> { Items = items, TotalCount = items.Count, PageNumber = 1, PageSize = items.Count });
+    }
+
+    [HttpPost("activity/{id:guid}/status")]
+    public async Task<IActionResult> UpdateActivityStatus(Guid id, [FromBody] UpdatePortalActivityEventRequest request, CancellationToken ct)
+    {
+        await EnsurePortalActivityEventDataAsync(request.TenantId, ct);
+        const string sql = @"
+UPDATE Portal.ActivityEvent
+SET Status = @Status,
+    AssignedTo = COALESCE(NULLIF(@AssignedTo, N''), AssignedTo),
+    RecommendedAction = COALESCE(NULLIF(@RecommendedAction, N''), RecommendedAction),
+    RequiresReview = @RequiresReview,
+    ReviewedDateUtc = CASE WHEN @Status IN (N'Reviewed', N'Acknowledged', N'Resolved') THEN SYSUTCDATETIME() ELSE ReviewedDateUtc END,
+    ReviewedBy = CASE WHEN @Status IN (N'Reviewed', N'Acknowledged', N'Resolved') THEN COALESCE(NULLIF(@AssignedTo, N''), N'Portal Ops') ELSE ReviewedBy END,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE ActivityEventId = @Id AND TenantId = @TenantId AND IsDeleted = 0;
+
+UPDATE Portal.AdminRecord
+SET Status = @Status,
+    JsonData = CASE WHEN ISJSON(JsonData) = 1 THEN JSON_MODIFY(JSON_MODIFY(JsonData, '$.severity', @Status), '$.detail', COALESCE(NULLIF(@RecommendedAction, N''), JSON_VALUE(JsonData, '$.detail'))) ELSE JsonData END,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE PortalAdminRecordId = @Id AND TenantId = @TenantId AND Kind = N'PortalActivity' AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.TenantId, request.Status, AssignedTo = request.AssignedTo ?? string.Empty, RecommendedAction = request.RecommendedAction ?? string.Empty, request.RequiresReview }, cancellationToken: ct));
+        return NoContent();
     }
 
     [HttpGet("capabilities")]
@@ -231,8 +704,300 @@ ORDER BY CreatedDateUtc DESC;";
     [HttpGet("my-account")]
     public async Task<IActionResult> GetMyAccount([FromQuery] Guid tenantId, CancellationToken ct)
     {
-        await EnsurePortalAdminDataAsync(tenantId, ct);
-        return Ok(await ReadSingleJsonRecordAsync<PortalMyAccountDto>(tenantId, "PortalMyAccount", "my-account", ct));
+        await EnsurePortalMyAccountProfileDataAsync(tenantId, ct);
+        const string sql = @"
+SELECT TOP 1 MyAccountProfileId AS Id,
+       TenantId,
+       AgencyName,
+       AdminName,
+       AdminEmail,
+       AdminRole,
+       AdminPhone,
+       TimeZone,
+       Locale,
+       PlanName,
+       PlanStatus,
+       RenewalDateUtc,
+       PortalUsers,
+       ActivePortalUsers,
+       PendingInvites,
+       OpenRequests,
+       UrgentRequests,
+       SharedDocuments,
+       StorageUsedGb,
+       StorageLimitGb,
+       MonthlyLoginCount,
+       MobileInstalls,
+       ChatSessions30d,
+       ApiCalls30d,
+       LastPortalPublishUtc,
+       LastAdminLoginUtc,
+       MfaEnabled,
+       SsoEnabled,
+       BrandingPublished,
+       MobileAppPublished,
+       ChatEnabled,
+       SupportEmail,
+       SupportPhone,
+       PortalDomain,
+       HealthJson,
+       ActivityJson
+FROM Portal.MyAccountProfile
+WHERE TenantId = @TenantId AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var account = await GetMyAccountDtoAsync(cn, tenantId, ct);
+        return account is null ? NotFound() : Ok(account);
+    }
+
+    [HttpPut("my-account/profile")]
+    public async Task<IActionResult> UpdateMyAccountProfile([FromBody] UpdatePortalMyAccountRequest request, CancellationToken ct)
+    {
+        await EnsurePortalMyAccountProfileDataAsync(request.TenantId, ct);
+        const string sql = @"
+UPDATE Portal.MyAccountProfile
+SET AgencyName = @AgencyName,
+    AdminName = @AdminName,
+    AdminEmail = @AdminEmail,
+    AdminRole = @AdminRole,
+    AdminPhone = @AdminPhone,
+    TimeZone = @TimeZone,
+    Locale = @Locale,
+    PlanName = @PlanName,
+    PlanStatus = @PlanStatus,
+    RenewalDateUtc = @RenewalDateUtc,
+    PortalUsers = @PortalUsers,
+    ActivePortalUsers = @ActivePortalUsers,
+    PendingInvites = @PendingInvites,
+    OpenRequests = @OpenRequests,
+    UrgentRequests = @UrgentRequests,
+    SharedDocuments = @SharedDocuments,
+    StorageUsedGb = @StorageUsedGb,
+    StorageLimitGb = @StorageLimitGb,
+    MonthlyLoginCount = @MonthlyLoginCount,
+    MobileInstalls = @MobileInstalls,
+    ChatSessions30d = @ChatSessions30d,
+    ApiCalls30d = @ApiCalls30d,
+    MfaEnabled = @MfaEnabled,
+    SsoEnabled = @SsoEnabled,
+    BrandingPublished = @BrandingPublished,
+    MobileAppPublished = @MobileAppPublished,
+    ChatEnabled = @ChatEnabled,
+    SupportEmail = @SupportEmail,
+    SupportPhone = @SupportPhone,
+    PortalDomain = @PortalDomain,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE TenantId = @TenantId AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, request, cancellationToken: ct));
+        var account = await GetMyAccountDtoAsync(cn, request.TenantId, ct);
+        if (account is not null)
+            await SyncMyAccountAdminRecordAsync(cn, account, ct);
+        return NoContent();
+    }
+
+    [HttpGet("white-label")]
+    public async Task<IActionResult> GetWhiteLabel([FromQuery] Guid tenantId, CancellationToken ct)
+    {
+        await EnsurePortalWhiteLabelDataAsync(tenantId, ct);
+        const string sql = @"
+SELECT WhiteLabelConfigurationId AS Id,
+       TenantId,
+       DisplayName,
+       PortalDomain,
+       DomainStatus,
+       PublishStatus,
+       LastPublishedDateUtc,
+       PrimaryColor,
+       AccentColor,
+       NavBackgroundColor,
+       NavTextColor,
+       LogoUrl,
+       FaviconUrl,
+       WelcomeMessage,
+       SupportEmail,
+       SupportPhone,
+       ShowAgencyLogo,
+       HidePoweredBy,
+       ShowNewsWidget,
+       ShowSupportChat,
+       EnableAnnouncements,
+       EnableCrossSellWidget,
+       MobileAppName,
+       MobileBundleId,
+       IosStoreUrl,
+       AndroidStoreUrl,
+       MobileVersion,
+       MinimumMobileVersion,
+       MobilePublished,
+       BiometricLogin,
+       PushNotifications,
+       OfflinePolicyView,
+       ForceMobileUpdate,
+       RequireMfaOnMobile,
+       AssistantName,
+       AssistantWelcomeMessage,
+       ChatWidgetColor,
+       ChatPosition,
+       ChatEscalationEmail,
+       OfficeHours,
+       ChatEnabled,
+       AiResponsesEnabled,
+       LiveHandoffEnabled,
+       ShowChatOnMobile,
+       AllowFileAttachments,
+       TranscriptEmailEnabled,
+       IdentityProvider,
+       SsoClientId,
+       SsoMetadataUrl,
+       RedirectUris,
+       SsoEnabled,
+       MfaRequired,
+       AllowSocialLogin,
+       AutoProvisionUsers,
+       PasswordMinLength,
+       SessionTimeoutMinutes,
+       MaxFailedLoginAttempts,
+       LockoutMinutes,
+       RequireUppercase,
+       RequireSpecialCharacter,
+       IpWhitelistEnabled,
+       ActivePortalUsers,
+       PendingInvites,
+       MobileInstalls,
+       ChatSessions30d,
+       OpenRequests,
+       UrgentRequests,
+       SharedDocuments,
+       ApiCalls30d,
+       CsATScore,
+       AiResolutionRate,
+       LiveHandoffs30d,
+       AverageResponseSeconds,
+       ConfigurationJson,
+       CreatedDateUtc,
+       ModifiedDateUtc
+FROM Portal.WhiteLabelConfiguration
+WHERE TenantId = @TenantId AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var item = await cn.QuerySingleOrDefaultAsync<PortalWhiteLabelConfigurationDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
+        return item is null ? NotFound() : Ok(item);
+    }
+
+    [HttpPut("white-label")]
+    public async Task<IActionResult> UpdateWhiteLabel([FromBody] UpdatePortalWhiteLabelConfigurationRequest request, CancellationToken ct)
+    {
+        await EnsurePortalWhiteLabelDataAsync(request.TenantId, ct);
+        const string sql = @"
+UPDATE Portal.WhiteLabelConfiguration
+SET DisplayName = @DisplayName,
+    PortalDomain = @PortalDomain,
+    DomainStatus = @DomainStatus,
+    PublishStatus = @PublishStatus,
+    PrimaryColor = @PrimaryColor,
+    AccentColor = @AccentColor,
+    NavBackgroundColor = @NavBackgroundColor,
+    NavTextColor = @NavTextColor,
+    LogoUrl = @LogoUrl,
+    FaviconUrl = @FaviconUrl,
+    WelcomeMessage = @WelcomeMessage,
+    SupportEmail = @SupportEmail,
+    SupportPhone = @SupportPhone,
+    ShowAgencyLogo = @ShowAgencyLogo,
+    HidePoweredBy = @HidePoweredBy,
+    ShowNewsWidget = @ShowNewsWidget,
+    ShowSupportChat = @ShowSupportChat,
+    EnableAnnouncements = @EnableAnnouncements,
+    EnableCrossSellWidget = @EnableCrossSellWidget,
+    MobileAppName = @MobileAppName,
+    MobileBundleId = @MobileBundleId,
+    IosStoreUrl = @IosStoreUrl,
+    AndroidStoreUrl = @AndroidStoreUrl,
+    MobileVersion = @MobileVersion,
+    MinimumMobileVersion = @MinimumMobileVersion,
+    MobilePublished = @MobilePublished,
+    BiometricLogin = @BiometricLogin,
+    PushNotifications = @PushNotifications,
+    OfflinePolicyView = @OfflinePolicyView,
+    ForceMobileUpdate = @ForceMobileUpdate,
+    RequireMfaOnMobile = @RequireMfaOnMobile,
+    AssistantName = @AssistantName,
+    AssistantWelcomeMessage = @AssistantWelcomeMessage,
+    ChatWidgetColor = @ChatWidgetColor,
+    ChatPosition = @ChatPosition,
+    ChatEscalationEmail = @ChatEscalationEmail,
+    OfficeHours = @OfficeHours,
+    ChatEnabled = @ChatEnabled,
+    AiResponsesEnabled = @AiResponsesEnabled,
+    LiveHandoffEnabled = @LiveHandoffEnabled,
+    ShowChatOnMobile = @ShowChatOnMobile,
+    AllowFileAttachments = @AllowFileAttachments,
+    TranscriptEmailEnabled = @TranscriptEmailEnabled,
+    IdentityProvider = @IdentityProvider,
+    SsoClientId = @SsoClientId,
+    SsoMetadataUrl = @SsoMetadataUrl,
+    RedirectUris = @RedirectUris,
+    SsoEnabled = @SsoEnabled,
+    MfaRequired = @MfaRequired,
+    AllowSocialLogin = @AllowSocialLogin,
+    AutoProvisionUsers = @AutoProvisionUsers,
+    PasswordMinLength = @PasswordMinLength,
+    SessionTimeoutMinutes = @SessionTimeoutMinutes,
+    MaxFailedLoginAttempts = @MaxFailedLoginAttempts,
+    LockoutMinutes = @LockoutMinutes,
+    RequireUppercase = @RequireUppercase,
+    RequireSpecialCharacter = @RequireSpecialCharacter,
+    IpWhitelistEnabled = @IpWhitelistEnabled,
+    ConfigurationJson = @ConfigurationJson,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE TenantId = @TenantId AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, request, cancellationToken: ct));
+        await SyncWhiteLabelAdminRecordsAsync(cn, request, ct);
+        return NoContent();
+    }
+
+    [HttpPost("white-label/publish")]
+    public async Task<IActionResult> PublishWhiteLabel([FromQuery] Guid tenantId, CancellationToken ct)
+    {
+        await EnsurePortalWhiteLabelDataAsync(tenantId, ct);
+        const string sql = @"
+UPDATE Portal.WhiteLabelConfiguration
+SET PublishStatus = N'Live',
+    DomainStatus = CASE WHEN DomainStatus = N'Pending DNS' THEN N'Verified' ELSE DomainStatus END,
+    LastPublishedDateUtc = SYSUTCDATETIME(),
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE TenantId = @TenantId AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
+        return NoContent();
+    }
+
+    [HttpPost("white-label/action")]
+    public async Task<IActionResult> RunWhiteLabelAction([FromQuery] Guid tenantId, [FromQuery] string action, CancellationToken ct)
+    {
+        await EnsurePortalWhiteLabelDataAsync(tenantId, ct);
+        var (domainStatus, publishStatus, configPatch) = action switch
+        {
+            "verify-domain" => ("Verified", (string?)null, "domain verified"),
+            "mark-draft" => ((string?)null, "Draft", "draft mode"),
+            "enable-sso" => ((string?)null, (string?)null, "sso enabled"),
+            "enable-chat" => ((string?)null, (string?)null, "chat enabled"),
+            "force-mobile-update" => ((string?)null, (string?)null, "mobile update required"),
+            _ => ((string?)null, (string?)null, "action recorded")
+        };
+        const string sql = @"
+UPDATE Portal.WhiteLabelConfiguration
+SET DomainStatus = COALESCE(@DomainStatus, DomainStatus),
+    PublishStatus = COALESCE(@PublishStatus, PublishStatus),
+    SsoEnabled = CASE WHEN @Action = N'enable-sso' THEN 1 ELSE SsoEnabled END,
+    ChatEnabled = CASE WHEN @Action = N'enable-chat' THEN 1 ELSE ChatEnabled END,
+    ForceMobileUpdate = CASE WHEN @Action = N'force-mobile-update' THEN 1 ELSE ForceMobileUpdate END,
+    ConfigurationJson = JSON_MODIFY(CASE WHEN ISJSON(ConfigurationJson) = 1 THEN ConfigurationJson ELSE N'{}' END, '$.lastAction', @ConfigPatch),
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE TenantId = @TenantId AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId, Action = action, DomainStatus = domainStatus, PublishStatus = publishStatus, ConfigPatch = configPatch }, cancellationToken: ct));
+        return NoContent();
     }
 
     [HttpGet("metrics/{kind}")]
@@ -242,33 +1007,155 @@ ORDER BY CreatedDateUtc DESC;";
         return Ok(await ReadJsonRecordsAsync<PortalMetricRecordDto>(tenantId, kind, searchTerm, ct));
     }
 
+    [HttpGet("chat-sessions")]
+    public async Task<IActionResult> GetChatSessions([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, CancellationToken ct)
+    {
+        await EnsurePortalChatSessionDataAsync(tenantId, ct);
+        const string sql = @"
+SELECT ChatSessionId AS Id,
+       TenantId,
+       SessionNumber,
+       ClientName,
+       AccountName,
+       ContactEmail,
+       Channel,
+       Topic,
+       Status,
+       Priority,
+       Sentiment,
+       AssignedTo,
+       Summary,
+       NextBestAction,
+       StartedDateUtc,
+       LastMessageDateUtc,
+       ResolvedDateUtc,
+       MessageCount,
+       WaitSeconds,
+       SlaDueDateUtc,
+       AiHandled,
+       HandoffRequired,
+       ReviewedDateUtc
+FROM Portal.ChatSession
+WHERE TenantId = @TenantId AND IsDeleted = 0
+  AND (@SearchTerm IS NULL OR @SearchTerm = ''
+       OR SessionNumber LIKE '%' + @SearchTerm + '%'
+       OR ClientName LIKE '%' + @SearchTerm + '%'
+       OR AccountName LIKE '%' + @SearchTerm + '%'
+       OR ContactEmail LIKE '%' + @SearchTerm + '%'
+       OR Topic LIKE '%' + @SearchTerm + '%'
+       OR Status LIKE '%' + @SearchTerm + '%'
+       OR Priority LIKE '%' + @SearchTerm + '%'
+       OR Sentiment LIKE '%' + @SearchTerm + '%'
+       OR AssignedTo LIKE '%' + @SearchTerm + '%'
+       OR Summary LIKE '%' + @SearchTerm + '%')
+ORDER BY CASE WHEN HandoffRequired = 1 THEN 0 WHEN Status = N'Open' THEN 1 WHEN ReviewedDateUtc IS NULL THEN 2 ELSE 3 END,
+         CASE Priority WHEN N'Urgent' THEN 0 WHEN N'High' THEN 1 WHEN N'Normal' THEN 2 ELSE 3 END,
+         LastMessageDateUtc DESC;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var items = (await cn.QueryAsync<PortalChatSessionDto>(new CommandDefinition(sql, new { TenantId = tenantId, SearchTerm = searchTerm }, cancellationToken: ct))).AsList();
+        return Ok(new PagedResult<PortalChatSessionDto> { Items = items, TotalCount = items.Count, PageNumber = 1, PageSize = items.Count });
+    }
+
+    [HttpPost("chat-sessions/{id:guid}/status")]
+    public async Task<IActionResult> UpdateChatSessionStatus(Guid id, [FromBody] UpdatePortalChatSessionStatusRequest request, CancellationToken ct)
+    {
+        await EnsurePortalChatSessionDataAsync(request.TenantId, ct);
+        const string sql = @"
+UPDATE Portal.ChatSession
+SET Status = @Status,
+    AssignedTo = COALESCE(NULLIF(@AssignedTo, N''), AssignedTo),
+    NextBestAction = COALESCE(NULLIF(@NextBestAction, N''), NextBestAction),
+    ReviewedDateUtc = CASE WHEN @Status IN (N'Reviewed', N'Resolved by Agent', N'AI Resolved') THEN COALESCE(ReviewedDateUtc, SYSUTCDATETIME()) ELSE ReviewedDateUtc END,
+    ResolvedDateUtc = CASE WHEN @Status IN (N'Resolved by Agent', N'AI Resolved') THEN COALESCE(ResolvedDateUtc, SYSUTCDATETIME()) ELSE ResolvedDateUtc END,
+    HandoffRequired = CASE WHEN @Status IN (N'Reviewed', N'Resolved by Agent', N'AI Resolved') THEN 0 ELSE HandoffRequired END,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE ChatSessionId = @Id AND TenantId = @TenantId AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var affected = await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.TenantId, request.Status, request.AssignedTo, request.NextBestAction }, cancellationToken: ct));
+        return affected == 0 ? NotFound() : NoContent();
+    }
+
     [HttpPut("my-account")]
     public async Task<IActionResult> UpdateMyAccount([FromQuery] Guid tenantId, [FromBody] PortalMyAccountDto account, CancellationToken ct)
     {
-        await EnsurePortalAdminDataAsync(tenantId, ct);
+        await EnsurePortalMyAccountProfileDataAsync(tenantId, ct);
         account.TenantId = tenantId;
-        var json = JsonSerializer.Serialize(account, JsonOptions);
         const string sql = @"
-UPDATE Portal.AdminRecord
-SET Name = @Name,
-    Status = @Status,
-    JsonData = @JsonData,
+UPDATE Portal.MyAccountProfile
+SET AgencyName = @AgencyName,
+    AdminName = @AdminName,
+    AdminEmail = @AdminEmail,
+    AdminRole = @AdminRole,
+    AdminPhone = @AdminPhone,
+    TimeZone = @TimeZone,
+    Locale = @Locale,
+    PlanName = @PlanName,
+    PlanStatus = @PlanStatus,
+    RenewalDateUtc = @RenewalDateUtc,
+    PortalUsers = @PortalUsers,
+    ActivePortalUsers = @ActivePortalUsers,
+    PendingInvites = @PendingInvites,
+    OpenRequests = @OpenRequests,
+    UrgentRequests = @UrgentRequests,
+    SharedDocuments = @SharedDocuments,
+    StorageUsedGb = @StorageUsedGb,
+    StorageLimitGb = @StorageLimitGb,
+    MonthlyLoginCount = @MonthlyLoginCount,
+    MobileInstalls = @MobileInstalls,
+    ChatSessions30d = @ChatSessions30d,
+    ApiCalls30d = @ApiCalls30d,
+    MfaEnabled = @MfaEnabled,
+    SsoEnabled = @SsoEnabled,
+    BrandingPublished = @BrandingPublished,
+    MobileAppPublished = @MobileAppPublished,
+    ChatEnabled = @ChatEnabled,
+    SupportEmail = @SupportEmail,
+    SupportPhone = @SupportPhone,
+    PortalDomain = @PortalDomain,
+    HealthJson = @HealthJson,
+    ActivityJson = @ActivityJson,
     ModifiedDateUtc = SYSUTCDATETIME()
-WHERE TenantId = @TenantId AND Kind = N'PortalMyAccount' AND Code = N'my-account' AND IsDeleted = 0;
-
-IF @@ROWCOUNT = 0
-BEGIN
-    INSERT INTO Portal.AdminRecord (PortalAdminRecordId, TenantId, Kind, Code, Name, Status, JsonData, CreatedDateUtc, IsDeleted)
-    VALUES (NEWID(), @TenantId, N'PortalMyAccount', N'my-account', @Name, @Status, @JsonData, SYSUTCDATETIME(), 0);
-END";
+WHERE TenantId = @TenantId AND IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
         await cn.ExecuteAsync(new CommandDefinition(sql, new
         {
-            TenantId = tenantId,
-            Name = account.AgencyName,
-            Status = account.PlanStatus,
-            JsonData = json
+            account.TenantId,
+            account.AgencyName,
+            account.AdminName,
+            account.AdminEmail,
+            account.AdminRole,
+            account.AdminPhone,
+            account.TimeZone,
+            account.Locale,
+            account.PlanName,
+            account.PlanStatus,
+            account.RenewalDateUtc,
+            account.PortalUsers,
+            account.ActivePortalUsers,
+            account.PendingInvites,
+            account.OpenRequests,
+            account.UrgentRequests,
+            account.SharedDocuments,
+            account.StorageUsedGb,
+            account.StorageLimitGb,
+            account.MonthlyLoginCount,
+            account.MobileInstalls,
+            account.ChatSessions30d,
+            account.ApiCalls30d,
+            account.MfaEnabled,
+            account.SsoEnabled,
+            account.BrandingPublished,
+            account.MobileAppPublished,
+            account.ChatEnabled,
+            account.SupportEmail,
+            account.SupportPhone,
+            account.PortalDomain,
+            HealthJson = JsonSerializer.Serialize(account.HealthChecks, JsonOptions),
+            ActivityJson = JsonSerializer.Serialize(account.RecentActivity, JsonOptions)
         }, cancellationToken: ct));
+        var saved = await GetMyAccountDtoAsync(cn, tenantId, ct);
+        if (saved is not null)
+            await SyncMyAccountAdminRecordAsync(cn, saved, ct);
         return NoContent();
     }
 
@@ -295,6 +1182,221 @@ WHERE PortalAdminRecordId = @Id AND TenantId = @TenantId AND Kind = @Kind AND Is
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.TenantId, request.Kind, request.Code, request.Name, request.Status, request.JsonData }, cancellationToken: ct));
         return NoContent();
+    }
+
+    private static async Task SyncWhiteLabelAdminRecordsAsync(System.Data.IDbConnection cn, UpdatePortalWhiteLabelConfigurationRequest request, CancellationToken ct)
+    {
+        var branding = new PortalBrandingSettingsDto
+        {
+            DisplayName = request.DisplayName,
+            Domain = request.PortalDomain,
+            SupportEmail = request.SupportEmail,
+            SupportPhone = request.SupportPhone,
+            WelcomeMessage = request.WelcomeMessage,
+            PrimaryColor = request.PrimaryColor,
+            AccentColor = request.AccentColor,
+            NavBg = request.NavBackgroundColor,
+            NavText = request.NavTextColor,
+            EmailFromName = request.DisplayName,
+            EmailReplyTo = request.SupportEmail,
+            EmailFooter = $"{request.DisplayName} · Client Portal Support · {request.SupportPhone}",
+            ShowAgencyLogo = request.ShowAgencyLogo,
+            ShowPoweredBy = !request.HidePoweredBy,
+            ShowSupportChat = request.ShowSupportChat,
+            ShowNewsWidget = request.ShowNewsWidget
+        };
+        var mobile = new PortalMobileSettingsDto
+        {
+            AppName = request.MobileAppName,
+            IosUrl = request.IosStoreUrl,
+            AndroidUrl = request.AndroidStoreUrl,
+            BundleId = request.MobileBundleId,
+            AppVersion = request.MobileVersion,
+            BiometricLogin = request.BiometricLogin,
+            ForceAppLock = request.ForceMobileUpdate,
+            LockTimeoutMinutes = request.SessionTimeoutMinutes,
+            RequireMfaOnMobile = request.RequireMfaOnMobile
+        };
+
+        var brandingJson = JsonSerializer.Serialize(branding, JsonOptions);
+        var mobileJson = JsonSerializer.Serialize(mobile, JsonOptions);
+        const string sql = @"
+UPDATE Portal.AdminRecord
+SET Name = @BrandingName, Status = @BrandingStatus, JsonData = @BrandingJson, ModifiedDateUtc = SYSUTCDATETIME()
+WHERE TenantId = @TenantId AND Kind = N'PortalBranding' AND Code = N'branding' AND IsDeleted = 0;
+
+IF @@ROWCOUNT = 0
+BEGIN
+    INSERT INTO Portal.AdminRecord (PortalAdminRecordId, TenantId, Kind, Code, Name, Status, JsonData, CreatedDateUtc, IsDeleted)
+    VALUES (NEWID(), @TenantId, N'PortalBranding', N'branding', @BrandingName, @BrandingStatus, @BrandingJson, SYSUTCDATETIME(), 0);
+END;
+
+UPDATE Portal.AdminRecord
+SET Name = @MobileName, Status = @MobileStatus, JsonData = @MobileJson, ModifiedDateUtc = SYSUTCDATETIME()
+WHERE TenantId = @TenantId AND Kind = N'PortalMobile' AND Code = N'mobile' AND IsDeleted = 0;
+
+IF @@ROWCOUNT = 0
+BEGIN
+    INSERT INTO Portal.AdminRecord (PortalAdminRecordId, TenantId, Kind, Code, Name, Status, JsonData, CreatedDateUtc, IsDeleted)
+    VALUES (NEWID(), @TenantId, N'PortalMobile', N'mobile', @MobileName, @MobileStatus, @MobileJson, SYSUTCDATETIME(), 0);
+END;";
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            request.TenantId,
+            BrandingName = request.DisplayName,
+            BrandingStatus = request.PublishStatus,
+            BrandingJson = brandingJson,
+            MobileName = request.MobileAppName,
+            MobileStatus = request.MobilePublished ? "Published" : "Draft",
+            MobileJson = mobileJson
+        }, cancellationToken: ct));
+    }
+
+    private static async Task<PortalMyAccountDto?> GetMyAccountDtoAsync(System.Data.IDbConnection cn, Guid tenantId, CancellationToken ct)
+    {
+        const string sql = @"
+SELECT TOP 1 MyAccountProfileId AS Id,
+       TenantId,
+       AgencyName,
+       AdminName,
+       AdminEmail,
+       AdminRole,
+       AdminPhone,
+       TimeZone,
+       Locale,
+       PlanName,
+       PlanStatus,
+       RenewalDateUtc,
+       PortalUsers,
+       ActivePortalUsers,
+       PendingInvites,
+       OpenRequests,
+       UrgentRequests,
+       SharedDocuments,
+       StorageUsedGb,
+       StorageLimitGb,
+       MonthlyLoginCount,
+       MobileInstalls,
+       ChatSessions30d,
+       ApiCalls30d,
+       LastPortalPublishUtc,
+       LastAdminLoginUtc,
+       MfaEnabled,
+       SsoEnabled,
+       BrandingPublished,
+       MobileAppPublished,
+       ChatEnabled,
+       SupportEmail,
+       SupportPhone,
+       PortalDomain,
+       HealthJson,
+       ActivityJson
+FROM Portal.MyAccountProfile
+WHERE TenantId = @TenantId AND IsDeleted = 0;";
+        var row = await cn.QuerySingleOrDefaultAsync<MyAccountProfileRow>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
+        return row?.ToDto();
+    }
+
+    private static async Task SyncMyAccountAdminRecordAsync(System.Data.IDbConnection cn, PortalMyAccountDto account, CancellationToken ct)
+    {
+        var json = JsonSerializer.Serialize(account, JsonOptions);
+        const string sql = @"
+UPDATE Portal.AdminRecord
+SET Name = @Name, Status = @Status, JsonData = @JsonData, ModifiedDateUtc = SYSUTCDATETIME()
+WHERE TenantId = @TenantId AND Kind = N'PortalMyAccount' AND Code = N'my-account' AND IsDeleted = 0;
+
+IF @@ROWCOUNT = 0
+BEGIN
+    INSERT INTO Portal.AdminRecord (PortalAdminRecordId, TenantId, Kind, Code, Name, Status, JsonData, CreatedDateUtc, IsDeleted)
+    VALUES (NEWID(), @TenantId, N'PortalMyAccount', N'my-account', @Name, @Status, @JsonData, SYSUTCDATETIME(), 0);
+END;";
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { account.TenantId, Name = account.AgencyName, Status = account.PlanStatus, JsonData = json }, cancellationToken: ct));
+    }
+
+    private sealed class MyAccountProfileRow
+    {
+        public Guid Id { get; set; }
+        public Guid TenantId { get; set; }
+        public string AgencyName { get; set; } = string.Empty;
+        public string AdminName { get; set; } = string.Empty;
+        public string AdminEmail { get; set; } = string.Empty;
+        public string AdminRole { get; set; } = string.Empty;
+        public string AdminPhone { get; set; } = string.Empty;
+        public string TimeZone { get; set; } = string.Empty;
+        public string Locale { get; set; } = string.Empty;
+        public string PlanName { get; set; } = string.Empty;
+        public string PlanStatus { get; set; } = string.Empty;
+        public DateTime RenewalDateUtc { get; set; }
+        public int PortalUsers { get; set; }
+        public int ActivePortalUsers { get; set; }
+        public int PendingInvites { get; set; }
+        public int OpenRequests { get; set; }
+        public int UrgentRequests { get; set; }
+        public int SharedDocuments { get; set; }
+        public int StorageUsedGb { get; set; }
+        public int StorageLimitGb { get; set; }
+        public int MonthlyLoginCount { get; set; }
+        public int MobileInstalls { get; set; }
+        public int ChatSessions30d { get; set; }
+        public int ApiCalls30d { get; set; }
+        public DateTime LastPortalPublishUtc { get; set; }
+        public DateTime LastAdminLoginUtc { get; set; }
+        public bool MfaEnabled { get; set; }
+        public bool SsoEnabled { get; set; }
+        public bool BrandingPublished { get; set; }
+        public bool MobileAppPublished { get; set; }
+        public bool ChatEnabled { get; set; }
+        public string SupportEmail { get; set; } = string.Empty;
+        public string SupportPhone { get; set; } = string.Empty;
+        public string PortalDomain { get; set; } = string.Empty;
+        public string HealthJson { get; set; } = "[]";
+        public string ActivityJson { get; set; } = "[]";
+
+        public PortalMyAccountDto ToDto() => new()
+        {
+            TenantId = TenantId,
+            AgencyName = AgencyName,
+            AdminName = AdminName,
+            AdminEmail = AdminEmail,
+            AdminRole = AdminRole,
+            AdminPhone = AdminPhone,
+            TimeZone = TimeZone,
+            Locale = Locale,
+            PlanName = PlanName,
+            PlanStatus = PlanStatus,
+            RenewalDateUtc = RenewalDateUtc,
+            PortalUsers = PortalUsers,
+            ActivePortalUsers = ActivePortalUsers,
+            PendingInvites = PendingInvites,
+            OpenRequests = OpenRequests,
+            UrgentRequests = UrgentRequests,
+            SharedDocuments = SharedDocuments,
+            StorageUsedGb = StorageUsedGb,
+            StorageLimitGb = StorageLimitGb,
+            MonthlyLoginCount = MonthlyLoginCount,
+            MobileInstalls = MobileInstalls,
+            ChatSessions30d = ChatSessions30d,
+            ApiCalls30d = ApiCalls30d,
+            LastPortalPublishUtc = LastPortalPublishUtc,
+            LastAdminLoginUtc = LastAdminLoginUtc,
+            MfaEnabled = MfaEnabled,
+            SsoEnabled = SsoEnabled,
+            BrandingPublished = BrandingPublished,
+            MobileAppPublished = MobileAppPublished,
+            ChatEnabled = ChatEnabled,
+            SupportEmail = SupportEmail,
+            SupportPhone = SupportPhone,
+            PortalDomain = PortalDomain,
+            HealthChecks = DeserializeList<PortalAccountHealthDto>(HealthJson),
+            RecentActivity = DeserializeList<PortalAccountActivityDto>(ActivityJson)
+        };
+    }
+
+    private static List<T> DeserializeList<T>(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        try { return JsonSerializer.Deserialize<List<T>>(json, JsonOptions) ?? []; }
+        catch { return []; }
     }
 
     [HttpPost("records/{id:guid}/status")]

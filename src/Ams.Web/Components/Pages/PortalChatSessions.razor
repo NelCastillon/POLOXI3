@@ -1,5 +1,6 @@
 @page "/portal/chat-sessions"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
@@ -7,71 +8,357 @@
 
 <PageTitle>Chat Sessions — AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true"><ToastPosition X="Right" Y="Bottom" /></SfToast>
-
-<AppPageHeader Title="Chat Sessions" Subtitle="Portal chat assistant sessions, resolution outcomes, and live handoffs" Icon="bi-chat-dots">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/portal/my-account")'><i class="bi bi-arrow-left" aria-hidden="true"></i> My Account</button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
-        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/portal/white-label")'><i class="bi bi-robot" aria-hidden="true"></i> Chat Settings</button>
-    </Actions>
-</AppPageHeader>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError</div>
+    <div class="pcs-toast pcs-toast--@_toastKind" role="status" aria-live="polite">
+        <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
 }
 
-<div class="pma-kpi-strip">
-    @Kpi("Total Sessions", _items.Sum(x => x.Count).ToString("N0"), "bi-chat-dots", "")
-    @Kpi("AI Resolved", _items.Where(x => x.Status == "AI Resolved").Sum(x => x.Count).ToString("N0"), "bi-stars", "AI Resolved")
-    @Kpi("Live Handoff", _items.Where(x => x.Status == "Live Handoff").Sum(x => x.Count).ToString("N0"), "bi-headset", "Live Handoff")
-    @Kpi("Open", _items.Where(x => x.Status == "Open").Sum(x => x.Count).ToString("N0"), "bi-hourglass", "Open")
-</div>
+<div class="pcs-page" @onclick="CloseActionMenu">
+    <section class="pcs-hero">
+        <div class="pcs-hero__content">
+            <span class="pcs-hero__eyebrow"><i class="bi bi-chat-dots-fill" aria-hidden="true"></i> Portal service command center</span>
+            <h1>Chat Sessions</h1>
+            <p>Prioritize live handoffs, SLA risk, AI resolution quality, and client service outcomes from a full-width enterprise dashboard synced to portal chat workflow data.</p>
+            <div class="pcs-hero__meta">
+                <span><i class="bi bi-chat-dots" aria-hidden="true"></i>@TotalSessions.ToString("N0") sessions</span>
+                <span><i class="bi bi-headset" aria-hidden="true"></i>@HandoffSessions.ToString("N0") handoffs</span>
+                <span><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>@SlaRisk.ToString("N0") SLA risk</span>
+                <span><i class="bi bi-stars" aria-hidden="true"></i>@AiResolutionRate.ToString("0")% AI resolved</span>
+            </div>
+        </div>
+        <div class="pcs-hero__actions">
+            <button type="button" class="pcs-btn pcs-btn--light" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "pcs-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="pcs-btn pcs-btn--light" @onclick="FocusHandoffs"><i class="bi bi-headset" aria-hidden="true"></i> Handoffs</button>
+            <button type="button" class="pcs-btn pcs-btn--light" @onclick="FocusSla"><i class="bi bi-alarm" aria-hidden="true"></i> SLA Risk</button>
+            <button type="button" class="pcs-btn pcs-btn--primary" @onclick="ExportAsync" disabled="@(!Filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+        </div>
+    </section>
 
-<div class="pma-panel app-datagrid">
-    <div class="pma-panel-hdr"><i class="bi bi-chat-dots" aria-hidden="true"></i> Session Detail</div>
-    <div class="api-filter-bar"><input class="api-search" placeholder="Search client, topic, or owner…" @bind="_search" @bind:event="oninput" /><select class="api-search" @bind="_filter"><option value="">All</option><option>AI Resolved</option><option>Live Handoff</option><option>Open</option></select></div>
-    <SfGrid TValue="PortalMetricRecordDto" DataSource="Filtered" AllowSorting="true" AllowPaging="true" AllowTextWrap="true" RowHeight="56">
-        <GridTextWrapSettings WrapMode="WrapMode.Content" />
-        <GridPageSettings PageSize="20" />
-        <GridColumns>
-            <GridColumn Field="@nameof(PortalMetricRecordDto.Name)" HeaderText="Client" MinWidth="200" />
-            <GridColumn Field="@nameof(PortalMetricRecordDto.Category)" HeaderText="Topic" MinWidth="160" />
-            <GridColumn Field="@nameof(PortalMetricRecordDto.Status)" HeaderText="Outcome" Width="140" />
-            <GridColumn Field="@nameof(PortalMetricRecordDto.Owner)" HeaderText="Owner" MinWidth="150" />
-            <GridColumn Field="@nameof(PortalMetricRecordDto.Detail)" HeaderText="Summary" MinWidth="260" />
-            <GridColumn Field="@nameof(PortalMetricRecordDto.EventDateUtc)" HeaderText="Started" Width="145" Type="ColumnType.DateTime" Format="MMM d, h:mm tt" />
-            <GridColumn Field="@nameof(PortalMetricRecordDto.Count)" HeaderText="Messages" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
-        </GridColumns>
-    </SfGrid>
+    <section class="pcs-kpi-strip" aria-label="Chat session KPIs">
+        @KpiCard("all", "Total Sessions", TotalSessions.ToString("N0"), "All synced conversations", "bi-chat-dots", "pcs-kpi--blue")
+        @KpiCard("handoff", "Live Handoffs", HandoffSessions.ToString("N0"), "Human service required", "bi-headset", "pcs-kpi--amber")
+        @KpiCard("sla", "SLA Risk", SlaRisk.ToString("N0"), "Overdue or due in 1 hour", "bi-alarm", "pcs-kpi--red")
+        @KpiCard("open", "Open", OpenSessions.ToString("N0"), "Active monitoring queue", "bi-hourglass-split", "pcs-kpi--purple")
+        @KpiCard("ai", "AI Resolved", AiResolved.ToString("N0"), "Closed without handoff", "bi-stars", "pcs-kpi--green")
+        @KpiCard("review", "Needs Review", NeedsReview.ToString("N0"), "Unreviewed transcripts", "bi-clipboard-check", "pcs-kpi--cyan")
+    </section>
+
+    <section class="pcs-workflows" aria-label="Chat session workflows">
+        @WorkflowButton("bi-headset", "Triage handoffs", "Prioritize escalated client conversations", FocusHandoffs)
+        @WorkflowButton("bi-alarm", "Protect SLA", "Filter overdue or near-due chats", FocusSla)
+        @WorkflowButton("bi-stars", "Review AI quality", "Validate automated resolutions", FocusAiResolved)
+        @WorkflowButton("bi-inbox", "Open requests", "Continue self-service workflow", () => Nav.NavigateTo("/portal/requests"))
+        @WorkflowButton("bi-robot", "Chat settings", "Tune portal assistant experience", () => Nav.NavigateTo("/portal/white-label"))
+    </section>
+
+    <section class="pcs-filter-panel">
+        <div class="pcs-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input aria-label="Search chat sessions" placeholder="Search client, account, topic, owner, status, priority, sentiment, summary…" @bind="Search" @bind:event="oninput" />
+        </div>
+        <div class="pcs-filter-actions">
+            <select class="pcs-select" aria-label="Filter by status" @bind="StatusFilter"><option value="">All statuses</option>@foreach (var status in Statuses){<option value="@status">@status</option>}</select>
+            <select class="pcs-select" aria-label="Filter by priority" @bind="PriorityFilter"><option value="">All priorities</option>@foreach (var priority in Priorities){<option value="@priority">@priority</option>}</select>
+            <select class="pcs-select" aria-label="Filter by topic" @bind="TopicFilter"><option value="">All topics</option>@foreach (var topic in Topics){<option value="@topic">@topic</option>}</select>
+            <span>@Filtered.Count().ToString("N0") visible</span>
+            <button type="button" class="pcs-btn pcs-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger pcs-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    <section class="pcs-tabs" aria-label="Chat session views">
+        @foreach (var tab in Tabs)
+        {
+            <button type="button" class="pcs-tab @(_activeTab == tab.Key ? "pcs-tab--active" : null)" @onclick="() => SetTab(tab.Key)"><i class="bi @tab.Icon" aria-hidden="true"></i><span>@tab.Label</span><strong>@TabCount(tab.Key)</strong></button>
+        }
+    </section>
+
+    <section class="pcs-dashboard">
+        <div class="pcs-main-card">
+            <div class="pcs-card-header">
+                <div>
+                    <span class="pcs-section-kicker"><i class="bi bi-list-task" aria-hidden="true"></i> Enterprise session register</span>
+                    <h2>@ActiveViewTitle</h2>
+                    <p>Sorted by importance: live handoffs, SLA risk, priority, customer sentiment, message depth, and recency.</p>
+                </div>
+                <div class="pcs-card-actions">
+                    <button type="button" class="pcs-btn pcs-btn--ghost" @onclick="ToggleView"><i class="bi @(_cardView ? "bi-table" : "bi-grid-3x3-gap")" aria-hidden="true"></i> @(_cardView ? "Table" : "Cards")</button>
+                    <button type="button" class="pcs-btn pcs-btn--primary" @onclick="ExportAsync" disabled="@(!Filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="pcs-loading"><span class="pcs-spinner" aria-hidden="true"></span> Loading chat sessions…</div>
+            }
+            else if (!Filtered.Any())
+            {
+                <div class="pcs-empty"><i class="bi bi-chat-square" aria-hidden="true"></i><strong>No chat sessions found</strong><span>Adjust filters or refresh portal chat workflow data.</span></div>
+            }
+            else if (_cardView)
+            {
+                <div class="pcs-card-grid">@foreach (var session in Filtered){@SessionCard(session)}</div>
+            }
+            else
+            {
+                <div class="pcs-table-scroll">
+                    <table class="pcs-table" aria-label="Portal chat sessions">
+                        <thead><tr><th>Client</th><th>Importance</th><th>Topic</th><th>Status</th><th>Owner</th><th>Last Activity</th><th>Messages</th><th class="pcs-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var session in Filtered)
+                            {
+                                <tr class="pcs-table-row @(_selected?.Id == session.Id ? "pcs-table-row--selected" : null)" @onclick="() => SelectSession(session)">
+                                    <td>@ClientCell(session)</td>
+                                    <td>@ImportanceCell(session)</td>
+                                    <td><span class="pcs-topic">@session.Topic</span><small>@session.Channel</small></td>
+                                    <td><span class="pcs-status pcs-status--@CssSafe(session.Status)">@session.Status</span></td>
+                                    <td>@session.AssignedTo</td>
+                                    <td>@session.LastMessageDateUtc.ToLocalTime().ToString("MMM d, h:mm tt")</td>
+                                    <td class="pcs-number">@session.MessageCount.ToString("N0")</td>
+                                    <td class="pcs-actions-col">@ActionMenu(session)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <aside class="pcs-side-panel">
+            <section class="pcs-panel-card pcs-panel-card--score">
+                <span class="pcs-section-kicker"><i class="bi bi-speedometer2" aria-hidden="true"></i> Service readiness</span>
+                <div class="pcs-score"><span>Resolution posture</span><strong>@ResolutionScore</strong><small>/100</small></div>
+                <div class="pcs-score-bar"><span style="width:@ResolutionScore%"></span></div>
+                <div class="pcs-signal-list">@foreach (var signal in ImportanceSignals){<div><i class="bi @signal.Icon" aria-hidden="true"></i><span>@signal.Text</span></div>}</div>
+            </section>
+            <section class="pcs-panel-card">
+                <span class="pcs-section-kicker"><i class="bi bi-chat-dots" aria-hidden="true"></i> Selected session</span>
+                @if (_selected is null)
+                {
+                    <div class="pcs-empty pcs-empty--compact">Select a chat session to review client context, SLA posture, transcript summary, and next best action.</div>
+                }
+                else
+                {
+                    <div class="pcs-selected-head"><span class="pcs-avatar">@Initials(_selected.ClientName)</span><div><strong>@_selected.ClientName</strong><span>@_selected.AccountName</span></div></div>
+                    <p class="pcs-selected-summary">@_selected.Summary</p>
+                    <div class="pcs-detail-list">
+                        <div><span>Status</span><strong>@_selected.Status</strong></div>
+                        <div><span>Priority</span><strong>@_selected.Priority</strong></div>
+                        <div><span>Sentiment</span><strong>@_selected.Sentiment</strong></div>
+                        <div><span>SLA</span><strong>@SlaLabel(_selected)</strong></div>
+                        <div><span>Owner</span><strong>@_selected.AssignedTo</strong></div>
+                        <div><span>Wait</span><strong>@FormatDuration(_selected.WaitSeconds)</strong></div>
+                    </div>
+                    <div class="pcs-next-action"><span>Next best action</span><strong>@_selected.NextBestAction</strong></div>
+                    <div class="pcs-selected-actions">
+                        <button type="button" class="pcs-btn pcs-btn--primary" @onclick="() => MarkReviewedAsync(_selected)" disabled="@_actionBusy"><i class="bi bi-check2-circle" aria-hidden="true"></i> Mark Reviewed</button>
+                        <button type="button" class="pcs-btn pcs-btn--ghost" @onclick="() => ResolveAsync(_selected)" disabled="@_actionBusy"><i class="bi bi-check-all" aria-hidden="true"></i> Resolve</button>
+                    </div>
+                }
+            </section>
+            <section class="pcs-panel-card">
+                <span class="pcs-section-kicker"><i class="bi bi-pie-chart" aria-hidden="true"></i> Topic mix</span>
+                <div class="pcs-mix-list">@foreach (var topic in Topics.Take(6)){<button type="button" class="@(TopicFilter == topic ? "pcs-mix-active" : null)" @onclick="() => SetTopic(topic)"><span>@topic</span><strong>@_items.Count(i => i.Topic == topic).ToString("N0")</strong></button>}</div>
+            </section>
+        </aside>
+    </section>
 </div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private SfToast? _toast;
-    private string _search = string.Empty;
-    private string _filter = string.Empty;
+    private bool _loading;
+    private bool _actionBusy;
+    private bool _toastVisible;
+    private bool _cardView;
+    private string _toastKind = "success";
+    private string _toastMessage = string.Empty;
+    private string _activeTab = "all";
+    private string? _kpiFilter;
+    private string? _search;
+    private string? _statusFilter;
+    private string? _priorityFilter;
+    private string? _topicFilter;
     private string? _loadError;
-    private List<PortalMetricRecordDto> _items = [];
-    private IEnumerable<PortalMetricRecordDto> Filtered => _items.Where(i => (string.IsNullOrEmpty(_filter) || i.Status == _filter) && (string.IsNullOrEmpty(_search) || i.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || i.Category.Contains(_search, StringComparison.OrdinalIgnoreCase) || i.Owner.Contains(_search, StringComparison.OrdinalIgnoreCase) || i.Detail.Contains(_search, StringComparison.OrdinalIgnoreCase)));
-    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Portal", "/portal/users"), new("Chat Sessions", "")); await LoadAsync(); }
-    private async Task LoadAsync() { try { _loadError = null; _items = (await Api.SearchPortalMetricRecordsAsync(_tenantId, "PortalChatSession"))?.Items.ToList() ?? []; } catch (Exception ex) { _loadError = $"Unable to load chat sessions: {ex.Message}"; if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = _loadError, CssClass = "e-toast-danger" }); } }
-    private RenderFragment Kpi(string label, string value, string icon, string filter) => @<button type="button" class="pma-kpi-card pma-ki-blue" @onclick="() => _filter = _filter == filter ? string.Empty : filter"><i class="bi @icon pma-kpi-icon"></i><div><div class="pma-kpi-value">@value</div><div class="pma-kpi-label">@label</div><span>@(string.IsNullOrEmpty(filter) ? "all records" : "click to filter")</span></div></button>;
+    private Guid? _openActionMenuFor;
+    private readonly List<PortalChatSessionDto> _items = [];
+    private PortalChatSessionDto? _selected;
 
-    async Task ResolveCurrentUserContextAsync()
+    private string? Search { get => _search; set => _search = value; }
+    private string? StatusFilter { get => _statusFilter; set => _statusFilter = value; }
+    private string? PriorityFilter { get => _priorityFilter; set => _priorityFilter = value; }
+    private string? TopicFilter { get => _topicFilter; set => _topicFilter = value; }
+    private bool HasFilters => !string.IsNullOrWhiteSpace(_search) || !string.IsNullOrWhiteSpace(_statusFilter) || !string.IsNullOrWhiteSpace(_priorityFilter) || !string.IsNullOrWhiteSpace(_topicFilter) || _kpiFilter is not null || _activeTab != "all";
+    private IEnumerable<string> Statuses => _items.Select(i => i.Status).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().OrderBy(s => s);
+    private IEnumerable<string> Priorities => _items.Select(i => i.Priority).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().OrderBy(PriorityRank);
+    private IEnumerable<string> Topics => _items.Select(i => i.Topic).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().OrderBy(s => s);
+    private TabDef[] Tabs => [new("all", "All", "bi-stack"), new("triage", "Triage", "bi-headset"), new("sla", "SLA Risk", "bi-alarm"), new("ai", "AI Quality", "bi-stars"), new("resolved", "Resolved", "bi-check2-circle")];
+    private int TotalSessions => _items.Count;
+    private int HandoffSessions => _items.Count(i => i.HandoffRequired || i.Status == "Live Handoff");
+    private int SlaRisk => _items.Count(IsSlaRisk);
+    private int OpenSessions => _items.Count(IsOpen);
+    private int AiResolved => _items.Count(i => i.AiHandled && i.Status == "AI Resolved");
+    private int NeedsReview => _items.Count(i => i.ReviewedDateUtc is null);
+    private decimal AiResolutionRate => TotalSessions == 0 ? 0 : (decimal)AiResolved / TotalSessions * 100;
+    private int ResolutionScore => Math.Clamp(100 - (HandoffSessions * 9) - (SlaRisk * 12) - (NeedsReview * 3) + (int)Math.Min(20, AiResolutionRate / 5), 0, 100);
+    private string ActiveViewTitle => _activeTab switch { "triage" => "Live handoff triage", "sla" => "SLA risk queue", "ai" => "AI quality review", "resolved" => "Resolved conversations", _ => "All chat sessions" };
+    private IEnumerable<Signal> ImportanceSignals => BuildImportanceSignals();
+
+    private IEnumerable<PortalChatSessionDto> Tabbed => _activeTab switch
+    {
+        "triage" => _items.Where(i => i.HandoffRequired || i.Status == "Live Handoff"),
+        "sla" => _items.Where(IsSlaRisk),
+        "ai" => _items.Where(i => i.AiHandled),
+        "resolved" => _items.Where(IsResolved),
+        _ => _items
+    };
+
+    private IEnumerable<PortalChatSessionDto> KpiFiltered => _kpiFilter switch
+    {
+        "handoff" => Tabbed.Where(i => i.HandoffRequired || i.Status == "Live Handoff"),
+        "sla" => Tabbed.Where(IsSlaRisk),
+        "open" => Tabbed.Where(IsOpen),
+        "ai" => Tabbed.Where(i => i.AiHandled && i.Status == "AI Resolved"),
+        "review" => Tabbed.Where(i => i.ReviewedDateUtc is null),
+        _ => Tabbed
+    };
+
+    private IEnumerable<PortalChatSessionDto> Filtered => ApplyFilters(KpiFiltered).OrderByDescending(ImportanceScore).ThenByDescending(i => i.LastMessageDateUtc);
+
+    protected override async Task OnInitializedAsync()
     {
         var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
         _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Portal", "/portal/users"), new("Chat Sessions", ""));
+        await LoadAsync();
     }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchPortalChatSessionsAsync(_tenantId, _search);
+            _items.Clear();
+            _items.AddRange(result?.Items ?? []);
+            _selected = _items.FirstOrDefault(i => i.Id == _selected?.Id) ?? _items.OrderByDescending(ImportanceScore).FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Unable to load chat sessions: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private IEnumerable<PortalChatSessionDto> ApplyFilters(IEnumerable<PortalChatSessionDto> sessions)
+    {
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) sessions = sessions.Where(i => i.Status == _statusFilter);
+        if (!string.IsNullOrWhiteSpace(_priorityFilter)) sessions = sessions.Where(i => i.Priority == _priorityFilter);
+        if (!string.IsNullOrWhiteSpace(_topicFilter)) sessions = sessions.Where(i => i.Topic == _topicFilter);
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var term = _search.Trim();
+            sessions = sessions.Where(i => Contains(i.ClientName, term) || Contains(i.AccountName, term) || Contains(i.ContactEmail, term) || Contains(i.Topic, term) || Contains(i.Status, term) || Contains(i.Priority, term) || Contains(i.Sentiment, term) || Contains(i.AssignedTo, term) || Contains(i.Summary, term));
+        }
+        return sessions;
+    }
+
+    private void SetTab(string key) { _activeTab = key; _kpiFilter = key is "all" ? null : key == "triage" ? "handoff" : key; }
+    private void SetKpiFilter(string key) { _kpiFilter = key == "all" || _kpiFilter == key ? null : key; if (key == "handoff") _activeTab = "triage"; if (key is "sla" or "ai") _activeTab = key; if (key == "open") _activeTab = "all"; }
+    private void SetTopic(string topic) => _topicFilter = _topicFilter == topic ? null : topic;
+    private void ToggleView() => _cardView = !_cardView;
+    private void SelectSession(PortalChatSessionDto session) => _selected = session;
+    private void ClearFilters() { _search = null; _statusFilter = null; _priorityFilter = null; _topicFilter = null; _kpiFilter = null; _activeTab = "all"; }
+    private void FocusHandoffs() { _activeTab = "triage"; _kpiFilter = "handoff"; _statusFilter = null; }
+    private void FocusSla() { _activeTab = "sla"; _kpiFilter = "sla"; _statusFilter = null; }
+    private void FocusAiResolved() { _activeTab = "ai"; _kpiFilter = "ai"; _statusFilter = "AI Resolved"; }
+    private void ToggleActionMenu(PortalChatSessionDto session) { _selected = session; _openActionMenuFor = _openActionMenuFor == session.Id ? null : session.Id; }
+    private void CloseActionMenu() => _openActionMenuFor = null;
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+
+    private async Task MarkReviewedAsync(PortalChatSessionDto session)
+        => await UpdateStatusAsync(session, "Reviewed", session.AssignedTo, "Transcript reviewed; monitor for repeat client contact.");
+
+    private async Task ResolveAsync(PortalChatSessionDto session)
+        => await UpdateStatusAsync(session, session.AiHandled ? "AI Resolved" : "Resolved by Agent", session.AssignedTo, "Conversation resolved and retained for service analytics.");
+
+    private async Task AssignToMeAsync(PortalChatSessionDto session)
+        => await UpdateStatusAsync(session, session.Status, "Tenant Admin", "Assigned to Tenant Admin for direct follow-up.");
+
+    private async Task UpdateStatusAsync(PortalChatSessionDto session, string status, string? assignedTo, string? nextBestAction)
+    {
+        _actionBusy = true;
+        try
+        {
+            await Api.UpdatePortalChatSessionStatusAsync(session.Id, new UpdatePortalChatSessionStatusRequest { TenantId = _tenantId, Status = status, AssignedTo = assignedTo, NextBestAction = nextBestAction });
+            ShowToast($"{session.SessionNumber} updated.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    private string TabCount(string key) => key switch { "all" => TotalSessions.ToString("N0"), "triage" => HandoffSessions.ToString("N0"), "sla" => SlaRisk.ToString("N0"), "ai" => _items.Count(i => i.AiHandled).ToString("N0"), "resolved" => _items.Count(IsResolved).ToString("N0"), _ => string.Empty };
+
+    private IEnumerable<Signal> BuildImportanceSignals()
+    {
+        yield return new("bi-headset", $"{HandoffSessions:N0} sessions require service ownership.");
+        yield return new("bi-alarm", $"{SlaRisk:N0} sessions are overdue or due within 1 hour.");
+        yield return new("bi-emoji-frown", $"{_items.Count(i => i.Sentiment == "Negative"):N0} sessions show negative sentiment.");
+        yield return new("bi-chat-left-text", $"{_items.Sum(i => i.MessageCount):N0} total message exchanges tracked.");
+    }
+
+    private async Task ExportAsync()
+    {
+        var csv = new System.Text.StringBuilder();
+        csv.AppendLine("Session,Client,Account,Topic,Status,Priority,Sentiment,Owner,Summary,NextBestAction,Started,LastActivity,Messages,SlaDue");
+        foreach (var item in Filtered)
+        {
+            csv.AppendLine(string.Join(',', Csv(item.SessionNumber), Csv(item.ClientName), Csv(item.AccountName), Csv(item.Topic), Csv(item.Status), Csv(item.Priority), Csv(item.Sentiment), Csv(item.AssignedTo), Csv(item.Summary), Csv(item.NextBestAction), Csv(item.StartedDateUtc.ToString("s")), Csv(item.LastMessageDateUtc.ToString("s")), item.MessageCount.ToString(), Csv(item.SlaDueDateUtc?.ToString("s"))));
+        }
+        Nav.NavigateTo("data:text/csv;charset=utf-8," + Uri.EscapeDataString(csv.ToString()), forceLoad: true);
+        ShowToast("Chat sessions export generated.");
+        await Task.CompletedTask;
+    }
+
+    private RenderFragment KpiCard(string key, string label, string value, string detail, string icon, string css) => @<button type="button" class="pcs-kpi @css @((_kpiFilter == key || (key == "all" && _kpiFilter is null)) ? "pcs-kpi--active" : null)" @onclick="@(() => SetKpiFilter(key))" title="Filter by @label"><span><i class="bi @icon" aria-hidden="true"></i>@label</span><strong>@value</strong><small>@detail</small></button>;
+    private RenderFragment WorkflowButton(string icon, string title, string detail, System.Action action) => @<button type="button" class="pcs-workflow" @onclick="action"><i class="bi @icon" aria-hidden="true"></i><span><strong>@title</strong><small>@detail</small></span></button>;
+    private RenderFragment ClientCell(PortalChatSessionDto session) => @<div class="pcs-client-cell"><span class="pcs-avatar">@Initials(session.ClientName)</span><div><strong>@session.ClientName</strong><span>@session.AccountName</span></div></div>;
+    private RenderFragment ImportanceCell(PortalChatSessionDto session) => @<div class="pcs-importance"><span class="pcs-priority pcs-priority--@CssSafe(session.Priority)">@session.Priority</span><small>@SlaLabel(session)</small></div>;
+    private RenderFragment SessionCard(PortalChatSessionDto session) => @<article class="pcs-session-card @(_selected?.Id == session.Id ? "pcs-session-card--active" : null)" @onclick="@(() => SelectSession(session))"><div class="pcs-session-card__top">@ClientCell(session)<span class="pcs-status pcs-status--@CssSafe(session.Status)">@session.Status</span></div><p>@session.Summary</p><div class="pcs-session-card__meta"><span><i class="bi bi-tag"></i>@session.Topic</span><span><i class="bi bi-flag"></i>@session.Priority</span><span><i class="bi bi-chat-left-text"></i>@session.MessageCount.ToString("N0") messages</span><span><i class="bi bi-clock"></i>@session.LastMessageDateUtc.ToLocalTime().ToString("MMM d, h:mm tt")</span></div><div class="pcs-session-card__actions" @onclick:stopPropagation="true"><button type="button" class="pcs-btn pcs-btn--ghost" @onclick="@(() => MarkReviewedAsync(session))" disabled="@_actionBusy"><i class="bi bi-check2-circle"></i> Review</button><button type="button" class="pcs-btn pcs-btn--ghost" @onclick="@(() => AssignToMeAsync(session))" disabled="@_actionBusy"><i class="bi bi-person-check"></i> Assign</button></div></article>;
+    private RenderFragment ActionMenu(PortalChatSessionDto session) => @<div class="pcs-action-menu-wrap" @onclick:stopPropagation="true"><button type="button" class="pcs-icon-btn" @onclick="@(() => ToggleActionMenu(session))" aria-label="Open actions"><i class="bi bi-three-dots-vertical"></i></button>@if (_openActionMenuFor == session.Id){<div class="pcs-action-menu" role="menu"><div><strong>@session.SessionNumber</strong><span>@session.Status</span></div><button type="button" @onclick="@(() => MarkReviewedAsync(session))" disabled="@_actionBusy"><i class="bi bi-check2-circle"></i>Mark reviewed</button><button type="button" @onclick="@(() => AssignToMeAsync(session))" disabled="@_actionBusy"><i class="bi bi-person-check"></i>Assign to me</button><button type="button" @onclick="@(() => ResolveAsync(session))" disabled="@_actionBusy"><i class="bi bi-check-all"></i>Resolve</button><button type="button" @onclick="@(() => Nav.NavigateTo("/portal/requests"))"><i class="bi bi-inbox"></i>Requests</button></div>}</div>;
+
+    private static int ImportanceScore(PortalChatSessionDto session) => (session.HandoffRequired ? 90 : 0) + (IsSlaRisk(session) ? 80 : 0) + (IsOpen(session) ? 45 : 0) + PriorityRank(session.Priority) switch { 0 => 40, 1 => 25, 2 => 10, _ => 0 } + (session.Sentiment == "Negative" ? 25 : 0) + Math.Min(30, session.MessageCount) + (session.LastMessageDateUtc >= DateTime.UtcNow.AddDays(-1) ? 20 : 0);
+    private static bool IsSlaRisk(PortalChatSessionDto session) => session.SlaDueDateUtc is not null && session.SlaDueDateUtc.Value <= DateTime.UtcNow.AddHours(1) && !IsResolved(session);
+    private static bool IsOpen(PortalChatSessionDto session) => session.Status is "Open" or "Live Handoff" or "In Review" or "Reviewed";
+    private static bool IsResolved(PortalChatSessionDto session) => session.Status is "AI Resolved" or "Resolved by Agent";
+    private static int PriorityRank(string priority) => priority switch { "Urgent" => 0, "High" => 1, "Normal" => 2, "Low" => 3, _ => 4 };
+    private static string SlaLabel(PortalChatSessionDto session) => session.SlaDueDateUtc is null ? "No SLA risk" : session.SlaDueDateUtc.Value <= DateTime.UtcNow ? "Overdue" : $"Due {session.SlaDueDateUtc.Value.ToLocalTime():h:mm tt}";
+    private static string FormatDuration(int seconds) => seconds < 60 ? $"{seconds}s" : seconds < 3600 ? $"{seconds / 60}m" : $"{seconds / 3600}h {(seconds % 3600) / 60}m";
+    private static bool Contains(string? source, string term) => !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static string Initials(string name) { var p = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return p.Length >= 2 ? $"{p[0][0]}{p[^1][0]}" : name.Length > 0 ? name[..1] : "?"; }
+    private static string CssSafe(string value) => string.IsNullOrWhiteSpace(value) ? "unknown" : value.ToLowerInvariant().Replace(" ", "-");
+    private static string Csv(string? value) => string.Concat("\"", (value ?? string.Empty).Replace("\"", "\"\""), "\"");
+
+    private sealed record TabDef(string Key, string Label, string Icon);
+    private sealed record Signal(string Icon, string Text);
 }

@@ -6,162 +6,411 @@
 
 <PageTitle>Portal Activity — AMS</PageTitle>
 
-<AppPageHeader Title="Portal Activity"
-               Subtitle="Real-time audit log of all client portal interactions and self-service actions"
+<AppPageHeader Title="Portal Activity Command Center"
+               Subtitle="Enterprise audit, adoption, service workflow, and security activity across the client portal."
                Icon="bi-activity">
     <Actions>
-        <button class="um-btn um-btn-ghost">
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_busy">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="ExportAsync" disabled="@(!_filtered.Any())">
             <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+        <button class="um-btn um-btn-primary" type="button" @onclick="AcknowledgeVisibleAsync" disabled="@(!_filtered.Any(e => e.RequiresReview))">
+            <i class="bi bi-check2-circle" aria-hidden="true"></i> Acknowledge visible
         </button>
     </Actions>
 </AppPageHeader>
 
-<!-- KPI strip -->
-<div class="pa-kpi-strip">
-    <div class="pa-kpi-card">
-        <div class="pa-kpi-icon pa-ki-blue"><i class="bi bi-people" aria-hidden="true"></i></div>
-        <div><div class="pa-kv">@_events.Select(e => e.UserEmail).Distinct().Count()</div><div class="pa-kl">Unique Users Today</div></div>
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
+{
+    <div class="pa-toast @_toastClass" role="status">
+        <i class="bi @(_toastClass == "pa-toast--danger" ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="pa-toast-close" @onclick="ClearToast" aria-label="Dismiss message"><i class="bi bi-x-lg"></i></button>
     </div>
-    <div class="pa-kpi-card">
-        <div class="pa-kpi-icon pa-ki-green"><i class="bi bi-lightning" aria-hidden="true"></i></div>
-        <div><div class="pa-kv">@_events.Count</div><div class="pa-kl">Total Events</div></div>
-    </div>
-    <div class="pa-kpi-card">
-        <div class="pa-kpi-icon pa-ki-amber"><i class="bi bi-file-earmark-plus" aria-hidden="true"></i></div>
-        <div><div class="pa-kv">@_events.Count(e => e.EventType == "Request Submitted")</div><div class="pa-kl">Requests Submitted</div></div>
-    </div>
-    <div class="pa-kpi-card">
-        <div class="pa-kpi-icon pa-ki-red"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></div>
-        <div><div class="pa-kv">@_events.Count(e => e.Severity == "Warning" || e.Severity == "Error")</div><div class="pa-kl">Warnings / Errors</div></div>
-    </div>
-</div>
+}
 
-<!-- Filter bar -->
-<div class="pa-filter-bar">
-    <div class="pa-search-wrap">
-        <i class="bi bi-search" aria-hidden="true"></i>
-        <input class="pa-search" placeholder="Search user, action…" @bind="_search" @bind:event="oninput" />
-    </div>
-    <select class="pa-sel" @bind="_typeFilter">
-        <option value="">All Event Types</option>
-        <option value="Login">Login</option>
-        <option value="Document Download">Document Download</option>
-        <option value="Request Submitted">Request Submitted</option>
-        <option value="Payment">Payment</option>
-        <option value="Message Sent">Message Sent</option>
-        <option value="E-Sign">E-Sign</option>
-    </select>
-    <select class="pa-sel" @bind="_sevFilter">
-        <option value="">All Severities</option>
-        <option value="Info">Info</option>
-        <option value="Warning">Warning</option>
-        <option value="Error">Error</option>
-    </select>
-</div>
+<div class="pa-page">
+    <section class="pa-hero">
+        <div class="pa-hero-main">
+            <div class="pa-eyebrow"><i class="bi bi-radar" aria-hidden="true"></i> Live portal telemetry</div>
+            <h2>Activity command center</h2>
+            <p>Prioritize the events that matter most: security risk, urgent client service workload, adoption gaps, document workflow, mobile payments, chat containment, and audit readiness.</p>
+            <div class="pa-hero-meta">
+                <span><i class="bi bi-clock-history"></i> Last event @LastEventText</span>
+                <span><i class="bi bi-shield-exclamation"></i> @HighRiskCount high-risk</span>
+                <span><i class="bi bi-list-check"></i> @OpenReviewCount need review</span>
+                <span><i class="bi bi-people"></i> @UniqueUserCount unique users</span>
+            </div>
+        </div>
+        <div class="pa-hero-panel">
+            <div class="pa-risk-gauge">
+                <span>Risk posture</span>
+                <strong>@RiskPosture</strong>
+                <div class="pa-gauge-track"><div style="width:@RiskWidth"></div></div>
+                <small>@HighRiskCount events above enterprise risk threshold</small>
+            </div>
+            <div class="pa-priority-list">
+                @foreach (var item in PriorityItems)
+                {
+                    <button type="button" class="pa-priority-item" @onclick="() => SelectEvent(item.Id)">
+                        <span class="pa-priority-score @RiskClass(item.RiskScore)">@item.RiskScore</span>
+                        <div><strong>@item.EventType</strong><small>@item.AccountName · @item.RecommendedAction</small></div>
+                        <i class="bi bi-chevron-right"></i>
+                    </button>
+                }
+            </div>
+        </div>
+    </section>
 
-<!-- Grid -->
-<div class="pa-grid-wrap">
-    <SfGrid TValue="PortalEvent" DataSource="Filtered" AllowSorting="true" EnableHover="true" RowHeight="50">
-        <GridColumns>
-            <GridColumn Field="@nameof(PortalEvent.OccurredAt)" HeaderText="Time" Width="160" Type="ColumnType.DateTime" Format="MMM d h:mm tt" />
-            <GridColumn Field="@nameof(PortalEvent.UserName)" HeaderText="User" MinWidth="170">
-                <Template>
-                    @{ var e = (PortalEvent)context; }
-                    <div class="pa-user-cell">
-                        <div class="pa-av">@Initials(e.UserName)</div>
-                        <div>
-                            <div class="pa-uname">@e.UserName</div>
-                            <div class="pa-uemail">@e.UserEmail</div>
+    <section class="pa-kpi-strip" aria-label="Portal activity KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="pa-kpi-card @(_activeKpi == kpi.Key ? "pa-kpi-card--active" : null)" title="@kpi.Tooltip" @onclick="() => SetKpi(kpi.Key)">
+                <span class="pa-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="pa-kpi-label">@kpi.Label</span>
+                <strong>@kpi.Value</strong>
+                <small>@kpi.Detail</small>
+            </button>
+        }
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger pa-load-error" role="alert">
+            <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+            @_loadError
+        </div>
+    }
+
+    <section class="pa-command-bar">
+        <div class="pa-search-wrap">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="pa-search" placeholder="Search user, account, action, IP, detail..." @bind="_search" @bind:event="oninput" @onkeyup="ApplyFilter" />
+        </div>
+        <select class="pa-select" @bind="_typeFilter" @bind:after="ApplyFilter">
+            <option value="">All event types</option>
+            @foreach (var type in EventTypes)
+            {
+                <option value="@type">@type</option>
+            }
+        </select>
+        <select class="pa-select" @bind="_severityFilter" @bind:after="ApplyFilter">
+            <option value="">All severity</option>
+            <option>Info</option>
+            <option>Warning</option>
+            <option>Error</option>
+        </select>
+        <select class="pa-select" @bind="_statusFilter" @bind:after="ApplyFilter">
+            <option value="">All statuses</option>
+            @foreach (var status in Statuses)
+            {
+                <option value="@status">@status</option>
+            }
+        </select>
+    </section>
+
+    <div class="pa-tabs" role="tablist" aria-label="Activity views">
+        @foreach (var tab in Tabs)
+        {
+            <button type="button" role="tab" class="pa-tab @(_activeTab == tab.Key ? "pa-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+            </button>
+        }
+    </div>
+
+    @if (_loading)
+    {
+        <div class="pa-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Loading portal activity...</div>
+    }
+    else
+    {
+        <section class="pa-grid">
+            <article class="pa-panel pa-panel--events">
+                <div class="pa-panel-header">
+                    <i class="bi bi-list-ul"></i>
+                    <div><strong>Prioritized activity stream</strong><span>@_filtered.Count event(s) match the current workflow filter.</span></div>
+                </div>
+                <div class="pa-event-list">
+                    @foreach (var item in _filtered)
+                    {
+                        <button type="button" class="pa-event-row @(_selected?.Id == item.Id ? "pa-event-row--active" : null)" @onclick="() => SelectEvent(item.Id)">
+                            <div class="pa-event-time"><strong>@item.OccurredAtUtc.ToLocalTime().ToString("h:mm tt")</strong><span>@item.OccurredAtUtc.ToLocalTime().ToString("MMM d")</span></div>
+                            <div class="pa-avatar">@Initials(item.UserName)</div>
+                            <div class="pa-event-main">
+                                <div class="pa-event-title"><strong>@item.EventType</strong><span class="@SeverityBadge(item.Severity)">@item.Severity</span><span class="@StatusBadge(item.Status)">@item.Status</span></div>
+                                <p>@item.Detail</p>
+                                <div class="pa-event-meta"><span>@item.UserName</span><span>@item.AccountName</span><span>@item.Category</span><span>@item.IpAddress</span></div>
+                            </div>
+                            <div class="pa-risk @RiskClass(item.RiskScore)">@item.RiskScore</div>
+                        </button>
+                    }
+                    @if (!_filtered.Any())
+                    {
+                        <div class="pa-empty"><i class="bi bi-inbox"></i><strong>No activity matches the current filters.</strong><span>Try another KPI, tab, status, severity, or search term.</span></div>
+                    }
+                </div>
+            </article>
+
+            <aside class="pa-side">
+                <article class="pa-panel">
+                    <div class="pa-panel-header"><i class="bi bi-ui-checks"></i><div><strong>Selected event workflow</strong><span>Review, assign, acknowledge, or escalate.</span></div></div>
+                    @if (_selected is null)
+                    {
+                        <div class="pa-empty pa-empty--side"><i class="bi bi-cursor"></i><strong>Select an event</strong><span>Choose an activity row to inspect workflow details.</span></div>
+                    }
+                    else
+                    {
+                        <div class="pa-detail">
+                            <div class="pa-detail-head"><span class="pa-risk @RiskClass(_selected.RiskScore)">@_selected.RiskScore</span><div><strong>@_selected.EventType</strong><span>@_selected.EventNumber · @_selected.Category</span></div></div>
+                            <dl>
+                                <dt>Account</dt><dd>@_selected.AccountName</dd>
+                                <dt>User</dt><dd>@_selected.UserName<br /><small>@_selected.UserEmail</small></dd>
+                                <dt>Device</dt><dd>@_selected.Device</dd>
+                                <dt>Location</dt><dd>@_selected.Location</dd>
+                                <dt>Workflow impact</dt><dd>@_selected.WorkflowImpact</dd>
+                                <dt>Recommended action</dt><dd>@_selected.RecommendedAction</dd>
+                                <dt>Assigned to</dt><dd>@_selected.AssignedTo</dd>
+                            </dl>
+                            <div class="pa-detail-actions">
+                                <button type="button" class="um-btn um-btn-primary" @onclick="MarkSelectedReviewedAsync" disabled="@_busy"><i class="bi bi-check2-circle"></i> Mark reviewed</button>
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="EscalateSelectedAsync" disabled="@_busy"><i class="bi bi-arrow-up-right-circle"></i> Escalate</button>
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="AssignSelectedToMeAsync" disabled="@_busy"><i class="bi bi-person-check"></i> Assign to me</button>
+                            </div>
                         </div>
+                    }
+                </article>
+
+                <article class="pa-panel">
+                    <div class="pa-panel-header"><i class="bi bi-bar-chart"></i><div><strong>Importance mix</strong><span>Risk, adoption, and workflow distribution.</span></div></div>
+                    <div class="pa-metric-list">
+                        @foreach (var metric in Metrics)
+                        {
+                            <div class="pa-metric-row"><span>@metric.Label</span><strong>@metric.Value</strong></div>
+                        }
                     </div>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(PortalEvent.EventType)" HeaderText="Event" Width="180">
-                <Template>@{ var e = (PortalEvent)context; }<span class="@EventBadge(e.EventType)">@e.EventType</span></Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(PortalEvent.Detail)" HeaderText="Detail" MinWidth="200" />
-            <GridColumn Field="@nameof(PortalEvent.AccountName)" HeaderText="Account" Width="170" />
-            <GridColumn Field="@nameof(PortalEvent.Severity)" HeaderText="Severity" Width="100">
-                <Template>@{ var e = (PortalEvent)context; }<span class="@SevBadge(e.Severity)">@e.Severity</span></Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(PortalEvent.IpAddress)" HeaderText="IP" Width="130">
-                <Template>@{ var e = (PortalEvent)context; }<span class="pa-mono">@e.IpAddress</span></Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
+                </article>
+            </aside>
+        </section>
+    }
 </div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
     private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private bool _loading = true;
+    private bool _busy;
+    private string? _loadError;
+    private string? _toastMessage;
+    private string _toastClass = "pa-toast--success";
     private string _search = string.Empty;
     private string _typeFilter = string.Empty;
-    private string _sevFilter  = string.Empty;
+    private string _severityFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _activeKpi = "all";
+    private string _activeTab = "priority";
+    private List<PortalActivityEventDto> _events = [];
+    private List<PortalActivityEventDto> _filtered = [];
+    private PortalActivityEventDto? _selected;
 
-    private List<PortalEvent> _events = [];
+    private IEnumerable<TabItem> Tabs =>
+    [
+        new("priority", "Priority", "bi-stars"),
+        new("security", "Security", "bi-shield-exclamation"),
+        new("service", "Service", "bi-life-preserver"),
+        new("documents", "Documents", "bi-folder2-open"),
+        new("adoption", "Adoption", "bi-people"),
+        new("audit", "Audit", "bi-clipboard-data")
+    ];
 
-    private IEnumerable<PortalEvent> Filtered => _events.Where(e =>
-        (string.IsNullOrEmpty(_search) || e.UserName.Contains(_search, StringComparison.OrdinalIgnoreCase) || e.Detail.Contains(_search, StringComparison.OrdinalIgnoreCase)) &&
-        (string.IsNullOrEmpty(_typeFilter) || e.EventType == _typeFilter) &&
-        (string.IsNullOrEmpty(_sevFilter)  || e.Severity  == _sevFilter));
+    private IEnumerable<KpiItem> Kpis =>
+    [
+        new("all", "Total events", _events.Count.ToString("N0"), "All portal workflows", "bi-activity", "Show all enterprise portal activity."),
+        new("risk", "High risk", HighRiskCount.ToString("N0"), "Security and escalation focus", "bi-shield-exclamation", "Show high-risk activity."),
+        new("review", "Needs review", OpenReviewCount.ToString("N0"), "Open workflow review", "bi-list-check", "Show events requiring review."),
+        new("service", "Service actions", ServiceCount.ToString("N0"), "Requests, chat, payments", "bi-life-preserver", "Show service-driving portal activity."),
+        new("adoption", "Unique users", UniqueUserCount.ToString("N0"), "Active client engagement", "bi-people", "Show adoption and access activity.")
+    ];
+
+    private IEnumerable<MetricItem> Metrics =>
+    [
+        new("Warnings / errors", _events.Count(e => e.Severity is "Warning" or "Error").ToString("N0")),
+        new("Escalated", _events.Count(e => e.Status == "Escalated").ToString("N0")),
+        new("Open", _events.Count(e => e.Status == "Open").ToString("N0")),
+        new("Reviewed", _events.Count(e => e.Status == "Reviewed" || e.Status == "Acknowledged" || e.Status == "Resolved").ToString("N0")),
+        new("Avg risk", (_events.Count == 0 ? 0 : (int)_events.Average(e => e.RiskScore)).ToString("N0")),
+        new("Avg duration", $"{(_events.Count == 0 ? 0 : (int)_events.Average(e => e.DurationSeconds))}s")
+    ];
+
+    private IEnumerable<string> EventTypes => _events.Select(e => e.EventType).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().OrderBy(x => x);
+    private IEnumerable<string> Statuses => _events.Select(e => e.Status).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().OrderBy(x => x);
+    private IEnumerable<PortalActivityEventDto> PriorityItems => _events.OrderByDescending(e => e.RequiresReview).ThenByDescending(e => e.RiskScore).ThenByDescending(e => e.OccurredAtUtc).Take(4);
+    private int HighRiskCount => _events.Count(e => e.RiskScore >= 70 || e.Severity is "Warning" or "Error");
+    private int OpenReviewCount => _events.Count(e => e.RequiresReview || e.Status is "Open" or "Escalated");
+    private int ServiceCount => _events.Count(e => e.Category is "Self-Service" or "Chat" or "Billing" || e.EventType.Contains("Request", StringComparison.OrdinalIgnoreCase));
+    private int UniqueUserCount => _events.Select(e => e.UserEmail).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    private string LastEventText => _events.Count == 0 ? "—" : _events.Max(e => e.OccurredAtUtc).ToLocalTime().ToString("MMM d h:mm tt");
+    private int AverageRisk => _events.Count == 0 ? 0 : (int)_events.Average(e => e.RiskScore);
+    private string RiskPosture => AverageRisk >= 70 ? "Elevated" : AverageRisk >= 40 ? "Watch" : "Healthy";
+    private string RiskWidth => $"{Math.Clamp(AverageRisk, 8, 100)}%";
 
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Portal","/portal/users"), new("Activity",""));
-        var result = await Api.SearchPortalAdminActivityAsync(_tenantId, _search);
-        _events = result?.Items.Select(e => new PortalEvent { Id = e.Id, OccurredAt = e.OccurredAt, UserName = e.UserName, UserEmail = e.UserEmail, AccountName = e.AccountName, EventType = e.EventType, Detail = e.Detail, Severity = e.Severity, IpAddress = e.IpAddress }).ToList() ?? [];
-    }
-
-    private static string EventBadge(string t) => t switch
-    {
-        "Login"              => "pa-ev pa-ev--login",
-        "Document Download"  => "pa-ev pa-ev--doc",
-        "Request Submitted"  => "pa-ev pa-ev--req",
-        "Payment"            => "pa-ev pa-ev--pay",
-        "Message Sent"       => "pa-ev pa-ev--msg",
-        "E-Sign"             => "pa-ev pa-ev--sign",
-        _                    => "pa-ev",
-    };
-
-    private static string SevBadge(string s) => s switch
-    {
-        "Warning" => "pa-sev pa-sev--warn",
-        "Error"   => "pa-sev pa-sev--err",
-        _         => "pa-sev pa-sev--info",
-    };
-
-    private static string Initials(string name)
-    {
-        var p = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        return p.Length >= 2 ? $"{p[0][0]}{p[^1][0]}" : name.Length > 0 ? name[..1] : "?";
-    }
-
-    private sealed class PortalEvent
-    {
-        public Guid     Id          { get; set; }
-        public DateTime OccurredAt  { get; set; }
-        public string   UserName    { get; set; } = string.Empty;
-        public string   UserEmail   { get; set; } = string.Empty;
-        public string   AccountName { get; set; } = string.Empty;
-        public string   EventType   { get; set; } = string.Empty;
-        public string   Detail      { get; set; } = string.Empty;
-        public string   Severity    { get; set; } = "Info";
-        public string   IpAddress   { get; set; } = string.Empty;
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
         var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
         _tenantId = context.TenantId;
         _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Portal", "/portal/users"), new("Activity", ""));
+        await LoadAsync();
     }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchPortalAdminActivityAsync(_tenantId, _search);
+            _events = result?.Items.OrderByDescending(e => e.OccurredAtUtc).ToList() ?? [];
+            ApplyFilter();
+            _selected = _filtered.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Unable to load portal activity: {ex.Message}";
+            ShowToast(_loadError, danger: true);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilter()
+    {
+        IEnumerable<PortalActivityEventDto> query = _events;
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            query = query.Where(e => Contains(e.UserName, _search) || Contains(e.UserEmail, _search) || Contains(e.AccountName, _search) || Contains(e.EventType, _search) || Contains(e.Detail, _search) || Contains(e.IpAddress, _search));
+        }
+        if (!string.IsNullOrWhiteSpace(_typeFilter)) query = query.Where(e => e.EventType == _typeFilter);
+        if (!string.IsNullOrWhiteSpace(_severityFilter)) query = query.Where(e => e.Severity == _severityFilter);
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(e => e.Status == _statusFilter);
+
+        query = _activeKpi switch
+        {
+            "risk" => query.Where(e => e.RiskScore >= 70 || e.Severity is "Warning" or "Error"),
+            "review" => query.Where(e => e.RequiresReview || e.Status is "Open" or "Escalated"),
+            "service" => query.Where(e => e.Category is "Self-Service" or "Chat" or "Billing" || e.EventType.Contains("Request", StringComparison.OrdinalIgnoreCase)),
+            "adoption" => query.Where(e => e.Category is "Authentication" or "Adoption" || e.EventType.Contains("Login", StringComparison.OrdinalIgnoreCase) || e.EventType.Contains("Invitation", StringComparison.OrdinalIgnoreCase)),
+            _ => query
+        };
+
+        query = _activeTab switch
+        {
+            "security" => query.Where(e => e.Category == "Security" || e.Severity is "Warning" or "Error"),
+            "service" => query.Where(e => e.Category is "Self-Service" or "Chat" or "Billing"),
+            "documents" => query.Where(e => e.Category == "Documents" || e.EventType.Contains("Document", StringComparison.OrdinalIgnoreCase) || e.EventType.Contains("E-Sign", StringComparison.OrdinalIgnoreCase)),
+            "adoption" => query.Where(e => e.Category is "Authentication" or "Adoption"),
+            "audit" => query.Where(e => e.Status is "Reviewed" or "Acknowledged" or "Resolved"),
+            _ => query
+        };
+
+        _filtered = query.OrderByDescending(e => e.RequiresReview).ThenByDescending(e => e.RiskScore).ThenByDescending(e => e.OccurredAtUtc).ToList();
+        if (_selected is null || !_filtered.Any(e => e.Id == _selected.Id)) _selected = _filtered.FirstOrDefault();
+    }
+
+    private void SetKpi(string key)
+    {
+        _activeKpi = key;
+        if (key == "risk") _activeTab = "security";
+        else if (key == "service") _activeTab = "service";
+        else if (key == "adoption") _activeTab = "adoption";
+        else if (key == "review") _activeTab = "priority";
+        ApplyFilter();
+    }
+
+    private void SetTab(string key)
+    {
+        _activeTab = key;
+        ApplyFilter();
+    }
+
+    private void SelectEvent(Guid id) => _selected = _events.FirstOrDefault(e => e.Id == id);
+
+    private async Task UpdateSelectedAsync(string status)
+    {
+        if (_selected is null) return;
+        await UpdateEventAsync(_selected, status, _selected.AssignedTo, status == "Escalated" ? "Escalated to security/service owner for same-day review." : _selected.RecommendedAction, status == "Escalated");
+    }
+
+    private Task MarkSelectedReviewedAsync() => UpdateSelectedAsync("Reviewed");
+
+    private Task EscalateSelectedAsync() => UpdateSelectedAsync("Escalated");
+
+    private async Task AssignSelectedToMeAsync()
+    {
+        if (_selected is null) return;
+        await UpdateEventAsync(_selected, _selected.Status, "Tenant Admin", "Assigned to tenant admin for ownership and follow-up.", _selected.RequiresReview);
+    }
+
+    private async Task AcknowledgeVisibleAsync()
+    {
+        _busy = true;
+        try
+        {
+            foreach (var item in _filtered.Where(e => e.RequiresReview).ToList())
+            {
+                await Api.UpdatePortalActivityStatusAsync(item.Id, new UpdatePortalActivityEventRequest { TenantId = _tenantId, Status = "Acknowledged", AssignedTo = "Portal Ops", RecommendedAction = item.RecommendedAction, RequiresReview = false });
+            }
+            await LoadAsync();
+            ShowToast("Visible review items acknowledged.");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Acknowledge failed: {ex.Message}", danger: true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task UpdateEventAsync(PortalActivityEventDto item, string status, string assignedTo, string recommendedAction, bool requiresReview)
+    {
+        _busy = true;
+        try
+        {
+            await Api.UpdatePortalActivityStatusAsync(item.Id, new UpdatePortalActivityEventRequest { TenantId = _tenantId, Status = status, AssignedTo = assignedTo, RecommendedAction = recommendedAction, RequiresReview = requiresReview });
+            await LoadAsync();
+            ShowToast($"Activity {item.EventNumber} updated to {status}.");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Update failed: {ex.Message}", danger: true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task ExportAsync()
+    {
+        ShowToast($"Export prepared for {_filtered.Count:N0} activity events.");
+        return Task.CompletedTask;
+    }
+
+    private static bool Contains(string value, string search) => value.Contains(search, StringComparison.OrdinalIgnoreCase);
+    private static string Initials(string name) { var p = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return p.Length >= 2 ? $"{p[0][0]}{p[^1][0]}" : name.Length > 0 ? name[..1] : "?"; }
+    private static string RiskClass(int risk) => risk >= 85 ? "pa-risk--critical" : risk >= 70 ? "pa-risk--high" : risk >= 40 ? "pa-risk--medium" : "pa-risk--low";
+    private static string SeverityBadge(string value) => value switch { "Error" => "pa-badge pa-badge--error", "Warning" => "pa-badge pa-badge--warning", _ => "pa-badge pa-badge--info" };
+    private static string StatusBadge(string value) => value switch { "Open" => "pa-badge pa-badge--open", "Escalated" => "pa-badge pa-badge--error", "Reviewed" or "Acknowledged" or "Resolved" => "pa-badge pa-badge--success", _ => "pa-badge pa-badge--neutral" };
+    private void ShowToast(string message, bool danger = false) { _toastMessage = message; _toastClass = danger ? "pa-toast--danger" : "pa-toast--success"; }
+    private void ClearToast() => _toastMessage = null;
+
+    private sealed record TabItem(string Key, string Label, string Icon);
+    private sealed record KpiItem(string Key, string Label, string Value, string Detail, string Icon, string Tooltip);
+    private sealed record MetricItem(string Label, string Value);
 }

@@ -172,6 +172,10 @@ public sealed class DatabaseMigrator
         new("0139_CRM_DuplicateManagement_Create", Migration0139_CrmDuplicateManagementCreate),
         new("0140_CRM_Enrichment_CreateSeed", Migration0140_CrmEnrichmentCreateSeed),
         new("0141_OPS_WorkbenchQuickLink_CreateSeed", Migration0141_OpsWorkbenchQuickLinkCreateSeed),
+        new("0142_Portal_ChatSession_CreateSeed", Migration0142_PortalChatSessionCreateSeed),
+        new("0143_Portal_WhiteLabelConfiguration_CreateSeed", Migration0143_PortalWhiteLabelConfigurationCreateSeed),
+        new("0144_Portal_ActivityEvent_CreateSeed", Migration0144_PortalActivityEventCreateSeed),
+        new("0145_Portal_MyAccountProfile_CreateSeed", Migration0145_PortalMyAccountProfileCreateSeed),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -7374,5 +7378,348 @@ WHERE NOT EXISTS
       AND q.LinkCode = l.LinkCode
       AND q.IsDeleted = 0
 );
+";
+
+    private const string Migration0142_PortalChatSessionCreateSeed = @"
+IF SCHEMA_ID(N'Portal') IS NULL EXEC(N'CREATE SCHEMA Portal');
+
+IF OBJECT_ID(N'Portal.ChatSession', N'U') IS NULL
+BEGIN
+    CREATE TABLE Portal.ChatSession
+    (
+        ChatSessionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Portal_ChatSession PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SessionNumber NVARCHAR(40) NOT NULL,
+        ClientName NVARCHAR(200) NOT NULL,
+        AccountName NVARCHAR(200) NOT NULL,
+        ContactEmail NVARCHAR(320) NOT NULL CONSTRAINT DF_PortalChatSession_ContactEmail DEFAULT N'',
+        Channel NVARCHAR(80) NOT NULL CONSTRAINT DF_PortalChatSession_Channel DEFAULT N'Web Portal',
+        Topic NVARCHAR(120) NOT NULL,
+        Status NVARCHAR(80) NOT NULL,
+        Priority NVARCHAR(40) NOT NULL CONSTRAINT DF_PortalChatSession_Priority DEFAULT N'Normal',
+        Sentiment NVARCHAR(40) NOT NULL CONSTRAINT DF_PortalChatSession_Sentiment DEFAULT N'Neutral',
+        AssignedTo NVARCHAR(160) NOT NULL CONSTRAINT DF_PortalChatSession_AssignedTo DEFAULT N'Unassigned',
+        Summary NVARCHAR(1000) NOT NULL CONSTRAINT DF_PortalChatSession_Summary DEFAULT N'',
+        NextBestAction NVARCHAR(500) NOT NULL CONSTRAINT DF_PortalChatSession_NextBestAction DEFAULT N'',
+        StartedDateUtc DATETIME2 NOT NULL,
+        LastMessageDateUtc DATETIME2 NOT NULL,
+        ResolvedDateUtc DATETIME2 NULL,
+        MessageCount INT NOT NULL CONSTRAINT DF_PortalChatSession_MessageCount DEFAULT 0,
+        WaitSeconds INT NOT NULL CONSTRAINT DF_PortalChatSession_WaitSeconds DEFAULT 0,
+        SlaDueDateUtc DATETIME2 NULL,
+        AiHandled BIT NOT NULL CONSTRAINT DF_PortalChatSession_AiHandled DEFAULT 0,
+        HandoffRequired BIT NOT NULL CONSTRAINT DF_PortalChatSession_HandoffRequired DEFAULT 0,
+        ReviewedDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PortalChatSession_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PortalChatSession_IsDeleted DEFAULT 0
+    );
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Portal.ChatSession') AND name = N'IX_Portal_ChatSession_TenantStatus')
+    CREATE INDEX IX_Portal_ChatSession_TenantStatus ON Portal.ChatSession(TenantId, IsDeleted, Status, Priority, LastMessageDateUtc DESC);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Portal.ChatSession') AND name = N'UX_Portal_ChatSession_Number')
+    CREATE UNIQUE INDEX UX_Portal_ChatSession_Number ON Portal.ChatSession(TenantId, SessionNumber) WHERE IsDeleted = 0;
+
+DECLARE @TenantId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM Core.Tenant ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000001');
+DECLARE @AdminUserId UNIQUEIDENTIFIER = (SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId ORDER BY CreatedDateUtc);
+
+DECLARE @Sessions TABLE
+(
+    SessionNumber NVARCHAR(40),
+    ClientName NVARCHAR(200),
+    AccountName NVARCHAR(200),
+    ContactEmail NVARCHAR(320),
+    Channel NVARCHAR(80),
+    Topic NVARCHAR(120),
+    Status NVARCHAR(80),
+    Priority NVARCHAR(40),
+    Sentiment NVARCHAR(40),
+    AssignedTo NVARCHAR(160),
+    Summary NVARCHAR(1000),
+    NextBestAction NVARCHAR(500),
+    StartedHoursAgo INT,
+    LastMessageMinutesAgo INT,
+    ResolvedHoursAgo INT NULL,
+    MessageCount INT,
+    WaitSeconds INT,
+    SlaMinutesFromNow INT NULL,
+    AiHandled BIT,
+    HandoffRequired BIT,
+    Reviewed BIT
+);
+
+INSERT INTO @Sessions VALUES
+(N'PCS-1001', N'Beth Owens', N'Riverside Construction LLC', N'beth@riverside.example', N'Web Portal', N'Billing', N'Live Handoff', N'Urgent', N'Negative', N'Mia Santos', N'Client disputed invoice finance charge and asked for same-day billing review.', N'Escalate to billing queue and attach invoice history before callback.', 9, 18, NULL, 18, 512, -30, 0, 1, 0),
+(N'PCS-1002', N'Rachel Chen', N'Chen Family', N'rachel.chen@example.com', N'Mobile App', N'COI Request', N'AI Resolved', N'Normal', N'Positive', N'Aria', N'Assistant guided the client through certificate request submission.', N'Quality review only; no human follow-up required.', 2, 7, 1, 12, 42, NULL, 1, 0, 1),
+(N'PCS-1003', N'David Kim', N'Kim Dental Group', N'david.kim@example.com', N'Web Portal', N'Login Support', N'Open', N'High', N'Negative', N'Unassigned', N'Suspended user attempted access and requested reinstatement assistance.', N'Assign security owner and verify account status before restoring access.', 5, 11, NULL, 9, 371, 45, 0, 1, 0),
+(N'PCS-1004', N'Marcus Webb', N'Webb Holdings LLC', N'marcus.webb@example.com', N'Web Portal', N'Document Access', N'In Review', N'Normal', N'Neutral', N'Jordan Lee', N'Client could not locate shared policy packet in document center.', N'Confirm document visibility and send direct portal link.', 18, 62, NULL, 14, 126, 180, 0, 0, 0),
+(N'PCS-1005', N'Pamela Torres', N'Torres Household', N'pamela.torres@example.com', N'Mobile App', N'Payment', N'Live Handoff', N'High', N'Neutral', N'Billing Team', N'Client requested payment plan options after failed card attempt.', N'Route to billing specialist and review payment provider response.', 27, 35, NULL, 21, 648, 60, 0, 1, 0),
+(N'PCS-1006', N'Ken Sato', N'Sato Tech LLC', N'ken@sato.example', N'Web Portal', N'Policy Change', N'AI Resolved', N'Normal', N'Positive', N'Aria', N'Assistant collected change details and created self-service request.', N'Review generated request for completeness during normal queue processing.', 31, 240, 30, 16, 58, NULL, 1, 0, 1),
+(N'PCS-1007', N'Alisha Grant', N'Grant Farms', N'alisha@grantfarms.example', N'Web Portal', N'Claims', N'Open', N'Urgent', N'Negative', N'Claims Desk', N'FNOL questions require a licensed claims representative handoff.', N'Call client, start FNOL intake, and document loss date.', 1, 4, NULL, 24, 184, 26, 0, 1, 0),
+(N'PCS-1008', N'Noah Patel', N'Patel Logistics', N'noah@patellogistics.example', N'Web Portal', N'Renewal', N'Resolved by Agent', N'Normal', N'Positive', N'Jordan Lee', N'Agent answered renewal document timing and confirmed next steps.', N'No action required; keep transcript for renewal team context.', 49, 1460, 47, 11, 95, NULL, 0, 0, 1);
+
+INSERT INTO Portal.ChatSession
+(ChatSessionId, TenantId, SessionNumber, ClientName, AccountName, ContactEmail, Channel, Topic, Status, Priority, Sentiment, AssignedTo, Summary, NextBestAction, StartedDateUtc, LastMessageDateUtc, ResolvedDateUtc, MessageCount, WaitSeconds, SlaDueDateUtc, AiHandled, HandoffRequired, ReviewedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @TenantId, s.SessionNumber, s.ClientName, s.AccountName, s.ContactEmail, s.Channel, s.Topic, s.Status, s.Priority, s.Sentiment, s.AssignedTo, s.Summary, s.NextBestAction,
+       DATEADD(HOUR, -s.StartedHoursAgo, SYSUTCDATETIME()), DATEADD(MINUTE, -s.LastMessageMinutesAgo, SYSUTCDATETIME()),
+       CASE WHEN s.ResolvedHoursAgo IS NULL THEN NULL ELSE DATEADD(HOUR, -s.ResolvedHoursAgo, SYSUTCDATETIME()) END,
+       s.MessageCount, s.WaitSeconds,
+       CASE WHEN s.SlaMinutesFromNow IS NULL THEN NULL ELSE DATEADD(MINUTE, s.SlaMinutesFromNow, SYSUTCDATETIME()) END,
+       s.AiHandled, s.HandoffRequired,
+       CASE WHEN s.Reviewed = 1 THEN DATEADD(MINUTE, -30, SYSUTCDATETIME()) ELSE NULL END,
+       SYSUTCDATETIME(), @AdminUserId, 0
+FROM @Sessions s
+WHERE NOT EXISTS (SELECT 1 FROM Portal.ChatSession cs WHERE cs.TenantId = @TenantId AND cs.SessionNumber = s.SessionNumber AND cs.IsDeleted = 0);
+";
+
+    private const string Migration0143_PortalWhiteLabelConfigurationCreateSeed = @"
+IF SCHEMA_ID(N'Portal') IS NULL EXEC(N'CREATE SCHEMA Portal');
+
+IF OBJECT_ID(N'Portal.WhiteLabelConfiguration', N'U') IS NULL
+BEGIN
+    CREATE TABLE Portal.WhiteLabelConfiguration
+    (
+        WhiteLabelConfigurationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Portal_WhiteLabelConfiguration PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DisplayName NVARCHAR(200) NOT NULL,
+        PortalDomain NVARCHAR(255) NOT NULL,
+        DomainStatus NVARCHAR(40) NOT NULL CONSTRAINT DF_WhiteLabel_DomainStatus DEFAULT N'Pending DNS',
+        PublishStatus NVARCHAR(40) NOT NULL CONSTRAINT DF_WhiteLabel_PublishStatus DEFAULT N'Draft',
+        LastPublishedDateUtc DATETIME2 NULL,
+        PrimaryColor NVARCHAR(20) NOT NULL CONSTRAINT DF_WhiteLabel_PrimaryColor DEFAULT N'#1d4ed8',
+        AccentColor NVARCHAR(20) NOT NULL CONSTRAINT DF_WhiteLabel_AccentColor DEFAULT N'#059669',
+        NavBackgroundColor NVARCHAR(20) NOT NULL CONSTRAINT DF_WhiteLabel_NavBg DEFAULT N'#1e293b',
+        NavTextColor NVARCHAR(20) NOT NULL CONSTRAINT DF_WhiteLabel_NavText DEFAULT N'#f8fafc',
+        LogoUrl NVARCHAR(500) NOT NULL CONSTRAINT DF_WhiteLabel_LogoUrl DEFAULT N'',
+        FaviconUrl NVARCHAR(500) NOT NULL CONSTRAINT DF_WhiteLabel_FaviconUrl DEFAULT N'',
+        WelcomeMessage NVARCHAR(1000) NOT NULL CONSTRAINT DF_WhiteLabel_Welcome DEFAULT N'',
+        SupportEmail NVARCHAR(320) NOT NULL,
+        SupportPhone NVARCHAR(50) NOT NULL CONSTRAINT DF_WhiteLabel_SupportPhone DEFAULT N'',
+        ShowAgencyLogo BIT NOT NULL CONSTRAINT DF_WhiteLabel_ShowAgencyLogo DEFAULT 1,
+        HidePoweredBy BIT NOT NULL CONSTRAINT DF_WhiteLabel_HidePoweredBy DEFAULT 0,
+        ShowNewsWidget BIT NOT NULL CONSTRAINT DF_WhiteLabel_ShowNews DEFAULT 1,
+        ShowSupportChat BIT NOT NULL CONSTRAINT DF_WhiteLabel_ShowChat DEFAULT 1,
+        EnableAnnouncements BIT NOT NULL CONSTRAINT DF_WhiteLabel_Announcements DEFAULT 1,
+        EnableCrossSellWidget BIT NOT NULL CONSTRAINT DF_WhiteLabel_CrossSell DEFAULT 1,
+        MobileAppName NVARCHAR(200) NOT NULL,
+        MobileBundleId NVARCHAR(160) NOT NULL CONSTRAINT DF_WhiteLabel_Bundle DEFAULT N'',
+        IosStoreUrl NVARCHAR(500) NOT NULL CONSTRAINT DF_WhiteLabel_IosUrl DEFAULT N'',
+        AndroidStoreUrl NVARCHAR(500) NOT NULL CONSTRAINT DF_WhiteLabel_AndroidUrl DEFAULT N'',
+        MobileVersion NVARCHAR(40) NOT NULL CONSTRAINT DF_WhiteLabel_MobileVersion DEFAULT N'2.4.1',
+        MinimumMobileVersion NVARCHAR(40) NOT NULL CONSTRAINT DF_WhiteLabel_MinMobileVersion DEFAULT N'2.0.0',
+        MobilePublished BIT NOT NULL CONSTRAINT DF_WhiteLabel_MobilePublished DEFAULT 1,
+        BiometricLogin BIT NOT NULL CONSTRAINT DF_WhiteLabel_Biometric DEFAULT 1,
+        PushNotifications BIT NOT NULL CONSTRAINT DF_WhiteLabel_Push DEFAULT 1,
+        OfflinePolicyView BIT NOT NULL CONSTRAINT DF_WhiteLabel_Offline DEFAULT 1,
+        ForceMobileUpdate BIT NOT NULL CONSTRAINT DF_WhiteLabel_ForceUpdate DEFAULT 0,
+        RequireMfaOnMobile BIT NOT NULL CONSTRAINT DF_WhiteLabel_MobileMfa DEFAULT 1,
+        AssistantName NVARCHAR(120) NOT NULL CONSTRAINT DF_WhiteLabel_Assistant DEFAULT N'Aria',
+        AssistantWelcomeMessage NVARCHAR(1000) NOT NULL CONSTRAINT DF_WhiteLabel_AssistantWelcome DEFAULT N'',
+        ChatWidgetColor NVARCHAR(20) NOT NULL CONSTRAINT DF_WhiteLabel_ChatColor DEFAULT N'#1d4ed8',
+        ChatPosition NVARCHAR(40) NOT NULL CONSTRAINT DF_WhiteLabel_ChatPosition DEFAULT N'bottom-right',
+        ChatEscalationEmail NVARCHAR(320) NOT NULL CONSTRAINT DF_WhiteLabel_ChatEmail DEFAULT N'',
+        OfficeHours NVARCHAR(120) NOT NULL CONSTRAINT DF_WhiteLabel_OfficeHours DEFAULT N'Mon-Fri, 8am-5pm CT',
+        ChatEnabled BIT NOT NULL CONSTRAINT DF_WhiteLabel_ChatEnabled DEFAULT 1,
+        AiResponsesEnabled BIT NOT NULL CONSTRAINT DF_WhiteLabel_AiResponses DEFAULT 1,
+        LiveHandoffEnabled BIT NOT NULL CONSTRAINT DF_WhiteLabel_Handoff DEFAULT 1,
+        ShowChatOnMobile BIT NOT NULL CONSTRAINT DF_WhiteLabel_MobileChat DEFAULT 1,
+        AllowFileAttachments BIT NOT NULL CONSTRAINT DF_WhiteLabel_Attachments DEFAULT 1,
+        TranscriptEmailEnabled BIT NOT NULL CONSTRAINT DF_WhiteLabel_Transcript DEFAULT 1,
+        IdentityProvider NVARCHAR(80) NOT NULL CONSTRAINT DF_WhiteLabel_Idp DEFAULT N'none',
+        SsoClientId NVARCHAR(255) NOT NULL CONSTRAINT DF_WhiteLabel_SsoClient DEFAULT N'',
+        SsoMetadataUrl NVARCHAR(500) NOT NULL CONSTRAINT DF_WhiteLabel_Metadata DEFAULT N'',
+        RedirectUris NVARCHAR(1000) NOT NULL CONSTRAINT DF_WhiteLabel_Redirects DEFAULT N'',
+        SsoEnabled BIT NOT NULL CONSTRAINT DF_WhiteLabel_SsoEnabled DEFAULT 0,
+        MfaRequired BIT NOT NULL CONSTRAINT DF_WhiteLabel_MfaRequired DEFAULT 0,
+        AllowSocialLogin BIT NOT NULL CONSTRAINT DF_WhiteLabel_Social DEFAULT 1,
+        AutoProvisionUsers BIT NOT NULL CONSTRAINT DF_WhiteLabel_AutoProvision DEFAULT 0,
+        PasswordMinLength INT NOT NULL CONSTRAINT DF_WhiteLabel_PwdMin DEFAULT 10,
+        SessionTimeoutMinutes INT NOT NULL CONSTRAINT DF_WhiteLabel_Timeout DEFAULT 30,
+        MaxFailedLoginAttempts INT NOT NULL CONSTRAINT DF_WhiteLabel_Failed DEFAULT 5,
+        LockoutMinutes INT NOT NULL CONSTRAINT DF_WhiteLabel_Lockout DEFAULT 15,
+        RequireUppercase BIT NOT NULL CONSTRAINT DF_WhiteLabel_Upper DEFAULT 1,
+        RequireSpecialCharacter BIT NOT NULL CONSTRAINT DF_WhiteLabel_Special DEFAULT 1,
+        IpWhitelistEnabled BIT NOT NULL CONSTRAINT DF_WhiteLabel_Ip DEFAULT 0,
+        ActivePortalUsers INT NOT NULL CONSTRAINT DF_WhiteLabel_ActiveUsers DEFAULT 0,
+        PendingInvites INT NOT NULL CONSTRAINT DF_WhiteLabel_PendingInvites DEFAULT 0,
+        MobileInstalls INT NOT NULL CONSTRAINT DF_WhiteLabel_MobileInstalls DEFAULT 0,
+        ChatSessions30d INT NOT NULL CONSTRAINT DF_WhiteLabel_ChatSessions DEFAULT 0,
+        OpenRequests INT NOT NULL CONSTRAINT DF_WhiteLabel_OpenRequests DEFAULT 0,
+        UrgentRequests INT NOT NULL CONSTRAINT DF_WhiteLabel_UrgentRequests DEFAULT 0,
+        SharedDocuments INT NOT NULL CONSTRAINT DF_WhiteLabel_SharedDocuments DEFAULT 0,
+        ApiCalls30d INT NOT NULL CONSTRAINT DF_WhiteLabel_ApiCalls DEFAULT 0,
+        CsATScore DECIMAL(4,2) NOT NULL CONSTRAINT DF_WhiteLabel_Csat DEFAULT 4.60,
+        AiResolutionRate INT NOT NULL CONSTRAINT DF_WhiteLabel_AiRate DEFAULT 74,
+        LiveHandoffs30d INT NOT NULL CONSTRAINT DF_WhiteLabel_Handoffs DEFAULT 0,
+        AverageResponseSeconds INT NOT NULL CONSTRAINT DF_WhiteLabel_Response DEFAULT 108,
+        ConfigurationJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_WhiteLabel_ConfigJson DEFAULT N'{}',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_WhiteLabel_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_WhiteLabel_IsDeleted DEFAULT 0
+    );
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Portal.WhiteLabelConfiguration') AND name = N'UX_WhiteLabel_Tenant')
+    CREATE UNIQUE INDEX UX_WhiteLabel_Tenant ON Portal.WhiteLabelConfiguration(TenantId) WHERE IsDeleted = 0;
+
+DECLARE @TenantId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM Core.Tenant ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000001');
+DECLARE @AdminUserId UNIQUEIDENTIFIER = (SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId ORDER BY CreatedDateUtc);
+DECLARE @AgencyName NVARCHAR(200) = COALESCE((SELECT TOP 1 TenantName FROM Core.Tenant WHERE TenantId = @TenantId), N'Demo Agency');
+DECLARE @PortalDomain NVARCHAR(255) = CONCAT(N'portal.', LOWER(REPLACE(REPLACE(@AgencyName, N' ', N''), N'.', N'')), N'.com');
+DECLARE @SupportEmail NVARCHAR(320) = COALESCE((SELECT TOP 1 ContactEmail FROM Agency.Profile WHERE TenantId = @TenantId AND IsDeleted = 0), N'support@demoagency.com');
+DECLARE @SupportPhone NVARCHAR(50) = COALESCE((SELECT TOP 1 ContactPhone FROM Agency.Profile WHERE TenantId = @TenantId AND IsDeleted = 0), N'(555) 000-0000');
+
+INSERT INTO Portal.WhiteLabelConfiguration
+(WhiteLabelConfigurationId, TenantId, DisplayName, PortalDomain, DomainStatus, PublishStatus, LastPublishedDateUtc, PrimaryColor, AccentColor, NavBackgroundColor, NavTextColor, WelcomeMessage, SupportEmail, SupportPhone, ShowAgencyLogo, HidePoweredBy, ShowNewsWidget, ShowSupportChat, EnableAnnouncements, EnableCrossSellWidget, MobileAppName, MobileBundleId, IosStoreUrl, AndroidStoreUrl, MobileVersion, MinimumMobileVersion, MobilePublished, BiometricLogin, PushNotifications, OfflinePolicyView, ForceMobileUpdate, RequireMfaOnMobile, AssistantName, AssistantWelcomeMessage, ChatWidgetColor, ChatPosition, ChatEscalationEmail, OfficeHours, ChatEnabled, AiResponsesEnabled, LiveHandoffEnabled, ShowChatOnMobile, AllowFileAttachments, TranscriptEmailEnabled, IdentityProvider, SsoEnabled, MfaRequired, AllowSocialLogin, AutoProvisionUsers, PasswordMinLength, SessionTimeoutMinutes, MaxFailedLoginAttempts, LockoutMinutes, RequireUppercase, RequireSpecialCharacter, IpWhitelistEnabled, ActivePortalUsers, PendingInvites, MobileInstalls, ChatSessions30d, OpenRequests, UrgentRequests, SharedDocuments, ApiCalls30d, CsATScore, AiResolutionRate, LiveHandoffs30d, AverageResponseSeconds, ConfigurationJson, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @TenantId, CONCAT(@AgencyName, N' Client Portal'), @PortalDomain, N'Verified', N'Live', DATEADD(DAY, -4, SYSUTCDATETIME()), N'#1d4ed8', N'#059669', N'#1e293b', N'#f8fafc', CONCAT(N'Manage policies, request certificates, upload documents, and message ', @AgencyName, N' in one secure place.'), @SupportEmail, @SupportPhone, 1, 0, 1, 1, 1, 1, CONCAT(@AgencyName, N' Mobile'), CONCAT(N'com.', LOWER(REPLACE(REPLACE(@AgencyName, N' ', N''), N'.', N'')), N'.client'), N'', N'', N'2.4.1', N'2.0.0', 1, 1, 1, 1, 0, 1, N'Aria', CONCAT(N'Hi there! I''m Aria, your ', @AgencyName, N' assistant. I can help with COI requests, policy questions, payments, and more.'), N'#1d4ed8', N'bottom-right', @SupportEmail, N'Mon-Fri, 8am-5pm CT', 1, 1, 1, 1, 1, 1, N'none', 0, 0, 1, 0, 10, 30, 5, 15, 1, 1, 0, 47, 6, 23, 184, 9, 3, 42, 50410, 4.60, 74, 18, 108, N'{}', SYSUTCDATETIME(), @AdminUserId, 0
+WHERE NOT EXISTS (SELECT 1 FROM Portal.WhiteLabelConfiguration WHERE TenantId = @TenantId AND IsDeleted = 0);
+";
+
+    private const string Migration0144_PortalActivityEventCreateSeed = @"
+IF SCHEMA_ID(N'Portal') IS NULL EXEC(N'CREATE SCHEMA Portal');
+
+IF OBJECT_ID(N'Portal.ActivityEvent', N'U') IS NULL
+BEGIN
+    CREATE TABLE Portal.ActivityEvent
+    (
+        ActivityEventId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Portal_ActivityEvent PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        EventNumber NVARCHAR(40) NOT NULL,
+        OccurredAtUtc DATETIME2 NOT NULL,
+        UserName NVARCHAR(200) NOT NULL,
+        UserEmail NVARCHAR(320) NOT NULL CONSTRAINT DF_ActivityEvent_UserEmail DEFAULT N'',
+        AccountName NVARCHAR(200) NOT NULL CONSTRAINT DF_ActivityEvent_Account DEFAULT N'',
+        EventType NVARCHAR(100) NOT NULL,
+        Category NVARCHAR(80) NOT NULL CONSTRAINT DF_ActivityEvent_Category DEFAULT N'General',
+        Severity NVARCHAR(40) NOT NULL CONSTRAINT DF_ActivityEvent_Severity DEFAULT N'Info',
+        Status NVARCHAR(60) NOT NULL CONSTRAINT DF_ActivityEvent_Status DEFAULT N'Open',
+        Detail NVARCHAR(1000) NOT NULL CONSTRAINT DF_ActivityEvent_Detail DEFAULT N'',
+        WorkflowImpact NVARCHAR(500) NOT NULL CONSTRAINT DF_ActivityEvent_Impact DEFAULT N'',
+        RecommendedAction NVARCHAR(500) NOT NULL CONSTRAINT DF_ActivityEvent_Action DEFAULT N'',
+        AssignedTo NVARCHAR(160) NOT NULL CONSTRAINT DF_ActivityEvent_AssignedTo DEFAULT N'Unassigned',
+        IpAddress NVARCHAR(80) NOT NULL CONSTRAINT DF_ActivityEvent_Ip DEFAULT N'',
+        Device NVARCHAR(160) NOT NULL CONSTRAINT DF_ActivityEvent_Device DEFAULT N'',
+        Location NVARCHAR(160) NOT NULL CONSTRAINT DF_ActivityEvent_Location DEFAULT N'',
+        RiskScore INT NOT NULL CONSTRAINT DF_ActivityEvent_Risk DEFAULT 0,
+        DurationSeconds INT NOT NULL CONSTRAINT DF_ActivityEvent_Duration DEFAULT 0,
+        RequiresReview BIT NOT NULL CONSTRAINT DF_ActivityEvent_Review DEFAULT 0,
+        ReviewedDateUtc DATETIME2 NULL,
+        ReviewedBy NVARCHAR(160) NOT NULL CONSTRAINT DF_ActivityEvent_ReviewedBy DEFAULT N'',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ActivityEvent_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_ActivityEvent_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Portal.ActivityEvent') AND name = N'IX_ActivityEvent_Tenant_Occurred')
+    CREATE INDEX IX_ActivityEvent_Tenant_Occurred ON Portal.ActivityEvent(TenantId, OccurredAtUtc DESC, IsDeleted);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Portal.ActivityEvent') AND name = N'UX_ActivityEvent_Tenant_Number')
+    CREATE UNIQUE INDEX UX_ActivityEvent_Tenant_Number ON Portal.ActivityEvent(TenantId, EventNumber) WHERE IsDeleted = 0;
+
+DECLARE @TenantId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM Core.Tenant ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000001');
+DECLARE @AdminUserId UNIQUEIDENTIFIER = (SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId ORDER BY CreatedDateUtc);
+
+DECLARE @Events TABLE
+(
+    EventNumber NVARCHAR(40), MinutesAgo INT, UserName NVARCHAR(200), UserEmail NVARCHAR(320), AccountName NVARCHAR(200), EventType NVARCHAR(100), Category NVARCHAR(80), Severity NVARCHAR(40), Status NVARCHAR(60), Detail NVARCHAR(1000), WorkflowImpact NVARCHAR(500), RecommendedAction NVARCHAR(500), AssignedTo NVARCHAR(160), IpAddress NVARCHAR(80), Device NVARCHAR(160), Location NVARCHAR(160), RiskScore INT, DurationSeconds INT, RequiresReview BIT
+);
+
+INSERT INTO @Events VALUES
+(N'ACT-1001', 12, N'Rachel Chen', N'rachel.chen@example.com', N'Chen Family', N'Login', N'Authentication', N'Info', N'Reviewed', N'Successful client portal login with MFA.', N'Confirms active client adoption and secure access.', N'No action required.', N'Portal Ops', N'72.14.20.18', N'Chrome on Windows', N'Austin, TX', 12, 4, 0),
+(N'ACT-1002', 28, N'Beth Owens', N'beth@riverside.example', N'Riverside Construction LLC', N'Request Submitted', N'Self-Service', N'Info', N'Open', N'Submitted urgent COI request for project owner.', N'Creates service workload with same-day SLA.', N'Assign to CSR and validate certificate holder details.', N'Unassigned', N'24.18.42.8', N'Safari on iPhone', N'Dallas, TX', 58, 96, 1),
+(N'ACT-1003', 44, N'David Kim', N'david.kim@example.com', N'Kim Dental Group', N'Failed Login', N'Security', N'Warning', N'Open', N'Failed login attempt after account suspension.', N'Security review required before reactivation.', N'Review suspension reason and contact account owner.', N'Security Team', N'104.44.12.9', N'Edge on Windows', N'Plano, TX', 84, 7, 1),
+(N'ACT-1004', 71, N'Marcus Webb', N'marcus.webb@example.com', N'Webb Holdings LLC', N'Document Download', N'Documents', N'Info', N'Reviewed', N'Downloaded commercial package and auto ID cards.', N'High-value client document engagement.', N'No action required.', N'Portal Ops', N'98.21.44.77', N'Chrome on Android', N'Fort Worth, TX', 22, 31, 0),
+(N'ACT-1005', 96, N'Aria Assistant', N'aria@system.local', N'Chen Family', N'AI Chat Resolved', N'Chat', N'Info', N'Reviewed', N'AI resolved certificate request workflow question.', N'Deflected service workload without handoff.', N'Use topic in knowledge base tuning.', N'Automation', N'10.10.4.12', N'Portal Chat Widget', N'System', 18, 118, 0),
+(N'ACT-1006', 128, N'Pamela Torres', N'pamela.torres@example.com', N'Torres Household', N'Invitation Accepted', N'Adoption', N'Info', N'Open', N'Accepted portal invite but has not enabled MFA.', N'New user activation incomplete.', N'Send MFA setup reminder.', N'Portal Ops', N'67.44.12.91', N'Firefox on Mac', N'San Antonio, TX', 46, 64, 1),
+(N'ACT-1007', 185, N'Ken Sato', N'ken@satotech.example', N'Sato Tech LLC', N'Document Upload', N'Documents', N'Info', N'Open', N'Uploaded signed cyber questionnaire.', N'Pending document classification and routing.', N'Route to account manager for review.', N'Jordan Lee', N'71.42.88.19', N'Chrome on Windows', N'Round Rock, TX', 39, 142, 1),
+(N'ACT-1008', 240, N'Marcus Webb', N'marcus.webb@example.com', N'Webb Holdings LLC', N'Payment', N'Billing', N'Info', N'Reviewed', N'Paid invoice INV-20418 from mobile app.', N'Reduces receivables and confirms mobile payment adoption.', N'No action required.', N'Accounting', N'98.21.44.77', N'Mobile App iOS', N'Fort Worth, TX', 10, 76, 0),
+(N'ACT-1009', 310, N'Unknown User', N'unknown@example.com', N'Unknown', N'Blocked Login', N'Security', N'Error', N'Escalated', N'Blocked login from unexpected geography.', N'Potential account takeover signal.', N'Escalate to security and verify user identity.', N'Security Team', N'185.199.108.21', N'Chrome on Linux', N'Unknown', 96, 3, 1),
+(N'ACT-1010', 430, N'Rachel Chen', N'rachel.chen@example.com', N'Chen Family', N'E-Sign', N'Documents', N'Info', N'Reviewed', N'Completed e-signature for auto policy change.', N'Completes digital service workflow.', N'Archive signed packet.', N'Document Ops', N'72.14.20.18', N'Chrome on Windows', N'Austin, TX', 16, 233, 0);
+
+INSERT INTO Portal.ActivityEvent
+(ActivityEventId, TenantId, EventNumber, OccurredAtUtc, UserName, UserEmail, AccountName, EventType, Category, Severity, Status, Detail, WorkflowImpact, RecommendedAction, AssignedTo, IpAddress, Device, Location, RiskScore, DurationSeconds, RequiresReview, ReviewedDateUtc, ReviewedBy, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @TenantId, e.EventNumber, DATEADD(MINUTE, -e.MinutesAgo, SYSUTCDATETIME()), e.UserName, e.UserEmail, e.AccountName, e.EventType, e.Category, e.Severity, e.Status, e.Detail, e.WorkflowImpact, e.RecommendedAction, e.AssignedTo, e.IpAddress, e.Device, e.Location, e.RiskScore, e.DurationSeconds, e.RequiresReview, CASE WHEN e.Status = N'Reviewed' THEN DATEADD(MINUTE, -5, SYSUTCDATETIME()) ELSE NULL END, CASE WHEN e.Status = N'Reviewed' THEN N'Portal Ops' ELSE N'' END, SYSUTCDATETIME(), @AdminUserId, 0
+FROM @Events e
+WHERE NOT EXISTS (SELECT 1 FROM Portal.ActivityEvent a WHERE a.TenantId = @TenantId AND a.EventNumber = e.EventNumber AND a.IsDeleted = 0);
+";
+
+    private const string Migration0145_PortalMyAccountProfileCreateSeed = @"
+IF SCHEMA_ID(N'Portal') IS NULL EXEC(N'CREATE SCHEMA Portal');
+
+IF OBJECT_ID(N'Portal.MyAccountProfile', N'U') IS NULL
+BEGIN
+    CREATE TABLE Portal.MyAccountProfile
+    (
+        MyAccountProfileId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Portal_MyAccountProfile PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AgencyName NVARCHAR(200) NOT NULL,
+        AdminName NVARCHAR(200) NOT NULL CONSTRAINT DF_MyAccount_AdminName DEFAULT N'Tenant Admin',
+        AdminEmail NVARCHAR(320) NOT NULL,
+        AdminRole NVARCHAR(80) NOT NULL CONSTRAINT DF_MyAccount_AdminRole DEFAULT N'Tenant Admin',
+        AdminPhone NVARCHAR(50) NOT NULL CONSTRAINT DF_MyAccount_AdminPhone DEFAULT N'',
+        TimeZone NVARCHAR(120) NOT NULL CONSTRAINT DF_MyAccount_TimeZone DEFAULT N'Central Standard Time',
+        Locale NVARCHAR(40) NOT NULL CONSTRAINT DF_MyAccount_Locale DEFAULT N'en-US',
+        PlanName NVARCHAR(120) NOT NULL CONSTRAINT DF_MyAccount_PlanName DEFAULT N'Enterprise',
+        PlanStatus NVARCHAR(80) NOT NULL CONSTRAINT DF_MyAccount_PlanStatus DEFAULT N'Active',
+        RenewalDateUtc DATETIME2 NOT NULL,
+        PortalUsers INT NOT NULL CONSTRAINT DF_MyAccount_PortalUsers DEFAULT 0,
+        ActivePortalUsers INT NOT NULL CONSTRAINT DF_MyAccount_ActiveUsers DEFAULT 0,
+        PendingInvites INT NOT NULL CONSTRAINT DF_MyAccount_PendingInvites DEFAULT 0,
+        OpenRequests INT NOT NULL CONSTRAINT DF_MyAccount_OpenRequests DEFAULT 0,
+        UrgentRequests INT NOT NULL CONSTRAINT DF_MyAccount_UrgentRequests DEFAULT 0,
+        SharedDocuments INT NOT NULL CONSTRAINT DF_MyAccount_SharedDocuments DEFAULT 0,
+        StorageUsedGb INT NOT NULL CONSTRAINT DF_MyAccount_StorageUsed DEFAULT 0,
+        StorageLimitGb INT NOT NULL CONSTRAINT DF_MyAccount_StorageLimit DEFAULT 250,
+        MonthlyLoginCount INT NOT NULL CONSTRAINT DF_MyAccount_LoginCount DEFAULT 0,
+        MobileInstalls INT NOT NULL CONSTRAINT DF_MyAccount_MobileInstalls DEFAULT 0,
+        ChatSessions30d INT NOT NULL CONSTRAINT DF_MyAccount_ChatSessions DEFAULT 0,
+        ApiCalls30d INT NOT NULL CONSTRAINT DF_MyAccount_ApiCalls DEFAULT 0,
+        LastPortalPublishUtc DATETIME2 NOT NULL,
+        LastAdminLoginUtc DATETIME2 NOT NULL,
+        MfaEnabled BIT NOT NULL CONSTRAINT DF_MyAccount_Mfa DEFAULT 1,
+        SsoEnabled BIT NOT NULL CONSTRAINT DF_MyAccount_Sso DEFAULT 0,
+        BrandingPublished BIT NOT NULL CONSTRAINT DF_MyAccount_Branding DEFAULT 1,
+        MobileAppPublished BIT NOT NULL CONSTRAINT DF_MyAccount_Mobile DEFAULT 1,
+        ChatEnabled BIT NOT NULL CONSTRAINT DF_MyAccount_Chat DEFAULT 1,
+        SupportEmail NVARCHAR(320) NOT NULL,
+        SupportPhone NVARCHAR(50) NOT NULL CONSTRAINT DF_MyAccount_SupportPhone DEFAULT N'',
+        PortalDomain NVARCHAR(255) NOT NULL,
+        HealthJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_MyAccount_Health DEFAULT N'[]',
+        ActivityJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_MyAccount_Activity DEFAULT N'[]',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_MyAccount_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_MyAccount_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Portal.MyAccountProfile') AND name = N'UX_MyAccount_Tenant')
+    CREATE UNIQUE INDEX UX_MyAccount_Tenant ON Portal.MyAccountProfile(TenantId) WHERE IsDeleted = 0;
+
+DECLARE @TenantId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM Core.Tenant ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000001');
+DECLARE @AdminUserId UNIQUEIDENTIFIER = (SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId ORDER BY CreatedDateUtc);
+DECLARE @AgencyName NVARCHAR(200) = COALESCE((SELECT TOP 1 TenantName FROM Core.Tenant WHERE TenantId = @TenantId), N'Demo Agency');
+DECLARE @AdminEmail NVARCHAR(320) = COALESCE((SELECT TOP 1 Email FROM IAM.[User] WHERE TenantId = @TenantId ORDER BY CreatedDateUtc), N'admin@demoagency.com');
+DECLARE @SupportEmail NVARCHAR(320) = COALESCE((SELECT TOP 1 ContactEmail FROM Agency.Profile WHERE TenantId = @TenantId AND IsDeleted = 0), @AdminEmail);
+DECLARE @SupportPhone NVARCHAR(50) = COALESCE((SELECT TOP 1 ContactPhone FROM Agency.Profile WHERE TenantId = @TenantId AND IsDeleted = 0), N'(555) 000-0000');
+DECLARE @PortalDomain NVARCHAR(255) = CONCAT(N'portal.', LOWER(REPLACE(REPLACE(@AgencyName, N' ', N''), N'.', N'')), N'.com');
+
+INSERT INTO Portal.MyAccountProfile
+(MyAccountProfileId, TenantId, AgencyName, AdminName, AdminEmail, AdminRole, AdminPhone, TimeZone, Locale, PlanName, PlanStatus, RenewalDateUtc, PortalUsers, ActivePortalUsers, PendingInvites, OpenRequests, UrgentRequests, SharedDocuments, StorageUsedGb, StorageLimitGb, MonthlyLoginCount, MobileInstalls, ChatSessions30d, ApiCalls30d, LastPortalPublishUtc, LastAdminLoginUtc, MfaEnabled, SsoEnabled, BrandingPublished, MobileAppPublished, ChatEnabled, SupportEmail, SupportPhone, PortalDomain, HealthJson, ActivityJson, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @TenantId, @AgencyName, N'Tenant Admin', @AdminEmail, N'Tenant Admin', @SupportPhone, N'Central Standard Time', N'en-US', N'Enterprise', N'Active', DATEADD(MONTH, 8, SYSUTCDATETIME()), 52, 47, 6, 23, 3, 184, 42, 250, 1260, 23, 184, 50410, DATEADD(DAY, -4, SYSUTCDATETIME()), DATEADD(HOUR, -2, SYSUTCDATETIME()), 1, 0, 1, 1, 1, @SupportEmail, @SupportPhone, @PortalDomain,
+       N'[{""name"":""Portal availability"",""status"":""Healthy"",""detail"":""All portal systems operational"",""icon"":""bi-check-circle""},{""name"":""Security posture"",""status"":""Watch"",""detail"":""SSO not enabled; MFA is active"",""icon"":""bi-shield-lock""},{""name"":""Storage capacity"",""status"":""Healthy"",""detail"":""42 GB of 250 GB used"",""icon"":""bi-hdd""}]',
+       N'[{""title"":""Branding published"",""detail"":""White-label portal configuration is live"",""severity"":""Healthy"",""icon"":""bi-palette""},{""title"":""Urgent request queue"",""detail"":""3 urgent self-service requests need review"",""severity"":""Watch"",""icon"":""bi-exclamation-triangle""},{""title"":""Admin login"",""detail"":""Tenant admin accessed portal console"",""severity"":""Info"",""icon"":""bi-person-check""}]',
+       SYSUTCDATETIME(), @AdminUserId, 0
+WHERE NOT EXISTS (SELECT 1 FROM Portal.MyAccountProfile WHERE TenantId = @TenantId AND IsDeleted = 0);
 ";
 }

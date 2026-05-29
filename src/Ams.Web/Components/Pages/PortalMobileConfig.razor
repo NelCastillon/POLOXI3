@@ -1,248 +1,463 @@
 @page "/portal/mobile"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using System.Text.Json
+@using Ams.Application.Common.Dtos
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Mobile Experience Config — AMS</PageTitle>
+<PageTitle>Portal Mobile — AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+@if (_toastVisible)
+{
+    <div class="pm-toast pm-toast--@_toastKind" role="status" aria-live="polite">
+        <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
 
-<AppPageHeader Title="Mobile Experience Configuration"
-               Subtitle="Configure the agency mobile app and mobile-optimized portal experience for your clients"
-               Icon="bi-phone-fill">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="() => _showPreview = true">
-            <i class="bi bi-phone" aria-hidden="true"></i> Preview App
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="SaveAsync">
-            <i class="bi bi-check-lg" aria-hidden="true"></i> Save Configuration
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<div class="pm-layout">
-
-    <!-- Settings panels -->
-    <div class="pm-settings-col">
-
-        <!-- App Identity -->
-        <div class="pm-panel">
-            <div class="pm-panel-hdr"><i class="bi bi-phone" aria-hidden="true"></i> App Identity</div>
-            <div class="pm-form-grid">
-                <div class="pm-field pm-field--full">
-                    <label class="pm-lbl">App Display Name</label>
-                    <SfTextBox @bind-Value="_cfg.AppName" Placeholder="e.g. First Insurance Mobile" />
-                </div>
-                <div class="pm-field">
-                    <label class="pm-lbl">iOS App Store URL</label>
-                    <SfTextBox @bind-Value="_cfg.IosUrl" Placeholder="https://apps.apple.com/…" />
-                </div>
-                <div class="pm-field">
-                    <label class="pm-lbl">Android Play Store URL</label>
-                    <SfTextBox @bind-Value="_cfg.AndroidUrl" Placeholder="https://play.google.com/…" />
-                </div>
-                <div class="pm-field">
-                    <label class="pm-lbl">App Bundle ID</label>
-                    <SfTextBox @bind-Value="_cfg.BundleId" Placeholder="com.agency.clientapp" />
-                </div>
-                <div class="pm-field">
-                    <label class="pm-lbl">App Version</label>
-                    <SfTextBox @bind-Value="_cfg.AppVersion" Placeholder="2.4.1" />
-                </div>
+@if (_showPreview)
+{
+    <div class="pm-modal-backdrop" role="presentation" @onclick="ClosePreview">
+        <div class="pm-preview-modal" role="dialog" aria-modal="true" aria-labelledby="pm-preview-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-phone" aria-hidden="true"></i>
+                <span id="pm-preview-title">Mobile App Preview</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="ClosePreview"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
             </div>
-        </div>
-
-        <!-- Push Notifications -->
-        <div class="pm-panel">
-            <div class="pm-panel-hdr"><i class="bi bi-bell" aria-hidden="true"></i> Push Notifications</div>
-            <div class="pm-toggle-list">
-                @foreach (var n in _notifications)
-                {
-                    <label class="pm-toggle-row">
-                        <input type="checkbox" class="pm-chk" checked="@n.Enabled" @onchange="() => n.Enabled = !n.Enabled" />
-                        <div class="pm-toggle-text">
-                            <span class="pm-toggle-name">@n.Name</span>
-                            <span class="pm-toggle-desc">@n.Description</span>
-                        </div>
-                    </label>
-                }
-            </div>
-        </div>
-
-        <!-- Features -->
-        <div class="pm-panel">
-            <div class="pm-panel-hdr"><i class="bi bi-grid-3x3-gap" aria-hidden="true"></i> Mobile Features</div>
-            <div class="pm-feature-grid">
-                @foreach (var f in _features)
-                {
-                    <div class="pm-feature-tile @(f.Enabled ? "pm-ft--on" : "pm-ft--off")">
-                        <div class="pm-ft-icon @f.IconCss"><i class="bi @f.Icon" aria-hidden="true"></i></div>
-                        <div class="pm-ft-name">@f.Name</div>
-                        <label class="pm-ft-toggle">
-                            <input type="checkbox" checked="@f.Enabled" @onchange="() => f.Enabled = !f.Enabled" />
-                            <span class="pm-ft-slider"></span>
-                        </label>
-                    </div>
-                }
-            </div>
-        </div>
-
-        <!-- Biometrics & Security -->
-        <div class="pm-panel">
-            <div class="pm-panel-hdr"><i class="bi bi-shield-lock" aria-hidden="true"></i> Biometrics &amp; Security</div>
-            <div class="pm-toggle-list">
-                <label class="pm-toggle-row">
-                    <input type="checkbox" class="pm-chk" @bind="_cfg.BiometricLogin" />
-                    <div class="pm-toggle-text">
-                        <span class="pm-toggle-name">Enable Biometric Login (Face ID / Touch ID)</span>
-                        <span class="pm-toggle-desc">Allow clients to authenticate with device biometrics</span>
-                    </div>
-                </label>
-                <label class="pm-toggle-row">
-                    <input type="checkbox" class="pm-chk" @bind="_cfg.ForceAppLock" />
-                    <div class="pm-toggle-text">
-                        <span class="pm-toggle-name">Force App Lock After Inactivity</span>
-                        <span class="pm-toggle-desc">Require re-authentication after @_cfg.LockTimeoutMinutes minutes of inactivity</span>
-                    </div>
-                </label>
-                <label class="pm-toggle-row">
-                    <input type="checkbox" class="pm-chk" @bind="_cfg.RequireMfaOnMobile" />
-                    <div class="pm-toggle-text">
-                        <span class="pm-toggle-name">Require MFA for sensitive actions on mobile</span>
-                        <span class="pm-toggle-desc">Payments, policy changes, and e-sign require step-up auth</span>
-                    </div>
-                </label>
-            </div>
-            <div class="pm-form-grid" style="padding:0 1rem 1rem">
-                <div class="pm-field">
-                    <label class="pm-lbl">Lock Timeout (minutes)</label>
-                    <SfNumericTextBox TValue="int" @bind-Value="_cfg.LockTimeoutMinutes" Min="1" Max="60" />
+            <div class="pm-preview-modal-body">
+                @PhonePreview()
+                <div class="pm-preview-summary">
+                    <span class="pm-section-kicker"><i class="bi bi-stars" aria-hidden="true"></i> Client experience readiness</span>
+                    <h3>@_form.AppName</h3>
+                    <p>@EnabledFeatureCount features, @EnabledNotificationCount notifications, MFA @(_form.RequireMfaOnMobile ? "required" : "optional"), app lock @(_form.ForceAppLock ? $"after {_form.LockTimeoutMinutes} minutes" : "disabled").</p>
+                    <button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Save Configuration</button>
                 </div>
             </div>
         </div>
     </div>
+}
 
-    <!-- Right: phone mock -->
-    <div class="pm-preview-col">
-        <div class="pm-preview-card">
-            <div class="pm-preview-hdr">App Preview</div>
-            <div class="pm-phone-frame">
-                <div class="pm-phone-screen">
-                    <div class="pm-phone-notch"></div>
-                    <div class="pm-phone-nav">
-                        <span class="pm-phone-app-name">@_cfg.AppName</span>
-                    </div>
-                    <div class="pm-phone-body">
-                        <div class="pm-phone-greet">Good morning 👋</div>
-                        <div class="pm-phone-cards">
-                            @foreach (var f in _features.Where(f => f.Enabled).Take(4))
+<EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="HandleInvalidSubmit">
+    <DataAnnotationsValidator />
+    <div class="pm-page" @onclick="CloseActionMenu">
+        <section class="pm-hero">
+            <div class="pm-hero__content">
+                <span class="pm-hero__eyebrow"><i class="bi bi-phone-fill" aria-hidden="true"></i> Client mobile command center</span>
+                <h1>Portal Mobile</h1>
+                <p>Configure the insured mobile app experience, secure access, feature entitlements, notifications, and adoption workflows.</p>
+                <div class="pm-hero__meta">
+                    <span><i class="bi bi-box-seam" aria-hidden="true"></i>@(_form.AppVersionLabel)</span>
+                    <span><i class="bi bi-upc-scan" aria-hidden="true"></i>@_form.BundleId</span>
+                    <span><i class="bi bi-phone" aria-hidden="true"></i>@TotalInstalls.ToString("N0") installs</span>
+                    <span><i class="bi bi-shield-check" aria-hidden="true"></i>@ReadinessScore readiness</span>
+                </div>
+            </div>
+            <div class="pm-hero__actions">
+                <button type="button" class="pm-btn pm-btn--light" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "pm-spin" : null)" aria-hidden="true"></i> Refresh</button>
+                <button type="button" class="pm-btn pm-btn--light" @onclick="OpenPreview"><i class="bi bi-phone" aria-hidden="true"></i> Preview</button>
+                <button type="button" class="pm-btn pm-btn--light" @onclick="OpenInstalls"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i> Installs</button>
+                <button type="submit" class="pm-btn pm-btn--primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Save</button>
+            </div>
+        </section>
+
+        <section class="pm-kpi-strip" aria-label="Mobile KPIs">
+            @KpiCard("all", "Readiness", ReadinessScore.ToString(), "Security and launch posture", "bi-shield-check", "pm-kpi--blue")
+            @KpiCard("features", "Features", $"{EnabledFeatureCount}/{_features.Count}", "Enabled mobile modules", "bi-grid-3x3-gap", "pm-kpi--green")
+            @KpiCard("notifications", "Push", $"{EnabledNotificationCount}/{_notifications.Count}", "Enabled notification streams", "bi-bell", "pm-kpi--amber")
+            @KpiCard("security", "Security", SecurityControlCount.ToString(), "Active protection controls", "bi-lock", "pm-kpi--purple")
+            @KpiCard("ios", "iOS", IosInstalls.ToString("N0"), "Apple installs", "bi-apple", "pm-kpi--cyan")
+            @KpiCard("android", "Android", AndroidInstalls.ToString("N0"), "Android installs", "bi-android2", "pm-kpi--red")
+        </section>
+
+        <section class="pm-workflows" aria-label="Mobile workflows">
+            <button type="button" class="pm-workflow" @onclick="EnableSecureDefaults"><i class="bi bi-shield-lock" aria-hidden="true"></i><span><strong>Secure defaults</strong><small>Turn on biometric, MFA, and app lock</small></span></button>
+            <button type="button" class="pm-workflow" @onclick="EnableAllFeatures"><i class="bi bi-grid-3x3-gap" aria-hidden="true"></i><span><strong>Enable features</strong><small>Activate all mobile modules</small></span></button>
+            <button type="button" class="pm-workflow" @onclick="EnableCoreNotifications"><i class="bi bi-bell" aria-hidden="true"></i><span><strong>Core alerts</strong><small>Policy, billing, and claim notifications</small></span></button>
+            <button type="button" class="pm-workflow" @onclick="OpenInstalls"><i class="bi bi-phone" aria-hidden="true"></i><span><strong>Install adoption</strong><small>Review mobile install metrics</small></span></button>
+            <button type="button" class="pm-workflow" @onclick="OpenFeatures"><i class="bi bi-toggles" aria-hidden="true"></i><span><strong>Portal features</strong><small>Open capability governance</small></span></button>
+        </section>
+
+        @if (_loadError is not null)
+        {
+            <div class="alert alert-danger pm-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+                <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError
+            </div>
+        }
+
+        <section class="pm-tabs" aria-label="Mobile configuration views">
+            @foreach (var tab in Tabs)
+            {
+                <button type="button" class="pm-tab @(_activeTab == tab.Key ? "pm-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                    <i class="bi @tab.Icon" aria-hidden="true"></i><span>@tab.Label</span><strong>@TabCount(tab.Key)</strong>
+                </button>
+            }
+        </section>
+
+        <section class="pm-dashboard">
+            <div class="pm-main-column">
+                @if (_activeTab is "identity" or "all")
+                {
+                    <section class="pm-panel">
+                        <div class="pm-panel-header"><div><span class="pm-section-kicker"><i class="bi bi-phone" aria-hidden="true"></i> App identity</span><h2>Store and app profile</h2></div><span>Source: Portal.AdminRecord / PortalMobile</span></div>
+                        <div class="pm-form-grid">
+                            <div class="pm-field pm-field--full"><label>App display name <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.AppName" /><ValidationMessage For="() => _form.AppName" class="text-danger" /></div>
+                            <div class="pm-field"><label>iOS App Store URL</label><InputText class="form-control" @bind-Value="_form.IosUrl" /><ValidationMessage For="() => _form.IosUrl" class="text-danger" /></div>
+                            <div class="pm-field"><label>Android Play Store URL</label><InputText class="form-control" @bind-Value="_form.AndroidUrl" /><ValidationMessage For="() => _form.AndroidUrl" class="text-danger" /></div>
+                            <div class="pm-field"><label>Bundle ID <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.BundleId" /><ValidationMessage For="() => _form.BundleId" class="text-danger" /></div>
+                            <div class="pm-field"><label>App version <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.AppVersion" /><ValidationMessage For="() => _form.AppVersion" class="text-danger" /></div>
+                        </div>
+                    </section>
+                }
+
+                @if (_activeTab is "security" or "all")
+                {
+                    <section class="pm-panel">
+                        <div class="pm-panel-header"><div><span class="pm-section-kicker"><i class="bi bi-shield-lock" aria-hidden="true"></i> Security</span><h2>Mobile access controls</h2></div><button type="button" class="pm-btn pm-btn--ghost" @onclick="EnableSecureDefaults">Apply secure defaults</button></div>
+                        <div class="pm-toggle-list">
+                            @ToggleRow("Biometric login", "Allow Face ID / Touch ID authentication on trusted devices.", _form.BiometricLogin, v => _form.BiometricLogin = v, "bi-fingerprint")
+                            @ToggleRow("Force app lock", $"Require re-authentication after {_form.LockTimeoutMinutes} minutes of inactivity.", _form.ForceAppLock, v => _form.ForceAppLock = v, "bi-lock")
+                            @ToggleRow("Require MFA on sensitive actions", "Payments, policy changes, claims, and document sharing use step-up authentication.", _form.RequireMfaOnMobile, v => _form.RequireMfaOnMobile = v, "bi-shield-check")
+                        </div>
+                        <div class="pm-form-grid pm-form-grid--compact">
+                            <div class="pm-field"><label>Lock timeout minutes</label><InputNumber class="form-control" @bind-Value="_form.LockTimeoutMinutes" /><ValidationMessage For="() => _form.LockTimeoutMinutes" class="text-danger" /></div>
+                        </div>
+                    </section>
+                }
+
+                @if (_activeTab is "features" or "all")
+                {
+                    <section class="pm-panel">
+                        <div class="pm-panel-header"><div><span class="pm-section-kicker"><i class="bi bi-grid-3x3-gap" aria-hidden="true"></i> Features</span><h2>Client mobile modules</h2></div><button type="button" class="pm-btn pm-btn--ghost" @onclick="EnableAllFeatures">Enable all</button></div>
+                        <div class="pm-feature-grid">
+                            @foreach (var feature in FilteredFeatures)
                             {
-                                <div class="pm-phone-card">
-                                    <i class="bi @f.Icon pm-phone-card-icon" aria-hidden="true"></i>
-                                    <span class="pm-phone-card-lbl">@f.Name</span>
-                                </div>
+                                <article class="pm-feature-tile @(feature.Enabled ? "pm-feature-tile--on" : "pm-feature-tile--off")">
+                                    <div class="pm-feature-icon @feature.IconCss"><i class="bi @feature.Icon" aria-hidden="true"></i></div>
+                                    <div><strong>@feature.Name</strong><span>@FeatureImportance(feature)</span></div>
+                                    <button type="button" class="pm-switch @(feature.Enabled ? "pm-switch--on" : null)" @onclick="() => ToggleFeature(feature)" aria-label="Toggle @feature.Name"><span></span></button>
+                                </article>
                             }
                         </div>
-                        <div class="pm-phone-policy-card">
-                            <div class="pm-phone-pol-hdr">Active Policies</div>
-                            <div class="pm-phone-pol-row"><i class="bi bi-house" aria-hidden="true"></i> Homeowners — Expires Jan 2026</div>
-                            <div class="pm-phone-pol-row"><i class="bi bi-car-front" aria-hidden="true"></i> Auto — Expires Mar 2026</div>
+                    </section>
+                }
+
+                @if (_activeTab is "notifications" or "all")
+                {
+                    <section class="pm-panel">
+                        <div class="pm-panel-header"><div><span class="pm-section-kicker"><i class="bi bi-bell" aria-hidden="true"></i> Push notifications</span><h2>Client engagement streams</h2></div><button type="button" class="pm-btn pm-btn--ghost" @onclick="EnableCoreNotifications">Enable core alerts</button></div>
+                        <div class="pm-toggle-list">
+                            @foreach (var notification in FilteredNotifications)
+                            {
+                                @ToggleRow(notification.Name, notification.Description, notification.Enabled, v => notification.Enabled = v, NotificationIcon(notification.Name))
+                            }
                         </div>
-                        @if (_cfg.BiometricLogin)
+                    </section>
+                }
+
+                @if (_activeTab is "adoption" or "all")
+                {
+                    <section class="pm-panel">
+                        <div class="pm-panel-header"><div><span class="pm-section-kicker"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i> Adoption</span><h2>Mobile install intelligence</h2></div><button type="button" class="pm-btn pm-btn--ghost" @onclick="OpenInstalls">Open installs</button></div>
+                        <div class="pm-install-list">
+                            @foreach (var install in FilteredInstalls)
+                            {
+                                <article class="pm-install-row" @onclick="() => SelectInstall(install)">
+                                    <div class="pm-install-platform"><i class="bi @(install.Category == "iOS" ? "bi-apple" : "bi-android2")" aria-hidden="true"></i></div>
+                                    <div><strong>@install.Name</strong><span>@install.Owner · @install.Detail</span></div>
+                                    <span class="pm-status pm-status--@CssSafe(install.Status)">@install.Status</span>
+                                    <strong>@install.Count.ToString("N0")</strong>
+                                </article>
+                            }
+                        </div>
+                    </section>
+                }
+            </div>
+
+            <aside class="pm-side-rail">
+                <section class="pm-phone-card-wrap">
+                    <div class="pm-panel-header"><div><span class="pm-section-kicker"><i class="bi bi-phone" aria-hidden="true"></i> Live preview</span><h2>Mobile home</h2></div><button type="button" class="pm-icon-btn" @onclick="OpenPreview"><i class="bi bi-arrows-fullscreen" aria-hidden="true"></i></button></div>
+                    @PhonePreview()
+                </section>
+                <section class="pm-panel pm-intel-card">
+                    <span class="pm-section-kicker"><i class="bi bi-stars" aria-hidden="true"></i> Readiness signals</span>
+                    <div class="pm-score"><span>Launch posture</span><strong>@ReadinessScore</strong><small>/100</small></div>
+                    <div class="pm-score-bar"><span style="width:@ReadinessScore%"></span></div>
+                    <div class="pm-signal-list">
+                        @foreach (var signal in ImportanceSignals)
                         {
-                            <div class="pm-phone-badge"><i class="bi bi-fingerprint" aria-hidden="true"></i> Biometric login active</div>
+                            <div><i class="bi @signal.Icon" aria-hidden="true"></i><span>@signal.Text</span></div>
                         }
                     </div>
-                    <div class="pm-phone-tab-bar">
-                        <div class="pm-phone-tab pm-phone-tab--active"><i class="bi bi-house-fill" aria-hidden="true"></i><span>Home</span></div>
-                        <div class="pm-phone-tab"><i class="bi bi-shield" aria-hidden="true"></i><span>Policies</span></div>
-                        <div class="pm-phone-tab"><i class="bi bi-folder2" aria-hidden="true"></i><span>Docs</span></div>
-                        <div class="pm-phone-tab"><i class="bi bi-chat" aria-hidden="true"></i><span>Messages</span></div>
-                        <div class="pm-phone-tab"><i class="bi bi-person" aria-hidden="true"></i><span>Me</span></div>
-                    </div>
-                </div>
-            </div>
-        </div>
+                </section>
+                <section class="pm-panel pm-intel-card">
+                    <span class="pm-section-kicker"><i class="bi bi-phone" aria-hidden="true"></i> Selected install</span>
+                    @if (_selectedInstall is null)
+                    {
+                        <div class="pm-empty-compact">Select an install record to review device adoption.</div>
+                    }
+                    else
+                    {
+                        <div class="pm-selected-install"><strong>@_selectedInstall.Name</strong><span>@_selectedInstall.Owner</span><span>@_selectedInstall.Category · @_selectedInstall.Detail</span><small>@_selectedInstall.EventDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</small></div>
+                    }
+                </section>
+            </aside>
+        </section>
     </div>
-</div>
+</EditForm>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private Guid _tenantId;
-    private SfToast? _toast;
-    private bool _showPreview;
     private Guid _recordId;
+    private bool _loading;
+    private bool _saving;
+    private bool _showPreview;
+    private bool _toastVisible;
+    private string _toastKind = "success";
+    private string _toastMessage = string.Empty;
+    private string _activeTab = "all";
+    private string? _kpiFilter;
+    private string? _loadError;
+    private MobileForm _form = new();
+    private readonly List<MobileToggleModel> _notifications = [];
+    private readonly List<MobileFeatureModel> _features = [];
+    private readonly List<PortalMetricRecordDto> _installs = [];
+    private PortalMetricRecordDto? _selectedInstall;
 
-    private MobileConfig _cfg = new();
-
-    private List<PushNotif> _notifications = [];
-    private List<MobileFeature> _features = [];
+    private TabDef[] Tabs => [new("all", "All", "bi-stack"), new("identity", "Identity", "bi-phone"), new("security", "Security", "bi-shield-lock"), new("features", "Features", "bi-grid-3x3-gap"), new("notifications", "Push", "bi-bell"), new("adoption", "Adoption", "bi-graph-up-arrow")];
+    private int EnabledFeatureCount => _features.Count(f => f.Enabled);
+    private int EnabledNotificationCount => _notifications.Count(n => n.Enabled);
+    private int SecurityControlCount => (_form.BiometricLogin ? 1 : 0) + (_form.ForceAppLock ? 1 : 0) + (_form.RequireMfaOnMobile ? 1 : 0);
+    private int TotalInstalls => _installs.Sum(i => i.Count);
+    private int IosInstalls => _installs.Where(i => i.Category == "iOS").Sum(i => i.Count);
+    private int AndroidInstalls => _installs.Where(i => i.Category == "Android").Sum(i => i.Count);
+    private int ReadinessScore => Math.Clamp(40 + EnabledFeatureCount * 7 + EnabledNotificationCount * 5 + SecurityControlCount * 10 - (_form.LockTimeoutMinutes > 30 ? 8 : 0), 0, 100);
+    private IEnumerable<Signal> ImportanceSignals => BuildImportanceSignals();
+    private IEnumerable<MobileFeatureModel> FilteredFeatures => _kpiFilter == "features" || _kpiFilter is null || _kpiFilter == "all" ? _features.OrderByDescending(f => f.Enabled).ThenBy(f => f.Name) : _features.Where(f => f.Enabled).OrderBy(f => f.Name);
+    private IEnumerable<MobileToggleModel> FilteredNotifications => _kpiFilter == "notifications" || _kpiFilter is null || _kpiFilter == "all" ? _notifications.OrderByDescending(n => n.Enabled).ThenBy(n => n.Name) : _notifications.Where(n => n.Enabled).OrderBy(n => n.Name);
+    private IEnumerable<PortalMetricRecordDto> FilteredInstalls => _kpiFilter switch
+    {
+        "ios" => _installs.Where(i => i.Category == "iOS"),
+        "android" => _installs.Where(i => i.Category == "Android"),
+        _ => _installs
+    };
 
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Portal","/portal/users"), new("Mobile Config",""));
-        var settings = await Api.GetPortalMobileSettingsAsync(_tenantId);
-        var records = await Api.SearchPortalAdminRecordsAsync(_tenantId, "PortalMobile");
-        _recordId = records?.Items.FirstOrDefault()?.PortalAdminRecordId ?? Guid.Empty;
-        if (settings is null) return;
-        _cfg = new MobileConfig { AppName = settings.AppName, IosUrl = settings.IosUrl, AndroidUrl = settings.AndroidUrl, BundleId = settings.BundleId, AppVersion = settings.AppVersion, BiometricLogin = settings.BiometricLogin, ForceAppLock = settings.ForceAppLock, LockTimeoutMinutes = settings.LockTimeoutMinutes, RequireMfaOnMobile = settings.RequireMfaOnMobile };
-        _notifications = settings.Notifications.Select(n => new PushNotif { Name = n.Name, Description = n.Description, Enabled = n.Enabled }).ToList();
-        _features = settings.Features.Select(f => new MobileFeature { Name = f.Name, Icon = f.Icon, IconCss = f.IconCss, Enabled = f.Enabled }).ToList();
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Portal", "/portal/users"), new("Mobile", ""));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var settings = await Api.GetPortalMobileSettingsAsync(_tenantId) ?? new PortalMobileSettingsDto();
+            var records = await Api.SearchPortalAdminRecordsAsync(_tenantId, "PortalMobile");
+            var installs = await Api.SearchPortalMetricRecordsAsync(_tenantId, "PortalMobileInstall");
+            _recordId = records?.Items.FirstOrDefault(r => r.Code == "mobile")?.PortalAdminRecordId ?? records?.Items.FirstOrDefault()?.PortalAdminRecordId ?? Guid.Empty;
+            _form = MobileForm.FromDto(settings);
+            _notifications.Clear();
+            _notifications.AddRange(settings.Notifications.Select(MobileToggleModel.FromDto));
+            _features.Clear();
+            _features.AddRange(settings.Features.Select(MobileFeatureModel.FromDto));
+            _installs.Clear();
+            _installs.AddRange(installs?.Items ?? []);
+            _selectedInstall = _installs.FirstOrDefault(i => i.Id == _selectedInstall?.Id) ?? _installs.OrderByDescending(i => i.EventDateUtc).FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Unable to load mobile configuration: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
     private async Task SaveAsync()
     {
-        var json = System.Text.Json.JsonSerializer.Serialize(new { _cfg.AppName, _cfg.IosUrl, _cfg.AndroidUrl, _cfg.BundleId, _cfg.AppVersion, _cfg.BiometricLogin, _cfg.ForceAppLock, _cfg.LockTimeoutMinutes, _cfg.RequireMfaOnMobile, Notifications = _notifications, Features = _features });
-        if (_recordId != Guid.Empty)
-            await Api.UpdatePortalAdminRecordAsync(_recordId, new UpsertPortalAdminRecordRequest(_tenantId, "PortalMobile", "mobile", _cfg.AppName, "Active", json));
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = "Mobile configuration saved.", CssClass = "e-toast-success" });
+        _saving = true;
+        try
+        {
+            var dto = ToDto();
+            var json = JsonSerializer.Serialize(dto, JsonOptions);
+            var request = new UpsertPortalAdminRecordRequest(_tenantId, "PortalMobile", "mobile", dto.AppName, "Published", json);
+            if (_recordId != Guid.Empty)
+            {
+                await Api.UpdatePortalAdminRecordAsync(_recordId, request);
+            }
+            else
+            {
+                var created = await Api.CreatePortalAdminRecordAsync(request);
+                _recordId = created;
+            }
+            ShowToast("Mobile configuration saved.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
     }
 
-    private sealed class MobileConfig
+    private PortalMobileSettingsDto ToDto() => new()
     {
-        public string AppName             { get; set; } = string.Empty;
-        public string IosUrl              { get; set; } = string.Empty;
-        public string AndroidUrl          { get; set; } = string.Empty;
-        public string BundleId            { get; set; } = string.Empty;
-        public string AppVersion          { get; set; } = string.Empty;
-        public bool   BiometricLogin      { get; set; }
-        public bool   ForceAppLock        { get; set; }
-        public int    LockTimeoutMinutes  { get; set; } = 15;
-        public bool   RequireMfaOnMobile  { get; set; }
+        AppName = _form.AppName.Trim(),
+        IosUrl = _form.IosUrl.Trim(),
+        AndroidUrl = _form.AndroidUrl.Trim(),
+        BundleId = _form.BundleId.Trim(),
+        AppVersion = _form.AppVersion.Trim(),
+        BiometricLogin = _form.BiometricLogin,
+        ForceAppLock = _form.ForceAppLock,
+        LockTimeoutMinutes = _form.LockTimeoutMinutes,
+        RequireMfaOnMobile = _form.RequireMfaOnMobile,
+        Notifications = _notifications.Select(n => n.ToDto()).ToList(),
+        Features = _features.Select(f => f.ToDto()).ToList()
+    };
+
+    private void SetTab(string key) => _activeTab = key;
+    private void SetKpiFilter(string key) { _kpiFilter = key == "all" || _kpiFilter == key ? null : key; if (key is "features" or "notifications" or "security") _activeTab = key; if (key is "ios" or "android") _activeTab = "adoption"; }
+    private string TabCount(string key) => key switch { "all" => (_features.Count + _notifications.Count).ToString(), "identity" => "5", "security" => SecurityControlCount.ToString(), "features" => EnabledFeatureCount.ToString(), "notifications" => EnabledNotificationCount.ToString(), "adoption" => TotalInstalls.ToString("N0"), _ => string.Empty };
+    private void ToggleFeature(MobileFeatureModel feature) => feature.Enabled = !feature.Enabled;
+    private void SelectInstall(PortalMetricRecordDto install) => _selectedInstall = install;
+    private void OpenPreview() => _showPreview = true;
+    private void ClosePreview() => _showPreview = false;
+    private void OpenInstalls() => Nav.NavigateTo("/portal/mobile-installs");
+    private void OpenFeatures() => Nav.NavigateTo("/portal/features");
+    private void CloseActionMenu() { }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HandleInvalidSubmit(EditContext _) => ShowToast("Please fix validation errors before saving.", "danger");
+
+    private void EnableSecureDefaults()
+    {
+        _form.BiometricLogin = true;
+        _form.ForceAppLock = true;
+        _form.RequireMfaOnMobile = true;
+        _form.LockTimeoutMinutes = Math.Min(_form.LockTimeoutMinutes, 15);
+        ShowToast("Secure mobile defaults applied.");
     }
 
-    private sealed class PushNotif
+    private void EnableAllFeatures()
     {
-        public string Name        { get; set; } = string.Empty;
+        foreach (var feature in _features) feature.Enabled = true;
+        ShowToast("All mobile features enabled in draft.");
+    }
+
+    private void EnableCoreNotifications()
+    {
+        foreach (var notification in _notifications.Where(n => n.Name.Contains("Policy", StringComparison.OrdinalIgnoreCase) || n.Name.Contains("Billing", StringComparison.OrdinalIgnoreCase) || n.Name.Contains("Claim", StringComparison.OrdinalIgnoreCase)))
+        {
+            notification.Enabled = true;
+        }
+        ShowToast("Core notification streams enabled in draft.");
+    }
+
+    private IEnumerable<Signal> BuildImportanceSignals()
+    {
+        yield return new("bi-shield-lock", $"{SecurityControlCount}/3 security controls are active.");
+        yield return new("bi-grid-3x3-gap", $"{EnabledFeatureCount}/{_features.Count} mobile features are enabled.");
+        yield return new("bi-bell", $"{EnabledNotificationCount}/{_notifications.Count} notification streams are enabled.");
+        yield return new("bi-phone", $"{TotalInstalls:N0} mobile installs are tracked.");
+    }
+
+    private RenderFragment KpiCard(string key, string label, string value, string detail, string icon, string css) => @<button type="button" class="pm-kpi @css @((_kpiFilter == key || (key == "all" && _kpiFilter is null)) ? "pm-kpi--active" : null)" @onclick="@(() => SetKpiFilter(key))" title="Filter by @label">
+        <span><i class="bi @icon" aria-hidden="true"></i>@label</span><strong>@value</strong><small>@detail</small>
+    </button>;
+
+    private RenderFragment ToggleRow(string name, string description, bool enabled, Action<bool> changed, string icon) => @<label class="pm-toggle-row">
+        <span class="pm-toggle-icon"><i class="bi @icon" aria-hidden="true"></i></span>
+        <span class="pm-toggle-copy"><strong>@name</strong><small>@description</small></span>
+        <input type="checkbox" checked="@enabled" @onchange="e => changed((bool)(e.Value ?? false))" />
+        <span class="pm-switch @(enabled ? "pm-switch--on" : null)"><span></span></span>
+    </label>;
+
+    private RenderFragment PhonePreview() => @<div class="pm-phone-frame">
+        <div class="pm-phone-screen">
+            <div class="pm-phone-notch"></div>
+            <div class="pm-phone-nav"><span>@_form.AppName</span><i class="bi bi-bell"></i></div>
+            <div class="pm-phone-body">
+                <div class="pm-phone-greet">Good morning</div>
+                <div class="pm-phone-cards">
+                    @foreach (var feature in _features.Where(f => f.Enabled).Take(4))
+                    {
+                        <div class="pm-phone-card"><i class="bi @feature.Icon" aria-hidden="true"></i><span>@feature.Name</span></div>
+                    }
+                </div>
+                <div class="pm-phone-policy-card"><strong>Active Policies</strong><span><i class="bi bi-house"></i> Homeowners — Expires Jan 2026</span><span><i class="bi bi-car-front"></i> Auto — Expires Mar 2026</span></div>
+                @if (_form.BiometricLogin)
+                {
+                    <div class="pm-phone-badge"><i class="bi bi-fingerprint" aria-hidden="true"></i> Biometric login active</div>
+                }
+            </div>
+            <div class="pm-phone-tab-bar"><span class="pm-phone-tab--active"><i class="bi bi-house-fill"></i>Home</span><span><i class="bi bi-shield"></i>Policies</span><span><i class="bi bi-folder2"></i>Docs</span><span><i class="bi bi-chat"></i>Messages</span></div>
+        </div>
+    </div>;
+
+    private static string FeatureImportance(MobileFeatureModel feature) => feature.Name switch { "Payments" => "High impact billing workflow", "Documents" => "High value service workflow", "Policies" => "Core client self-service", "Messages" => "Client engagement channel", _ => "Mobile client capability" };
+    private static string NotificationIcon(string name) => name.Contains("Billing", StringComparison.OrdinalIgnoreCase) ? "bi-receipt" : name.Contains("Claim", StringComparison.OrdinalIgnoreCase) ? "bi-exclamation-circle" : "bi-bell";
+    private static string CssSafe(string value) => string.IsNullOrWhiteSpace(value) ? "unknown" : value.ToLowerInvariant().Replace(" ", "-");
+
+    private sealed record TabDef(string Key, string Label, string Icon);
+    private sealed record Signal(string Icon, string Text);
+
+    private sealed class MobileForm
+    {
+        [Required, StringLength(120)] public string AppName { get; set; } = string.Empty;
+        [StringLength(300)] public string IosUrl { get; set; } = string.Empty;
+        [StringLength(300)] public string AndroidUrl { get; set; } = string.Empty;
+        [Required, StringLength(160)] public string BundleId { get; set; } = string.Empty;
+        [Required, StringLength(40)] public string AppVersion { get; set; } = string.Empty;
+        public bool BiometricLogin { get; set; }
+        public bool ForceAppLock { get; set; }
+        [Range(1, 60)] public int LockTimeoutMinutes { get; set; } = 15;
+        public bool RequireMfaOnMobile { get; set; }
+        public string AppVersionLabel => string.IsNullOrWhiteSpace(AppVersion) ? "version not set" : $"v{AppVersion}";
+
+        public static MobileForm FromDto(PortalMobileSettingsDto dto) => new()
+        {
+            AppName = dto.AppName,
+            IosUrl = dto.IosUrl,
+            AndroidUrl = dto.AndroidUrl,
+            BundleId = dto.BundleId,
+            AppVersion = dto.AppVersion,
+            BiometricLogin = dto.BiometricLogin,
+            ForceAppLock = dto.ForceAppLock,
+            LockTimeoutMinutes = dto.LockTimeoutMinutes,
+            RequireMfaOnMobile = dto.RequireMfaOnMobile
+        };
+    }
+
+    private sealed class MobileToggleModel
+    {
+        public string Name { get; set; } = string.Empty;
         public string Description { get; set; } = string.Empty;
-        public bool   Enabled     { get; set; }
+        public bool Enabled { get; set; }
+        public static MobileToggleModel FromDto(PortalMobileToggleDto dto) => new() { Name = dto.Name, Description = dto.Description, Enabled = dto.Enabled };
+        public PortalMobileToggleDto ToDto() => new() { Name = Name, Description = Description, Enabled = Enabled };
     }
 
-    private sealed class MobileFeature
+    private sealed class MobileFeatureModel
     {
-        public string Name    { get; set; } = string.Empty;
-        public string Icon    { get; set; } = "bi-circle";
+        public string Name { get; set; } = string.Empty;
+        public string Icon { get; set; } = "bi-circle";
         public string IconCss { get; set; } = string.Empty;
-        public bool   Enabled { get; set; }
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        public bool Enabled { get; set; }
+        public static MobileFeatureModel FromDto(PortalMobileFeatureDto dto) => new() { Name = dto.Name, Icon = dto.Icon, IconCss = dto.IconCss, Enabled = dto.Enabled };
+        public PortalMobileFeatureDto ToDto() => new() { Name = Name, Icon = Icon, IconCss = IconCss, Enabled = Enabled };
     }
 }

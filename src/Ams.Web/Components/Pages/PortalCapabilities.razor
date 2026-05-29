@@ -1,154 +1,536 @@
 @page "/portal/features"
 @namespace Ams.Web.Components.Pages
+@using System.Text.Json
+@using Ams.Application.Common.Dtos
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Portal Capabilities — AMS</PageTitle>
+<PageTitle>Portal Features — AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+@if (_toastVisible)
+{
+    <div class="pc-toast pc-toast--@_toastKind" role="status" aria-live="polite">
+        <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
 
-<AppPageHeader Title="Portal Capabilities"
-               Subtitle="Configure which self-service features are available to insured portal users"
-               Icon="bi-toggles-fill">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="EnableAll">
-            <i class="bi bi-check-all" aria-hidden="true"></i> Enable All
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="SaveAsync">
-            <i class="bi bi-check-lg" aria-hidden="true"></i> Save Settings
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<!-- KPI strip -->
-<div class="pc-kpi-strip">
-    <div class="pc-kpi-card">
-        <div class="pc-kv">@_capabilities.Count(c => c.Enabled)</div>
-        <div class="pc-kl">Enabled Features</div>
-    </div>
-    <div class="pc-kpi-card">
-        <div class="pc-kv">@_capabilities.Count(c => !c.Enabled)</div>
-        <div class="pc-kl">Disabled Features</div>
-    </div>
-    <div class="pc-kpi-card">
-        <div class="pc-kv">@_capabilities.Count(c => c.RequiresApproval && c.Enabled)</div>
-        <div class="pc-kl">Approval-Gated</div>
-    </div>
-    <div class="pc-kpi-card">
-        <div class="pc-kv">@_capabilities.Count(c => c.MfaRequired && c.Enabled)</div>
-        <div class="pc-kl">MFA-Required</div>
-    </div>
-</div>
-
-<!-- Capability cards -->
-<div class="pc-cap-grid">
-    @foreach (var cap in _capabilities)
-    {
-        <div class="pc-cap-card @(cap.Enabled ? "pc-cap-card--on" : "pc-cap-card--off")">
-            <div class="pc-cap-header">
-                <div class="pc-cap-icon @cap.IconCss"><i class="bi @cap.Icon" aria-hidden="true"></i></div>
-                <div class="pc-cap-title-wrap">
-                    <div class="pc-cap-name">@cap.Name</div>
-                    <div class="pc-cap-desc">@cap.Description</div>
+@if (_showConfirm)
+{
+    <div class="pc-modal-backdrop" role="presentation" @onclick="CloseConfirm">
+        <div class="pc-confirm" role="dialog" aria-modal="true" aria-labelledby="pc-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingAction == "Disable" ? "um-confirm-icon--danger" : null)">
+                    <i class="bi @_confirmIcon" aria-hidden="true"></i>
                 </div>
-                <label class="pc-toggle" title="@(cap.Enabled ? "Disable" : "Enable")">
-                    <input type="checkbox" checked="@cap.Enabled" @onchange="() => cap.Enabled = !cap.Enabled" />
-                    <span class="pc-toggle-slider"></span>
-                </label>
+                <div>
+                    <h3 id="pc-confirm-title">@_confirmTitle</h3>
+                    <p>@_confirmMessage</p>
+                </div>
             </div>
-            <div class="pc-cap-opts">
-                <label class="pc-opt-lbl @(!cap.Enabled ? "pc-opt-disabled" : "")">
-                    <SfCheckBox @bind-Checked="cap.RequiresApproval" Disabled="@(!cap.Enabled)" />
-                    <span>Require staff approval</span>
-                </label>
-                <label class="pc-opt-lbl @(!cap.Enabled ? "pc-opt-disabled" : "")">
-                    <SfCheckBox @bind-Checked="cap.MfaRequired" Disabled="@(!cap.Enabled)" />
-                    <span>Require MFA to use</span>
-                </label>
-                <label class="pc-opt-lbl @(!cap.Enabled ? "pc-opt-disabled" : "")">
-                    <SfCheckBox @bind-Checked="cap.AuditLog" Disabled="@(!cap.Enabled)" />
-                    <span>Log to audit trail</span>
-                </label>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseConfirm" disabled="@_busy">Cancel</button>
+                <button type="button" class="um-btn @(_pendingAction == "Disable" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteConfirmedAsync" disabled="@_busy">
+                    @if (_busy)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    Confirm
+                </button>
             </div>
-            <div class="pc-cap-footer">
-                <span class="pc-cat-badge @CategoryCss(cap.Category)">@cap.Category</span>
-                @if (cap.Enabled)
+        </div>
+    </div>
+}
+
+<div class="pc-page" @onclick="CloseActionMenu">
+    <section class="pc-hero">
+        <div class="pc-hero__content">
+            <span class="pc-hero__eyebrow"><i class="bi bi-toggles" aria-hidden="true"></i> Client portal feature command center</span>
+            <h1>Portal Features</h1>
+            <p>Configure which self-service capabilities are available to insured portal users, with approval gates, MFA requirements, audit logging, and rollout readiness.</p>
+            <div class="pc-hero__meta">
+                <span><i class="bi bi-grid" aria-hidden="true"></i>@_capabilities.Count features</span>
+                <span><i class="bi bi-check-circle" aria-hidden="true"></i>@_capabilities.Count(c => c.Enabled) enabled</span>
+                <span><i class="bi bi-shield-lock" aria-hidden="true"></i>@_capabilities.Count(c => c.MfaRequired && c.Enabled) MFA gated</span>
+                <span><i class="bi bi-clipboard-check" aria-hidden="true"></i>@ReadinessScore/100 readiness</span>
+            </div>
+        </div>
+        <div class="pc-hero__actions">
+            <button type="button" class="pc-btn pc-btn--light" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "pc-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="pc-btn pc-btn--light" @onclick="EnableAll"><i class="bi bi-check-all" aria-hidden="true"></i> Enable All</button>
+            <button type="button" class="pc-btn pc-btn--light" @onclick="DisableRisky"><i class="bi bi-shield-exclamation" aria-hidden="true"></i> Disable Risky</button>
+            <button type="button" class="pc-btn pc-btn--primary" @onclick="SaveAsync" disabled="@_busy"><i class="bi bi-cloud-check" aria-hidden="true"></i> Save Settings</button>
+        </div>
+    </section>
+
+    <section class="pc-kpi-strip" aria-label="Portal feature KPIs">
+        @KpiCard("all", "Total", _capabilities.Count.ToString(), "All portal capabilities", "bi-grid", "pc-kpi--blue")
+        @KpiCard("enabled", "Enabled", _capabilities.Count(c => c.Enabled).ToString(), "Available to clients", "bi-check-circle", "pc-kpi--green")
+        @KpiCard("disabled", "Disabled", _capabilities.Count(c => !c.Enabled).ToString(), "Hidden from portal", "bi-dash-circle", "pc-kpi--red")
+        @KpiCard("approval", "Approval", _capabilities.Count(c => c.Enabled && c.RequiresApproval).ToString(), "Staff review required", "bi-person-check", "pc-kpi--amber")
+        @KpiCard("mfa", "MFA", _capabilities.Count(c => c.Enabled && c.MfaRequired).ToString(), "Strong auth required", "bi-shield-lock", "pc-kpi--purple")
+        @KpiCard("audit", "Audit", _capabilities.Count(c => c.Enabled && c.AuditLog).ToString(), "Tracked activities", "bi-journal-check", "pc-kpi--cyan")
+    </section>
+
+    <section class="pc-workflows" aria-label="Portal feature workflows">
+        @WorkflowButton("bi-check-all", "Enable rollout", "Enable all client-ready features", EnableAll)
+        @WorkflowButton("bi-shield-lock", "Security posture", "Review MFA and audit gaps", () => SetKpiFilter("security"))
+        @WorkflowButton("bi-person-check", "Approval workflow", "Review gated features", () => SetKpiFilter("approval"))
+        @WorkflowButton("bi-folder2-open", "Documents", "Open document center", () => Nav.NavigateTo("/portal/documents"))
+        @WorkflowButton("bi-clock-history", "Activity", "Open portal activity", () => Nav.NavigateTo("/portal/activity"))
+    </section>
+
+    <section class="pc-filter-panel">
+        <div class="pc-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input aria-label="Search portal features" placeholder="Search feature, category, description, security, approval, audit…" @bind="SearchText" @bind:event="oninput" />
+        </div>
+        <div class="pc-filter-actions">
+            <select class="pc-select" @bind="CategoryFilter">
+                <option value="">All categories</option>
+                @foreach (var category in Categories)
                 {
-                    <span class="pc-on-chip"><i class="bi bi-check-circle-fill" aria-hidden="true"></i> Active</span>
+                    <option value="@category">@category</option>
+                }
+            </select>
+            <span>@FilteredCapabilities.Count() visible</span>
+            <button type="button" class="pc-btn pc-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger pc-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError
+        </div>
+    }
+
+    <section class="pc-tabs" aria-label="Feature categories">
+        @foreach (var tab in Tabs)
+        {
+            <button type="button" class="pc-tab @(_activeTab == tab.Key ? "pc-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </section>
+
+    <section class="pc-dashboard">
+        <div class="pc-main-card">
+            <div class="pc-card-header">
+                <div>
+                    <span class="pc-section-kicker"><i class="bi bi-sliders" aria-hidden="true"></i> Feature register</span>
+                    <h2>@ActiveViewTitle</h2>
+                    <p>Prioritized by security exposure, client impact, staff approval workflow, and audit readiness.</p>
+                </div>
+                <div class="pc-card-actions">
+                    <button type="button" class="pc-btn pc-btn--ghost" @onclick="ToggleView"><i class="bi @(_tableView ? "bi-grid-3x3-gap" : "bi-table")" aria-hidden="true"></i> @(_tableView ? "Cards" : "Table")</button>
+                    <button type="button" class="pc-btn pc-btn--primary" @onclick="SaveAsync" disabled="@_busy"><i class="bi bi-check-lg" aria-hidden="true"></i> Save</button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="pc-loading"><span class="pc-spinner" aria-hidden="true"></span> Loading portal features…</div>
+            }
+            else if (!FilteredCapabilities.Any())
+            {
+                <div class="pc-empty"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No features found</strong><span>Adjust filters or refresh seeded portal capability data.</span></div>
+            }
+            else if (_tableView)
+            {
+                <div class="pc-table-scroll">
+                    <table class="pc-table" aria-label="Portal features">
+                        <thead><tr><th>Feature</th><th>Category</th><th>Status</th><th>Approval</th><th>MFA</th><th>Audit</th><th>Priority</th><th class="pc-actions-col"><span class="visually-hidden">Actions</span></th></tr></thead>
+                        <tbody>
+                            @foreach (var cap in FilteredCapabilities)
+                            {
+                                <tr class="pc-table-row @(_selected?.Id == cap.Id ? "pc-table-row--selected" : null)" @onclick="() => SelectCapability(cap)">
+                                    <td>@FeatureCell(cap)</td>
+                                    <td><span class="pc-cat pc-cat--@CssSafe(cap.Category)">@cap.Category</span></td>
+                                    <td>@StatusChip(cap)</td>
+                                    <td>@FlagChip(cap.RequiresApproval, "Approval")</td>
+                                    <td>@FlagChip(cap.MfaRequired, "MFA")</td>
+                                    <td>@FlagChip(cap.AuditLog, "Audit")</td>
+                                    <td><span class="pc-priority pc-priority--@PriorityLevel(cap).ToLowerInvariant()">@PriorityLevel(cap)</span></td>
+                                    <td class="pc-actions-col">@ActionMenu(cap)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+            else
+            {
+                <div class="pc-cap-grid">
+                    @foreach (var cap in FilteredCapabilities)
+                    {
+                        @CapabilityCard(cap)
+                    }
+                </div>
+            }
+        </div>
+
+        <aside class="pc-side-panel">
+            <div class="pc-panel-card">
+                <span class="pc-section-kicker"><i class="bi bi-stars" aria-hidden="true"></i> Readiness</span>
+                <div class="pc-score-card"><span>Feature readiness</span><strong>@ReadinessScore</strong><small>/100</small></div>
+                <div class="pc-readiness"><span style="width:@ReadinessScore%"></span></div>
+                <div class="pc-importance-list">
+                    @foreach (var item in ImportanceSignals)
+                    {
+                        <div><i class="bi @item.Icon" aria-hidden="true"></i><span>@item.Text</span></div>
+                    }
+                </div>
+            </div>
+
+            <div class="pc-panel-card">
+                <span class="pc-section-kicker"><i class="bi bi-toggles" aria-hidden="true"></i> Selected feature</span>
+                @if (_selected is null)
+                {
+                    <div class="pc-empty pc-empty--compact"><span>Select a feature to review status, controls, and rollout actions.</span></div>
                 }
                 else
                 {
-                    <span class="pc-off-chip"><i class="bi bi-dash-circle" aria-hidden="true"></i> Disabled</span>
+                    var selected = _selected;
+                    <div class="pc-selected-head"><span class="pc-cap-icon @selected.IconCss"><i class="bi @selected.Icon"></i></span><div><strong>@selected.Name</strong><span>@selected.Category</span></div></div>
+                    <p class="pc-selected-desc">@selected.Description</p>
+                    <div class="pc-detail-list">
+                        <div><span>Status</span><strong>@(selected.Enabled ? "Enabled" : "Disabled")</strong></div>
+                        <div><span>Approval</span><strong>@(selected.RequiresApproval ? "Required" : "Not required")</strong></div>
+                        <div><span>MFA</span><strong>@(selected.MfaRequired ? "Required" : "Optional")</strong></div>
+                        <div><span>Audit</span><strong>@(selected.AuditLog ? "Enabled" : "Disabled")</strong></div>
+                    </div>
+                    <div class="pc-selected-actions">
+                        <button type="button" class="pc-btn pc-btn--primary" @onclick="() => ToggleEnabled(selected)"><i class="bi @(selected.Enabled ? "bi-dash-circle" : "bi-check-circle")" aria-hidden="true"></i> @(selected.Enabled ? "Disable" : "Enable")</button>
+                        <button type="button" class="pc-btn pc-btn--ghost" @onclick="() => ToggleMfa(selected)"><i class="bi bi-shield-lock" aria-hidden="true"></i> Toggle MFA</button>
+                    </div>
                 }
             </div>
-        </div>
-    }
+
+            <div class="pc-panel-card">
+                <span class="pc-section-kicker"><i class="bi bi-pie-chart" aria-hidden="true"></i> Category mix</span>
+                <div class="pc-mix-list">
+                    @foreach (var category in Categories)
+                    {
+                        <div><span><i class="bi bi-folder" aria-hidden="true"></i>@category</span><strong>@_capabilities.Count(c => c.Category == category)</strong></div>
+                    }
+                </div>
+            </div>
+        </aside>
+    </section>
 </div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private readonly List<PortalCapability> _capabilities = [];
     private Guid _tenantId;
-    private SfToast? _toast;
+    private bool _loading;
+    private bool _busy;
+    private bool _toastVisible;
+    private bool _showConfirm;
+    private bool _tableView;
+    private string _toastKind = "success";
+    private string _toastMessage = string.Empty;
+    private string _activeTab = "all";
+    private string? _kpiFilter;
+    private string? _searchText;
+    private string? _categoryFilter;
+    private string? _loadError;
+    private Guid? _openActionMenuFor;
+    private PortalCapability? _selected;
+    private PortalCapability? _pendingCapability;
+    private string _pendingAction = string.Empty;
+    private string _confirmTitle = "Confirm action";
+    private string _confirmMessage = "Confirm this feature action?";
+    private string _confirmIcon = "bi-question-circle";
 
-    private List<PortalCapability> _capabilities = [];
+    private string? SearchText { get => _searchText; set { _searchText = value; } }
+    private string? CategoryFilter { get => _categoryFilter; set { _categoryFilter = value; } }
+    private bool HasFilters => !string.IsNullOrWhiteSpace(_searchText) || !string.IsNullOrWhiteSpace(_categoryFilter) || _kpiFilter is not null || _activeTab != "all";
+    private IEnumerable<string> Categories => _capabilities.Select(c => c.Category).Where(c => !string.IsNullOrWhiteSpace(c)).Distinct().OrderBy(c => c);
+    private TabDef[] Tabs => [new("all", "All", "bi-stack"), new("enabled", "Enabled", "bi-check-circle"), new("security", "Security", "bi-shield-lock"), new("approval", "Approval", "bi-person-check"), new("audit", "Audit", "bi-journal-check")];
+    private int ReadinessScore => _capabilities.Count == 0 ? 100 : Math.Clamp((int)Math.Round((_capabilities.Count(c => c.Enabled) * 35m + _capabilities.Count(c => c.Enabled && c.AuditLog) * 25m + _capabilities.Count(c => c.Enabled && c.MfaRequired) * 20m + _capabilities.Count(c => c.Enabled && c.RequiresApproval) * 20m) / _capabilities.Count), 0, 100);
+    private string ActiveViewTitle => _activeTab switch { "enabled" => "Enabled client features", "security" => "Security-sensitive features", "approval" => "Approval-gated workflows", "audit" => "Audited capabilities", _ => "All portal features" };
+    private IEnumerable<Signal> ImportanceSignals => BuildImportanceSignals();
+
+    private IEnumerable<PortalCapability> TabCapabilities => _activeTab switch
+    {
+        "enabled" => _capabilities.Where(c => c.Enabled),
+        "security" => _capabilities.Where(c => c.MfaRequired || !c.AuditLog),
+        "approval" => _capabilities.Where(c => c.RequiresApproval),
+        "audit" => _capabilities.Where(c => c.AuditLog),
+        _ => _capabilities
+    };
+
+    private IEnumerable<PortalCapability> KpiCapabilities => _kpiFilter switch
+    {
+        "enabled" => TabCapabilities.Where(c => c.Enabled),
+        "disabled" => TabCapabilities.Where(c => !c.Enabled),
+        "approval" => TabCapabilities.Where(c => c.Enabled && c.RequiresApproval),
+        "mfa" => TabCapabilities.Where(c => c.Enabled && c.MfaRequired),
+        "audit" => TabCapabilities.Where(c => c.Enabled && c.AuditLog),
+        "security" => TabCapabilities.Where(c => c.Enabled && (!c.MfaRequired || !c.AuditLog)),
+        _ => TabCapabilities
+    };
+
+    private IEnumerable<PortalCapability> FilteredCapabilities => ApplyFilters(KpiCapabilities).OrderByDescending(ImportanceScore).ThenBy(c => c.Category).ThenBy(c => c.Name);
 
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Portal","/portal/users"), new("Capabilities",""));
-        var result = await Api.GetPortalCapabilitiesAsync(_tenantId);
-        _capabilities = result?.Items.Select(c => new PortalCapability { Id = c.Id, Name = c.Name, Description = c.Description, Icon = c.Icon, IconCss = c.IconCss, Category = c.Category, Enabled = c.Enabled, RequiresApproval = c.RequiresApproval, MfaRequired = c.MfaRequired, AuditLog = c.AuditLog }).ToList() ?? [];
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Portal", "/portal/users"), new("Features", ""));
+        await LoadAsync();
     }
 
-    private void EnableAll() { foreach (var c in _capabilities) c.Enabled = true; }
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.GetPortalCapabilitiesAsync(_tenantId);
+            _capabilities.Clear();
+            _capabilities.AddRange((result?.Items ?? []).Select(PortalCapability.FromDto));
+            _selected = _capabilities.FirstOrDefault(c => c.Id == _selected?.Id) ?? _capabilities.OrderByDescending(ImportanceScore).FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load portal features: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private IEnumerable<PortalCapability> ApplyFilters(IEnumerable<PortalCapability> capabilities)
+    {
+        if (!string.IsNullOrWhiteSpace(_categoryFilter)) capabilities = capabilities.Where(c => c.Category == _categoryFilter);
+        if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            var term = _searchText.Trim();
+            capabilities = capabilities.Where(c => Contains(c.Name, term) || Contains(c.Description, term) || Contains(c.Category, term) || Contains(c.Enabled ? "enabled active" : "disabled inactive", term) || Contains(c.RequiresApproval ? "approval required" : "no approval", term) || Contains(c.MfaRequired ? "mfa required" : "mfa optional", term) || Contains(c.AuditLog ? "audit enabled" : "audit disabled", term));
+        }
+        return capabilities;
+    }
 
     private async Task SaveAsync()
     {
-        foreach (var cap in _capabilities)
-            await Api.SetPortalAdminRecordStatusAsync(cap.Id, cap.Enabled ? "Active" : "Inactive");
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = "Portal capabilities saved.", CssClass = "e-toast-success" });
+        _busy = true;
+        try
+        {
+            foreach (var capability in _capabilities)
+            {
+                var dto = capability.ToDto();
+                var json = JsonSerializer.Serialize(dto, JsonOptions);
+                await Api.UpdatePortalAdminRecordAsync(capability.Id, new UpsertPortalAdminRecordRequest(_tenantId, "PortalCapability", Slug(capability.Name), capability.Name, capability.Enabled ? "Active" : "Inactive", json));
+            }
+            ShowToast("Portal feature settings saved.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
-    private static string CategoryCss(string cat) => cat switch
+    private void EnableAll()
     {
-        "Policy Services" => "pc-cat pc-cat--policy",
-        "Documents"       => "pc-cat pc-cat--docs",
-        "Billing"         => "pc-cat pc-cat--billing",
-        "Claims"          => "pc-cat pc-cat--claims",
-        "Communication"   => "pc-cat pc-cat--comms",
-        _                 => "pc-cat",
+        foreach (var capability in _capabilities)
+        {
+            capability.Enabled = true;
+            capability.AuditLog = true;
+        }
+        ShowToast("All portal features enabled in draft. Save to publish.");
+    }
+
+    private void DisableRisky()
+    {
+        foreach (var capability in _capabilities.Where(c => c.Enabled && !c.MfaRequired && !c.AuditLog))
+        {
+            capability.Enabled = false;
+        }
+        ShowToast("Risky features disabled in draft. Save to publish.");
+    }
+
+    private void ToggleEnabled(PortalCapability capability)
+    {
+        if (capability.Enabled)
+        {
+            OpenConfirm(capability, "Disable");
+            return;
+        }
+        capability.Enabled = true;
+        capability.AuditLog = true;
+        _selected = capability;
+    }
+
+    private void ToggleMfa(PortalCapability capability)
+    {
+        capability.MfaRequired = !capability.MfaRequired;
+        _selected = capability;
+    }
+
+    private void ToggleApproval(PortalCapability capability) { capability.RequiresApproval = !capability.RequiresApproval; _selected = capability; }
+    private void ToggleAudit(PortalCapability capability) { capability.AuditLog = !capability.AuditLog; _selected = capability; }
+    private void SelectCapability(PortalCapability capability) => _selected = capability;
+    private void ToggleView() => _tableView = !_tableView;
+    private void SetTab(string key) { _activeTab = key; }
+    private void SetKpiFilter(string key) { _kpiFilter = key == "all" || _kpiFilter == key ? null : key; }
+    private void ClearFilters() { _searchText = null; _categoryFilter = null; _kpiFilter = null; _activeTab = "all"; }
+
+    private void OpenConfirm(PortalCapability capability, string action)
+    {
+        _pendingCapability = capability;
+        _pendingAction = action;
+        _selected = capability;
+        (_confirmTitle, _confirmMessage, _confirmIcon) = action switch
+        {
+            "Disable" => ($"Disable {capability.Name}?", "This hides the feature from client portal users until it is re-enabled and saved.", "bi-dash-circle"),
+            _ => ("Confirm action", "Confirm this portal feature action?", "bi-question-circle")
+        };
+        _showConfirm = true;
+    }
+
+    private void CloseConfirm() { if (!_busy) _showConfirm = false; }
+
+    private async Task ExecuteConfirmedAsync()
+    {
+        if (_pendingCapability is null) return;
+        if (_pendingAction == "Disable")
+        {
+            _pendingCapability.Enabled = false;
+            _showConfirm = false;
+            ShowToast($"{_pendingCapability.Name} disabled in draft. Save to publish.");
+        }
+        await Task.CompletedTask;
+    }
+
+    private string TabCount(string key) => key switch
+    {
+        "all" => _capabilities.Count.ToString(),
+        "enabled" => _capabilities.Count(c => c.Enabled).ToString(),
+        "security" => _capabilities.Count(c => c.MfaRequired || !c.AuditLog).ToString(),
+        "approval" => _capabilities.Count(c => c.RequiresApproval).ToString(),
+        "audit" => _capabilities.Count(c => c.AuditLog).ToString(),
+        _ => string.Empty
     };
+
+    private IEnumerable<Signal> BuildImportanceSignals()
+    {
+        yield return new("bi-dash-circle", $"{_capabilities.Count(c => !c.Enabled)} disabled features are hidden from clients.");
+        yield return new("bi-shield-exclamation", $"{_capabilities.Count(c => c.Enabled && !c.MfaRequired)} enabled features do not require MFA.");
+        yield return new("bi-journal-x", $"{_capabilities.Count(c => c.Enabled && !c.AuditLog)} enabled features are missing audit logging.");
+        yield return new("bi-person-check", $"{_capabilities.Count(c => c.Enabled && c.RequiresApproval)} enabled features require staff approval.");
+    }
+
+    private RenderFragment KpiCard(string key, string label, string value, string detail, string icon, string css) => @<button type="button" class="pc-kpi @css @((_kpiFilter == key || (key == "all" && _kpiFilter is null)) ? "pc-kpi--active" : null)" @onclick="@(() => SetKpiFilter(key))" title="Filter by @label">
+        <span><i class="bi @icon" aria-hidden="true"></i>@label</span>
+        <strong>@value</strong>
+        <small>@detail</small>
+    </button>;
+
+    private RenderFragment WorkflowButton(string icon, string title, string detail, System.Action action) => @<button type="button" class="pc-workflow" @onclick="@(() => action())">
+        <i class="bi @icon" aria-hidden="true"></i>
+        <span><strong>@title</strong><small>@detail</small></span>
+    </button>;
+
+    private RenderFragment FeatureCell(PortalCapability cap) => @<div class="pc-feature-cell"><span class="pc-cap-icon @cap.IconCss"><i class="bi @cap.Icon" aria-hidden="true"></i></span><div><strong>@cap.Name</strong><span>@cap.Description</span></div></div>;
+    private RenderFragment StatusChip(PortalCapability cap) => @<span class="pc-status @(cap.Enabled ? "pc-status--active" : "pc-status--inactive")"><i class="bi @(cap.Enabled ? "bi-check-circle" : "bi-dash-circle")" aria-hidden="true"></i>@(cap.Enabled ? "Enabled" : "Disabled")</span>;
+    private RenderFragment FlagChip(bool enabled, string label) => @<span class="pc-flag @(enabled ? "pc-flag--on" : "pc-flag--off")">@(enabled ? label : "—")</span>;
+
+    private RenderFragment CapabilityCard(PortalCapability cap) => @<article class="pc-cap-card @(cap.Enabled ? "pc-cap-card--on" : "pc-cap-card--off") @(_selected?.Id == cap.Id ? "pc-cap-card--selected" : null)" @onclick="@(() => SelectCapability(cap))">
+        <div class="pc-cap-header">
+            <span class="pc-cap-icon @cap.IconCss"><i class="bi @cap.Icon" aria-hidden="true"></i></span>
+            <div class="pc-cap-title-wrap"><strong>@cap.Name</strong><span>@cap.Description</span></div>
+            <button type="button" class="pc-switch @(cap.Enabled ? "pc-switch--on" : null)" @onclick:stopPropagation="true" @onclick="@(() => ToggleEnabled(cap))" aria-label="Toggle @cap.Name"><span></span></button>
+        </div>
+        <div class="pc-cap-opts" @onclick:stopPropagation="true">
+            @OptionButton(cap.Enabled, cap.RequiresApproval, "Require approval", "bi-person-check", () => ToggleApproval(cap))
+            @OptionButton(cap.Enabled, cap.MfaRequired, "Require MFA", "bi-shield-lock", () => ToggleMfa(cap))
+            @OptionButton(cap.Enabled, cap.AuditLog, "Audit log", "bi-journal-check", () => ToggleAudit(cap))
+        </div>
+        <div class="pc-cap-footer"><span class="pc-cat pc-cat--@CssSafe(cap.Category)">@cap.Category</span><span class="pc-priority pc-priority--@PriorityLevel(cap).ToLowerInvariant()">@PriorityLevel(cap)</span></div>
+    </article>;
+
+    private RenderFragment OptionButton(bool capEnabled, bool enabled, string label, string icon, System.Action action) => @<button type="button" class="pc-opt @(enabled ? "pc-opt--on" : null)" disabled="@(!capEnabled)" @onclick="@(() => action())"><i class="bi @icon" aria-hidden="true"></i>@label</button>;
+
+    private RenderFragment ActionMenu(PortalCapability cap) => @<div class="pc-action-menu-wrap" @onclick:stopPropagation="true">
+        <button type="button" class="pc-icon-btn" @onclick="@(() => ToggleActionMenu(cap))" aria-haspopup="menu" aria-expanded="@(_openActionMenuFor == cap.Id)" title="Feature actions"><i class="bi bi-three-dots-vertical" aria-hidden="true"></i></button>
+        @if (_openActionMenuFor == cap.Id)
+        {
+            <div class="pc-action-menu" role="menu">
+                <div class="pc-action-menu__summary"><strong>@cap.Name</strong><span>@cap.Category</span></div>
+                <button type="button" class="pc-action-menu__item" role="menuitem" @onclick="@(() => ToggleEnabled(cap))"><i class="bi @(cap.Enabled ? "bi-dash-circle" : "bi-check-circle")" aria-hidden="true"></i>@(cap.Enabled ? "Disable" : "Enable")</button>
+                <button type="button" class="pc-action-menu__item" role="menuitem" @onclick="@(() => ToggleMfa(cap))"><i class="bi bi-shield-lock" aria-hidden="true"></i>Toggle MFA</button>
+                <button type="button" class="pc-action-menu__item" role="menuitem" @onclick="@(() => ToggleApproval(cap))"><i class="bi bi-person-check" aria-hidden="true"></i>Toggle Approval</button>
+                <button type="button" class="pc-action-menu__item" role="menuitem" @onclick="@(() => ToggleAudit(cap))"><i class="bi bi-journal-check" aria-hidden="true"></i>Toggle Audit</button>
+            </div>
+        }
+    </div>;
+
+    private void ToggleActionMenu(PortalCapability cap) { _selected = cap; _openActionMenuFor = _openActionMenuFor == cap.Id ? null : cap.Id; }
+    private void CloseActionMenu() { if (!_busy) _openActionMenuFor = null; }
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+
+    private static bool Contains(string? source, string term) => !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static int ImportanceScore(PortalCapability cap) => (!cap.Enabled ? 40 : 0) + (cap.Enabled && !cap.AuditLog ? 35 : 0) + (cap.Enabled && !cap.MfaRequired ? 25 : 0) + (cap.Enabled && cap.RequiresApproval ? 15 : 0);
+    private static string PriorityLevel(PortalCapability cap) => ImportanceScore(cap) >= 60 ? "High" : ImportanceScore(cap) >= 30 ? "Medium" : "Normal";
+    private static string CssSafe(string value) => string.IsNullOrWhiteSpace(value) ? "unknown" : value.Trim().ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
+    private static string Slug(string value) => CssSafe(value);
+
+    private sealed record TabDef(string Key, string Label, string Icon);
+    private sealed record Signal(string Icon, string Text);
 
     private sealed class PortalCapability
     {
-        public Guid   Id              { get; set; }
-        public string Name            { get; set; } = string.Empty;
-        public string Description     { get; set; } = string.Empty;
-        public string Icon            { get; set; } = "bi-circle";
-        public string IconCss         { get; set; } = string.Empty;
-        public string Category        { get; set; } = string.Empty;
-        public bool   Enabled         { get; set; }
-        public bool   RequiresApproval{ get; set; }
-        public bool   MfaRequired     { get; set; }
-        public bool   AuditLog        { get; set; }
-    }
+        public Guid Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string Icon { get; set; } = "bi-circle";
+        public string IconCss { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty;
+        public bool Enabled { get; set; }
+        public bool RequiresApproval { get; set; }
+        public bool MfaRequired { get; set; }
+        public bool AuditLog { get; set; }
 
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        public static PortalCapability FromDto(PortalCapabilityDto dto) => new()
+        {
+            Id = dto.Id,
+            Name = dto.Name,
+            Description = dto.Description,
+            Icon = dto.Icon,
+            IconCss = dto.IconCss,
+            Category = string.IsNullOrWhiteSpace(dto.Category) ? "General" : dto.Category,
+            Enabled = dto.Enabled,
+            RequiresApproval = dto.RequiresApproval,
+            MfaRequired = dto.MfaRequired,
+            AuditLog = dto.AuditLog
+        };
+
+        public PortalCapabilityDto ToDto() => new()
+        {
+            Id = Id,
+            Name = Name,
+            Description = Description,
+            Icon = Icon,
+            IconCss = IconCss,
+            Category = Category,
+            Enabled = Enabled,
+            RequiresApproval = RequiresApproval,
+            MfaRequired = MfaRequired,
+            AuditLog = AuditLog
+        };
     }
 }

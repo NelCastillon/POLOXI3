@@ -1,279 +1,551 @@
 @page "/portal/branding"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using System.Text.Json
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Common.Validation
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
 <PageTitle>Portal Branding — AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+@if (_toastVisible)
+{
+    <div class="pb-toast pb-toast--@_toastKind" role="status" aria-live="polite">
+        <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
 
-<AppPageHeader Title="Portal Branding"
-               Subtitle="White-label the client portal with your agency's colors, logo, and messaging"
-               Icon="bi-palette-fill">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="ResetDefaults">
-            <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset Defaults
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="SaveAsync">
-            <i class="bi bi-check-lg" aria-hidden="true"></i> Save Branding
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<div class="pb-layout">
-
-    <!-- Left: settings panels -->
-    <div class="pb-settings-col">
-
-        <!-- Identity -->
-        <div class="pb-panel">
-            <div class="pb-panel-hdr"><i class="bi bi-building" aria-hidden="true"></i> Agency Identity</div>
-            <div class="pb-form-grid">
-                <div class="pb-field pb-field--full">
-                    <label class="pb-lbl">Portal Display Name</label>
-                    <SfTextBox @bind-Value="_brand.DisplayName" Placeholder="e.g. First Insurance Client Portal" />
-                </div>
-                <div class="pb-field pb-field--full">
-                    <label class="pb-lbl">Custom Domain</label>
-                    <SfTextBox @bind-Value="_brand.Domain" Placeholder="e.g. portal.firstinsurance.com" />
-                    <span class="pb-hint">Requires DNS CNAME pointing to portal.agencybinder.com</span>
-                </div>
-                <div class="pb-field">
-                    <label class="pb-lbl">Support Email</label>
-                    <SfTextBox @bind-Value="_brand.SupportEmail" Placeholder="support@yourагенcy.com" />
-                </div>
-                <div class="pb-field">
-                    <label class="pb-lbl">Support Phone</label>
-                    <SfTextBox @bind-Value="_brand.SupportPhone" Placeholder="(555) 000-0000" />
-                </div>
-                <div class="pb-field pb-field--full">
-                    <label class="pb-lbl">Welcome Message</label>
-                    <SfTextBox @bind-Value="_brand.WelcomeMessage" Multiline="true" />
+@if (_showResetConfirm)
+{
+    <div class="pb-modal-backdrop" role="presentation" @onclick="CloseResetConfirm">
+        <div class="pb-confirm" role="dialog" aria-modal="true" aria-labelledby="pb-reset-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i></div>
+                <div>
+                    <h3 id="pb-reset-title">Reset portal branding?</h3>
+                    <p>This replaces the current draft with tenant defaults. Save afterward to publish the defaults to the portal record.</p>
                 </div>
             </div>
-        </div>
-
-        <!-- Colors -->
-        <div class="pb-panel">
-            <div class="pb-panel-hdr"><i class="bi bi-palette" aria-hidden="true"></i> Brand Colors</div>
-            <div class="pb-color-grid">
-                <div class="pb-color-field">
-                    <label class="pb-lbl">Primary Color</label>
-                    <div class="pb-color-row">
-                        <input type="color" class="pb-color-input" @bind="_brand.PrimaryColor" />
-                        <SfTextBox @bind-Value="_brand.PrimaryColor" CssClass="pb-hex-input" />
-                    </div>
-                </div>
-                <div class="pb-color-field">
-                    <label class="pb-lbl">Accent Color</label>
-                    <div class="pb-color-row">
-                        <input type="color" class="pb-color-input" @bind="_brand.AccentColor" />
-                        <SfTextBox @bind-Value="_brand.AccentColor" CssClass="pb-hex-input" />
-                    </div>
-                </div>
-                <div class="pb-color-field">
-                    <label class="pb-lbl">Nav Background</label>
-                    <div class="pb-color-row">
-                        <input type="color" class="pb-color-input" @bind="_brand.NavBg" />
-                        <SfTextBox @bind-Value="_brand.NavBg" CssClass="pb-hex-input" />
-                    </div>
-                </div>
-                <div class="pb-color-field">
-                    <label class="pb-lbl">Nav Text Color</label>
-                    <div class="pb-color-row">
-                        <input type="color" class="pb-color-input" @bind="_brand.NavText" />
-                        <SfTextBox @bind-Value="_brand.NavText" CssClass="pb-hex-input" />
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Email sender -->
-        <div class="pb-panel">
-            <div class="pb-panel-hdr"><i class="bi bi-envelope" aria-hidden="true"></i> Email Sender Identity</div>
-            <div class="pb-form-grid">
-                <div class="pb-field">
-                    <label class="pb-lbl">From Name</label>
-                    <SfTextBox @bind-Value="_brand.EmailFromName" Placeholder="First Insurance" />
-                </div>
-                <div class="pb-field">
-                    <label class="pb-lbl">Reply-To Address</label>
-                    <SfTextBox @bind-Value="_brand.EmailReplyTo" Placeholder="noreply@firstinsurance.com" />
-                </div>
-                <div class="pb-field pb-field--full">
-                    <label class="pb-lbl">Email Footer Text</label>
-                    <SfTextBox @bind-Value="_brand.EmailFooter" Multiline="true" />
-                </div>
-            </div>
-        </div>
-
-        <!-- Toggles -->
-        <div class="pb-panel">
-            <div class="pb-panel-hdr"><i class="bi bi-toggles" aria-hidden="true"></i> Display Options</div>
-            <div class="pb-toggle-list">
-                <label class="pb-toggle-row"><SfCheckBox @bind-Checked="_brand.ShowAgencyLogo" /><span>Show agency logo in portal header</span></label>
-                <label class="pb-toggle-row"><SfCheckBox @bind-Checked="_brand.ShowPoweredBy" /><span>Show "Powered by AgencyBinder" footer</span></label>
-                <label class="pb-toggle-row"><SfCheckBox @bind-Checked="_brand.ShowSupportChat" /><span>Enable support chat bubble</span></label>
-                <label class="pb-toggle-row"><SfCheckBox @bind-Checked="_brand.ShowNewsWidget" /><span>Show agency news / announcements widget</span></label>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseResetConfirm" disabled="@_busy">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ResetDefaults" disabled="@_busy">Reset Defaults</button>
             </div>
         </div>
     </div>
+}
 
-    <!-- Right: live preview -->
-    <div class="pb-preview-col">
-        <div class="pb-preview-card">
-            <div class="pb-preview-hdr">Live Preview</div>
-            <div class="pb-portal-mock" style="--mock-primary:@_brand.PrimaryColor; --mock-nav-bg:@_brand.NavBg; --mock-nav-text:@_brand.NavText; --mock-accent:@_brand.AccentColor">
-                <div class="pb-mock-nav">
-                    <div class="pb-mock-logo">
-                        <div class="pb-mock-logo-box" style="background:var(--mock-primary)">A</div>
-                        <span class="pb-mock-brand-name" style="color:var(--mock-nav-text)">@_brand.DisplayName</span>
-                    </div>
-                    <div class="pb-mock-nav-links">
-                        <span class="pb-mock-link pb-mock-link--active" style="color:var(--mock-primary)">Dashboard</span>
-                        <span class="pb-mock-link">Policies</span>
-                        <span class="pb-mock-link">Documents</span>
-                        <span class="pb-mock-link">Requests</span>
-                    </div>
-                </div>
-                <div class="pb-mock-body">
-                    <div class="pb-mock-welcome">
-                        <div class="pb-mock-greet">Welcome back, <strong>Client</strong> 👋</div>
-                        <div class="pb-mock-sub">@(_brand.WelcomeMessage.Length > 80 ? _brand.WelcomeMessage[..80] + "…" : _brand.WelcomeMessage)</div>
-                    </div>
-                    <div class="pb-mock-cards">
-                        <div class="pb-mock-card" style="border-top:3px solid var(--mock-primary)">
-                            <div class="pb-mock-card-icon" style="background:var(--mock-primary)20; color:var(--mock-primary)"><i class="bi bi-shield-check" aria-hidden="true"></i></div>
-                            <div class="pb-mock-card-lbl">Active Policies</div>
-                            <div class="pb-mock-card-val">4</div>
-                        </div>
-                        <div class="pb-mock-card" style="border-top:3px solid var(--mock-accent)">
-                            <div class="pb-mock-card-icon" style="background:var(--mock-accent)20; color:var(--mock-accent)"><i class="bi bi-file-earmark-text" aria-hidden="true"></i></div>
-                            <div class="pb-mock-card-lbl">Documents</div>
-                            <div class="pb-mock-card-val">12</div>
-                        </div>
-                        <div class="pb-mock-card" style="border-top:3px solid var(--mock-primary)">
-                            <div class="pb-mock-card-icon" style="background:var(--mock-primary)20; color:var(--mock-primary)"><i class="bi bi-receipt" aria-hidden="true"></i></div>
-                            <div class="pb-mock-card-lbl">Open Invoices</div>
-                            <div class="pb-mock-card-val">1</div>
-                        </div>
-                    </div>
-                    <button class="pb-mock-btn" style="background:var(--mock-primary)">Request a Certificate</button>
+<EditForm Model="_brand" OnValidSubmit="SaveAsync" OnInvalidSubmit="HandleInvalidSubmit">
+    <DataAnnotationsValidator />
+    <div class="pb-page">
+        <section class="pb-hero">
+            <div class="pb-hero__content">
+                <span class="pb-hero__eyebrow"><i class="bi bi-palette-fill" aria-hidden="true"></i> Client portal brand command center</span>
+                <h1>Portal Branding</h1>
+                <p>White-label the client portal with agency identity, domain, colors, support channels, email sender identity, and live client-facing previews.</p>
+                <div class="pb-hero__meta">
+                    <span><i class="bi bi-globe2" aria-hidden="true"></i>@DisplayValue(_brand.Domain, "Domain not set")</span>
+                    <span><i class="bi bi-envelope-at" aria-hidden="true"></i>@DisplayValue(_brand.SupportEmail, "Support email missing")</span>
+                    <span><i class="bi bi-check-circle" aria-hidden="true"></i>@ReadinessScore/100 readiness</span>
+                    <span><i class="bi bi-brush" aria-hidden="true"></i>@ActiveOptionCount display options</span>
                 </div>
             </div>
-        </div>
+            <div class="pb-hero__actions">
+                <button type="button" class="pb-btn pb-btn--light" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "pb-spin" : null)" aria-hidden="true"></i> Refresh</button>
+                <button type="button" class="pb-btn pb-btn--light" @onclick="OpenResetConfirm"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset</button>
+                <button type="submit" class="pb-btn pb-btn--primary" disabled="@_busy"><i class="bi bi-check-lg" aria-hidden="true"></i> Save Branding</button>
+                <button type="button" class="pb-btn pb-btn--light" @onclick='() => Nav.NavigateTo("/portal/users")'><i class="bi bi-people" aria-hidden="true"></i> Portal Users</button>
+            </div>
+        </section>
+
+        <section class="pb-kpi-strip" aria-label="Branding KPIs">
+            @KpiCard("identity", "Identity", IdentityScore.ToString(), "Display, domain, support", "bi-building", "pb-kpi--blue")
+            @KpiCard("colors", "Colors", ColorScore.ToString(), "Palette completeness", "bi-palette", "pb-kpi--purple")
+            @KpiCard("email", "Email", EmailScore.ToString(), "Sender readiness", "bi-envelope-check", "pb-kpi--green")
+            @KpiCard("options", "Options", ActiveOptionCount.ToString(), "Enabled portal modules", "bi-toggles", "pb-kpi--cyan")
+            @KpiCard("preview", "Preview", PreviewScore.ToString(), "Client experience", "bi-window-sidebar", "pb-kpi--amber")
+        </section>
+
+        <section class="pb-workflows" aria-label="Branding workflows">
+            @WorkflowButton("bi-globe2", "Domain setup", "Configure portal URL", () => SetTab("identity"))
+            @WorkflowButton("bi-brush", "Theme palette", "Tune client portal colors", () => SetTab("colors"))
+            @WorkflowButton("bi-envelope-at", "Email identity", "Align sender and footer", () => SetTab("email"))
+            @WorkflowButton("bi-phone", "Mobile settings", "Open mobile branding", () => Nav.NavigateTo("/portal/mobile"))
+            @WorkflowButton("bi-eye", "Live preview", "Review client experience", () => SetTab("preview"))
+        </section>
+
+        @if (_loadError is not null)
+        {
+            <div class="alert alert-danger pb-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+                <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError
+            </div>
+        }
+
+        @if (_formError is not null)
+        {
+            <div class="alert alert-danger pb-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+                <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_formError
+            </div>
+        }
+
+        <section class="pb-tabs" aria-label="Branding sections">
+            @foreach (var tab in Tabs)
+            {
+                <button type="button" class="pb-tab @(_activeTab == tab.Key ? "pb-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                    <i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label <strong>@tab.Score()</strong>
+                </button>
+            }
+        </section>
+
+        <section class="pb-dashboard">
+            <div class="pb-main-card">
+                <div class="pb-card-header">
+                    <div>
+                        <span class="pb-section-kicker"><i class="bi @ActiveTabIcon" aria-hidden="true"></i> @ActiveTabKicker</span>
+                        <h2>@ActiveTabTitle</h2>
+                        <p>@ActiveTabSubtitle</p>
+                    </div>
+                    <div class="pb-card-actions">
+                        <button type="button" class="pb-btn pb-btn--ghost" @onclick="OpenResetConfirm"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset Draft</button>
+                        <button type="submit" class="pb-btn pb-btn--primary" disabled="@_busy"><i class="bi bi-cloud-check" aria-hidden="true"></i> Publish</button>
+                    </div>
+                </div>
+
+                <div class="pb-content">
+                    @if (_loading)
+                    {
+                        <div class="pb-loading"><span class="pb-spinner" aria-hidden="true"></span> Loading branding settings…</div>
+                    }
+                    else if (_activeTab == "identity")
+                    {
+                        <div class="pb-form-grid">
+                            <div class="pb-field pb-field--full">
+                                <label>Portal Display Name <span class="text-danger">*</span></label>
+                                <InputText class="form-control" @bind-Value="_brand.DisplayName" />
+                                <ValidationMessage For="() => _brand.DisplayName" class="text-danger" />
+                            </div>
+                            <div class="pb-field pb-field--full">
+                                <label>Custom Domain <span class="text-danger">*</span></label>
+                                <InputText class="form-control" @bind-Value="_brand.Domain" />
+                                <small>Requires DNS CNAME pointing to the hosted AMS portal endpoint.</small>
+                                <ValidationMessage For="() => _brand.Domain" class="text-danger" />
+                            </div>
+                            <div class="pb-field">
+                                <label>Support Email <span class="text-danger">*</span></label>
+                                <InputText class="form-control" @bind-Value="_brand.SupportEmail" />
+                                <ValidationMessage For="() => _brand.SupportEmail" class="text-danger" />
+                            </div>
+                            <div class="pb-field">
+                                <label>Support Phone</label>
+                                <InputText class="form-control" @bind-Value="_brand.SupportPhone" />
+                                <ValidationMessage For="() => _brand.SupportPhone" class="text-danger" />
+                            </div>
+                            <div class="pb-field pb-field--full">
+                                <label>Welcome Message <span class="text-danger">*</span></label>
+                                <InputTextArea class="form-control" rows="4" @bind-Value="_brand.WelcomeMessage" />
+                                <ValidationMessage For="() => _brand.WelcomeMessage" class="text-danger" />
+                            </div>
+                        </div>
+                    }
+                    else if (_activeTab == "colors")
+                    {
+                        <div class="pb-color-grid">
+                            @ColorField("Primary Color", nameof(BrandSettings.PrimaryColor), _brand.PrimaryColor, value => _brand.PrimaryColor = value, "Used for CTAs, active nav, and primary highlights")
+                            @ColorField("Accent Color", nameof(BrandSettings.AccentColor), _brand.AccentColor, value => _brand.AccentColor = value, "Used for secondary metrics and success states")
+                            @ColorField("Navigation Background", nameof(BrandSettings.NavBg), _brand.NavBg, value => _brand.NavBg = value, "Left/top navigation shell")
+                            @ColorField("Navigation Text", nameof(BrandSettings.NavText), _brand.NavText, value => _brand.NavText = value, "Navigation labels and brand text")
+                        </div>
+                    }
+                    else if (_activeTab == "email")
+                    {
+                        <div class="pb-form-grid">
+                            <div class="pb-field">
+                                <label>From Name <span class="text-danger">*</span></label>
+                                <InputText class="form-control" @bind-Value="_brand.EmailFromName" />
+                                <ValidationMessage For="() => _brand.EmailFromName" class="text-danger" />
+                            </div>
+                            <div class="pb-field">
+                                <label>Reply-To Address <span class="text-danger">*</span></label>
+                                <InputText class="form-control" @bind-Value="_brand.EmailReplyTo" />
+                                <ValidationMessage For="() => _brand.EmailReplyTo" class="text-danger" />
+                            </div>
+                            <div class="pb-field pb-field--full">
+                                <label>Email Footer Text</label>
+                                <InputTextArea class="form-control" rows="4" @bind-Value="_brand.EmailFooter" />
+                                <ValidationMessage For="() => _brand.EmailFooter" class="text-danger" />
+                            </div>
+                        </div>
+                    }
+                    else if (_activeTab == "options")
+                    {
+                        <div class="pb-option-grid">
+                            @OptionToggle("bi-image", "Agency logo", "Show agency logo in the portal header", _brand.ShowAgencyLogo, value => _brand.ShowAgencyLogo = value)
+                            @OptionToggle("bi-badge-ad", "Powered by footer", "Show platform attribution in the footer", _brand.ShowPoweredBy, value => _brand.ShowPoweredBy = value)
+                            @OptionToggle("bi-chat-dots", "Support chat", "Enable the support chat bubble", _brand.ShowSupportChat, value => _brand.ShowSupportChat = value)
+                            @OptionToggle("bi-newspaper", "News widget", "Show agency announcements and updates", _brand.ShowNewsWidget, value => _brand.ShowNewsWidget = value)
+                        </div>
+                    }
+                    else
+                    {
+                        @PreviewPanel()
+                    }
+                </div>
+            </div>
+
+            <aside class="pb-side-panel">
+                <div class="pb-panel-card">
+                    <span class="pb-section-kicker"><i class="bi bi-stars" aria-hidden="true"></i> Readiness</span>
+                    <div class="pb-score-card">
+                        <span>Brand publish score</span>
+                        <strong>@ReadinessScore</strong>
+                        <small>/100</small>
+                    </div>
+                    <div class="pb-readiness"><span style="width:@ReadinessScore%"></span></div>
+                    <div class="pb-importance-list">
+                        @foreach (var item in ImportanceSignals)
+                        {
+                            <div><i class="bi @item.Icon" aria-hidden="true"></i><span>@item.Text</span></div>
+                        }
+                    </div>
+                </div>
+
+                <div class="pb-panel-card">
+                    <span class="pb-section-kicker"><i class="bi bi-window-sidebar" aria-hidden="true"></i> Live preview</span>
+                    @PreviewPanel(true)
+                </div>
+
+                <div class="pb-panel-card">
+                    <span class="pb-section-kicker"><i class="bi bi-envelope-paper" aria-hidden="true"></i> Email preview</span>
+                    <div class="pb-email-preview">
+                        <span>From: @_brand.EmailFromName &lt;@_brand.EmailReplyTo&gt;</span>
+                        <strong>Welcome to @_brand.DisplayName</strong>
+                        <p>@_brand.WelcomeMessage</p>
+                        <small>@_brand.EmailFooter</small>
+                    </div>
+                </div>
+            </aside>
+        </section>
     </div>
-</div>
+</EditForm>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private Guid _tenantId;
-    private SfToast? _toast;
     private Guid _recordId;
-
+    private bool _loading;
+    private bool _busy;
+    private bool _toastVisible;
+    private bool _showResetConfirm;
+    private string _toastKind = "success";
+    private string _toastMessage = string.Empty;
+    private string? _loadError;
+    private string? _formError;
+    private string _activeTab = "identity";
     private BrandSettings _brand = new();
+
+    private TabDef[] Tabs =>
+    [
+        new("identity", "Identity", "bi-building", () => IdentityScore),
+        new("colors", "Colors", "bi-palette", () => ColorScore),
+        new("email", "Email", "bi-envelope-check", () => EmailScore),
+        new("options", "Options", "bi-toggles", () => ActiveOptionCount),
+        new("preview", "Preview", "bi-window-sidebar", () => PreviewScore)
+    ];
+
+    private int IdentityScore => Score(!string.IsNullOrWhiteSpace(_brand.DisplayName), !string.IsNullOrWhiteSpace(_brand.Domain), !string.IsNullOrWhiteSpace(_brand.SupportEmail), !string.IsNullOrWhiteSpace(_brand.WelcomeMessage));
+    private int ColorScore => Score(IsHex(_brand.PrimaryColor), IsHex(_brand.AccentColor), IsHex(_brand.NavBg), IsHex(_brand.NavText));
+    private int EmailScore => Score(!string.IsNullOrWhiteSpace(_brand.EmailFromName), !string.IsNullOrWhiteSpace(_brand.EmailReplyTo), !string.IsNullOrWhiteSpace(_brand.EmailFooter));
+    private int ActiveOptionCount => new[] { _brand.ShowAgencyLogo, _brand.ShowPoweredBy, _brand.ShowSupportChat, _brand.ShowNewsWidget }.Count(v => v);
+    private int PreviewScore => Score(IdentityScore >= 75, ColorScore == 100, EmailScore >= 67, ActiveOptionCount >= 2);
+    private int ReadinessScore => (IdentityScore + ColorScore + EmailScore + PreviewScore) / 4;
+    private IEnumerable<Signal> ImportanceSignals => BuildImportanceSignals();
+    private string ActiveTabIcon => Tabs.First(t => t.Key == _activeTab).Icon;
+    private string ActiveTabKicker => _activeTab switch { "identity" => "Agency identity", "colors" => "Visual system", "email" => "Outbound identity", "options" => "Portal modules", _ => "Client experience" };
+    private string ActiveTabTitle => _activeTab switch { "identity" => "Agency identity and domain", "colors" => "Brand color system", "email" => "Email sender identity", "options" => "Portal display options", _ => "Live client portal preview" };
+    private string ActiveTabSubtitle => _activeTab switch
+    {
+        "identity" => "These fields define what clients see first: portal name, domain, support channel, and welcome copy.",
+        "colors" => "Tune the primary, accent, and navigation colors used across the self-service experience.",
+        "email" => "Align portal-generated email notifications with agency sender and support identity.",
+        "options" => "Enable or disable client-facing portal modules and display affordances.",
+        _ => "Review the portal and email experience before saving changes."
+    };
 
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Portal","/portal/users"), new("Branding",""));
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Portal", "/portal/users"), new("Branding", ""));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
-        var settings = await Api.GetPortalBrandingSettingsAsync(_tenantId);
-        var records = await Api.SearchPortalAdminRecordsAsync(_tenantId, "PortalBranding");
-        _recordId = records?.Items.FirstOrDefault()?.PortalAdminRecordId ?? Guid.Empty;
-        if (settings is null) { ResetDefaults(); return; }
-        _brand = new BrandSettings
+        _loading = true;
+        _loadError = null;
+        try
         {
-            DisplayName = settings.DisplayName,
-            Domain = settings.Domain,
-            SupportEmail = settings.SupportEmail,
-            SupportPhone = settings.SupportPhone,
-            WelcomeMessage = settings.WelcomeMessage,
-            PrimaryColor = settings.PrimaryColor,
-            AccentColor = settings.AccentColor,
-            NavBg = settings.NavBg,
-            NavText = settings.NavText,
-            EmailFromName = settings.EmailFromName,
-            EmailReplyTo = settings.EmailReplyTo,
-            EmailFooter = settings.EmailFooter,
-            ShowAgencyLogo = settings.ShowAgencyLogo,
-            ShowPoweredBy = settings.ShowPoweredBy,
-            ShowSupportChat = settings.ShowSupportChat,
-            ShowNewsWidget = settings.ShowNewsWidget
-        };
-    }
-
-    private void ResetDefaults()
-    {
-        _brand = new BrandSettings
+            var settings = await Api.GetPortalBrandingSettingsAsync(_tenantId);
+            var records = await Api.SearchPortalAdminRecordsAsync(_tenantId, "PortalBranding", "branding");
+            _recordId = records?.Items.FirstOrDefault(r => r.Code == "branding")?.PortalAdminRecordId ?? records?.Items.FirstOrDefault()?.PortalAdminRecordId ?? Guid.Empty;
+            _brand = BrandSettings.FromDto(settings) ?? BuildDefaults();
+        }
+        catch (Exception ex)
         {
-            DisplayName    = "First Insurance Client Portal",
-            Domain         = "portal.firstinsurance.com",
-            SupportEmail   = "support@firstinsurance.com",
-            SupportPhone   = "(555) 234-5678",
-            WelcomeMessage = "Manage your policies, request certificates, upload documents, and more — all in one place.",
-            PrimaryColor   = "#1d4ed8",
-            AccentColor    = "#059669",
-            NavBg          = "#1e293b",
-            NavText        = "#f8fafc",
-            EmailFromName  = "First Insurance",
-            EmailReplyTo   = "noreply@firstinsurance.com",
-            EmailFooter    = "First Insurance · Client Portal Support · (555) 234-5678",
-            ShowAgencyLogo = true,
-            ShowPoweredBy  = false,
-            ShowSupportChat= true,
-            ShowNewsWidget = true,
-        };
+            _loadError = $"Failed to load portal branding: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
+            if (string.IsNullOrWhiteSpace(_brand.DisplayName))
+            {
+                _brand = BuildDefaults();
+            }
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
     private async Task SaveAsync()
     {
-        var json = System.Text.Json.JsonSerializer.Serialize(_brand);
-        if (_recordId != Guid.Empty)
-            await Api.UpdatePortalAdminRecordAsync(_recordId, new UpsertPortalAdminRecordRequest(_tenantId, "PortalBranding", "branding", _brand.DisplayName, "Active", json));
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = "Portal branding saved successfully.", CssClass = "e-toast-success" });
+        _busy = true;
+        _formError = null;
+        try
+        {
+            var dto = _brand.ToDto();
+            var json = JsonSerializer.Serialize(dto, JsonOptions);
+            var request = new UpsertPortalAdminRecordRequest(_tenantId, "PortalBranding", "branding", dto.DisplayName, "Active", json);
+            if (_recordId == Guid.Empty)
+            {
+                _recordId = await Api.CreatePortalAdminRecordAsync(request);
+            }
+            else
+            {
+                await Api.UpdatePortalAdminRecordAsync(_recordId, request);
+            }
+            ShowToast("Portal branding saved successfully.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
+
+    private void HandleInvalidSubmit(EditContext editContext)
+    {
+        _formError = "Fix the highlighted validation errors before saving portal branding.";
+        ShowToast(_formError, "danger");
+    }
+
+    private void OpenResetConfirm() => _showResetConfirm = true;
+    private void CloseResetConfirm() { if (!_busy) _showResetConfirm = false; }
+    private void ResetDefaults()
+    {
+        _brand = BuildDefaults();
+        _showResetConfirm = false;
+        ShowToast("Branding draft reset to tenant defaults.");
+    }
+
+    private void SetTab(string key) => _activeTab = key;
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+
+    private IEnumerable<Signal> BuildImportanceSignals()
+    {
+        yield return new("bi-globe2", string.IsNullOrWhiteSpace(_brand.Domain) ? "Custom domain is missing and should be configured before publishing." : $"Domain configured: {_brand.Domain}.");
+        yield return new("bi-envelope-at", string.IsNullOrWhiteSpace(_brand.SupportEmail) ? "Support email is missing from the client experience." : $"Support email routes to {_brand.SupportEmail}.");
+        yield return new("bi-palette", ColorScore == 100 ? "All brand colors are valid hex values." : "One or more brand colors need a valid hex value.");
+        yield return new("bi-chat-dots", _brand.ShowSupportChat ? "Support chat is enabled for client self-service." : "Support chat is hidden; ensure clients have another support path.");
+    }
+
+    private RenderFragment KpiCard(string key, string label, string value, string detail, string icon, string css) => @<button type="button" class="pb-kpi @css @(_activeTab == key ? "pb-kpi--active" : null)" @onclick="@(() => SetTab(key))" title="Open @label configuration">
+        <span><i class="bi @icon" aria-hidden="true"></i>@label</span>
+        <strong>@value</strong>
+        <small>@detail</small>
+    </button>;
+
+    private RenderFragment WorkflowButton(string icon, string title, string detail, System.Action action) => @<button type="button" class="pb-workflow" @onclick="@(() => action())">
+        <i class="bi @icon" aria-hidden="true"></i>
+        <span><strong>@title</strong><small>@detail</small></span>
+    </button>;
+
+    private RenderFragment ColorField(string label, string field, string value, Action<string> setValue, string hint) => @<div class="pb-color-field">
+        <label>@label <span class="text-danger">*</span></label>
+        <div class="pb-color-row">
+            <input type="color" value="@SafeColor(value)" @oninput="e => setValue(e.Value?.ToString() ?? string.Empty)" aria-label="@label picker" />
+            <InputText class="form-control" Value="@value" ValueChanged="setValue" ValueExpression="@(() => value)" />
+        </div>
+        <small>@hint</small>
+        @if (!IsHex(value))
+        {
+            <div class="text-danger">@label must be a valid hex color.</div>
+        }
+    </div>;
+
+    private RenderFragment OptionToggle(string icon, string title, string detail, bool value, Action<bool> setValue) => @<button type="button" class="pb-option @(value ? "pb-option--active" : null)" @onclick="@(() => setValue(!value))">
+        <i class="bi @icon" aria-hidden="true"></i>
+        <span><strong>@title</strong><small>@detail</small></span>
+        <em>@(value ? "On" : "Off")</em>
+    </button>;
+
+    private RenderFragment PreviewPanel(bool compact = false) => @<div class="pb-portal-mock @(compact ? "pb-portal-mock--compact" : null)" style="--mock-primary:@SafeColor(_brand.PrimaryColor); --mock-nav-bg:@SafeColor(_brand.NavBg); --mock-nav-text:@SafeColor(_brand.NavText); --mock-accent:@SafeColor(_brand.AccentColor)">
+        <div class="pb-mock-nav">
+            <div class="pb-mock-logo">
+                @if (_brand.ShowAgencyLogo)
+                {
+                    <div class="pb-mock-logo-box">@Initial(_brand.DisplayName)</div>
+                }
+                <span>@DisplayValue(_brand.DisplayName, "Client Portal")</span>
+            </div>
+            <div class="pb-mock-nav-links"><span>Dashboard</span><span>Policies</span><span>Documents</span><span>Requests</span></div>
+        </div>
+        <div class="pb-mock-body">
+            <div class="pb-mock-welcome"><strong>Welcome back, Client</strong><span>@Truncate(_brand.WelcomeMessage, compact ? 72 : 130)</span></div>
+            <div class="pb-mock-cards"><div><i class="bi bi-shield-check"></i><strong>4</strong><span>Policies</span></div><div><i class="bi bi-folder2-open"></i><strong>12</strong><span>Documents</span></div><div><i class="bi bi-receipt"></i><strong>1</strong><span>Invoice</span></div></div>
+            <button type="button">Request a Certificate</button>
+            @if (_brand.ShowSupportChat)
+            {
+                <span class="pb-chat-dot"><i class="bi bi-chat-dots"></i></span>
+            }
+            @if (_brand.ShowPoweredBy)
+            {
+                <small class="pb-powered">Powered by AgencyBinder</small>
+            }
+        </div>
+    </div>;
+
+    private static BrandSettings BuildDefaults() => new()
+    {
+        DisplayName = "Tenant Agency Client Portal",
+        Domain = "portal.tenant-agency.com",
+        SupportEmail = "support@agency.local",
+        SupportPhone = "(555) 000-0000",
+        WelcomeMessage = "Manage policies, request certificates, upload documents, and message your agency in one secure place.",
+        PrimaryColor = "#1d4ed8",
+        AccentColor = "#059669",
+        NavBg = "#1e293b",
+        NavText = "#f8fafc",
+        EmailFromName = "Tenant Agency",
+        EmailReplyTo = "support@agency.local",
+        EmailFooter = "Tenant Agency · Client Portal Support · (555) 000-0000",
+        ShowAgencyLogo = true,
+        ShowPoweredBy = false,
+        ShowSupportChat = true,
+        ShowNewsWidget = true
+    };
+
+    private static int Score(params bool[] checks) => checks.Length == 0 ? 0 : (int)Math.Round(checks.Count(v => v) * 100m / checks.Length);
+    private static bool IsHex(string? value) => !string.IsNullOrWhiteSpace(value) && System.Text.RegularExpressions.Regex.IsMatch(value, "^#[0-9A-Fa-f]{6}$");
+    private static string SafeColor(string? value) => IsHex(value) ? value! : "#1d4ed8";
+    private static string DisplayValue(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private static string Initial(string? value) => string.IsNullOrWhiteSpace(value) ? "A" : value.Trim()[0].ToString().ToUpperInvariant();
+    private static string Truncate(string? value, int length) => string.IsNullOrWhiteSpace(value) ? "Welcome to your secure client portal." : value.Length <= length ? value : value[..length] + "…";
+
+    private sealed record TabDef(string Key, string Label, string Icon, Func<int> Score);
+    private sealed record Signal(string Icon, string Text);
 
     private sealed class BrandSettings
     {
-        public string DisplayName    { get; set; } = string.Empty;
-        public string Domain         { get; set; } = string.Empty;
-        public string SupportEmail   { get; set; } = string.Empty;
-        public string SupportPhone   { get; set; } = string.Empty;
-        public string WelcomeMessage { get; set; } = string.Empty;
-        public string PrimaryColor   { get; set; } = "#1d4ed8";
-        public string AccentColor    { get; set; } = "#059669";
-        public string NavBg          { get; set; } = "#1e293b";
-        public string NavText        { get; set; } = "#f8fafc";
-        public string EmailFromName  { get; set; } = string.Empty;
-        public string EmailReplyTo   { get; set; } = string.Empty;
-        public string EmailFooter    { get; set; } = string.Empty;
-        public bool   ShowAgencyLogo  { get; set; } = true;
-        public bool   ShowPoweredBy   { get; set; }
-        public bool   ShowSupportChat { get; set; } = true;
-        public bool   ShowNewsWidget  { get; set; } = true;
-    }
+        [Required(ErrorMessage = "Portal display name is required.")]
+        [StringLength(120, ErrorMessage = "Portal display name cannot exceed 120 characters.")]
+        public string DisplayName { get; set; } = string.Empty;
 
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        [Required(ErrorMessage = "Custom domain is required.")]
+        [StringLength(200, ErrorMessage = "Custom domain cannot exceed 200 characters.")]
+        public string Domain { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Support email is required.")]
+        [AmsEmailAddress]
+        [StringLength(320, ErrorMessage = "Support email cannot exceed 320 characters.")]
+        public string SupportEmail { get; set; } = string.Empty;
+
+        [StringLength(40, ErrorMessage = "Support phone cannot exceed 40 characters.")]
+        public string SupportPhone { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Welcome message is required.")]
+        [StringLength(500, ErrorMessage = "Welcome message cannot exceed 500 characters.")]
+        public string WelcomeMessage { get; set; } = string.Empty;
+
+        [Required]
+        [StringLength(7, MinimumLength = 7, ErrorMessage = "Primary color must be a hex value like #1d4ed8.")]
+        public string PrimaryColor { get; set; } = "#1d4ed8";
+
+        [Required]
+        [StringLength(7, MinimumLength = 7, ErrorMessage = "Accent color must be a hex value like #059669.")]
+        public string AccentColor { get; set; } = "#059669";
+
+        [Required]
+        [StringLength(7, MinimumLength = 7, ErrorMessage = "Navigation background must be a hex value like #1e293b.")]
+        public string NavBg { get; set; } = "#1e293b";
+
+        [Required]
+        [StringLength(7, MinimumLength = 7, ErrorMessage = "Navigation text color must be a hex value like #f8fafc.")]
+        public string NavText { get; set; } = "#f8fafc";
+
+        [Required(ErrorMessage = "Email from name is required.")]
+        [StringLength(160, ErrorMessage = "Email from name cannot exceed 160 characters.")]
+        public string EmailFromName { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Reply-to address is required.")]
+        [AmsEmailAddress]
+        [StringLength(320, ErrorMessage = "Reply-to address cannot exceed 320 characters.")]
+        public string EmailReplyTo { get; set; } = string.Empty;
+
+        [StringLength(500, ErrorMessage = "Email footer cannot exceed 500 characters.")]
+        public string EmailFooter { get; set; } = string.Empty;
+
+        public bool ShowAgencyLogo { get; set; } = true;
+        public bool ShowPoweredBy { get; set; }
+        public bool ShowSupportChat { get; set; } = true;
+        public bool ShowNewsWidget { get; set; } = true;
+
+        public static BrandSettings? FromDto(PortalBrandingSettingsDto? dto) => dto is null ? null : new()
+        {
+            DisplayName = dto.DisplayName,
+            Domain = dto.Domain,
+            SupportEmail = dto.SupportEmail,
+            SupportPhone = dto.SupportPhone,
+            WelcomeMessage = dto.WelcomeMessage,
+            PrimaryColor = dto.PrimaryColor,
+            AccentColor = dto.AccentColor,
+            NavBg = dto.NavBg,
+            NavText = dto.NavText,
+            EmailFromName = dto.EmailFromName,
+            EmailReplyTo = dto.EmailReplyTo,
+            EmailFooter = dto.EmailFooter,
+            ShowAgencyLogo = dto.ShowAgencyLogo,
+            ShowPoweredBy = dto.ShowPoweredBy,
+            ShowSupportChat = dto.ShowSupportChat,
+            ShowNewsWidget = dto.ShowNewsWidget
+        };
+
+        public PortalBrandingSettingsDto ToDto() => new()
+        {
+            DisplayName = DisplayName,
+            Domain = Domain,
+            SupportEmail = SupportEmail,
+            SupportPhone = SupportPhone,
+            WelcomeMessage = WelcomeMessage,
+            PrimaryColor = PrimaryColor,
+            AccentColor = AccentColor,
+            NavBg = NavBg,
+            NavText = NavText,
+            EmailFromName = EmailFromName,
+            EmailReplyTo = EmailReplyTo,
+            EmailFooter = EmailFooter,
+            ShowAgencyLogo = ShowAgencyLogo,
+            ShowPoweredBy = ShowPoweredBy,
+            ShowSupportChat = ShowSupportChat,
+            ShowNewsWidget = ShowNewsWidget
+        };
     }
 }
