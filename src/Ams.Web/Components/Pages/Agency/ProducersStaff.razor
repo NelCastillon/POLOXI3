@@ -1,317 +1,472 @@
-@page "/admin/agency/staff"
+﻿@page "/admin/agency/staff"
 @page "/tenant/agency/producers"
 @namespace Ams.Web.Components.Pages.AgencyAdmin
-@using System.ComponentModel.DataAnnotations
 @using Ams.Application.Common.Validation
 @using Ams.Application.Features.Iam
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Producers — Agency Setup</PageTitle>
+<PageTitle>Producers â€” Agency Setup</PageTitle>
 
 <AppPageHeader Title="Producers"
-               Subtitle="Licensed producers, appointments, and license renewal readiness"
-               Icon="bi-person-badge">
+               Subtitle="Enterprise producer roster, role assignments, licensing readiness, and agency distribution capacity."
+               Icon="bi-person-badge-fill">
     <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_loading" title="Refresh producers">
             <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
         </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/csrs"><i class="bi bi-headset" aria-hidden="true"></i> CSRs</a>
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/teams"><i class="bi bi-people" aria-hidden="true"></i> Teams</a>
+        <button class="um-btn um-btn-primary" type="button" @onclick="OpenAddModal">
             <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Producer
         </button>
     </Actions>
 </AppPageHeader>
 
-<section class="ma-hero as-tenant-hero">
-    <div>
-        <span class="ma-eyebrow">Tenant · Agency Staff</span>
-        <h2>Producer Command Center</h2>
-        <p>Monitor licensed producers, appointments, license expirations, and staff readiness across the agency.</p>
-    </div>
-    <div class="ma-hero-actions">
-        <a class="um-btn um-btn-ghost" href="/tenant/agency/csrs"><i class="bi bi-headset" aria-hidden="true"></i> CSRs</a>
-        <a class="um-btn um-btn-ghost" href="/tenant/agency/branches"><i class="bi bi-diagram-3" aria-hidden="true"></i> Branches</a>
-        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Producer</button>
-    </div>
-</section>
-
-<!-- KPI strip -->
-<div class="as-kpi-strip" aria-label="Producer filters">
-    <button type="button" class='as-kpi-card @KpiClass("Overview")' @onclick='() => SetKpiFilter("Overview")' title="Show all producers">
-        <span class="as-kpi-icon"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
-        <div><div class="ps-kpi-value">@_producerCount</div><div class="ps-kpi-label">Producers</div></div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Active")' @onclick='() => SetKpiFilter("Active")' title="Show active producers">
-        <span class="as-kpi-icon as-kpi-icon--success"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
-        <div><div class="ps-kpi-value">@_activeProducerCount</div><div class="ps-kpi-label">Active</div></div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Expiring")' @onclick='() => SetKpiFilter("Expiring")' title="Show producer licenses expiring in 90 days">
-        <span class="as-kpi-icon as-kpi-icon--warning"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></span>
-        <div><div class="ps-kpi-value">@_licenseExpiringCount</div><div class="ps-kpi-label">License Expiring</div></div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Expired")' @onclick='() => SetKpiFilter("Expired")' title="Show expired producer licenses">
-        <span class="as-kpi-icon as-kpi-icon--danger"><i class="bi bi-x-circle-fill" aria-hidden="true"></i></span>
-        <div><div class="ps-kpi-value">@_licenseExpiredCount</div><div class="ps-kpi-label">Expired</div></div>
-    </button>
-</div>
-
-<!-- Filter toolbar -->
-<AppFilterPanel @bind-SearchValue="_search"
-                OnSearch="OnSearchAsync"
-                SearchPlaceholder="Search name, NPN or email…">
-    <Filters>
-        <SfDropDownList TValue="string" TItem="LabelValue"
-                        DataSource="_roleOptions"
-                        Placeholder="Role"
-                        ShowClearButton="true"
-                        Width="150px"
-                        Value="_filterRole"
-                        ValueChanged="@((string v) => { _filterRole = v; ApplyFilters(); })">
-            <DropDownListFieldSettings Value="Value" Text="Label" />
-        </SfDropDownList>
-
-        <SfDropDownList TValue="string" TItem="LabelValue"
-                        DataSource="_licenseStatusOptions"
-                        Placeholder="License Status"
-                        ShowClearButton="true"
-                        Width="160px"
-                        Value="_filterLicenseStatus"
-                        ValueChanged="@((string v) => { _filterLicenseStatus = v; ApplyFilters(); })">
-            <DropDownListFieldSettings Value="Value" Text="Label" />
-        </SfDropDownList>
-
-        <label class="ps-toggle-label">
-            <input type="checkbox" @bind="_filterActiveOnly" @bind:after="ApplyFilters" />
-            Active only
-        </label>
-    </Filters>
-</AppFilterPanel>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
-        @_loadError
+    <div class="ps-toast @_toastClass" role="status">
+        <i class="@ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ps-toast-close" @onclick="ClearToast" aria-label="Dismiss message"><i class="bi bi-x-lg"></i></button>
     </div>
 }
 
-<!-- Grid -->
-<div class="um-grid-card app-datagrid">
-    @if (_loading)
+<div class="ps-page">
+    <section class="ps-hero">
+        <div class="ps-hero-main">
+            <span class="ps-eyebrow"><i class="bi bi-command" aria-hidden="true"></i> Tenant Â· Agency Staff</span>
+            <h2>Producer Command Center</h2>
+            <p>Manage Producer role assignments, producer profiles, department and team alignment, license readiness, and distribution capacity across the agency.</p>
+            <div class="ps-hero-meta">
+                <span><i class="bi bi-person-badge" aria-hidden="true"></i> @_producerCount producers</span>
+                <span><i class="bi bi-check-circle" aria-hidden="true"></i> @_activeProducerCount active</span>
+                <span><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_licenseExpiringCount expiring</span>
+            </div>
+        </div>
+        <div class="ps-hero-panel">
+            <div class="ps-readiness-card">
+                <span>Producer readiness</span>
+                <strong>@ReadinessScore%</strong>
+                <div class="ps-score-track"><div style="width:@ReadinessScore%"></div></div>
+                <small>@ReadinessSummary</small>
+            </div>
+            <div class="ps-action-list">
+                @foreach (var action in PriorityActions)
+                {
+                    <button type="button" class="ps-action-item" @onclick="() => RunPriorityAction(action)">
+                        <i class="bi @action.Icon" aria-hidden="true"></i>
+                        <span><strong>@action.Title</strong><small>@action.Detail</small></span>
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                    </button>
+                }
+            </div>
+        </div>
+    </section>
+
+    <section class="ps-kpi-strip" aria-label="Producer KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="@KpiCardClass(kpi.Key)" title="@kpi.Tooltip" @onclick="() => SetTab(kpi.Key)">
+                <span class="ps-kpi-icon ps-kpi-icon--@kpi.Tone"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="ps-kpi-label">@kpi.Label</span>
+                <strong>@kpi.Value</strong>
+                <small>@kpi.Detail</small>
+            </button>
+        }
+    </section>
+
+    <section class="ps-command-bar">
+        <div class="ps-tabs" role="tablist" aria-label="Producer sections">
+            @foreach (var tab in Tabs)
+            {
+                <button type="button" role="tab" class="@TabClass(tab.Key)" @onclick="() => SetTab(tab.Key)">
+                    <i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label
+                </button>
+            }
+        </div>
+        <div class="ps-command-actions">
+            <button class="um-btn um-btn-ghost" type="button" @onclick="CopySummaryAsync" disabled="@(!_allEntries.Any())"><i class="bi bi-clipboard" aria-hidden="true"></i> Copy Summary</button>
+            <button class="um-btn um-btn-ghost" type="button" @onclick="ClearFilters"><i class="bi bi-x-circle" aria-hidden="true"></i> Clear Filters</button>
+            <button class="um-btn um-btn-primary" type="button" @onclick="OpenAddModal"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Producer</button>
+        </div>
+    </section>
+
+    <section class="ps-filter-bar" aria-label="Producer filters">
+        <div class="ps-search-box">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="um-input" value="@_search" @oninput="@(args => { _search = args.Value?.ToString() ?? string.Empty; ApplyFilters(); })" placeholder="Search name, email, NPN, department, team, state, or statusâ€¦" />
+        </div>
+        <select class="um-input ps-filter-select" value="@_filterDepartment" @onchange="@(args => { _filterDepartment = args.Value?.ToString() ?? string.Empty; ApplyFilters(); })" aria-label="Filter by department">
+            <option value="">All Departments</option>
+            @foreach (var department in DepartmentFilterOptions)
+            {
+                <option value="@department">@department</option>
+            }
+        </select>
+        <select class="um-input ps-filter-select" value="@_filterLicenseStatus" @onchange="@(args => { _filterLicenseStatus = args.Value?.ToString() ?? string.Empty; ApplyFilters(); })" aria-label="Filter by license status">
+            <option value="">All License Status</option>
+            <option value="Ready">Ready</option>
+            <option value="Expiring">Expiring</option>
+            <option value="Expired">Expired</option>
+            <option value="Missing">Missing</option>
+        </select>
+        <label class="ps-toggle-label">
+            <input type="checkbox" checked="@_activeOnly" @onchange="@(args => ToggleActiveOnly(args.Value is bool value && value))" />
+            Active only
+        </label>
+        <span class="ps-result-count">@FilteredEntries.Count producer(s) shown</span>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
     {
-        <div class="um-loading-overlay" aria-live="polite">
-            <div class="um-spinner" aria-hidden="true"></div>
-            <span>Loading…</span>
+        <div class="alert alert-danger ps-load-error" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
         </div>
     }
-    <SfGrid TValue="StaffEntry"
-            DataSource="_entries"
-            AllowPaging="true"
-            AllowSorting="true"
-            EnableHover="true"
-            RowHeight="52">
-        <GridEvents TValue="StaffEntry" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50, 100 })" />
-        <GridColumns>
-            <GridColumn Field="@nameof(StaffEntry.FullName)" HeaderText="Name" Width="200">
-                <Template>
-                    @{ var e = (StaffEntry)context; }
-                    <div class="ps-name-cell">
-                        <span class="ps-avatar" style="@AvatarStyle(e)" aria-hidden="true">@Initials(e)</span>
-                        <div>
-                            <div class="ps-full-name">@e.FullName</div>
-                            <div class="ps-email">@e.Email</div>
+
+    <section class="ps-content-grid">
+        <div class="ps-main-panel">
+            @if (_loading)
+            {
+                <div class="ps-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Loading producers...</div>
+            }
+            else if (!_allEntries.Any())
+            {
+                <div class="ps-empty-state">
+                    <i class="bi bi-person-plus" aria-hidden="true"></i>
+                    <strong>No producers assigned</strong>
+                    <span>Add or assign Producer role access to start building the producer roster.</span>
+                    <button class="um-btn um-btn-primary" type="button" @onclick="OpenAddModal"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Producer</button>
+                </div>
+            }
+            else
+            {
+                @if (ShowTab("overview"))
+                {
+                    <section class="ps-section">
+                        <div class="ps-section-header"><i class="bi bi-speedometer2" aria-hidden="true"></i><div><strong>Executive Overview</strong><span>Most important producer readiness signals by distribution impact.</span></div></div>
+                        <div class="ps-overview-grid">
+                            <div class="ps-identity-card"><span class="ps-module-icon ps-module-icon--blue"><i class="bi bi-person-badge-fill"></i></span><div><strong>@_producerCount producers</strong><span>@_activeProducerCount active Â· @_inactiveProducerCount inactive</span></div></div>
+                            <div class="ps-identity-card"><span class="ps-module-icon ps-module-icon--green"><i class="bi bi-building"></i></span><div><strong>@DepartmentsRepresented departments</strong><span>@TeamsRepresented team(s) represented</span></div></div>
+                            <div class="ps-identity-card"><span class="ps-module-icon ps-module-icon--purple"><i class="bi bi-shield-check"></i></span><div><strong>@ReadyLicenseCount license-ready</strong><span>@_licenseExpiringCount expiring Â· @_licenseExpiredCount expired</span></div></div>
                         </div>
+                        <div class="ps-producer-board">
+                            @foreach (var producer in FilteredEntries.Take(6))
+                            {
+                                <button type="button" class="@ProducerCardClass(producer)" @onclick="() => SelectProducer(producer)">
+                                    <span class="ps-avatar" style="@AvatarStyle(producer)" aria-hidden="true">@Initials(producer)</span>
+                                    <span class="ps-producer-content"><strong>@producer.FullName</strong><small>@producer.Email Â· @DepartmentText(producer)</small></span>
+                                    <span class="@StatusClass(producer)">@StatusText(producer)</span>
+                                </button>
+                            }
+                        </div>
+                    </section>
+                }
+
+                @if (ShowTab("directory") || ShowTab("active") || ShowTab("expiring") || ShowTab("expired") || ShowTab("missing") || ShowTab("departments"))
+                {
+                    <section class="ps-section">
+                        <div class="ps-section-header"><i class="bi bi-list-ul" aria-hidden="true"></i><div><strong>@DirectoryTitle</strong><span>Native producer directory with clickable rows and inline actions.</span></div></div>
+                        <div class="ps-table-wrap">
+                            <table class="ps-table">
+                                <thead>
+                                    <tr>
+                                        <th>Producer</th>
+                                        <th>Department</th>
+                                        <th>Team</th>
+                                        <th>NPN</th>
+                                        <th>License</th>
+                                        <th>Status</th>
+                                        <th class="ps-actions-col">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var producer in FilteredEntries)
+                                    {
+                                        <tr class="@ProducerRowClass(producer)" @onclick="() => SelectProducer(producer)">
+                                            <td><div class="ps-name-cell"><span class="ps-avatar" style="@AvatarStyle(producer)" aria-hidden="true">@Initials(producer)</span><div><strong>@producer.FullName</strong><small>@producer.Email</small></div></div></td>
+                                            <td>@DepartmentText(producer)</td>
+                                            <td>@TeamText(producer)</td>
+                                            <td><span class="ps-mono">@NpnText(producer)</span></td>
+                                            <td><span class="@LicenseExpiryClass(producer)">@LicenseText(producer)</span></td>
+                                            <td><span class="@StatusClass(producer)">@StatusText(producer)</span></td>
+                                            <td class="ps-row-actions" @onclick:stopPropagation="true">
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditModal(producer)" title="Edit producer"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ConfirmRemoveProducerRole(producer)" title="Remove Producer role"><i class="bi bi-trash3" aria-hidden="true"></i></button>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                }
+            }
+        </div>
+
+        <aside class="ps-side-panel" aria-label="Producer details and governance">
+            <div class="ps-side-card">
+                <div class="ps-side-header"><i class="bi bi-person-badge" aria-hidden="true"></i><div><strong>Selected producer</strong><span>@(SelectedProducer is null ? "Choose a row or card" : SelectedProducer.FullName)</span></div></div>
+                @if (SelectedProducer is null)
+                {
+                    <p class="ps-side-copy">Select a producer to review role assignment, license readiness, department, team, and available actions.</p>
+                }
+                else
+                {
+                    <div class="ps-selected-summary">
+                        <span class="ps-selected-avatar" style="@AvatarStyle(SelectedProducer)">@Initials(SelectedProducer)</span>
+                        <div><strong>@SelectedProducer.FullName</strong><small>@SelectedProducer.Email</small></div>
                     </div>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(StaffEntry.Role)" HeaderText="Role" Width="120">
-                <Template>
-                    @{ var e = (StaffEntry)context; }
-                    <span class="@RoleBadgeClass(e.Role)">@e.Role</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(StaffEntry.Npn)" HeaderText="NPN" Width="130">
-                <Template>
-                    @{ var e = (StaffEntry)context; }
-                    <span class="ps-mono">@e.Npn</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(StaffEntry.LicenseState)" HeaderText="Lic. State" Width="100" />
-            <GridColumn Field="@nameof(StaffEntry.LicenseExpiry)" HeaderText="Lic. Expiry" Width="130">
-                <Template>
-                    @{ var e = (StaffEntry)context; }
-                    <span class="@LicenseExpiryClass(e)">
-                        @(e.LicenseExpiry.HasValue ? e.LicenseExpiry.Value.ToString("d") : "—")
-                    </span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(StaffEntry.AppointmentCount)" HeaderText="Appointments" Width="130" />
-            <GridColumn Field="@nameof(StaffEntry.Department)" HeaderText="Department" Width="160" />
-            <GridColumn Field="@nameof(StaffEntry.TeamName)" HeaderText="Team" Width="150" />
-            <GridColumn Field="@nameof(StaffEntry.IsActive)" HeaderText="Status" Width="100">
-                <Template>
-                    @{ var e = (StaffEntry)context; }
-                    <AppStatusBadge Status="@(e.IsActive ? "Active" : "Inactive")" Label="@(e.IsActive ? "Active" : "Inactive")" />
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
-                <Template>
-                    @{ var e = (StaffEntry)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEditDrawer(e)" title="Edit">
-                        <i class="bi bi-pencil" aria-hidden="true"></i>
-                    </button>
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ConfirmRemoveProducerRole(e)" title="Remove Producer role">
-                        <i class="bi bi-trash3" aria-hidden="true"></i>
-                    </button>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
+                    <dl class="ps-detail-list">
+                        <div><dt>Department</dt><dd>@DepartmentText(SelectedProducer)</dd></div>
+                        <div><dt>Team</dt><dd>@TeamText(SelectedProducer)</dd></div>
+                        <div><dt>NPN</dt><dd>@NpnText(SelectedProducer)</dd></div>
+                        <div><dt>License</dt><dd>@LicenseText(SelectedProducer)</dd></div>
+                        <div><dt>Status</dt><dd>@(SelectedProducer.IsActive ? "Active" : "Inactive")</dd></div>
+                    </dl>
+                    <div class="ps-selected-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEditModal(SelectedProducer)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfirmRemoveProducerRole(SelectedProducer)"><i class="bi bi-trash3" aria-hidden="true"></i> Remove Role</button>
+                    </div>
+                }
+            </div>
+            <div class="ps-side-card">
+                <div class="ps-side-header"><i class="bi bi-list-check" aria-hidden="true"></i><div><strong>Readiness checklist</strong><span>@ChecklistComplete of @Checklist.Count complete</span></div></div>
+                <div class="ps-checklist">
+                    @foreach (var item in Checklist)
+                    {
+                        <div class="@CheckItemClass(item)"><i class="@CheckIconClass(item)" aria-hidden="true"></i><span>@item.Text</span></div>
+                    }
+                </div>
+            </div>
+            <div class="ps-side-card">
+                <div class="ps-side-header"><i class="bi bi-diagram-3" aria-hidden="true"></i><div><strong>Workflow impact</strong><span>Where producer data matters</span></div></div>
+                <div class="ps-impact-list">
+                    <span><i class="bi bi-cash-coin" aria-hidden="true"></i> Commission attribution</span>
+                    <span><i class="bi bi-shield-check" aria-hidden="true"></i> License compliance</span>
+                    <span><i class="bi bi-briefcase" aria-hidden="true"></i> Opportunity ownership</span>
+                    <span><i class="bi bi-graph-up" aria-hidden="true"></i> Production reporting</span>
+                </div>
+            </div>
+        </aside>
+    </section>
 </div>
 
-<!-- Add/Edit Drawer -->
-<AppCrudDrawer @bind-Visible="_showDrawer"
-               Title="@(_editModel.StaffId == Guid.Empty ? "Add Producer" : "Edit Producer")"
-               OnConfirm="SaveStaffAsync"
-               OnClose="CloseDrawer">
-    <Content>
-        @if (_editContext is not null)
-        {
-            <EditForm EditContext="_editContext">
+@if (_showForm)
+{
+    <div class="ps-modal-backdrop" role="presentation">
+        <div class="ps-modal" role="dialog" aria-modal="true" aria-labelledby="producer-form-title">
+            <EditForm EditContext="_editContext" OnValidSubmit="SaveStaffAsync">
                 <DataAnnotationsValidator />
-                <div class="ps-form">
-                    <label class="ps-form-label">First Name *</label>
-                    <InputText class="um-input" @bind-Value="_editModel.FirstName" />
-                    <ValidationMessage For="() => _editModel.FirstName" class="text-danger" />
-
-                    <label class="ps-form-label">Last Name *</label>
-                    <InputText class="um-input" @bind-Value="_editModel.LastName" />
-                    <ValidationMessage For="() => _editModel.LastName" class="text-danger" />
-
-                    <label class="ps-form-label">Email *</label>
-                    <InputText class="um-input" type="email" @bind-Value="_editModel.Email" />
-                    <ValidationMessage For="() => _editModel.Email" class="text-danger" />
-
-                    <label class="ps-form-label">Department *</label>
-                    <SfDropDownList TValue="string" TItem="LabelValue"
-                                    DataSource="_departmentOptions"
-                                    @bind-Value="_editModel.Department"
-                                    Placeholder="Select department"
-                                    Width="100%">
-                        <DropDownListFieldSettings Value="Value" Text="Label" />
-                    </SfDropDownList>
-                    <ValidationMessage For="() => _editModel.Department" class="text-danger" />
-
-                    <label class="ps-form-label">Team *</label>
-                    <SfDropDownList TValue="string" TItem="LabelValue"
-                                    DataSource="_teamOptions"
-                                    @bind-Value="_editModel.TeamName"
-                                    Placeholder="Select team"
-                                    Width="100%">
-                        <DropDownListFieldSettings Value="Value" Text="Label" />
-                    </SfDropDownList>
-                    <ValidationMessage For="() => _editModel.TeamName" class="text-danger" />
-
-                    <label class="ps-form-label">NPN</label>
-                    <InputText class="um-input ps-mono" @bind-Value="_editModel.Npn" />
-
-                    <label class="ps-form-label">License State</label>
-                    <InputText class="um-input" @bind-Value="_editModel.LicenseState" />
-
-                    <label class="ps-form-label">License Expiry</label>
-                    <InputDate class="um-input" @bind-Value="_editModel.LicenseExpiry" />
-
-                    <label class="ps-form-label">Active</label>
-                    <SfSwitch @bind-Checked="_editModel.IsActive" />
+                <div class="um-modal-header">
+                    <i class="bi bi-person-badge-fill" aria-hidden="true"></i>
+                    <span id="producer-form-title">@(_form.StaffId == Guid.Empty ? "Add Producer" : "Edit Producer")</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div>
+                            <label class="ps-form-label">First Name *</label>
+                            <InputText class="um-input" @bind-Value="_form.FirstName" />
+                        </div>
+                        <div>
+                            <label class="ps-form-label">Last Name *</label>
+                            <InputText class="um-input" @bind-Value="_form.LastName" />
+                        </div>
+                        <div>
+                            <label class="ps-form-label">Email *</label>
+                            <InputText class="um-input" type="email" @bind-Value="_form.Email" />
+                        </div>
+                        <div>
+                            <label class="ps-form-label">Department *</label>
+                            <InputSelect class="um-input" @bind-Value="_form.Department">
+                                <option value="">Select department</option>
+                                @foreach (var department in _departmentOptions)
+                                {
+                                    <option value="@department.Value">@department.Label</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div>
+                            <label class="ps-form-label">Team *</label>
+                            <InputSelect class="um-input" @bind-Value="_form.TeamName">
+                                <option value="">Select team</option>
+                                @foreach (var team in _teamOptions)
+                                {
+                                    <option value="@team.Value">@team.Label</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div>
+                            <label class="ps-form-label">NPN</label>
+                            <InputText class="um-input ps-mono" @bind-Value="_form.Npn" />
+                        </div>
+                        <div>
+                            <label class="ps-form-label">License State</label>
+                            <InputText class="um-input" @bind-Value="_form.LicenseState" />
+                        </div>
+                        <div>
+                            <label class="ps-form-label">License Expiry</label>
+                            <InputDate class="um-input" @bind-Value="_form.LicenseExpiry" />
+                        </div>
+                        <div>
+                            <label class="ps-toggle-card">
+                                <InputCheckbox @bind-Value="_form.IsActive" />
+                                <span><strong>Active producer</strong><small>Available for assignment and reporting.</small></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving)
+                        {
+                            <span class="um-spinner um-spinner-sm" aria-hidden="true"></span>
+                        }
+                        else
+                        {
+                            <i class="bi bi-floppy" aria-hidden="true"></i>
+                        }
+                        Save Producer
+                    </button>
                 </div>
             </EditForm>
-        }
-    </Content>
-</AppCrudDrawer>
+        </div>
+    </div>
+}
 
-<SfDialog @bind-Visible="_showRemoveConfirm"
-          Width="440px"
-          IsModal="true"
-          ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
+@if (_pendingRemove is not null)
+{
+    <div class="ps-modal-backdrop" role="presentation">
+        <div class="ps-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="remove-producer-title">
             <div class="um-confirm-dialog">
-                <div class="um-confirm-icon um-confirm-icon--danger">
-                    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
-                </div>
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></div>
                 <div>
-                    <h3>Remove Producer role?</h3>
-                    <p>This will remove the Producer role from <strong>@_pendingRemove?.FullName</strong>. The user account will remain active unless changed separately.</p>
+                    <h3 id="remove-producer-title">Remove Producer role?</h3>
+                    <p class="ps-confirm-copy">This will remove the Producer role from <strong>@_pendingRemove.FullName</strong>. The user account remains active unless changed separately.</p>
                 </div>
             </div>
             <div class="um-modal-footer">
                 <button type="button" class="um-btn um-btn-ghost" @onclick="CloseRemoveConfirm">Cancel</button>
-                <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteRemoveProducerRoleAsync">Remove role</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteRemoveProducerRoleAsync" disabled="@_removing"><i class="bi bi-trash3" aria-hidden="true"></i> Remove role</button>
             </div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
-
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+        </div>
+    </div>
+}
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private SfToast? _toast;
-
+    private Guid _tenantAdminUserId;
     private List<StaffEntry> _allEntries = [];
-    private List<StaffEntry> _entries    = [];
+    private List<StaffEntry> _entries = [];
     private List<LabelValue> _departmentOptions = [];
     private List<LabelValue> _teamOptions = [];
-
-    private bool _loading    = false;
-    private bool _showDrawer = false;
-    private bool _showRemoveConfirm = false;
-
-    private string _search               = string.Empty;
-    private string _filterRole           = string.Empty;
-    private string _filterLicenseStatus  = string.Empty;
-    private bool   _filterActiveOnly     = false;
-    private string _activeFilter         = "Overview";
+    private bool _loading;
+    private bool _saving;
+    private bool _removing;
+    private bool _showForm;
+    private string _search = string.Empty;
+    private string _filterDepartment = string.Empty;
+    private string _filterLicenseStatus = string.Empty;
+    private bool _activeOnly;
+    private string _activeTab = "overview";
     private string? _loadError;
-    private EditContext? _editContext;
+    private string? _toastMessage;
+    private string _toastClass = string.Empty;
+    private StaffEntry? SelectedProducer;
     private StaffEntry? _pendingRemove;
+    private StaffEntry _form = new() { Role = "Producer" };
+    private EditContext _editContext = default!;
 
-    private int _totalCount          = 0;
-    private int _producerCount       = 0;
-    private int _activeProducerCount = 0;
-    private int _licenseExpiringCount = 0;
-    private int _licenseExpiredCount = 0;
+    private IReadOnlyList<StaffEntry> FilteredEntries => _entries;
+    private int _producerCount => _allEntries.Count;
+    private int _activeProducerCount => _allEntries.Count(e => e.IsActive);
+    private int _inactiveProducerCount => _producerCount - _activeProducerCount;
+    private int _licenseExpiringCount => _allEntries.Count(e => LicenseStatus(e) == "Expiring");
+    private int _licenseExpiredCount => _allEntries.Count(e => LicenseStatus(e) == "Expired");
+    private int MissingLicenseCount => _allEntries.Count(e => LicenseStatus(e) == "Missing");
+    private int ReadyLicenseCount => _allEntries.Count(e => LicenseStatus(e) == "Ready");
+    private int DepartmentsRepresented => _allEntries.Where(e => !string.IsNullOrWhiteSpace(e.Department)).Select(e => e.Department).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    private int TeamsRepresented => _allEntries.Where(e => !string.IsNullOrWhiteSpace(e.TeamName)).Select(e => e.TeamName).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    private int ChecklistComplete => Checklist.Count(i => i.Done);
+    private int ReadinessScore => Math.Clamp((ChecklistComplete * 100) / Math.Max(Checklist.Count, 1), 0, 100);
+    private string ReadinessSummary => ReadinessScore switch
+    {
+        >= 90 => "Producer roster is enterprise ready.",
+        >= 70 => "Minor licensing cleanup recommended.",
+        >= 40 => "Producer readiness needs attention.",
+        _ => "Assign and complete Producer records."
+    };
 
-    private static readonly List<LabelValue> _roleOptions =
+    private string ToastIconClass => _toastClass == "ps-toast--danger" ? "bi bi-exclamation-triangle" : "bi bi-check-circle";
+
+    private IReadOnlyList<string> DepartmentFilterOptions => _allEntries
+        .Where(e => !string.IsNullOrWhiteSpace(e.Department))
+        .Select(e => e.Department)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(x => x)
+        .ToList();
+
+    private string DirectoryTitle => _activeTab switch
+    {
+        "active" => "Active Producers",
+        "expiring" => "Licenses Expiring Soon",
+        "expired" => "Expired Licenses",
+        "missing" => "Missing License Data",
+        "departments" => "Department-Aligned Producers",
+        _ => "Producer Directory"
+    };
+
+    private IReadOnlyList<KpiCard> Kpis =>
     [
-        new("Producer", "Producer"),
-        new("CSR",      "CSR"),
-        new("Manager",  "Manager"),
+        new("overview", "Producers", _producerCount.ToString(), "Producer role assignments", "bi-person-badge-fill", "blue", "Show producer overview"),
+        new("active", "Active", _activeProducerCount.ToString(), "Available for ownership", "bi-check-circle-fill", "green", "Show active producers"),
+        new("expiring", "Expiring", _licenseExpiringCount.ToString(), "Licenses due in 90 days", "bi-exclamation-triangle-fill", "amber", "Show expiring licenses"),
+        new("expired", "Expired", _licenseExpiredCount.ToString(), "Immediate compliance risk", "bi-x-circle-fill", "red", "Show expired licenses"),
+        new("missing", "Missing", MissingLicenseCount.ToString(), "Missing license expiry", "bi-question-circle-fill", "slate", "Show missing license data")
     ];
 
-    private static readonly List<LabelValue> _licenseStatusOptions =
+    private IReadOnlyList<NavTab> Tabs =>
     [
-        new("Active",   "Active"),
-        new("Expiring", "Expiring (90 days)"),
-        new("Expired",  "Expired"),
+        new("overview", "Overview", "bi-speedometer2"),
+        new("directory", "Directory", "bi-list-ul"),
+        new("active", "Active", "bi-check-circle"),
+        new("expiring", "Expiring", "bi-exclamation-triangle"),
+        new("expired", "Expired", "bi-x-circle"),
+        new("missing", "Missing", "bi-question-circle"),
+        new("departments", "Departments", "bi-building")
     ];
 
-    private StaffEntry _editModel = new();
+    private IReadOnlyList<PriorityAction> PriorityActions =>
+    [
+        new("Add producer", "Assign Producer role access", "bi-plus-circle", "add"),
+        new("Review expiring", "Prioritize renewal actions", "bi-exclamation-triangle", "expiring"),
+        new("Review missing", "Complete license readiness", "bi-question-circle", "missing")
+    ];
+
+    private IReadOnlyList<ChecklistItem> Checklist =>
+    [
+        new(_producerCount > 0, "At least one producer is assigned"),
+        new(_activeProducerCount > 0, "At least one active producer is available"),
+        new(MissingLicenseCount == 0 && _producerCount > 0, "All producers have license expiry data"),
+        new(_licenseExpiredCount == 0, "No producer licenses are expired"),
+        new(DepartmentsRepresented > 0 && TeamsRepresented > 0, "Producer department and team alignment exists")
+    ];
 
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
+        _editContext = new EditContext(_form);
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+
         Breadcrumbs.SetCrumbs(
-            new("Home",          "/"),
-            new("Agency Setup",  "/tenant/agency/profile"),
+            new("Home", "/"),
+            new("Agency Setup", "/tenant/agency/profile"),
             new("Producers", "/tenant/agency/producers"));
 
         await LoadAsync();
@@ -320,119 +475,148 @@
     private async Task LoadAsync()
     {
         _loading = true;
-        StateHasChanged();
+        _loadError = null;
         try
         {
-            _loadError = null;
             await LoadLookupOptionsAsync();
             var users = await Api.SearchUsersAsync(_tenantId, pageSize: 1000);
             var producerRoleUserIds = await GetUserIdsByRoleAsync("Producer");
-            _allEntries = users?.Items.Where(u => producerRoleUserIds.Contains(u.UserId) || HasAssignedRole(u, "Producer")).Select(u => new StaffEntry
-            {
-                StaffId = u.UserId,
-                FirstName = FirstName(u.FullName),
-                LastName = LastName(u.FullName),
-                Email = u.Email,
-                Role = "Producer",
-                Department = u.Department ?? string.Empty,
-                TeamName = u.JobTitle ?? string.Empty,
-                Npn = string.Empty,
-                LicenseState = u.Region ?? string.Empty,
-                LicenseExpiry = null,
-                AppointmentCount = 0,
-                IsActive = IsActiveUser(u)
-            }).ToList() ?? [];
-            ComputeKpi();
+            _allEntries = users?.Items
+                .Where(u => producerRoleUserIds.Contains(u.UserId) || HasAssignedRole(u, "Producer"))
+                .Select(StaffEntry.FromUser)
+                .OrderBy(e => e.LastName)
+                .ThenBy(e => e.FirstName)
+                .ToList() ?? [];
+
             ApplyFilters();
+            SelectedProducer = SelectedProducer is null
+                ? _entries.FirstOrDefault()
+                : _allEntries.FirstOrDefault(e => e.StaffId == SelectedProducer.StaffId) ?? _entries.FirstOrDefault();
         }
         catch (Exception ex)
         {
             _loadError = $"Load failed: {ex.Message}";
-            await ShowToastAsync($"Error loading staff: {ex.Message}", "e-toast-danger");
+            ShowToast($"Error loading producers: {ex.Message}", true);
         }
-        finally { _loading = false; }
+        finally
+        {
+            _loading = false;
+        }
     }
-
-    private async Task OnSearchAsync(string _) => await LoadAsync();
 
     private void ApplyFilters()
     {
-        var cutoffExpiry = DateTime.Today.AddDays(90);
         _entries = _allEntries.Where(e =>
-            RoleEquals(e.Role, "Producer") &&
-            (_activeFilter switch
+            (_activeTab switch
             {
-                "Active" => e.IsActive,
-                "Expiring" => e.LicenseExpiry.HasValue && e.LicenseExpiry.Value <= cutoffExpiry && e.LicenseExpiry.Value >= DateTime.Today,
-                "Expired" => e.LicenseExpiry.HasValue && e.LicenseExpiry.Value < DateTime.Today,
+                "active" => e.IsActive,
+                "expiring" => LicenseStatus(e) == "Expiring",
+                "expired" => LicenseStatus(e) == "Expired",
+                "missing" => LicenseStatus(e) == "Missing",
+                "departments" => !string.IsNullOrWhiteSpace(e.Department),
                 _ => true
             }) &&
-            (string.IsNullOrEmpty(_filterRole) || RoleEquals(e.Role, _filterRole)) &&
-            (!_filterActiveOnly || e.IsActive) &&
-            (string.IsNullOrEmpty(_filterLicenseStatus) ||
-             (_filterLicenseStatus == "Active"   && e.LicenseExpiry > cutoffExpiry) ||
-             (_filterLicenseStatus == "Expiring" && e.LicenseExpiry.HasValue && e.LicenseExpiry.Value <= cutoffExpiry && e.LicenseExpiry.Value >= DateTime.Today) ||
-             (_filterLicenseStatus == "Expired"  && e.LicenseExpiry < DateTime.Today)) &&
-            (string.IsNullOrEmpty(_search) ||
+            (!_activeOnly || e.IsActive) &&
+            (string.IsNullOrWhiteSpace(_filterDepartment) || string.Equals(e.Department, _filterDepartment, StringComparison.OrdinalIgnoreCase)) &&
+            (string.IsNullOrWhiteSpace(_filterLicenseStatus) || LicenseStatus(e) == _filterLicenseStatus) &&
+            (string.IsNullOrWhiteSpace(_search) ||
              e.FullName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
              e.Email.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             e.Npn.Contains(_search, StringComparison.OrdinalIgnoreCase))
-        ).ToList();
+             e.Npn.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.Department.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.TeamName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.LicenseState.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             (e.IsActive ? "Active" : "Inactive").Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).OrderByDescending(e => e.IsActive).ThenBy(e => e.LastName).ThenBy(e => e.FirstName).ToList();
 
-        StateHasChanged();
+        if (SelectedProducer is not null && !_entries.Any(e => e.StaffId == SelectedProducer.StaffId))
+        {
+            SelectedProducer = _entries.FirstOrDefault();
+        }
     }
 
-    private void SetKpiFilter(string filter)
+    private void SetTab(string tab)
     {
-        _activeFilter = _activeFilter == filter && filter != "Overview" ? "Overview" : filter;
-        _filterRole = "Producer";
-        _filterActiveOnly = _activeFilter == "Active";
+        _activeTab = _activeTab == tab && tab != "overview" ? "overview" : tab;
+        _activeOnly = _activeTab == "active";
         ApplyFilters();
     }
 
-    private string KpiClass(string filter) => _activeFilter == filter ? "as-kpi-card--active" : string.Empty;
+    private bool IsActiveTab(string tab) => string.Equals(_activeTab, tab, StringComparison.OrdinalIgnoreCase);
+    private bool ShowTab(string tab) => IsActiveTab("overview") || IsActiveTab(tab);
+    private string KpiCardClass(string key) => IsActiveTab(key) ? "ps-kpi-card ps-kpi-card--active" : "ps-kpi-card";
+    private string TabClass(string key) => IsActiveTab(key) ? "ps-tab ps-tab--active" : "ps-tab";
+    private string ProducerCardClass(StaffEntry producer) => SelectedProducer?.StaffId == producer.StaffId ? "ps-producer-card ps-producer-card--selected" : "ps-producer-card";
+    private string ProducerRowClass(StaffEntry producer) => SelectedProducer?.StaffId == producer.StaffId ? "ps-row--selected" : string.Empty;
+    private static string StatusClass(StaffEntry producer) => producer.IsActive ? "ps-status ps-status--active" : "ps-status ps-status--inactive";
+    private static string StatusText(StaffEntry producer) => producer.IsActive ? "Active" : "Inactive";
+    private static string CheckItemClass(ChecklistItem item) => item.Done ? "ps-check-item ps-check-item--done" : "ps-check-item";
+    private static string CheckIconClass(ChecklistItem item) => item.Done ? "bi bi-check-circle-fill" : "bi bi-circle";
 
-    private void OnRowSelected(RowSelectEventArgs<StaffEntry> args) => OpenEditDrawer(args.Data);
-
-    private void ComputeKpi()
+    private void ToggleActiveOnly(bool value)
     {
-        var cutoff = DateTime.Today.AddDays(90);
-        _totalCount          = _allEntries.Count;
-        _producerCount       = _allEntries.Count(e => RoleEquals(e.Role, "Producer"));
-        _activeProducerCount = _allEntries.Count(e => RoleEquals(e.Role, "Producer") && e.IsActive);
-        _licenseExpiringCount = _allEntries.Count(e => RoleEquals(e.Role, "Producer") && e.LicenseExpiry.HasValue && e.LicenseExpiry.Value <= cutoff && e.LicenseExpiry.Value >= DateTime.Today);
-        _licenseExpiredCount = _allEntries.Count(e => RoleEquals(e.Role, "Producer") && e.LicenseExpiry.HasValue && e.LicenseExpiry.Value < DateTime.Today);
+        _activeOnly = value;
+        ApplyFilters();
     }
 
-    private void OpenAddDrawer()  { _editModel = new() { Role = "Producer" }; _editContext = new EditContext(_editModel); _showDrawer = true; }
-    private void OpenEditDrawer(StaffEntry e) { _editModel = new StaffEntry { StaffId = e.StaffId, FirstName = e.FirstName, LastName = e.LastName, Email = e.Email, Role = e.Role, Department = e.Department, TeamName = e.TeamName, Npn = e.Npn, LicenseState = e.LicenseState, LicenseExpiry = e.LicenseExpiry, AppointmentCount = e.AppointmentCount, IsActive = e.IsActive }; _editContext = new EditContext(_editModel); _showDrawer = true; }
-    private void CloseDrawer() => _showDrawer = false;
+    private void ClearFilters()
+    {
+        _search = string.Empty;
+        _filterDepartment = string.Empty;
+        _filterLicenseStatus = string.Empty;
+        _activeOnly = false;
+        _activeTab = "overview";
+        ApplyFilters();
+    }
+
+    private void SelectProducer(StaffEntry producer) => SelectedProducer = producer;
+
+    private void RunPriorityAction(PriorityAction action)
+    {
+        if (action.TabKey == "add")
+        {
+            OpenAddModal();
+            return;
+        }
+        SetTab(action.TabKey);
+    }
+
+    private void OpenAddModal()
+    {
+        _form = new StaffEntry { Role = "Producer" };
+        _editContext = new EditContext(_form);
+        _showForm = true;
+    }
+
+    private void OpenEditModal(StaffEntry producer)
+    {
+        _form = producer.Clone();
+        _editContext = new EditContext(_form);
+        _showForm = true;
+    }
+
+    private void CloseForm() => _showForm = false;
 
     private async Task SaveStaffAsync()
     {
+        _saving = true;
         try
         {
-            if (_editContext?.Validate() != true)
-            {
-                await ShowToastAsync("Please fix validation errors before saving.", "e-toast-danger");
-                return;
-            }
-
-            var fullName = $"{_editModel.FirstName} {_editModel.LastName}".Trim();
-            if (_editModel.StaffId == Guid.Empty)
+            var fullName = _form.FullName;
+            if (_form.StaffId == Guid.Empty)
             {
                 var userId = await Api.CreateUserAsync(new CreateUserRequest
                 {
                     TenantId = _tenantId,
-                    UserName = string.IsNullOrWhiteSpace(_editModel.Email) ? $"{_editModel.FirstName}.{_editModel.LastName}".Trim('.').ToLowerInvariant() : _editModel.Email,
-                    Email = _editModel.Email,
+                    UserName = string.IsNullOrWhiteSpace(_form.Email) ? $"{_form.FirstName}.{_form.LastName}".Trim('.').ToLowerInvariant() : _form.Email,
+                    Email = _form.Email,
                     FullName = fullName,
                     DisplayName = fullName,
                     UserTypeCode = "Internal",
-                    StatusCode = _editModel.IsActive ? "Active" : "Inactive",
-                    Department = _editModel.Department,
-                    Region = _editModel.LicenseState,
-                    JobTitle = _editModel.TeamName,
+                    StatusCode = _form.IsActive ? "Active" : "Inactive",
+                    Department = _form.Department,
+                    Region = _form.LicenseState,
+                    JobTitle = _form.TeamName,
                     TimeZoneCode = "UTC",
                     LocaleCode = "en-US"
                 });
@@ -440,48 +624,47 @@
             }
             else
             {
-                await Api.UpdateUserAsync(_editModel.StaffId, new UpdateUserRequest
+                await Api.UpdateUserAsync(_form.StaffId, new UpdateUserRequest
                 {
-                    UserId = _editModel.StaffId,
+                    UserId = _form.StaffId,
                     FullName = fullName,
                     DisplayName = fullName,
-                    Department = _editModel.Department,
-                    Region = _editModel.LicenseState,
-                    JobTitle = _editModel.TeamName,
+                    Department = _form.Department,
+                    Region = _form.LicenseState,
+                    JobTitle = _form.TeamName,
                     TimeZoneCode = "UTC",
                     LocaleCode = "en-US"
                 });
-                await EnsureUserRoleAsync(_editModel.StaffId, "Producer");
-                await Api.SetUserActiveAsync(_editModel.StaffId, _editModel.IsActive);
+                await EnsureUserRoleAsync(_form.StaffId, "Producer");
+                await Api.SetUserActiveAsync(_form.StaffId, _form.IsActive);
             }
 
-            _showDrawer = false;
+            _showForm = false;
             await LoadAsync();
-            await ShowToastAsync("Producer record saved.", "e-toast-success");
+            ShowToast("Producer record saved.");
         }
         catch (Exception ex)
         {
-            await ShowToastAsync($"Save failed: {ex.Message}", "e-toast-danger");
+            ShowToast($"Save failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
         }
     }
 
-    private void ConfirmRemoveProducerRole(StaffEntry entry)
-    {
-        _pendingRemove = entry;
-        _showRemoveConfirm = true;
-    }
+    private void ConfirmRemoveProducerRole(StaffEntry entry) => _pendingRemove = entry;
 
-    private void CloseRemoveConfirm()
-    {
-        _showRemoveConfirm = false;
-        _pendingRemove = null;
-    }
+    private void CloseRemoveConfirm() => _pendingRemove = null;
 
     private async Task ExecuteRemoveProducerRoleAsync()
     {
         if (_pendingRemove is null)
+        {
             return;
+        }
 
+        _removing = true;
         try
         {
             var assignment = await GetUserRoleAssignmentAsync(_pendingRemove.StaffId, "Producer");
@@ -490,13 +673,17 @@
                 await Api.RevokeUserRoleAsync(new RevokeUserRoleRequest { UserRoleId = assignment.UserRoleId, Reason = "Removed from Producer page" });
             }
 
-            CloseRemoveConfirm();
+            _pendingRemove = null;
             await LoadAsync();
-            await ShowToastAsync("Producer role removed.", "e-toast-success");
+            ShowToast("Producer role removed.");
         }
         catch (Exception ex)
         {
-            await ShowToastAsync($"Remove failed: {ex.Message}", "e-toast-danger");
+            ShowToast($"Remove failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _removing = false;
         }
     }
 
@@ -509,11 +696,20 @@
         _teamOptions = teams?.Where(t => t.IsActive).OrderBy(t => t.TeamName).Select(t => new LabelValue(t.TeamName, t.TeamName)).ToList() ?? [];
     }
 
-    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    private async Task CopySummaryAsync()
     {
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+        var summary = $"Producers: {_producerCount} total; {_activeProducerCount} active; {_licenseExpiringCount} expiring; {_licenseExpiredCount} expired; {MissingLicenseCount} missing license data.";
+        await Js.InvokeVoidAsync("navigator.clipboard.writeText", summary);
+        ShowToast("Producer summary copied.");
     }
+
+    private void ShowToast(string message, bool danger = false)
+    {
+        _toastMessage = message;
+        _toastClass = danger ? "ps-toast--danger" : string.Empty;
+    }
+
+    private void ClearToast() => _toastMessage = null;
 
     private static string Initials(StaffEntry e)
     {
@@ -527,23 +723,29 @@
         return $"background:hsl({hue},50%,42%);color:#fff;";
     }
 
-    private static string RoleBadgeClass(string role) => role switch
-    {
-        "Producer" => "ps-role-badge ps-role-badge--producer",
-        "CSR"      => "ps-role-badge ps-role-badge--csr",
-        "Manager"  => "ps-role-badge ps-role-badge--manager",
-        _          => "ps-role-badge",
-    };
-
     private static string LicenseExpiryClass(StaffEntry e)
+        => LicenseStatus(e) switch
+        {
+            "Expired" => "ps-expiry ps-expiry--expired",
+            "Expiring" => "ps-expiry ps-expiry--expiring",
+            "Missing" => "ps-expiry ps-expiry--missing",
+            _ => "ps-expiry"
+        };
+
+    private static string LicenseStatus(StaffEntry e)
     {
-        if (!e.LicenseExpiry.HasValue) return "";
-        if (e.LicenseExpiry.Value < DateTime.Today)     return "ps-expiry ps-expiry--expired";
-        if (e.LicenseExpiry.Value < DateTime.Today.AddDays(90)) return "ps-expiry ps-expiry--expiring";
-        return "ps-expiry";
+        if (!e.LicenseExpiry.HasValue) return "Missing";
+        if (e.LicenseExpiry.Value < DateTime.Today) return "Expired";
+        if (e.LicenseExpiry.Value <= DateTime.Today.AddDays(90)) return "Expiring";
+        return "Ready";
     }
 
+    private static string LicenseText(StaffEntry e) => e.LicenseExpiry.HasValue ? e.LicenseExpiry.Value.ToString("MMM d, yyyy") : "Missing";
+    private static string NpnText(StaffEntry e) => string.IsNullOrWhiteSpace(e.Npn) ? "Missing" : e.Npn;
+    private static string DepartmentText(StaffEntry e) => string.IsNullOrWhiteSpace(e.Department) ? "Unassigned" : e.Department;
+    private static string TeamText(StaffEntry e) => string.IsNullOrWhiteSpace(e.TeamName) ? "Unassigned" : e.TeamName;
     private static bool RoleEquals(string? actual, string expected) => string.Equals(actual?.Trim(), expected, StringComparison.OrdinalIgnoreCase);
+
     private async Task<HashSet<Guid>> GetUserIdsByRoleAsync(string roleName)
     {
         var assignments = await Api.SearchUserRolesAsync(_tenantId, isActive: true, pageSize: 5000);
@@ -562,12 +764,16 @@
     private async Task EnsureUserRoleAsync(Guid userId, string roleName)
     {
         if (await GetUserRoleAssignmentAsync(userId, roleName) is not null)
+        {
             return;
+        }
 
         var roles = await Api.SearchRolesAsync(_tenantId, roleName);
         var role = roles?.Items.FirstOrDefault(r => RoleEquals(r.RoleName, roleName) || RoleEquals(r.RoleCode, roleName));
         if (role is null)
+        {
             throw new InvalidOperationException($"The {roleName} role was not found.");
+        }
 
         await Api.AssignUserRoleAsync(new AssignUserRoleRequest
         {
@@ -593,46 +799,77 @@
         return parts.Length <= 1 ? string.Empty : string.Join(' ', parts.Skip(1));
     }
 
+    private sealed record KpiCard(string Key, string Label, string Value, string Detail, string Icon, string Tone, string Tooltip);
+    private sealed record NavTab(string Key, string Label, string Icon);
+    private sealed record PriorityAction(string Title, string Detail, string Icon, string TabKey);
+    private sealed record ChecklistItem(bool Done, string Text);
     private sealed record LabelValue(string Value, string Label);
 
     private sealed class StaffEntry
     {
-        public Guid      StaffId          { get; set; } = Guid.Empty;
-        [Required]
-        [StringLength(100)]
-        public string    FirstName        { get; set; } = string.Empty;
-        [Required]
-        [StringLength(100)]
-        public string    LastName         { get; set; } = string.Empty;
-        public string    FullName         => $"{FirstName} {LastName}".Trim();
-        [Required]
-        [AmsEmailAddress]
-        [StringLength(320)]
-        public string    Email            { get; set; } = string.Empty;
-        public string    Role             { get; set; } = "Producer";
-        [Required]
-        [StringLength(100)]
-        public string    Department       { get; set; } = string.Empty;
-        [Required]
-        [StringLength(100)]
-        public string    TeamName         { get; set; } = string.Empty;
-        [StringLength(100)]
-        public string    Npn              { get; set; } = string.Empty;
-        [StringLength(100)]
-        public string    LicenseState     { get; set; } = string.Empty;
-        public DateTime? LicenseExpiry    { get; set; }
-        public int       AppointmentCount { get; set; }
-        public bool      IsActive         { get; set; } = true;
-    }
+        public Guid StaffId { get; set; } = Guid.Empty;
 
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        [Required, StringLength(100)]
+        public string FirstName { get; set; } = string.Empty;
+
+        [Required, StringLength(100)]
+        public string LastName { get; set; } = string.Empty;
+
+        public string FullName => $"{FirstName} {LastName}".Trim();
+
+        [Required, AmsEmailAddress, StringLength(320)]
+        public string Email { get; set; } = string.Empty;
+
+        public string Role { get; set; } = "Producer";
+
+        [Required, StringLength(100)]
+        public string Department { get; set; } = string.Empty;
+
+        [Required, StringLength(100)]
+        public string TeamName { get; set; } = string.Empty;
+
+        [StringLength(100)]
+        public string Npn { get; set; } = string.Empty;
+
+        [StringLength(100)]
+        public string LicenseState { get; set; } = string.Empty;
+
+        public DateTime? LicenseExpiry { get; set; }
+        public int AppointmentCount { get; set; }
+        public bool IsActive { get; set; } = true;
+
+        public StaffEntry Clone()
+            => new()
+            {
+                StaffId = StaffId,
+                FirstName = FirstName,
+                LastName = LastName,
+                Email = Email,
+                Role = Role,
+                Department = Department,
+                TeamName = TeamName,
+                Npn = Npn,
+                LicenseState = LicenseState,
+                LicenseExpiry = LicenseExpiry,
+                AppointmentCount = AppointmentCount,
+                IsActive = IsActive
+            };
+
+        public static StaffEntry FromUser(UserDto user)
+            => new()
+            {
+                StaffId = user.UserId,
+                FirstName = FirstName(user.FullName),
+                LastName = LastName(user.FullName),
+                Email = user.Email,
+                Role = "Producer",
+                Department = user.Department ?? string.Empty,
+                TeamName = user.JobTitle ?? string.Empty,
+                Npn = string.Empty,
+                LicenseState = user.Region ?? string.Empty,
+                LicenseExpiry = null,
+                AppointmentCount = 0,
+                IsActive = IsActiveUser(user)
+            };
     }
 }

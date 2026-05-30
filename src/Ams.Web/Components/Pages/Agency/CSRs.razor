@@ -1,4 +1,4 @@
-@page "/tenant/agency/csrs"
+﻿@page "/tenant/agency/csrs"
 @namespace Ams.Web.Components.Pages.AgencyAdmin
 @using System.ComponentModel.DataAnnotations
 @using Ams.Application.Common.Validation
@@ -6,245 +6,463 @@
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>CSRs — Agency Setup</PageTitle>
+<PageTitle>CSRs â€” Agency Setup</PageTitle>
 
 <AppPageHeader Title="Customer Service Representatives"
-               Subtitle="Customer service representatives and their assignments"
+               Subtitle="Enterprise CSR roster, service coverage, team alignment, and customer support readiness."
                Icon="bi-headset">
     <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_loading" title="Refresh CSRs">
             <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
         </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/producers"><i class="bi bi-person-badge" aria-hidden="true"></i> Producers</a>
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/teams"><i class="bi bi-people" aria-hidden="true"></i> Teams</a>
+        <button class="um-btn um-btn-primary" type="button" @onclick="OpenAddModal">
             <i class="bi bi-plus-lg" aria-hidden="true"></i> Add CSR
         </button>
     </Actions>
 </AppPageHeader>
 
-<section class="ma-hero as-tenant-hero">
-    <div>
-        <span class="ma-eyebrow">Tenant · Agency Staff</span>
-        <h2>CSR Command Center</h2>
-        <p>Manage service representatives, department alignment, team assignment, and active support coverage.</p>
-    </div>
-    <div class="ma-hero-actions">
-        <a class="um-btn um-btn-ghost" href="/tenant/agency/producers"><i class="bi bi-person-badge" aria-hidden="true"></i> Producers</a>
-        <a class="um-btn um-btn-ghost" href="/tenant/agency/teams"><i class="bi bi-people" aria-hidden="true"></i> Teams</a>
-        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add CSR</button>
-    </div>
-</section>
-
-<!-- KPI strip -->
-<div class="as-kpi-strip" aria-label="CSR filters">
-    <button type="button" class='as-kpi-card @KpiClass("Overview")' @onclick='() => SetKpiFilter("Overview")' title="Show all CSRs">
-        <span class="as-kpi-icon"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
-        <div><div class="csr-kpi-value">@_totalCount</div><div class="csr-kpi-label">Total CSRs</div></div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Active")' @onclick='() => SetKpiFilter("Active")' title="Show active CSRs">
-        <span class="as-kpi-icon as-kpi-icon--success"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
-        <div><div class="csr-kpi-value">@_activeCount</div><div class="csr-kpi-label">Active</div></div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Departments")' @onclick='() => SetKpiFilter("Departments")' title="Show CSRs assigned to departments">
-        <span class="as-kpi-icon as-kpi-icon--warning"><i class="bi bi-grid" aria-hidden="true"></i></span>
-        <div><div class="csr-kpi-value">@_departmentCount</div><div class="csr-kpi-label">Departments</div></div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Teams")' @onclick='() => SetKpiFilter("Teams")' title="Show CSRs assigned to teams">
-        <span class="as-kpi-icon as-kpi-icon--violet"><i class="bi bi-people" aria-hidden="true"></i></span>
-        <div><div class="csr-kpi-value">@_teamCount</div><div class="csr-kpi-label">Teams</div></div>
-    </button>
-</div>
-
-<!-- Filter toolbar -->
-<AppFilterPanel @bind-SearchValue="_search"
-                OnSearch="OnSearchAsync"
-                SearchPlaceholder="Search name or email…">
-    <Filters>
-        <label class="csr-toggle-label">
-            <input type="checkbox" @bind="_filterActiveOnly" @bind:after="ApplyFilters" />
-            Active only
-        </label>
-    </Filters>
-</AppFilterPanel>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
-        @_loadError
+    <div class="csr-toast @_toastClass" role="status">
+        <i class="@ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="csr-toast-close" @onclick="ClearToast" aria-label="Dismiss message"><i class="bi bi-x-lg"></i></button>
     </div>
 }
 
-<!-- Grid -->
-<div class="um-grid-card app-datagrid">
-    @if (_loading)
+<div class="csr-page">
+    <section class="csr-hero">
+        <div class="csr-hero-main">
+            <span class="csr-eyebrow"><i class="bi bi-command" aria-hidden="true"></i> Tenant Â· Agency Staff</span>
+            <h2>CSR Command Center</h2>
+            <p>Manage CSR role assignments, support coverage, department alignment, team ownership, and customer service readiness across the agency.</p>
+            <div class="csr-hero-meta">
+                <span><i class="bi bi-headset" aria-hidden="true"></i> @_csrCount CSRs</span>
+                <span><i class="bi bi-check-circle" aria-hidden="true"></i> @_activeCsrCount active</span>
+                <span><i class="bi bi-diagram-3" aria-hidden="true"></i> @TeamsRepresented teams</span>
+            </div>
+        </div>
+        <div class="csr-hero-panel">
+            <div class="csr-readiness-card">
+                <span>Service readiness</span>
+                <strong>@ReadinessScore%</strong>
+                <div class="csr-score-track"><div style="width:@ReadinessScore%"></div></div>
+                <small>@ReadinessSummary</small>
+            </div>
+            <div class="csr-action-list">
+                @foreach (var action in PriorityActions)
+                {
+                    <button type="button" class="csr-action-item" @onclick="() => RunPriorityAction(action)">
+                        <i class="bi @action.Icon" aria-hidden="true"></i>
+                        <span><strong>@action.Title</strong><small>@action.Detail</small></span>
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                    </button>
+                }
+            </div>
+        </div>
+    </section>
+
+    <section class="csr-kpi-strip" aria-label="CSR KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="@KpiCardClass(kpi.Key)" title="@kpi.Tooltip" @onclick="() => SetTab(kpi.Key)">
+                <span class="csr-kpi-icon csr-kpi-icon--@kpi.Tone"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="csr-kpi-label">@kpi.Label</span>
+                <strong>@kpi.Value</strong>
+                <small>@kpi.Detail</small>
+            </button>
+        }
+    </section>
+
+    <section class="csr-command-bar">
+        <div class="csr-tabs" role="tablist" aria-label="CSR sections">
+            @foreach (var tab in Tabs)
+            {
+                <button type="button" role="tab" class="@TabClass(tab.Key)" @onclick="() => SetTab(tab.Key)">
+                    <i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label
+                </button>
+            }
+        </div>
+        <div class="csr-command-actions">
+            <button class="um-btn um-btn-ghost" type="button" @onclick="CopySummaryAsync" disabled="@(!_allEntries.Any())"><i class="bi bi-clipboard" aria-hidden="true"></i> Copy Summary</button>
+            <button class="um-btn um-btn-ghost" type="button" @onclick="ClearFilters"><i class="bi bi-x-circle" aria-hidden="true"></i> Clear Filters</button>
+            <button class="um-btn um-btn-primary" type="button" @onclick="OpenAddModal"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add CSR</button>
+        </div>
+    </section>
+
+    <section class="csr-filter-bar" aria-label="CSR filters">
+        <div class="csr-search-box">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="um-input" value="@_search" @oninput="@(args => { _search = args.Value?.ToString() ?? string.Empty; ApplyFilters(); })" placeholder="Search name, email, department, team, branch, or statusâ€¦" />
+        </div>
+        <select class="um-input csr-filter-select" value="@_filterDepartment" @onchange="@(args => { _filterDepartment = args.Value?.ToString() ?? string.Empty; ApplyFilters(); })" aria-label="Filter by department">
+            <option value="">All Departments</option>
+            @foreach (var department in DepartmentFilterOptions)
+            {
+                <option value="@department">@department</option>
+            }
+        </select>
+        <select class="um-input csr-filter-select" value="@_filterTeam" @onchange="@(args => { _filterTeam = args.Value?.ToString() ?? string.Empty; ApplyFilters(); })" aria-label="Filter by team">
+            <option value="">All Teams</option>
+            @foreach (var team in TeamFilterOptions)
+            {
+                <option value="@team">@team</option>
+            }
+        </select>
+        <label class="csr-toggle-label">
+            <input type="checkbox" checked="@_activeOnly" @onchange="@(args => ToggleActiveOnly(args.Value is bool value && value))" />
+            Active only
+        </label>
+        <span class="csr-result-count">@FilteredEntries.Count CSR(s) shown</span>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
     {
-        <div class="um-loading-overlay" aria-live="polite">
-            <div class="um-spinner" aria-hidden="true"></div>
-            <span>Loading…</span>
+        <div class="alert alert-danger csr-load-error" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
         </div>
     }
-    <SfGrid TValue="CsrEntry"
-            DataSource="_entries"
-            AllowPaging="true"
-            AllowSorting="true"
-            EnableHover="true"
-            RowHeight="52">
-        <GridEvents TValue="CsrEntry" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50, 100 })" />
-        <GridColumns>
-            <GridColumn Field="@nameof(CsrEntry.FullName)" HeaderText="Name" Width="220">
-                <Template>
-                    @{ var e = (CsrEntry)context; }
-                    <div class="csr-name-cell">
-                        <span class="csr-avatar" style="@AvatarStyle(e)" aria-hidden="true">@Initials(e)</span>
-                        <div>
-                            <div class="csr-full-name">@e.FullName</div>
-                            <div class="csr-email">@e.Email</div>
+
+    <section class="csr-content-grid">
+        <div class="csr-main-panel">
+            @if (_loading)
+            {
+                <div class="csr-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Loading CSRs...</div>
+            }
+            else if (!_allEntries.Any())
+            {
+                <div class="csr-empty-state">
+                    <i class="bi bi-person-plus" aria-hidden="true"></i>
+                    <strong>No CSRs assigned</strong>
+                    <span>Add or assign CSR role access to start building the service roster.</span>
+                    <button class="um-btn um-btn-primary" type="button" @onclick="OpenAddModal"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add CSR</button>
+                </div>
+            }
+            else
+            {
+                @if (ShowTab("overview"))
+                {
+                    <section class="csr-section">
+                        <div class="csr-section-header"><i class="bi bi-speedometer2" aria-hidden="true"></i><div><strong>Executive Overview</strong><span>Most important CSR readiness signals by service impact.</span></div></div>
+                        <div class="csr-overview-grid">
+                            <div class="csr-identity-card"><span class="csr-module-icon csr-module-icon--blue"><i class="bi bi-headset"></i></span><div><strong>@_csrCount CSRs</strong><span>@_activeCsrCount active Â· @_inactiveCsrCount inactive</span></div></div>
+                            <div class="csr-identity-card"><span class="csr-module-icon csr-module-icon--green"><i class="bi bi-building"></i></span><div><strong>@DepartmentsRepresented departments</strong><span>@TeamsRepresented team(s) represented</span></div></div>
+                            <div class="csr-identity-card"><span class="csr-module-icon csr-module-icon--purple"><i class="bi bi-diagram-3"></i></span><div><strong>@AlignedCsrCount aligned</strong><span>@UnassignedCsrCount need department or team</span></div></div>
                         </div>
+                        <div class="csr-producer-board">
+                            @foreach (var csr in FilteredEntries.Take(6))
+                            {
+                                <button type="button" class="@CsrCardClass(csr)" @onclick="() => SelectCsr(csr)">
+                                    <span class="csr-avatar" style="@AvatarStyle(csr)" aria-hidden="true">@Initials(csr)</span>
+                                    <span class="csr-producer-content"><strong>@csr.FullName</strong><small>@csr.Email Â· @DepartmentText(csr)</small></span>
+                                    <span class="@StatusClass(csr)">@StatusText(csr)</span>
+                                </button>
+                            }
+                        </div>
+                    </section>
+                }
+
+                @if (ShowTab("directory") || ShowTab("active") || ShowTab("unassigned") || ShowTab("departments") || ShowTab("teams"))
+                {
+                    <section class="csr-section">
+                        <div class="csr-section-header"><i class="bi bi-list-ul" aria-hidden="true"></i><div><strong>@DirectoryTitle</strong><span>Native CSR directory with clickable rows and inline actions.</span></div></div>
+                        <div class="csr-table-wrap">
+                            <table class="csr-table">
+                                <thead>
+                                    <tr>
+                                        <th>CSR</th>
+                                        <th>Department</th>
+                                        <th>Team</th>
+                                        <th>Coverage</th>
+                                        <th>Alignment</th>
+                                        <th>Status</th>
+                                        <th class="csr-actions-col">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var csr in FilteredEntries)
+                                    {
+                                        <tr class="@CsrRowClass(csr)" @onclick="() => SelectCsr(csr)">
+                                            <td><div class="csr-name-cell"><span class="csr-avatar" style="@AvatarStyle(csr)" aria-hidden="true">@Initials(csr)</span><div><strong>@csr.FullName</strong><small>@csr.Email</small></div></div></td>
+                                            <td>@DepartmentText(csr)</td>
+                                            <td>@TeamText(csr)</td>
+                                            <td><span class="csr-mono">@CoverageText(csr)</span></td>
+                                            <td><span class="@AlignmentClass(csr)">@AlignmentText(csr)</span></td>
+                                            <td><span class="@StatusClass(csr)">@StatusText(csr)</span></td>
+                                            <td class="csr-row-actions" @onclick:stopPropagation="true">
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditModal(csr)" title="Edit CSR"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ConfirmRemoveCsrRole(csr)" title="Remove CSR role"><i class="bi bi-trash3" aria-hidden="true"></i></button>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                }
+            }
+        </div>
+
+        <aside class="csr-side-panel" aria-label="CSR details and governance">
+            <div class="csr-side-card">
+                <div class="csr-side-header"><i class="bi bi-headset" aria-hidden="true"></i><div><strong>Selected CSR</strong><span>@(SelectedCsr is null ? "Choose a row or card" : SelectedCsr.FullName)</span></div></div>
+                @if (SelectedCsr is null)
+                {
+                    <p class="csr-side-copy">Select a CSR to review service assignment, department, team, account coverage readiness, and available actions.</p>
+                }
+                else
+                {
+                    <div class="csr-selected-summary">
+                        <span class="csr-selected-avatar" style="@AvatarStyle(SelectedCsr)">@Initials(SelectedCsr)</span>
+                        <div><strong>@SelectedCsr.FullName</strong><small>@SelectedCsr.Email</small></div>
                     </div>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(CsrEntry.Department)" HeaderText="Department" Width="180" />
-            <GridColumn Field="@nameof(CsrEntry.TeamName)" HeaderText="Team" Width="160" />
-            <GridColumn Field="@nameof(CsrEntry.IsActive)" HeaderText="Status" Width="110">
-                <Template>
-                    @{ var e = (CsrEntry)context; }
-                    <AppStatusBadge Status="@(e.IsActive ? "Active" : "Inactive")"
-                                    Label="@(e.IsActive ? "Active" : "Inactive")" />
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
-                <Template>
-                    @{ var e = (CsrEntry)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEditDrawer(e)" title="Edit">
-                        <i class="bi bi-pencil" aria-hidden="true"></i>
-                    </button>
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ConfirmRemoveCsrRole(e)" title="Remove CSR role">
-                        <i class="bi bi-trash3" aria-hidden="true"></i>
-                    </button>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
+                    <dl class="csr-detail-list">
+                        <div><dt>Department</dt><dd>@DepartmentText(SelectedCsr)</dd></div>
+                        <div><dt>Team</dt><dd>@TeamText(SelectedCsr)</dd></div>
+                        <div><dt>Coverage</dt><dd>@CoverageText(SelectedCsr)</dd></div>
+                        <div><dt>Alignment</dt><dd>@AlignmentText(SelectedCsr)</dd></div>
+                        <div><dt>Status</dt><dd>@StatusText(SelectedCsr)</dd></div>
+                    </dl>
+                    <div class="csr-selected-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEditModal(SelectedCsr)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfirmRemoveCsrRole(SelectedCsr)"><i class="bi bi-trash3" aria-hidden="true"></i> Remove Role</button>
+                    </div>
+                }
+            </div>
+            <div class="csr-side-card">
+                <div class="csr-side-header"><i class="bi bi-list-check" aria-hidden="true"></i><div><strong>Readiness checklist</strong><span>@ChecklistComplete of @Checklist.Count complete</span></div></div>
+                <div class="csr-checklist">
+                    @foreach (var item in Checklist)
+                    {
+                        <div class="@CheckItemClass(item)"><i class="@CheckIconClass(item)" aria-hidden="true"></i><span>@item.Text</span></div>
+                    }
+                </div>
+            </div>
+            <div class="csr-side-card">
+                <div class="csr-side-header"><i class="bi bi-diagram-3" aria-hidden="true"></i><div><strong>Workflow impact</strong><span>Where CSR data matters</span></div></div>
+                <div class="csr-impact-list">
+                    <span><i class="bi bi-inbox" aria-hidden="true"></i> Service queue ownership</span>
+                    <span><i class="bi bi-person-lines-fill" aria-hidden="true"></i> Account relationship coverage</span>
+                    <span><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Submission support coordination</span>
+                    <span><i class="bi bi-activity" aria-hidden="true"></i> SLA and retention reporting</span>
+                </div>
+            </div>
+        </aside>
+    </section>
 </div>
 
-<!-- Add/Edit Drawer -->
-<AppCrudDrawer @bind-Visible="_showDrawer"
-               Title="@(_editModel.StaffId == Guid.Empty ? "Add CSR" : "Edit CSR")"
-               OnConfirm="SaveAsync"
-               OnClose="CloseDrawer">
-    <Content>
-        @if (_editContext is not null)
-        {
-            <EditForm EditContext="_editContext">
+@if (_showForm)
+{
+    <div class="csr-modal-backdrop" role="presentation">
+        <div class="csr-modal" role="dialog" aria-modal="true" aria-labelledby="csr-form-title">
+            <EditForm EditContext="_editContext" OnValidSubmit="SaveStaffAsync">
                 <DataAnnotationsValidator />
-                <div class="csr-form">
-                    <label class="csr-form-label">First Name *</label>
-                    <InputText class="um-input" @bind-Value="_editModel.FirstName" />
-                    <ValidationMessage For="() => _editModel.FirstName" class="text-danger" />
-
-                    <label class="csr-form-label">Last Name *</label>
-                    <InputText class="um-input" @bind-Value="_editModel.LastName" />
-                    <ValidationMessage For="() => _editModel.LastName" class="text-danger" />
-
-                    <label class="csr-form-label">Email *</label>
-                    <InputText class="um-input" type="email" @bind-Value="_editModel.Email" />
-                    <ValidationMessage For="() => _editModel.Email" class="text-danger" />
-
-                    <label class="csr-form-label">Department *</label>
-                    <SfDropDownList TValue="string" TItem="LabelValue"
-                                    DataSource="_departmentOptions"
-                                    @bind-Value="_editModel.Department"
-                                    Placeholder="Select department"
-                                    Width="100%">
-                        <DropDownListFieldSettings Value="Value" Text="Label" />
-                    </SfDropDownList>
-                    <ValidationMessage For="() => _editModel.Department" class="text-danger" />
-
-                    <label class="csr-form-label">Team *</label>
-                    <SfDropDownList TValue="string" TItem="LabelValue"
-                                    DataSource="_teamOptions"
-                                    @bind-Value="_editModel.TeamName"
-                                    Placeholder="Select team"
-                                    Width="100%">
-                        <DropDownListFieldSettings Value="Value" Text="Label" />
-                    </SfDropDownList>
-                    <ValidationMessage For="() => _editModel.TeamName" class="text-danger" />
-
-                    <label class="csr-form-label">Active</label>
-                    <SfSwitch @bind-Checked="_editModel.IsActive" />
+                <div class="um-modal-header">
+                    <i class="bi bi-headset" aria-hidden="true"></i>
+                    <span id="csr-form-title">@(_form.StaffId == Guid.Empty ? "Add CSR" : "Edit CSR")</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div>
+                            <label class="csr-form-label">First Name *</label>
+                            <InputText class="um-input" @bind-Value="_form.FirstName" />
+                        </div>
+                        <div>
+                            <label class="csr-form-label">Last Name *</label>
+                            <InputText class="um-input" @bind-Value="_form.LastName" />
+                        </div>
+                        <div>
+                            <label class="csr-form-label">Email *</label>
+                            <InputText class="um-input" type="email" @bind-Value="_form.Email" />
+                        </div>
+                        <div>
+                            <label class="csr-form-label">Department *</label>
+                            <InputSelect class="um-input" @bind-Value="_form.Department">
+                                <option value="">Select department</option>
+                                @foreach (var department in _departmentOptions)
+                                {
+                                    <option value="@department.Value">@department.Label</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div>
+                            <label class="csr-form-label">Team *</label>
+                            <InputSelect class="um-input" @bind-Value="_form.TeamName">
+                                <option value="">Select team</option>
+                                @foreach (var team in _teamOptions)
+                                {
+                                    <option value="@team.Value">@team.Label</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div>
+                            <label class="csr-form-label">Coverage Focus</label>
+                            <InputText class="um-input" @bind-Value="_form.CoverageFocus" />
+                        </div>
+                        <div>
+                            <label class="csr-toggle-card">
+                                <InputCheckbox @bind-Value="_form.IsActive" />
+                                <span><strong>Active CSR</strong><small>Available for service assignments and customer support queues.</small></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving)
+                        {
+                            <span class="um-spinner um-spinner-sm" aria-hidden="true"></span>
+                        }
+                        else
+                        {
+                            <i class="bi bi-floppy" aria-hidden="true"></i>
+                        }
+                        Save CSR
+                    </button>
                 </div>
             </EditForm>
-        }
-    </Content>
-</AppCrudDrawer>
+        </div>
+    </div>
+}
 
-<SfDialog @bind-Visible="_showRemoveConfirm"
-          Width="440px"
-          IsModal="true"
-          ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
+@if (_pendingRemove is not null)
+{
+    <div class="csr-modal-backdrop" role="presentation">
+        <div class="csr-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="remove-csr-title">
             <div class="um-confirm-dialog">
-                <div class="um-confirm-icon um-confirm-icon--danger">
-                    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
-                </div>
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></div>
                 <div>
-                    <h3>Remove CSR role?</h3>
-                    <p>This will remove the CSR role from <strong>@_pendingRemove?.FullName</strong>. The user account will remain active unless changed separately.</p>
+                    <h3 id="remove-csr-title">Remove CSR role?</h3>
+                    <p class="csr-confirm-copy">This will remove the CSR role from <strong>@_pendingRemove.FullName</strong>. The user account remains active unless changed separately.</p>
                 </div>
             </div>
             <div class="um-modal-footer">
                 <button type="button" class="um-btn um-btn-ghost" @onclick="CloseRemoveConfirm">Cancel</button>
-                <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteRemoveCsrRoleAsync">Remove role</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteRemoveCsrRoleAsync" disabled="@_removing"><i class="bi bi-trash3" aria-hidden="true"></i> Remove role</button>
             </div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
-
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+        </div>
+    </div>
+}
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private SfToast? _toast;
-
+    private Guid _tenantAdminUserId;
     private List<CsrEntry> _allEntries = [];
-    private List<CsrEntry> _entries    = [];
+    private List<CsrEntry> _entries = [];
     private List<LabelValue> _departmentOptions = [];
     private List<LabelValue> _teamOptions = [];
-
-    private bool _loading    = false;
-    private bool _showDrawer = false;
-    private bool _showRemoveConfirm = false;
-
-    private string _search          = string.Empty;
-    private bool   _filterActiveOnly = false;
-    private string _activeFilter = "Overview";
+    private bool _loading;
+    private bool _saving;
+    private bool _removing;
+    private bool _showForm;
+    private string _search = string.Empty;
+    private string _filterDepartment = string.Empty;
+    private string _filterTeam = string.Empty;
+    private bool _activeOnly;
+    private string _activeTab = "overview";
     private string? _loadError;
-    private EditContext? _editContext;
+    private string? _toastMessage;
+    private string _toastClass = string.Empty;
+    private CsrEntry? SelectedCsr;
     private CsrEntry? _pendingRemove;
+    private CsrEntry _form = new() { Role = "CSR" };
+    private EditContext _editContext = default!;
 
-    private int _totalCount  = 0;
-    private int _activeCount = 0;
-    private int _departmentCount = 0;
-    private int _teamCount = 0;
+    private IReadOnlyList<CsrEntry> FilteredEntries => _entries;
+    private int _csrCount => _allEntries.Count;
+    private int _activeCsrCount => _allEntries.Count(e => e.IsActive);
+    private int _inactiveCsrCount => _csrCount - _activeCsrCount;
+    private int AlignedCsrCount => _allEntries.Count(e => !string.IsNullOrWhiteSpace(e.Department) && !string.IsNullOrWhiteSpace(e.TeamName));
+    private int UnassignedCsrCount => _allEntries.Count(e => string.IsNullOrWhiteSpace(e.Department) || string.IsNullOrWhiteSpace(e.TeamName));
+    private int DepartmentsRepresented => _allEntries.Where(e => !string.IsNullOrWhiteSpace(e.Department)).Select(e => e.Department).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    private int TeamsRepresented => _allEntries.Where(e => !string.IsNullOrWhiteSpace(e.TeamName)).Select(e => e.TeamName).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    private int ChecklistComplete => Checklist.Count(i => i.Done);
+    private int ReadinessScore => Math.Clamp((ChecklistComplete * 100) / Math.Max(Checklist.Count, 1), 0, 100);
+    private string ReadinessSummary => ReadinessScore switch
+    {
+        >= 90 => "CSR service roster is enterprise ready.",
+        >= 70 => "Minor assignment cleanup recommended.",
+        >= 40 => "CSR readiness needs department or team attention.",
+        _ => "Assign and complete CSR records."
+    };
 
-    private CsrEntry _editModel = new();
+    private string ToastIconClass => _toastClass == "csr-toast--danger" ? "bi bi-exclamation-triangle" : "bi bi-check-circle";
+
+    private IReadOnlyList<string> DepartmentFilterOptions => _allEntries
+        .Where(e => !string.IsNullOrWhiteSpace(e.Department))
+        .Select(e => e.Department)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(x => x)
+        .ToList();
+
+    private IReadOnlyList<string> TeamFilterOptions => _allEntries
+        .Where(e => !string.IsNullOrWhiteSpace(e.TeamName))
+        .Select(e => e.TeamName)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(x => x)
+        .ToList();
+
+    private string DirectoryTitle => _activeTab switch
+    {
+        "active" => "Active CSRs",
+        "unassigned" => "Assignment Gaps",
+        "departments" => "Department-Aligned CSRs",
+        "teams" => "Team-Aligned CSRs",
+        _ => "CSR Directory"
+    };
+
+    private IReadOnlyList<KpiCard> Kpis =>
+    [
+        new("overview", "CSRs", _csrCount.ToString(), "CSR role assignments", "bi-headset", "blue", "Show CSR overview"),
+        new("active", "Active", _activeCsrCount.ToString(), "Available for service queues", "bi-check-circle-fill", "green", "Show active CSRs"),
+        new("departments", "Departments", DepartmentsRepresented.ToString(), "Department coverage", "bi-building", "purple", "Show department-aligned CSRs"),
+        new("teams", "Teams", TeamsRepresented.ToString(), "Team coverage", "bi-people-fill", "amber", "Show team-aligned CSRs"),
+        new("unassigned", "Gaps", UnassignedCsrCount.ToString(), "Need department or team", "bi-exclamation-triangle-fill", "red", "Show assignment gaps")
+    ];
+
+    private IReadOnlyList<NavTab> Tabs =>
+    [
+        new("overview", "Overview", "bi-speedometer2"),
+        new("directory", "Directory", "bi-list-ul"),
+        new("active", "Active", "bi-check-circle"),
+        new("departments", "Departments", "bi-building"),
+        new("teams", "Teams", "bi-people"),
+        new("unassigned", "Gaps", "bi-exclamation-triangle")
+    ];
+
+    private IReadOnlyList<PriorityAction> PriorityActions =>
+    [
+        new("Add CSR", "Assign CSR role access", "bi-plus-circle", "add"),
+        new("Review gaps", "Complete department and team alignment", "bi-exclamation-triangle", "unassigned"),
+        new("View active", "Confirm service coverage", "bi-check-circle", "active")
+    ];
+
+    private IReadOnlyList<ChecklistItem> Checklist =>
+    [
+        new(_csrCount > 0, "At least one CSR is assigned"),
+        new(_activeCsrCount > 0, "At least one active CSR is available"),
+        new(DepartmentsRepresented > 0, "CSR department coverage exists"),
+        new(TeamsRepresented > 0, "CSR team coverage exists"),
+        new(UnassignedCsrCount == 0 && _csrCount > 0, "All CSRs have department and team alignment")
+    ];
 
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
+        _editContext = new EditContext(_form);
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+
         Breadcrumbs.SetCrumbs(
-            new("Home",         "/"),
+            new("Home", "/"),
             new("Agency Setup", "/tenant/agency/profile"),
-            new("CSRs",         "/tenant/agency/csrs"));
+            new("CSRs", "/tenant/agency/csrs"));
 
         await LoadAsync();
     }
@@ -252,103 +470,149 @@
     private async Task LoadAsync()
     {
         _loading = true;
-        StateHasChanged();
+        _loadError = null;
         try
         {
-            _loadError = null;
             await LoadLookupOptionsAsync();
             var users = await Api.SearchUsersAsync(_tenantId, pageSize: 1000);
             var csrRoleUserIds = await GetUserIdsByRoleAsync("CSR");
-            _allEntries = users?.Items.Where(u => csrRoleUserIds.Contains(u.UserId) || HasAssignedRole(u, "CSR"))
-                .Select(u => new CsrEntry
-                {
-                    StaffId = u.UserId,
-                    FirstName = FirstName(u.FullName),
-                    LastName = LastName(u.FullName),
-                    Email = u.Email,
-                    Department = u.Department ?? string.Empty,
-                    TeamName = u.JobTitle ?? string.Empty,
-                    IsActive = IsActiveUser(u)
-                }).ToList() ?? [];
-            ComputeKpi();
+            _allEntries = users?.Items
+                .Where(u => csrRoleUserIds.Contains(u.UserId) || HasAssignedRole(u, "CSR"))
+                .Select(CsrEntry.FromUser)
+                .OrderBy(e => e.LastName)
+                .ThenBy(e => e.FirstName)
+                .ToList() ?? [];
+
             ApplyFilters();
+            SelectedCsr = SelectedCsr is null
+                ? _entries.FirstOrDefault()
+                : _allEntries.FirstOrDefault(e => e.StaffId == SelectedCsr.StaffId) ?? _entries.FirstOrDefault();
         }
         catch (Exception ex)
         {
             _loadError = $"Load failed: {ex.Message}";
-            await ShowToastAsync($"Error loading CSRs: {ex.Message}", "e-toast-danger");
+            ShowToast($"Error loading CSRs: {ex.Message}", true);
         }
-        finally { _loading = false; }
+        finally
+        {
+            _loading = false;
+        }
     }
-
-    private async Task OnSearchAsync(string _) => await LoadAsync();
 
     private void ApplyFilters()
     {
         _entries = _allEntries.Where(e =>
-            (_activeFilter switch
+            (_activeTab switch
             {
-                "Active" => e.IsActive,
-                "Departments" => !string.IsNullOrWhiteSpace(e.Department),
-                "Teams" => !string.IsNullOrWhiteSpace(e.TeamName),
+                "active" => e.IsActive,
+                "unassigned" => string.IsNullOrWhiteSpace(e.Department) || string.IsNullOrWhiteSpace(e.TeamName),
+                "departments" => !string.IsNullOrWhiteSpace(e.Department),
+                "teams" => !string.IsNullOrWhiteSpace(e.TeamName),
                 _ => true
             }) &&
-            (!_filterActiveOnly || e.IsActive) &&
-            (string.IsNullOrEmpty(_search) ||
+            (!_activeOnly || e.IsActive) &&
+            (string.IsNullOrWhiteSpace(_filterDepartment) || string.Equals(e.Department, _filterDepartment, StringComparison.OrdinalIgnoreCase)) &&
+            (string.IsNullOrWhiteSpace(_filterTeam) || string.Equals(e.TeamName, _filterTeam, StringComparison.OrdinalIgnoreCase)) &&
+            (string.IsNullOrWhiteSpace(_search) ||
              e.FullName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             e.Email.Contains(_search, StringComparison.OrdinalIgnoreCase))
-        ).ToList();
+             e.Email.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.Department.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.TeamName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.CoverageFocus.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             (e.IsActive ? "Active" : "Inactive").Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).OrderByDescending(e => e.IsActive).ThenBy(e => e.LastName).ThenBy(e => e.FirstName).ToList();
 
-        StateHasChanged();
+        if (SelectedCsr is not null && !_entries.Any(e => e.StaffId == SelectedCsr.StaffId))
+        {
+            SelectedCsr = _entries.FirstOrDefault();
+        }
     }
 
-    private void SetKpiFilter(string filter)
+    private void SetTab(string tab)
     {
-        _activeFilter = _activeFilter == filter && filter != "Overview" ? "Overview" : filter;
-        _filterActiveOnly = _activeFilter == "Active";
+        _activeTab = _activeTab == tab && tab != "overview" ? "overview" : tab;
+        _activeOnly = _activeTab == "active";
         ApplyFilters();
     }
 
-    private string KpiClass(string filter) => _activeFilter == filter ? "as-kpi-card--active" : string.Empty;
+    private bool IsActiveTab(string tab) => string.Equals(_activeTab, tab, StringComparison.OrdinalIgnoreCase);
+    private bool ShowTab(string tab) => IsActiveTab("overview") || IsActiveTab(tab);
+    private string KpiCardClass(string key) => IsActiveTab(key) ? "csr-kpi-card csr-kpi-card--active" : "csr-kpi-card";
+    private string TabClass(string key) => IsActiveTab(key) ? "csr-tab csr-tab--active" : "csr-tab";
+    private string CsrCardClass(CsrEntry csr) => SelectedCsr?.StaffId == csr.StaffId ? "csr-producer-card csr-producer-card--selected" : "csr-producer-card";
+    private string CsrRowClass(CsrEntry csr) => SelectedCsr?.StaffId == csr.StaffId ? "csr-row--selected" : string.Empty;
+    private static string StatusClass(CsrEntry csr) => csr.IsActive ? "csr-status csr-status--active" : "csr-status csr-status--inactive";
+    private static string StatusText(CsrEntry csr) => csr.IsActive ? "Active" : "Inactive";
+    private static string AlignmentClass(CsrEntry csr) => string.IsNullOrWhiteSpace(csr.Department) || string.IsNullOrWhiteSpace(csr.TeamName) ? "csr-expiry csr-expiry--expiring" : "csr-expiry";
+    private static string AlignmentText(CsrEntry csr) => string.IsNullOrWhiteSpace(csr.Department) || string.IsNullOrWhiteSpace(csr.TeamName) ? "Needs assignment" : "Aligned";
+    private static string CheckItemClass(ChecklistItem item) => item.Done ? "csr-check-item csr-check-item--done" : "csr-check-item";
+    private static string CheckIconClass(ChecklistItem item) => item.Done ? "bi bi-check-circle-fill" : "bi bi-circle";
 
-    private void OnRowSelected(RowSelectEventArgs<CsrEntry> args) => OpenEditDrawer(args.Data);
-
-    private void ComputeKpi()
+    private void ToggleActiveOnly(bool value)
     {
-        _totalCount  = _allEntries.Count;
-        _activeCount = _allEntries.Count(e => e.IsActive);
-        _departmentCount = _allEntries.Select(e => e.Department).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-        _teamCount = _allEntries.Select(e => e.TeamName).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        _activeOnly = value;
+        ApplyFilters();
     }
 
-    private void OpenAddDrawer()  { _editModel = new(); _editContext = new EditContext(_editModel); _showDrawer = true; }
-    private void OpenEditDrawer(CsrEntry e) { _editModel = new CsrEntry { StaffId = e.StaffId, FirstName = e.FirstName, LastName = e.LastName, Email = e.Email, Department = e.Department, TeamName = e.TeamName, IsActive = e.IsActive }; _editContext = new EditContext(_editModel); _showDrawer = true; }
-    private void CloseDrawer() => _showDrawer = false;
-
-    private async Task SaveAsync()
+    private void ClearFilters()
     {
+        _search = string.Empty;
+        _filterDepartment = string.Empty;
+        _filterTeam = string.Empty;
+        _activeOnly = false;
+        _activeTab = "overview";
+        ApplyFilters();
+    }
+
+    private void SelectCsr(CsrEntry csr) => SelectedCsr = csr;
+
+    private void RunPriorityAction(PriorityAction action)
+    {
+        if (action.TabKey == "add")
+        {
+            OpenAddModal();
+            return;
+        }
+
+        SetTab(action.TabKey);
+    }
+
+    private void OpenAddModal()
+    {
+        _form = new CsrEntry { Role = "CSR" };
+        _editContext = new EditContext(_form);
+        _showForm = true;
+    }
+
+    private void OpenEditModal(CsrEntry csr)
+    {
+        _form = csr.Clone();
+        _editContext = new EditContext(_form);
+        _showForm = true;
+    }
+
+    private void CloseForm() => _showForm = false;
+
+    private async Task SaveStaffAsync()
+    {
+        _saving = true;
         try
         {
-            if (_editContext?.Validate() != true)
-            {
-                await ShowToastAsync("Please fix validation errors before saving.", "e-toast-danger");
-                return;
-            }
-
-            var fullName = $"{_editModel.FirstName} {_editModel.LastName}".Trim();
-            if (_editModel.StaffId == Guid.Empty)
+            var fullName = _form.FullName;
+            if (_form.StaffId == Guid.Empty)
             {
                 var userId = await Api.CreateUserAsync(new CreateUserRequest
                 {
                     TenantId = _tenantId,
-                    UserName = string.IsNullOrWhiteSpace(_editModel.Email) ? $"{_editModel.FirstName}.{_editModel.LastName}".Trim('.').ToLowerInvariant() : _editModel.Email,
-                    Email = _editModel.Email,
+                    UserName = string.IsNullOrWhiteSpace(_form.Email) ? $"{_form.FirstName}.{_form.LastName}".Trim('.').ToLowerInvariant() : _form.Email,
+                    Email = _form.Email,
                     FullName = fullName,
                     DisplayName = fullName,
                     UserTypeCode = "Internal",
-                    StatusCode = _editModel.IsActive ? "Active" : "Inactive",
-                    Department = _editModel.Department,
-                    JobTitle = _editModel.TeamName,
+                    StatusCode = _form.IsActive ? "Active" : "Inactive",
+                    Department = _form.Department,
+                    JobTitle = _form.TeamName,
+                    Region = _form.CoverageFocus,
                     TimeZoneCode = "UTC",
                     LocaleCode = "en-US"
                 });
@@ -356,47 +620,46 @@
             }
             else
             {
-                await Api.UpdateUserAsync(_editModel.StaffId, new UpdateUserRequest
+                await Api.UpdateUserAsync(_form.StaffId, new UpdateUserRequest
                 {
-                    UserId = _editModel.StaffId,
+                    UserId = _form.StaffId,
                     FullName = fullName,
                     DisplayName = fullName,
-                    Department = _editModel.Department,
-                    JobTitle = _editModel.TeamName,
+                    Department = _form.Department,
+                    JobTitle = _form.TeamName,
+                    Region = _form.CoverageFocus,
                     TimeZoneCode = "UTC",
                     LocaleCode = "en-US"
                 });
-                await EnsureUserRoleAsync(_editModel.StaffId, "CSR");
-                await Api.SetUserActiveAsync(_editModel.StaffId, _editModel.IsActive);
+                await EnsureUserRoleAsync(_form.StaffId, "CSR");
+                await Api.SetUserActiveAsync(_form.StaffId, _form.IsActive);
             }
 
-            _showDrawer = false;
+            _showForm = false;
             await LoadAsync();
-            await ShowToastAsync("CSR saved.", "e-toast-success");
+            ShowToast("CSR record saved.");
         }
         catch (Exception ex)
         {
-            await ShowToastAsync($"Save failed: {ex.Message}", "e-toast-danger");
+            ShowToast($"Save failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
         }
     }
 
-    private void ConfirmRemoveCsrRole(CsrEntry entry)
-    {
-        _pendingRemove = entry;
-        _showRemoveConfirm = true;
-    }
-
-    private void CloseRemoveConfirm()
-    {
-        _showRemoveConfirm = false;
-        _pendingRemove = null;
-    }
+    private void ConfirmRemoveCsrRole(CsrEntry entry) => _pendingRemove = entry;
+    private void CloseRemoveConfirm() => _pendingRemove = null;
 
     private async Task ExecuteRemoveCsrRoleAsync()
     {
         if (_pendingRemove is null)
+        {
             return;
+        }
 
+        _removing = true;
         try
         {
             var assignment = await GetUserRoleAssignmentAsync(_pendingRemove.StaffId, "CSR");
@@ -405,13 +668,17 @@
                 await Api.RevokeUserRoleAsync(new RevokeUserRoleRequest { UserRoleId = assignment.UserRoleId, Reason = "Removed from CSR page" });
             }
 
-            CloseRemoveConfirm();
+            _pendingRemove = null;
             await LoadAsync();
-            await ShowToastAsync("CSR role removed.", "e-toast-success");
+            ShowToast("CSR role removed.");
         }
         catch (Exception ex)
         {
-            await ShowToastAsync($"Remove failed: {ex.Message}", "e-toast-danger");
+            ShowToast($"Remove failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _removing = false;
         }
     }
 
@@ -424,11 +691,20 @@
         _teamOptions = teams?.Where(t => t.IsActive).OrderBy(t => t.TeamName).Select(t => new LabelValue(t.TeamName, t.TeamName)).ToList() ?? [];
     }
 
-    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    private async Task CopySummaryAsync()
     {
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+        var summary = $"CSRs: {_csrCount} total; {_activeCsrCount} active; {DepartmentsRepresented} departments; {TeamsRepresented} teams; {UnassignedCsrCount} assignment gaps.";
+        await Js.InvokeVoidAsync("navigator.clipboard.writeText", summary);
+        ShowToast("CSR summary copied.");
     }
+
+    private void ShowToast(string message, bool danger = false)
+    {
+        _toastMessage = message;
+        _toastClass = danger ? "csr-toast--danger" : string.Empty;
+    }
+
+    private void ClearToast() => _toastMessage = null;
 
     private static string Initials(CsrEntry e)
     {
@@ -442,6 +718,11 @@
         return $"background:hsl({hue},50%,42%);color:#fff;";
     }
 
+    private static string DepartmentText(CsrEntry e) => string.IsNullOrWhiteSpace(e.Department) ? "Unassigned" : e.Department;
+    private static string TeamText(CsrEntry e) => string.IsNullOrWhiteSpace(e.TeamName) ? "Unassigned" : e.TeamName;
+    private static string CoverageText(CsrEntry e) => string.IsNullOrWhiteSpace(e.CoverageFocus) ? "Service Desk" : e.CoverageFocus;
+    private static bool RoleEquals(string? actual, string expected) => string.Equals(actual?.Trim(), expected, StringComparison.OrdinalIgnoreCase);
+
     private async Task<HashSet<Guid>> GetUserIdsByRoleAsync(string roleName)
     {
         var assignments = await Api.SearchUserRolesAsync(_tenantId, isActive: true, pageSize: 5000);
@@ -451,9 +732,6 @@
             .ToHashSet() ?? [];
     }
 
-    private static bool HasAssignedRole(UserDto user, string roleName) => HasRoleToken(user.AssignedRoleNames, roleName) || HasRoleToken(user.AssignedRoleCodes, roleName);
-    private static bool HasRoleToken(string? roles, string roleName) => (roles ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Any(role => RoleEquals(role, roleName));
-    private static bool RoleEquals(string? actual, string expected) => string.Equals(actual?.Trim(), expected, StringComparison.OrdinalIgnoreCase);
     private async Task<UserRoleDto?> GetUserRoleAssignmentAsync(Guid userId, string roleName)
     {
         var assignments = await Api.SearchUserRolesAsync(_tenantId, userId: userId, isActive: true, pageSize: 100);
@@ -463,12 +741,16 @@
     private async Task EnsureUserRoleAsync(Guid userId, string roleName)
     {
         if (await GetUserRoleAssignmentAsync(userId, roleName) is not null)
+        {
             return;
+        }
 
         var roles = await Api.SearchRolesAsync(_tenantId, roleName);
         var role = roles?.Items.FirstOrDefault(r => RoleEquals(r.RoleName, roleName) || RoleEquals(r.RoleCode, roleName));
         if (role is null)
+        {
             throw new InvalidOperationException($"The {roleName} role was not found.");
+        }
 
         await Api.AssignUserRoleAsync(new AssignUserRoleRequest
         {
@@ -479,6 +761,9 @@
             Reason = $"Assigned from {roleName} page"
         });
     }
+
+    private static bool HasAssignedRole(UserDto user, string roleName) => HasRoleToken(user.AssignedRoleNames, roleName) || HasRoleToken(user.AssignedRoleCodes, roleName);
+    private static bool HasRoleToken(string? roles, string roleName) => (roles ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Any(role => RoleEquals(role, roleName));
     private static bool IsActiveUser(UserDto user) => string.Equals(user.StatusCode, "Active", StringComparison.OrdinalIgnoreCase) && !user.IsLockedOut;
     private static string FirstName(string fullName)
     {
@@ -491,39 +776,66 @@
         return parts.Length <= 1 ? string.Empty : string.Join(' ', parts.Skip(1));
     }
 
-    private sealed class CsrEntry
-    {
-        public Guid   StaffId    { get; set; } = Guid.Empty;
-        [Required]
-        [StringLength(100)]
-        public string FirstName  { get; set; } = string.Empty;
-        [Required]
-        [StringLength(100)]
-        public string LastName   { get; set; } = string.Empty;
-        public string FullName   => $"{FirstName} {LastName}".Trim();
-        [Required]
-        [AmsEmailAddress]
-        [StringLength(320)]
-        public string Email      { get; set; } = string.Empty;
-        [Required]
-        [StringLength(100)]
-        public string Department { get; set; } = string.Empty;
-        [Required]
-        [StringLength(100)]
-        public string TeamName   { get; set; } = string.Empty;
-        public bool   IsActive   { get; set; } = true;
-    }
-
+    private sealed record KpiCard(string Key, string Label, string Value, string Detail, string Icon, string Tone, string Tooltip);
+    private sealed record NavTab(string Key, string Label, string Icon);
+    private sealed record PriorityAction(string Title, string Detail, string Icon, string TabKey);
+    private sealed record ChecklistItem(bool Done, string Text);
     private sealed record LabelValue(string Value, string Label);
 
-    async Task ResolveCurrentUserContextAsync()
+    private sealed class CsrEntry
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        public Guid StaffId { get; set; } = Guid.Empty;
+
+        [Required, StringLength(100)]
+        public string FirstName { get; set; } = string.Empty;
+
+        [Required, StringLength(100)]
+        public string LastName { get; set; } = string.Empty;
+
+        public string FullName => $"{FirstName} {LastName}".Trim();
+
+        [Required, AmsEmailAddress, StringLength(320)]
+        public string Email { get; set; } = string.Empty;
+
+        public string Role { get; set; } = "CSR";
+
+        [Required, StringLength(100)]
+        public string Department { get; set; } = string.Empty;
+
+        [Required, StringLength(100)]
+        public string TeamName { get; set; } = string.Empty;
+
+        [StringLength(100)]
+        public string CoverageFocus { get; set; } = string.Empty;
+
+        public bool IsActive { get; set; } = true;
+
+        public CsrEntry Clone()
+            => new()
+            {
+                StaffId = StaffId,
+                FirstName = FirstName,
+                LastName = LastName,
+                Email = Email,
+                Role = Role,
+                Department = Department,
+                TeamName = TeamName,
+                CoverageFocus = CoverageFocus,
+                IsActive = IsActive
+            };
+
+        public static CsrEntry FromUser(UserDto user)
+            => new()
+            {
+                StaffId = user.UserId,
+                FirstName = FirstName(user.FullName),
+                LastName = LastName(user.FullName),
+                Email = user.Email,
+                Role = "CSR",
+                Department = user.Department ?? string.Empty,
+                TeamName = user.JobTitle ?? string.Empty,
+                CoverageFocus = user.Region ?? string.Empty,
+                IsActive = IsActiveUser(user)
+            };
     }
 }

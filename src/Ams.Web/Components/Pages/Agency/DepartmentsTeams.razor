@@ -1,268 +1,443 @@
-@page "/admin/agency/teams"
+﻿@page "/admin/agency/teams"
 @page "/tenant/agency/teams"
 @namespace Ams.Web.Components.Pages.AgencyAdmin
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Departments &amp; Teams — Agency Setup</PageTitle>
+<PageTitle>Teams â€” Agency Setup</PageTitle>
 
-<AppPageHeader Title="Departments &amp; Teams"
-               Subtitle="Manage organisational units, departments and their team assignments"
-               Icon="bi-diagram-3">
+<AppPageHeader Title="Teams"
+               Subtitle="Enterprise team ownership, department alignment, member capacity, and operating status."
+               Icon="bi-people-fill">
     <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_loading" title="Refresh teams">
             <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
         </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/branches"><i class="bi bi-diagram-3" aria-hidden="true"></i> Branches</a>
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/departments"><i class="bi bi-building" aria-hidden="true"></i> Departments</a>
+        <button class="um-btn um-btn-primary" type="button" @onclick="OpenAddModal">
             <i class="bi bi-plus-lg" aria-hidden="true"></i> New Team
         </button>
     </Actions>
 </AppPageHeader>
 
-<section class="ma-hero as-tenant-hero">
-    <div>
-        <span class="ma-eyebrow">Tenant · Agency Structure</span>
-        <h2>Team Command Center</h2>
-        <p>Coordinate team ownership, department alignment, member capacity, and operating status across the agency.</p>
-    </div>
-    <div class="ma-hero-actions">
-        <a class="um-btn um-btn-ghost" href="/tenant/agency/branches"><i class="bi bi-diagram-3" aria-hidden="true"></i> Branches</a>
-        <a class="um-btn um-btn-ghost" href="/tenant/agency/departments"><i class="bi bi-grid" aria-hidden="true"></i> Departments</a>
-        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Team</button>
-    </div>
-</section>
-
-<!-- KPI strip -->
-<div class="as-kpi-strip" aria-label="Team filters">
-    <button type="button" class='as-kpi-card @KpiClass("Overview")' @onclick='() => SetKpiFilter("Overview")' title="Show all teams">
-        <span class="as-kpi-icon"><i class="bi bi-diagram-3-fill" aria-hidden="true"></i></span>
-        <div>
-            <div class="dt-kpi-value">@_totalCount</div>
-            <div class="dt-kpi-label">Total Teams</div>
-        </div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Active")' @onclick='() => SetKpiFilter("Active")' title="Show active teams">
-        <span class="as-kpi-icon as-kpi-icon--success"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
-        <div>
-            <div class="dt-kpi-value">@_activeCount</div>
-            <div class="dt-kpi-label">Active</div>
-        </div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Members")' @onclick='() => SetKpiFilter("Members")' title="Show teams with assigned members">
-        <span class="as-kpi-icon as-kpi-icon--violet"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
-        <div>
-            <div class="dt-kpi-value">@_memberCount</div>
-            <div class="dt-kpi-label">Total Members</div>
-        </div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Departments")' @onclick='() => SetKpiFilter("Departments")' title="Show teams assigned to departments">
-        <span class="as-kpi-icon as-kpi-icon--warning"><i class="bi bi-building" aria-hidden="true"></i></span>
-        <div>
-            <div class="dt-kpi-value">@_deptCount</div>
-            <div class="dt-kpi-label">Departments</div>
-        </div>
-    </button>
-</div>
-
-<!-- Filter toolbar -->
-<AppFilterPanel @bind-SearchValue="_search"
-                OnSearch="OnSearchAsync"
-                SearchPlaceholder="Search team or department…">
-    <Filters>
-        <SfDropDownList TValue="string" TItem="LabelValue"
-                        DataSource="_deptOptions"
-                        Placeholder="All Departments"
-                        ShowClearButton="true"
-                        Width="180px"
-                        Value="_filterDept"
-                        ValueChanged="@((string v) => { _filterDept = v; ApplyFilters(); })">
-            <DropDownListFieldSettings Value="Value" Text="Label" />
-        </SfDropDownList>
-
-        <label class="dt-toggle-label">
-            <input type="checkbox" @bind="_filterActiveOnly" @bind:after="ApplyFilters" />
-            Active only
-        </label>
-    </Filters>
-</AppFilterPanel>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
-        @_loadError
+    <div class="dt-toast @_toastClass" role="status">
+        <i class="bi @(_toastClass == "dt-toast--danger" ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="dt-toast-close" @onclick="ClearToast" aria-label="Dismiss message"><i class="bi bi-x-lg"></i></button>
     </div>
 }
 
-<!-- Grid -->
-<div class="um-grid-card app-datagrid">
-    @if (_loading)
+<div class="dt-page">
+    <section class="dt-hero">
+        <div class="dt-hero-main">
+            <span class="dt-eyebrow"><i class="bi bi-command" aria-hidden="true"></i> Tenant Â· Agency Structure</span>
+            <h2>Team Command Center</h2>
+            <p>Coordinate team ownership, department alignment, workload capacity, and operating status for service, sales, underwriting, claims, and support workflows.</p>
+            <div class="dt-hero-meta">
+                <span><i class="bi bi-people" aria-hidden="true"></i> @_totalCount teams</span>
+                <span><i class="bi bi-check-circle" aria-hidden="true"></i> @_activeCount active</span>
+                <span><i class="bi bi-person-lines-fill" aria-hidden="true"></i> @_memberCount members</span>
+            </div>
+        </div>
+        <div class="dt-hero-panel">
+            <div class="dt-readiness-card">
+                <span>Team readiness</span>
+                <strong>@ReadinessScore%</strong>
+                <div class="dt-score-track"><div style="width:@ReadinessScore%"></div></div>
+                <small>@ReadinessSummary</small>
+            </div>
+            <div class="dt-action-list">
+                @foreach (var action in PriorityActions)
+                {
+                    <button type="button" class="dt-action-item" @onclick="() => RunPriorityAction(action)">
+                        <i class="bi @action.Icon" aria-hidden="true"></i>
+                        <span><strong>@action.Title</strong><small>@action.Detail</small></span>
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                    </button>
+                }
+            </div>
+        </div>
+    </section>
+
+    <section class="dt-kpi-strip" aria-label="Team KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="dt-kpi-card @(IsActiveTab(kpi.Key) ? "dt-kpi-card--active" : null)" title="@kpi.Tooltip" @onclick="() => SetTab(kpi.Key)">
+                <span class="dt-kpi-icon dt-kpi-icon--@kpi.Tone"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="dt-kpi-label">@kpi.Label</span>
+                <strong>@kpi.Value</strong>
+                <small>@kpi.Detail</small>
+            </button>
+        }
+    </section>
+
+    <section class="dt-command-bar">
+        <div class="dt-tabs" role="tablist" aria-label="Team sections">
+            @foreach (var tab in Tabs)
+            {
+                <button type="button" role="tab" class="dt-tab @(IsActiveTab(tab.Key) ? "dt-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                    <i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label
+                </button>
+            }
+        </div>
+        <div class="dt-command-actions">
+            <button class="um-btn um-btn-ghost" type="button" @onclick="CopySummaryAsync" disabled="@(!_allEntries.Any())"><i class="bi bi-clipboard" aria-hidden="true"></i> Copy Summary</button>
+            <button class="um-btn um-btn-ghost" type="button" @onclick="ClearFilters"><i class="bi bi-x-circle" aria-hidden="true"></i> Clear Filters</button>
+            <button class="um-btn um-btn-primary" type="button" @onclick="OpenAddModal"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Team</button>
+        </div>
+    </section>
+
+    <section class="dt-filter-bar" aria-label="Team filters">
+        <div class="dt-search-box">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="um-input" value="@_search" @oninput="@(args => { _search = args.Value?.ToString() ?? string.Empty; ApplyFilters(); })" placeholder="Search team name, code, department, lead, description, or statusâ€¦" />
+        </div>
+        <select class="um-input dt-department-filter" value="@_filterDepartment" @onchange="@(args => { _filterDepartment = args.Value?.ToString() ?? string.Empty; ApplyFilters(); })" aria-label="Filter by department">
+            <option value="">All Departments</option>
+            @foreach (var department in DepartmentFilterOptions)
+            {
+                <option value="@department">@department</option>
+            }
+        </select>
+        <label class="dt-toggle-label">
+            <input type="checkbox" checked="@_activeOnly" @onchange="@(args => ToggleActiveOnly(args.Value is bool value && value))" />
+            Active only
+        </label>
+        <span class="dt-result-count">@FilteredEntries.Count team(s) shown</span>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
     {
-        <div class="um-loading-overlay" aria-live="polite">
-            <div class="um-spinner" aria-hidden="true"></div>
-            <span>Loading…</span>
+        <div class="alert alert-danger dt-load-error" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
         </div>
     }
-    <SfGrid TValue="TeamEntry"
-            DataSource="_entries"
-            AllowPaging="true"
-            AllowSorting="true"
-            EnableHover="true"
-            RowHeight="52">
-        <GridEvents TValue="TeamEntry" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
-        <GridColumns>
-            <GridColumn Field="@nameof(TeamEntry.TeamName)" HeaderText="Team Name" Width="200">
-                <Template>
-                    @{ var e = (TeamEntry)context; }
-                    <div class="dt-name-cell">
-                        <span class="dt-team-icon" aria-hidden="true"><i class="bi bi-people"></i></span>
-                        <div>
-                            <div class="dt-team-name">@e.TeamName</div>
-                            <div class="dt-team-code">@e.TeamCode</div>
-                        </div>
-                    </div>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(TeamEntry.Department)" HeaderText="Department" Width="180" />
-            <GridColumn Field="@nameof(TeamEntry.TeamLead)" HeaderText="Team Lead" Width="180" />
-            <GridColumn Field="@nameof(TeamEntry.MemberCount)" HeaderText="Members" Width="100" />
-            <GridColumn Field="@nameof(TeamEntry.IsActive)" HeaderText="Status" Width="110">
-                <Template>
-                    @{ var e = (TeamEntry)context; }
-                    <AppStatusBadge Status="@(e.IsActive ? "Active" : "Inactive")"
-                                    Label="@(e.IsActive ? "Active" : "Inactive")" />
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="" Width="120" TextAlign="TextAlign.Right">
-                <Template>
-                    @{ var e = (TeamEntry)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEditDrawer(e)" title="Edit">
-                        <i class="bi bi-pencil" aria-hidden="true"></i>
-                    </button>
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(e)" title="Delete">
-                        <i class="bi bi-trash" aria-hidden="true"></i>
-                    </button>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
 
-<!-- Add/Edit Drawer -->
-<AppCrudDrawer @bind-Visible="_showDrawer"
-               Title="@(_editModel.TeamId == Guid.Empty ? "New Team" : "Edit Team")"
-               OnConfirm="SaveTeamAsync"
-               OnClose="CloseDrawer">
-    <Content>
-        <EditForm EditContext="_editContext" OnValidSubmit="SaveTeamAsync">
-            <DataAnnotationsValidator />
-        <div class="dt-form">
-            <label class="dt-form-label">Team Name *</label>
-            <InputText class="um-input" @bind-Value="_editModel.TeamName" placeholder="Team name" />
-            <ValidationMessage For="() => _editModel.TeamName" class="text-danger" />
-
-            <label class="dt-form-label">Team Code</label>
-            <InputText class="um-input dt-mono" @bind-Value="_editModel.TeamCode" placeholder="Short code" />
-            <ValidationMessage For="() => _editModel.TeamCode" class="text-danger" />
-
-            <label class="dt-form-label">Department</label>
-            <SfDropDownList TValue="Guid?" TItem="DepartmentOption"
-                            DataSource="_departmentOptions"
-                            Placeholder="Select department"
-                            ShowClearButton="true"
-                            @bind-Value="_editModel.DepartmentId">
-                <DropDownListFieldSettings Value="DepartmentId" Text="DepartmentName" />
-            </SfDropDownList>
-            <ValidationMessage For="() => _editModel.DepartmentId" class="text-danger" />
-
-            <label class="dt-form-label">Description</label>
-            <InputTextArea class="um-input" @bind-Value="_editModel.Description" placeholder="Optional description" />
-            <ValidationMessage For="() => _editModel.Description" class="text-danger" />
-
-            <label class="dt-form-label">Team Lead</label>
-            <InputText class="um-input" @bind-Value="_editModel.TeamLead" placeholder="Full name" />
-            <ValidationMessage For="() => _editModel.TeamLead" class="text-danger" />
-
-            <label class="dt-form-label">Team Type</label>
-            <InputText class="um-input" @bind-Value="_editModel.TeamType" placeholder="e.g. Service, Sales" />
-            <ValidationMessage For="() => _editModel.TeamType" class="text-danger" />
-
-            <label class="dt-form-label">Active</label>
-            <SfSwitch @bind-Checked="_editModel.IsActive" />
-        </div>
-        </EditForm>
-    </Content>
-</AppCrudDrawer>
-
-<SfDialog Width="420px" IsModal="true" ShowCloseIcon="false" Visible="_showDeleteDialog">
-    <DialogTemplates>
-        <Content>
-            <div class="um-confirm-dialog">
-                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div>
-                <div class="um-confirm-message">
-                    <h6>Delete team?</h6>
-                    <p>This will remove <strong>@_deleteTarget?.TeamName</strong> from the agency team list.</p>
+    <section class="dt-content-grid">
+        <div class="dt-main-panel">
+            @if (_loading)
+            {
+                <div class="dt-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Loading teams...</div>
+            }
+            else if (!_allEntries.Any())
+            {
+                <div class="dt-empty-state">
+                    <i class="bi bi-people" aria-hidden="true"></i>
+                    <strong>No teams configured</strong>
+                    <span>Create the first operating team to coordinate department capacity and workflow ownership.</span>
+                    <button class="um-btn um-btn-primary" type="button" @onclick="OpenAddModal"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Team</button>
                 </div>
-                <div class="um-modal-footer">
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showDeleteDialog = false">Cancel</button>
-                    <button type="button" class="um-btn um-btn-danger" @onclick="DeleteTeamAsync">Delete</button>
+            }
+            else
+            {
+                @if (ShowTab("overview"))
+                {
+                    <section class="dt-section">
+                        <div class="dt-section-header"><i class="bi bi-speedometer2" aria-hidden="true"></i><div><strong>Executive Overview</strong><span>Most important team governance and capacity signals.</span></div></div>
+                        <div class="dt-overview-grid">
+                            <div class="dt-identity-card"><span class="dt-module-icon dt-module-icon--blue"><i class="bi bi-people-fill"></i></span><div><strong>@_totalCount teams</strong><span>@_activeCount active Â· @_inactiveCount inactive</span></div></div>
+                            <div class="dt-identity-card"><span class="dt-module-icon dt-module-icon--green"><i class="bi bi-person-lines-fill"></i></span><div><strong>@_memberCount members</strong><span>@TeamsWithMembers team(s) with capacity</span></div></div>
+                            <div class="dt-identity-card"><span class="dt-module-icon dt-module-icon--purple"><i class="bi bi-building"></i></span><div><strong>@_deptCount departments</strong><span>@TeamsWithoutDepartments team(s) unassigned</span></div></div>
+                        </div>
+                        <div class="dt-team-board">
+                            @foreach (var team in FilteredEntries.Take(6))
+                            {
+                                <button type="button" class="dt-team-card @(SelectedTeam?.TeamId == team.TeamId ? "dt-team-card--selected" : null)" @onclick="() => SelectTeam(team)">
+                                    <span class="dt-team-avatar">@Initials(team.TeamName)</span>
+                                    <span class="dt-team-content"><strong>@team.TeamName</strong><small>@CodeText(team) Â· @DepartmentText(team)</small></span>
+                                    <span class="dt-status @(team.IsActive ? "dt-status--active" : "dt-status--inactive")">@(team.IsActive ? "Active" : "Inactive")</span>
+                                </button>
+                            }
+                        </div>
+                    </section>
+                }
+
+                @if (ShowTab("directory") || ShowTab("active") || ShowTab("inactive") || ShowTab("members") || ShowTab("departments") || ShowTab("leads"))
+                {
+                    <section class="dt-section">
+                        <div class="dt-section-header"><i class="bi bi-list-ul" aria-hidden="true"></i><div><strong>@DirectoryTitle</strong><span>Native team directory with clickable rows and inline actions.</span></div></div>
+                        <div class="dt-table-wrap">
+                            <table class="dt-table">
+                                <thead>
+                                    <tr>
+                                        <th>Team</th>
+                                        <th>Department</th>
+                                        <th>Lead</th>
+                                        <th>Members</th>
+                                        <th>Status</th>
+                                        <th class="dt-actions-col">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var team in FilteredEntries)
+                                    {
+                                        <tr class="@(SelectedTeam?.TeamId == team.TeamId ? "dt-row--selected" : null)" @onclick="() => SelectTeam(team)">
+                                            <td><div class="dt-name-cell"><span class="dt-icon" aria-hidden="true"><i class="bi bi-people"></i></span><div><strong>@team.TeamName</strong><small>@CodeText(team)</small></div></div></td>
+                                            <td>@DepartmentText(team)</td>
+                                            <td>@LeadText(team)</td>
+                                            <td><span class="dt-pill"><i class="bi bi-person-lines-fill" aria-hidden="true"></i> @team.MemberCount</span></td>
+                                            <td><span class="dt-status @(team.IsActive ? "dt-status--active" : "dt-status--inactive")">@(team.IsActive ? "Active" : "Inactive")</span></td>
+                                            <td class="dt-row-actions" @onclick:stopPropagation="true">
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditModal(team)" title="Edit team"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ConfirmDelete(team)" title="Delete team"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                }
+            }
+        </div>
+
+        <aside class="dt-side-panel" aria-label="Team details and governance">
+            <div class="dt-side-card">
+                <div class="dt-side-header"><i class="bi bi-people-fill" aria-hidden="true"></i><div><strong>Selected team</strong><span>@(SelectedTeam is null ? "Choose a row or card" : SelectedTeam.TeamName)</span></div></div>
+                @if (SelectedTeam is null)
+                {
+                    <p class="dt-side-copy">Select a team to review department alignment, lead ownership, member capacity, and available actions.</p>
+                }
+                else
+                {
+                    <div class="dt-selected-summary">
+                        <span class="dt-selected-avatar">@Initials(SelectedTeam.TeamName)</span>
+                        <div><strong>@SelectedTeam.TeamName</strong><small>@CodeText(SelectedTeam)</small></div>
+                    </div>
+                    <dl class="dt-detail-list">
+                        <div><dt>Department</dt><dd>@DepartmentText(SelectedTeam)</dd></div>
+                        <div><dt>Team Lead</dt><dd>@LeadText(SelectedTeam)</dd></div>
+                        <div><dt>Members</dt><dd>@SelectedTeam.MemberCount</dd></div>
+                        <div><dt>Status</dt><dd>@(SelectedTeam.IsActive ? "Active" : "Inactive")</dd></div>
+                    </dl>
+                    <div class="dt-selected-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEditModal(SelectedTeam)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                        <a class="um-btn um-btn-ghost" href="/tenant/agency/departments"><i class="bi bi-building" aria-hidden="true"></i> Departments</a>
+                    </div>
+                }
+            </div>
+            <div class="dt-side-card">
+                <div class="dt-side-header"><i class="bi bi-list-check" aria-hidden="true"></i><div><strong>Readiness checklist</strong><span>@ChecklistComplete of @Checklist.Count complete</span></div></div>
+                <div class="dt-checklist">
+                    @foreach (var item in Checklist)
+                    {
+                        <div class="dt-check-item @(item.Done ? "dt-check-item--done" : null)"><i class="bi @(item.Done ? "bi-check-circle-fill" : "bi-circle")" aria-hidden="true"></i><span>@item.Text</span></div>
+                    }
                 </div>
             </div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+            <div class="dt-side-card">
+                <div class="dt-side-header"><i class="bi bi-diagram-3" aria-hidden="true"></i><div><strong>Workflow impact</strong><span>Where team data matters</span></div></div>
+                <div class="dt-impact-list">
+                    <span><i class="bi bi-router" aria-hidden="true"></i> Work queue routing</span>
+                    <span><i class="bi bi-person-check" aria-hidden="true"></i> Ownership assignment</span>
+                    <span><i class="bi bi-bar-chart" aria-hidden="true"></i> Capacity reporting</span>
+                    <span><i class="bi bi-clock-history" aria-hidden="true"></i> SLA operations</span>
+                </div>
+            </div>
+        </aside>
+    </section>
+</div>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+@if (_showForm)
+{
+    <div class="dt-modal-backdrop" role="presentation">
+        <div class="dt-modal" role="dialog" aria-modal="true" aria-labelledby="team-form-title">
+            <EditForm EditContext="_editContext" OnValidSubmit="SaveTeamAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-header">
+                    <i class="bi bi-people-fill" aria-hidden="true"></i>
+                    <span id="team-form-title">@(_form.TeamId == Guid.Empty ? "New Team" : "Edit Team")</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div>
+                            <label class="dt-form-label">Team Name *</label>
+                            <InputText class="um-input" @bind-Value="_form.TeamName" placeholder="Commercial Service Team" />
+                        </div>
+                        <div>
+                            <label class="dt-form-label">Team Code</label>
+                            <InputText class="um-input dt-mono" @bind-Value="_form.TeamCode" placeholder="COMM-SVC" />
+                        </div>
+                        <div>
+                            <label class="dt-form-label">Department</label>
+                            <InputSelect class="um-input" @bind-Value="_form.DepartmentId">
+                                <option value="">Select department</option>
+                                @foreach (var department in _departmentOptions)
+                                {
+                                    <option value="@department.DepartmentId">@department.DepartmentName</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div>
+                            <label class="dt-form-label">Team Lead</label>
+                            <InputText class="um-input" @bind-Value="_form.TeamLead" placeholder="Full name" />
+                        </div>
+                        <div>
+                            <label class="dt-form-label">Member Count</label>
+                            <InputNumber class="um-input" @bind-Value="_form.MemberCount" />
+                        </div>
+                        <div>
+                            <label class="dt-toggle-card">
+                                <InputCheckbox @bind-Value="_form.IsActive" />
+                                <span><strong>Active team</strong><small>Available for workflow assignment and reporting.</small></span>
+                            </label>
+                        </div>
+                        <div class="dt-form-section dt-form-section--full">
+                            <label class="dt-form-label">Description</label>
+                            <InputTextArea class="um-input" @bind-Value="_form.Description" placeholder="Describe team responsibilities, service scope, or workflow ownership." />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving)
+                        {
+                            <span class="um-spinner um-spinner-sm" aria-hidden="true"></span>
+                        }
+                        else
+                        {
+                            <i class="bi bi-floppy" aria-hidden="true"></i>
+                        }
+                        Save Team
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_deleteTarget is not null)
+{
+    <div class="dt-modal-backdrop" role="presentation">
+        <div class="dt-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-team-title">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash" aria-hidden="true"></i></div>
+                <div>
+                    <h3 id="delete-team-title">Delete team?</h3>
+                    <p class="dt-confirm-copy">This will remove <strong>@_deleteTarget.TeamName</strong> from agency team assignments and reporting.</p>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="DeleteTeamAsync" disabled="@_deleting"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
+            </div>
+        </div>
+    </div>
+}
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private SfToast? _toast;
-
+    private Guid _tenantAdminUserId;
     private List<TeamEntry> _allEntries = [];
-    private List<TeamEntry> _entries    = [];
-
-    private bool _loading    = false;
-    private bool _showDrawer = false;
-
-    private string _search         = string.Empty;
-    private string _filterDept     = string.Empty;
-    private bool   _filterActiveOnly = false;
-    private string _activeFilter = "Overview";
+    private List<TeamEntry> _entries = [];
+    private List<DepartmentOption> _departmentOptions = [];
+    private bool _loading;
+    private bool _saving;
+    private bool _deleting;
+    private bool _showForm;
+    private string _search = string.Empty;
+    private string _filterDepartment = string.Empty;
+    private bool _activeOnly;
+    private string _activeTab = "overview";
     private string? _loadError;
-
-    private int _totalCount  = 0;
-    private int _activeCount = 0;
-    private int _memberCount = 0;
-    private int _deptCount   = 0;
-
-    private readonly List<LabelValue> _deptOptions = [];
-    private readonly List<DepartmentOption> _departmentOptions = [];
-
-    private TeamEntry _editModel = new();
-    private EditContext _editContext = default!;
-    private bool _showDeleteDialog;
+    private string? _toastMessage;
+    private string _toastClass = string.Empty;
+    private TeamEntry? SelectedTeam;
     private TeamEntry? _deleteTarget;
+    private TeamForm _form = new();
+    private EditContext _editContext = default!;
 
-    public DepartmentsTeams()
+    private IReadOnlyList<TeamEntry> FilteredEntries => _entries;
+    private int _totalCount => _allEntries.Count;
+    private int _activeCount => _allEntries.Count(e => e.IsActive);
+    private int _inactiveCount => _totalCount - _activeCount;
+    private int _memberCount => _allEntries.Sum(e => e.MemberCount);
+    private int _deptCount => _allEntries.Where(e => !string.IsNullOrWhiteSpace(e.Department)).Select(e => e.Department).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    private int TeamsWithMembers => _allEntries.Count(e => e.MemberCount > 0);
+    private int TeamsWithoutDepartments => _allEntries.Count(e => string.IsNullOrWhiteSpace(e.Department));
+    private int TeamsWithLeads => _allEntries.Count(e => !string.IsNullOrWhiteSpace(e.TeamLead));
+    private int TeamsMissingLeads => _allEntries.Count(e => string.IsNullOrWhiteSpace(e.TeamLead));
+    private int ChecklistComplete => Checklist.Count(i => i.Done);
+    private int ReadinessScore => Math.Clamp((ChecklistComplete * 100) / Math.Max(Checklist.Count, 1), 0, 100);
+    private string ReadinessSummary => ReadinessScore switch
     {
-        _editContext = new EditContext(_editModel);
-    }
+        >= 90 => "Team structure is enterprise ready.",
+        >= 70 => "Minor capacity cleanup recommended.",
+        >= 40 => "Team governance needs attention.",
+        _ => "Create core operating teams."
+    };
+
+    private IReadOnlyList<string> DepartmentFilterOptions => _allEntries
+        .Where(e => !string.IsNullOrWhiteSpace(e.Department))
+        .Select(e => e.Department)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(x => x)
+        .ToList();
+
+    private string DirectoryTitle => _activeTab switch
+    {
+        "active" => "Active Teams",
+        "inactive" => "Inactive Teams",
+        "members" => "Teams With Members",
+        "departments" => "Department-Aligned Teams",
+        "leads" => "Team Lead Coverage",
+        _ => "Team Directory"
+    };
+
+    private IReadOnlyList<KpiCard> Kpis =>
+    [
+        new("overview", "Teams", _totalCount.ToString(), "Total operating teams", "bi-people-fill", "blue", "Show team overview"),
+        new("active", "Active", _activeCount.ToString(), "Available for assignment", "bi-check-circle-fill", "green", "Show active teams"),
+        new("members", "Members", _memberCount.ToString(), $"{TeamsWithMembers} team(s) staffed", "bi-person-lines-fill", "purple", "Show teams with members"),
+        new("departments", "Departments", _deptCount.ToString(), $"{TeamsWithoutDepartments} unassigned", "bi-building", TeamsWithoutDepartments > 0 ? "amber" : "slate", "Show department aligned teams"),
+        new("leads", "Leads", TeamsWithLeads.ToString(), $"{TeamsMissingLeads} missing lead", "bi-person-badge", TeamsMissingLeads > 0 ? "red" : "slate", "Show lead ownership")
+    ];
+
+    private IReadOnlyList<NavTab> Tabs =>
+    [
+        new("overview", "Overview", "bi-speedometer2"),
+        new("directory", "Directory", "bi-list-ul"),
+        new("active", "Active", "bi-check-circle"),
+        new("inactive", "Inactive", "bi-dash-circle"),
+        new("members", "Members", "bi-person-lines-fill"),
+        new("departments", "Departments", "bi-building"),
+        new("leads", "Leads", "bi-person-badge")
+    ];
+
+    private IReadOnlyList<PriorityAction> PriorityActions =>
+    [
+        new("Add team", "Create a workflow unit", "bi-plus-circle", "add"),
+        new("Review leads", "Identify missing ownership", "bi-person-badge", "leads"),
+        new("Review departments", "Confirm team alignment", "bi-building", "departments")
+    ];
+
+    private IReadOnlyList<ChecklistItem> Checklist =>
+    [
+        new(_totalCount > 0, "At least one team is configured"),
+        new(_activeCount > 0, "At least one active team is available"),
+        new(TeamsWithLeads == _totalCount && _totalCount > 0, "Every team has a lead"),
+        new(TeamsWithoutDepartments == 0 && _totalCount > 0, "Every team is assigned to a department"),
+        new(TeamsWithMembers > 0, "At least one team has member capacity")
+    ];
 
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
+        _editContext = new EditContext(_form);
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+
         Breadcrumbs.SetCrumbs(
-            new("Home",        "/"),
-            new("Agency Setup","/tenant/agency/profile"),
-            new("Teams",       "/tenant/agency/teams"));
+            new("Home", "/"),
+            new("Agency Setup", "/tenant/agency/profile"),
+            new("Teams", "/tenant/agency/teams"));
 
         await LoadAsync();
     }
@@ -270,189 +445,289 @@
     private async Task LoadAsync()
     {
         _loading = true;
-        StateHasChanged();
+        _loadError = null;
         try
         {
-            _loadError = null;
             var departments = await Api.GetDepartmentsAsync(_tenantId);
-            _departmentOptions.Clear();
-            _departmentOptions.AddRange((departments ?? [])
+            _departmentOptions = (departments ?? [])
                 .Where(d => d.IsActive)
                 .OrderBy(d => d.DepartmentName)
-                .Select(d => new DepartmentOption(d.DepartmentId, d.DepartmentName)));
+                .Select(d => new DepartmentOption(d.DepartmentId, d.DepartmentName))
+                .ToList();
 
             var teams = await Api.GetTeamsAsync(_tenantId);
-            _allEntries = teams?.Select(t => new TeamEntry
-            {
-                TeamId = t.TeamId,
-                DepartmentId = t.DepartmentId,
-                TeamCode = t.TeamCode ?? string.Empty,
-                TeamName = t.TeamName,
-                Description = t.Description,
-                Department = t.DepartmentName ?? string.Empty,
-                TeamLead = t.ManagerName ?? string.Empty,
-                TeamType = string.Empty,
-                MemberCount = t.MemberCount,
-                IsActive = t.IsActive
-            }).ToList() ?? [];
-            ComputeKpi();
+            _allEntries = teams?.Select(TeamEntry.FromDto).OrderBy(e => e.Department).ThenBy(e => e.TeamName).ToList() ?? [];
             ApplyFilters();
+            SelectedTeam = SelectedTeam is null
+                ? _entries.FirstOrDefault()
+                : _allEntries.FirstOrDefault(e => e.TeamId == SelectedTeam.TeamId) ?? _entries.FirstOrDefault();
         }
         catch (Exception ex)
         {
             _loadError = $"Load failed: {ex.Message}";
-            await ShowToastAsync($"Error loading teams: {ex.Message}", "e-toast-danger");
+            ShowToast($"Error loading teams: {ex.Message}", true);
         }
-        finally { _loading = false; }
+        finally
+        {
+            _loading = false;
+        }
     }
-
-    private async Task OnSearchAsync(string _) => await LoadAsync();
 
     private void ApplyFilters()
     {
         _entries = _allEntries.Where(e =>
-            (_activeFilter switch
+            (_activeTab switch
             {
-                "Active" => e.IsActive,
-                "Members" => e.MemberCount > 0,
-                "Departments" => !string.IsNullOrWhiteSpace(e.Department),
+                "active" => e.IsActive,
+                "inactive" => !e.IsActive,
+                "members" => e.MemberCount > 0,
+                "departments" => !string.IsNullOrWhiteSpace(e.Department),
+                "leads" => !string.IsNullOrWhiteSpace(e.TeamLead),
                 _ => true
             }) &&
-            (string.IsNullOrEmpty(_filterDept) || e.Department == _filterDept) &&
-            (!_filterActiveOnly || e.IsActive) &&
-            (string.IsNullOrEmpty(_search) ||
+            (string.IsNullOrWhiteSpace(_filterDepartment) || string.Equals(e.Department, _filterDepartment, StringComparison.OrdinalIgnoreCase)) &&
+            (!_activeOnly || e.IsActive) &&
+            (string.IsNullOrWhiteSpace(_search) ||
              e.TeamName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             e.Department.Contains(_search, StringComparison.OrdinalIgnoreCase))
-        ).ToList();
+             e.TeamCode.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.Department.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.TeamLead.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             (e.Description?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+             (e.IsActive ? "Active" : "Inactive").Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).OrderByDescending(e => e.IsActive).ThenBy(e => e.Department).ThenBy(e => e.TeamName).ToList();
 
-        StateHasChanged();
+        if (SelectedTeam is not null && !_entries.Any(e => e.TeamId == SelectedTeam.TeamId))
+        {
+            SelectedTeam = _entries.FirstOrDefault();
+        }
     }
 
-    private void SetKpiFilter(string filter)
+    private void SetTab(string tab)
     {
-        _activeFilter = _activeFilter == filter && filter != "Overview" ? "Overview" : filter;
-        _filterActiveOnly = _activeFilter == "Active";
+        _activeTab = _activeTab == tab && tab != "overview" ? "overview" : tab;
+        _activeOnly = _activeTab == "active";
         ApplyFilters();
     }
 
-    private string KpiClass(string filter) => _activeFilter == filter ? "as-kpi-card--active" : string.Empty;
+    private bool IsActiveTab(string tab) => string.Equals(_activeTab, tab, StringComparison.OrdinalIgnoreCase);
+    private bool ShowTab(string tab) => IsActiveTab("overview") || IsActiveTab(tab);
 
-    private void OnRowSelected(RowSelectEventArgs<TeamEntry> args) => OpenEditDrawer(args.Data);
-
-    private void ComputeKpi()
+    private void ToggleActiveOnly(bool value)
     {
-        _totalCount  = _allEntries.Count;
-        _activeCount = _allEntries.Count(e => e.IsActive);
-        _memberCount = _allEntries.Sum(e => e.MemberCount);
-        _deptCount   = _allEntries.Where(e => !string.IsNullOrWhiteSpace(e.Department)).Select(e => e.Department).Distinct().Count();
-        _deptOptions.Clear();
-        _deptOptions.AddRange(_allEntries
-            .Where(e => !string.IsNullOrWhiteSpace(e.Department))
-            .Select(e => e.Department)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(x => x)
-            .Select(x => new LabelValue(x, x)));
+        _activeOnly = value;
+        ApplyFilters();
     }
 
-    private void OpenAddDrawer()  { _editModel = new(); _editContext = new EditContext(_editModel); _showDrawer = true; }
-    private void OpenEditDrawer(TeamEntry e) { _editModel = new TeamEntry { TeamId = e.TeamId, DepartmentId = e.DepartmentId, TeamCode = e.TeamCode, TeamName = e.TeamName, Description = e.Description, Department = e.Department, TeamLead = e.TeamLead, TeamType = e.TeamType, MemberCount = e.MemberCount, IsActive = e.IsActive }; _editContext = new EditContext(_editModel); _showDrawer = true; }
-    private void CloseDrawer() => _showDrawer = false;
+    private void ClearFilters()
+    {
+        _search = string.Empty;
+        _filterDepartment = string.Empty;
+        _activeOnly = false;
+        _activeTab = "overview";
+        ApplyFilters();
+    }
+
+    private void SelectTeam(TeamEntry team) => SelectedTeam = team;
+
+    private void RunPriorityAction(PriorityAction action)
+    {
+        if (action.TabKey == "add")
+        {
+            OpenAddModal();
+            return;
+        }
+        SetTab(action.TabKey);
+    }
+
+    private void OpenAddModal()
+    {
+        _form = new TeamForm();
+        _editContext = new EditContext(_form);
+        _showForm = true;
+    }
+
+    private void OpenEditModal(TeamEntry team)
+    {
+        _form = TeamForm.FromEntry(team);
+        _editContext = new EditContext(_form);
+        _showForm = true;
+    }
+
+    private void CloseForm() => _showForm = false;
 
     private async Task SaveTeamAsync()
     {
+        _saving = true;
         try
         {
-            var departmentName = _departmentOptions.FirstOrDefault(d => d.DepartmentId == _editModel.DepartmentId)?.DepartmentName ?? _editModel.Department;
-            var team = new DepartmentTeamDto
+            var team = _form.ToDto(_tenantId, _departmentOptions);
+            if (_form.TeamId == Guid.Empty)
             {
-                TeamId = _editModel.TeamId,
-                TenantId = _tenantId,
-                TeamName = _editModel.TeamName,
-                TeamCode = _editModel.TeamCode,
-                Description = _editModel.Description,
-                DepartmentId = _editModel.DepartmentId,
-                DepartmentName = departmentName,
-                ManagerName = _editModel.TeamLead,
-                MemberCount = _editModel.MemberCount,
-                IsActive = _editModel.IsActive,
-                Status = _editModel.IsActive ? "Active" : "Inactive"
-            };
-
-            if (_editModel.TeamId == Guid.Empty)
                 await Api.CreateTeamAsync(team, _tenantId);
+            }
             else
-                await Api.UpdateTeamAsync(_editModel.TeamId, team);
+            {
+                await Api.UpdateTeamAsync(_form.TeamId, team);
+            }
 
-            _showDrawer = false;
+            _showForm = false;
             await LoadAsync();
-            await ShowToastAsync("Team saved.", "e-toast-success");
+            ShowToast("Team saved.");
         }
         catch (Exception ex)
         {
-            await ShowToastAsync($"Save failed: {ex.Message}", "e-toast-danger");
+            ShowToast($"Save failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
         }
     }
 
-    private void ConfirmDelete(TeamEntry entry)
-    {
-        _deleteTarget = entry;
-        _showDeleteDialog = true;
-    }
+    private void ConfirmDelete(TeamEntry team) => _deleteTarget = team;
+    private void CancelDelete() => _deleteTarget = null;
 
     private async Task DeleteTeamAsync()
     {
         if (_deleteTarget is null)
+        {
             return;
+        }
 
+        _deleting = true;
         try
         {
             await Api.DeleteTeamAsync(_deleteTarget.TeamId);
-            _showDeleteDialog = false;
+            _deleteTarget = null;
             await LoadAsync();
-            await ShowToastAsync("Team deleted.", "e-toast-success");
+            ShowToast("Team deleted.");
         }
         catch (Exception ex)
         {
-            await ShowToastAsync($"Delete failed: {ex.Message}", "e-toast-danger");
+            ShowToast($"Delete failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _deleting = false;
         }
     }
 
-    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    private async Task CopySummaryAsync()
     {
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+        var summary = $"Teams: {_totalCount} total; {_activeCount} active; {_inactiveCount} inactive; {_memberCount} members; {_deptCount} departments; {TeamsWithLeads} lead-owned.";
+        await Js.InvokeVoidAsync("navigator.clipboard.writeText", summary);
+        ShowToast("Team summary copied.");
     }
 
-    private sealed record LabelValue(string Value, string Label);
+    private void ShowToast(string message, bool danger = false)
+    {
+        _toastMessage = message;
+        _toastClass = danger ? "dt-toast--danger" : string.Empty;
+    }
+
+    private void ClearToast() => _toastMessage = null;
+
+    private static string Initials(string value)
+    {
+        var words = value.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return words.Length switch
+        {
+            0 => "T",
+            1 => words[0][0].ToString().ToUpperInvariant(),
+            _ => string.Concat(words.Take(2).Select(w => char.ToUpperInvariant(w[0])))
+        };
+    }
+
+    private static string CodeText(TeamEntry team) => string.IsNullOrWhiteSpace(team.TeamCode) ? "No code" : team.TeamCode;
+    private static string DepartmentText(TeamEntry team) => string.IsNullOrWhiteSpace(team.Department) ? "Unassigned" : team.Department;
+    private static string LeadText(TeamEntry team) => string.IsNullOrWhiteSpace(team.TeamLead) ? "Unassigned" : team.TeamLead;
+
+    private sealed record KpiCard(string Key, string Label, string Value, string Detail, string Icon, string Tone, string Tooltip);
+    private sealed record NavTab(string Key, string Label, string Icon);
+    private sealed record PriorityAction(string Title, string Detail, string Icon, string TabKey);
+    private sealed record ChecklistItem(bool Done, string Text);
     private sealed record DepartmentOption(Guid DepartmentId, string DepartmentName);
 
     private sealed class TeamEntry
     {
-        public Guid   TeamId      { get; set; } = Guid.Empty;
-        public Guid?  DepartmentId { get; set; }
-        [StringLength(50)]
-        public string TeamCode    { get; set; } = string.Empty;
-        [Required, StringLength(200)]
-        public string TeamName    { get; set; } = string.Empty;
-        [StringLength(1000)]
+        public Guid TeamId { get; set; } = Guid.Empty;
+        public Guid? DepartmentId { get; set; }
+        public string TeamCode { get; set; } = string.Empty;
+        public string TeamName { get; set; } = string.Empty;
         public string? Description { get; set; }
-        public string Department  { get; set; } = string.Empty;
-        [StringLength(200)]
-        public string TeamLead    { get; set; } = string.Empty;
-        [StringLength(100)]
-        public string? TeamType    { get; set; }
-        public int    MemberCount { get; set; }
-        public bool   IsActive    { get; set; } = true;
+        public string Department { get; set; } = string.Empty;
+        public string TeamLead { get; set; } = string.Empty;
+        public int MemberCount { get; set; }
+        public bool IsActive { get; set; } = true;
+
+        public static TeamEntry FromDto(DepartmentTeamDto dto)
+            => new()
+            {
+                TeamId = dto.TeamId,
+                DepartmentId = dto.DepartmentId,
+                TeamCode = dto.TeamCode ?? string.Empty,
+                TeamName = dto.TeamName,
+                Description = dto.Description,
+                Department = dto.DepartmentName ?? string.Empty,
+                TeamLead = dto.ManagerName ?? string.Empty,
+                MemberCount = dto.MemberCount,
+                IsActive = dto.IsActive
+            };
     }
 
-    async Task ResolveCurrentUserContextAsync()
+    private sealed class TeamForm
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        public Guid TeamId { get; set; } = Guid.Empty;
+
+        [Required, StringLength(200)]
+        public string TeamName { get; set; } = string.Empty;
+
+        [StringLength(50)]
+        public string TeamCode { get; set; } = string.Empty;
+
+        public Guid? DepartmentId { get; set; }
+
+        [StringLength(1000)]
+        public string? Description { get; set; }
+
+        [StringLength(200)]
+        public string TeamLead { get; set; } = string.Empty;
+
+        [Range(0, 10000)]
+        public int MemberCount { get; set; }
+
+        public bool IsActive { get; set; } = true;
+
+        public static TeamForm FromEntry(TeamEntry entry)
+            => new()
+            {
+                TeamId = entry.TeamId,
+                TeamName = entry.TeamName,
+                TeamCode = entry.TeamCode,
+                DepartmentId = entry.DepartmentId,
+                Description = entry.Description,
+                TeamLead = entry.TeamLead,
+                MemberCount = entry.MemberCount,
+                IsActive = entry.IsActive
+            };
+
+        public DepartmentTeamDto ToDto(Guid tenantId, IReadOnlyList<DepartmentOption> departments)
+        {
+            var departmentName = departments.FirstOrDefault(d => d.DepartmentId == DepartmentId)?.DepartmentName;
+            return new DepartmentTeamDto
+            {
+                TeamId = TeamId,
+                TenantId = tenantId,
+                TeamName = TeamName.Trim(),
+                TeamCode = string.IsNullOrWhiteSpace(TeamCode) ? null : TeamCode.Trim(),
+                Description = string.IsNullOrWhiteSpace(Description) ? null : Description.Trim(),
+                DepartmentId = DepartmentId,
+                DepartmentName = departmentName,
+                ManagerName = string.IsNullOrWhiteSpace(TeamLead) ? null : TeamLead.Trim(),
+                MemberCount = MemberCount,
+                IsActive = IsActive,
+                Status = IsActive ? "Active" : "Inactive"
+            };
+        }
     }
 }

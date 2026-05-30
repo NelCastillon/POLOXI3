@@ -1,21 +1,23 @@
 @page "/tenant/agency/hours"
 @namespace Ams.Web.Components.Pages.AgencyAdmin
+@using Ams.Application.Features.Agency
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
 <PageTitle>Business Hours — Agency Setup</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
 <AppPageHeader Title="Business Hours"
-               Subtitle="Configure your agency's operating hours shown to clients and used by workflow routing"
-               Icon="bi-clock">
+               Subtitle="Enterprise operating schedule, routing availability, holiday closures, and emergency agency status."
+               Icon="bi-clock-history">
     <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="ResetToDefaults" title="Reset to defaults">
-            <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset Defaults
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
         </button>
-        <button class="um-btn um-btn-primary" @onclick="SaveChanges" disabled="@_saving">
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/profile"><i class="bi bi-building-check" aria-hidden="true"></i> Profile</a>
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/branches"><i class="bi bi-diagram-3" aria-hidden="true"></i> Branches</a>
+        <button class="um-btn um-btn-primary" type="button" @onclick="SaveChangesAsync" disabled="@(_saving || _loading)">
             @if (_saving)
             {
                 <span class="um-spinner um-spinner-sm" aria-hidden="true"></span>
@@ -29,304 +31,618 @@
     </Actions>
 </AppPageHeader>
 
-<section class="ma-hero as-tenant-hero">
-    <div>
-        <span class="ma-eyebrow">Tenant · Agency Setup</span>
-        <h2>Business Hours Command Center</h2>
-        <p>Control operating schedules, time-zone rules, holidays, and emergency closure status used by routing and client experiences.</p>
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
+{
+    <div class="bh-toast @_toastClass" role="status">
+        <i class="bi @(_toastClass == "bh-toast--danger" ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="bh-toast-close" @onclick="ClearToast" aria-label="Dismiss message"><i class="bi bi-x-lg"></i></button>
     </div>
-    <div class="ma-hero-actions">
-        <a class="um-btn um-btn-ghost" href="/tenant/agency/profile"><i class="bi bi-building" aria-hidden="true"></i> Profile</a>
-        <a class="um-btn um-btn-ghost" href="/tenant/agency/branding"><i class="bi bi-palette" aria-hidden="true"></i> Branding</a>
-        <button class="um-btn um-btn-primary" @onclick="SaveChanges" disabled="@_saving"><i class="bi bi-floppy" aria-hidden="true"></i> Save Hours</button>
-    </div>
-</section>
+}
 
-<div class="as-kpi-strip" aria-label="Business hours filters">
-    <button type="button" class='as-kpi-card @KpiClass("Overview")' @onclick='() => SetFilter("Overview")' title="Show all business-hours sections">
-        <span class="as-kpi-icon"><i class="bi bi-clock-history" aria-hidden="true"></i></span>
-        <div>
-            <div class="as-kpi-value">@(_emergencyClosing ? "Closed" : "Open")</div>
-            <div class="as-kpi-label">Overview</div>
+<div class="bh-page">
+    <section class="bh-hero">
+        <div class="bh-hero-main">
+            <span class="bh-eyebrow"><i class="bi bi-command" aria-hidden="true"></i> Tenant · Operating Model</span>
+            <h2>Business Hours Command Center</h2>
+            <p>Control the canonical availability data used by intake routing, client portal messaging, SLA expectations, branch handoffs, and emergency closure workflows.</p>
+            <div class="bh-hero-meta">
+                <span><i class="bi bi-calendar-week" aria-hidden="true"></i> @_openDays open day(s)</span>
+                <span><i class="bi bi-globe-americas" aria-hidden="true"></i> @TimezoneLabel</span>
+                <span><i class="bi @(_model.EmergencyClosing ? "bi-exclamation-octagon" : "bi-check-circle")" aria-hidden="true"></i> @(_model.EmergencyClosing ? "Emergency closed" : "Normal operations")</span>
+            </div>
         </div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Schedule")' @onclick='() => SetFilter("Schedule")' title="Show weekly schedule and open days">
-        <span class="as-kpi-icon as-kpi-icon--success"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
-        <div>
-            <div class="as-kpi-value">@_openDays</div>
-            <div class="as-kpi-label">Open Days / Week</div>
+        <div class="bh-hero-panel">
+            <div class="bh-readiness-card">
+                <span>Hours readiness</span>
+                <strong>@ReadinessScore%</strong>
+                <div class="bh-score-track"><div style="width:@ReadinessScore%"></div></div>
+                <small>@ReadinessSummary</small>
+            </div>
+            <div class="bh-action-list">
+                @foreach (var action in PriorityActions)
+                {
+                    <button type="button" class="bh-action-item" @onclick="() => RunPriorityAction(action)">
+                        <i class="bi @action.Icon" aria-hidden="true"></i>
+                        <span><strong>@action.Title</strong><small>@action.Detail</small></span>
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                    </button>
+                }
+            </div>
         </div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Timezone")' @onclick='() => SetFilter("Timezone")' title="Show time zone settings">
-        <span class="as-kpi-icon"><i class="bi bi-globe" aria-hidden="true"></i></span>
-        <div>
-            <div class="as-kpi-value">@_selectedTimezone</div>
-            <div class="as-kpi-label">Time Zone</div>
-        </div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Holidays")' @onclick='() => SetFilter("Holidays")' title="Show holiday closures">
-        <span class="as-kpi-icon as-kpi-icon--warning"><i class="bi bi-calendar-x" aria-hidden="true"></i></span>
-        <div>
-            <div class="as-kpi-value">@_holidays.Count</div>
-            <div class="as-kpi-label">Holiday Closures</div>
-        </div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Emergency")' @onclick='() => SetFilter("Emergency")' title="Show emergency closure status">
-        <span class="as-kpi-icon @(_emergencyClosing ? "as-kpi-icon--danger" : "as-kpi-icon--success")"><i class="bi bi-toggle-on" aria-hidden="true"></i></span>
-        <div>
-            <div class="as-kpi-value">@(_emergencyClosing ? "Closed" : "Normal")</div>
-            <div class="as-kpi-label">Current Status</div>
-        </div>
-    </button>
-</div>
+    </section>
 
-<div class="as-card">
-    @if (_saved)
-    {
-        <div class="as-save-banner" role="alert">
-            <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
-            Business hours saved successfully.
-        </div>
-    }
+    <section class="bh-kpi-strip" aria-label="Business hours KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="bh-kpi-card @(IsActiveTab(kpi.Key) ? "bh-kpi-card--active" : null)" title="@kpi.Tooltip" @onclick="() => SetTab(kpi.Key)">
+                <span class="bh-kpi-icon bh-kpi-icon--@kpi.Tone"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="bh-kpi-label">@kpi.Label</span>
+                <strong>@kpi.Value</strong>
+                <small>@kpi.Detail</small>
+            </button>
+        }
+    </section>
 
-    @if (ShowSection("Timezone"))
-    {
-    <div class="as-section">
-        <div class="bh-section-head">
-            <h3 class="as-section-title"><i class="bi bi-globe" aria-hidden="true"></i> Time Zone</h3>
-        </div>
-        <div class="bh-tz-row">
-            <label class="bh-field-label" for="tz-select">Agency Time Zone</label>
-            <SfDropDownList TValue="string" TItem="TzOption"
-                            DataSource="_timezones"
-                            @bind-Value="_selectedTimezone"
-                            Width="320px"
-                            ID="tz-select">
-                <DropDownListFieldSettings Value="Value" Text="Label" />
-            </SfDropDownList>
-        </div>
-    </div>
-    }
-
-    @if (ShowSection("Schedule"))
-    {
-    <div class="as-section">
-        <div class="bh-section-head">
-            <h3 class="as-section-title"><i class="bi bi-calendar-week" aria-hidden="true"></i> Weekly Schedule</h3>
-            <span class="as-section-hint">Toggle each day on or off and set open/close times</span>
-        </div>
-        <div class="bh-schedule-grid">
-            @foreach (var day in VisibleSchedule)
+    <section class="bh-command-bar">
+        <div class="bh-tabs" role="tablist" aria-label="Business hours sections">
+            @foreach (var tab in Tabs)
             {
-                <div class="bh-day-row @(day.IsOpen ? "bh-day-open" : "bh-day-closed")">
-                    <label class="bh-day-toggle">
-                        <input type="checkbox" @bind="day.IsOpen" class="bh-toggle-input" />
-                        <span class="bh-toggle-track" aria-hidden="true"><span class="bh-toggle-knob"></span></span>
-                        <span class="bh-day-name">@day.DayName</span>
-                    </label>
-                    @if (day.IsOpen)
-                    {
-                        <div class="bh-time-inputs">
-                            <div class="bh-time-group">
-                                <label class="bh-time-label">Opens</label>
-                                <input type="time" class="um-input bh-time-input" @bind="day.OpenTime" />
-                            </div>
-                            <span class="bh-time-sep">—</span>
-                            <div class="bh-time-group">
-                                <label class="bh-time-label">Closes</label>
-                                <input type="time" class="um-input bh-time-input" @bind="day.CloseTime" />
-                            </div>
-                            <label class="bh-lunch-label">
-                                <input type="checkbox" @bind="day.HasLunchBreak" />
-                                Lunch break
-                            </label>
-                            @if (day.HasLunchBreak)
+                <button type="button" role="tab" class="bh-tab @(IsActiveTab(tab.Key) ? "bh-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                    <i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label
+                </button>
+            }
+        </div>
+        <div class="bh-command-actions">
+            <button class="um-btn um-btn-ghost" type="button" @onclick="CopySummaryAsync" disabled="@_loading"><i class="bi bi-clipboard" aria-hidden="true"></i> Copy Summary</button>
+            <button class="um-btn um-btn-ghost" type="button" @onclick="ResetToDefaults" disabled="@_loading"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset Defaults</button>
+            <button class="um-btn um-btn-primary" type="button" @onclick="SaveChangesAsync" disabled="@(_saving || _loading)"><i class="bi bi-floppy" aria-hidden="true"></i> Save Hours</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger bh-load-error" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
+        </div>
+    }
+
+    <section class="bh-content-grid">
+        <div class="bh-main-panel">
+            @if (_loading)
+            {
+                <div class="bh-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Loading business hours...</div>
+            }
+            else
+            {
+                @if (ShowTab("overview"))
+                {
+                    <section class="bh-section">
+                        <div class="bh-section-header"><i class="bi bi-speedometer2" aria-hidden="true"></i><div><strong>Executive Overview</strong><span>Most important operating availability signals by workflow impact.</span></div></div>
+                        <div class="bh-overview-grid">
+                            <div class="bh-identity-card"><span class="bh-module-icon bh-module-icon--blue"><i class="bi bi-calendar-week"></i></span><div><strong>@_openDays open day(s)</strong><span>@WeeklyCoverageSummary</span></div></div>
+                            <div class="bh-identity-card"><span class="bh-module-icon bh-module-icon--green"><i class="bi bi-clock"></i></span><div><strong>@TotalWeeklyHours.ToString("0.#") hours/week</strong><span>@LongestDaySummary</span></div></div>
+                            <div class="bh-identity-card"><span class="bh-module-icon bh-module-icon--purple"><i class="bi bi-shield-check"></i></span><div><strong>@ReadinessScore% ready</strong><span>@ReadinessSummary</span></div></div>
+                        </div>
+                        <div class="bh-day-board">
+                            @foreach (var day in _model.WeeklySchedule)
                             {
-                                <div class="bh-time-group">
-                                    <label class="bh-time-label">From</label>
-                                    <input type="time" class="um-input bh-time-input" @bind="day.LunchStart" />
-                                </div>
-                                <span class="bh-time-sep">—</span>
-                                <div class="bh-time-group">
-                                    <label class="bh-time-label">To</label>
-                                    <input type="time" class="um-input bh-time-input" @bind="day.LunchEnd" />
+                                <button type="button" class="bh-day-card @(day.IsOpen ? "bh-day-card--open" : "bh-day-card--closed")" @onclick="() => FocusScheduleDay(day)">
+                                    <span class="bh-day-card-day">@day.DayName[..3]</span>
+                                    <strong>@(day.IsOpen ? $"{FormatTime(day.OpenTime)} - {FormatTime(day.CloseTime)}" : "Closed")</strong>
+                                    <small>@(day.HasLunchBreak ? $"Lunch {FormatTime(day.LunchStart)} - {FormatTime(day.LunchEnd)}" : day.IsOpen ? "Continuous coverage" : "No routing")</small>
+                                </button>
+                            }
+                        </div>
+                    </section>
+                }
+
+                @if (ShowTab("schedule"))
+                {
+                    <section class="bh-section">
+                        <div class="bh-section-header"><i class="bi bi-calendar-week" aria-hidden="true"></i><div><strong>Weekly Schedule</strong><span>Set standard opening, closing, lunch, and closed-day rules.</span></div></div>
+                        <div class="bh-schedule-grid">
+                            @foreach (var day in _model.WeeklySchedule)
+                            {
+                                <div class="bh-day-row @(day.IsOpen ? "bh-day-open" : "bh-day-closed") @(ReferenceEquals(day, _focusedDay) ? "bh-day-focused" : null)">
+                                    <label class="bh-day-toggle">
+                                        <input type="checkbox" @bind="day.IsOpen" class="bh-toggle-input" />
+                                        <span class="bh-toggle-track" aria-hidden="true"><span class="bh-toggle-knob"></span></span>
+                                        <span class="bh-day-name">@day.DayName</span>
+                                    </label>
+                                    @if (day.IsOpen)
+                                    {
+                                        <div class="bh-time-inputs">
+                                            <div class="bh-time-group">
+                                                <label class="bh-time-label">Opens</label>
+                                                <input type="time" class="um-input bh-time-input" @bind="day.OpenTime" />
+                                            </div>
+                                            <span class="bh-time-sep">—</span>
+                                            <div class="bh-time-group">
+                                                <label class="bh-time-label">Closes</label>
+                                                <input type="time" class="um-input bh-time-input" @bind="day.CloseTime" />
+                                            </div>
+                                            <label class="bh-lunch-label">
+                                                <input type="checkbox" @bind="day.HasLunchBreak" />
+                                                Lunch break
+                                            </label>
+                                            @if (day.HasLunchBreak)
+                                            {
+                                                <div class="bh-time-group">
+                                                    <label class="bh-time-label">From</label>
+                                                    <input type="time" class="um-input bh-time-input" @bind="day.LunchStart" />
+                                                </div>
+                                                <span class="bh-time-sep">—</span>
+                                                <div class="bh-time-group">
+                                                    <label class="bh-time-label">To</label>
+                                                    <input type="time" class="um-input bh-time-input" @bind="day.LunchEnd" />
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <span class="bh-closed-badge">Closed</span>
+                                    }
                                 </div>
                             }
                         </div>
-                    }
-                    else
-                    {
-                        <span class="bh-closed-badge">Closed</span>
-                    }
-                </div>
-            }
-        </div>
-    </div>
-    }
-
-    @if (ShowSection("Emergency"))
-    {
-    <div class="as-section">
-        <div class="bh-section-head">
-            <h3 class="as-section-title"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Emergency Closing</h3>
-        </div>
-        <div class="bh-emergency-row">
-            <label class="bh-emergency-toggle">
-                <input type="checkbox" @bind="_emergencyClosing" />
-                <span class="bh-emergency-label">
-                    <strong>Enable emergency closure</strong>
-                    <span>Overrides all hours and shows your agency as closed to clients</span>
-                </span>
-            </label>
-            @if (_emergencyClosing)
-            {
-                <div class="bh-emergency-message-wrap">
-                    <label class="bh-field-label">Closure Message</label>
-                    <textarea class="um-input bh-textarea" @bind="_emergencyMessage" rows="2"
-                              placeholder="e.g. Our office is temporarily closed due to severe weather."></textarea>
-                </div>
-            }
-        </div>
-    </div>
-    }
-
-    @if (ShowSection("Holidays"))
-    {
-    <div class="as-section">
-        <div class="bh-section-head">
-            <h3 class="as-section-title"><i class="bi bi-calendar-x" aria-hidden="true"></i> Holiday Closures</h3>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="AddHoliday">
-                <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Holiday
-            </button>
-        </div>
-        @if (_holidays.Count == 0)
-        {
-            <p class="bh-no-holidays">No holiday closures configured.</p>
-        }
-        else
-        {
-            <div class="bh-holiday-list">
-                @foreach (var h in _holidays)
-                {
-                    <div class="bh-holiday-row">
-                        <input type="date" class="um-input bh-holiday-date" @bind="h.Date" />
-                        <input type="text" class="um-input bh-holiday-name" @bind="h.Name" placeholder="Holiday name…" />
-                        <button class="bh-holiday-remove" @onclick="() => _holidays.Remove(h)" aria-label="Remove holiday">
-                            <i class="bi bi-x-lg" aria-hidden="true"></i>
-                        </button>
-                    </div>
+                    </section>
                 }
+
+                @if (ShowTab("timezone"))
+                {
+                    <section class="bh-section">
+                        <div class="bh-section-header"><i class="bi bi-globe-americas" aria-hidden="true"></i><div><strong>Time Zone & Routing</strong><span>Align client-facing hours and automation cutoffs to the correct agency time zone.</span></div></div>
+                        <div class="bh-timezone-panel">
+                            <label class="bh-field-label" for="timezone-select">Agency Time Zone</label>
+                            <select id="timezone-select" class="um-input bh-select" @bind="_model.TimeZoneId">
+                                @foreach (var timezone in Timezones)
+                                {
+                                    <option value="@timezone.Value">@timezone.Label</option>
+                                }
+                            </select>
+                            <p>Current operating windows, client portal availability notices, and after-hours routing are evaluated against <strong>@TimezoneLabel</strong>.</p>
+                        </div>
+                    </section>
+                }
+
+                @if (ShowTab("holidays"))
+                {
+                    <section class="bh-section">
+                        <div class="bh-section-header"><i class="bi bi-calendar-x" aria-hidden="true"></i><div><strong>Holiday Closures</strong><span>Maintain agency-wide closure dates used by intake and client messaging.</span></div><button class="um-btn um-btn-ghost um-btn-sm" type="button" @onclick="AddHoliday"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Holiday</button></div>
+                        @if (!_model.HolidayClosures.Any())
+                        {
+                            <div class="bh-empty-state"><i class="bi bi-calendar-plus" aria-hidden="true"></i><strong>No holiday closures configured</strong><span>Add dates when agency-wide service should be shown as closed.</span><button class="um-btn um-btn-primary" type="button" @onclick="AddHoliday"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Holiday</button></div>
+                        }
+                        else
+                        {
+                            <div class="bh-holiday-list">
+                                @foreach (var holiday in _model.HolidayClosures)
+                                {
+                                    <div class="bh-holiday-row">
+                                        <input type="date" class="um-input bh-holiday-date" @bind="holiday.Date" />
+                                        <input type="text" class="um-input bh-holiday-name" @bind="holiday.Name" placeholder="Holiday name" maxlength="120" />
+                                        <button class="bh-holiday-remove" type="button" @onclick="() => RequestRemoveHoliday(holiday)" aria-label="Remove holiday"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </section>
+                }
+
+                @if (ShowTab("emergency"))
+                {
+                    <section class="bh-section">
+                        <div class="bh-section-header"><i class="bi bi-exclamation-octagon" aria-hidden="true"></i><div><strong>Emergency Closure</strong><span>Override standard hours during storms, outages, or agency-wide operational incidents.</span></div></div>
+                        <div class="bh-emergency-panel @(_model.EmergencyClosing ? "bh-emergency-panel--active" : null)">
+                            <label class="bh-emergency-toggle">
+                                <input type="checkbox" @bind="_model.EmergencyClosing" />
+                                <span>
+                                    <strong>@(_model.EmergencyClosing ? "Emergency closure enabled" : "Normal operating status")</strong>
+                                    <small>@(_model.EmergencyClosing ? "All client-facing availability should display emergency closure messaging." : "Standard weekly and holiday rules are active.")</small>
+                                </span>
+                            </label>
+                            @if (_model.EmergencyClosing)
+                            {
+                                <div class="bh-emergency-message-wrap">
+                                    <label class="bh-field-label" for="emergency-message">Closure Message</label>
+                                    <textarea id="emergency-message" class="um-input bh-textarea" @bind="_model.EmergencyMessage" rows="3" maxlength="1000" placeholder="Example: Our office is temporarily closed due to severe weather. Claims emergencies are still being routed."></textarea>
+                                </div>
+                            }
+                        </div>
+                    </section>
+                }
+            }
+        </div>
+
+        <aside class="bh-side-panel" aria-label="Business hours governance">
+            <div class="bh-side-card">
+                <div class="bh-side-header"><i class="bi bi-activity" aria-hidden="true"></i><div><strong>Workflow impact</strong><span>Where these settings are used</span></div></div>
+                <div class="bh-impact-list">
+                    <span><i class="bi bi-router" aria-hidden="true"></i> Intake routing</span>
+                    <span><i class="bi bi-chat-dots" aria-hidden="true"></i> Client portal notices</span>
+                    <span><i class="bi bi-alarm" aria-hidden="true"></i> SLA expectations</span>
+                    <span><i class="bi bi-telephone-forward" aria-hidden="true"></i> After-hours handoffs</span>
+                </div>
             </div>
-        }
-    </div>
-    }
+            <div class="bh-side-card">
+                <div class="bh-side-header"><i class="bi bi-list-check" aria-hidden="true"></i><div><strong>Readiness checklist</strong><span>@ChecklistComplete of @Checklist.Count complete</span></div></div>
+                <div class="bh-checklist">
+                    @foreach (var item in Checklist)
+                    {
+                        <div class="bh-check-item @(item.Done ? "bh-check-item--done" : null)"><i class="bi @(item.Done ? "bi-check-circle-fill" : "bi-circle")" aria-hidden="true"></i><span>@item.Text</span></div>
+                    }
+                </div>
+            </div>
+            <div class="bh-side-card">
+                <div class="bh-side-header"><i class="bi bi-info-circle" aria-hidden="true"></i><div><strong>Last synced</strong><span>@LastSyncedText</span></div></div>
+                <p class="bh-side-copy">Saving publishes the tenant-wide source of truth for business hours immediately through the agency API.</p>
+            </div>
+        </aside>
+    </section>
 </div>
 
+@if (_holidayToRemove is not null)
+{
+    <div class="bh-modal-backdrop" role="presentation">
+        <div class="bh-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="remove-holiday-title">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash" aria-hidden="true"></i></div>
+                <div>
+                    <h3 id="remove-holiday-title">Remove holiday closure?</h3>
+                    <p class="bh-confirm-copy">Remove <strong>@_holidayToRemove.Name</strong> from agency-wide closure dates. Save hours to persist this change.</p>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelRemoveHoliday">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ConfirmRemoveHoliday"><i class="bi bi-trash" aria-hidden="true"></i> Remove</button>
+            </div>
+        </div>
+    </div>
+}
+
 @code {
-    private SfToast? _toast;
-    private bool _saving = false;
-    private bool _saved  = false;
-    private string _selectedTimezone = "Eastern Standard Time";
-    private bool _emergencyClosing   = false;
-    private string _emergencyMessage = string.Empty;
-    private string _activeFilter = "Overview";
+    private Guid _tenantId;
+    private bool _loading = true;
+    private bool _saving;
+    private string? _loadError;
+    private string? _toastMessage;
+    private string _toastClass = string.Empty;
+    private string _activeTab = "overview";
+    private DateTime? _lastSyncedUtc;
+    private BusinessHoursModel _model = BusinessHoursModel.CreateDefault();
+    private BusinessDayModel? _focusedDay;
+    private HolidayClosureModel? _holidayToRemove;
 
-    private int _openDays => _schedule.Count(d => d.IsOpen);
-
-    private IEnumerable<DaySchedule> VisibleSchedule => _activeFilter == "Schedule"
-        ? _schedule.Where(d => d.IsOpen)
-        : _schedule;
-
-    private sealed class DaySchedule
+    private int _openDays => _model.WeeklySchedule.Count(d => d.IsOpen);
+    private double TotalWeeklyHours => _model.WeeklySchedule.Where(d => d.IsOpen).Sum(d => Math.Max(0, (d.CloseTime - d.OpenTime).TotalHours - (d.HasLunchBreak ? Math.Max(0, (d.LunchEnd - d.LunchStart).TotalHours) : 0)));
+    private int ChecklistComplete => Checklist.Count(i => i.Done);
+    private string TimezoneLabel => Timezones.FirstOrDefault(t => t.Value == _model.TimeZoneId)?.ShortLabel ?? _model.TimeZoneId;
+    private string LastSyncedText => _lastSyncedUtc is null ? "Not synced this session" : $"{_lastSyncedUtc.Value.ToLocalTime():MMM d, yyyy h:mm tt}";
+    private string WeeklyCoverageSummary => _openDays == 0 ? "No standard operating days" : _openDays == 7 ? "Every day coverage" : "Weekday and selected day coverage";
+    private string LongestDaySummary => _model.WeeklySchedule.Where(d => d.IsOpen).OrderByDescending(d => d.CloseTime - d.OpenTime).Select(d => $"Longest window: {d.DayName}").FirstOrDefault() ?? "No open days configured";
+    private int ReadinessScore => Math.Clamp((ChecklistComplete * 100) / Math.Max(Checklist.Count, 1), 0, 100);
+    private string ReadinessSummary => ReadinessScore switch
     {
-        public string DayName      { get; set; } = string.Empty;
-        public bool   IsOpen       { get; set; }
-        public TimeOnly OpenTime   { get; set; } = new(8, 0);
-        public TimeOnly CloseTime  { get; set; } = new(17, 0);
-        public bool   HasLunchBreak { get; set; }
-        public TimeOnly LunchStart { get; set; } = new(12, 0);
-        public TimeOnly LunchEnd   { get; set; } = new(13, 0);
-    }
+        >= 90 => "Schedule is enterprise ready.",
+        >= 70 => "Minor cleanup recommended.",
+        >= 40 => "Routing data needs attention.",
+        _ => "Configure core operating data."
+    };
 
-    private sealed class HolidayClosure
-    {
-        public DateOnly Date { get; set; } = DateOnly.FromDateTime(DateTime.Today);
-        public string   Name { get; set; } = string.Empty;
-    }
-
-    private readonly List<DaySchedule> _schedule =
+    private IReadOnlyList<KpiCard> Kpis =>
     [
-        new() { DayName = "Monday",    IsOpen = true  },
-        new() { DayName = "Tuesday",   IsOpen = true  },
-        new() { DayName = "Wednesday", IsOpen = true  },
-        new() { DayName = "Thursday",  IsOpen = true  },
-        new() { DayName = "Friday",    IsOpen = true  },
-        new() { DayName = "Saturday",  IsOpen = false },
-        new() { DayName = "Sunday",    IsOpen = false },
+        new("overview", "Overview", _model.EmergencyClosing ? "Closed" : "Open", _model.EmergencyClosing ? "Emergency override active" : "Normal operating mode", "bi-speedometer2", _model.EmergencyClosing ? "red" : "blue", "Show operating overview"),
+        new("schedule", "Open Days", _openDays.ToString(), $"{TotalWeeklyHours:0.#} coverage hours/week", "bi-calendar-week", "green", "Filter to the weekly schedule"),
+        new("timezone", "Time Zone", TimezoneLabel, "Routing clock source", "bi-globe-americas", "purple", "Filter to time-zone settings"),
+        new("holidays", "Holidays", _model.HolidayClosures.Count.ToString(), NextHolidaySummary, "bi-calendar-x", "amber", "Filter to holiday closures"),
+        new("emergency", "Status", _model.EmergencyClosing ? "Closed" : "Normal", _model.EmergencyClosing ? "Closure message enabled" : "Standard rules apply", "bi-exclamation-octagon", _model.EmergencyClosing ? "red" : "slate", "Filter to emergency status")
     ];
 
-    private readonly List<HolidayClosure> _holidays = [];
-
-    private sealed record TzOption(string Value, string Label);
-
-    private static readonly List<TzOption> _timezones =
+    private IReadOnlyList<NavTab> Tabs =>
     [
-        new("Eastern Standard Time",  "Eastern (ET) — UTC-5/4"),
-        new("Central Standard Time",  "Central (CT) — UTC-6/5"),
-        new("Mountain Standard Time", "Mountain (MT) — UTC-7/6"),
-        new("Pacific Standard Time",  "Pacific (PT) — UTC-8/7"),
-        new("Alaskan Standard Time",  "Alaska (AKT) — UTC-9/8"),
-        new("Hawaiian Standard Time", "Hawaii (HT) — UTC-10"),
-        new("UTC",                    "UTC — Coordinated Universal Time"),
-        new("GMT Standard Time",      "London (GMT/BST)"),
-        new("Central European Standard Time", "Central European (CET/CEST)"),
+        new("overview", "Overview", "bi-speedometer2"),
+        new("schedule", "Schedule", "bi-calendar-week"),
+        new("timezone", "Time Zone", "bi-globe-americas"),
+        new("holidays", "Holidays", "bi-calendar-x"),
+        new("emergency", "Emergency", "bi-exclamation-octagon")
     ];
 
-    protected override void OnInitialized()
+    private IReadOnlyList<PriorityAction> PriorityActions =>
+    [
+        new("Review weekly schedule", "Validate service windows before publishing", "bi-calendar-check", "schedule"),
+        new("Add holiday closures", "Protect SLA and portal messaging", "bi-calendar-plus", "holidays"),
+        new("Emergency status", "Manage immediate agency availability", "bi-exclamation-triangle", "emergency")
+    ];
+
+    private IReadOnlyList<ChecklistItem> Checklist =>
+    [
+        new(_openDays > 0, "At least one operating day is open"),
+        new(_model.WeeklySchedule.Where(d => d.IsOpen).All(d => d.CloseTime > d.OpenTime), "All open days have valid time windows"),
+        new(!string.IsNullOrWhiteSpace(_model.TimeZoneId), "Agency time zone is selected"),
+        new(!_model.EmergencyClosing || !string.IsNullOrWhiteSpace(_model.EmergencyMessage), "Emergency closure has clear client messaging"),
+        new(_model.HolidayClosures.All(h => h.Date != default && !string.IsNullOrWhiteSpace(h.Name)), "Holiday closure entries are complete")
+    ];
+
+    private string NextHolidaySummary => _model.HolidayClosures.Where(h => h.Date >= DateOnly.FromDateTime(DateTime.Today)).OrderBy(h => h.Date).Select(h => $"Next: {h.Name}").FirstOrDefault() ?? "No upcoming closures";
+
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(
-            new("Home",           "/"),
-            new("Agency Setup",   "/tenant/agency/profile"),
+            new("Home", "/"),
+            new("Agency Setup", "/tenant/agency/profile"),
             new("Business Hours", "/tenant/agency/hours"));
+
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        await LoadAsync();
     }
 
-    private void AddHoliday() => _holidays.Add(new HolidayClosure());
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
 
-    private void SetFilter(string filter) => _activeFilter = _activeFilter == filter && filter != "Overview" ? "Overview" : filter;
+        try
+        {
+            var dto = await Api.GetAgencyBusinessHoursAsync(_tenantId);
+            _model = BusinessHoursModel.FromDto(dto);
+            _lastSyncedUtc = DateTime.UtcNow;
+            _focusedDay = null;
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Business hours failed to load: {ex.Message}";
+            ShowToast($"Business hours failed to load: {ex.Message}", true);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
 
-    private bool ShowSection(string section) => _activeFilter == "Overview" || _activeFilter == section;
+    private async Task SaveChangesAsync()
+    {
+        var validationError = ValidateModel();
+        if (!string.IsNullOrWhiteSpace(validationError))
+        {
+            ShowToast(validationError, true);
+            return;
+        }
 
-    private string KpiClass(string filter) => _activeFilter == filter ? "as-kpi-card--active" : string.Empty;
+        _saving = true;
+        try
+        {
+            await Api.UpdateAgencyBusinessHoursAsync(_tenantId, _model.ToRequest());
+            _lastSyncedUtc = DateTime.UtcNow;
+            ShowToast("Business hours saved successfully.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
 
     private void ResetToDefaults()
     {
-        foreach (var d in _schedule)
-        {
-            d.IsOpen        = d.DayName is "Monday" or "Tuesday" or "Wednesday" or "Thursday" or "Friday";
-            d.OpenTime      = new TimeOnly(8, 0);
-            d.CloseTime     = new TimeOnly(17, 0);
-            d.HasLunchBreak = false;
-        }
-        _emergencyClosing  = false;
-        _emergencyMessage  = string.Empty;
-        _selectedTimezone  = "Eastern Standard Time";
-        _saved             = false;
-        _activeFilter      = "Overview";
+        _model = BusinessHoursModel.CreateDefault();
+        _focusedDay = null;
+        _activeTab = "overview";
+        ShowToast("Default business hours restored. Save hours to publish changes.");
     }
 
-    private async Task SaveChanges()
+    private void AddHoliday()
     {
-        _saving = true;
-        _saved  = false;
-        StateHasChanged();
-        await Task.Delay(600); // simulate async save
-        _saving = false;
-        _saved  = true;
-        StateHasChanged();
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = "Business hours saved successfully.", CssClass = "e-toast-success" });
-        await Task.Delay(3500);
-        _saved = false;
-        StateHasChanged();
+        _model.HolidayClosures.Add(new HolidayClosureModel { Date = DateOnly.FromDateTime(DateTime.Today.AddDays(1)), Name = "New closure" });
+        _activeTab = "holidays";
+    }
+
+    private void RequestRemoveHoliday(HolidayClosureModel holiday) => _holidayToRemove = holiday;
+    private void CancelRemoveHoliday() => _holidayToRemove = null;
+
+    private void ConfirmRemoveHoliday()
+    {
+        if (_holidayToRemove is not null)
+        {
+            _model.HolidayClosures.Remove(_holidayToRemove);
+            ShowToast("Holiday closure removed. Save hours to publish changes.");
+        }
+        _holidayToRemove = null;
+    }
+
+    private async Task CopySummaryAsync()
+    {
+        var summary = $"Business Hours: {TimezoneLabel}; {_openDays} open days; {TotalWeeklyHours:0.#} weekly hours; {_model.HolidayClosures.Count} holiday closures; status {(_model.EmergencyClosing ? "Emergency Closed" : "Normal")}.";
+        await Js.InvokeVoidAsync("navigator.clipboard.writeText", summary);
+        ShowToast("Business hours summary copied.");
+    }
+
+    private void RunPriorityAction(PriorityAction action) => SetTab(action.TabKey);
+    private void FocusScheduleDay(BusinessDayModel day) { _focusedDay = day; _activeTab = "schedule"; }
+    private void SetTab(string tab) => _activeTab = tab;
+    private bool IsActiveTab(string tab) => string.Equals(_activeTab, tab, StringComparison.OrdinalIgnoreCase);
+    private bool ShowTab(string tab) => IsActiveTab("overview") || IsActiveTab(tab);
+    private void ClearToast() => _toastMessage = null;
+
+    private void ShowToast(string message, bool danger = false)
+    {
+        _toastMessage = message;
+        _toastClass = danger ? "bh-toast--danger" : string.Empty;
+    }
+
+    private string? ValidateModel()
+    {
+        if (_openDays == 0)
+        {
+            return "At least one operating day must be open.";
+        }
+
+        foreach (var day in _model.WeeklySchedule.Where(d => d.IsOpen))
+        {
+            if (day.CloseTime <= day.OpenTime)
+            {
+                return $"{day.DayName} close time must be after open time.";
+            }
+
+            if (day.HasLunchBreak && (day.LunchEnd <= day.LunchStart || day.LunchStart < day.OpenTime || day.LunchEnd > day.CloseTime))
+            {
+                return $"{day.DayName} lunch break must be inside operating hours.";
+            }
+        }
+
+        if (_model.EmergencyClosing && string.IsNullOrWhiteSpace(_model.EmergencyMessage))
+        {
+            return "Emergency closure requires a client-facing message.";
+        }
+
+        if (_model.HolidayClosures.Any(h => h.Date == default || string.IsNullOrWhiteSpace(h.Name)))
+        {
+            return "Holiday closures require a date and name.";
+        }
+
+        return null;
+    }
+
+    private static string FormatTime(TimeOnly time) => time.ToString("h:mm tt");
+
+    private static readonly IReadOnlyList<TimezoneOption> Timezones =
+    [
+        new("Eastern Standard Time", "Eastern (ET) — UTC-5/4", "Eastern"),
+        new("Central Standard Time", "Central (CT) — UTC-6/5", "Central"),
+        new("Mountain Standard Time", "Mountain (MT) — UTC-7/6", "Mountain"),
+        new("Pacific Standard Time", "Pacific (PT) — UTC-8/7", "Pacific"),
+        new("Alaskan Standard Time", "Alaska (AKT) — UTC-9/8", "Alaska"),
+        new("Hawaiian Standard Time", "Hawaii (HT) — UTC-10", "Hawaii"),
+        new("UTC", "UTC — Coordinated Universal Time", "UTC")
+    ];
+
+    private sealed record KpiCard(string Key, string Label, string Value, string Detail, string Icon, string Tone, string Tooltip);
+    private sealed record NavTab(string Key, string Label, string Icon);
+    private sealed record PriorityAction(string Title, string Detail, string Icon, string TabKey);
+    private sealed record ChecklistItem(bool Done, string Text);
+    private sealed record TimezoneOption(string Value, string Label, string ShortLabel);
+
+    private sealed class BusinessHoursModel
+    {
+        public string TimeZoneId { get; set; } = "Eastern Standard Time";
+        public bool EmergencyClosing { get; set; }
+        public string? EmergencyMessage { get; set; }
+        public List<BusinessDayModel> WeeklySchedule { get; set; } = [];
+        public List<HolidayClosureModel> HolidayClosures { get; set; } = [];
+
+        public static BusinessHoursModel FromDto(AgencyBusinessHoursDto? dto)
+        {
+            if (dto is null)
+            {
+                return CreateDefault();
+            }
+
+            return new BusinessHoursModel
+            {
+                TimeZoneId = string.IsNullOrWhiteSpace(dto.TimeZoneId) ? "Eastern Standard Time" : dto.TimeZoneId,
+                EmergencyClosing = dto.EmergencyClosing,
+                EmergencyMessage = dto.EmergencyMessage,
+                WeeklySchedule = NormalizeSchedule(dto.WeeklySchedule.Select(BusinessDayModel.FromDto)),
+                HolidayClosures = dto.HolidayClosures.OrderBy(h => h.Date).Select(HolidayClosureModel.FromDto).ToList()
+            };
+        }
+
+        public static BusinessHoursModel CreateDefault()
+            => new()
+            {
+                WeeklySchedule = NormalizeSchedule([]),
+                HolidayClosures =
+                [
+                    new() { Date = new DateOnly(DateTime.Today.Year, 1, 1), Name = "New Year's Day" },
+                    new() { Date = new DateOnly(DateTime.Today.Year, 7, 4), Name = "Independence Day" },
+                    new() { Date = new DateOnly(DateTime.Today.Year, 12, 25), Name = "Christmas Day" }
+                ]
+            };
+
+        public UpdateAgencyBusinessHoursRequest ToRequest()
+            => new()
+            {
+                TimeZoneId = TimeZoneId,
+                EmergencyClosing = EmergencyClosing,
+                EmergencyMessage = EmergencyMessage,
+                WeeklySchedule = WeeklySchedule.Select(d => d.ToDto()).ToList(),
+                HolidayClosures = HolidayClosures.OrderBy(h => h.Date).Select(h => h.ToDto()).ToList()
+            };
+
+        private static List<BusinessDayModel> NormalizeSchedule(IEnumerable<BusinessDayModel> source)
+        {
+            var byDay = source.GroupBy(d => d.DayOfWeek).ToDictionary(g => g.Key, g => g.First());
+            var days = new List<BusinessDayModel>(7);
+            for (var i = 0; i < 7; i++)
+            {
+                if (byDay.TryGetValue(i, out var existing))
+                {
+                    existing.DayName = Enum.GetName((DayOfWeek)i) ?? i.ToString();
+                    existing.DayOfWeek = i;
+                    days.Add(existing);
+                }
+                else
+                {
+                    days.Add(new BusinessDayModel { DayOfWeek = i, DayName = Enum.GetName((DayOfWeek)i) ?? i.ToString(), IsOpen = i is >= 1 and <= 5 });
+                }
+            }
+            return days;
+        }
+    }
+
+    private sealed class BusinessDayModel
+    {
+        public string DayName { get; set; } = string.Empty;
+        public int DayOfWeek { get; set; }
+        public bool IsOpen { get; set; }
+        public TimeOnly OpenTime { get; set; } = new(8, 0);
+        public TimeOnly CloseTime { get; set; } = new(17, 0);
+        public bool HasLunchBreak { get; set; }
+        public TimeOnly LunchStart { get; set; } = new(12, 0);
+        public TimeOnly LunchEnd { get; set; } = new(13, 0);
+
+        public static BusinessDayModel FromDto(AgencyBusinessDayDto dto)
+            => new()
+            {
+                DayName = dto.DayName,
+                DayOfWeek = dto.DayOfWeek,
+                IsOpen = dto.IsOpen,
+                OpenTime = dto.OpenTime,
+                CloseTime = dto.CloseTime,
+                HasLunchBreak = dto.HasLunchBreak,
+                LunchStart = dto.LunchStart ?? new TimeOnly(12, 0),
+                LunchEnd = dto.LunchEnd ?? new TimeOnly(13, 0)
+            };
+
+        public AgencyBusinessDayDto ToDto()
+            => new()
+            {
+                DayName = DayName,
+                DayOfWeek = DayOfWeek,
+                IsOpen = IsOpen,
+                OpenTime = OpenTime,
+                CloseTime = CloseTime,
+                HasLunchBreak = HasLunchBreak,
+                LunchStart = HasLunchBreak ? LunchStart : null,
+                LunchEnd = HasLunchBreak ? LunchEnd : null
+            };
+    }
+
+    private sealed class HolidayClosureModel
+    {
+        public DateOnly Date { get; set; } = DateOnly.FromDateTime(DateTime.Today);
+        public string Name { get; set; } = string.Empty;
+
+        public static HolidayClosureModel FromDto(AgencyHolidayClosureDto dto)
+            => new() { Date = dto.Date, Name = dto.Name };
+
+        public AgencyHolidayClosureDto ToDto()
+            => new() { Date = Date, Name = Name.Trim() };
     }
 }

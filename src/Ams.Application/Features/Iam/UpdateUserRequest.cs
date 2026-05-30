@@ -1,3 +1,5 @@
+using Ams.Application.Common.Validation;
+
 namespace Ams.Application.Features.Iam;
 
 public sealed class UpdateUserRequest
@@ -5,6 +7,7 @@ public sealed class UpdateUserRequest
     public Guid UserId { get; set; }
     public string FullName { get; set; } = string.Empty;
     public string? DisplayName { get; set; }
+    [AmsPhone]
     public string? PhoneNumber { get; set; }
     public string? Department { get; set; }
     public string? Region { get; set; }

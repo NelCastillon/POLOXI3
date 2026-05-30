@@ -1,220 +1,429 @@
-@page "/crm/quotes"
+﻿@page "/crm/quotes"
 @page "/quotes/new"
 @page "/quotes/{QuoteId:guid}"
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
 @using Ams.Application.Features.Quotes
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 
-<PageTitle>Quotes</PageTitle>
+<PageTitle>@PageTitleText</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<AppPageHeader Title="Quotes" Subtitle="Create, edit, and manage account quotes" Icon="bi-file-text">
-    <Actions>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Quote
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<div class="toolbar">
-    <SfTextBox Placeholder="Search quotes..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
-</div>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastMessage is not null)
 {
-    <div class="alert alert-danger" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
-        @_loadError
+    <div class="qd-toast @ToastCss" role="status" aria-live="polite">
+        <i class="bi @ToastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="qd-toast-close" @onclick="CloseToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-@if (_loading && _items is null)
+@if (IsDetailRoute)
 {
-    <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+    @if (_loading && _quote is null)
+    {
+        <div class="qd-loading"><span class="um-spinner" aria-hidden="true"></span><span>Loading quoteâ€¦</span></div>
+    }
+    else if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+    }
+    else if (_quote is null)
+    {
+        <div class="qd-not-found">
+            <i class="bi bi-file-earmark-x qd-not-found-icon" aria-hidden="true"></i>
+            <h2>Quote not found</h2>
+            <p>The requested quote record could not be loaded.</p>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/quotes")'><i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Quotes</button>
+        </div>
+    }
+    else
+    {
+        <div class="qd-page-shell">
+            <AppPageHeader Title="@_quote.QuoteNumber" Subtitle="@(_quote.AccountName ?? "Account quote")" Icon="bi-file-earmark-text" ReturnUrl="/crm/quotes" ReturnLabel="Back to Quotes">
+                <Actions>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="OpenEditCurrent"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="RefreshDetailAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+                    <button type="button" class="um-btn um-btn-danger" @onclick="() => ConfirmDelete(_quote)"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
+                </Actions>
+            </AppPageHeader>
+
+            <section class="qd-hero" aria-label="Quote executive summary">
+                <div class="qd-hero-main">
+                    <div class="qd-eyebrow">Quote Dashboard</div>
+                    <div class="qd-hero-title-row">
+                        <h1>@_quote.QuoteNumber</h1>
+                        <span class="@StatusBadge(_quote.StatusCode)">@_quote.StatusCode</span>
+                    </div>
+                    <p>@(_quote.OpportunityName ?? "No opportunity linked") Â· @(_quote.AccountName ?? "No account name")</p>
+                    <div class="qd-action-row">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="PresentQuoteAsync" disabled="@_saving"><i class="bi bi-send" aria-hidden="true"></i> Present</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="AcceptQuoteAsync" disabled="@_saving"><i class="bi bi-check2-circle" aria-hidden="true"></i> Accept</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="DeclineQuoteAsync" disabled="@_saving"><i class="bi bi-x-circle" aria-hidden="true"></i> Decline</button>
+                    </div>
+                </div>
+                <div class="qd-hero-money">
+                    <span>Total Premium</span>
+                    <strong>@_quote.TotalAmount.ToString("C0")</strong>
+                    <small>@ValidityLabel</small>
+                </div>
+            </section>
+
+            <div class="qd-kpi-strip" aria-label="Quote KPIs">
+                <button type="button" class="qd-kpi-card @KpiActive(0)" @onclick="() => SetTab(0)" title="View overview">
+                    <span class="qd-kpi-icon qd-kpi-icon--blue"><i class="bi bi-currency-dollar" aria-hidden="true"></i></span>
+                    <span>Total</span>
+                    <strong>@_quote.TotalAmount.ToString("C0")</strong>
+                    <small>@_lines.Count line item(s)</small>
+                </button>
+                <button type="button" class="qd-kpi-card @KpiActive(1)" @onclick="() => SetTab(1)" title="View quote lines">
+                    <span class="qd-kpi-icon qd-kpi-icon--green"><i class="bi bi-list-check" aria-hidden="true"></i></span>
+                    <span>Lines</span>
+                    <strong>@_lines.Count</strong>
+                    <small>@LineTotal.ToString("C0") line total</small>
+                </button>
+                <button type="button" class="qd-kpi-card @KpiActive(2)" @onclick="() => SetTab(2)" title="View workflow">
+                    <span class="qd-kpi-icon qd-kpi-icon--purple"><i class="bi bi-diagram-3" aria-hidden="true"></i></span>
+                    <span>Workflow</span>
+                    <strong>@WorkflowStep</strong>
+                    <small>@NextBestAction</small>
+                </button>
+                <button type="button" class="qd-kpi-card @KpiActive(3)" @onclick="() => SetTab(3)" title="View account context">
+                    <span class="qd-kpi-icon qd-kpi-icon--amber"><i class="bi bi-building" aria-hidden="true"></i></span>
+                    <span>Account</span>
+                    <strong>@(_quote.AccountName ?? "â€”")</strong>
+                    <small>@(_quote.OpportunityName ?? "No opportunity")</small>
+                </button>
+            </div>
+
+            <div class="qd-layout">
+                <main class="qd-main-card">
+                    <nav class="qd-tabs" aria-label="Quote detail tabs">
+                        @TabButton(0, "Overview", "bi-house")
+                        @TabButton(1, "Lines", "bi-list-check")
+                        @TabButton(2, "Workflow", "bi-diagram-3")
+                        @TabButton(3, "Account Context", "bi-building")
+                    </nav>
+
+                    <section class="qd-tab-body">
+                        @if (_tab == 0)
+                        {
+                            <div class="qd-card-grid">
+                                <article class="qd-info-card">
+                                    <h3>Quote Information</h3>
+                                    <div class="qd-field-grid">
+                                        @Field("Quote #", _quote.QuoteNumber)
+                                        @Field("Status", _quote.StatusCode)
+                                        @Field("Total Amount", _quote.TotalAmount.ToString("C2"))
+                                        @Field("Valid Until", _quote.ValidUntilDate?.ToString("d") ?? "â€”")
+                                        @Field("Created", _quote.CreatedDateUtc.ToString("f"))
+                                        @Field("Last Modified", _quote.ModifiedDateUtc?.ToString("f") ?? "â€”")
+                                    </div>
+                                </article>
+                                <article class="qd-info-card">
+                                    <h3>Revenue Context</h3>
+                                    <div class="qd-field-grid">
+                                        @Field("Account", _quote.AccountName ?? "â€”")
+                                        @Field("Opportunity", _quote.OpportunityName ?? "â€”")
+                                        @Field("Line Total", LineTotal.ToString("C2"))
+                                        @Field("Delta", (_quote.TotalAmount - LineTotal).ToString("C2"))
+                                        @Field("Average Line", (_lines.Count == 0 ? 0 : LineTotal / _lines.Count).ToString("C2"))
+                                        @Field("Validity", ValidityLabel)
+                                    </div>
+                                </article>
+                            </div>
+                        }
+                        else if (_tab == 1)
+                        {
+                            <div class="qd-tab-toolbar">
+                                <span>@_lines.Count quote line(s)</span>
+                                <span class="qd-muted">Line editing requires quote-line API endpoints.</span>
+                            </div>
+                            @if (_lines.Count == 0)
+                            {
+                                @EmptyState("bi-list-check", "No quote lines", "This quote has no line items yet.")
+                            }
+                            else
+                            {
+                                <div class="qd-table-wrap">
+                                    <table class="qd-table">
+                                        <thead>
+                                            <tr>
+                                                <th>#</th>
+                                                <th>Item</th>
+                                                <th>Description</th>
+                                                <th class="qd-text-end">Qty</th>
+                                                <th class="qd-text-end">Unit</th>
+                                                <th class="qd-text-end">Discount</th>
+                                                <th class="qd-text-end">Tax</th>
+                                                <th class="qd-text-end">Total</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var line in _lines.OrderBy(l => l.LineOrder))
+                                            {
+                                                <tr>
+                                                    <td>@line.LineOrder</td>
+                                                    <td>@(line.ItemCode ?? "â€”")</td>
+                                                    <td><strong>@line.Description</strong></td>
+                                                    <td class="qd-text-end">@line.Quantity.ToString("N2")</td>
+                                                    <td class="qd-text-end">@line.UnitPrice.ToString("C2")</td>
+                                                    <td class="qd-text-end">@line.DiscountPercent.ToString("N1")%</td>
+                                                    <td class="qd-text-end">@line.TaxPercent.ToString("N1")%</td>
+                                                    <td class="qd-text-end"><strong>@line.LineTotal.ToString("C2")</strong></td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
+                        }
+                        else if (_tab == 2)
+                        {
+                            <div class="qd-workflow">
+                                @WorkflowNode("Draft", "bi-pencil-square")
+                                @WorkflowNode("Presented", "bi-send")
+                                @WorkflowNode("Accepted", "bi-check2-circle")
+                                @WorkflowNode("Declined", "bi-x-circle")
+                                @WorkflowNode("Expired", "bi-calendar-x")
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="qd-card-grid">
+                                <article class="qd-info-card">
+                                    <h3>Account</h3>
+                                    <div class="qd-field-grid">
+                                        @Field("Account Name", _quote.AccountName ?? "â€”")
+                                        @Field("Account ID", _quote.AccountId.ToString())
+                                    </div>
+                                    <button type="button" class="um-btn um-btn-ghost" @onclick="OpenAccount"><i class="bi bi-arrow-right" aria-hidden="true"></i> Open Account</button>
+                                </article>
+                                <article class="qd-info-card">
+                                    <h3>Opportunity</h3>
+                                    <div class="qd-field-grid">
+                                        @Field("Opportunity", _quote.OpportunityName ?? "â€”")
+                                        @Field("Opportunity ID", _quote.OpportunityId?.ToString() ?? "â€”")
+                                    </div>
+                                    @if (_quote.OpportunityId.HasValue)
+                                    {
+                                        <button type="button" class="um-btn um-btn-ghost" @onclick="OpenOpportunity"><i class="bi bi-arrow-right" aria-hidden="true"></i> Open Opportunity</button>
+                                    }
+                                </article>
+                            </div>
+                        }
+                    </section>
+                </main>
+
+                <aside class="qd-side-panel" aria-label="Quote actions and intelligence">
+                    <section class="qd-panel-card qd-panel-card--action">
+                        <h3>Next Best Action</h3>
+                        <p>@NextBestActionDetail</p>
+                        <button type="button" class="um-btn um-btn-primary qd-full" @onclick="ExecuteNextBestActionAsync" disabled="@_saving"><i class="bi bi-stars" aria-hidden="true"></i> Execute Action</button>
+                    </section>
+                    <section class="qd-panel-card">
+                        <h3>Quality Checks</h3>
+                        @CheckRow("Account linked", _quote.AccountId != Guid.Empty)
+                        @CheckRow("Opportunity linked", _quote.OpportunityId.HasValue)
+                        @CheckRow("Quote lines loaded", _lines.Count > 0)
+                        @CheckRow("Still valid", !IsExpired)
+                        @CheckRow("Amount captured", _quote.TotalAmount > 0)
+                    </section>
+                </aside>
+            </div>
+        </div>
+    }
 }
 else
 {
-    <div class="app-datagrid">
-        <SfGrid TValue="QuoteDto" DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px" EnableHover="true">
-            <GridPageSettings PageSize="10"></GridPageSettings>
-            <GridColumns>
-                <GridColumn Field="@nameof(QuoteDto.QuoteNumber)" HeaderText="Quote #" Width="140"></GridColumn>
-                <GridColumn Field="@nameof(QuoteDto.AccountName)" HeaderText="Account" Width="200"></GridColumn>
-                <GridColumn Field="@nameof(QuoteDto.OpportunityName)" HeaderText="Opportunity" Width="200"></GridColumn>
-                <GridColumn Field="@nameof(QuoteDto.TotalAmount)" HeaderText="Total Amount" Format="C2" Width="140" TextAlign="TextAlign.Right"></GridColumn>
-                <GridColumn Field="@nameof(QuoteDto.ValidUntilDate)" HeaderText="Valid Until" Type="ColumnType.DateTime" Format="d" Width="140"></GridColumn>
-                <GridColumn Field="@nameof(QuoteDto.StatusCode)" HeaderText="Status" Width="120"></GridColumn>
-                <GridColumn Field="@nameof(QuoteDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="g" Width="160"></GridColumn>
-                <GridColumn HeaderText="Actions" Width="140" TextAlign="TextAlign.Right">
-                    <Template>
-                        @{ var quote = (QuoteDto)context; }
-                        <button class="um-btn um-btn-ghost um-btn-sm" title="Edit" @onclick="() => OpenEdit(quote)">
-                            <i class="bi bi-pencil" aria-hidden="true"></i>
-                        </button>
-                        <button class="um-btn um-btn-ghost um-btn-sm" title="Delete" @onclick="() => ConfirmDelete(quote)">
-                            <i class="bi bi-trash" aria-hidden="true"></i>
-                        </button>
-                    </Template>
-                </GridColumn>
-            </GridColumns>
-        </SfGrid>
+    <div class="qd-list-shell">
+        <AppPageHeader Title="Quotes" Subtitle="Create, edit, and manage account quotes" Icon="bi-file-text">
+            <Actions>
+                <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Quote</button>
+                <button class="um-btn um-btn-ghost" @onclick="LoadListAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+            </Actions>
+        </AppPageHeader>
+
+        <div class="qd-toolbar">
+            <input class="qd-input" placeholder="Search quotes..." @bind="_searchTerm" @bind:event="oninput" />
+            <button class="um-btn um-btn-ghost" @onclick="LoadListAsync"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(_loadError))
+        {
+            <div class="alert alert-danger" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+        }
+
+        @if (_loading && _items is null)
+        {
+            <div class="qd-loading"><span class="um-spinner" aria-hidden="true"></span><span>Loading quotesâ€¦</span></div>
+        }
+        else
+        {
+            <div class="qd-table-wrap">
+                <table class="qd-table qd-table--clickable">
+                    <thead>
+                        <tr>
+                            <th>Quote #</th>
+                            <th>Account</th>
+                            <th>Opportunity</th>
+                            <th class="qd-text-end">Amount</th>
+                            <th>Valid Until</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                            <th class="qd-text-end">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var quote in _items ?? [])
+                        {
+                            <tr @onclick="() => OpenQuoteDetail(quote.QuoteId)">
+                                <td><strong>@quote.QuoteNumber</strong></td>
+                                <td>@(quote.AccountName ?? "â€”")</td>
+                                <td>@(quote.OpportunityName ?? "â€”")</td>
+                                <td class="qd-text-end"><strong>@quote.TotalAmount.ToString("C0")</strong></td>
+                                <td>@(quote.ValidUntilDate?.ToString("d") ?? "â€”")</td>
+                                <td><span class="@StatusBadge(quote.StatusCode)">@quote.StatusCode</span></td>
+                                <td>@quote.CreatedDateUtc.ToString("g")</td>
+                                <td class="qd-text-end">
+                                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Edit" @onclick="() => OpenEdit(quote)" @onclick:stopPropagation="true"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                    <button type="button" class="um-btn um-btn-ghost um-btn-sm qd-danger" title="Delete" @onclick="() => ConfirmDelete(quote)" @onclick:stopPropagation="true"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
     </div>
 }
 
-<SfDialog @bind-Visible="_showForm" Width="560px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
+@if (_showForm)
+{
+    <div class="qd-modal-backdrop" @onclick="() => _showForm = false">
+        <div class="qd-modal" role="dialog" aria-modal="true" aria-labelledby="quoteFormTitle" @onclick:stopPropagation="true">
             <div class="um-modal-header">
                 <i class="bi bi-file-text" aria-hidden="true"></i>
-                <span>@(_editingId == Guid.Empty ? "Create Quote" : "Edit Quote")</span>
+                <span id="quoteFormTitle">@(_editingId == Guid.Empty ? "Create Quote" : "Edit Quote")</span>
                 <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button>
             </div>
             <EditForm Model="_form" OnValidSubmit="SaveAsync">
                 <DataAnnotationsValidator />
                 <div class="um-modal-body">
                     <div class="um-form-grid">
-                        <div>
-                            <label class="form-label">Quote Number</label>
-                            <InputText class="form-control" @bind-Value="_form.QuoteNumber" />
-                            <ValidationMessage For="() => _form.QuoteNumber" class="text-danger" />
-                        </div>
-                        <div>
-                            <label class="form-label">Account</label>
-                            <SfDropDownList TValue="Guid" TItem="AccountOption" DataSource="_accountOptions" @bind-Value="_form.AccountId" Placeholder="Select account" Width="100%">
-                                <DropDownListFieldSettings Value="AccountId" Text="AccountName" />
-                            </SfDropDownList>
-                            <ValidationMessage For="() => _form.AccountId" class="text-danger" />
-                        </div>
-                        <div>
-                            <label class="form-label">Opportunity</label>
-                            <SfDropDownList TValue="Guid?" TItem="OpportunityOption" DataSource="_opportunityOptions" @bind-Value="_form.OpportunityId" Placeholder="Optional" ShowClearButton="true" Width="100%">
-                                <DropDownListFieldSettings Value="OpportunityId" Text="OpportunityName" />
-                            </SfDropDownList>
-                            <ValidationMessage For="() => _form.OpportunityId" class="text-danger" />
-                        </div>
-                        <div>
-                            <label class="form-label">Status</label>
-                            <SfDropDownList TValue="string" TItem="LabelValue" DataSource="_statusOptions" @bind-Value="_form.StatusCode" Width="100%">
-                                <DropDownListFieldSettings Value="Value" Text="Label" />
-                            </SfDropDownList>
-                            <ValidationMessage For="() => _form.StatusCode" class="text-danger" />
-                        </div>
-                        <div>
-                            <label class="form-label">Total Amount</label>
-                            <SfNumericTextBox TValue="decimal" @bind-Value="_form.TotalAmount" Format="C2" Min="0" Width="100%" />
-                            <ValidationMessage For="() => _form.TotalAmount" class="text-danger" />
-                        </div>
-                        <div>
-                            <label class="form-label">Valid Until</label>
-                            <SfDatePicker TValue="DateTime?" @bind-Value="_form.ValidUntilDate" Width="100%" />
-                            <ValidationMessage For="() => _form.ValidUntilDate" class="text-danger" />
-                        </div>
+                        <div class="um-field"><label>Quote Number <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_form.QuoteNumber" /></div>
+                        <div class="um-field"><label>Account <span class="text-danger">*</span></label><InputSelect class="um-input" @bind-Value="_form.AccountId"><option value="@Guid.Empty">Select account</option>@foreach (var account in _accountOptions) { <option value="@account.AccountId">@account.AccountName</option> }</InputSelect></div>
+                        <div class="um-field"><label>Opportunity</label><InputSelect class="um-input" @bind-Value="_form.OpportunityId"><option value="">No opportunity</option>@foreach (var opportunity in _opportunityOptions) { <option value="@opportunity.OpportunityId">@opportunity.OpportunityName</option> }</InputSelect></div>
+                        <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect class="um-input" @bind-Value="_form.StatusCode">@foreach (var status in _statusOptions) { <option value="@status.Value">@status.Label</option> }</InputSelect></div>
+                        <div class="um-field"><label>Total Amount</label><InputNumber class="um-input" @bind-Value="_form.TotalAmount" /></div>
+                        <div class="um-field"><label>Valid Until</label><InputDate class="um-input" @bind-Value="_form.ValidUntilDate" /></div>
                     </div>
                 </div>
                 <div class="um-modal-footer">
                     <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
-                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
-                        <i class="bi bi-check-lg" aria-hidden="true"></i> Save
-                    </button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Save</button>
                 </div>
             </EditForm>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+    </div>
+}
 
-<SfDialog @bind-Visible="_showDelete" Width="420px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-confirm-dialog">
-                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></div>
-                <h3>Delete quote?</h3>
-                <p>Delete quote <strong>@_deleteTarget?.QuoteNumber</strong>? This action cannot be undone.</p>
-                <div class="um-modal-footer">
-                    <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
-                    <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
-                </div>
+@if (_showDelete)
+{
+    <div class="qd-modal-backdrop" @onclick="() => _showDelete = false">
+        <div class="qd-modal qd-modal--confirm um-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="quoteDeleteTitle" @onclick:stopPropagation="true">
+            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></div>
+            <h3 id="quoteDeleteTitle">Delete quote?</h3>
+            <p>Delete quote <strong>@_deleteTarget?.QuoteNumber</strong>? This action cannot be undone.</p>
+            <div class="um-modal-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
             </div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+    </div>
+}
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
     [Parameter] public Guid? QuoteId { get; set; }
     [SupplyParameterFromQuery] public Guid? LeadId { get; set; }
 
     private Guid _tenantId;
-    private SfToast? _toast;
+    private Guid _currentUserId;
     private string? _searchTerm;
     private string? _loadError;
+    private string? _toastMessage;
+    private string _toastKind = "info";
     private List<QuoteDto>? _items;
+    private QuoteDto? _quote;
+    private List<QuoteLineDto> _lines = [];
     private List<AccountOption> _accountOptions = [];
     private List<OpportunityOption> _opportunityOptions = [];
     private bool _loading;
     private bool _saving;
     private bool _showForm;
     private bool _showDelete;
+    private int _tab;
     private Guid _editingId = Guid.Empty;
     private QuoteDto? _deleteTarget;
     private QuoteForm _form = new();
 
+    private bool IsDetailRoute => QuoteId.HasValue;
+    private string PageTitleText => IsDetailRoute ? $"{_quote?.QuoteNumber ?? "Quote"} â€” Quotes" : "Quotes";
+    private decimal LineTotal => _lines.Sum(l => l.LineTotal);
+    private bool IsExpired => _quote?.ValidUntilDate is not null && _quote.ValidUntilDate.Value.Date < DateTime.UtcNow.Date;
+    private string ValidityLabel => _quote?.ValidUntilDate is null ? "No expiration date" : IsExpired ? $"Expired {_quote.ValidUntilDate.Value:d}" : $"Valid until {_quote.ValidUntilDate.Value:d}";
+    private string WorkflowStep => _quote?.StatusCode switch { "Accepted" => "Closed Won", "Declined" => "Closed Lost", "Expired" => "Expired", "Presented" => "Client Review", _ => "Draft" };
+    private string NextBestAction => _quote?.StatusCode switch { "Draft" => "Present quote", "Presented" => "Capture decision", "Accepted" => "Create policy", "Declined" => "Review objection", "Expired" => "Reprice quote", _ => "Review quote" };
+    private string NextBestActionDetail => _quote?.StatusCode switch { "Draft" => "Send the quote to the client once pricing and lines are validated.", "Presented" => "Record the client decision or follow up before the validity window closes.", "Accepted" => "Move the accepted quote into downstream policy/submission workflow.", "Declined" => "Capture why the quote was declined and prepare an alternate option.", "Expired" => "Refresh rates and issue an updated quote before presenting again.", _ => "Review the quote details and choose the next workflow action." };
+    private string ToastCss => $"qd-toast--{_toastKind}";
+    private string ToastIcon => _toastKind switch { "success" => "bi-check-circle-fill", "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-info-circle-fill" };
+
     private static readonly List<LabelValue> _statusOptions =
     [
-        new("Draft", "Draft"),
-        new("Presented", "Presented"),
-        new("Accepted", "Accepted"),
-        new("Declined", "Declined"),
-        new("Expired", "Expired"),
+        new("Draft", "Draft"), new("Presented", "Presented"), new("Accepted", "Accepted"), new("Declined", "Declined"), new("Expired", "Expired"),
     ];
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        await LoadAsync();
-        if (QuoteId.HasValue)
+        if (IsDetailRoute)
         {
-            var quote = await Api.GetQuoteByIdAsync(QuoteId.Value);
-            if (quote is not null)
-            {
-                OpenEdit(quote);
-            }
+            await LoadDetailAsync();
         }
-        else if (Nav.Uri.Contains("/quotes/new", StringComparison.OrdinalIgnoreCase))
+        else
         {
-            OpenCreate();
+            await LoadListAsync();
+            if (Nav.Uri.Contains("/quotes/new", StringComparison.OrdinalIgnoreCase))
+            {
+                OpenCreate();
+            }
         }
     }
 
-    private async Task LoadAsync()
+    private async Task LoadReferenceDataAsync()
+    {
+        var accounts = await Api.SearchAccountsAsync(_tenantId, pageSize: 250);
+        _accountOptions = (accounts?.Items ?? []).OrderBy(a => a.AccountName).Select(a => new AccountOption(a.AccountId, a.AccountName)).ToList();
+
+        var opportunities = await Api.SearchOpportunitiesAsync(_tenantId, pageSize: 250);
+        _opportunityOptions = (opportunities?.Items ?? []).OrderBy(o => o.OpportunityName).Select(o => new OpportunityOption(o.OpportunityId, o.OpportunityName)).ToList();
+    }
+
+    private async Task LoadListAsync()
     {
         _loading = true;
         try
         {
             _loadError = null;
-            var accounts = await Api.SearchAccountsAsync(_tenantId);
-            _accountOptions = (accounts?.Items ?? []).OrderBy(a => a.AccountName).Select(a => new AccountOption(a.AccountId, a.AccountName)).ToList();
-
-            var opportunities = await Api.SearchOpportunitiesAsync(_tenantId);
-            _opportunityOptions = (opportunities?.Items ?? []).OrderBy(o => o.OpportunityName).Select(o => new OpportunityOption(o.OpportunityId, o.OpportunityName)).ToList();
-
+            await LoadReferenceDataAsync();
             var result = await Api.SearchQuotesAsync(_tenantId, _searchTerm);
             _items = result?.Items.ToList() ?? [];
         }
         catch (Exception ex)
         {
             _loadError = $"Error loading quotes: {ex.Message}";
-            await Toast(_loadError, "e-toast-danger");
+            await Toast(_loadError, "danger");
         }
         finally
         {
@@ -222,10 +431,34 @@ else
         }
     }
 
+    private async Task LoadDetailAsync()
+    {
+        if (!QuoteId.HasValue) return;
+        _loading = true;
+        try
+        {
+            _loadError = null;
+            await LoadReferenceDataAsync();
+            _quote = await Api.GetQuoteByIdAsync(QuoteId.Value);
+            _lines = _quote is null ? [] : (await Api.GetQuoteLinesAsync(QuoteId.Value))?.ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Error loading quote: {ex.Message}";
+            await Toast(_loadError, "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private Task RefreshDetailAsync() => LoadDetailAsync();
+
     private void OpenCreate()
     {
         _editingId = Guid.Empty;
-        _form = new QuoteForm { QuoteNumber = $"QT-{DateTime.UtcNow:yyyyMMddHHmmss}", StatusCode = "Draft", ValidUntilDate = DateTime.UtcNow.AddDays(30) };
+        _form = new QuoteForm { QuoteNumber = $"QT-{DateTime.UtcNow:yyyyMMddHHmmss}", StatusCode = "Draft", ValidUntilDate = DateTime.UtcNow.Date.AddDays(30) };
         if (_accountOptions.Count == 1)
         {
             _form.AccountId = _accountOptions[0].AccountId;
@@ -233,18 +466,15 @@ else
         _showForm = true;
     }
 
+    private void OpenEditCurrent()
+    {
+        if (_quote is not null) OpenEdit(_quote);
+    }
+
     private void OpenEdit(QuoteDto quote)
     {
         _editingId = quote.QuoteId;
-        _form = new QuoteForm
-        {
-            QuoteNumber = quote.QuoteNumber,
-            AccountId = quote.AccountId,
-            OpportunityId = quote.OpportunityId,
-            TotalAmount = quote.TotalAmount,
-            ValidUntilDate = quote.ValidUntilDate,
-            StatusCode = quote.StatusCode,
-        };
+        _form = new QuoteForm { QuoteNumber = quote.QuoteNumber, AccountId = quote.AccountId, OpportunityId = quote.OpportunityId, TotalAmount = quote.TotalAmount, ValidUntilDate = quote.ValidUntilDate, StatusCode = quote.StatusCode };
         _showForm = true;
     }
 
@@ -252,7 +482,7 @@ else
     {
         if (_form.AccountId == Guid.Empty)
         {
-            await Toast("Account is required.", "e-toast-danger");
+            await Toast("Account is required.", "danger");
             return;
         }
 
@@ -261,27 +491,80 @@ else
         {
             if (_editingId == Guid.Empty)
             {
-                await Api.CreateQuoteAsync(new CreateQuoteRequest { TenantId = _tenantId, QuoteNumber = _form.QuoteNumber, AccountId = _form.AccountId, OpportunityId = _form.OpportunityId, TotalAmount = _form.TotalAmount, ValidUntilDate = _form.ValidUntilDate, StatusCode = _form.StatusCode });
-                await Toast("Quote created.", "e-toast-success");
-            }
-            else
-            {
-                await Api.UpdateQuoteAsync(_editingId, new UpdateQuoteRequest { QuoteId = _editingId, TenantId = _tenantId, QuoteNumber = _form.QuoteNumber, AccountId = _form.AccountId, OpportunityId = _form.OpportunityId, TotalAmount = _form.TotalAmount, ValidUntilDate = _form.ValidUntilDate, StatusCode = _form.StatusCode });
-                await Toast("Quote updated.", "e-toast-success");
+                var id = await Api.CreateQuoteAsync(new CreateQuoteRequest { TenantId = _tenantId, QuoteNumber = _form.QuoteNumber, AccountId = _form.AccountId, OpportunityId = _form.OpportunityId, TotalAmount = _form.TotalAmount, ValidUntilDate = _form.ValidUntilDate, StatusCode = _form.StatusCode, CreatedByUserId = _currentUserId });
+                await Toast("Quote created.", "success");
+                _showForm = false;
+                Nav.NavigateTo($"/quotes/{id}");
+                return;
             }
 
+            await Api.UpdateQuoteAsync(_editingId, new UpdateQuoteRequest { QuoteId = _editingId, TenantId = _tenantId, QuoteNumber = _form.QuoteNumber, AccountId = _form.AccountId, OpportunityId = _form.OpportunityId, TotalAmount = _form.TotalAmount, ValidUntilDate = _form.ValidUntilDate, StatusCode = _form.StatusCode, CreatedByUserId = _currentUserId, ModifiedByUserId = _currentUserId });
+            await Toast("Quote updated.", "success");
             _showForm = false;
-            await LoadAsync();
+            if (IsDetailRoute) await LoadDetailAsync(); else await LoadListAsync();
         }
         catch (Exception ex)
         {
-            await Toast($"Save failed: {ex.Message}", "e-toast-danger");
+            await Toast($"Save failed: {ex.Message}", "danger");
         }
         finally
         {
             _saving = false;
         }
     }
+
+    private async Task SetStatusAsync(string status)
+    {
+        if (_quote is null || string.Equals(_quote.StatusCode, status, StringComparison.OrdinalIgnoreCase)) return;
+        _saving = true;
+        try
+        {
+            await Api.UpdateQuoteAsync(_quote.QuoteId, new UpdateQuoteRequest { QuoteId = _quote.QuoteId, TenantId = _quote.TenantId, QuoteNumber = _quote.QuoteNumber, AccountId = _quote.AccountId, OpportunityId = _quote.OpportunityId, TotalAmount = _quote.TotalAmount, ValidUntilDate = _quote.ValidUntilDate, StatusCode = status, CreatedByUserId = _currentUserId, ModifiedByUserId = _currentUserId });
+            await Toast($"Quote marked {status}.", "success");
+            await LoadDetailAsync();
+        }
+        catch (Exception ex)
+        {
+            await Toast($"Status update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private Task PresentQuoteAsync() => SetStatusAsync("Presented");
+
+    private Task AcceptQuoteAsync() => SetStatusAsync("Accepted");
+
+    private Task DeclineQuoteAsync() => SetStatusAsync("Declined");
+
+    private void OpenAccount()
+    {
+        if (_quote is not null)
+        {
+            Nav.NavigateTo($"/accounts/{_quote.AccountId}");
+        }
+    }
+
+    private void OpenOpportunity()
+    {
+        if (_quote?.OpportunityId is Guid opportunityId)
+        {
+            Nav.NavigateTo($"/crm/opportunities/{opportunityId}");
+        }
+    }
+
+    private void OpenQuoteDetail(Guid quoteId) => Nav.NavigateTo($"/quotes/{quoteId}");
+
+    private Task ExecuteNextBestActionAsync()
+        => _quote?.StatusCode switch
+        {
+            "Draft" => SetStatusAsync("Presented"),
+            "Presented" => SetStatusAsync(IsExpired ? "Expired" : "Accepted"),
+            "Expired" => SetStatusAsync("Draft"),
+            _ => Toast("Review the quote workflow before the next step.", "info")
+        };
 
     private void ConfirmDelete(QuoteDto quote)
     {
@@ -295,14 +578,14 @@ else
         _saving = true;
         try
         {
-            await Api.DeleteQuoteAsync(_deleteTarget.QuoteId);
+            await Api.DeleteQuoteAsync(_deleteTarget.QuoteId, _currentUserId);
             _showDelete = false;
-            await Toast("Quote deleted.", "e-toast-success");
-            await LoadAsync();
+            await Toast("Quote deleted.", "success");
+            if (IsDetailRoute) Nav.NavigateTo("/crm/quotes"); else await LoadListAsync();
         }
         catch (Exception ex)
         {
-            await Toast($"Delete failed: {ex.Message}", "e-toast-danger");
+            await Toast($"Delete failed: {ex.Message}", "danger");
         }
         finally
         {
@@ -310,43 +593,81 @@ else
         }
     }
 
-    private async Task Toast(string msg, string css = "e-toast-info")
+    private void SetTab(int tab) => _tab = tab;
+    private string KpiActive(int tab) => _tab == tab ? "qd-kpi-card--active" : string.Empty;
+    private void CloseToast() => _toastMessage = null;
+
+    private Task Toast(string message, string kind = "info")
     {
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = css });
+        _toastMessage = message;
+        _toastKind = kind;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private RenderFragment TabButton(int tab, string label, string icon) => __builder =>
+    {
+        <button type="button" class="qd-tab @(_tab == tab ? "qd-tab--active" : string.Empty)" @onclick="() => SetTab(tab)"><i class="bi @icon" aria-hidden="true"></i><span>@label</span></button>;
+    };
+
+    private static RenderFragment Field(string label, string value) => __builder =>
+    {
+        <div class="qd-field"><span>@label</span><strong>@value</strong></div>;
+    };
+
+    private static RenderFragment EmptyState(string icon, string title, string text) => __builder =>
+    {
+        <div class="qd-empty"><i class="bi @icon" aria-hidden="true"></i><strong>@title</strong><span>@text</span></div>;
+    };
+
+    private RenderFragment WorkflowNode(string status, string icon) => __builder =>
+    {
+        var active = _quote?.StatusCode == status;
+        <div class="qd-workflow-node @(active ? "qd-workflow-node--active" : string.Empty)"><span><i class="bi @icon" aria-hidden="true"></i></span><div><strong>@status</strong><small>@WorkflowDescription(status)</small></div></div>;
+    };
+
+    private static RenderFragment CheckRow(string label, bool passed) => __builder =>
+    {
+        <div class="qd-check-row @(passed ? "qd-check-row--ok" : "qd-check-row--warn")"><i class="bi @(passed ? "bi-check-circle-fill" : "bi-exclamation-circle-fill")" aria-hidden="true"></i><span>@label</span></div>;
+    };
+
+    private static string WorkflowDescription(string status) => status switch
+    {
+        "Draft" => "Pricing is being prepared.",
+        "Presented" => "Client is reviewing the offer.",
+        "Accepted" => "Client approved the quote.",
+        "Declined" => "Client rejected the offer.",
+        "Expired" => "Validity window elapsed.",
+        _ => "Workflow checkpoint."
+    };
+
+    private static string StatusBadge(string status) => status switch
+    {
+        "Accepted" => "qd-status qd-status--accepted",
+        "Declined" => "qd-status qd-status--declined",
+        "Expired" => "qd-status qd-status--expired",
+        "Presented" => "qd-status qd-status--presented",
+        _ => "qd-status qd-status--draft"
+    };
+
+    private async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _currentUserId = context.UserId;
     }
 
     private sealed class QuoteForm
     {
-        [Required, StringLength(50)]
-        public string QuoteNumber { get; set; } = string.Empty;
-
-        [Required]
-        public Guid AccountId { get; set; }
-
+        [Required, StringLength(50)] public string QuoteNumber { get; set; } = string.Empty;
+        [Required] public Guid AccountId { get; set; }
         public Guid? OpportunityId { get; set; }
-
-        [Range(0, 999999999999)]
-        public decimal TotalAmount { get; set; }
-
+        [Range(0, 999999999999)] public decimal TotalAmount { get; set; }
         public DateTime? ValidUntilDate { get; set; }
-
-        [Required, StringLength(50)]
-        public string StatusCode { get; set; } = "Draft";
+        [Required, StringLength(50)] public string StatusCode { get; set; } = "Draft";
     }
 
     private sealed record AccountOption(Guid AccountId, string AccountName);
     private sealed record OpportunityOption(Guid OpportunityId, string OpportunityName);
     private sealed record LabelValue(string Value, string Label);
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
-    }
 }
+

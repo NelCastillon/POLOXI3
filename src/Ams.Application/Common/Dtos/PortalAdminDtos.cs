@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Ams.Application.Common.Validation;
 
 namespace Ams.Application.Common.Dtos;
 
@@ -303,6 +304,7 @@ public sealed class UpdatePortalMyAccountRequest
     [StringLength(320)]
     public string SupportEmail { get; set; } = string.Empty;
 
+    [AmsPhone]
     [StringLength(50)]
     public string SupportPhone { get; set; } = string.Empty;
 

@@ -1,236 +1,408 @@
-@page "/tenant/agency/departments"
+﻿@page "/tenant/agency/departments"
 @namespace Ams.Web.Components.Pages.AgencyAdmin
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Departments — Agency Setup</PageTitle>
+<PageTitle>Departments â€” Agency Setup</PageTitle>
 
 <AppPageHeader Title="Departments"
-               Subtitle="Manage organisational departments"
-               Icon="bi-building">
+               Subtitle="Enterprise department governance, ownership, team capacity, and operating status."
+               Icon="bi-building-fill-gear">
     <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_loading" title="Refresh departments">
             <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
         </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/branches"><i class="bi bi-diagram-3" aria-hidden="true"></i> Branches</a>
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/teams"><i class="bi bi-people" aria-hidden="true"></i> Teams</a>
+        <button class="um-btn um-btn-primary" type="button" @onclick="OpenAddModal">
             <i class="bi bi-plus-lg" aria-hidden="true"></i> New Department
         </button>
     </Actions>
 </AppPageHeader>
 
-<section class="ma-hero as-tenant-hero">
-    <div>
-        <span class="ma-eyebrow">Tenant · Agency Structure</span>
-        <h2>Department Command Center</h2>
-        <p>Organize operational departments, managers, and team capacity across the agency structure.</p>
-    </div>
-    <div class="ma-hero-actions">
-        <a class="um-btn um-btn-ghost" href="/tenant/agency/branches"><i class="bi bi-diagram-3" aria-hidden="true"></i> Branches</a>
-        <a class="um-btn um-btn-ghost" href="/tenant/agency/teams"><i class="bi bi-people" aria-hidden="true"></i> Teams</a>
-        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Department</button>
-    </div>
-</section>
-
-<!-- KPI strip -->
-<div class="as-kpi-strip" aria-label="Department filters">
-    <button type="button" class='as-kpi-card @KpiClass("Overview")' @onclick='() => SetKpiFilter("Overview")' title="Show all departments">
-        <span class="as-kpi-icon"><i class="bi bi-building" aria-hidden="true"></i></span>
-        <div>
-            <div class="dep-kpi-value">@_totalCount</div>
-            <div class="dep-kpi-label">Total Departments</div>
-        </div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Active")' @onclick='() => SetKpiFilter("Active")' title="Show active departments">
-        <span class="as-kpi-icon as-kpi-icon--success"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
-        <div>
-            <div class="dep-kpi-value">@_activeCount</div>
-            <div class="dep-kpi-label">Active</div>
-        </div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Inactive")' @onclick='() => SetKpiFilter("Inactive")' title="Show inactive departments">
-        <span class="as-kpi-icon as-kpi-icon--warning"><i class="bi bi-dash-circle" aria-hidden="true"></i></span>
-        <div>
-            <div class="dep-kpi-value">@(_totalCount - _activeCount)</div>
-            <div class="dep-kpi-label">Inactive</div>
-        </div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Teams")' @onclick='() => SetKpiFilter("Teams")' title="Show departments with teams">
-        <span class="as-kpi-icon as-kpi-icon--violet"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
-        <div>
-            <div class="dep-kpi-value">@_allEntries.Sum(e => e.TeamCount)</div>
-            <div class="dep-kpi-label">Assigned Teams</div>
-        </div>
-    </button>
-</div>
-
-<!-- Filter toolbar -->
-<AppFilterPanel @bind-SearchValue="_search"
-                OnSearch="OnSearchAsync"
-                SearchPlaceholder="Search department…">
-    <Filters>
-        <label class="dep-toggle-label">
-            <input type="checkbox" @bind="_filterActiveOnly" @bind:after="ApplyFilters" />
-            Active only
-        </label>
-    </Filters>
-</AppFilterPanel>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
-        @_loadError
+    <div class="dep-toast @_toastClass" role="status">
+        <i class="bi @(_toastClass == "dep-toast--danger" ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="dep-toast-close" @onclick="ClearToast" aria-label="Dismiss message"><i class="bi bi-x-lg"></i></button>
     </div>
 }
 
-<!-- Grid -->
-<div class="um-grid-card app-datagrid">
-    @if (_loading)
+<div class="dep-page">
+    <section class="dep-hero">
+        <div class="dep-hero-main">
+            <span class="dep-eyebrow"><i class="bi bi-command" aria-hidden="true"></i> Tenant Â· Agency Structure</span>
+            <h2>Department Command Center</h2>
+            <p>Organize business units, manager ownership, team assignments, operating status, and service readiness across the agency structure.</p>
+            <div class="dep-hero-meta">
+                <span><i class="bi bi-building" aria-hidden="true"></i> @_totalCount departments</span>
+                <span><i class="bi bi-check-circle" aria-hidden="true"></i> @_activeCount active</span>
+                <span><i class="bi bi-people" aria-hidden="true"></i> @_teamCount assigned teams</span>
+            </div>
+        </div>
+        <div class="dep-hero-panel">
+            <div class="dep-readiness-card">
+                <span>Department readiness</span>
+                <strong>@ReadinessScore%</strong>
+                <div class="dep-score-track"><div style="width:@ReadinessScore%"></div></div>
+                <small>@ReadinessSummary</small>
+            </div>
+            <div class="dep-action-list">
+                @foreach (var action in PriorityActions)
+                {
+                    <button type="button" class="dep-action-item" @onclick="() => RunPriorityAction(action)">
+                        <i class="bi @action.Icon" aria-hidden="true"></i>
+                        <span><strong>@action.Title</strong><small>@action.Detail</small></span>
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                    </button>
+                }
+            </div>
+        </div>
+    </section>
+
+    <section class="dep-kpi-strip" aria-label="Department KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="dep-kpi-card @(IsActiveTab(kpi.Key) ? "dep-kpi-card--active" : null)" title="@kpi.Tooltip" @onclick="() => SetTab(kpi.Key)">
+                <span class="dep-kpi-icon dep-kpi-icon--@kpi.Tone"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="dep-kpi-label">@kpi.Label</span>
+                <strong>@kpi.Value</strong>
+                <small>@kpi.Detail</small>
+            </button>
+        }
+    </section>
+
+    <section class="dep-command-bar">
+        <div class="dep-tabs" role="tablist" aria-label="Department sections">
+            @foreach (var tab in Tabs)
+            {
+                <button type="button" role="tab" class="dep-tab @(IsActiveTab(tab.Key) ? "dep-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                    <i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label
+                </button>
+            }
+        </div>
+        <div class="dep-command-actions">
+            <button class="um-btn um-btn-ghost" type="button" @onclick="CopySummaryAsync" disabled="@(!_allEntries.Any())"><i class="bi bi-clipboard" aria-hidden="true"></i> Copy Summary</button>
+            <button class="um-btn um-btn-ghost" type="button" @onclick="ClearFilters"><i class="bi bi-x-circle" aria-hidden="true"></i> Clear Filters</button>
+            <button class="um-btn um-btn-primary" type="button" @onclick="OpenAddModal"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Department</button>
+        </div>
+    </section>
+
+    <section class="dep-filter-bar" aria-label="Department filters">
+        <div class="dep-search-box">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="um-input" value="@_search" @oninput="@(args => { _search = args.Value?.ToString() ?? string.Empty; ApplyFilters(); })" placeholder="Search department name, code, manager, description, or statusâ€¦" />
+        </div>
+        <label class="dep-toggle-label">
+            <input type="checkbox" checked="@_activeOnly" @onchange="@(args => ToggleActiveOnly(args.Value is bool value && value))" />
+            Active only
+        </label>
+        <span class="dep-result-count">@FilteredEntries.Count department(s) shown</span>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
     {
-        <div class="um-loading-overlay" aria-live="polite">
-            <div class="um-spinner" aria-hidden="true"></div>
-            <span>Loading…</span>
+        <div class="alert alert-danger dep-load-error" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
         </div>
     }
-    <SfGrid TValue="DepartmentEntry"
-            DataSource="_entries"
-            AllowPaging="true"
-            AllowSorting="true"
-            EnableHover="true"
-            RowHeight="52">
-        <GridEvents TValue="DepartmentEntry" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
-        <GridColumns>
-            <GridColumn Field="@nameof(DepartmentEntry.DepartmentName)" HeaderText="Department Name" Width="220">
-                <Template>
-                    @{ var e = (DepartmentEntry)context; }
-                    <div class="dep-name-cell">
-                        <span class="dep-icon" aria-hidden="true"><i class="bi bi-building"></i></span>
-                        <div>
-                            <div class="dep-dept-name">@e.DepartmentName</div>
-                            <div class="dep-dept-code">@e.DepartmentCode</div>
-                        </div>
-                    </div>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(DepartmentEntry.Manager)" HeaderText="Manager" Width="180" />
-            <GridColumn Field="@nameof(DepartmentEntry.TeamCount)" HeaderText="Teams" Width="100" />
-            <GridColumn Field="@nameof(DepartmentEntry.IsActive)" HeaderText="Status" Width="110">
-                <Template>
-                    @{ var e = (DepartmentEntry)context; }
-                    <AppStatusBadge Status="@(e.IsActive ? "Active" : "Inactive")"
-                                    Label="@(e.IsActive ? "Active" : "Inactive")" />
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="" Width="120" TextAlign="TextAlign.Right">
-                <Template>
-                    @{ var e = (DepartmentEntry)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEditDrawer(e)" title="Edit">
-                        <i class="bi bi-pencil" aria-hidden="true"></i>
-                    </button>
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(e)" title="Delete">
-                        <i class="bi bi-trash" aria-hidden="true"></i>
-                    </button>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
 
-<!-- Add/Edit Drawer -->
-<AppCrudDrawer @bind-Visible="_showDrawer"
-               Title="@(_editModel.DepartmentId == Guid.Empty ? "New Department" : "Edit Department")"
-               OnConfirm="SaveAsync"
-               OnClose="CloseDrawer">
-    <Content>
-        <EditForm EditContext="_editContext" OnValidSubmit="SaveAsync">
-            <DataAnnotationsValidator />
-        <div class="dep-form">
-            <label class="dep-form-label">Department Name *</label>
-            <InputText class="um-input" @bind-Value="_editModel.DepartmentName" placeholder="Department name" />
-            <ValidationMessage For="() => _editModel.DepartmentName" class="text-danger" />
-
-            <label class="dep-form-label">Department Code</label>
-            <InputText class="um-input dep-mono" @bind-Value="_editModel.DepartmentCode" placeholder="Short code" />
-            <ValidationMessage For="() => _editModel.DepartmentCode" class="text-danger" />
-
-            <label class="dep-form-label">Description</label>
-            <InputTextArea class="um-input" @bind-Value="_editModel.Description" placeholder="Optional description" />
-            <ValidationMessage For="() => _editModel.Description" class="text-danger" />
-
-            <label class="dep-form-label">Manager</label>
-            <InputText class="um-input" @bind-Value="_editModel.Manager" placeholder="Full name" />
-            <ValidationMessage For="() => _editModel.Manager" class="text-danger" />
-
-            <label class="dep-form-label">Active</label>
-            <SfSwitch @bind-Checked="_editModel.IsActive" />
-        </div>
-        </EditForm>
-    </Content>
-</AppCrudDrawer>
-
-<SfDialog Width="420px" IsModal="true" ShowCloseIcon="false" Visible="_showDeleteDialog">
-    <DialogTemplates>
-        <Content>
-            <div class="um-confirm-dialog">
-                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div>
-                <div class="um-confirm-message">
-                    <h6>Delete department?</h6>
-                    <p>This will remove <strong>@_deleteTarget?.DepartmentName</strong>. Related teams may become unassigned.</p>
+    <section class="dep-content-grid">
+        <div class="dep-main-panel">
+            @if (_loading)
+            {
+                <div class="dep-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Loading departments...</div>
+            }
+            else if (!_allEntries.Any())
+            {
+                <div class="dep-empty-state">
+                    <i class="bi bi-building-add" aria-hidden="true"></i>
+                    <strong>No departments configured</strong>
+                    <span>Create the first department to establish manager ownership and team routing.</span>
+                    <button class="um-btn um-btn-primary" type="button" @onclick="OpenAddModal"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Department</button>
                 </div>
-                <div class="um-modal-footer">
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showDeleteDialog = false">Cancel</button>
-                    <button type="button" class="um-btn um-btn-danger" @onclick="DeleteAsync">Delete</button>
+            }
+            else
+            {
+                @if (ShowTab("overview"))
+                {
+                    <section class="dep-section">
+                        <div class="dep-section-header"><i class="bi bi-speedometer2" aria-hidden="true"></i><div><strong>Executive Overview</strong><span>Most important department governance signals by workflow impact.</span></div></div>
+                        <div class="dep-overview-grid">
+                            <div class="dep-identity-card"><span class="dep-module-icon dep-module-icon--blue"><i class="bi bi-building-fill"></i></span><div><strong>@_totalCount departments</strong><span>@_activeCount active Â· @_inactiveCount inactive</span></div></div>
+                            <div class="dep-identity-card"><span class="dep-module-icon dep-module-icon--green"><i class="bi bi-people-fill"></i></span><div><strong>@_teamCount assigned teams</strong><span>@DepartmentsWithTeams department(s) with capacity</span></div></div>
+                            <div class="dep-identity-card"><span class="dep-module-icon dep-module-icon--purple"><i class="bi bi-person-badge"></i></span><div><strong>@DepartmentsWithManagers managers</strong><span>@DepartmentsMissingManagers department(s) missing manager</span></div></div>
+                        </div>
+                        <div class="dep-department-board">
+                            @foreach (var department in FilteredEntries.Take(6))
+                            {
+                                <button type="button" class="dep-department-card @(SelectedDepartment?.DepartmentId == department.DepartmentId ? "dep-department-card--selected" : null)" @onclick="() => SelectDepartment(department)">
+                                    <span class="dep-department-avatar">@Initials(department.DepartmentName)</span>
+                                    <span class="dep-department-content"><strong>@department.DepartmentName</strong><small>@CodeText(department) Â· @ManagerText(department)</small></span>
+                                    <span class="dep-status @(department.IsActive ? "dep-status--active" : "dep-status--inactive")">@(department.IsActive ? "Active" : "Inactive")</span>
+                                </button>
+                            }
+                        </div>
+                    </section>
+                }
+
+                @if (ShowTab("directory") || ShowTab("active") || ShowTab("inactive") || ShowTab("teams") || ShowTab("managers"))
+                {
+                    <section class="dep-section">
+                        <div class="dep-section-header"><i class="bi bi-list-ul" aria-hidden="true"></i><div><strong>@DirectoryTitle</strong><span>Native department directory with clickable rows and inline actions.</span></div></div>
+                        <div class="dep-table-wrap">
+                            <table class="dep-table">
+                                <thead>
+                                    <tr>
+                                        <th>Department</th>
+                                        <th>Manager</th>
+                                        <th>Teams</th>
+                                        <th>Status</th>
+                                        <th>Created</th>
+                                        <th class="dep-actions-col">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var department in FilteredEntries)
+                                    {
+                                        <tr class="@(SelectedDepartment?.DepartmentId == department.DepartmentId ? "dep-row--selected" : null)" @onclick="() => SelectDepartment(department)">
+                                            <td><div class="dep-name-cell"><span class="dep-icon" aria-hidden="true"><i class="bi bi-building"></i></span><div><strong>@department.DepartmentName</strong><small>@CodeText(department)</small></div></div></td>
+                                            <td>@ManagerText(department)</td>
+                                            <td><span class="dep-pill"><i class="bi bi-people" aria-hidden="true"></i> @department.TeamCount</span></td>
+                                            <td><span class="dep-status @(department.IsActive ? "dep-status--active" : "dep-status--inactive")">@(department.IsActive ? "Active" : "Inactive")</span></td>
+                                            <td>@FormatDate(department.CreatedDateUtc)</td>
+                                            <td class="dep-row-actions" @onclick:stopPropagation="true">
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditModal(department)" title="Edit department"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ConfirmDelete(department)" title="Delete department"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                }
+            }
+        </div>
+
+        <aside class="dep-side-panel" aria-label="Department details and governance">
+            <div class="dep-side-card">
+                <div class="dep-side-header"><i class="bi bi-building-check" aria-hidden="true"></i><div><strong>Selected department</strong><span>@(SelectedDepartment is null ? "Choose a row or card" : SelectedDepartment.DepartmentName)</span></div></div>
+                @if (SelectedDepartment is null)
+                {
+                    <p class="dep-side-copy">Select a department to review manager ownership, team capacity, and available actions.</p>
+                }
+                else
+                {
+                    <div class="dep-selected-summary">
+                        <span class="dep-selected-avatar">@Initials(SelectedDepartment.DepartmentName)</span>
+                        <div><strong>@SelectedDepartment.DepartmentName</strong><small>@CodeText(SelectedDepartment)</small></div>
+                    </div>
+                    <dl class="dep-detail-list">
+                        <div><dt>Manager</dt><dd>@ManagerText(SelectedDepartment)</dd></div>
+                        <div><dt>Teams</dt><dd>@SelectedDepartment.TeamCount</dd></div>
+                        <div><dt>Status</dt><dd>@(SelectedDepartment.IsActive ? "Active" : "Inactive")</dd></div>
+                        <div><dt>Created</dt><dd>@FormatDate(SelectedDepartment.CreatedDateUtc)</dd></div>
+                    </dl>
+                    <div class="dep-selected-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEditModal(SelectedDepartment)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                        <a class="um-btn um-btn-ghost" href="/tenant/agency/teams"><i class="bi bi-people" aria-hidden="true"></i> Teams</a>
+                    </div>
+                }
+            </div>
+            <div class="dep-side-card">
+                <div class="dep-side-header"><i class="bi bi-list-check" aria-hidden="true"></i><div><strong>Readiness checklist</strong><span>@ChecklistComplete of @Checklist.Count complete</span></div></div>
+                <div class="dep-checklist">
+                    @foreach (var item in Checklist)
+                    {
+                        <div class="dep-check-item @(item.Done ? "dep-check-item--done" : null)"><i class="bi @(item.Done ? "bi-check-circle-fill" : "bi-circle")" aria-hidden="true"></i><span>@item.Text</span></div>
+                    }
                 </div>
             </div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+            <div class="dep-side-card">
+                <div class="dep-side-header"><i class="bi bi-diagram-3" aria-hidden="true"></i><div><strong>Workflow impact</strong><span>Where department data matters</span></div></div>
+                <div class="dep-impact-list">
+                    <span><i class="bi bi-router" aria-hidden="true"></i> Work routing</span>
+                    <span><i class="bi bi-people" aria-hidden="true"></i> Team assignments</span>
+                    <span><i class="bi bi-bar-chart" aria-hidden="true"></i> Management reporting</span>
+                    <span><i class="bi bi-shield-check" aria-hidden="true"></i> Operational governance</span>
+                </div>
+            </div>
+        </aside>
+    </section>
+</div>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+@if (_showForm)
+{
+    <div class="dep-modal-backdrop" role="presentation">
+        <div class="dep-modal" role="dialog" aria-modal="true" aria-labelledby="department-form-title">
+            <EditForm EditContext="_editContext" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-header">
+                    <i class="bi bi-building-fill-gear" aria-hidden="true"></i>
+                    <span id="department-form-title">@(_form.DepartmentId == Guid.Empty ? "New Department" : "Edit Department")</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div>
+                            <label class="dep-form-label">Department Name *</label>
+                            <InputText class="um-input" @bind-Value="_form.DepartmentName" placeholder="Commercial Lines" />
+                        </div>
+                        <div>
+                            <label class="dep-form-label">Department Code</label>
+                            <InputText class="um-input dep-mono" @bind-Value="_form.DepartmentCode" placeholder="COMM" />
+                        </div>
+                        <div>
+                            <label class="dep-form-label">Manager</label>
+                            <InputText class="um-input" @bind-Value="_form.Manager" placeholder="Full name" />
+                        </div>
+                        <div>
+                            <label class="dep-toggle-card">
+                                <InputCheckbox @bind-Value="_form.IsActive" />
+                                <span><strong>Active department</strong><small>Available for team ownership and routing.</small></span>
+                            </label>
+                        </div>
+                        <div class="dep-form-section dep-form-section--full">
+                            <label class="dep-form-label">Description</label>
+                            <InputTextArea class="um-input" @bind-Value="_form.Description" placeholder="Describe department responsibilities, workflow ownership, or service focus." />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving)
+                        {
+                            <span class="um-spinner um-spinner-sm" aria-hidden="true"></span>
+                        }
+                        else
+                        {
+                            <i class="bi bi-floppy" aria-hidden="true"></i>
+                        }
+                        Save Department
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_deleteTarget is not null)
+{
+    <div class="dep-modal-backdrop" role="presentation">
+        <div class="dep-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-department-title">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash" aria-hidden="true"></i></div>
+                <div>
+                    <h3 id="delete-department-title">Delete department?</h3>
+                    <p class="dep-confirm-copy">This will remove <strong>@_deleteTarget.DepartmentName</strong>. Related teams may become unassigned.</p>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="DeleteAsync" disabled="@_deleting"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
+            </div>
+        </div>
+    </div>
+}
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private SfToast? _toast;
-
+    private Guid _tenantAdminUserId;
     private List<DepartmentEntry> _allEntries = [];
-    private List<DepartmentEntry> _entries    = [];
-
-    private bool _loading    = false;
-    private bool _showDrawer = false;
-
-    private string _search          = string.Empty;
-    private bool   _filterActiveOnly = false;
-    private string _activeFilter = "Overview";
+    private List<DepartmentEntry> _entries = [];
+    private bool _loading;
+    private bool _saving;
+    private bool _deleting;
+    private bool _showForm;
+    private string _search = string.Empty;
+    private bool _activeOnly;
+    private string _activeTab = "overview";
     private string? _loadError;
-
-    private int _totalCount  = 0;
-    private int _activeCount = 0;
-
-    private DepartmentEntry _editModel = new();
-    private EditContext _editContext = default!;
-    private bool _showDeleteDialog;
+    private string? _toastMessage;
+    private string _toastClass = string.Empty;
+    private DepartmentEntry? SelectedDepartment;
     private DepartmentEntry? _deleteTarget;
+    private DepartmentForm _form = new();
+    private EditContext _editContext = default!;
 
-    public Departments()
+    private IReadOnlyList<DepartmentEntry> FilteredEntries => _entries;
+    private int _totalCount => _allEntries.Count;
+    private int _activeCount => _allEntries.Count(e => e.IsActive);
+    private int _inactiveCount => _totalCount - _activeCount;
+    private int _teamCount => _allEntries.Sum(e => e.TeamCount);
+    private int DepartmentsWithTeams => _allEntries.Count(e => e.TeamCount > 0);
+    private int DepartmentsWithManagers => _allEntries.Count(e => !string.IsNullOrWhiteSpace(e.Manager));
+    private int DepartmentsMissingManagers => _allEntries.Count(e => string.IsNullOrWhiteSpace(e.Manager));
+    private int ChecklistComplete => Checklist.Count(i => i.Done);
+    private int ReadinessScore => Math.Clamp((ChecklistComplete * 100) / Math.Max(Checklist.Count, 1), 0, 100);
+    private string ReadinessSummary => ReadinessScore switch
     {
-        _editContext = new EditContext(_editModel);
-    }
+        >= 90 => "Department structure is enterprise ready.",
+        >= 70 => "Minor ownership cleanup recommended.",
+        >= 40 => "Department governance needs attention.",
+        _ => "Create core operating departments."
+    };
+
+    private string DirectoryTitle => _activeTab switch
+    {
+        "active" => "Active Departments",
+        "inactive" => "Inactive Departments",
+        "teams" => "Departments With Teams",
+        "managers" => "Manager Coverage",
+        _ => "Department Directory"
+    };
+
+    private IReadOnlyList<KpiCard> Kpis =>
+    [
+        new("overview", "Departments", _totalCount.ToString(), "Total operating units", "bi-building-fill", "blue", "Show department overview"),
+        new("active", "Active", _activeCount.ToString(), "Available for routing", "bi-check-circle-fill", "green", "Show active departments"),
+        new("inactive", "Inactive", _inactiveCount.ToString(), "Disabled or retired", "bi-dash-circle", "amber", "Show inactive departments"),
+        new("teams", "Teams", _teamCount.ToString(), $"{DepartmentsWithTeams} department(s) staffed", "bi-people-fill", "purple", "Show departments with teams"),
+        new("managers", "Managers", DepartmentsWithManagers.ToString(), $"{DepartmentsMissingManagers} missing owner", "bi-person-badge", DepartmentsMissingManagers > 0 ? "red" : "slate", "Show manager ownership")
+    ];
+
+    private IReadOnlyList<NavTab> Tabs =>
+    [
+        new("overview", "Overview", "bi-speedometer2"),
+        new("directory", "Directory", "bi-list-ul"),
+        new("active", "Active", "bi-check-circle"),
+        new("inactive", "Inactive", "bi-dash-circle"),
+        new("teams", "Teams", "bi-people"),
+        new("managers", "Managers", "bi-person-badge")
+    ];
+
+    private IReadOnlyList<PriorityAction> PriorityActions =>
+    [
+        new("Add department", "Create an operating unit", "bi-plus-circle", "add"),
+        new("Review managers", "Identify missing ownership", "bi-person-badge", "managers"),
+        new("Review teams", "Confirm team capacity", "bi-people", "teams")
+    ];
+
+    private IReadOnlyList<ChecklistItem> Checklist =>
+    [
+        new(_totalCount > 0, "At least one department is configured"),
+        new(_activeCount > 0, "At least one active department is available"),
+        new(DepartmentsWithManagers == _totalCount && _totalCount > 0, "Every department has a manager"),
+        new(DepartmentsWithTeams > 0, "At least one department has team capacity"),
+        new(_allEntries.All(e => !string.IsNullOrWhiteSpace(e.DepartmentCode)), "Department codes are populated")
+    ];
 
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
+        _editContext = new EditContext(_form);
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+
         Breadcrumbs.SetCrumbs(
-            new("Home",         "/"),
+            new("Home", "/"),
             new("Agency Setup", "/tenant/agency/profile"),
-            new("Departments",  "/tenant/agency/departments"));
+            new("Departments", "/tenant/agency/departments"));
 
         await LoadAsync();
     }
@@ -238,157 +410,261 @@
     private async Task LoadAsync()
     {
         _loading = true;
-        StateHasChanged();
+        _loadError = null;
         try
         {
-            _loadError = null;
             var departments = await Api.GetDepartmentsAsync(_tenantId);
-            _allEntries = departments?.Select(d => new DepartmentEntry
-            {
-                DepartmentId = d.DepartmentId,
-                DepartmentCode = d.DepartmentCode ?? string.Empty,
-                DepartmentName = d.DepartmentName,
-                Manager = d.ManagerName ?? string.Empty,
-                TeamCount = d.TeamCount,
-                IsActive = d.IsActive
-            }).ToList() ?? [];
-            ComputeKpi();
+            _allEntries = departments?.Select(DepartmentEntry.FromDto).OrderBy(e => e.DepartmentName).ToList() ?? [];
             ApplyFilters();
+            SelectedDepartment = SelectedDepartment is null
+                ? _entries.FirstOrDefault()
+                : _allEntries.FirstOrDefault(e => e.DepartmentId == SelectedDepartment.DepartmentId) ?? _entries.FirstOrDefault();
         }
         catch (Exception ex)
         {
             _loadError = $"Load failed: {ex.Message}";
-            await ShowToastAsync($"Error loading departments: {ex.Message}", "e-toast-danger");
+            ShowToast($"Error loading departments: {ex.Message}", true);
         }
-        finally { _loading = false; }
+        finally
+        {
+            _loading = false;
+        }
     }
-
-    private async Task OnSearchAsync(string _) => await LoadAsync();
 
     private void ApplyFilters()
     {
         _entries = _allEntries.Where(e =>
-            (_activeFilter switch
+            (_activeTab switch
             {
-                "Active" => e.IsActive,
-                "Inactive" => !e.IsActive,
-                "Teams" => e.TeamCount > 0,
+                "active" => e.IsActive,
+                "inactive" => !e.IsActive,
+                "teams" => e.TeamCount > 0,
+                "managers" => !string.IsNullOrWhiteSpace(e.Manager),
                 _ => true
             }) &&
-            (!_filterActiveOnly || e.IsActive) &&
-            (string.IsNullOrEmpty(_search) ||
+            (!_activeOnly || e.IsActive) &&
+            (string.IsNullOrWhiteSpace(_search) ||
              e.DepartmentName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             e.DepartmentCode.Contains(_search, StringComparison.OrdinalIgnoreCase))
-        ).ToList();
+             e.DepartmentCode.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.Manager.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             (e.Description?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+             (e.IsActive ? "Active" : "Inactive").Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).OrderByDescending(e => e.IsActive).ThenBy(e => e.DepartmentName).ToList();
 
-        StateHasChanged();
+        if (SelectedDepartment is not null && !_entries.Any(e => e.DepartmentId == SelectedDepartment.DepartmentId))
+        {
+            SelectedDepartment = _entries.FirstOrDefault();
+        }
     }
 
-    private void SetKpiFilter(string filter)
+    private void SetTab(string tab)
     {
-        _activeFilter = _activeFilter == filter && filter != "Overview" ? "Overview" : filter;
-        _filterActiveOnly = _activeFilter == "Active";
+        _activeTab = _activeTab == tab && tab != "overview" ? "overview" : tab;
+        _activeOnly = _activeTab == "active";
         ApplyFilters();
     }
 
-    private string KpiClass(string filter) => _activeFilter == filter ? "as-kpi-card--active" : string.Empty;
+    private bool IsActiveTab(string tab) => string.Equals(_activeTab, tab, StringComparison.OrdinalIgnoreCase);
+    private bool ShowTab(string tab) => IsActiveTab("overview") || IsActiveTab(tab);
 
-    private void OnRowSelected(RowSelectEventArgs<DepartmentEntry> args) => OpenEditDrawer(args.Data);
-
-    private void ComputeKpi()
+    private void ToggleActiveOnly(bool value)
     {
-        _totalCount  = _allEntries.Count;
-        _activeCount = _allEntries.Count(e => e.IsActive);
+        _activeOnly = value;
+        ApplyFilters();
     }
 
-    private void OpenAddDrawer()  { _editModel = new(); _editContext = new EditContext(_editModel); _showDrawer = true; }
-    private void OpenEditDrawer(DepartmentEntry e) { _editModel = new DepartmentEntry { DepartmentId = e.DepartmentId, DepartmentCode = e.DepartmentCode, DepartmentName = e.DepartmentName, Description = e.Description, Manager = e.Manager, TeamCount = e.TeamCount, IsActive = e.IsActive }; _editContext = new EditContext(_editModel); _showDrawer = true; }
-    private void CloseDrawer() => _showDrawer = false;
+    private void ClearFilters()
+    {
+        _search = string.Empty;
+        _activeOnly = false;
+        _activeTab = "overview";
+        ApplyFilters();
+    }
+
+    private void SelectDepartment(DepartmentEntry department) => SelectedDepartment = department;
+
+    private void RunPriorityAction(PriorityAction action)
+    {
+        if (action.TabKey == "add")
+        {
+            OpenAddModal();
+            return;
+        }
+        SetTab(action.TabKey);
+    }
+
+    private void OpenAddModal()
+    {
+        _form = new DepartmentForm();
+        _editContext = new EditContext(_form);
+        _showForm = true;
+    }
+
+    private void OpenEditModal(DepartmentEntry department)
+    {
+        _form = DepartmentForm.FromEntry(department);
+        _editContext = new EditContext(_form);
+        _showForm = true;
+    }
+
+    private void CloseForm() => _showForm = false;
 
     private async Task SaveAsync()
     {
+        _saving = true;
         try
         {
-            var department = new DepartmentDto
+            var department = _form.ToDto(_tenantId);
+            if (_form.DepartmentId == Guid.Empty)
             {
-                DepartmentId = _editModel.DepartmentId,
-                TenantId = _tenantId,
-                DepartmentName = _editModel.DepartmentName,
-                DepartmentCode = _editModel.DepartmentCode,
-                Description = _editModel.Description,
-                ManagerName = _editModel.Manager,
-                TeamCount = _editModel.TeamCount,
-                IsActive = _editModel.IsActive
-            };
-
-            if (_editModel.DepartmentId == Guid.Empty)
                 await Api.CreateDepartmentAsync(department, _tenantId);
+            }
             else
-                await Api.UpdateDepartmentAsync(_editModel.DepartmentId, department);
+            {
+                await Api.UpdateDepartmentAsync(_form.DepartmentId, department);
+            }
 
-            _showDrawer = false;
+            _showForm = false;
             await LoadAsync();
-            await ShowToastAsync("Department saved.", "e-toast-success");
+            ShowToast("Department saved.");
         }
         catch (Exception ex)
         {
-            await ShowToastAsync($"Save failed: {ex.Message}", "e-toast-danger");
+            ShowToast($"Save failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
         }
     }
 
-    private void ConfirmDelete(DepartmentEntry entry)
-    {
-        _deleteTarget = entry;
-        _showDeleteDialog = true;
-    }
+    private void ConfirmDelete(DepartmentEntry department) => _deleteTarget = department;
+    private void CancelDelete() => _deleteTarget = null;
 
     private async Task DeleteAsync()
     {
         if (_deleteTarget is null)
+        {
             return;
+        }
 
+        _deleting = true;
         try
         {
             await Api.DeleteDepartmentAsync(_deleteTarget.DepartmentId);
-            _showDeleteDialog = false;
+            _deleteTarget = null;
             await LoadAsync();
-            await ShowToastAsync("Department deleted.", "e-toast-success");
+            ShowToast("Department deleted.");
         }
         catch (Exception ex)
         {
-            await ShowToastAsync($"Delete failed: {ex.Message}", "e-toast-danger");
+            ShowToast($"Delete failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _deleting = false;
         }
     }
 
-    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    private async Task CopySummaryAsync()
     {
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+        var summary = $"Departments: {_totalCount} total; {_activeCount} active; {_inactiveCount} inactive; {_teamCount} assigned teams; {DepartmentsWithManagers} manager-owned.";
+        await Js.InvokeVoidAsync("navigator.clipboard.writeText", summary);
+        ShowToast("Department summary copied.");
     }
+
+    private void ShowToast(string message, bool danger = false)
+    {
+        _toastMessage = message;
+        _toastClass = danger ? "dep-toast--danger" : string.Empty;
+    }
+
+    private void ClearToast() => _toastMessage = null;
+
+    private static string Initials(string value)
+    {
+        var words = value.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return words.Length switch
+        {
+            0 => "D",
+            1 => words[0][0].ToString().ToUpperInvariant(),
+            _ => string.Concat(words.Take(2).Select(w => char.ToUpperInvariant(w[0])))
+        };
+    }
+
+    private static string CodeText(DepartmentEntry department) => string.IsNullOrWhiteSpace(department.DepartmentCode) ? "No code" : department.DepartmentCode;
+    private static string ManagerText(DepartmentEntry department) => string.IsNullOrWhiteSpace(department.Manager) ? "Unassigned" : department.Manager;
+    private static string FormatDate(DateTime value) => value == default ? "â€”" : value.ToLocalTime().ToString("MMM d, yyyy");
+
+    private sealed record KpiCard(string Key, string Label, string Value, string Detail, string Icon, string Tone, string Tooltip);
+    private sealed record NavTab(string Key, string Label, string Icon);
+    private sealed record PriorityAction(string Title, string Detail, string Icon, string TabKey);
+    private sealed record ChecklistItem(bool Done, string Text);
 
     private sealed class DepartmentEntry
     {
-        public Guid   DepartmentId   { get; set; } = Guid.Empty;
-        [StringLength(50)]
+        public Guid DepartmentId { get; set; } = Guid.Empty;
         public string DepartmentCode { get; set; } = string.Empty;
-        [Required, StringLength(200)]
         public string DepartmentName { get; set; } = string.Empty;
-        [StringLength(1000)]
-        public string? Description   { get; set; }
-        [StringLength(200)]
-        public string Manager        { get; set; } = string.Empty;
-        public int    TeamCount      { get; set; }
-        public bool   IsActive       { get; set; } = true;
+        public string? Description { get; set; }
+        public string Manager { get; set; } = string.Empty;
+        public int TeamCount { get; set; }
+        public bool IsActive { get; set; } = true;
+        public DateTime CreatedDateUtc { get; set; }
+
+        public static DepartmentEntry FromDto(DepartmentDto dto)
+            => new()
+            {
+                DepartmentId = dto.DepartmentId,
+                DepartmentCode = dto.DepartmentCode ?? string.Empty,
+                DepartmentName = dto.DepartmentName,
+                Description = dto.Description,
+                Manager = dto.ManagerName ?? string.Empty,
+                TeamCount = dto.TeamCount,
+                IsActive = dto.IsActive,
+                CreatedDateUtc = dto.CreatedDateUtc
+            };
     }
 
-    async Task ResolveCurrentUserContextAsync()
+    private sealed class DepartmentForm
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        public Guid DepartmentId { get; set; } = Guid.Empty;
+
+        [Required, StringLength(200)]
+        public string DepartmentName { get; set; } = string.Empty;
+
+        [StringLength(50)]
+        public string DepartmentCode { get; set; } = string.Empty;
+
+        [StringLength(1000)]
+        public string? Description { get; set; }
+
+        [StringLength(200)]
+        public string Manager { get; set; } = string.Empty;
+
+        public bool IsActive { get; set; } = true;
+
+        public static DepartmentForm FromEntry(DepartmentEntry entry)
+            => new()
+            {
+                DepartmentId = entry.DepartmentId,
+                DepartmentName = entry.DepartmentName,
+                DepartmentCode = entry.DepartmentCode,
+                Description = entry.Description,
+                Manager = entry.Manager,
+                IsActive = entry.IsActive
+            };
+
+        public DepartmentDto ToDto(Guid tenantId)
+            => new()
+            {
+                DepartmentId = DepartmentId,
+                TenantId = tenantId,
+                DepartmentName = DepartmentName.Trim(),
+                DepartmentCode = string.IsNullOrWhiteSpace(DepartmentCode) ? null : DepartmentCode.Trim(),
+                Description = string.IsNullOrWhiteSpace(Description) ? null : Description.Trim(),
+                ManagerName = string.IsNullOrWhiteSpace(Manager) ? null : Manager.Trim(),
+                IsActive = IsActive
+            };
     }
 }

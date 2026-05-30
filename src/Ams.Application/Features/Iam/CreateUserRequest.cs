@@ -1,3 +1,5 @@
+using Ams.Application.Common.Validation;
+
 namespace Ams.Application.Features.Iam;
 
 public sealed class CreateUserRequest
@@ -11,6 +13,7 @@ public sealed class CreateUserRequest
     public string? DisplayName { get; set; }
     public string UserTypeCode { get; set; } = "Internal";
     public string StatusCode { get; set; } = "Active";
+    [AmsPhone]
     public string? PhoneNumber { get; set; }
     public string? Department { get; set; }
     public string? Region { get; set; }

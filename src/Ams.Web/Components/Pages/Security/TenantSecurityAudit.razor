@@ -1,0 +1,437 @@
+﻿@page "/tenant/security/teams2"
+@namespace Ams.Web.Components.Pages.SecurityAdmin
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Features.Iam
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Team Access â€” Users &amp; Security</PageTitle>
+
+<AppPageHeader Title="Team Access"
+               Subtitle="Control which users and roles have access to each team"
+               Icon="bi-people-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Access Rule
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="sta-kpi-strip">
+    <div class="sta-kpi-card @KpiClass("teams")" @onclick='() => SetKpiFilter("teams")' role="button" tabindex="0" title="Show all team access rules">
+        <span class="sta-kpi-icon sta-kpi-icon--teams"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
+        <div><div class="sta-kpi-value">@_teamCount</div><div class="sta-kpi-label">Teams</div></div>
+    </div>
+    <div class="sta-kpi-card @KpiClass("users")" @onclick='() => SetKpiFilter("users")' role="button" tabindex="0" title="Show users with team access">
+        <span class="sta-kpi-icon sta-kpi-icon--users"><i class="bi bi-person-badge" aria-hidden="true"></i></span>
+        <div><div class="sta-kpi-value">@_userCount</div><div class="sta-kpi-label">Users with Access</div></div>
+    </div>
+    <div class="sta-kpi-card @KpiClass("restricted")" @onclick='() => SetKpiFilter("restricted")' role="button" tabindex="0" title="Show restricted access rules">
+        <span class="sta-kpi-icon sta-kpi-icon--restricted"><i class="bi bi-lock-fill" aria-hidden="true"></i></span>
+        <div><div class="sta-kpi-value">@_restrictedCount</div><div class="sta-kpi-label">Restricted Teams</div></div>
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search team or userâ€¦">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_teamOptions"
+                        Placeholder="All Teams"
+                        ShowClearButton="true"
+                        Width="180px"
+                        Value="_filterTeam"
+                        ValueChanged="@((string v) => { _filterTeam = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+    </Filters>
+</AppFilterPanel>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+}
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loadingâ€¦</span>
+        </div>
+    }
+    <SfGrid TValue="TeamAccessEntry"
+            DataSource="_entries"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridColumns>
+            <GridColumn Field="@nameof(TeamAccessEntry.TeamName)" HeaderText="Team" Width="180">
+                <Template>
+                    @{ var e = (TeamAccessEntry)context; }
+                    <div class="sta-team-cell">
+                        <span class="sta-team-icon" aria-hidden="true"><i class="bi bi-people"></i></span>
+                        <div>
+                            <div class="sta-team-name">@e.TeamName</div>
+                            <div class="sta-team-dept">@e.Department</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TeamAccessEntry.UserFullName)" HeaderText="User" Width="180">
+                <Template>
+                    @{ var e = (TeamAccessEntry)context; }
+                    <div class="sta-user-cell">
+                        <span class="sta-avatar" style="@AvatarStyle(e)" aria-hidden="true">@Initials(e.UserFullName)</span>
+                        <span>@e.UserFullName</span>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TeamAccessEntry.AccessLevel)" HeaderText="Access Level" Width="140">
+                <Template>
+                    @{ var e = (TeamAccessEntry)context; }
+                    <span class="@AccessBadgeClass(e.AccessLevel)">@e.AccessLevel</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TeamAccessEntry.GrantedByName)" HeaderText="Granted By" Width="160" />
+            <GridColumn Field="@nameof(TeamAccessEntry.GrantedDate)" HeaderText="Granted" Width="130">
+                <Template>
+                    @{ var e = (TeamAccessEntry)context; }
+                    <span>@e.GrantedDate.ToString("d")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var e = (TeamAccessEntry)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditDrawer(e)" title="Edit">
+                        <i class="bi bi-pencil" aria-hidden="true"></i>
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ConfirmRemove(e)" title="Remove access">
+                        <i class="bi bi-trash3" aria-hidden="true"></i>
+                    </button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Add/Edit Drawer -->
+<AppCrudDrawer @bind-Visible="_showDrawer"
+               Title="@(_editModel.AccessId == Guid.Empty ? "Add Access Rule" : "Edit Access Rule")"
+               OnConfirm="SaveAsync"
+               OnClose="CloseDrawer">
+    <Content>
+        @if (_editContext is not null)
+        {
+            <EditForm EditContext="_editContext">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body"><div class="um-form-grid">
+                    <div class="um-field">
+                    <label>Team <span class="text-danger">*</span></label>
+                    <SfDropDownList TValue="string" TItem="LabelValue"
+                                    DataSource="_teamOptions"
+                                    @bind-Value="_editModel.TeamName"
+                                    Placeholder="Select team"
+                                    Width="100%">
+                        <DropDownListFieldSettings Value="Value" Text="Label" />
+                    </SfDropDownList>
+                    </div>
+
+                    <div class="um-field">
+                    <label>User <span class="text-danger">*</span></label>
+                    <SfDropDownList TValue="Guid" TItem="UserOption"
+                                    DataSource="_userOptions"
+                                    @bind-Value="_editModel.UserId"
+                                    Placeholder="Select user"
+                                    Width="100%">
+                        <DropDownListFieldSettings Value="UserId" Text="FullName" />
+                    </SfDropDownList>
+                    </div>
+
+                    <div class="um-field">
+                    <label>Access Level <span class="text-danger">*</span></label>
+                    <SfDropDownList TValue="string" TItem="LabelValue"
+                                    DataSource="_accessLevelOptions"
+                                    @bind-Value="_editModel.AccessLevel"
+                                    Width="100%">
+                        <DropDownListFieldSettings Value="Value" Text="Label" />
+                    </SfDropDownList>
+                    </div>
+                </div></div>
+            </EditForm>
+        }
+    </Content>
+</AppCrudDrawer>
+
+<SfDialog @bind-Visible="_showRemoveConfirm" Width="440px" IsModal="true" ShowCloseIcon="false">
+    <DialogTemplates>
+        <Content>
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></div>
+                <div><h3>Remove team access?</h3><p>Remove access for <strong>@_pendingRemove?.UserFullName</strong> to <strong>@_pendingRemove?.TeamName</strong>?</p></div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseRemoveConfirm">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteRemoveAsync">Remove</button>
+            </div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    Guid TenantId { get; set; }
+    Guid TenantAdminUserId { get; set; }
+    Guid DevTenantId { get; set; }
+    Guid DevUserId { get; set; }
+    private Guid _tenantAdminUserId;
+    private Guid _tenantId;
+    private SfToast? _toast;
+
+    private List<TeamAccessEntry> _allEntries = [];
+    private List<TeamAccessEntry> _entries    = [];
+    private List<LabelValue> _teamOptions = [];
+    private List<UserOption> _userOptions = [];
+
+    private bool _loading    = false;
+    private bool _showDrawer = false;
+    private bool _showRemoveConfirm = false;
+
+    private string _search      = string.Empty;
+    private string _filterTeam  = string.Empty;
+    private string _activeFilter = string.Empty;
+    private string? _loadError;
+
+    private int _teamCount       = 0;
+    private int _userCount       = 0;
+    private int _restrictedCount = 0;
+
+    private static readonly List<LabelValue> _accessLevelOptions =
+    [
+        new("Full",      "Full Access"),
+        new("ReadOnly",  "Read Only"),
+        new("Limited",   "Limited"),
+    ];
+
+    private TeamAccessEntry _editModel = new();
+    private TeamAccessEntry? _pendingRemove;
+    private EditContext? _editContext;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(
+            new("Home",             "/"),
+            new("Users & Security", "/tenant/security/users"),
+            new("Team Access",      "/tenant/security/teams"));
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            _loadError = null;
+            await LoadLookupOptionsAsync();
+            var scopes = await Api.SearchUserScopesAsync(_tenantId, scopeTypeCode: "Team", pageSize: 5000);
+            _allEntries = scopes?.Items.Where(s => s.IsActive).Select(MapScope).ToList() ?? [];
+            ComputeKpi();
+            ApplyFilters();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Load failed: {ex.Message}";
+            await ShowToastAsync($"Load failed: {ex.Message}", "e-toast-danger");
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private void ApplyFilters()
+    {
+        _entries = _allEntries.Where(e =>
+            (string.IsNullOrEmpty(_filterTeam) || e.TeamName == _filterTeam) &&
+            (string.IsNullOrEmpty(_search) ||
+             e.TeamName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.UserFullName.Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+        if (_activeFilter == "restricted") _entries = _entries.Where(e => e.AccessLevel != "Full").ToList();
+        if (_activeFilter == "users") _entries = _entries.Where(e => !string.IsNullOrWhiteSpace(e.UserFullName)).ToList();
+        StateHasChanged();
+    }
+
+    private void SetKpiFilter(string filter)
+    {
+        _activeFilter = _activeFilter == filter ? string.Empty : filter;
+        ApplyFilters();
+    }
+
+    private string KpiClass(string filter) => _activeFilter == filter ? "sta-kpi-card--active" : string.Empty;
+
+    private void ComputeKpi()
+    {
+        _teamCount       = _allEntries.Select(e => e.TeamName).Distinct().Count();
+        _userCount       = _allEntries.Select(e => e.UserFullName).Distinct().Count();
+        _restrictedCount = _allEntries.Count(e => e.AccessLevel != "Full");
+    }
+
+    private void OpenAddDrawer()  { _editModel = new(); _editContext = new EditContext(_editModel); _showDrawer = true; }
+    private void OpenEditDrawer(TeamAccessEntry e) { _editModel = new TeamAccessEntry { AccessId = e.AccessId, TeamName = e.TeamName, Department = e.Department, UserId = e.UserId, UserFullName = e.UserFullName, AccessLevel = e.AccessLevel, GrantedByName = e.GrantedByName, GrantedDate = e.GrantedDate }; _editContext = new EditContext(_editModel); _showDrawer = true; }
+    private void CloseDrawer() => _showDrawer = false;
+
+    private async Task SaveAsync()
+    {
+        try
+        {
+            if (_editContext?.Validate() != true)
+            {
+                await ShowToastAsync("Please fix validation errors before saving.", "e-toast-danger");
+                return;
+            }
+
+            if (_editModel.AccessId != Guid.Empty)
+                await Api.RevokeUserScopeAsync(_editModel.AccessId);
+
+            await Api.AssignUserScopeAsync(new AssignUserScopeRequest
+            {
+                TenantId = _tenantId,
+                UserId = _editModel.UserId,
+                ScopeTypeCode = "Team",
+                ScopeValue = $"{_editModel.TeamName}|{_editModel.AccessLevel}"
+            });
+
+            _showDrawer = false;
+            await LoadAsync();
+            await ShowToastAsync("Access rule saved.", "e-toast-success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Save failed: {ex.Message}", "e-toast-danger");
+        }
+    }
+
+    private void ConfirmRemove(TeamAccessEntry entry) { _pendingRemove = entry; _showRemoveConfirm = true; }
+    private void CloseRemoveConfirm() { _pendingRemove = null; _showRemoveConfirm = false; }
+    private async Task ExecuteRemoveAsync()
+    {
+        if (_pendingRemove is null) return;
+        try
+        {
+            await Api.RevokeUserScopeAsync(_pendingRemove.AccessId);
+            CloseRemoveConfirm();
+            await LoadAsync();
+            await ShowToastAsync("Access rule removed.", "e-toast-success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Remove failed: {ex.Message}", "e-toast-danger");
+        }
+    }
+
+    private async Task LoadLookupOptionsAsync()
+    {
+        var teams = await Api.GetTeamsAsync(_tenantId);
+        _teamOptions = teams?.Where(t => t.IsActive).OrderBy(t => t.TeamName).Select(t => new LabelValue(t.TeamName, t.TeamName)).ToList() ?? [];
+
+        var users = await Api.SearchUsersAsync(_tenantId, pageSize: 5000);
+        _userOptions = users?.Items.OrderBy(u => u.FullName).Select(u => new UserOption(u.UserId, u.FullName, u.Email)).ToList() ?? [];
+    }
+
+    private TeamAccessEntry MapScope(UserScopeDto scope)
+    {
+        var parts = scope.ScopeValue.Split('|', 2, StringSplitOptions.TrimEntries);
+        var teamName = parts.ElementAtOrDefault(0) ?? scope.ScopeValue;
+        var accessLevel = parts.ElementAtOrDefault(1) ?? "Full";
+        var team = _teamOptions.FirstOrDefault(t => t.Value == teamName);
+        return new TeamAccessEntry
+        {
+            AccessId = scope.UserScopeId,
+            UserId = scope.UserId,
+            UserFullName = scope.UserFullName ?? _userOptions.FirstOrDefault(u => u.UserId == scope.UserId)?.FullName ?? string.Empty,
+            TeamName = teamName,
+            Department = team?.Label == teamName ? string.Empty : string.Empty,
+            AccessLevel = accessLevel,
+            GrantedByName = scope.GrantedByFullName ?? "Tenant",
+            GrantedDate = scope.GrantedDateUtc
+        };
+    }
+
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    private static string Initials(string fullName)
+    {
+        var parts = fullName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : fullName.Length >= 1 ? fullName[..1] : "?";
+    }
+
+    private static string AvatarStyle(TeamAccessEntry e)
+    {
+        var hue = Math.Abs(e.UserFullName.GetHashCode()) % 360;
+        return $"background:hsl({hue},50%,42%);color:#fff;";
+    }
+
+    private static string AccessBadgeClass(string level) => level switch
+    {
+        "Full"     => "sta-access-badge sta-access-badge--full",
+        "ReadOnly" => "sta-access-badge sta-access-badge--readonly",
+        "Limited"  => "sta-access-badge sta-access-badge--limited",
+        _          => "sta-access-badge",
+    };
+
+    private sealed record LabelValue(string Value, string Label);
+    private sealed record UserOption(Guid UserId, string FullName, string Email);
+
+    private sealed class TeamAccessEntry
+    {
+        public Guid     AccessId      { get; set; } = Guid.Empty;
+        [Required]
+        public string   TeamName      { get; set; } = string.Empty;
+        public string   Department    { get; set; } = string.Empty;
+        [Required]
+        public Guid     UserId        { get; set; } = Guid.Empty;
+        [RequiredGuid(ErrorMessage = "User is required.")]
+        public Guid     UserValidationId { get => UserId; set => UserId = value; }
+        public string   UserFullName  { get; set; } = string.Empty;
+        [Required]
+        public string   AccessLevel   { get; set; } = "Full";
+        public string   GrantedByName { get; set; } = string.Empty;
+        public DateTime GrantedDate   { get; set; } = DateTime.Today;
+    }
+
+    private sealed class RequiredGuidAttribute : ValidationAttribute
+    {
+        public override bool IsValid(object? value) => value is Guid guid && guid != Guid.Empty;
+    }
+
+    async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        TenantId = context.TenantId;
+        TenantAdminUserId = context.UserId;
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+        DevTenantId = context.TenantId;
+        DevUserId = context.UserId;
+    }
+}

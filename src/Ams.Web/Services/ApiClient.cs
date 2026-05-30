@@ -910,20 +910,20 @@ public sealed partial class ApiClient
     public async Task<Guid> CreateLeadInterestLineAsync(Guid leadId, CreateLeadInterestLineRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync($"api/leads/{leadId}/interest-lines", request, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
     }
 
     public async Task UpdateLeadInterestLineAsync(Guid leadId, Guid interestLineId, UpdateLeadInterestLineRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PutAsJsonAsync($"api/leads/{leadId}/interest-lines/{interestLineId}", request, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
     }
 
     public async Task DeleteLeadInterestLineAsync(Guid interestLineId, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.DeleteAsync($"api/leads/interest-lines/{interestLineId}?modifiedByUserId={modifiedByUserId}", cancellationToken);
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
     }
 
     public Task<IReadOnlyList<LeadCommunicationDto>?> GetLeadCommunicationsAsync(Guid leadId, CancellationToken cancellationToken = default)
@@ -932,14 +932,20 @@ public sealed partial class ApiClient
     public async Task<Guid> CreateLeadCommunicationAsync(Guid leadId, CreateLeadCommunicationRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync($"api/leads/{leadId}/communications", request, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task UpdateLeadCommunicationAsync(Guid leadId, Guid communicationId, UpdateLeadCommunicationRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/leads/{leadId}/communications/{communicationId}", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
     }
 
     public async Task DeleteLeadCommunicationAsync(Guid communicationId, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.DeleteAsync($"api/leads/communications/{communicationId}?modifiedByUserId={modifiedByUserId}", cancellationToken);
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
     }
 
     // -- CRM Duplicate Management ------------------------------
@@ -1012,8 +1018,20 @@ public sealed partial class ApiClient
     public async Task<Guid> CreateLeadCampaignAsync(Guid leadId, CreateLeadCampaignEnrollmentRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync($"api/leads/{leadId}/campaigns", request, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task UpdateLeadCampaignAsync(Guid leadId, Guid enrollmentId, UpdateLeadCampaignEnrollmentRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/leads/{leadId}/campaigns/{enrollmentId}", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task DeleteLeadCampaignAsync(Guid enrollmentId, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/leads/campaigns/{enrollmentId}?modifiedByUserId={modifiedByUserId}", cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
     }
 
     public Task<IReadOnlyList<LeadDocumentDto>?> GetLeadDocumentsAsync(Guid leadId, CancellationToken cancellationToken = default)
@@ -1022,8 +1040,20 @@ public sealed partial class ApiClient
     public async Task<Guid> CreateLeadDocumentAsync(Guid leadId, CreateLeadDocumentRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync($"api/leads/{leadId}/documents", request, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task UpdateLeadDocumentAsync(Guid leadId, Guid documentId, UpdateLeadDocumentRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/leads/{leadId}/documents/{documentId}", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task DeleteLeadDocumentAsync(Guid documentId, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/leads/documents/{documentId}?modifiedByUserId={modifiedByUserId}", cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
     }
 
     public Task<PagedResult<OpportunityDto>?> SearchOpportunitiesAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
