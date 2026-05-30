@@ -7,71 +7,411 @@
 
 <PageTitle>Portal API Usage — AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true"><ToastPosition X="Right" Y="Bottom" /></SfToast>
-
-<AppPageHeader Title="Portal API Usage" Subtitle="API calls, integrations, webhooks, and portal automation usage for the last 30 days" Icon="bi-activity">
+<AppPageHeader Title="Portal API Usage"
+               Subtitle="Enterprise command center for portal API volume, health, latency, quota pressure, integrations, webhooks, and security review workflows."
+               Icon="bi-activity">
     <Actions>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/portal/my-account")'><i class="bi bi-arrow-left" aria-hidden="true"></i> My Account</button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
-        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/tenant/integrations/api")'><i class="bi bi-key" aria-hidden="true"></i> API Keys</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick='() => Nav.NavigateTo("/portal/my-account")'><i class="bi bi-arrow-left" aria-hidden="true"></i> My Account</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_busy"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+        <button class="um-btn um-btn-primary" type="button" @onclick='() => Nav.NavigateTo("/tenant/integrations/api")'><i class="bi bi-key" aria-hidden="true"></i> API Keys</button>
     </Actions>
 </AppPageHeader>
 
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError</div>
+    <div class="pau-toast @_toastClass" role="status">
+        <i class="bi @(_toastClass == "pau-toast--danger" ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="pau-toast-close" @onclick="ClearToast" aria-label="Dismiss message"><i class="bi bi-x-lg"></i></button>
+    </div>
 }
 
-<div class="pma-kpi-strip">
-    @Kpi("Total Calls", _items.Sum(x => x.Count).ToString("N0"), "bi-activity", "")
-    @Kpi("Successful", _items.Where(x => x.Status == "Successful").Sum(x => x.Count).ToString("N0"), "bi-check-circle", "Successful")
-    @Kpi("Warnings", _items.Where(x => x.Status == "Warning").Sum(x => x.Count).ToString("N0"), "bi-exclamation-triangle", "Warning")
-    @Kpi("Errors", _items.Where(x => x.Status == "Error").Sum(x => x.Count).ToString("N0"), "bi-x-circle", "Error")
-</div>
+<div class="pau-page">
+    <section class="pau-hero">
+        <div class="pau-hero-main">
+            <div class="pau-eyebrow"><i class="bi bi-diagram-3-fill" aria-hidden="true"></i> Portal API operations</div>
+            <h2>@TotalCalls.ToString("N0") API calls in the last 30 days</h2>
+            <p>Prioritize the endpoints that drive client portal adoption by error exposure, quota pressure, latency, webhook delivery, security signals, and service workflow impact.</p>
+            <div class="pau-hero-meta">
+                <span><i class="bi bi-check-circle"></i> @SuccessRate.ToString("N1")% success</span>
+                <span><i class="bi bi-speedometer2"></i> @AverageLatency.ToString("N0") ms avg</span>
+                <span><i class="bi bi-exclamation-triangle"></i> @AttentionCount.ToString("N0") need review</span>
+                <span><i class="bi bi-hdd-network"></i> @WebhookDeliveries.ToString("N0") webhooks</span>
+            </div>
+        </div>
+        <div class="pau-hero-panel">
+            <div class="pau-score-card">
+                <span>API health score</span>
+                <strong>@HealthScore%</strong>
+                <div class="pau-score-track"><div style="width:@HealthScore%"></div></div>
+                <small>@HealthSummary</small>
+            </div>
+            <div class="pau-priority-list">
+                @foreach (var item in PriorityEndpoints)
+                {
+                    <button type="button" class="pau-priority-item" @onclick="() => SelectEndpoint(item)">
+                        <span class="pau-risk pau-risk--@PriorityCss(item.Priority)">@EndpointScore(item)</span>
+                        <div><strong>@item.EndpointName</strong><small>@item.RecommendedAction</small></div>
+                        <i class="bi bi-chevron-right"></i>
+                    </button>
+                }
+            </div>
+        </div>
+    </section>
 
-<div class="pma-panel app-datagrid">
-    <div class="pma-panel-hdr"><i class="bi bi-activity" aria-hidden="true"></i> API Usage Detail</div>
-    <div class="api-filter-bar"><input class="api-search" placeholder="Search endpoint, integration, or detail…" @bind="_search" @bind:event="oninput" /><select class="api-search" @bind="_filter"><option value="">All</option><option>Successful</option><option>Warning</option><option>Error</option></select></div>
-    <SfGrid TValue="PortalMetricRecordDto" DataSource="Filtered" AllowSorting="true" AllowPaging="true" AllowTextWrap="true" RowHeight="56">
-        <GridTextWrapSettings WrapMode="WrapMode.Content" />
-        <GridPageSettings PageSize="20" />
-        <GridColumns>
-            <GridColumn Field="@nameof(PortalMetricRecordDto.Name)" HeaderText="Endpoint" MinWidth="220" />
-            <GridColumn Field="@nameof(PortalMetricRecordDto.Category)" HeaderText="Integration" MinWidth="160" />
-            <GridColumn Field="@nameof(PortalMetricRecordDto.Status)" HeaderText="Status" Width="130" />
-            <GridColumn Field="@nameof(PortalMetricRecordDto.Owner)" HeaderText="API Key" MinWidth="160" />
-            <GridColumn Field="@nameof(PortalMetricRecordDto.Detail)" HeaderText="Detail" MinWidth="260" />
-            <GridColumn Field="@nameof(PortalMetricRecordDto.EventDateUtc)" HeaderText="Last Call" Width="145" Type="ColumnType.DateTime" Format="MMM d, h:mm tt" />
-            <GridColumn Field="@nameof(PortalMetricRecordDto.Count)" HeaderText="Calls" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
-        </GridColumns>
-    </SfGrid>
+    <section class="pau-kpi-strip" aria-label="API usage KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="pau-kpi-card @(IsActiveKpi(kpi.Key) ? "pau-kpi-card--active" : null)" title="@kpi.Tooltip" @onclick="() => SetKpi(kpi.Key)">
+                <span class="pau-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="pau-kpi-label">@kpi.Label</span>
+                <strong>@kpi.Value</strong>
+                <small>@kpi.Detail</small>
+            </button>
+        }
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger pau-load-error" role="alert">
+            <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+            @_loadError
+        </div>
+    }
+
+    <section class="pau-command-bar">
+        <div class="pau-search-wrap">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="pau-search" placeholder="Search endpoint, route, integration, API key, status, or detail…" @bind="_search" @bind:event="oninput" />
+        </div>
+        <select class="pau-select" @bind="_integrationFilter">
+            <option value="">All integrations</option>
+            @foreach (var integration in Integrations)
+            {
+                <option value="@integration">@integration</option>
+            }
+        </select>
+        <select class="pau-select" @bind="_statusFilter">
+            <option value="">All statuses</option>
+            @foreach (var status in Statuses)
+            {
+                <option value="@status">@status</option>
+            }
+        </select>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="AcknowledgeHealthyAsync" disabled="@_busy"><i class="bi bi-check2-circle"></i> Acknowledge healthy</button>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="EscalateAtRiskAsync" disabled="@_busy"><i class="bi bi-exclamation-octagon"></i> Escalate risks</button>
+    </section>
+
+    <div class="pau-tabs" role="tablist" aria-label="API usage tabs">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" role="tab" class="pau-tab @(_activeTab == tab.Key ? "pau-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </div>
+
+    @if (_loading)
+    {
+        <div class="pau-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Loading API usage...</div>
+    }
+    else
+    {
+        <section class="pau-grid">
+            <article class="pau-panel">
+                <div class="pau-panel-header"><i class="bi bi-hdd-network"></i><div><strong>@ActiveListTitle</strong><span>@FilteredEndpoints.Count().ToString("N0") endpoints sorted by enterprise importance.</span></div></div>
+                @if (!FilteredEndpoints.Any())
+                {
+                    <div class="pau-empty"><i class="bi bi-plug"></i><strong>No endpoints match this view</strong><span>Adjust filters or refresh API usage data.</span></div>
+                }
+                else
+                {
+                    <div class="pau-endpoint-list">
+                        @foreach (var item in FilteredEndpoints)
+                        {
+                            <button type="button" class="pau-endpoint-row @(_selected?.Id == item.Id ? "pau-endpoint-row--active" : null)" @onclick="() => SelectEndpoint(item)">
+                                <span class="pau-method pau-method--@item.Method.ToLowerInvariant()">@item.Method</span>
+                                <div class="pau-endpoint-main">
+                                    <div class="pau-endpoint-title"><strong>@item.EndpointName</strong><span class="pau-badge pau-badge--@StatusCss(item.Status)">@item.Status</span><span class="pau-badge pau-badge--@HealthCss(item.HealthStatus)">@item.HealthStatus</span></div>
+                                    <p>@item.Route · @item.IntegrationName · @item.ApiKeyName</p>
+                                    <div class="pau-endpoint-meta"><span>@item.Calls30d.ToString("N0") calls</span><span>@item.P95LatencyMs.ToString("N0") ms P95</span><span>@item.QuotaUsedPercent% quota</span><span>@FormatRelative(item.LastCallUtc)</span></div>
+                                </div>
+                                <span class="pau-row-score">@EndpointScore(item)</span>
+                            </button>
+                        }
+                    </div>
+                }
+            </article>
+
+            <aside class="pau-side">
+                @if (_selected is null)
+                {
+                    <div class="pau-panel"><div class="pau-empty pau-empty--side"><i class="bi bi-cursor"></i><strong>Select an endpoint</strong><span>Choose an API record to review health, quota, latency, and actions.</span></div></div>
+                }
+                else
+                {
+                    <article class="pau-panel">
+                        <div class="pau-panel-header"><i class="bi bi-terminal"></i><div><strong>Endpoint command</strong><span>@_selected.EndpointCode · @_selected.IntegrationName</span></div></div>
+                        <div class="pau-detail">
+                            <div class="pau-detail-head"><span class="pau-method pau-method--@_selected.Method.ToLowerInvariant()">@_selected.Method</span><div><strong>@_selected.EndpointName</strong><span>@_selected.Route</span></div></div>
+                            <dl>
+                                <dt>API key</dt><dd>@_selected.ApiKeyName</dd>
+                                <dt>Owner</dt><dd>@_selected.Owner</dd>
+                                <dt>Status</dt><dd>@_selected.Status <small>@_selected.HealthStatus</small></dd>
+                                <dt>Priority</dt><dd>@_selected.Priority</dd>
+                                <dt>Last call</dt><dd>@FormatRelative(_selected.LastCallUtc)</dd>
+                                <dt>Detail</dt><dd>@_selected.Detail</dd>
+                                <dt>Action</dt><dd>@_selected.RecommendedAction</dd>
+                            </dl>
+                            <div class="pau-detail-actions">
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="() => MarkHealthyAsync(_selected)" disabled="@_busy"><i class="bi bi-check-circle"></i> Mark healthy</button>
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="() => WatchEndpointAsync(_selected)" disabled="@_busy"><i class="bi bi-eye"></i> Watch</button>
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="() => OptimizeEndpointAsync(_selected)" disabled="@_busy"><i class="bi bi-speedometer2"></i> Optimize</button>
+                                <button type="button" class="um-btn um-btn-danger" @onclick="() => EscalateEndpointAsync(_selected)" disabled="@_busy"><i class="bi bi-exclamation-octagon"></i> Escalate</button>
+                            </div>
+                        </div>
+                    </article>
+                    <article class="pau-panel">
+                        <div class="pau-panel-header"><i class="bi bi-bar-chart"></i><div><strong>30-day usage</strong><span>Volume, quality, and quota profile.</span></div></div>
+                        <div class="pau-metric-list">
+                            <div class="pau-metric-row"><span>Success</span><strong>@_selected.SuccessCount30d.ToString("N0")</strong></div>
+                            <div class="pau-metric-row"><span>Warnings</span><strong>@_selected.WarningCount30d.ToString("N0")</strong></div>
+                            <div class="pau-metric-row"><span>Errors</span><strong>@_selected.ErrorCount30d.ToString("N0")</strong></div>
+                            <div class="pau-metric-row"><span>Retries</span><strong>@_selected.RetryCount30d.ToString("N0")</strong></div>
+                            <div class="pau-metric-row"><span>Webhooks</span><strong>@_selected.WebhookDeliveries30d.ToString("N0")</strong></div>
+                        </div>
+                    </article>
+                }
+            </aside>
+        </section>
+    }
 </div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
-    private Guid _tenantId;
-    private SfToast? _toast;
-    private string _search = string.Empty;
-    private string _filter = string.Empty;
-    private string? _loadError;
-    private List<PortalMetricRecordDto> _items = [];
-    private IEnumerable<PortalMetricRecordDto> Filtered => _items.Where(i => (string.IsNullOrEmpty(_filter) || i.Status == _filter) && (string.IsNullOrEmpty(_search) || i.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || i.Category.Contains(_search, StringComparison.OrdinalIgnoreCase) || i.Owner.Contains(_search, StringComparison.OrdinalIgnoreCase) || i.Detail.Contains(_search, StringComparison.OrdinalIgnoreCase)));
-    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Portal", "/portal/users"), new("API Usage", "")); await LoadAsync(); }
-    private async Task LoadAsync() { try { _loadError = null; _items = (await Api.SearchPortalMetricRecordsAsync(_tenantId, "PortalApiUsage"))?.Items.ToList() ?? []; } catch (Exception ex) { _loadError = $"Unable to load API usage: {ex.Message}"; if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = _loadError, CssClass = "e-toast-danger" }); } }
-    private RenderFragment Kpi(string label, string value, string icon, string filter) => @<button type="button" class="pma-kpi-card pma-ki-gray" @onclick="() => _filter = _filter == filter ? string.Empty : filter"><i class="bi @icon pma-kpi-icon"></i><div><div class="pma-kpi-value">@value</div><div class="pma-kpi-label">@label</div><span>@(string.IsNullOrEmpty(filter) ? "all records" : "click to filter")</span></div></button>;
+    private readonly TabItem[] _tabs =
+    [
+        new("all", "All", "bi-stack"),
+        new("attention", "Needs Review", "bi-exclamation-triangle"),
+        new("errors", "Errors", "bi-x-octagon"),
+        new("quota", "Quota", "bi-speedometer"),
+        new("webhooks", "Webhooks", "bi-broadcast-pin"),
+        new("healthy", "Healthy", "bi-check-circle")
+    ];
 
-    async Task ResolveCurrentUserContextAsync()
+    private Guid _tenantId;
+    private bool _loading;
+    private bool _saving;
+    private string _search = string.Empty;
+    private string _activeKpi = "all";
+    private string _activeTab = "all";
+    private string _integrationFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string? _loadError;
+    private string? _toastMessage;
+    private string _toastClass = "pau-toast--success";
+    private List<PortalApiUsageDto> _items = [];
+    private PortalApiUsageDto? _selected;
+    private bool _busy => _loading || _saving;
+
+    private IEnumerable<string> Integrations => _items.Select(i => i.IntegrationName).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().OrderBy(s => s);
+    private IEnumerable<string> Statuses => _items.Select(i => i.Status).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().OrderBy(s => s);
+    private int TotalCalls => _items.Sum(i => i.Calls30d);
+    private int TotalErrors => _items.Sum(i => i.ErrorCount30d);
+    private int TotalWarnings => _items.Sum(i => i.WarningCount30d);
+    private int AttentionCount => _items.Count(i => i.RequiresReview || i.Status is "Warning" or "Error" || i.HealthStatus is "At Risk" or "Degraded" or "Watch");
+    private int QuotaPressureCount => _items.Count(i => i.QuotaUsedPercent >= 70);
+    private int WebhookDeliveries => _items.Sum(i => i.WebhookDeliveries30d);
+    private int AverageLatency => _items.Count == 0 ? 0 : (int)Math.Round(_items.Average(i => i.AvgLatencyMs));
+    private decimal SuccessRate => TotalCalls == 0 ? 0 : Math.Round(_items.Sum(i => i.SuccessCount30d) * 100m / TotalCalls, 1);
+    private int HealthScore => _items.Count == 0 ? 0 : Math.Clamp((int)Math.Round(SuccessRate - (AttentionCount * 3m) - (QuotaPressureCount * 2m) - (TotalErrors > 0 ? 4m : 0m)), 0, 100);
+    private string HealthSummary => HealthScore >= 90 ? "API portfolio is enterprise healthy" : HealthScore >= 75 ? "Mostly healthy with active watch items" : "Operational remediation is required";
+
+    private IEnumerable<KpiItem> Kpis =>
+    [
+        new("all", "Total Calls", "bi-activity", TotalCalls.ToString("N0"), "last 30 days", "Show all API usage"),
+        new("successful", "Success Rate", "bi-check-circle", $"{SuccessRate:N1}%", "successful calls", "Filter healthy endpoints"),
+        new("attention", "Needs Review", "bi-exclamation-triangle", AttentionCount.ToString("N0"), "risk or warnings", "Filter endpoints requiring review"),
+        new("errors", "Errors", "bi-x-octagon", TotalErrors.ToString("N0"), "failed calls", "Filter endpoints with errors"),
+        new("quota", "Quota Pressure", "bi-speedometer", QuotaPressureCount.ToString("N0"), "above 70%", "Filter high quota endpoints"),
+        new("webhooks", "Webhooks", "bi-broadcast-pin", WebhookDeliveries.ToString("N0"), "deliveries", "Filter webhook endpoints")
+    ];
+
+    private IEnumerable<PortalApiUsageDto> PriorityEndpoints => _items.OrderByDescending(EndpointScore).ThenByDescending(i => i.ErrorCount30d).ThenByDescending(i => i.QuotaUsedPercent).Take(4);
+
+    private IEnumerable<PortalApiUsageDto> FilteredEndpoints => _items
+        .Where(MatchesSearch)
+        .Where(i => string.IsNullOrWhiteSpace(_integrationFilter) || i.IntegrationName == _integrationFilter)
+        .Where(i => string.IsNullOrWhiteSpace(_statusFilter) || i.Status == _statusFilter)
+        .Where(MatchesActiveView)
+        .OrderByDescending(EndpointScore)
+        .ThenByDescending(i => i.ErrorCount30d)
+        .ThenByDescending(i => i.QuotaUsedPercent)
+        .ThenByDescending(i => i.LastCallUtc);
+
+    private string ActiveListTitle => _activeTab switch
+    {
+        "attention" => "Endpoints needing review",
+        "errors" => "Error remediation queue",
+        "quota" => "Quota pressure watchlist",
+        "webhooks" => "Webhook delivery operations",
+        "healthy" => "Healthy endpoints",
+        _ => "API usage inventory"
+    };
+
+    protected override async Task OnInitializedAsync()
     {
         var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
         _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Portal", "/portal/users"), new("API Usage", ""));
+        await LoadAsync();
     }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _items = (await Api.SearchPortalApiUsageAsync(_tenantId, _search))?.Items.ToList() ?? [];
+            _selected = _selected is null ? _items.OrderByDescending(EndpointScore).FirstOrDefault() : _items.FirstOrDefault(i => i.Id == _selected.Id) ?? _items.OrderByDescending(EndpointScore).FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Unable to load API usage: {ex.Message}";
+            ShowToast(_loadError, true);
+        }
+        finally { _loading = false; }
+    }
+
+    private void SetKpi(string key)
+    {
+        _activeKpi = key;
+        _activeTab = key switch
+        {
+            "successful" => "healthy",
+            "attention" => "attention",
+            "errors" => "errors",
+            "quota" => "quota",
+            "webhooks" => "webhooks",
+            _ => "all"
+        };
+    }
+
+    private void SetTab(string key)
+    {
+        _activeTab = key;
+        _activeKpi = key == "healthy" ? "successful" : key;
+    }
+
+    private bool IsActiveKpi(string key) => _activeKpi == key;
+    private void SelectEndpoint(PortalApiUsageDto item) => _selected = item;
+
+    private bool MatchesSearch(PortalApiUsageDto item)
+    {
+        if (string.IsNullOrWhiteSpace(_search)) return true;
+        return item.EndpointName.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Route.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.IntegrationName.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.ApiKeyName.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Status.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.HealthStatus.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Detail.Contains(_search, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool MatchesActiveView(PortalApiUsageDto item) => _activeTab switch
+    {
+        "attention" => item.RequiresReview || item.Status is "Warning" or "Error" || item.HealthStatus is "At Risk" or "Degraded" or "Watch",
+        "errors" => item.ErrorCount30d > 0 || item.Status == "Error",
+        "quota" => item.QuotaUsedPercent >= 70,
+        "webhooks" => item.WebhookDeliveries30d > 0,
+        "healthy" => item.HealthStatus == "Healthy" && item.Status == "Successful" && !item.RequiresReview,
+        _ => true
+    };
+
+    private int TabCount(string key) => key switch
+    {
+        "attention" => _items.Count(i => i.RequiresReview || i.Status is "Warning" or "Error" || i.HealthStatus is "At Risk" or "Degraded" or "Watch"),
+        "errors" => _items.Count(i => i.ErrorCount30d > 0 || i.Status == "Error"),
+        "quota" => QuotaPressureCount,
+        "webhooks" => _items.Count(i => i.WebhookDeliveries30d > 0),
+        "healthy" => _items.Count(i => i.HealthStatus == "Healthy" && i.Status == "Successful" && !i.RequiresReview),
+        _ => _items.Count
+    };
+
+    private async Task MarkHealthyAsync(PortalApiUsageDto item) => await UpdateEndpointAsync(item, "Successful", "Healthy", "Normal", item.Owner, "Endpoint reviewed and operating within enterprise thresholds.", false);
+    private async Task WatchEndpointAsync(PortalApiUsageDto item) => await UpdateEndpointAsync(item, item.Status == "Error" ? "Warning" : item.Status, "Watch", item.Priority is "Critical" ? "High" : item.Priority, item.Owner, "Endpoint placed on watch for trend monitoring and follow-up.", true);
+    private async Task OptimizeEndpointAsync(PortalApiUsageDto item) => await UpdateEndpointAsync(item, item.Status, item.QuotaUsedPercent >= 70 ? "Watch" : "Healthy", item.QuotaUsedPercent >= 70 ? "High" : "Normal", item.Owner, "Review caching, throttling, and payload size to reduce latency and quota pressure.", item.QuotaUsedPercent >= 70);
+    private async Task EscalateEndpointAsync(PortalApiUsageDto item) => await UpdateEndpointAsync(item, "Error", "At Risk", "Critical", "Portal Ops", "Escalated for immediate remediation by portal operations and integration owner.", true);
+
+    private async Task AcknowledgeHealthyAsync()
+    {
+        foreach (var item in _items.Where(i => i.HealthStatus == "Healthy" && i.Status == "Successful" && i.RequiresReview).ToList())
+            await MarkHealthyAsync(item);
+    }
+
+    private async Task EscalateAtRiskAsync()
+    {
+        foreach (var item in _items.Where(i => i.Status == "Error" || i.HealthStatus is "At Risk" or "Degraded" || i.ErrorCount30d > 25).ToList())
+            await EscalateEndpointAsync(item);
+    }
+
+    private async Task UpdateEndpointAsync(PortalApiUsageDto item, string status, string health, string priority, string owner, string action, bool requiresReview)
+    {
+        _saving = true;
+        try
+        {
+            await Api.UpdatePortalApiUsageStatusAsync(item.Id, new UpdatePortalApiUsageRequest
+            {
+                TenantId = _tenantId,
+                Status = status,
+                HealthStatus = health,
+                Priority = priority,
+                Owner = owner,
+                RecommendedAction = action,
+                RequiresReview = requiresReview
+            });
+            ShowToast($"{item.EndpointName} API workflow updated.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Update failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private void ShowToast(string message, bool danger = false)
+    {
+        _toastMessage = message;
+        _toastClass = danger ? "pau-toast--danger" : "pau-toast--success";
+    }
+
+    private void ClearToast() => _toastMessage = null;
+
+    private static int EndpointScore(PortalApiUsageDto item)
+    {
+        var priority = item.Priority switch { "Critical" => 36, "High" => 28, "Normal" => 12, _ => 8 };
+        var health = item.HealthStatus switch { "At Risk" => 30, "Degraded" => 24, "Watch" => 18, _ => 4 };
+        var errors = item.ErrorCount30d > 0 ? Math.Min(22, 6 + item.ErrorCount30d / 2) : 0;
+        var quota = item.QuotaUsedPercent >= 70 ? 14 : item.QuotaUsedPercent >= 50 ? 7 : 0;
+        return Math.Clamp(priority + health + errors + quota + (item.RequiresReview ? 10 : 0), 0, 100);
+    }
+
+    private static string PriorityCss(string value) => value.ToLowerInvariant().Replace(" ", "-");
+    private static string HealthCss(string value) => value.ToLowerInvariant().Replace(" ", "-");
+    private static string StatusCss(string value) => value.ToLowerInvariant().Replace(" ", "-");
+
+    private static string FormatRelative(DateTime? utc)
+    {
+        if (utc is null || utc == default) return "never";
+        var diff = DateTime.UtcNow - utc.Value.ToUniversalTime();
+        if (diff.TotalMinutes < 60) return $"{Math.Max(1, (int)diff.TotalMinutes)}m ago";
+        if (diff.TotalHours < 24) return $"{(int)diff.TotalHours}h ago";
+        return $"{(int)diff.TotalDays}d ago";
+    }
+
+    private sealed record TabItem(string Key, string Label, string Icon);
+    private sealed record KpiItem(string Key, string Label, string Icon, string Value, string Detail, string Tooltip);
 }

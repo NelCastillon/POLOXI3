@@ -80,6 +80,7 @@ public sealed class TenantBrandingRepository : ITenantBrandingRepository
                     PrimaryColor    = @PrimaryColor,
                     SecondaryColor  = @SecondaryColor,
                     AccentColor     = @AccentColor,
+                    CustomDomain    = @CustomDomain,
                     CustomCssUrl    = @CustomCssUrl,
                     SupportEmail    = @SupportEmail,
                     SupportPhone    = @SupportPhone,
@@ -88,9 +89,9 @@ public sealed class TenantBrandingRepository : ITenantBrandingRepository
                 WHERE TenantId = @TenantId AND IsDeleted = 0;
             ELSE
                 INSERT INTO Core.TenantBranding
-                    (TenantId, WhiteLabelName, LogoUrl, FaviconUrl, PrimaryColor, SecondaryColor, AccentColor, CustomCssUrl, SupportEmail, SupportPhone, FooterText, IsActive, CreatedDateUtc, IsDeleted)
+                    (TenantId, WhiteLabelName, LogoUrl, FaviconUrl, PrimaryColor, SecondaryColor, AccentColor, CustomDomain, CustomCssUrl, SupportEmail, SupportPhone, FooterText, IsActive, CreatedDateUtc, IsDeleted)
                 VALUES
-                    (@TenantId, @WhiteLabelName, @LogoUrl, @FaviconUrl, @PrimaryColor, @SecondaryColor, @AccentColor, @CustomCssUrl, @SupportEmail, @SupportPhone, @FooterText, 1, SYSUTCDATETIME(), 0);
+                    (@TenantId, @WhiteLabelName, @LogoUrl, @FaviconUrl, @PrimaryColor, @SecondaryColor, @AccentColor, @CustomDomain, @CustomCssUrl, @SupportEmail, @SupportPhone, @FooterText, 1, SYSUTCDATETIME(), 0);
             """;
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new
@@ -102,6 +103,7 @@ public sealed class TenantBrandingRepository : ITenantBrandingRepository
             request.PrimaryColor,
             request.SecondaryColor,
             request.AccentColor,
+            request.CustomDomain,
             request.CustomCssUrl,
             request.SupportEmail,
             request.SupportPhone,
@@ -119,6 +121,7 @@ public sealed class TenantBrandingRepository : ITenantBrandingRepository
                 PrimaryColor    = '#0d6efd',
                 SecondaryColor  = '#6c757d',
                 AccentColor     = '#198754',
+                CustomDomain    = NULL,
                 CustomCssUrl    = NULL,
                 SupportEmail    = NULL,
                 SupportPhone    = NULL,

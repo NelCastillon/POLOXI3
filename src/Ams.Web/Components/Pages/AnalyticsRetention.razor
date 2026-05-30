@@ -1,9 +1,834 @@
 @page "/analytics/retention"
 @namespace Ams.Web.Components.Pages
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject IJSRuntime Js
 
-<PageTitle>Renewal & Retention Reports — AMS</PageTitle>
+<PageTitle>Retention Analytics — AMS</PageTitle>
 
-<SharedReportExplorer Title="Renewal & Retention Reports"
-                      Subtitle="Retention, expiration, renewal probability, and book preservation reports from DB data"
-                      Icon="bi-arrow-clockwise"
-                      Module="Retention" />
+<AppPageHeader Title="Retention Analytics"
+               Subtitle="Enterprise retention command center for renewal risk, save plays, churn drivers, client health, producer accountability, reports, exports, and scheduled delivery."
+               Icon="bi-arrow-clockwise">
+    <Actions>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_busy"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="CreateSaveCaseAsync" disabled="@(_selectedItem is null || _busy)"><i class="bi bi-plus-circle" aria-hidden="true"></i> Create Save Case</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="OpenScheduleForSelected" disabled="@(_selectedReport is null || _busy)"><i class="bi bi-calendar-plus" aria-hidden="true"></i> Schedule Report</button>
+        <button class="um-btn um-btn-primary" type="button" @onclick="ExportRetentionPackAsync" disabled="@(!_retentionReports.Any() || _busy)"><i class="bi bi-download" aria-hidden="true"></i> Export Retention Pack</button>
+    </Actions>
+</AppPageHeader>
+
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
+{
+    <div class="ar-toast @_toastClass" role="status">
+        <i class="bi @(_toastClass == "ar-toast--danger" ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ar-toast-close" @onclick="ClearToast" aria-label="Dismiss message"><i class="bi bi-x-lg"></i></button>
+    </div>
+}
+
+<div class="ar-page">
+    <section class="ar-hero">
+        <div class="ar-hero-main">
+            <div class="ar-eyebrow"><i class="bi bi-heart-pulse-fill" aria-hidden="true"></i> Renewal retention cockpit</div>
+            <h2>@_dashboard.Kpi.RetentionRate.ToString("N1")% retention with @FormatCurrency(BookAtRiskPremium) at-risk book</h2>
+            <p>Prioritize the highest-impact retention work: executive save queue, renewal probability, churn drivers, premium exposure, client sentiment, producer touch accountability, and report workflow readiness.</p>
+            <div class="ar-hero-meta">
+                <span><i class="bi bi-shield-exclamation"></i> @AtRiskCount.ToString("N0") at-risk records</span>
+                <span><i class="bi bi-cash-stack"></i> @FormatCurrency(BookAtRiskPremium) premium exposure</span>
+                <span><i class="bi bi-activity"></i> @AverageRetention.ToString("N1")% modeled retention</span>
+                <span><i class="bi bi-clipboard2-check"></i> @RetentionCaseCount.ToString("N0") active cases</span>
+            </div>
+        </div>
+        <div class="ar-hero-panel">
+            <div class="ar-score-card">
+                <span>Retention readiness score</span>
+                <strong>@RetentionReadinessScore%</strong>
+                <div class="ar-score-track"><div style="width:@RetentionReadinessScore%"></div></div>
+                <small>@RetentionReadinessSummary</small>
+            </div>
+            <div class="ar-priority-list">
+                @foreach (var item in PriorityItems)
+                {
+                    <button type="button" class="ar-priority-item" @onclick="() => SelectRetentionItem(item)">
+                        <span class="ar-risk ar-risk--@PriorityCss(item.Priority)">@ItemScore(item)</span>
+                        <div><strong>@item.Title</strong><small>@item.NextAction</small></div>
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                    </button>
+                }
+            </div>
+        </div>
+    </section>
+
+    <section class="ar-kpi-strip" aria-label="Retention KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="ar-kpi-card @(IsActiveKpi(kpi.Key) ? "ar-kpi-card--active" : null)" title="@kpi.Tooltip" @onclick="() => SetKpi(kpi.Key)">
+                <span class="ar-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="ar-kpi-label">@kpi.Label</span>
+                <strong>@kpi.Value</strong>
+                <small>@kpi.Detail</small>
+            </button>
+        }
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger ar-load-error" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
+        </div>
+    }
+
+    <section class="ar-command-bar">
+        <div class="ar-search-wrap">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="ar-search" placeholder="Search retention analytics, accounts, producers, drivers, cases, sentiment, or reports…" @bind="_search" @bind:event="oninput" />
+        </div>
+        <select class="ar-select" @bind="_segmentFilter">
+            <option value="">All segments</option>
+            @foreach (var segment in Segments)
+            {
+                <option value="@segment">@segment</option>
+            }
+        </select>
+        <select class="ar-select" @bind="_priorityFilter">
+            <option value="">All priorities</option>
+            <option value="Critical">Critical</option>
+            <option value="High">High</option>
+            <option value="Normal">Normal</option>
+        </select>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="RunRetentionReportsAsync" disabled="@(!_retentionReports.Any() || _busy)"><i class="bi bi-play-fill" aria-hidden="true"></i> Run Retention Reports</button>
+    </section>
+
+    <div class="ar-tabs" role="tablist" aria-label="Retention analytics views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" role="tab" class="ar-tab @(_activeTab == tab.Key ? "ar-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </div>
+
+    @if (_loading)
+    {
+        <div class="ar-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Loading retention analytics...</div>
+    }
+    else
+    {
+        <section class="ar-grid">
+            <article class="ar-panel ar-panel--main">
+                <div class="ar-panel-header"><i class="bi @ActiveIcon" aria-hidden="true"></i><div><strong>@ActiveListTitle</strong><span>@FilteredItemCount.ToString("N0") retention records sorted by book impact.</span></div></div>
+                @if (!FilteredItems.Any())
+                {
+                    <div class="ar-empty"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i><strong>No retention records match this view</strong><span>Adjust filters or refresh seeded retention analytics.</span></div>
+                }
+                else
+                {
+                    <div class="ar-item-list">
+                        @foreach (var item in FilteredItems)
+                        {
+                            <button type="button" class="ar-item-row @(_selectedItem?.Title == item.Title ? "ar-item-row--active" : null)" @onclick="() => SelectRetentionItem(item)">
+                                <span class="ar-module-icon ar-module-icon--@CategoryCss(item.Category)"><i class="bi @CategoryIcon(item.Category)" aria-hidden="true"></i></span>
+                                <div class="ar-item-main">
+                                    <div class="ar-item-title"><strong>@item.Title</strong><span class="ar-badge ar-badge--@CategoryCss(item.Category)">@item.Category</span><span class="ar-badge ar-badge--type">@item.Driver</span></div>
+                                    <p>@item.Insight</p>
+                                    <div class="ar-item-meta"><span>@item.Owner</span><span>@item.Segment</span><span>@item.Count.ToString("N0") records</span><span>@item.RetentionPct.ToString("N1")% retention</span><span>due @FormatDate(item.DueDateUtc)</span></div>
+                                </div>
+                                <span class="ar-row-score">@ItemScore(item)</span>
+                            </button>
+                        }
+                    </div>
+                }
+            </article>
+
+            <aside class="ar-side">
+                @if (_selectedItem is null)
+                {
+                    <div class="ar-panel"><div class="ar-empty ar-empty--side"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a retention priority</strong><span>Choose a save queue, churn driver, producer gap, or client health segment to inspect actions and workflow.</span></div></div>
+                }
+                else
+                {
+                    <article class="ar-panel">
+                        <div class="ar-panel-header"><i class="bi @CategoryIcon(_selectedItem.Category)" aria-hidden="true"></i><div><strong>Retention command</strong><span>@_selectedItem.Priority · @_selectedItem.Status</span></div></div>
+                        <div class="ar-detail">
+                            <div class="ar-detail-head">
+                                <span class="ar-module-icon ar-module-icon--@CategoryCss(_selectedItem.Category)"><i class="bi @CategoryIcon(_selectedItem.Category)" aria-hidden="true"></i></span>
+                                <div><strong>@_selectedItem.Title</strong><span>@_selectedItem.Insight</span></div>
+                            </div>
+                            <dl>
+                                <dt>Premium exposure</dt><dd>@FormatCurrency(_selectedItem.Premium)</dd>
+                                <dt>Owner</dt><dd>@_selectedItem.Owner</dd>
+                                <dt>Segment</dt><dd>@_selectedItem.Segment</dd>
+                                <dt>Driver</dt><dd>@_selectedItem.Driver</dd>
+                                <dt>Retention</dt><dd>@_selectedItem.RetentionPct.ToString("N1")%</dd>
+                                <dt>Risk score</dt><dd>@_selectedItem.RiskScore</dd>
+                                <dt>Trend</dt><dd class="@TrendCss(_selectedItem.TrendPct)">@FormatSigned(_selectedItem.TrendPct)%</dd>
+                                <dt>Next action</dt><dd>@_selectedItem.NextAction</dd>
+                            </dl>
+                            <div class="ar-detail-actions">
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="CreateSaveCaseAsync" disabled="@_busy"><i class="bi bi-plus-circle" aria-hidden="true"></i> Create Save Case</button>
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="FocusRetentionReport" disabled="@(_selectedReport is null)"><i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i> Focus Report</button>
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="RunSelectedReportAsync" disabled="@(_selectedReport is null || _busy)"><i class="bi bi-play-fill" aria-hidden="true"></i> Run</button>
+                                <button type="button" class="um-btn um-btn-primary" @onclick="ExportSelectedReportAsync" disabled="@(_selectedReport is null || _busy)"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+                            </div>
+                        </div>
+                    </article>
+                }
+
+                <article class="ar-panel">
+                    <div class="ar-panel-header"><i class="bi bi-person-check" aria-hidden="true"></i><div><strong>Open save cases</strong><span>Live retention center workflow.</span></div></div>
+                    <div class="ar-case-list">
+                        @foreach (var item in CasesByImportance.Take(5))
+                        {
+                            <button type="button" class="ar-case-row" @onclick="() => SelectCaseAsync(item)">
+                                <div><strong>@item.AccountName</strong><span>@item.PolicyNumber · @item.LineOfBusiness · @item.Producer</span></div>
+                                <div class="ar-case-metrics"><strong>@FormatCurrency(item.CurrentPremium)</strong><span class="ar-risk-label ar-risk-label--@RiskClass(item.RiskScore)">@item.RiskScore risk</span></div>
+                            </button>
+                        }
+                        @if (!_retentionCenter.Cases.Any())
+                        {
+                            <div class="ar-empty ar-empty--compact"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No save cases loaded</strong><span>Create one from a retention priority.</span></div>
+                        }
+                    </div>
+                </article>
+
+                <article class="ar-panel">
+                    <div class="ar-panel-header"><i class="bi bi-gift" aria-hidden="true"></i><div><strong>Offer effectiveness</strong><span>Retention lift and premium impact.</span></div></div>
+                    <div class="ar-offer-list">
+                        @foreach (var offer in OffersByImportance.Take(4))
+                        {
+                            <div class="ar-offer-row">
+                                <div><strong>@offer.OfferName</strong><span>@offer.OfferType · @offer.Status</span></div>
+                                <div class="ar-progress"><div style="width:@Math.Clamp(offer.RetentionLift, 0, 100)%"></div></div>
+                                <strong>@offer.RetentionLift% lift</strong>
+                            </div>
+                        }
+                    </div>
+                </article>
+            </aside>
+        </section>
+
+        <section class="ar-lower-grid">
+            <article class="ar-panel">
+                <div class="ar-panel-header"><i class="bi bi-pie-chart" aria-hidden="true"></i><div><strong>Retention mix</strong><span>Renewed, at-risk, and lost segments.</span></div></div>
+                <div class="ar-retention-list">
+                    @foreach (var segment in _dashboard.RetentionSegments)
+                    {
+                        <div class="ar-retention-row">
+                            <div><strong>@segment.Label</strong><span>@segment.Value.ToString("N1")% of renewal book</span></div>
+                            <div class="ar-progress"><div style="width:@Math.Clamp(segment.Value, 0, 100)%"></div></div>
+                        </div>
+                    }
+                </div>
+            </article>
+
+            <article class="ar-panel">
+                <div class="ar-panel-header"><i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i><div><strong>Retention report workflow</strong><span>Preview, run, export, and scheduled delivery.</span></div></div>
+                <div class="ar-report-list">
+                    @foreach (var report in RetentionReportsByImportance.Take(5))
+                    {
+                        <button type="button" class="ar-report-row @(_selectedReport?.ReportDefinitionId == report.ReportDefinitionId ? "ar-report-row--active" : null)" @onclick="() => SelectReport(report)">
+                            <div><strong>@report.ReportName</strong><span>@report.ReportTypeCode · @report.OutputFormats · @LastRunLabel(report.ReportDefinitionId)</span></div>
+                            <span>@ReportScore(report)</span>
+                        </button>
+                    }
+                    @if (!_retentionReports.Any())
+                    {
+                        <div class="ar-empty ar-empty--compact"><i class="bi bi-file-earmark-x" aria-hidden="true"></i><strong>No Retention module reports found</strong><span>Retention analytics still uses seeded records and live retention center data.</span></div>
+                    }
+                </div>
+            </article>
+        </section>
+    }
+</div>
+
+@if (_showSchedule)
+{
+    <div class="ar-modal-backdrop" role="presentation" @onclick="CloseSchedule">
+        <div class="ar-modal" role="dialog" aria-modal="true" aria-label="Schedule retention report" @onclick:stopPropagation="true">
+            <EditForm EditContext="_scheduleEditContext" OnValidSubmit="ScheduleAsync">
+                <DataAnnotationsValidator />
+                <div class="ar-modal-header">
+                    <i class="bi bi-calendar-plus" aria-hidden="true"></i>
+                    <span>Schedule retention report</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseSchedule"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="ar-modal-body">
+                    @if (!string.IsNullOrWhiteSpace(_formError))
+                    {
+                        <div class="alert alert-danger ar-load-error" role="alert">@_formError</div>
+                    }
+                    <div class="ar-form-grid">
+                        <label>Report
+                            <select class="ar-input" @bind="_scheduleForm.ReportDefinitionId">
+                                @foreach (var report in RetentionReportsByImportance)
+                                {
+                                    <option value="@report.ReportDefinitionId">@report.ReportName</option>
+                                }
+                            </select>
+                            <ValidationMessage For="() => _scheduleForm.ReportDefinitionId" class="text-danger" />
+                        </label>
+                        <label>Frequency
+                            <select class="ar-input" @bind="_scheduleForm.FrequencyCode">
+                                @foreach (var frequency in _frequencyOptions)
+                                {
+                                    <option value="@frequency">@frequency</option>
+                                }
+                            </select>
+                            <ValidationMessage For="() => _scheduleForm.FrequencyCode" class="text-danger" />
+                        </label>
+                        <label>Output format
+                            <select class="ar-input" @bind="_scheduleForm.OutputFormat">
+                                @foreach (var format in _formatOptions)
+                                {
+                                    <option value="@format">@format</option>
+                                }
+                            </select>
+                            <ValidationMessage For="() => _scheduleForm.OutputFormat" class="text-danger" />
+                        </label>
+                        <label>Delivery email
+                            <input class="ar-input" @bind="_scheduleForm.DeliveryEmail" />
+                            <ValidationMessage For="() => _scheduleForm.DeliveryEmail" class="text-danger" />
+                        </label>
+                    </div>
+                </div>
+                <div class="ar-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseSchedule">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check2" aria-hidden="true"></i> Schedule</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@code {
+    private readonly TabItem[] _tabs =
+    [
+        new("all", "Command", "bi-speedometer2"),
+        new("at-risk", "At Risk", "bi-shield-exclamation"),
+        new("save-play", "Save Plays", "bi-life-preserver"),
+        new("churn-driver", "Churn Drivers", "bi-exclamation-triangle"),
+        new("producer", "Producer", "bi-person-badge"),
+        new("client-health", "Client Health", "bi-heart-pulse"),
+        new("reports", "Reports", "bi-file-earmark-bar-graph")
+    ];
+
+    private readonly string[] _frequencyOptions = ["Daily", "Weekly", "Monthly", "Quarterly"];
+    private readonly string[] _formatOptions = ["PDF", "Excel", "CSV"];
+
+    private Guid _tenantId;
+    private Guid? _currentUserId;
+    private bool _loading;
+    private bool _saving;
+    private bool _showSchedule;
+    private string _search = string.Empty;
+    private string _activeKpi = "all";
+    private string _activeTab = "all";
+    private string _segmentFilter = string.Empty;
+    private string _priorityFilter = string.Empty;
+    private string? _loadError;
+    private string? _formError;
+    private string? _toastMessage;
+    private string _toastClass = "ar-toast--success";
+    private ExecutiveDashboardPageDto _dashboard = new();
+    private RenewalRetentionCenterDto _retentionCenter = new();
+    private List<RetentionAnalyticsRecord> _retentionItems = [];
+    private List<ReportDefinitionDto> _retentionReports = [];
+    private List<ReportExecutionDto> _executions = [];
+    private List<ReportScheduleDto> _schedules = [];
+    private RetentionAnalyticsRecord? _selectedItem;
+    private ReportDefinitionDto? _selectedReport;
+    private ScheduleForm _scheduleForm = new();
+    private EditContext _scheduleEditContext = default!;
+    private bool _busy => _loading || _saving;
+
+    private decimal BookAtRiskPremium => _retentionItems.Sum(i => i.Premium) + _dashboard.Kpi.RenewalAtRiskPremium;
+    private int AtRiskCount => _retentionItems.Count(i => i.Category is "At Risk" or "Churn Driver" || i.Status is "At Risk" or "Escalate") + _dashboard.Kpi.RenewalAtRiskCount;
+    private int RetentionCaseCount => _retentionCenter.Cases.Count;
+    private double AverageRetention => _retentionItems.Count == 0 ? _dashboard.Kpi.RetentionRate : _retentionItems.Average(i => i.RetentionPct);
+    private int CriticalCount => _retentionItems.Count(i => i.Priority == "Critical");
+    private int ScheduledReportCount => _retentionReports.Count(r => IsScheduled(r.ReportDefinitionId));
+    private int RetentionReadinessScore => Math.Clamp(64 + Math.Min(12, _retentionItems.Count * 2) + Math.Min(10, ScheduledReportCount * 4) + Math.Min(14, (int)(AverageRetention / 8)), 0, 100);
+    private string RetentionReadinessSummary => RetentionReadinessScore >= 90 ? "Retention workflow is executive ready" : RetentionReadinessScore >= 80 ? "Retention operations are healthy with focused save opportunities" : "Create save cases and schedule retention reports to improve readiness";
+    private IEnumerable<string> Segments => _retentionItems.Select(i => i.Segment).Concat(_retentionCenter.Cases.Select(c => c.LineOfBusiness)).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().OrderBy(s => s);
+    private IEnumerable<RetentionAnalyticsRecord> PriorityItems => _retentionItems.OrderByDescending(ItemScore).ThenBy(i => i.DueDateUtc).Take(4);
+    private IEnumerable<RenewalRetentionCaseDto> CasesByImportance => _retentionCenter.Cases.OrderByDescending(c => c.IsEscalated).ThenByDescending(c => c.RiskScore).ThenBy(c => c.ExpirationDate);
+    private IEnumerable<RenewalRetentionOfferDto> OffersByImportance => _retentionCenter.Offers.OrderByDescending(o => o.RetentionLift).ThenByDescending(o => Math.Abs(o.PremiumImpact));
+    private IEnumerable<ReportDefinitionDto> RetentionReportsByImportance => _retentionReports.OrderByDescending(ReportScore).ThenBy(r => r.ReportName);
+    private IEnumerable<RetentionAnalyticsRecord> FilteredItems => _retentionItems
+        .Where(MatchesSearch)
+        .Where(i => string.IsNullOrWhiteSpace(_segmentFilter) || i.Segment == _segmentFilter)
+        .Where(i => string.IsNullOrWhiteSpace(_priorityFilter) || i.Priority == _priorityFilter)
+        .Where(MatchesActiveView)
+        .OrderByDescending(ItemScore)
+        .ThenBy(i => i.DueDateUtc)
+        .ToList();
+    private int FilteredItemCount => FilteredItems.Count();
+
+    private IEnumerable<KpiItem> Kpis =>
+    [
+        new("all", "Retention", "bi-arrow-clockwise", $"{_dashboard.Kpi.RetentionRate:N1}%", $"{_dashboard.Kpi.RetentionDelta:+0.0;-0.0;0.0}% delta", "Show all retention command records"),
+        new("at-risk", "At Risk", "bi-shield-exclamation", AtRiskCount.ToString("N0"), FormatCurrency(BookAtRiskPremium), "Filter executive save queue and at-risk renewals"),
+        new("save-play", "Save Plays", "bi-life-preserver", _retentionItems.Count(i => i.Category == "Save Play").ToString("N0"), "ready motions", "Filter retention save plays"),
+        new("churn-driver", "Churn Drivers", "bi-exclamation-triangle", _retentionItems.Count(i => i.Category == "Churn Driver").ToString("N0"), "root causes", "Filter churn driver risks"),
+        new("producer", "Cases", "bi-person-badge", RetentionCaseCount.ToString("N0"), "active save cases", "Show producer and case accountability"),
+        new("reports", "Reports", "bi-file-earmark-bar-graph", _retentionReports.Count.ToString("N0"), $"{ScheduledReportCount:N0} scheduled", "Filter Retention module reports")
+    ];
+
+    private string ActiveListTitle => _activeTab switch
+    {
+        "at-risk" => "Executive renewal save queue",
+        "save-play" => "Retention save plays ready for execution",
+        "churn-driver" => "Churn drivers requiring mitigation",
+        "producer" => "Producer accountability and touch cadence",
+        "client-health" => "Client health and service recovery",
+        "reports" => "Retention reporting workflow",
+        _ => "Enterprise retention command queue"
+    };
+
+    private string ActiveIcon => _activeTab switch
+    {
+        "at-risk" => "bi-shield-exclamation",
+        "save-play" => "bi-life-preserver",
+        "churn-driver" => "bi-exclamation-triangle",
+        "producer" => "bi-person-badge",
+        "client-health" => "bi-heart-pulse",
+        "reports" => "bi-file-earmark-bar-graph",
+        _ => "bi-speedometer2"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _currentUserId = context.UserId;
+        _scheduleEditContext = new(_scheduleForm);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var dashboard = await Api.GetExecutiveDashboardPageAsync(_tenantId);
+            var center = await Api.GetRenewalRetentionCenterAsync(_tenantId);
+            var records = await Api.SearchDashboardRecordsAsync(_tenantId, "RetentionAnalytics", _search);
+            var definitions = await Api.SearchReportDefinitionsAsync("Retention");
+            var executions = await Api.SearchReportExecutionsAsync(_tenantId, null);
+            var schedules = await Api.SearchReportSchedulesAsync(_tenantId, "Retention");
+
+            _dashboard = dashboard ?? new();
+            _retentionCenter = center ?? new();
+            _retentionItems = records?.Items.Select(r => DeserializeRetentionRecord(r.Id, r.JsonData)).Where(r => r is not null).Cast<RetentionAnalyticsRecord>().ToList() ?? [];
+            _retentionReports = definitions?.Items.Where(r => r.ModuleCode == "Retention" || r.ReportName.Contains("Retention", StringComparison.OrdinalIgnoreCase) || r.ReportName.Contains("Renewal", StringComparison.OrdinalIgnoreCase)).ToList() ?? [];
+            _executions = executions?.Items.Where(e => _retentionReports.Any(r => r.ReportDefinitionId == e.ReportDefinitionId)).ToList() ?? [];
+            _schedules = schedules?.Items.Where(s => _retentionReports.Any(r => r.ReportDefinitionId == s.ReportDefinitionId)).ToList() ?? [];
+            _selectedItem = _selectedItem is null ? FilteredItems.FirstOrDefault() : _retentionItems.FirstOrDefault(i => i.Title == _selectedItem.Title) ?? FilteredItems.FirstOrDefault();
+            _selectedReport = _selectedReport is null ? RetentionReportsByImportance.FirstOrDefault() : _retentionReports.FirstOrDefault(r => r.ReportDefinitionId == _selectedReport.ReportDefinitionId) ?? RetentionReportsByImportance.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load retention analytics: {ex.Message}";
+            _retentionItems = [];
+            _retentionReports = [];
+            _executions = [];
+            _schedules = [];
+            ShowToast(_loadError, true);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static RetentionAnalyticsRecord? DeserializeRetentionRecord(Guid id, string json)
+    {
+        try
+        {
+            var item = System.Text.Json.JsonSerializer.Deserialize<RetentionAnalyticsRecord>(json, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            if (item is not null) item.Id = id;
+            return item;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private bool MatchesSearch(RetentionAnalyticsRecord item)
+    {
+        if (string.IsNullOrWhiteSpace(_search)) return true;
+        return item.Title.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Category.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Owner.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Segment.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Driver.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Status.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Insight.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || _retentionCenter.Cases.Any(c => c.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) || c.PolicyNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) || c.Producer.Contains(_search, StringComparison.OrdinalIgnoreCase))
+            || _retentionReports.Any(r => r.ReportName.Contains(_search, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private bool MatchesActiveView(RetentionAnalyticsRecord item) => _activeTab switch
+    {
+        "at-risk" => item.Category == "At Risk" || item.Status is "At Risk" or "Escalate",
+        "save-play" => item.Category == "Save Play",
+        "churn-driver" => item.Category == "Churn Driver",
+        "producer" => item.Category == "Producer",
+        "client-health" => item.Category == "Client Health",
+        "reports" => _retentionReports.Any(),
+        _ => true
+    };
+
+    private void SetKpi(string key)
+    {
+        _activeKpi = key;
+        _activeTab = key;
+    }
+
+    private void SetTab(string key)
+    {
+        _activeTab = key;
+        _activeKpi = key;
+    }
+
+    private void ResetFilters()
+    {
+        _search = string.Empty;
+        _segmentFilter = string.Empty;
+        _priorityFilter = string.Empty;
+        _activeKpi = "all";
+        _activeTab = "all";
+    }
+
+    private bool IsActiveKpi(string key) => _activeKpi == key;
+    private void SelectRetentionItem(RetentionAnalyticsRecord item) => _selectedItem = item;
+    private void SelectReport(ReportDefinitionDto report) => _selectedReport = report;
+
+    private async Task SelectCaseAsync(RenewalRetentionCaseDto item)
+    {
+        _search = item.AccountName;
+        var detail = await Api.GetRenewalRetentionDetailAsync(item.RetentionCaseId);
+        ShowToast(detail is null ? $"Focused save case: {item.AccountName}" : $"Focused save case: {detail.Case.AccountName} · {detail.Activities.Count} activities · {detail.Offers.Count} offers");
+    }
+
+    private void FocusRetentionReport()
+    {
+        if (_selectedReport is null) return;
+        _activeTab = "reports";
+        _activeKpi = "reports";
+        ShowToast($"Focused report workflow: {_selectedReport.ReportName}");
+    }
+
+    private int TabCount(string key) => key switch
+    {
+        "at-risk" => _retentionItems.Count(i => i.Category == "At Risk" || i.Status is "At Risk" or "Escalate"),
+        "save-play" => _retentionItems.Count(i => i.Category == "Save Play"),
+        "churn-driver" => _retentionItems.Count(i => i.Category == "Churn Driver"),
+        "producer" => _retentionItems.Count(i => i.Category == "Producer"),
+        "client-health" => _retentionItems.Count(i => i.Category == "Client Health"),
+        "reports" => _retentionReports.Count,
+        _ => _retentionItems.Count
+    };
+
+    private async Task CreateSaveCaseAsync()
+    {
+        if (_selectedItem is null) return;
+        _saving = true;
+        try
+        {
+            var id = await Api.CreateRenewalRetentionCaseAsync(new Ams.Application.Features.RenewalRetention.CreateRenewalRetentionCaseRequest
+            {
+                TenantId = _tenantId,
+                AccountName = _selectedItem.Title,
+                PolicyNumber = $"RET-{DateTime.UtcNow:yyyyMMddHHmm}",
+                LineOfBusiness = _selectedItem.Segment,
+                Carrier = "Retention Market Review",
+                Producer = _selectedItem.Owner,
+                Csr = "Retention Desk",
+                ExpirationDate = _selectedItem.DueDateUtc,
+                CurrentPremium = _selectedItem.Premium,
+                ProposedPremium = _selectedItem.Premium,
+                RetentionProbability = (int)Math.Clamp(_selectedItem.RetentionPct, 0, 100),
+                RiskScore = _selectedItem.RiskScore,
+                Stage = "Save Plan",
+                Priority = _selectedItem.Priority,
+                OutreachStatus = "Not Started",
+                Sentiment = _selectedItem.RiskScore >= 75 ? "Concerned" : "Neutral",
+                RiskDrivers = _selectedItem.Driver,
+                NextBestAction = _selectedItem.NextAction,
+                NextActionDueDate = _selectedItem.DueDateUtc,
+                AssignedToName = _selectedItem.Owner,
+                IsEscalated = _selectedItem.Priority == "Critical",
+                IsAtRisk = _selectedItem.RiskScore >= 70,
+                CreatedByUserId = _currentUserId
+            });
+            await Api.AddRenewalRetentionActivityAsync(new Ams.Application.Features.RenewalRetention.CreateRenewalRetentionActivityRequest
+            {
+                RetentionCaseId = id,
+                ActivityType = "Plan",
+                Subject = $"Created retention save plan for {_selectedItem.Title}",
+                Outcome = "Created",
+                Notes = _selectedItem.Insight,
+                ActivityDateUtc = DateTime.UtcNow,
+                CreatedByName = "Retention Analytics",
+                CreatedByUserId = _currentUserId
+            });
+            ShowToast($"Save case created: {_selectedItem.Title}");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Create save case failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task RunSelectedReportAsync()
+    {
+        if (_selectedReport is not null)
+        {
+            await RunReportAsync(_selectedReport);
+        }
+    }
+
+    private async Task ExportSelectedReportAsync()
+    {
+        if (_selectedReport is not null)
+        {
+            await ExportReportAsync(_selectedReport);
+        }
+    }
+
+    private async Task RunRetentionReportsAsync()
+    {
+        var candidates = RetentionReportsByImportance.Take(2).ToList();
+        foreach (var report in candidates)
+        {
+            await RunReportAsync(report);
+        }
+        if (candidates.Count > 0)
+        {
+            ShowToast($"Retention report run completed for {candidates.Count} report(s).");
+        }
+    }
+
+    private async Task RunReportAsync(ReportDefinitionDto report)
+    {
+        _saving = true;
+        try
+        {
+            await Api.RunReportAsync(report.ReportDefinitionId, new RunReportRequest(_tenantId, PreferredFormat(report), _currentUserId));
+            ShowToast($"Retention report run completed: {report.ReportName}");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Run failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ExportReportAsync(ReportDefinitionDto report)
+    {
+        _saving = true;
+        try
+        {
+            var file = await Api.DownloadReportExcelAsync(report.ReportDefinitionId, _tenantId);
+            await DownloadFileAsync(file);
+            ShowToast($"Retention export downloaded: {report.ReportName}");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Export failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ExportRetentionPackAsync()
+    {
+        _saving = true;
+        try
+        {
+            var file = await Api.DownloadReportsExcelAsync(new DownloadReportsRequest
+            {
+                TenantId = _tenantId,
+                ReportDefinitionIds = _retentionReports.Select(r => r.ReportDefinitionId).ToList(),
+                SearchTerm = _search,
+                ModuleCode = "Retention",
+                Format = "Excel"
+            });
+            await DownloadFileAsync(file);
+            ShowToast($"Retention analytics pack downloaded for {_retentionReports.Count} report(s).");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Export retention pack failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void OpenScheduleForSelected()
+    {
+        if (_selectedReport is not null)
+        {
+            OpenSchedule(_selectedReport);
+        }
+    }
+
+    private void OpenSchedule(ReportDefinitionDto report)
+    {
+        _scheduleForm = new ScheduleForm
+        {
+            ReportDefinitionId = report.ReportDefinitionId,
+            OutputFormat = PreferredFormat(report),
+            FrequencyCode = "Weekly",
+            DeliveryEmail = "retention-ops@agencybinder.local"
+        };
+        _scheduleEditContext = new(_scheduleForm);
+        _formError = null;
+        _showSchedule = true;
+    }
+
+    private void CloseSchedule()
+    {
+        _showSchedule = false;
+        _formError = null;
+    }
+
+    private async Task ScheduleAsync()
+    {
+        _formError = null;
+        if (!_scheduleEditContext.Validate()) return;
+        _saving = true;
+        try
+        {
+            await Api.ScheduleReportAsync(new ScheduleReportRequest(_tenantId, _scheduleForm.ReportDefinitionId, _scheduleForm.FrequencyCode, _scheduleForm.OutputFormat, _scheduleForm.DeliveryEmail));
+            _showSchedule = false;
+            ShowToast($"Retention report scheduled for {_scheduleForm.DeliveryEmail}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Schedule failed: {ex.Message}";
+            ShowToast($"Schedule failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task DownloadFileAsync(ReportDownloadFile file)
+    {
+        var fileName = file.FileName.Replace("'", string.Empty).Replace("\"", string.Empty);
+        var base64 = Convert.ToBase64String(file.Content);
+        var script = $"(() => {{ const a = document.createElement(\"a\"); a.href = \"data:application/vnd.ms-excel;base64,{base64}\"; a.download = \"{fileName}\"; document.body.appendChild(a); a.click(); a.remove(); }})()";
+        await Js.InvokeVoidAsync("eval", script);
+    }
+
+    private void ShowToast(string message, bool danger = false)
+    {
+        _toastMessage = message;
+        _toastClass = danger ? "ar-toast--danger" : "ar-toast--success";
+    }
+
+    private void ClearToast() => _toastMessage = null;
+
+    private bool IsScheduled(Guid reportDefinitionId) => _schedules.Any(s => s.ReportDefinitionId == reportDefinitionId && s.IsActive);
+    private static bool IsExportable(ReportDefinitionDto report) => report.OutputFormats.Contains("Excel", StringComparison.OrdinalIgnoreCase) || report.OutputFormats.Contains("CSV", StringComparison.OrdinalIgnoreCase);
+    private static string PreferredFormat(ReportDefinitionDto report) => report.OutputFormats.Contains("Excel", StringComparison.OrdinalIgnoreCase) ? "Excel" : report.OutputFormats.Contains("CSV", StringComparison.OrdinalIgnoreCase) ? "CSV" : "PDF";
+
+    private int ReportScore(ReportDefinitionDto report)
+    {
+        var score = 35;
+        if (report.ReportTypeCode == "Analytics") score += 20;
+        if (report.ReportTypeCode == "Detail") score += 12;
+        if (IsScheduled(report.ReportDefinitionId)) score += 18;
+        if (_executions.Any(e => e.ReportDefinitionId == report.ReportDefinitionId)) score += 16;
+        if (IsExportable(report)) score += 8;
+        return Math.Clamp(score, 0, 100);
+    }
+
+    private int ItemScore(RetentionAnalyticsRecord item)
+    {
+        var score = item.Priority switch { "Critical" => 40, "High" => 28, "Normal" => 16, _ => 10 };
+        score += item.Category switch { "At Risk" => 20, "Churn Driver" => 18, "Save Play" => 15, "Producer" => 12, "Client Health" => 10, _ => 6 };
+        score += Math.Min(24, (int)(item.Premium / 30000m));
+        score += Math.Min(12, item.RiskScore / 10);
+        if (item.DueDateUtc <= DateTime.UtcNow.AddDays(7)) score += 12;
+        return Math.Clamp(score, 0, 100);
+    }
+
+    private string LastRunLabel(Guid reportDefinitionId)
+        => _executions.Where(e => e.ReportDefinitionId == reportDefinitionId).OrderByDescending(e => e.CreatedDateUtc).FirstOrDefault() is { } execution
+            ? $"Run {FormatRelative(execution.CompletedDateUtc ?? execution.CreatedDateUtc)}"
+            : "Never run";
+
+    private static string FormatCurrency(decimal value) => value >= 1000000 ? $"${value / 1000000m:N1}M" : $"${value / 1000m:N0}K";
+    private static string FormatDate(DateTime value) => value.ToLocalTime().ToString("MMM d");
+    private static string FormatRelative(DateTime? utc)
+    {
+        if (utc is null || utc == default) return "never";
+        var diff = DateTime.UtcNow - utc.Value.ToUniversalTime();
+        if (diff.TotalMinutes < 60) return $"{Math.Max(1, (int)diff.TotalMinutes)}m ago";
+        if (diff.TotalHours < 24) return $"{(int)diff.TotalHours}h ago";
+        return $"{(int)diff.TotalDays}d ago";
+    }
+
+    private static string FormatSigned(double value) => value >= 0 ? $"+{value:N1}" : value.ToString("N1");
+    private static string TrendCss(double value) => value >= 0 ? "ar-positive" : "ar-negative";
+    private static string PriorityCss(string value) => value.ToLowerInvariant();
+    private static string RiskClass(int score) => score >= 80 ? "high" : score >= 60 ? "medium" : "low";
+    private static string CategoryCss(string value) => value switch { "At Risk" => "red", "Churn Driver" => "amber", "Save Play" => "green", "Producer" => "purple", "Client Health" => "blue", _ => "slate" };
+    private static string CategoryIcon(string value) => value switch { "At Risk" => "bi-shield-exclamation", "Churn Driver" => "bi-exclamation-triangle", "Save Play" => "bi-life-preserver", "Producer" => "bi-person-badge", "Client Health" => "bi-heart-pulse", _ => "bi-arrow-clockwise" };
+
+    private sealed record TabItem(string Key, string Label, string Icon);
+    private sealed record KpiItem(string Key, string Label, string Icon, string Value, string Detail, string Tooltip);
+
+    private sealed class RetentionAnalyticsRecord
+    {
+        public Guid Id { get; set; }
+        public string Category { get; set; } = string.Empty;
+        public string Priority { get; set; } = string.Empty;
+        public string Title { get; set; } = string.Empty;
+        public string Owner { get; set; } = string.Empty;
+        public string Segment { get; set; } = string.Empty;
+        public string Driver { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public decimal Premium { get; set; }
+        public int Count { get; set; }
+        public double RetentionPct { get; set; }
+        public int RiskScore { get; set; }
+        public double TrendPct { get; set; }
+        public DateTime DueDateUtc { get; set; }
+        public string NextAction { get; set; } = string.Empty;
+        public string Insight { get; set; } = string.Empty;
+    }
+
+    private sealed class ScheduleForm
+    {
+        [Required] public Guid ReportDefinitionId { get; set; }
+        [Required, StringLength(40)] public string FrequencyCode { get; set; } = "Weekly";
+        [Required, StringLength(20)] public string OutputFormat { get; set; } = "Excel";
+        [Required, EmailAddress, StringLength(254)] public string DeliveryEmail { get; set; } = "retention-ops@agencybinder.local";
+    }
+}

@@ -53,6 +53,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITenantRepository, TenantRepository>();
         services.AddScoped<IAuthRepository, AuthRepository>();
         services.AddScoped<IBranchRepository, BranchRepository>();
+        services.AddScoped<IAgencyBusinessHoursRepository, AgencyBusinessHoursRepository>();
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IRoleRepository, RoleRepository>();
         services.AddScoped<IContactRepository, ContactRepository>();
@@ -105,6 +106,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITenantService, TenantService>();
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IBranchService, BranchService>();
+        services.AddScoped<IAgencyBusinessHoursService, AgencyBusinessHoursService>();
         services.AddScoped<IUserService, UserService>();
         services.AddScoped<IRoleService, RoleService>();
         services.AddScoped<IContactService, ContactService>();

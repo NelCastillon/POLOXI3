@@ -1,9 +1,770 @@
 @page "/analytics/policies"
 @namespace Ams.Web.Components.Pages
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject IJSRuntime Js
 
-<PageTitle>Policy Reports — AMS</PageTitle>
+<PageTitle>Policy Analytics — AMS</PageTitle>
 
-<SharedReportExplorer Title="Policy Reports"
-                      Subtitle="Policy book, active policies, premium, carrier, LOB, and branch reports from DB data"
-                      Icon="bi-shield-check"
-                      Module="Policy" />
+<AppPageHeader Title="Policy Analytics"
+               Subtitle="Enterprise policy command center for renewals, bind-to-issue workflow, cancellation exposure, endorsements, compliance, reports, exports, and scheduled delivery."
+               Icon="bi-shield-check">
+    <Actions>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_busy"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="OpenScheduleForSelected" disabled="@(_selectedReport is null || _busy)"><i class="bi bi-calendar-plus" aria-hidden="true"></i> Schedule Report</button>
+        <button class="um-btn um-btn-primary" type="button" @onclick="ExportPolicyPackAsync" disabled="@(!_policyReports.Any() || _busy)"><i class="bi bi-download" aria-hidden="true"></i> Export Policy Pack</button>
+    </Actions>
+</AppPageHeader>
+
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
+{
+    <div class="ap-toast @_toastClass" role="status">
+        <i class="bi @(_toastClass == "ap-toast--danger" ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ap-toast-close" @onclick="ClearToast" aria-label="Dismiss message"><i class="bi bi-x-lg"></i></button>
+    </div>
+}
+
+<div class="ap-page">
+    <section class="ap-hero">
+        <div class="ap-hero-main">
+            <div class="ap-eyebrow"><i class="bi bi-shield-fill-check" aria-hidden="true"></i> Policy operations cockpit</div>
+            <h2>@FormatCurrency(PolicyPremium) policy book command</h2>
+            <p>Prioritize policy work by business impact: renewal exposure, cancellation risk, bind backlog, endorsement premium accuracy, document compliance, report execution, and scheduled leadership delivery.</p>
+            <div class="ap-hero-meta">
+                <span><i class="bi bi-journal-check"></i> @PolicyRecordCount.ToString("N0") active policy records</span>
+                <span><i class="bi bi-cash-stack"></i> @FormatCurrency(PolicyPremium) premium in motion</span>
+                <span><i class="bi bi-check2-circle"></i> @AverageCompletion.ToString("N1")% avg completion</span>
+                <span><i class="bi bi-exclamation-triangle"></i> @CriticalCount.ToString("N0") critical queues</span>
+            </div>
+        </div>
+        <div class="ap-hero-panel">
+            <div class="ap-score-card">
+                <span>Policy readiness score</span>
+                <strong>@PolicyReadinessScore%</strong>
+                <div class="ap-score-track"><div style="width:@PolicyReadinessScore%"></div></div>
+                <small>@PolicyReadinessSummary</small>
+            </div>
+            <div class="ap-priority-list">
+                @foreach (var item in PriorityItems)
+                {
+                    <button type="button" class="ap-priority-item" @onclick="() => SelectPolicyItem(item)">
+                        <span class="ap-risk ap-risk--@PriorityCss(item.Priority)">@ItemScore(item)</span>
+                        <div><strong>@item.Title</strong><small>@item.NextAction</small></div>
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                    </button>
+                }
+            </div>
+        </div>
+    </section>
+
+    <section class="ap-kpi-strip" aria-label="Policy KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="ap-kpi-card @(IsActiveKpi(kpi.Key) ? "ap-kpi-card--active" : null)" title="@kpi.Tooltip" @onclick="() => SetKpi(kpi.Key)">
+                <span class="ap-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="ap-kpi-label">@kpi.Label</span>
+                <strong>@kpi.Value</strong>
+                <small>@kpi.Detail</small>
+            </button>
+        }
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger ap-load-error" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
+        </div>
+    }
+
+    <section class="ap-command-bar">
+        <div class="ap-search-wrap">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="ap-search" placeholder="Search policies, renewals, owners, workflows, compliance, carriers, LOBs, or reports…" @bind="_search" @bind:event="oninput" />
+        </div>
+        <select class="ap-select" @bind="_segmentFilter">
+            <option value="">All segments</option>
+            @foreach (var segment in Segments)
+            {
+                <option value="@segment">@segment</option>
+            }
+        </select>
+        <select class="ap-select" @bind="_priorityFilter">
+            <option value="">All priorities</option>
+            <option value="Critical">Critical</option>
+            <option value="High">High</option>
+            <option value="Normal">Normal</option>
+        </select>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="RunPolicyReportsAsync" disabled="@(!_policyReports.Any() || _busy)"><i class="bi bi-play-fill" aria-hidden="true"></i> Run Policy Reports</button>
+    </section>
+
+    <div class="ap-tabs" role="tablist" aria-label="Policy analytics views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" role="tab" class="ap-tab @(_activeTab == tab.Key ? "ap-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </div>
+
+    @if (_loading)
+    {
+        <div class="ap-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Loading policy analytics...</div>
+    }
+    else
+    {
+        <section class="ap-grid">
+            <article class="ap-panel ap-panel--main">
+                <div class="ap-panel-header"><i class="bi @ActiveIcon" aria-hidden="true"></i><div><strong>@ActiveListTitle</strong><span>@FilteredItemCount.ToString("N0") policy records sorted by enterprise importance.</span></div></div>
+                @if (!FilteredItems.Any())
+                {
+                    <div class="ap-empty"><i class="bi bi-shield-check" aria-hidden="true"></i><strong>No policy records match this view</strong><span>Adjust filters or refresh seeded policy analytics.</span></div>
+                }
+                else
+                {
+                    <div class="ap-item-list">
+                        @foreach (var item in FilteredItems)
+                        {
+                            <button type="button" class="ap-item-row @(_selectedItem?.Title == item.Title ? "ap-item-row--active" : null)" @onclick="() => SelectPolicyItem(item)">
+                                <span class="ap-module-icon ap-module-icon--@CategoryCss(item.Category)"><i class="bi @CategoryIcon(item.Category)" aria-hidden="true"></i></span>
+                                <div class="ap-item-main">
+                                    <div class="ap-item-title"><strong>@item.Title</strong><span class="ap-badge ap-badge--@CategoryCss(item.Category)">@item.Category</span><span class="ap-badge ap-badge--type">@item.Workflow</span></div>
+                                    <p>@item.Insight</p>
+                                    <div class="ap-item-meta"><span>@item.Owner</span><span>@item.Segment</span><span>@item.Count.ToString("N0") records</span><span>@item.CompletionPct.ToString("N1")% complete</span><span>due @FormatDate(item.DueDateUtc)</span></div>
+                                </div>
+                                <span class="ap-row-score">@ItemScore(item)</span>
+                            </button>
+                        }
+                    </div>
+                }
+            </article>
+
+            <aside class="ap-side">
+                @if (_selectedItem is null)
+                {
+                    <div class="ap-panel"><div class="ap-empty ap-empty--side"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a policy priority</strong><span>Choose a renewal, cancellation, bind, endorsement, or compliance queue to inspect next steps and reporting workflow.</span></div></div>
+                }
+                else
+                {
+                    <article class="ap-panel">
+                        <div class="ap-panel-header"><i class="bi @CategoryIcon(_selectedItem.Category)" aria-hidden="true"></i><div><strong>Policy command</strong><span>@_selectedItem.Priority · @_selectedItem.Status</span></div></div>
+                        <div class="ap-detail">
+                            <div class="ap-detail-head">
+                                <span class="ap-module-icon ap-module-icon--@CategoryCss(_selectedItem.Category)"><i class="bi @CategoryIcon(_selectedItem.Category)" aria-hidden="true"></i></span>
+                                <div><strong>@_selectedItem.Title</strong><span>@_selectedItem.Insight</span></div>
+                            </div>
+                            <dl>
+                                <dt>Premium impact</dt><dd>@FormatCurrency(_selectedItem.Premium)</dd>
+                                <dt>Owner</dt><dd>@_selectedItem.Owner</dd>
+                                <dt>Segment</dt><dd>@_selectedItem.Segment</dd>
+                                <dt>Workflow</dt><dd>@_selectedItem.Workflow</dd>
+                                <dt>Completion</dt><dd>@_selectedItem.CompletionPct.ToString("N1")%</dd>
+                                <dt>Trend</dt><dd class="@TrendCss(_selectedItem.TrendPct)">@FormatSigned(_selectedItem.TrendPct)%</dd>
+                                <dt>Next action</dt><dd>@_selectedItem.NextAction</dd>
+                            </dl>
+                            <div class="ap-detail-actions">
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="FocusPolicyReport" disabled="@(_selectedReport is null)"><i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i> Focus Report</button>
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="RunSelectedReportAsync" disabled="@(_selectedReport is null || _busy)"><i class="bi bi-play-fill" aria-hidden="true"></i> Run</button>
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="OpenScheduleForSelected" disabled="@(_selectedReport is null || _busy)"><i class="bi bi-calendar-plus" aria-hidden="true"></i> Schedule</button>
+                                <button type="button" class="um-btn um-btn-primary" @onclick="ExportSelectedReportAsync" disabled="@(_selectedReport is null || _busy)"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+                            </div>
+                        </div>
+                    </article>
+                }
+
+                <article class="ap-panel">
+                    <div class="ap-panel-header"><i class="bi bi-clock-history" aria-hidden="true"></i><div><strong>Renewals at risk</strong><span>Executive retention exposure.</span></div></div>
+                    <div class="ap-renewal-list">
+                        @foreach (var renewal in RenewalsByImportance.Take(5))
+                        {
+                            <div class="ap-renewal-row">
+                                <div><strong>@renewal.AccountName</strong><span>@renewal.LobCode · expires @FormatDate(renewal.ExpiryDate)</span></div>
+                                <div class="ap-renewal-metrics"><strong>@FormatCurrency(renewal.Premium)</strong><span class="ap-risk-label ap-risk-label--@renewal.RiskLevel.ToLowerInvariant()">@renewal.RiskLevel</span></div>
+                            </div>
+                        }
+                    </div>
+                </article>
+
+                <article class="ap-panel">
+                    <div class="ap-panel-header"><i class="bi bi-pie-chart" aria-hidden="true"></i><div><strong>Retention mix</strong><span>Policy book health distribution.</span></div></div>
+                    <div class="ap-retention-list">
+                        @foreach (var segment in RetentionSegments)
+                        {
+                            <div class="ap-retention-row">
+                                <div><strong>@segment.Label</strong><span>@segment.Value.ToString("N1")% of expiring policy base</span></div>
+                                <div class="ap-progress"><div style="width:@Math.Clamp(segment.Value, 0, 100)%"></div></div>
+                            </div>
+                        }
+                    </div>
+                </article>
+            </aside>
+        </section>
+
+        <section class="ap-lower-grid">
+            <article class="ap-panel">
+                <div class="ap-panel-header"><i class="bi bi-bar-chart" aria-hidden="true"></i><div><strong>Premium trend</strong><span>Written premium versus prior period.</span></div></div>
+                <div class="ap-trend-grid">
+                    @foreach (var point in PremiumTrend)
+                    {
+                        <div class="ap-trend-col">
+                            <div class="ap-trend-bar-wrap"><div class="ap-trend-bar ap-trend-bar--current" style="height:@TrendHeight(point.Value)%"></div></div>
+                            <div class="ap-trend-bar-wrap"><div class="ap-trend-bar ap-trend-bar--prior" style="height:@TrendHeight(point.PriorValue)%"></div></div>
+                            <span>@point.Label</span>
+                        </div>
+                    }
+                </div>
+            </article>
+
+            <article class="ap-panel">
+                <div class="ap-panel-header"><i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i><div><strong>Policy report workflow</strong><span>Preview, run, export, and scheduled delivery.</span></div></div>
+                <div class="ap-report-list">
+                    @foreach (var report in PolicyReportsByImportance.Take(5))
+                    {
+                        <button type="button" class="ap-report-row @(_selectedReport?.ReportDefinitionId == report.ReportDefinitionId ? "ap-report-row--active" : null)" @onclick="() => SelectReport(report)">
+                            <div><strong>@report.ReportName</strong><span>@report.ReportTypeCode · @report.OutputFormats · @LastRunLabel(report.ReportDefinitionId)</span></div>
+                            <span>@ReportScore(report)</span>
+                        </button>
+                    }
+                    @if (!_policyReports.Any())
+                    {
+                        <div class="ap-empty ap-empty--compact"><i class="bi bi-file-earmark-x" aria-hidden="true"></i><strong>No Policy module reports found</strong><span>Policy analytics still uses seeded policy and executive dashboard data.</span></div>
+                    }
+                </div>
+            </article>
+        </section>
+    }
+</div>
+
+@if (_showSchedule)
+{
+    <div class="ap-modal-backdrop" role="presentation" @onclick="CloseSchedule">
+        <div class="ap-modal" role="dialog" aria-modal="true" aria-label="Schedule policy report" @onclick:stopPropagation="true">
+            <EditForm EditContext="_scheduleEditContext" OnValidSubmit="ScheduleAsync">
+                <DataAnnotationsValidator />
+                <div class="ap-modal-header">
+                    <i class="bi bi-calendar-plus" aria-hidden="true"></i>
+                    <span>Schedule policy report</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseSchedule"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="ap-modal-body">
+                    @if (!string.IsNullOrWhiteSpace(_formError))
+                    {
+                        <div class="alert alert-danger ap-load-error" role="alert">@_formError</div>
+                    }
+                    <div class="ap-form-grid">
+                        <label>Report
+                            <select class="ap-input" @bind="_scheduleForm.ReportDefinitionId">
+                                @foreach (var report in PolicyReportsByImportance)
+                                {
+                                    <option value="@report.ReportDefinitionId">@report.ReportName</option>
+                                }
+                            </select>
+                            <ValidationMessage For="() => _scheduleForm.ReportDefinitionId" class="text-danger" />
+                        </label>
+                        <label>Frequency
+                            <select class="ap-input" @bind="_scheduleForm.FrequencyCode">
+                                @foreach (var frequency in _frequencyOptions)
+                                {
+                                    <option value="@frequency">@frequency</option>
+                                }
+                            </select>
+                            <ValidationMessage For="() => _scheduleForm.FrequencyCode" class="text-danger" />
+                        </label>
+                        <label>Output format
+                            <select class="ap-input" @bind="_scheduleForm.OutputFormat">
+                                @foreach (var format in _formatOptions)
+                                {
+                                    <option value="@format">@format</option>
+                                }
+                            </select>
+                            <ValidationMessage For="() => _scheduleForm.OutputFormat" class="text-danger" />
+                        </label>
+                        <label>Delivery email
+                            <input class="ap-input" @bind="_scheduleForm.DeliveryEmail" />
+                            <ValidationMessage For="() => _scheduleForm.DeliveryEmail" class="text-danger" />
+                        </label>
+                    </div>
+                </div>
+                <div class="ap-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseSchedule">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check2" aria-hidden="true"></i> Schedule</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@code {
+    private readonly TabItem[] _tabs =
+    [
+        new("all", "Command", "bi-speedometer2"),
+        new("renewal", "Renewals", "bi-clock-history"),
+        new("bind", "Bind", "bi-journal-check"),
+        new("cancellation", "Cancellations", "bi-exclamation-octagon"),
+        new("endorsement", "Endorsements", "bi-pencil-square"),
+        new("compliance", "Compliance", "bi-shield-check"),
+        new("reports", "Reports", "bi-file-earmark-bar-graph")
+    ];
+
+    private readonly string[] _frequencyOptions = ["Daily", "Weekly", "Monthly", "Quarterly"];
+    private readonly string[] _formatOptions = ["PDF", "Excel", "CSV"];
+
+    private Guid _tenantId;
+    private Guid? _currentUserId;
+    private bool _loading;
+    private bool _saving;
+    private bool _showSchedule;
+    private string _search = string.Empty;
+    private string _activeKpi = "all";
+    private string _activeTab = "all";
+    private string _segmentFilter = string.Empty;
+    private string _priorityFilter = string.Empty;
+    private string? _loadError;
+    private string? _formError;
+    private string? _toastMessage;
+    private string _toastClass = "ap-toast--success";
+    private ExecutiveDashboardPageDto _dashboard = new();
+    private List<PolicyAnalyticsRecord> _policyItems = [];
+    private List<ReportDefinitionDto> _policyReports = [];
+    private List<ReportExecutionDto> _executions = [];
+    private List<ReportScheduleDto> _schedules = [];
+    private PolicyAnalyticsRecord? _selectedItem;
+    private ReportDefinitionDto? _selectedReport;
+    private ScheduleForm _scheduleForm = new();
+    private EditContext _scheduleEditContext = default!;
+    private bool _busy => _loading || _saving;
+
+    private decimal PolicyPremium => _policyItems.Sum(i => i.Premium);
+    private int PolicyRecordCount => _policyItems.Sum(i => i.Count);
+    private double AverageCompletion => _policyItems.Count == 0 ? 0 : _policyItems.Average(i => i.CompletionPct);
+    private int CriticalCount => _policyItems.Count(i => i.Priority == "Critical");
+    private int RenewalCount => _policyItems.Count(i => i.Category == "Renewal") + _dashboard.Kpi.RenewalAtRiskCount;
+    private int CancellationCount => _policyItems.Where(i => i.Category == "Cancellation" || i.Status == "Escalate").Sum(i => i.Count);
+    private int ActiveReportCount => _policyReports.Count;
+    private int ScheduledReportCount => _policyReports.Count(r => IsScheduled(r.ReportDefinitionId));
+    private int PolicyReadinessScore => Math.Clamp(66 + Math.Min(12, _policyItems.Count * 2) + Math.Min(10, ScheduledReportCount * 4) + Math.Min(12, (int)(AverageCompletion / 10)), 0, 100);
+    private string PolicyReadinessSummary => PolicyReadinessScore >= 90 ? "Policy workflow is executive ready" : PolicyReadinessScore >= 80 ? "Policy operations are healthy with focused exceptions" : "Run and schedule policy reports to improve readiness";
+    private IEnumerable<string> Segments => _policyItems.Select(i => i.Segment).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().OrderBy(s => s);
+    private IEnumerable<PolicyAnalyticsRecord> PriorityItems => _policyItems.OrderByDescending(ItemScore).ThenBy(i => i.DueDateUtc).Take(4);
+    private IEnumerable<DashboardRenewalRiskDto> RenewalsByImportance => _dashboard.RenewalsAtRisk.OrderByDescending(r => r.RiskLevel == "High").ThenBy(r => r.ExpiryDate).ThenByDescending(r => r.Premium);
+    private IEnumerable<DashboardPiePointDto> RetentionSegments => _dashboard.RetentionSegments;
+    private IEnumerable<DashboardPremiumPointDto> PremiumTrend => _dashboard.PremiumTrend;
+    private IEnumerable<ReportDefinitionDto> PolicyReportsByImportance => _policyReports.OrderByDescending(ReportScore).ThenBy(r => r.ReportName);
+    private IEnumerable<PolicyAnalyticsRecord> FilteredItems => _policyItems
+        .Where(MatchesSearch)
+        .Where(i => string.IsNullOrWhiteSpace(_segmentFilter) || i.Segment == _segmentFilter)
+        .Where(i => string.IsNullOrWhiteSpace(_priorityFilter) || i.Priority == _priorityFilter)
+        .Where(MatchesActiveView)
+        .OrderByDescending(ItemScore)
+        .ThenBy(i => i.DueDateUtc)
+        .ToList();
+    private int FilteredItemCount => FilteredItems.Count();
+
+    private IEnumerable<KpiItem> Kpis =>
+    [
+        new("all", "Premium", "bi-cash-stack", FormatCurrency(PolicyPremium), $"{PolicyRecordCount:N0} policy records", "Show all policy command records"),
+        new("renewal", "Renewals", "bi-clock-history", RenewalCount.ToString("N0"), FormatCurrency(_dashboard.Kpi.RenewalAtRiskPremium), "Filter renewal exposure and retention priorities"),
+        new("bind", "Bind Backlog", "bi-journal-check", _policyItems.Where(i => i.Category == "Bind").Sum(i => i.Count).ToString("N0"), "awaiting issue", "Filter bind-to-issue workflow"),
+        new("cancellation", "Cancel Risk", "bi-exclamation-octagon", CancellationCount.ToString("N0"), "save actions", "Filter cancellation and non-pay risk"),
+        new("endorsement", "Endorsements", "bi-pencil-square", _policyItems.Where(i => i.Category == "Endorsement").Sum(i => i.Count).ToString("N0"), "premium changes", "Filter endorsement activity"),
+        new("reports", "Reports", "bi-file-earmark-bar-graph", ActiveReportCount.ToString("N0"), $"{ScheduledReportCount:N0} scheduled", "Filter Policy module reports")
+    ];
+
+    private string ActiveListTitle => _activeTab switch
+    {
+        "renewal" => "Renewal and retention priorities",
+        "bind" => "Bind-to-issue backlog",
+        "cancellation" => "Cancellation and non-pay risk",
+        "endorsement" => "Endorsement premium accuracy",
+        "compliance" => "Policy compliance and document readiness",
+        "reports" => "Policy reporting workflow",
+        _ => "Enterprise policy command queue"
+    };
+
+    private string ActiveIcon => _activeTab switch
+    {
+        "renewal" => "bi-clock-history",
+        "bind" => "bi-journal-check",
+        "cancellation" => "bi-exclamation-octagon",
+        "endorsement" => "bi-pencil-square",
+        "compliance" => "bi-shield-check",
+        "reports" => "bi-file-earmark-bar-graph",
+        _ => "bi-speedometer2"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _currentUserId = context.UserId;
+        _scheduleEditContext = new(_scheduleForm);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var dashboard = await Api.GetExecutiveDashboardPageAsync(_tenantId);
+            var records = await Api.SearchDashboardRecordsAsync(_tenantId, "PolicyAnalytics", _search);
+            var definitions = await Api.SearchReportDefinitionsAsync("Policy");
+            var executions = await Api.SearchReportExecutionsAsync(_tenantId, null);
+            var schedules = await Api.SearchReportSchedulesAsync(_tenantId, "Policy");
+
+            _dashboard = dashboard ?? new();
+            _policyItems = records?.Items.Select(r => DeserializePolicyRecord(r.Id, r.JsonData)).Where(r => r is not null).Cast<PolicyAnalyticsRecord>().ToList() ?? [];
+            _policyReports = definitions?.Items.Where(r => r.ModuleCode == "Policy").ToList() ?? [];
+            _executions = executions?.Items.Where(e => _policyReports.Any(r => r.ReportDefinitionId == e.ReportDefinitionId)).ToList() ?? [];
+            _schedules = schedules?.Items.Where(s => _policyReports.Any(r => r.ReportDefinitionId == s.ReportDefinitionId)).ToList() ?? [];
+            _selectedItem = _selectedItem is null ? FilteredItems.FirstOrDefault() : _policyItems.FirstOrDefault(i => i.Title == _selectedItem.Title) ?? FilteredItems.FirstOrDefault();
+            _selectedReport = _selectedReport is null ? PolicyReportsByImportance.FirstOrDefault() : _policyReports.FirstOrDefault(r => r.ReportDefinitionId == _selectedReport.ReportDefinitionId) ?? PolicyReportsByImportance.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load policy analytics: {ex.Message}";
+            _policyItems = [];
+            _policyReports = [];
+            _executions = [];
+            _schedules = [];
+            ShowToast(_loadError, true);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static PolicyAnalyticsRecord? DeserializePolicyRecord(Guid id, string json)
+    {
+        try
+        {
+            var item = System.Text.Json.JsonSerializer.Deserialize<PolicyAnalyticsRecord>(json, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            if (item is not null) item.Id = id;
+            return item;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private bool MatchesSearch(PolicyAnalyticsRecord item)
+    {
+        if (string.IsNullOrWhiteSpace(_search)) return true;
+        return item.Title.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Category.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Owner.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Segment.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Workflow.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Status.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Insight.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || _dashboard.RenewalsAtRisk.Any(r => r.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) || r.LobCode.Contains(_search, StringComparison.OrdinalIgnoreCase))
+            || _policyReports.Any(r => r.ReportName.Contains(_search, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private bool MatchesActiveView(PolicyAnalyticsRecord item) => _activeTab switch
+    {
+        "renewal" => item.Category == "Renewal",
+        "bind" => item.Category == "Bind",
+        "cancellation" => item.Category == "Cancellation" || item.Status == "Escalate",
+        "endorsement" => item.Category == "Endorsement",
+        "compliance" => item.Category == "Compliance",
+        "reports" => _policyReports.Any(),
+        _ => true
+    };
+
+    private void SetKpi(string key)
+    {
+        _activeKpi = key;
+        _activeTab = key;
+    }
+
+    private void SetTab(string key)
+    {
+        _activeTab = key;
+        _activeKpi = key;
+    }
+
+    private void ResetFilters()
+    {
+        _search = string.Empty;
+        _segmentFilter = string.Empty;
+        _priorityFilter = string.Empty;
+        _activeKpi = "all";
+        _activeTab = "all";
+    }
+
+    private bool IsActiveKpi(string key) => _activeKpi == key;
+    private void SelectPolicyItem(PolicyAnalyticsRecord item) => _selectedItem = item;
+    private void SelectReport(ReportDefinitionDto report) => _selectedReport = report;
+    private void FocusPolicyReport()
+    {
+        if (_selectedReport is null) return;
+        _activeTab = "reports";
+        _activeKpi = "reports";
+        ShowToast($"Focused report workflow: {_selectedReport.ReportName}");
+    }
+
+    private int TabCount(string key) => key switch
+    {
+        "renewal" => _policyItems.Count(i => i.Category == "Renewal"),
+        "bind" => _policyItems.Count(i => i.Category == "Bind"),
+        "cancellation" => _policyItems.Count(i => i.Category == "Cancellation" || i.Status == "Escalate"),
+        "endorsement" => _policyItems.Count(i => i.Category == "Endorsement"),
+        "compliance" => _policyItems.Count(i => i.Category == "Compliance"),
+        "reports" => _policyReports.Count,
+        _ => _policyItems.Count
+    };
+
+    private async Task RunSelectedReportAsync()
+    {
+        if (_selectedReport is not null)
+        {
+            await RunReportAsync(_selectedReport);
+        }
+    }
+
+    private async Task ExportSelectedReportAsync()
+    {
+        if (_selectedReport is not null)
+        {
+            await ExportReportAsync(_selectedReport);
+        }
+    }
+
+    private async Task RunPolicyReportsAsync()
+    {
+        var candidates = PolicyReportsByImportance.Take(2).ToList();
+        foreach (var report in candidates)
+        {
+            await RunReportAsync(report);
+        }
+        if (candidates.Count > 0)
+        {
+            ShowToast($"Policy report run completed for {candidates.Count} report(s).");
+        }
+    }
+
+    private async Task RunReportAsync(ReportDefinitionDto report)
+    {
+        _saving = true;
+        try
+        {
+            await Api.RunReportAsync(report.ReportDefinitionId, new RunReportRequest(_tenantId, PreferredFormat(report), _currentUserId));
+            ShowToast($"Policy report run completed: {report.ReportName}");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Run failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ExportReportAsync(ReportDefinitionDto report)
+    {
+        _saving = true;
+        try
+        {
+            var file = await Api.DownloadReportExcelAsync(report.ReportDefinitionId, _tenantId);
+            await DownloadFileAsync(file);
+            ShowToast($"Policy export downloaded: {report.ReportName}");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Export failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ExportPolicyPackAsync()
+    {
+        _saving = true;
+        try
+        {
+            var file = await Api.DownloadReportsExcelAsync(new DownloadReportsRequest
+            {
+                TenantId = _tenantId,
+                ReportDefinitionIds = _policyReports.Select(r => r.ReportDefinitionId).ToList(),
+                SearchTerm = _search,
+                ModuleCode = "Policy",
+                Format = "Excel"
+            });
+            await DownloadFileAsync(file);
+            ShowToast($"Policy analytics pack downloaded for {_policyReports.Count} report(s).");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Export policy pack failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void OpenScheduleForSelected()
+    {
+        if (_selectedReport is not null)
+        {
+            OpenSchedule(_selectedReport);
+        }
+    }
+
+    private void OpenSchedule(ReportDefinitionDto report)
+    {
+        _scheduleForm = new ScheduleForm
+        {
+            ReportDefinitionId = report.ReportDefinitionId,
+            OutputFormat = PreferredFormat(report),
+            FrequencyCode = "Weekly",
+            DeliveryEmail = "policy-ops@agencybinder.local"
+        };
+        _scheduleEditContext = new(_scheduleForm);
+        _formError = null;
+        _showSchedule = true;
+    }
+
+    private void CloseSchedule()
+    {
+        _showSchedule = false;
+        _formError = null;
+    }
+
+    private async Task ScheduleAsync()
+    {
+        _formError = null;
+        if (!_scheduleEditContext.Validate()) return;
+        _saving = true;
+        try
+        {
+            await Api.ScheduleReportAsync(new ScheduleReportRequest(_tenantId, _scheduleForm.ReportDefinitionId, _scheduleForm.FrequencyCode, _scheduleForm.OutputFormat, _scheduleForm.DeliveryEmail));
+            _showSchedule = false;
+            ShowToast($"Policy report scheduled for {_scheduleForm.DeliveryEmail}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Schedule failed: {ex.Message}";
+            ShowToast($"Schedule failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task DownloadFileAsync(ReportDownloadFile file)
+    {
+        var fileName = file.FileName.Replace("'", string.Empty).Replace("\"", string.Empty);
+        var base64 = Convert.ToBase64String(file.Content);
+        var script = $"(() => {{ const a = document.createElement(\"a\"); a.href = \"data:application/vnd.ms-excel;base64,{base64}\"; a.download = \"{fileName}\"; document.body.appendChild(a); a.click(); a.remove(); }})()";
+        await Js.InvokeVoidAsync("eval", script);
+    }
+
+    private void ShowToast(string message, bool danger = false)
+    {
+        _toastMessage = message;
+        _toastClass = danger ? "ap-toast--danger" : "ap-toast--success";
+    }
+
+    private void ClearToast() => _toastMessage = null;
+
+    private bool IsScheduled(Guid reportDefinitionId) => _schedules.Any(s => s.ReportDefinitionId == reportDefinitionId && s.IsActive);
+    private static bool IsExportable(ReportDefinitionDto report) => report.OutputFormats.Contains("Excel", StringComparison.OrdinalIgnoreCase) || report.OutputFormats.Contains("CSV", StringComparison.OrdinalIgnoreCase);
+    private static string PreferredFormat(ReportDefinitionDto report) => report.OutputFormats.Contains("Excel", StringComparison.OrdinalIgnoreCase) ? "Excel" : report.OutputFormats.Contains("CSV", StringComparison.OrdinalIgnoreCase) ? "CSV" : "PDF";
+
+    private int ReportScore(ReportDefinitionDto report)
+    {
+        var score = 35;
+        if (report.ReportTypeCode == "Analytics") score += 20;
+        if (report.ReportTypeCode == "Detail") score += 12;
+        if (IsScheduled(report.ReportDefinitionId)) score += 18;
+        if (_executions.Any(e => e.ReportDefinitionId == report.ReportDefinitionId)) score += 16;
+        if (IsExportable(report)) score += 8;
+        return Math.Clamp(score, 0, 100);
+    }
+
+    private int ItemScore(PolicyAnalyticsRecord item)
+    {
+        var score = item.Priority switch { "Critical" => 40, "High" => 28, "Normal" => 16, _ => 10 };
+        score += item.Category switch { "Cancellation" => 20, "Renewal" => 18, "Bind" => 16, "Endorsement" => 12, "Compliance" => 10, _ => 6 };
+        score += Math.Min(24, (int)(item.Premium / 30000m));
+        if (item.DueDateUtc <= DateTime.UtcNow.AddDays(7)) score += 12;
+        return Math.Clamp(score, 0, 100);
+    }
+
+    private string LastRunLabel(Guid reportDefinitionId)
+        => _executions.Where(e => e.ReportDefinitionId == reportDefinitionId).OrderByDescending(e => e.CreatedDateUtc).FirstOrDefault() is { } execution
+            ? $"Run {FormatRelative(execution.CompletedDateUtc ?? execution.CreatedDateUtc)}"
+            : "Never run";
+
+    private static decimal MaxTrendValue(IEnumerable<DashboardPremiumPointDto> points)
+        => points.SelectMany(p => new[] { p.Value, p.PriorValue }).DefaultIfEmpty(1).Max();
+
+    private decimal TrendHeight(decimal value)
+    {
+        var max = MaxTrendValue(PremiumTrend);
+        return max <= 0 ? 5 : Math.Clamp(value / max * 100m, 5m, 100m);
+    }
+
+    private static string FormatCurrency(decimal value) => value >= 1000000 ? $"${value / 1000000m:N1}M" : $"${value / 1000m:N0}K";
+    private static string FormatDate(DateTime value) => value.ToLocalTime().ToString("MMM d");
+    private static string FormatRelative(DateTime? utc)
+    {
+        if (utc is null || utc == default) return "never";
+        var diff = DateTime.UtcNow - utc.Value.ToUniversalTime();
+        if (diff.TotalMinutes < 60) return $"{Math.Max(1, (int)diff.TotalMinutes)}m ago";
+        if (diff.TotalHours < 24) return $"{(int)diff.TotalHours}h ago";
+        return $"{(int)diff.TotalDays}d ago";
+    }
+
+    private static string FormatSigned(double value) => value >= 0 ? $"+{value:N1}" : value.ToString("N1");
+    private static string TrendCss(double value) => value >= 0 ? "ap-positive" : "ap-negative";
+    private static string PriorityCss(string value) => value.ToLowerInvariant();
+    private static string CategoryCss(string value) => value switch { "Cancellation" => "red", "Renewal" => "blue", "Bind" => "green", "Endorsement" => "amber", "Compliance" => "purple", _ => "slate" };
+    private static string CategoryIcon(string value) => value switch { "Cancellation" => "bi-exclamation-octagon", "Renewal" => "bi-clock-history", "Bind" => "bi-journal-check", "Endorsement" => "bi-pencil-square", "Compliance" => "bi-shield-check", _ => "bi-shield" };
+
+    private sealed record TabItem(string Key, string Label, string Icon);
+    private sealed record KpiItem(string Key, string Label, string Icon, string Value, string Detail, string Tooltip);
+
+    private sealed class PolicyAnalyticsRecord
+    {
+        public Guid Id { get; set; }
+        public string Category { get; set; } = string.Empty;
+        public string Priority { get; set; } = string.Empty;
+        public string Title { get; set; } = string.Empty;
+        public string Owner { get; set; } = string.Empty;
+        public string Segment { get; set; } = string.Empty;
+        public string Workflow { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public decimal Premium { get; set; }
+        public int Count { get; set; }
+        public double CompletionPct { get; set; }
+        public double TrendPct { get; set; }
+        public DateTime DueDateUtc { get; set; }
+        public string NextAction { get; set; } = string.Empty;
+        public string Insight { get; set; } = string.Empty;
+    }
+
+    private sealed class ScheduleForm
+    {
+        [Required] public Guid ReportDefinitionId { get; set; }
+        [Required, StringLength(40)] public string FrequencyCode { get; set; } = "Weekly";
+        [Required, StringLength(20)] public string OutputFormat { get; set; } = "Excel";
+        [Required, EmailAddress, StringLength(254)] public string DeliveryEmail { get; set; } = "policy-ops@agencybinder.local";
+    }
+}

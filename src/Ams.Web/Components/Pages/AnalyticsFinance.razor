@@ -1,9 +1,973 @@
 @page "/analytics/finance"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject IJSRuntime Js
 
-<PageTitle>Billing & Finance Reports — AMS</PageTitle>
+<PageTitle>Finance Analytics — AMS</PageTitle>
 
-<SharedReportExplorer Title="Billing & Finance Reports"
-                      Subtitle="AR aging, revenue, billing, and financial performance reports from DB data"
-                      Icon="bi-bank"
-                      Module="Finance" />
+<AppPageHeader Title="Finance Analytics"
+               Subtitle="Enterprise finance command center for cash, AR aging, revenue recognition, close readiness, AP exposure, GL controls, bank reconciliations, and report delivery."
+               Icon="bi-bank2">
+    <Actions>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_busy"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="SyncArAgingAsync" disabled="@_busy"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Sync AR Aging</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="CreateCloseJournalAsync" disabled="@(_selectedItem is null || _busy)"><i class="bi bi-journal-plus" aria-hidden="true"></i> Create Close Journal</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="OpenScheduleForSelected" disabled="@(_selectedReport is null || _busy)"><i class="bi bi-calendar-plus" aria-hidden="true"></i> Schedule Report</button>
+        <button class="um-btn um-btn-primary" type="button" @onclick="ExportFinancePackAsync" disabled="@(!_financeReports.Any() || _busy)"><i class="bi bi-download" aria-hidden="true"></i> Export Finance Pack</button>
+    </Actions>
+</AppPageHeader>
+
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
+{
+    <div class="af-toast @_toastClass" role="status">
+        <i class="bi @(_toastClass == "af-toast--danger" ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="af-toast-close" @onclick="ClearToast" aria-label="Dismiss message"><i class="bi bi-x-lg"></i></button>
+    </div>
+}
+
+<div class="af-page">
+    <section class="af-hero">
+        <div class="af-hero-main">
+            <div class="af-eyebrow"><i class="bi bi-activity" aria-hidden="true"></i> Finance control cockpit</div>
+            <h2>@FormatCurrency(TotalCashFocus) in managed finance exposure with @FinanceReadinessScore% readiness</h2>
+            <p>Rank cash acceleration, AR aging, collections, revenue recognition, AP payment timing, GL controls, bank reconciliation, and close activities by financial impact and operational urgency.</p>
+            <div class="af-hero-meta">
+                <span><i class="bi bi-cash-coin"></i> @FormatCurrency(ArOutstanding) AR outstanding</span>
+                <span><i class="bi bi-receipt"></i> @FormatCurrency(ApExposure) AP exposure</span>
+                <span><i class="bi bi-calendar2-check"></i> @OpenCloseItems close items</span>
+                <span><i class="bi bi-file-earmark-bar-graph"></i> @_financeReports.Count reports</span>
+            </div>
+        </div>
+        <div class="af-hero-panel">
+            <div class="af-score-card">
+                <span>Finance readiness score</span>
+                <strong>@FinanceReadinessScore%</strong>
+                <div class="af-score-track"><div style="width:@FinanceReadinessScore%"></div></div>
+                <small>@FinanceReadinessSummary</small>
+            </div>
+            <div class="af-priority-list">
+                @foreach (var item in PriorityItems)
+                {
+                    <button type="button" class="af-priority-item" @onclick="() => SelectAnalyticsItem(item)">
+                        <span class="af-risk af-risk--@PriorityCss(item.Priority)">@ItemScore(item)</span>
+                        <div><strong>@item.Title</strong><small>@item.NextAction</small></div>
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                    </button>
+                }
+            </div>
+        </div>
+    </section>
+
+    <section class="af-kpi-strip" aria-label="Finance KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="af-kpi-card @(IsActiveKpi(kpi.Key) ? "af-kpi-card--active" : null)" title="@kpi.Tooltip" @onclick="() => SetKpi(kpi.Key)">
+                <span class="af-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="af-kpi-label">@kpi.Label</span>
+                <strong>@kpi.Value</strong>
+                <small>@kpi.Detail</small>
+            </button>
+        }
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger af-load-error" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
+        </div>
+    }
+
+    <section class="af-command-bar">
+        <div class="af-search-wrap">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="af-search" placeholder="Search finance analytics, AR/AP, close, GL, bank, revenue, reports, owners, workflows, or status…" @bind="_search" @bind:event="oninput" />
+        </div>
+        <select class="af-select" @bind="_segmentFilter">
+            <option value="">All segments</option>
+            @foreach (var segment in Segments)
+            {
+                <option value="@segment">@segment</option>
+            }
+        </select>
+        <select class="af-select" @bind="_priorityFilter">
+            <option value="">All priorities</option>
+            <option value="Critical">Critical</option>
+            <option value="High">High</option>
+            <option value="Normal">Normal</option>
+        </select>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="RunFinanceReportsAsync" disabled="@(!_financeReports.Any() || _busy)"><i class="bi bi-play-fill" aria-hidden="true"></i> Run Finance Reports</button>
+    </section>
+
+    <div class="af-tabs" role="tablist" aria-label="Finance analytics views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" role="tab" class="af-tab @(_activeTab == tab.Key ? "af-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </div>
+
+    @if (_loading)
+    {
+        <div class="af-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Loading finance analytics...</div>
+    }
+    else
+    {
+        <section class="af-grid">
+            <article class="af-panel af-panel--main">
+                <div class="af-panel-header"><i class="bi @ActiveIcon" aria-hidden="true"></i><div><strong>@ActiveListTitle</strong><span>@FilteredItemCount.ToString("N0") finance records ranked by cash impact, close risk, control health, workflow urgency, and due date.</span></div></div>
+                @if (!FilteredItems.Any())
+                {
+                    <div class="af-empty"><i class="bi bi-bank" aria-hidden="true"></i><strong>No finance records match this view</strong><span>Adjust filters or refresh seeded finance analytics.</span></div>
+                }
+                else
+                {
+                    <div class="af-item-list">
+                        @foreach (var item in FilteredItems)
+                        {
+                            <button type="button" class="af-item-row @(_selectedItem?.Title == item.Title ? "af-item-row--active" : null)" @onclick="() => SelectAnalyticsItem(item)">
+                                <span class="af-module-icon af-module-icon--@CategoryCss(item.Category)"><i class="bi @CategoryIcon(item.Category)" aria-hidden="true"></i></span>
+                                <div class="af-item-main">
+                                    <div class="af-item-title"><strong>@item.Title</strong><span class="af-badge af-badge--@CategoryCss(item.Category)">@item.Category</span><span class="af-badge af-badge--type">@item.Workflow</span></div>
+                                    <p>@item.Insight</p>
+                                    <div class="af-item-meta"><span>@item.Owner</span><span>@item.Segment</span><span>@item.Count.ToString("N0") items</span><span>@FormatCurrency(item.Amount)</span><span>@item.HealthPct.ToString("N1")% health</span><span>due @FormatDate(item.DueDateUtc)</span></div>
+                                </div>
+                                <span class="af-row-score">@ItemScore(item)</span>
+                            </button>
+                        }
+                    </div>
+                }
+            </article>
+
+            <aside class="af-side">
+                @if (_selectedItem is null)
+                {
+                    <div class="af-panel"><div class="af-empty af-empty--side"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a finance priority</strong><span>Choose a cash, AR, close, revenue, payable, or control priority to inspect workflow and actions.</span></div></div>
+                }
+                else
+                {
+                    <article class="af-panel">
+                        <div class="af-panel-header"><i class="bi @CategoryIcon(_selectedItem.Category)" aria-hidden="true"></i><div><strong>Finance command</strong><span>@_selectedItem.Priority · @_selectedItem.Status</span></div></div>
+                        <div class="af-detail">
+                            <div class="af-detail-head">
+                                <span class="af-module-icon af-module-icon--@CategoryCss(_selectedItem.Category)"><i class="bi @CategoryIcon(_selectedItem.Category)" aria-hidden="true"></i></span>
+                                <div><strong>@_selectedItem.Title</strong><span>@_selectedItem.Insight</span></div>
+                            </div>
+                            <dl>
+                                <dt>Exposure</dt><dd>@FormatCurrency(_selectedItem.Amount)</dd>
+                                <dt>Items</dt><dd>@_selectedItem.Count.ToString("N0")</dd>
+                                <dt>Health</dt><dd>@_selectedItem.HealthPct.ToString("N1")%</dd>
+                                <dt>Trend</dt><dd class="@TrendCss(_selectedItem.TrendPct)">@FormatSigned(_selectedItem.TrendPct)%</dd>
+                                <dt>Workflow</dt><dd>@_selectedItem.Workflow</dd>
+                                <dt>Owner</dt><dd>@_selectedItem.Owner</dd>
+                                <dt>Due</dt><dd>@FormatDate(_selectedItem.DueDateUtc)</dd>
+                                <dt>Next action</dt><dd>@_selectedItem.NextAction</dd>
+                            </dl>
+                            <div class="af-detail-actions">
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="CreateCloseJournalAsync" disabled="@_busy"><i class="bi bi-journal-plus" aria-hidden="true"></i> Create Journal</button>
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="CreateCollectionNoteAsync" disabled="@(_selectedAging is null || _busy)"><i class="bi bi-telephone-outbound" aria-hidden="true"></i> Log Collection</button>
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="FocusFinanceReport" disabled="@(_selectedReport is null)"><i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i> Focus Report</button>
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="OpenSelectedReportPreviewAsync" disabled="@(_selectedReport is null || _busy)"><i class="bi bi-eye" aria-hidden="true"></i> View Report</button>
+                                <button type="button" class="um-btn um-btn-primary" @onclick="RunSelectedReportAsync" disabled="@(_selectedReport is null || _busy)"><i class="bi bi-play-fill" aria-hidden="true"></i> Run</button>
+                            </div>
+                        </div>
+                    </article>
+                }
+
+                <article class="af-panel">
+                    <div class="af-panel-header"><i class="bi bi-hourglass-split" aria-hidden="true"></i><div><strong>AR aging queue</strong><span>Existing aging snapshots sorted by cash risk.</span></div></div>
+                    <div class="af-case-list">
+                        @foreach (var aging in AgingByImportance.Take(6))
+                        {
+                            <button type="button" class="af-case-row @(_selectedAging?.SnapshotId == aging.SnapshotId ? "af-case-row--active" : null)" @onclick="() => SelectAging(aging)">
+                                <div><strong>@FormatCurrency(aging.TotalOutstanding)</strong><span>@aging.SnapshotDate.ToString("MMM d, yyyy") · 60+ @FormatCurrency(aging.Days60Amount + aging.Days90Amount + aging.Days90PlusAmount)</span></div>
+                                <div class="af-case-metrics"><strong>@AgingRiskPct(aging).ToString("N0")%</strong><span class="af-risk-label af-risk-label--@AgingRiskClass(aging)">aged</span></div>
+                            </button>
+                        }
+                        @if (!_arAging.Any())
+                        {
+                            <div class="af-empty af-empty--compact"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No AR aging snapshots loaded</strong><span>Use Sync AR Aging to create snapshots from invoices.</span></div>
+                        }
+                    </div>
+                </article>
+
+                <article class="af-panel">
+                    <div class="af-panel-header"><i class="bi bi-lightning-charge" aria-hidden="true"></i><div><strong>Finance actions</strong><span>Collections, AP, close, and controls workflow.</span></div></div>
+                    <div class="af-action-list">
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="CreateCollectionNoteAsync" disabled="@(_selectedAging is null || _busy)"><i class="bi bi-chat-left-text" aria-hidden="true"></i> Add Collection Note</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="CreateBillingAdjustmentAsync" disabled="@(_selectedInvoice is null || _busy)"><i class="bi bi-sliders" aria-hidden="true"></i> Create Billing Adjustment</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="CreateApPaymentAsync" disabled="@(_selectedApInvoice is null || _busy)"><i class="bi bi-credit-card" aria-hidden="true"></i> Stage AP Payment</button>
+                        <button type="button" class="um-btn um-btn-primary" @onclick="SyncArAgingAsync" disabled="@_busy"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Sync Aging</button>
+                    </div>
+                </article>
+            </aside>
+        </section>
+
+        <section class="af-lower-grid">
+            <article class="af-panel">
+                <div class="af-panel-header"><i class="bi bi-calendar2-check" aria-hidden="true"></i><div><strong>Close readiness</strong><span>Periods, journals, and reconciliation dependencies.</span></div></div>
+                <div class="af-metric-list">
+                    <div><span>Open periods</span><strong>@_periods.Count(p => !p.StatusCode.Contains("Closed", StringComparison.OrdinalIgnoreCase)).ToString("N0")</strong></div>
+                    <div><span>Draft journals</span><strong>@_journals.Count(j => j.StatusCode.Contains("Draft", StringComparison.OrdinalIgnoreCase)).ToString("N0")</strong></div>
+                    <div><span>Unbalanced journals</span><strong>@_journals.Count(j => j.TotalDebit != j.TotalCredit).ToString("N0")</strong></div>
+                    <div><span>Bank discrepancies</span><strong>@FormatCurrency(_bankReconciliations.Sum(b => Math.Abs(b.Discrepancy)))</strong></div>
+                </div>
+            </article>
+
+            <article class="af-panel">
+                <div class="af-panel-header"><i class="bi bi-pie-chart" aria-hidden="true"></i><div><strong>Revenue and payables mix</strong><span>Deferred revenue and vendor cash requirements.</span></div></div>
+                <div class="af-mix-list">
+                    @foreach (var row in RevenuePayableMix)
+                    {
+                        <div class="af-mix-row">
+                            <span>@row.Label</span>
+                            <div><span style="width:@row.Percent.ToString("N0")%"></span></div>
+                            <strong>@FormatCurrency(row.Amount)</strong>
+                        </div>
+                    }
+                </div>
+            </article>
+
+            <article class="af-panel">
+                <div class="af-panel-header"><i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i><div><strong>Finance report workflow</strong><span>Preview, run, export, and scheduled delivery.</span></div></div>
+                <div class="af-report-list">
+                    @foreach (var report in FinanceReportsByImportance.Take(6))
+                    {
+                        <div class="af-report-row @(_selectedReport?.ReportDefinitionId == report.ReportDefinitionId ? "af-report-row--active" : null)" role="button" tabindex="0" title="Open report preview" @onclick="() => OpenPreviewAsync(report)">
+                            <div><strong>@report.ReportName</strong><span>@report.ReportTypeCode · @report.OutputFormats · @LastRunLabel(report.ReportDefinitionId)</span></div>
+                            <div class="af-report-actions">
+                                <span>@ReportScore(report)</span>
+                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" title="View report" @onclick="() => OpenPreviewAsync(report)" @onclick:stopPropagation="true" disabled="@_busy"><i class="bi bi-eye" aria-hidden="true"></i></button>
+                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Run report" @onclick="() => RunReportAsync(report)" @onclick:stopPropagation="true" disabled="@_busy"><i class="bi bi-play-fill" aria-hidden="true"></i></button>
+                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Export report" @onclick="() => ExportReportAsync(report)" @onclick:stopPropagation="true" disabled="@_busy"><i class="bi bi-download" aria-hidden="true"></i></button>
+                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Schedule report" @onclick="() => OpenSchedule(report)" @onclick:stopPropagation="true" disabled="@_busy"><i class="bi bi-calendar-plus" aria-hidden="true"></i></button>
+                            </div>
+                        </div>
+                    }
+                    @if (!_financeReports.Any())
+                    {
+                        <div class="af-empty af-empty--compact"><i class="bi bi-file-earmark-x" aria-hidden="true"></i><strong>No Finance module reports found</strong><span>Finance analytics still uses seeded records and live financial workflow data.</span></div>
+                    }
+                </div>
+            </article>
+        </section>
+    }
+</div>
+
+@if (_showSchedule)
+{
+    <div class="af-modal-backdrop" role="presentation" @onclick="CloseSchedule">
+        <div class="af-modal" role="dialog" aria-modal="true" aria-label="Schedule finance report" @onclick:stopPropagation="true">
+            <EditForm EditContext="_scheduleEditContext" OnValidSubmit="ScheduleAsync">
+                <DataAnnotationsValidator />
+                <div class="af-modal-header">
+                    <i class="bi bi-calendar-plus" aria-hidden="true"></i>
+                    <span>Schedule finance report</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseSchedule"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="af-modal-body">
+                    @if (!string.IsNullOrWhiteSpace(_formError))
+                    {
+                        <div class="alert alert-danger af-load-error" role="alert">@_formError</div>
+                    }
+                    <div class="af-form-grid">
+                        <label>Report
+                            <select class="af-input" @bind="_scheduleForm.ReportDefinitionId">
+                                @foreach (var report in FinanceReportsByImportance)
+                                {
+                                    <option value="@report.ReportDefinitionId">@report.ReportName</option>
+                                }
+                            </select>
+                            <ValidationMessage For="() => _scheduleForm.ReportDefinitionId" class="text-danger" />
+                        </label>
+                        <label>Frequency
+                            <select class="af-input" @bind="_scheduleForm.FrequencyCode">
+                                @foreach (var frequency in _frequencyOptions)
+                                {
+                                    <option value="@frequency">@frequency</option>
+                                }
+                            </select>
+                            <ValidationMessage For="() => _scheduleForm.FrequencyCode" class="text-danger" />
+                        </label>
+                        <label>Output format
+                            <select class="af-input" @bind="_scheduleForm.OutputFormat">
+                                @foreach (var format in _formatOptions)
+                                {
+                                    <option value="@format">@format</option>
+                                }
+                            </select>
+                            <ValidationMessage For="() => _scheduleForm.OutputFormat" class="text-danger" />
+                        </label>
+                        <label>Delivery email
+                            <input class="af-input" @bind="_scheduleForm.DeliveryEmail" />
+                            <ValidationMessage For="() => _scheduleForm.DeliveryEmail" class="text-danger" />
+                        </label>
+                    </div>
+                </div>
+                <div class="af-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseSchedule">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check2" aria-hidden="true"></i> Schedule</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showPreview)
+{
+    <div class="af-modal-backdrop" role="presentation" @onclick="ClosePreview">
+        <div class="af-modal af-modal--preview" role="dialog" aria-modal="true" aria-label="Finance report preview" @onclick:stopPropagation="true">
+            <div class="af-modal-header">
+                <i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i>
+                <div>
+                    <span>@(_preview?.ReportName ?? _previewReport?.ReportName ?? "Finance Report")</span>
+                    <small>@(_preview?.Description ?? _previewReport?.Description ?? "Generated finance report preview")</small>
+                </div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="ClosePreview"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="af-modal-body af-preview-body">
+                @if (_previewLoading)
+                {
+                    <div class="af-loading af-loading--preview"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Generating finance report preview...</div>
+                }
+                else if (!string.IsNullOrWhiteSpace(_previewError))
+                {
+                    <div class="alert alert-danger af-load-error" role="alert"><i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_previewError</div>
+                }
+                else if (_preview is not null)
+                {
+                    <div class="af-preview-summary">
+                        <div><span>Module</span><strong>@_preview.ModuleCode</strong></div>
+                        <div><span>Type</span><strong>@_preview.ReportTypeCode</strong></div>
+                        <div><span>Rows</span><strong>@_preview.RowCount.ToString("N0")</strong></div>
+                        <div><span>Generated</span><strong>@_preview.GeneratedDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</strong></div>
+                    </div>
+                    <div class="af-preview-table-wrap">
+                        <table class="af-preview-table">
+                            <thead>
+                                <tr>
+                                    @foreach (var column in _preview.Columns)
+                                    {
+                                        <th class="@PreviewCellCss(column.DataType)">@column.Header</th>
+                                    }
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var row in _preview.Rows)
+                                {
+                                    <tr>
+                                        @foreach (var column in _preview.Columns)
+                                        {
+                                            <td class="@PreviewCellCss(column.DataType)">@row.GetValueOrDefault(column.Field)</td>
+                                        }
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+            <div class="af-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="ClosePreview">Close</button>
+                @if (_previewReport is not null)
+                {
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => OpenSchedule(_previewReport)"><i class="bi bi-calendar-plus" aria-hidden="true"></i> Schedule</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => RunReportAsync(_previewReport)"><i class="bi bi-play-fill" aria-hidden="true"></i> Run</button>
+                    <button type="button" class="um-btn um-btn-primary" @onclick="() => ExportReportAsync(_previewReport)"><i class="bi bi-download" aria-hidden="true"></i> Download Excel</button>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private readonly TabItem[] _tabs =
+    [
+        new("all", "Command", "bi-speedometer2"),
+        new("cash", "Cash", "bi-cash-coin"),
+        new("ar", "AR Aging", "bi-hourglass-split"),
+        new("close", "Close", "bi-calendar2-check"),
+        new("revenue", "Revenue", "bi-pie-chart"),
+        new("payables", "AP", "bi-receipt"),
+        new("controls", "Controls", "bi-shield-check"),
+        new("reports", "Reports", "bi-file-earmark-bar-graph")
+    ];
+
+    private readonly string[] _frequencyOptions = ["Daily", "Weekly", "Monthly", "Quarterly"];
+    private readonly string[] _formatOptions = ["PDF", "Excel", "CSV"];
+
+    private Guid _tenantId;
+    private Guid? _currentUserId;
+    private bool _loading;
+    private bool _saving;
+    private bool _showSchedule;
+    private string _search = string.Empty;
+    private string _activeKpi = "all";
+    private string _activeTab = "all";
+    private string _segmentFilter = string.Empty;
+    private string _priorityFilter = string.Empty;
+    private string? _loadError;
+    private string? _formError;
+    private string? _toastMessage;
+    private string _toastClass = "af-toast--success";
+    private bool _showPreview;
+    private bool _previewLoading;
+    private string? _previewError;
+    private ReportPreviewDto? _preview;
+    private ReportDefinitionDto? _previewReport;
+    private List<FinanceAnalyticsRecord> _financeItems = [];
+    private List<ArAgingSnapshotDto> _arAging = [];
+    private List<InvoiceDto> _invoices = [];
+    private List<GLAccountDto> _glAccounts = [];
+    private List<JournalEntryDto> _journals = [];
+    private List<ApInvoiceDto> _apInvoices = [];
+    private List<ApPaymentDto> _apPayments = [];
+    private List<AccountingPeriodDto> _periods = [];
+    private List<BankReconciliationDto> _bankReconciliations = [];
+    private List<DeferredRevenueScheduleDto> _deferredRevenue = [];
+    private List<BillingAdjustmentDto> _adjustments = [];
+    private List<CollectionsNoteDto> _collectionsNotes = [];
+    private List<ReportDefinitionDto> _financeReports = [];
+    private List<ReportExecutionDto> _executions = [];
+    private List<ReportScheduleDto> _schedules = [];
+    private FinanceAnalyticsRecord? _selectedItem;
+    private ArAgingSnapshotDto? _selectedAging;
+    private InvoiceDto? _selectedInvoice;
+    private ApInvoiceDto? _selectedApInvoice;
+    private ReportDefinitionDto? _selectedReport;
+    private ScheduleForm _scheduleForm = new();
+    private EditContext _scheduleEditContext = default!;
+    private bool _busy => _loading || _saving;
+
+    private decimal ArOutstanding => _arAging.Sum(a => a.TotalOutstanding) + _invoices.Sum(i => i.BalanceAmount);
+    private decimal AgedAr => _arAging.Sum(a => a.Days60Amount + a.Days90Amount + a.Days90PlusAmount);
+    private decimal ApExposure => _apInvoices.Sum(i => Math.Max(0, i.Amount - i.AmountPaid));
+    private decimal DeferredRemaining => _deferredRevenue.Sum(r => r.RemainingAmount);
+    private decimal BankDiscrepancy => _bankReconciliations.Sum(b => Math.Abs(b.Discrepancy));
+    private decimal AnalyticsExposure => _financeItems.Sum(i => i.Amount);
+    private decimal TotalCashFocus => AnalyticsExposure + ArOutstanding + ApExposure + DeferredRemaining + BankDiscrepancy;
+    private int OpenCloseItems => _periods.Count(p => !p.StatusCode.Contains("Closed", StringComparison.OrdinalIgnoreCase)) + _journals.Count(j => !j.StatusCode.Contains("Posted", StringComparison.OrdinalIgnoreCase));
+    private int ScheduledReportCount => _financeReports.Count(r => IsScheduled(r.ReportDefinitionId));
+    private int FinanceReadinessScore => Math.Clamp(58 + Math.Min(12, _financeItems.Count * 2) + Math.Min(10, _glAccounts.Count(g => g.IsActive)) + Math.Min(10, ScheduledReportCount * 4) + Math.Min(10, _bankReconciliations.Count(b => Math.Abs(b.Discrepancy) == 0)), 0, 100);
+    private string FinanceReadinessSummary => FinanceReadinessScore >= 90 ? "Finance workflow is executive ready" : FinanceReadinessScore >= 80 ? "Finance controls are healthy with focused cash and close actions" : "Sync AR aging, run reports, and clear close/control exceptions to improve readiness";
+    private IEnumerable<string> Segments => _financeItems.Select(i => i.Segment).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().OrderBy(s => s);
+    private IEnumerable<FinanceAnalyticsRecord> PriorityItems => _financeItems.OrderByDescending(ItemScore).ThenBy(i => i.DueDateUtc).Take(4);
+    private IEnumerable<ArAgingSnapshotDto> AgingByImportance => _arAging.OrderByDescending(AgingScore).ThenByDescending(a => a.TotalOutstanding);
+    private IEnumerable<ReportDefinitionDto> FinanceReportsByImportance => _financeReports.OrderByDescending(ReportScore).ThenBy(r => r.ReportName);
+    private IEnumerable<MixRow> RevenuePayableMix
+    {
+        get
+        {
+            var rows = new[]
+            {
+                new MixRow("AR outstanding", ArOutstanding),
+                new MixRow("Deferred remaining", DeferredRemaining),
+                new MixRow("AP exposure", ApExposure),
+                new MixRow("Bank discrepancy", BankDiscrepancy)
+            };
+            var max = Math.Max(1, rows.Max(r => r.Amount));
+            return rows.Select(r => r with { Percent = Math.Clamp((double)(r.Amount / max * 100), 4, 100) });
+        }
+    }
+    private IEnumerable<FinanceAnalyticsRecord> FilteredItems => _financeItems
+        .Where(MatchesSearch)
+        .Where(i => string.IsNullOrWhiteSpace(_segmentFilter) || i.Segment == _segmentFilter)
+        .Where(i => string.IsNullOrWhiteSpace(_priorityFilter) || i.Priority == _priorityFilter)
+        .Where(MatchesActiveView)
+        .OrderByDescending(ItemScore)
+        .ThenBy(i => i.DueDateUtc)
+        .ToList();
+    private int FilteredItemCount => FilteredItems.Count();
+
+    private IEnumerable<KpiItem> Kpis =>
+    [
+        new("all", "Exposure", "bi-speedometer2", FormatCurrency(TotalCashFocus), $"{_financeItems.Count:N0} priorities", "Show all finance command records"),
+        new("cash", "Cash", "bi-cash-coin", FormatCurrency(ArOutstanding), $"{AgedArPct:N1}% aged", "Filter cash acceleration and collections records"),
+        new("ar", "AR Aging", "bi-hourglass-split", FormatCurrency(AgedAr), "60+ day exposure", "Filter AR aging records"),
+        new("close", "Close", "bi-calendar2-check", OpenCloseItems.ToString("N0"), "open items", "Filter close readiness records"),
+        new("revenue", "Revenue", "bi-pie-chart", FormatCurrency(DeferredRemaining), "deferred", "Filter revenue recognition records"),
+        new("payables", "AP", "bi-receipt", FormatCurrency(ApExposure), $"{_apInvoices.Count:N0} invoices", "Filter payables and vendor cash requirements"),
+        new("controls", "Controls", "bi-shield-check", FormatCurrency(BankDiscrepancy), "bank variance", "Filter GL controls and reconciliation quality records"),
+        new("reports", "Reports", "bi-file-earmark-bar-graph", _financeReports.Count.ToString("N0"), $"{ScheduledReportCount:N0} scheduled", "Filter Finance module reports")
+    ];
+
+    private double AgedArPct => ArOutstanding <= 0 ? 0 : (double)(AgedAr / ArOutstanding * 100);
+    private string ActiveListTitle => _activeTab switch
+    {
+        "cash" => "Cash acceleration and collections queue",
+        "ar" => "AR aging and delinquency exposure",
+        "close" => "Month-end close readiness exceptions",
+        "revenue" => "Revenue recognition and deferred revenue review",
+        "payables" => "AP payment timing and vendor exposure",
+        "controls" => "GL, bank reconciliation, and control quality",
+        "reports" => "Finance reporting workflow",
+        _ => "Enterprise finance command queue"
+    };
+
+    private string ActiveIcon => _activeTab switch
+    {
+        "cash" => "bi-cash-coin",
+        "ar" => "bi-hourglass-split",
+        "close" => "bi-calendar2-check",
+        "revenue" => "bi-pie-chart",
+        "payables" => "bi-receipt",
+        "controls" => "bi-shield-check",
+        "reports" => "bi-file-earmark-bar-graph",
+        _ => "bi-speedometer2"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _currentUserId = context.UserId;
+        _scheduleEditContext = new(_scheduleForm);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var records = await Api.SearchDashboardRecordsAsync(_tenantId, "FinanceAnalytics", _search);
+            var arAging = await Api.SearchArAgingSnapshotsAsync(_tenantId, _search);
+            var invoices = await Api.SearchInvoicesAsync(_tenantId, _search);
+            var gl = await Api.SearchGLAccountsAsync(_tenantId, _search, pageSize: 100);
+            var journals = await Api.SearchJournalEntriesAsync(_tenantId, _search);
+            var apInvoices = await Api.SearchApInvoicesAsync(_tenantId, _search);
+            var apPayments = await Api.SearchApPaymentsAsync(_tenantId, _search);
+            var periods = await Api.SearchAccountingPeriodsAsync(_tenantId, _search);
+            var bank = await Api.SearchBankReconciliationsAsync(_tenantId, _search);
+            var deferred = await Api.SearchDeferredRevenueSchedulesAsync(_tenantId, _search);
+            var adjustments = await Api.SearchBillingAdjustmentsAsync(_tenantId, _search);
+            var collections = await Api.SearchCollectionsNotesAsync(_tenantId, _search);
+            var definitions = await Api.SearchReportDefinitionsAsync("Finance");
+            var executions = await Api.SearchReportExecutionsAsync(_tenantId, null);
+            var schedules = await Api.SearchReportSchedulesAsync(_tenantId, "Finance");
+
+            _financeItems = records?.Items.Select(r => DeserializeFinanceRecord(r.Id, r.JsonData)).Where(r => r is not null).Cast<FinanceAnalyticsRecord>().ToList() ?? [];
+            _arAging = arAging?.Items.ToList() ?? [];
+            _invoices = invoices?.Items.ToList() ?? [];
+            _glAccounts = gl?.Items.ToList() ?? [];
+            _journals = journals?.Items.ToList() ?? [];
+            _apInvoices = apInvoices?.Items.ToList() ?? [];
+            _apPayments = apPayments?.Items.ToList() ?? [];
+            _periods = periods?.Items.ToList() ?? [];
+            _bankReconciliations = bank?.Items.ToList() ?? [];
+            _deferredRevenue = deferred?.Items.ToList() ?? [];
+            _adjustments = adjustments?.Items.ToList() ?? [];
+            _collectionsNotes = collections?.Items.ToList() ?? [];
+            _financeReports = definitions?.Items.Where(IsFinanceReport).ToList() ?? [];
+            _executions = executions?.Items.Where(e => _financeReports.Any(r => r.ReportDefinitionId == e.ReportDefinitionId)).ToList() ?? [];
+            _schedules = schedules?.Items.Where(s => _financeReports.Any(r => r.ReportDefinitionId == s.ReportDefinitionId)).ToList() ?? [];
+            _selectedItem = _selectedItem is null ? FilteredItems.FirstOrDefault() : _financeItems.FirstOrDefault(i => i.Title == _selectedItem.Title) ?? FilteredItems.FirstOrDefault();
+            _selectedAging = _selectedAging is null ? AgingByImportance.FirstOrDefault() : _arAging.FirstOrDefault(a => a.SnapshotId == _selectedAging.SnapshotId) ?? AgingByImportance.FirstOrDefault();
+            _selectedInvoice = _selectedInvoice is null ? _invoices.OrderByDescending(i => i.BalanceAmount).FirstOrDefault() : _invoices.FirstOrDefault(i => i.InvoiceId == _selectedInvoice.InvoiceId) ?? _invoices.OrderByDescending(i => i.BalanceAmount).FirstOrDefault();
+            _selectedApInvoice = _selectedApInvoice is null ? _apInvoices.OrderByDescending(i => i.Amount - i.AmountPaid).FirstOrDefault() : _apInvoices.FirstOrDefault(i => i.ApInvoiceId == _selectedApInvoice.ApInvoiceId) ?? _apInvoices.OrderByDescending(i => i.Amount - i.AmountPaid).FirstOrDefault();
+            _selectedReport = _selectedReport is null ? FinanceReportsByImportance.FirstOrDefault() : _financeReports.FirstOrDefault(r => r.ReportDefinitionId == _selectedReport.ReportDefinitionId) ?? FinanceReportsByImportance.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load finance analytics: {ex.Message}";
+            _financeItems = [];
+            ShowToast(_loadError, true);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static FinanceAnalyticsRecord? DeserializeFinanceRecord(Guid id, string json)
+    {
+        try
+        {
+            var item = System.Text.Json.JsonSerializer.Deserialize<FinanceAnalyticsRecord>(json, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            if (item is not null) item.Id = id;
+            return item;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool IsFinanceReport(ReportDefinitionDto report) => report.ModuleCode == "Finance" || report.ModuleCode == "Billing" || report.ReportName.Contains("Finance", StringComparison.OrdinalIgnoreCase) || report.ReportName.Contains("Billing", StringComparison.OrdinalIgnoreCase) || report.ReportName.Contains("AR", StringComparison.OrdinalIgnoreCase) || report.ReportName.Contains("Revenue", StringComparison.OrdinalIgnoreCase);
+    private bool MatchesSearch(FinanceAnalyticsRecord item) => string.IsNullOrWhiteSpace(_search) || item.Title.Contains(_search, StringComparison.OrdinalIgnoreCase) || item.Category.Contains(_search, StringComparison.OrdinalIgnoreCase) || item.Owner.Contains(_search, StringComparison.OrdinalIgnoreCase) || item.Segment.Contains(_search, StringComparison.OrdinalIgnoreCase) || item.Workflow.Contains(_search, StringComparison.OrdinalIgnoreCase) || item.Status.Contains(_search, StringComparison.OrdinalIgnoreCase) || item.Insight.Contains(_search, StringComparison.OrdinalIgnoreCase) || _financeReports.Any(r => r.ReportName.Contains(_search, StringComparison.OrdinalIgnoreCase));
+    private bool MatchesActiveView(FinanceAnalyticsRecord item) => _activeTab switch
+    {
+        "cash" => item.Category == "Cash" || item.Workflow == "Collections",
+        "ar" => item.Category == "Cash" || item.Workflow == "Collections",
+        "close" => item.Category == "Close" || item.Workflow == "Close",
+        "revenue" => item.Category == "Revenue" || item.Workflow == "Revenue Recognition",
+        "payables" => item.Category == "Payables" || item.Workflow == "Payables",
+        "controls" => item.Category == "Controls" || item.Workflow == "Reconciliation",
+        "reports" => item.Category == "Reports" || item.Workflow == "Reporting" || _financeReports.Any(),
+        _ => true
+    };
+
+    private void SetKpi(string key) { _activeKpi = key; _activeTab = key; }
+    private void SetTab(string key) { _activeTab = key; _activeKpi = key; }
+    private void ResetFilters() { _search = string.Empty; _segmentFilter = string.Empty; _priorityFilter = string.Empty; _activeKpi = "all"; _activeTab = "all"; }
+    private bool IsActiveKpi(string key) => _activeKpi == key;
+    private void SelectAnalyticsItem(FinanceAnalyticsRecord item) => _selectedItem = item;
+    private void SelectAging(ArAgingSnapshotDto aging) => _selectedAging = aging;
+    private void SelectReport(ReportDefinitionDto report) => _selectedReport = report;
+    private void FocusFinanceReport() { if (_selectedReport is null) return; _activeTab = "reports"; _activeKpi = "reports"; ShowToast($"Focused report workflow: {_selectedReport.ReportName}"); }
+
+    private async Task OpenSelectedReportPreviewAsync()
+    {
+        if (_selectedReport is null) return;
+        await OpenPreviewAsync(_selectedReport);
+    }
+
+    private async Task OpenPreviewAsync(ReportDefinitionDto report)
+    {
+        _selectedReport = report;
+        _previewReport = report;
+        _preview = null;
+        _previewError = null;
+        _previewLoading = true;
+        _showPreview = true;
+        try
+        {
+            _preview = await Api.GetReportPreviewAsync(report.ReportDefinitionId, _tenantId);
+        }
+        catch (Exception ex)
+        {
+            _previewError = $"Preview failed: {ex.Message}";
+            ShowToast(_previewError, true);
+        }
+        finally
+        {
+            _previewLoading = false;
+        }
+    }
+
+    private void ClosePreview()
+    {
+        _showPreview = false;
+        _previewError = null;
+        _previewLoading = false;
+    }
+
+    private int TabCount(string key) => key switch
+    {
+        "cash" => _financeItems.Count(i => i.Category == "Cash") + _collectionsNotes.Count,
+        "ar" => _arAging.Count,
+        "close" => _financeItems.Count(i => i.Category == "Close") + OpenCloseItems,
+        "revenue" => _financeItems.Count(i => i.Category == "Revenue") + _deferredRevenue.Count,
+        "payables" => _financeItems.Count(i => i.Category == "Payables") + _apInvoices.Count,
+        "controls" => _financeItems.Count(i => i.Category == "Controls") + _bankReconciliations.Count,
+        "reports" => _financeReports.Count,
+        _ => _financeItems.Count
+    };
+
+    private async Task SyncArAgingAsync()
+    {
+        _saving = true;
+        try
+        {
+            var count = await Api.SyncArAgingFromInvoicesAsync(_tenantId, DateOnly.FromDateTime(DateTime.UtcNow), _currentUserId);
+            ShowToast($"AR aging synced from invoices: {count:N0} snapshot(s) updated.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"AR aging sync failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task CreateCloseJournalAsync()
+    {
+        if (_selectedItem is null) return;
+        _saving = true;
+        try
+        {
+            var amount = Math.Max(1, Math.Round(_selectedItem.Amount, 2));
+            await Api.CreateJournalEntryAsync(new CreateJournalEntryRequest
+            {
+                TenantId = _tenantId,
+                EntryNumber = $"FIN-{DateTime.UtcNow:yyyyMMddHHmmss}",
+                EntryDate = DateOnly.FromDateTime(DateTime.UtcNow),
+                Description = $"Finance analytics action: {_selectedItem.Title}. {_selectedItem.NextAction}",
+                TotalDebit = amount,
+                TotalCredit = amount,
+                StatusCode = "Draft",
+                CreatedByUserId = _currentUserId
+            });
+            ShowToast($"Draft journal created for {_selectedItem.Title}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Create journal failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task CreateCollectionNoteAsync()
+    {
+        if (_selectedAging is null) return;
+        _saving = true;
+        try
+        {
+            await Api.CreateCollectionsNoteAsync(new CreateCollectionsNoteRequest
+            {
+                TenantId = _tenantId,
+                AccountId = _selectedAging.AccountId,
+                NoteDate = DateOnly.FromDateTime(DateTime.UtcNow),
+                NoteText = $"Finance analytics collection follow-up for {FormatCurrency(_selectedAging.TotalOutstanding)} outstanding; aged 60+ exposure {FormatCurrency(_selectedAging.Days60Amount + _selectedAging.Days90Amount + _selectedAging.Days90PlusAmount)}.",
+                ActionCode = "AnalyticsFollowUp",
+                NextFollowUpDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(3)),
+                CreatedByUserId = _currentUserId
+            });
+            ShowToast("Collection note logged from finance analytics.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Collection note failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task CreateBillingAdjustmentAsync()
+    {
+        if (_selectedInvoice is null) return;
+        _saving = true;
+        try
+        {
+            await Api.CreateBillingAdjustmentAsync(new CreateBillingAdjustmentRequest
+            {
+                TenantId = _tenantId,
+                InvoiceId = _selectedInvoice.InvoiceId,
+                AccountId = _selectedInvoice.AccountId,
+                AdjustmentTypeCode = "Review",
+                AdjustmentDate = DateOnly.FromDateTime(DateTime.UtcNow),
+                Amount = Math.Max(1, Math.Min(_selectedInvoice.BalanceAmount <= 0 ? _selectedInvoice.TotalAmount : _selectedInvoice.BalanceAmount, 5000)),
+                Reason = "Finance analytics billing review adjustment",
+                StatusCode = "Pending",
+                CreatedByUserId = _currentUserId
+            });
+            ShowToast($"Billing adjustment staged for invoice {_selectedInvoice.InvoiceNumber}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Billing adjustment failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task CreateApPaymentAsync()
+    {
+        if (_selectedApInvoice is null) return;
+        _saving = true;
+        try
+        {
+            await Api.CreateApPaymentAsync(new CreateApPaymentRequest
+            {
+                TenantId = _tenantId,
+                VendorId = _selectedApInvoice.VendorId,
+                ApInvoiceId = _selectedApInvoice.ApInvoiceId,
+                PaymentDate = DateOnly.FromDateTime(DateTime.UtcNow),
+                Amount = Math.Max(1, _selectedApInvoice.Amount - _selectedApInvoice.AmountPaid),
+                PaymentMethodCode = "ACH",
+                ReferenceNumber = $"FIN-{DateTime.UtcNow:MMddHHmm}",
+                Notes = "Staged from finance analytics AP exposure workflow.",
+                StatusCode = "Pending",
+                CreatedByUserId = _currentUserId
+            });
+            ShowToast($"AP payment staged for invoice {_selectedApInvoice.InvoiceNumber}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"AP payment failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task RunFinanceReportsAsync()
+    {
+        _saving = true;
+        try
+        {
+            foreach (var report in FinanceReportsByImportance.Take(5))
+            {
+                await RunReportAsync(report, reload: false);
+            }
+            ShowToast($"Finance report run completed for {Math.Min(5, _financeReports.Count):N0} report(s).");
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task RunSelectedReportAsync()
+    {
+        if (_selectedReport is null) return;
+        await RunReportAsync(_selectedReport);
+    }
+
+    private async Task RunReportAsync(ReportDefinitionDto report, bool reload = true)
+    {
+        try
+        {
+            var format = PreferredFormat(report);
+            await Api.RunReportAsync(report.ReportDefinitionId, new RunReportRequest(_tenantId, format, _currentUserId));
+            if (reload) await LoadAsync();
+            if (reload) ShowToast($"Report run completed: {report.ReportName}");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Run failed: {ex.Message}", true);
+        }
+    }
+
+    private async Task ExportFinancePackAsync()
+    {
+        _saving = true;
+        try
+        {
+            var file = await Api.DownloadReportsExcelAsync(new DownloadReportsRequest { TenantId = _tenantId, ReportDefinitionIds = FinanceReportsByImportance.Select(r => r.ReportDefinitionId).Take(12).ToList(), SearchTerm = _search, ModuleCode = "Finance", Format = "Excel" });
+            await DownloadFileAsync(file);
+            ShowToast($"Finance pack exported for {Math.Min(12, _financeReports.Count):N0} report(s).");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Export finance pack failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task ExportSelectedReportAsync()
+    {
+        if (_selectedReport is null) return;
+        await ExportReportAsync(_selectedReport);
+    }
+
+    private async Task ExportReportAsync(ReportDefinitionDto report)
+    {
+        try
+        {
+            var file = await Api.DownloadReportExcelAsync(report.ReportDefinitionId, _tenantId);
+            await DownloadFileAsync(file);
+            ShowToast($"Excel downloaded: {report.ReportName}");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Export failed: {ex.Message}", true);
+        }
+    }
+
+    private void OpenScheduleForSelected()
+    {
+        if (_selectedReport is null) return;
+        OpenSchedule(_selectedReport);
+    }
+
+    private void OpenSchedule(ReportDefinitionDto report)
+    {
+        _selectedReport = report;
+        _scheduleForm = new ScheduleForm { ReportDefinitionId = report.ReportDefinitionId, OutputFormat = PreferredFormat(report), FrequencyCode = "Weekly", DeliveryEmail = "finance@agencybinder.local" };
+        _scheduleEditContext = new(_scheduleForm);
+        _formError = null;
+        _showSchedule = true;
+    }
+
+    private void CloseSchedule() => _showSchedule = false;
+
+    private async Task ScheduleAsync()
+    {
+        _formError = null;
+        if (!_scheduleEditContext.Validate()) return;
+        _saving = true;
+        try
+        {
+            await Api.ScheduleReportAsync(new ScheduleReportRequest(_tenantId, _scheduleForm.ReportDefinitionId, _scheduleForm.FrequencyCode, _scheduleForm.OutputFormat, _scheduleForm.DeliveryEmail));
+            _showSchedule = false;
+            ShowToast($"Finance report scheduled for {_scheduleForm.DeliveryEmail}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Schedule failed: {ex.Message}";
+            ShowToast(_formError, true);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task DownloadFileAsync(ReportDownloadFile file)
+    {
+        var fileName = file.FileName.Replace("'", string.Empty);
+        var base64 = Convert.ToBase64String(file.Content);
+        var script = $"(() => {{ const a = document.createElement(\"a\"); a.href = \"data:application/vnd.ms-excel;base64,{base64}\"; a.download = \"{fileName}\"; document.body.appendChild(a); a.click(); a.remove(); }})()";
+        await Js.InvokeVoidAsync("eval", script);
+    }
+
+    private static string PreferredFormat(ReportDefinitionDto report) => report.OutputFormats.Contains("Excel", StringComparison.OrdinalIgnoreCase) ? "Excel" : report.OutputFormats.Contains("CSV", StringComparison.OrdinalIgnoreCase) ? "CSV" : "PDF";
+    private bool IsScheduled(Guid reportId) => _schedules.Any(s => s.ReportDefinitionId == reportId && s.IsActive);
+    private string LastRunLabel(Guid reportId) => _executions.Where(e => e.ReportDefinitionId == reportId).OrderByDescending(e => e.CreatedDateUtc).Select(e => e.CompletedDateUtc.HasValue ? $"last {FormatDate(e.CompletedDateUtc.Value)}" : e.StatusCode).FirstOrDefault() ?? "not run";
+    private int ReportScore(ReportDefinitionDto report) => (report.IsSystemReport ? 20 : 10) + (IsScheduled(report.ReportDefinitionId) ? 20 : 0) + (report.OutputFormats.Contains("Excel", StringComparison.OrdinalIgnoreCase) ? 10 : 0) + (report.ReportName.Contains("AR", StringComparison.OrdinalIgnoreCase) || report.ReportName.Contains("Revenue", StringComparison.OrdinalIgnoreCase) || report.ReportName.Contains("Finance", StringComparison.OrdinalIgnoreCase) ? 30 : 12);
+    private static int ItemScore(FinanceAnalyticsRecord item) => Math.Clamp((item.Priority == "Critical" ? 44 : item.Priority == "High" ? 30 : 18) + (int)Math.Min(24, item.Amount / 25000) + (int)Math.Min(18, item.Count) + (int)Math.Max(0, 12 - (item.DueDateUtc - DateTime.UtcNow).TotalDays) + (int)Math.Max(0, 100 - item.HealthPct) / 4, 0, 100);
+    private static int AgingScore(ArAgingSnapshotDto aging) => Math.Clamp((int)Math.Min(60, aging.TotalOutstanding / 10000) + (int)Math.Min(35, AgingRiskPct(aging)) + (aging.Days90PlusAmount > 0 ? 15 : 0), 0, 100);
+    private static double AgingRiskPct(ArAgingSnapshotDto aging) => aging.TotalOutstanding <= 0 ? 0 : (double)((aging.Days60Amount + aging.Days90Amount + aging.Days90PlusAmount) / aging.TotalOutstanding * 100);
+    private static string AgingRiskClass(ArAgingSnapshotDto aging) => AgingRiskPct(aging) >= 50 ? "critical" : AgingRiskPct(aging) >= 25 ? "high" : "normal";
+    private static string PriorityCss(string priority) => priority switch { "Critical" => "critical", "High" => "high", "Normal" => "normal", _ => "standard" };
+    private static string CategoryCss(string category) => category switch { "Cash" => "green", "Close" => "blue", "Revenue" => "purple", "Payables" => "amber", "Controls" => "cyan", _ => "slate" };
+    private static string CategoryIcon(string category) => category switch { "Cash" => "bi-cash-coin", "Close" => "bi-calendar2-check", "Revenue" => "bi-pie-chart", "Payables" => "bi-receipt", "Controls" => "bi-shield-check", _ => "bi-bank" };
+    private static string TrendCss(double value) => value >= 0 ? "af-trend-up" : "af-trend-down";
+    private static string FormatSigned(double value) => value >= 0 ? $"+{value:N1}" : value.ToString("N1");
+    private static string FormatCurrency(decimal value) => value >= 1000000 ? $"{value / 1000000m:C1}M" : value >= 1000 ? $"{value / 1000m:C0}K" : value.ToString("C0");
+    private static string FormatDate(DateTime value) => value.ToLocalTime().ToString("MMM d");
+    private static string PreviewCellCss(string dataType) => dataType.Equals("Number", StringComparison.OrdinalIgnoreCase) || dataType.Equals("Currency", StringComparison.OrdinalIgnoreCase) || dataType.Equals("Percent", StringComparison.OrdinalIgnoreCase) ? "af-preview-cell--numeric" : string.Empty;
+    private void ShowToast(string message, bool danger = false) { _toastMessage = message; _toastClass = danger ? "af-toast--danger" : "af-toast--success"; }
+    private void ClearToast() => _toastMessage = null;
+
+    private sealed record TabItem(string Key, string Label, string Icon);
+    private sealed record KpiItem(string Key, string Label, string Icon, string Value, string Detail, string Tooltip);
+    private sealed record MixRow(string Label, decimal Amount) { public double Percent { get; init; } }
+    private sealed class FinanceAnalyticsRecord
+    {
+        public Guid Id { get; set; }
+        public string Category { get; set; } = string.Empty;
+        public string Priority { get; set; } = string.Empty;
+        public string Title { get; set; } = string.Empty;
+        public string Owner { get; set; } = string.Empty;
+        public string Segment { get; set; } = string.Empty;
+        public string Workflow { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public decimal Amount { get; set; }
+        public int Count { get; set; }
+        public double HealthPct { get; set; }
+        public double TrendPct { get; set; }
+        public DateTime DueDateUtc { get; set; }
+        public string NextAction { get; set; } = string.Empty;
+        public string Insight { get; set; } = string.Empty;
+    }
+
+    private sealed class ScheduleForm
+    {
+        [Required]
+        public Guid ReportDefinitionId { get; set; }
+
+        [Required, StringLength(50)]
+        public string FrequencyCode { get; set; } = "Weekly";
+
+        [Required, StringLength(20)]
+        public string OutputFormat { get; set; } = "Excel";
+
+        [Required, EmailAddress, StringLength(254)]
+        public string DeliveryEmail { get; set; } = "finance@agencybinder.local";
+    }
+}

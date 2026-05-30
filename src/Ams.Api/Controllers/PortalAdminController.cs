@@ -191,6 +191,169 @@ END;";
         await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
     }
 
+    private async Task EnsurePortalMobileInstallDataAsync(Guid tenantId, CancellationToken ct)
+    {
+        await EnsurePortalAdminDataAsync(tenantId, ct);
+
+        const string sql = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Portal') EXEC(N'CREATE SCHEMA Portal');
+
+IF OBJECT_ID(N'Portal.MobileInstall', N'U') IS NULL
+BEGIN
+    CREATE TABLE Portal.MobileInstall
+    (
+        MobileInstallId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Portal_MobileInstall PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        InstallNumber NVARCHAR(40) NOT NULL,
+        AccountName NVARCHAR(200) NOT NULL,
+        UserName NVARCHAR(200) NOT NULL,
+        UserEmail NVARCHAR(320) NOT NULL CONSTRAINT DF_MobileInstall_UserEmail DEFAULT N'',
+        Platform NVARCHAR(40) NOT NULL,
+        DeviceModel NVARCHAR(160) NOT NULL,
+        AppVersion NVARCHAR(40) NOT NULL,
+        OsVersion NVARCHAR(80) NOT NULL CONSTRAINT DF_MobileInstall_OsVersion DEFAULT N'',
+        Status NVARCHAR(80) NOT NULL,
+        ComplianceStatus NVARCHAR(80) NOT NULL CONSTRAINT DF_MobileInstall_Compliance DEFAULT N'Compliant',
+        RiskLevel NVARCHAR(40) NOT NULL CONSTRAINT DF_MobileInstall_Risk DEFAULT N'Low',
+        EnrollmentType NVARCHAR(80) NOT NULL CONSTRAINT DF_MobileInstall_Enroll DEFAULT N'Client Self-Service',
+        LastIpAddress NVARCHAR(80) NOT NULL CONSTRAINT DF_MobileInstall_Ip DEFAULT N'',
+        LastLocation NVARCHAR(160) NOT NULL CONSTRAINT DF_MobileInstall_Location DEFAULT N'',
+        PushTokenStatus NVARCHAR(80) NOT NULL CONSTRAINT DF_MobileInstall_Push DEFAULT N'Healthy',
+        RecommendedAction NVARCHAR(500) NOT NULL CONSTRAINT DF_MobileInstall_Action DEFAULT N'',
+        InstalledDateUtc DATETIME2 NOT NULL,
+        LastSeenDateUtc DATETIME2 NOT NULL,
+        LastPushDateUtc DATETIME2 NULL,
+        Sessions30d INT NOT NULL CONSTRAINT DF_MobileInstall_Sessions DEFAULT 0,
+        DocumentsViewed30d INT NOT NULL CONSTRAINT DF_MobileInstall_Docs DEFAULT 0,
+        RequestsSubmitted30d INT NOT NULL CONSTRAINT DF_MobileInstall_Requests DEFAULT 0,
+        PushesSent30d INT NOT NULL CONSTRAINT DF_MobileInstall_Pushes DEFAULT 0,
+        BiometricEnabled BIT NOT NULL CONSTRAINT DF_MobileInstall_Biometric DEFAULT 0,
+        MfaVerified BIT NOT NULL CONSTRAINT DF_MobileInstall_Mfa DEFAULT 0,
+        OfflineAccessEnabled BIT NOT NULL CONSTRAINT DF_MobileInstall_Offline DEFAULT 0,
+        UpdateRequired BIT NOT NULL CONSTRAINT DF_MobileInstall_Update DEFAULT 0,
+        TrustedDevice BIT NOT NULL CONSTRAINT DF_MobileInstall_Trusted DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_MobileInstall_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_MobileInstall_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Portal.MobileInstall') AND name = N'IX_MobileInstall_Tenant_Status')
+    CREATE INDEX IX_MobileInstall_Tenant_Status ON Portal.MobileInstall(TenantId, IsDeleted, Status, ComplianceStatus, LastSeenDateUtc DESC);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Portal.MobileInstall') AND name = N'UX_MobileInstall_Tenant_Number')
+    CREATE UNIQUE INDEX UX_MobileInstall_Tenant_Number ON Portal.MobileInstall(TenantId, InstallNumber) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM Portal.MobileInstall WHERE TenantId = @TenantId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Portal.MobileInstall (MobileInstallId, TenantId, InstallNumber, AccountName, UserName, UserEmail, Platform, DeviceModel, AppVersion, OsVersion, Status, ComplianceStatus, RiskLevel, EnrollmentType, LastIpAddress, LastLocation, PushTokenStatus, RecommendedAction, InstalledDateUtc, LastSeenDateUtc, LastPushDateUtc, Sessions30d, DocumentsViewed30d, RequestsSubmitted30d, PushesSent30d, BiometricEnabled, MfaVerified, OfflineAccessEnabled, UpdateRequired, TrustedDevice, CreatedDateUtc, IsDeleted)
+    VALUES
+    (NEWID(), @TenantId, N'MOB-1001', N'Chen Family', N'Rachel Chen', N'rachel.chen@example.com', N'iOS', N'iPhone 15 Pro', N'2.4.1', N'iOS 18.2', N'Active', N'Compliant', N'Low', N'Client Self-Service', N'72.14.20.18', N'Austin, TX', N'Healthy', N'No action required.', DATEADD(DAY, -32, SYSUTCDATETIME()), DATEADD(HOUR, -2, SYSUTCDATETIME()), DATEADD(HOUR, -5, SYSUTCDATETIME()), 42, 18, 4, 16, 1, 1, 1, 0, 1, SYSUTCDATETIME(), 0),
+    (NEWID(), @TenantId, N'MOB-1002', N'Webb Holdings LLC', N'Marcus Webb', N'marcus.webb@example.com', N'Android', N'Pixel 8', N'2.4.0', N'Android 15', N'Active', N'Update Recommended', N'Medium', N'Client Self-Service', N'98.21.44.77', N'Fort Worth, TX', N'Healthy', N'Ask client to update to 2.4.1 for latest document fixes.', DATEADD(DAY, -21, SYSUTCDATETIME()), DATEADD(HOUR, -18, SYSUTCDATETIME()), DATEADD(HOUR, -20, SYSUTCDATETIME()), 31, 12, 2, 11, 1, 1, 1, 1, 1, SYSUTCDATETIME(), 0),
+    (NEWID(), @TenantId, N'MOB-1003', N'Riverside Construction LLC', N'Beth Owens', N'beth@riverside.example', N'iOS', N'iPad Air', N'2.3.8', N'iPadOS 17.6', N'Active', N'Update Required', N'High', N'Broker Assisted', N'24.18.42.8', N'Dallas, TX', N'Registration Stale', N'Force mobile update and refresh push token before renewal campaign.', DATEADD(DAY, -74, SYSUTCDATETIME()), DATEADD(HOUR, -7, SYSUTCDATETIME()), NULL, 58, 33, 8, 0, 0, 1, 1, 1, 0, SYSUTCDATETIME(), 0),
+    (NEWID(), @TenantId, N'MOB-1004', N'Kim Dental Group', N'David Kim', N'david.kim@example.com', N'iOS', N'iPhone 13', N'2.2.9', N'iOS 16.7', N'Suspended', N'Non-Compliant', N'Critical', N'Client Self-Service', N'104.44.12.9', N'Plano, TX', N'Disabled', N'Review suspended account before reactivating device access.', DATEADD(DAY, -120, SYSUTCDATETIME()), DATEADD(HOUR, -96, SYSUTCDATETIME()), NULL, 9, 1, 0, 0, 0, 0, 0, 1, 0, SYSUTCDATETIME(), 0);
+END;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
+        await SyncMobileInstallAdminRecordsAsync(cn, tenantId, ct);
+    }
+
+    private async Task EnsurePortalApiUsageDataAsync(Guid tenantId, CancellationToken ct)
+    {
+        await EnsurePortalAdminDataAsync(tenantId, ct);
+
+        const string sql = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Portal') EXEC(N'CREATE SCHEMA Portal');
+
+IF OBJECT_ID(N'Portal.ApiUsage', N'U') IS NULL
+BEGIN
+    CREATE TABLE Portal.ApiUsage
+    (
+        ApiUsageId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Portal_ApiUsage PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        EndpointCode NVARCHAR(80) NOT NULL,
+        EndpointName NVARCHAR(200) NOT NULL,
+        Method NVARCHAR(12) NOT NULL,
+        Route NVARCHAR(300) NOT NULL,
+        IntegrationName NVARCHAR(160) NOT NULL,
+        ApiKeyName NVARCHAR(160) NOT NULL,
+        Status NVARCHAR(80) NOT NULL,
+        HealthStatus NVARCHAR(80) NOT NULL CONSTRAINT DF_ApiUsage_Health DEFAULT N'Healthy',
+        Priority NVARCHAR(40) NOT NULL CONSTRAINT DF_ApiUsage_Priority DEFAULT N'Normal',
+        Owner NVARCHAR(160) NOT NULL CONSTRAINT DF_ApiUsage_Owner DEFAULT N'Portal Ops',
+        Detail NVARCHAR(1000) NOT NULL CONSTRAINT DF_ApiUsage_Detail DEFAULT N'',
+        RecommendedAction NVARCHAR(500) NOT NULL CONSTRAINT DF_ApiUsage_Action DEFAULT N'',
+        LastCallUtc DATETIME2 NOT NULL,
+        Calls30d INT NOT NULL CONSTRAINT DF_ApiUsage_Calls DEFAULT 0,
+        SuccessCount30d INT NOT NULL CONSTRAINT DF_ApiUsage_Success DEFAULT 0,
+        WarningCount30d INT NOT NULL CONSTRAINT DF_ApiUsage_Warning DEFAULT 0,
+        ErrorCount30d INT NOT NULL CONSTRAINT DF_ApiUsage_Error DEFAULT 0,
+        AvgLatencyMs INT NOT NULL CONSTRAINT DF_ApiUsage_AvgLatency DEFAULT 0,
+        P95LatencyMs INT NOT NULL CONSTRAINT DF_ApiUsage_P95 DEFAULT 0,
+        RateLimitPerMinute INT NOT NULL CONSTRAINT DF_ApiUsage_RateLimit DEFAULT 0,
+        QuotaUsedPercent INT NOT NULL CONSTRAINT DF_ApiUsage_Quota DEFAULT 0,
+        WebhookDeliveries30d INT NOT NULL CONSTRAINT DF_ApiUsage_Webhooks DEFAULT 0,
+        RetryCount30d INT NOT NULL CONSTRAINT DF_ApiUsage_Retries DEFAULT 0,
+        RequiresReview BIT NOT NULL CONSTRAINT DF_ApiUsage_Review DEFAULT 0,
+        ReviewedDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ApiUsage_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_ApiUsage_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Portal.ApiUsage') AND name = N'IX_ApiUsage_Tenant_Status')
+    CREATE INDEX IX_ApiUsage_Tenant_Status ON Portal.ApiUsage(TenantId, IsDeleted, Status, HealthStatus, LastCallUtc DESC);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Portal.ApiUsage') AND name = N'UX_ApiUsage_Tenant_Endpoint')
+    CREATE UNIQUE INDEX UX_ApiUsage_Tenant_Endpoint ON Portal.ApiUsage(TenantId, EndpointCode) WHERE IsDeleted = 0;
+
+INSERT INTO Portal.ApiUsage
+(ApiUsageId, TenantId, EndpointCode, EndpointName, Method, Route, IntegrationName, ApiKeyName, Status, HealthStatus, Priority, Owner, Detail, RecommendedAction, LastCallUtc, Calls30d, SuccessCount30d, WarningCount30d, ErrorCount30d, AvgLatencyMs, P95LatencyMs, RateLimitPerMinute, QuotaUsedPercent, WebhookDeliveries30d, RetryCount30d, RequiresReview, ReviewedDateUtc, CreatedDateUtc, IsDeleted)
+SELECT ar.PortalAdminRecordId, ar.TenantId, LEFT(ar.Code, 80), ar.Name,
+       LEFT(COALESCE(NULLIF(LEFT(ar.Name, CHARINDEX(N' ', ar.Name + N' ') - 1), N''), N'GET'), 12),
+       COALESCE(NULLIF(JSON_VALUE(ar.JsonData, '$.name'), N''), ar.Name),
+       COALESCE(NULLIF(JSON_VALUE(ar.JsonData, '$.category'), N''), N'Client Portal'),
+       COALESCE(NULLIF(JSON_VALUE(ar.JsonData, '$.owner'), N''), N'portal-web'),
+       ar.Status,
+       CASE WHEN ar.Status = N'Error' THEN N'At Risk' WHEN ar.Status = N'Warning' THEN N'Watch' ELSE N'Healthy' END,
+       CASE WHEN ar.Status = N'Error' THEN N'Critical' WHEN ar.Status = N'Warning' THEN N'High' ELSE N'Normal' END,
+       CASE WHEN ar.Status IN (N'Warning', N'Error') THEN N'Portal Ops' ELSE N'Automation' END,
+       COALESCE(NULLIF(JSON_VALUE(ar.JsonData, '$.detail'), N''), ar.Name),
+       CASE WHEN ar.Status IN (N'Warning', N'Error') THEN N'Review trend and remediate integration warnings.' ELSE N'Monitor normal usage trend.' END,
+       COALESCE(TRY_CONVERT(DATETIME2, JSON_VALUE(ar.JsonData, '$.eventDateUtc')), ar.ModifiedDateUtc, ar.CreatedDateUtc),
+       COALESCE(TRY_CONVERT(INT, JSON_VALUE(ar.JsonData, '$.count')), 0),
+       CASE WHEN ar.Status = N'Successful' THEN COALESCE(TRY_CONVERT(INT, JSON_VALUE(ar.JsonData, '$.count')), 0) ELSE 0 END,
+       CASE WHEN ar.Status = N'Warning' THEN COALESCE(TRY_CONVERT(INT, JSON_VALUE(ar.JsonData, '$.count')), 0) ELSE 0 END,
+       CASE WHEN ar.Status = N'Error' THEN COALESCE(TRY_CONVERT(INT, JSON_VALUE(ar.JsonData, '$.count')), 0) ELSE 0 END,
+       220, 850, 300, CASE WHEN ar.Status = N'Warning' THEN 72 WHEN ar.Status = N'Error' THEN 88 ELSE 44 END,
+       CASE WHEN ar.Status = N'Successful' THEN COALESCE(TRY_CONVERT(INT, JSON_VALUE(ar.JsonData, '$.count')), 0) / 10 ELSE 0 END,
+       CASE WHEN ar.Status IN (N'Warning', N'Error') THEN COALESCE(TRY_CONVERT(INT, JSON_VALUE(ar.JsonData, '$.count')), 0) ELSE 0 END,
+       CASE WHEN ar.Status IN (N'Warning', N'Error') THEN 1 ELSE 0 END,
+       CASE WHEN ar.Status IN (N'Warning', N'Error') THEN NULL ELSE SYSUTCDATETIME() END,
+       SYSUTCDATETIME(), 0
+FROM Portal.AdminRecord ar
+WHERE ar.TenantId = @TenantId AND ar.Kind = N'PortalApiUsage' AND ar.IsDeleted = 0 AND ISJSON(ar.JsonData) = 1
+  AND NOT EXISTS (SELECT 1 FROM Portal.ApiUsage au WHERE au.TenantId = ar.TenantId AND au.EndpointCode = LEFT(ar.Code, 80) AND au.IsDeleted = 0);
+
+IF NOT EXISTS (SELECT 1 FROM Portal.ApiUsage WHERE TenantId = @TenantId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Portal.ApiUsage
+    (ApiUsageId, TenantId, EndpointCode, EndpointName, Method, Route, IntegrationName, ApiKeyName, Status, HealthStatus, Priority, Owner, Detail, RecommendedAction, LastCallUtc, Calls30d, SuccessCount30d, WarningCount30d, ErrorCount30d, AvgLatencyMs, P95LatencyMs, RateLimitPerMinute, QuotaUsedPercent, WebhookDeliveries30d, RetryCount30d, RequiresReview, ReviewedDateUtc, CreatedDateUtc, IsDeleted)
+    VALUES
+    (NEWID(), @TenantId, N'documents-list', N'Document center list', N'GET', N'/portal/documents', N'Client Portal', N'portal-web', N'Successful', N'Healthy', N'Normal', N'Portal Ops', N'High-volume document center read endpoint for client portal and mobile app.', N'Monitor cache hit rate and preserve current rate limit.', DATEADD(MINUTE, -12, SYSUTCDATETIME()), 48200, 48011, 151, 38, 118, 390, 1200, 62, 0, 151, 0, SYSUTCDATETIME(), SYSUTCDATETIME(), 0),
+    (NEWID(), @TenantId, N'auth-login', N'Portal authentication', N'POST', N'/portal/auth', N'Authentication', N'portal-auth', N'Warning', N'Watch', N'Critical', N'Security Team', N'Elevated failed login attempts and lockout warnings in the last 24 hours.', N'Review suspicious IP patterns and tune lockout messaging.', DATEADD(MINUTE, -18, SYSUTCDATETIME()), 18640, 18172, 431, 37, 164, 610, 900, 71, 0, 431, 1, NULL, SYSUTCDATETIME(), 0),
+    (NEWID(), @TenantId, N'invites-send', N'Portal invite send', N'POST', N'/portal/invites/send', N'Admin Console', N'portal-admin', N'Error', N'At Risk', N'Critical', N'Portal Ops', N'Invite delivery errors are concentrated on unverified domains.', N'Verify sender domain and retry failed invites after DNS validation.', DATEADD(MINUTE, -135, SYSUTCDATETIME()), 780, 712, 31, 37, 284, 970, 180, 64, 0, 31, 1, NULL, SYSUTCDATETIME(), 0);
+END;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
+        await SyncApiUsageAdminRecordsAsync(cn, tenantId, ct);
+    }
+
     private async Task EnsurePortalActivityEventDataAsync(Guid tenantId, CancellationToken ct)
     {
         await EnsurePortalAdminDataAsync(tenantId, ct);
@@ -653,6 +816,159 @@ ORDER BY OccurredAtUtc DESC;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
         var items = (await cn.QueryAsync<PortalActivityEventDto>(new CommandDefinition(sql, new { TenantId = tenantId, SearchTerm = searchTerm }, cancellationToken: ct))).AsList();
         return Ok(new PagedResult<PortalActivityEventDto> { Items = items, TotalCount = items.Count, PageNumber = 1, PageSize = items.Count });
+    }
+
+    [HttpGet("mobile-installs")]
+    public async Task<IActionResult> GetMobileInstalls([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, CancellationToken ct)
+    {
+        await EnsurePortalMobileInstallDataAsync(tenantId, ct);
+        const string sql = @"
+SELECT MobileInstallId AS Id,
+       TenantId,
+       InstallNumber,
+       AccountName,
+       UserName,
+       UserEmail,
+       Platform,
+       DeviceModel,
+       AppVersion,
+       OsVersion,
+       Status,
+       ComplianceStatus,
+       RiskLevel,
+       EnrollmentType,
+       LastIpAddress,
+       LastLocation,
+       PushTokenStatus,
+       RecommendedAction,
+       InstalledDateUtc,
+       LastSeenDateUtc,
+       LastPushDateUtc,
+       Sessions30d,
+       DocumentsViewed30d,
+       RequestsSubmitted30d,
+       PushesSent30d,
+       BiometricEnabled,
+       MfaVerified,
+       OfflineAccessEnabled,
+       UpdateRequired,
+       TrustedDevice,
+       CreatedDateUtc,
+       ModifiedDateUtc
+FROM Portal.MobileInstall
+WHERE TenantId = @TenantId AND IsDeleted = 0
+  AND (@SearchTerm IS NULL OR @SearchTerm = ''
+       OR InstallNumber LIKE '%' + @SearchTerm + '%'
+       OR AccountName LIKE '%' + @SearchTerm + '%'
+       OR UserName LIKE '%' + @SearchTerm + '%'
+       OR UserEmail LIKE '%' + @SearchTerm + '%'
+       OR Platform LIKE '%' + @SearchTerm + '%'
+       OR DeviceModel LIKE '%' + @SearchTerm + '%'
+       OR Status LIKE '%' + @SearchTerm + '%'
+       OR ComplianceStatus LIKE '%' + @SearchTerm + '%')
+ORDER BY CASE RiskLevel WHEN N'Critical' THEN 0 WHEN N'High' THEN 1 WHEN N'Medium' THEN 2 ELSE 3 END,
+         CASE WHEN UpdateRequired = 1 THEN 0 ELSE 1 END,
+         LastSeenDateUtc DESC;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var items = (await cn.QueryAsync<PortalMobileInstallDto>(new CommandDefinition(sql, new { TenantId = tenantId, SearchTerm = searchTerm }, cancellationToken: ct))).AsList();
+        return Ok(new PagedResult<PortalMobileInstallDto> { Items = items, TotalCount = items.Count, PageNumber = 1, PageSize = items.Count });
+    }
+
+    [HttpPost("mobile-installs/{id:guid}/status")]
+    public async Task<IActionResult> UpdateMobileInstallStatus(Guid id, [FromBody] UpdatePortalMobileInstallRequest request, CancellationToken ct)
+    {
+        await EnsurePortalMobileInstallDataAsync(request.TenantId, ct);
+        const string sql = @"
+UPDATE Portal.MobileInstall
+SET Status = @Status,
+    ComplianceStatus = @ComplianceStatus,
+    RiskLevel = @RiskLevel,
+    RecommendedAction = @RecommendedAction,
+    UpdateRequired = @UpdateRequired,
+    TrustedDevice = @TrustedDevice,
+    LastPushDateUtc = CASE WHEN @UpdateRequired = 1 THEN SYSUTCDATETIME() ELSE LastPushDateUtc END,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE MobileInstallId = @Id AND TenantId = @TenantId AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var affected = await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.TenantId, request.Status, request.ComplianceStatus, request.RiskLevel, request.RecommendedAction, request.UpdateRequired, request.TrustedDevice }, cancellationToken: ct));
+        await SyncMobileInstallAdminRecordsAsync(cn, request.TenantId, ct);
+        return affected == 0 ? NotFound() : NoContent();
+    }
+
+    [HttpGet("api-usage")]
+    public async Task<IActionResult> GetApiUsage([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, CancellationToken ct)
+    {
+        await EnsurePortalApiUsageDataAsync(tenantId, ct);
+        const string sql = @"
+SELECT ApiUsageId AS Id,
+       TenantId,
+       EndpointCode,
+       EndpointName,
+       Method,
+       Route,
+       IntegrationName,
+       ApiKeyName,
+       Status,
+       HealthStatus,
+       Priority,
+       Owner,
+       Detail,
+       RecommendedAction,
+       LastCallUtc,
+       Calls30d,
+       SuccessCount30d,
+       WarningCount30d,
+       ErrorCount30d,
+       AvgLatencyMs,
+       P95LatencyMs,
+       RateLimitPerMinute,
+       QuotaUsedPercent,
+       WebhookDeliveries30d,
+       RetryCount30d,
+       RequiresReview,
+       ReviewedDateUtc,
+       CreatedDateUtc,
+       ModifiedDateUtc
+FROM Portal.ApiUsage
+WHERE TenantId = @TenantId AND IsDeleted = 0
+  AND (@SearchTerm IS NULL OR @SearchTerm = ''
+       OR EndpointCode LIKE '%' + @SearchTerm + '%'
+       OR EndpointName LIKE '%' + @SearchTerm + '%'
+       OR Route LIKE '%' + @SearchTerm + '%'
+       OR IntegrationName LIKE '%' + @SearchTerm + '%'
+       OR ApiKeyName LIKE '%' + @SearchTerm + '%'
+       OR Status LIKE '%' + @SearchTerm + '%'
+       OR HealthStatus LIKE '%' + @SearchTerm + '%'
+       OR Detail LIKE '%' + @SearchTerm + '%')
+ORDER BY CASE WHEN RequiresReview = 1 THEN 0 ELSE 1 END,
+         CASE Priority WHEN N'Critical' THEN 0 WHEN N'High' THEN 1 WHEN N'Normal' THEN 2 ELSE 3 END,
+         QuotaUsedPercent DESC,
+         ErrorCount30d DESC,
+         LastCallUtc DESC;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var items = (await cn.QueryAsync<PortalApiUsageDto>(new CommandDefinition(sql, new { TenantId = tenantId, SearchTerm = searchTerm }, cancellationToken: ct))).AsList();
+        return Ok(new PagedResult<PortalApiUsageDto> { Items = items, TotalCount = items.Count, PageNumber = 1, PageSize = items.Count });
+    }
+
+    [HttpPost("api-usage/{id:guid}/status")]
+    public async Task<IActionResult> UpdateApiUsageStatus(Guid id, [FromBody] UpdatePortalApiUsageRequest request, CancellationToken ct)
+    {
+        await EnsurePortalApiUsageDataAsync(request.TenantId, ct);
+        const string sql = @"
+UPDATE Portal.ApiUsage
+SET Status = @Status,
+    HealthStatus = @HealthStatus,
+    Priority = @Priority,
+    Owner = @Owner,
+    RecommendedAction = @RecommendedAction,
+    RequiresReview = @RequiresReview,
+    ReviewedDateUtc = CASE WHEN @RequiresReview = 0 THEN SYSUTCDATETIME() ELSE ReviewedDateUtc END,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE ApiUsageId = @Id AND TenantId = @TenantId AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var affected = await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.TenantId, request.Status, request.HealthStatus, request.Priority, request.Owner, request.RecommendedAction, request.RequiresReview }, cancellationToken: ct));
+        await SyncApiUsageAdminRecordsAsync(cn, request.TenantId, ct);
+        return affected == 0 ? NotFound() : NoContent();
     }
 
     [HttpPost("activity/{id:guid}/status")]
@@ -1311,6 +1627,135 @@ BEGIN
     VALUES (NEWID(), @TenantId, N'PortalMyAccount', N'my-account', @Name, @Status, @JsonData, SYSUTCDATETIME(), 0);
 END;";
         await cn.ExecuteAsync(new CommandDefinition(sql, new { account.TenantId, Name = account.AgencyName, Status = account.PlanStatus, JsonData = json }, cancellationToken: ct));
+    }
+
+    private static async Task SyncMobileInstallAdminRecordsAsync(System.Data.IDbConnection cn, Guid tenantId, CancellationToken ct)
+    {
+        const string readSql = @"
+SELECT MobileInstallId AS Id,
+       TenantId,
+       InstallNumber,
+       AccountName,
+       UserName,
+       UserEmail,
+       Platform,
+       DeviceModel,
+       AppVersion,
+       OsVersion,
+       Status,
+       ComplianceStatus,
+       RiskLevel,
+       EnrollmentType,
+       LastIpAddress,
+       LastLocation,
+       PushTokenStatus,
+       RecommendedAction,
+       InstalledDateUtc,
+       LastSeenDateUtc,
+       LastPushDateUtc,
+       Sessions30d,
+       DocumentsViewed30d,
+       RequestsSubmitted30d,
+       PushesSent30d,
+       BiometricEnabled,
+       MfaVerified,
+       OfflineAccessEnabled,
+       UpdateRequired,
+       TrustedDevice,
+       CreatedDateUtc,
+       ModifiedDateUtc
+FROM Portal.MobileInstall
+WHERE TenantId = @TenantId AND IsDeleted = 0;";
+        var installs = (await cn.QueryAsync<PortalMobileInstallDto>(new CommandDefinition(readSql, new { TenantId = tenantId }, cancellationToken: ct))).AsList();
+        const string upsertSql = @"
+UPDATE Portal.AdminRecord
+SET Name = @Name, Status = @Status, JsonData = @JsonData, ModifiedDateUtc = SYSUTCDATETIME()
+WHERE TenantId = @TenantId AND Kind = N'PortalMobileInstall' AND Code = @Code AND IsDeleted = 0;
+
+IF @@ROWCOUNT = 0
+BEGIN
+    INSERT INTO Portal.AdminRecord (PortalAdminRecordId, TenantId, Kind, Code, Name, Status, JsonData, CreatedDateUtc, IsDeleted)
+    VALUES (@Id, @TenantId, N'PortalMobileInstall', @Code, @Name, @Status, @JsonData, SYSUTCDATETIME(), 0);
+END;";
+        foreach (var install in installs)
+        {
+            var metric = new PortalMetricRecordDto
+            {
+                Id = install.Id,
+                Name = install.AccountName,
+                Category = install.Platform,
+                Status = install.Status,
+                Owner = install.UserName,
+                Detail = $"{install.DeviceModel} · v{install.AppVersion} · {install.ComplianceStatus}",
+                EventDateUtc = install.LastSeenDateUtc,
+                Count = 1,
+                Amount = install.Sessions30d
+            };
+            await cn.ExecuteAsync(new CommandDefinition(upsertSql, new { install.Id, install.TenantId, Code = install.InstallNumber, Name = install.UserName, install.Status, JsonData = JsonSerializer.Serialize(metric, JsonOptions) }, cancellationToken: ct));
+        }
+    }
+
+    private static async Task SyncApiUsageAdminRecordsAsync(System.Data.IDbConnection cn, Guid tenantId, CancellationToken ct)
+    {
+        const string readSql = @"
+SELECT ApiUsageId AS Id,
+       TenantId,
+       EndpointCode,
+       EndpointName,
+       Method,
+       Route,
+       IntegrationName,
+       ApiKeyName,
+       Status,
+       HealthStatus,
+       Priority,
+       Owner,
+       Detail,
+       RecommendedAction,
+       LastCallUtc,
+       Calls30d,
+       SuccessCount30d,
+       WarningCount30d,
+       ErrorCount30d,
+       AvgLatencyMs,
+       P95LatencyMs,
+       RateLimitPerMinute,
+       QuotaUsedPercent,
+       WebhookDeliveries30d,
+       RetryCount30d,
+       RequiresReview,
+       ReviewedDateUtc,
+       CreatedDateUtc,
+       ModifiedDateUtc
+FROM Portal.ApiUsage
+WHERE TenantId = @TenantId AND IsDeleted = 0;";
+        var records = (await cn.QueryAsync<PortalApiUsageDto>(new CommandDefinition(readSql, new { TenantId = tenantId }, cancellationToken: ct))).AsList();
+        const string upsertSql = @"
+UPDATE Portal.AdminRecord
+SET Name = @Name, Status = @Status, JsonData = @JsonData, ModifiedDateUtc = SYSUTCDATETIME()
+WHERE TenantId = @TenantId AND Kind = N'PortalApiUsage' AND Code = @Code AND IsDeleted = 0;
+
+IF @@ROWCOUNT = 0
+BEGIN
+    INSERT INTO Portal.AdminRecord (PortalAdminRecordId, TenantId, Kind, Code, Name, Status, JsonData, CreatedDateUtc, IsDeleted)
+    VALUES (@Id, @TenantId, N'PortalApiUsage', @Code, @Name, @Status, @JsonData, SYSUTCDATETIME(), 0);
+END;";
+        foreach (var item in records)
+        {
+            var metric = new PortalMetricRecordDto
+            {
+                Id = item.Id,
+                Name = $"{item.Method} {item.Route}",
+                Category = item.IntegrationName,
+                Status = item.Status,
+                Owner = item.ApiKeyName,
+                Detail = $"{item.HealthStatus} · {item.Detail}",
+                EventDateUtc = item.LastCallUtc,
+                Count = item.Calls30d,
+                Amount = item.QuotaUsedPercent
+            };
+            await cn.ExecuteAsync(new CommandDefinition(upsertSql, new { item.Id, item.TenantId, Code = item.EndpointCode, Name = item.EndpointName, item.Status, JsonData = JsonSerializer.Serialize(metric, JsonOptions) }, cancellationToken: ct));
+        }
     }
 
     private sealed class MyAccountProfileRow

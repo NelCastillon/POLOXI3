@@ -1,9 +1,850 @@
 @page "/analytics/producers"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Features.Forecast
+@using Microsoft.AspNetCore.Components.Forms
+@inject ApiClient Api
+@inject ProducerWorkbenchApiClient ProducerWorkbench
+@inject CurrentUserContext CurrentUser
+@inject IJSRuntime Js
 
-<PageTitle>Commission & Producer Reports — AMS</PageTitle>
+<PageTitle>Producer Analytics — AMS</PageTitle>
 
-<SharedReportExplorer Title="Commission & Producer Reports"
-                      Subtitle="Producer scorecards, commission statements, goal, and activity reports from DB data"
-                      Icon="bi-person-badge"
-                      Module="Producer" />
+<AppPageHeader Title="Producer Analytics"
+               Subtitle="Enterprise producer command center for goal attainment, premium production, pipeline velocity, quote conversion, renewal retention, commissions, coaching, and report delivery."
+               Icon="bi-person-badge">
+    <Actions>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_busy"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="SyncCommissionDataAsync" disabled="@_busy"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Sync Commissions</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LogSelectedContactAsync" disabled="@(!CanLogContact || _busy)"><i class="bi bi-telephone-outbound" aria-hidden="true"></i> Log Contact</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="OpenScheduleForSelected" disabled="@(_selectedReport is null || _busy)"><i class="bi bi-calendar-plus" aria-hidden="true"></i> Schedule Report</button>
+        <button class="um-btn um-btn-primary" type="button" @onclick="ExportProducerPackAsync" disabled="@(!_producerReports.Any() || _busy)"><i class="bi bi-download" aria-hidden="true"></i> Export Producer Pack</button>
+    </Actions>
+</AppPageHeader>
+
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
+{
+    <div class="ap-toast @_toastClass" role="status">
+        <i class="bi @(_toastClass == "ap-toast--danger" ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ap-toast-close" @onclick="ClearToast" aria-label="Dismiss message"><i class="bi bi-x-lg"></i></button>
+    </div>
+}
+
+<div class="ap-page">
+    <section class="ap-hero">
+        <div class="ap-hero-main">
+            <div class="ap-eyebrow"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i> Producer growth cockpit</div>
+            <h2>@FormatCurrency(TotalManagedPremium) premium focus with @ProducerReadinessScore% producer readiness</h2>
+            <p>Rank producer performance by goal attainment, written premium, active pipeline, quote conversion, renewal retention, coaching urgency, commission readiness, and sales workflow execution.</p>
+            <div class="ap-hero-meta">
+                <span><i class="bi bi-trophy"></i> @AverageGoalPct.ToString("N1")% goal attainment</span>
+                <span><i class="bi bi-funnel"></i> @FormatCurrency(TotalPipeline) weighted pipeline</span>
+                <span><i class="bi bi-file-earmark-text"></i> @QuoteFollowupCount quote follow-ups</span>
+                <span><i class="bi bi-cash-stack"></i> @FormatCurrency(NetCommissionPayout) net payout</span>
+            </div>
+        </div>
+        <div class="ap-hero-panel">
+            <div class="ap-score-card">
+                <span>Producer readiness score</span>
+                <strong>@ProducerReadinessScore%</strong>
+                <div class="ap-score-track"><div style="width:@ProducerReadinessScore%"></div></div>
+                <small>@ProducerReadinessSummary</small>
+            </div>
+            <div class="ap-priority-list">
+                @foreach (var item in PriorityItems)
+                {
+                    <button type="button" class="ap-priority-item" @onclick="() => SelectAnalyticsItem(item)">
+                        <span class="ap-risk ap-risk--@PriorityCss(item.Priority)">@ItemScore(item)</span>
+                        <div><strong>@item.Title</strong><small>@item.NextAction</small></div>
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                    </button>
+                }
+            </div>
+        </div>
+    </section>
+
+    <section class="ap-kpi-strip" aria-label="Producer KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="ap-kpi-card @(IsActiveKpi(kpi.Key) ? "ap-kpi-card--active" : null)" title="@kpi.Tooltip" @onclick="() => SetKpi(kpi.Key)">
+                <span class="ap-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="ap-kpi-label">@kpi.Label</span>
+                <strong>@kpi.Value</strong>
+                <small>@kpi.Detail</small>
+            </button>
+        }
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger ap-load-error" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
+        </div>
+    }
+
+    <section class="ap-command-bar">
+        <div class="ap-search-wrap">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="ap-search" placeholder="Search producer analytics, producers, branches, pipeline, quotes, renewals, commissions, owners, workflows, or status…" @bind="_search" @bind:event="oninput" />
+        </div>
+        <select class="ap-select" @bind="_segmentFilter">
+            <option value="">All segments</option>
+            @foreach (var segment in Segments)
+            {
+                <option value="@segment">@segment</option>
+            }
+        </select>
+        <select class="ap-select" @bind="_priorityFilter">
+            <option value="">All priorities</option>
+            <option value="Critical">Critical</option>
+            <option value="High">High</option>
+            <option value="Normal">Normal</option>
+        </select>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="RunProducerReportsAsync" disabled="@(!_producerReports.Any() || _busy)"><i class="bi bi-play-fill" aria-hidden="true"></i> Run Producer Reports</button>
+    </section>
+
+    <div class="ap-tabs" role="tablist" aria-label="Producer analytics views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" role="tab" class="ap-tab @(_activeTab == tab.Key ? "ap-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </div>
+
+    @if (_loading)
+    {
+        <div class="ap-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Loading producer analytics...</div>
+    }
+    else
+    {
+        <section class="ap-grid">
+            <article class="ap-panel ap-panel--main">
+                <div class="ap-panel-header"><i class="bi @ActiveIcon" aria-hidden="true"></i><div><strong>@ActiveListTitle</strong><span>@FilteredItemCount.ToString("N0") producer records ranked by premium impact, workflow urgency, coaching risk, conversion, and due date.</span></div></div>
+                @if (!FilteredItems.Any())
+                {
+                    <div class="ap-empty"><i class="bi bi-person-badge" aria-hidden="true"></i><strong>No producer records match this view</strong><span>Adjust filters or refresh seeded producer analytics.</span></div>
+                }
+                else
+                {
+                    <div class="ap-item-list">
+                        @foreach (var item in FilteredItems)
+                        {
+                            <button type="button" class="ap-item-row @(_selectedItem?.Title == item.Title ? "ap-item-row--active" : null)" @onclick="() => SelectAnalyticsItem(item)">
+                                <span class="ap-module-icon ap-module-icon--@CategoryCss(item.Category)"><i class="bi @CategoryIcon(item.Category)" aria-hidden="true"></i></span>
+                                <div class="ap-item-main">
+                                    <div class="ap-item-title"><strong>@item.Title</strong><span class="ap-badge ap-badge--@CategoryCss(item.Category)">@item.Category</span><span class="ap-badge ap-badge--type">@item.Workflow</span></div>
+                                    <p>@item.Insight</p>
+                                    <div class="ap-item-meta"><span>@item.Owner</span><span>@item.Segment</span><span>@item.Count.ToString("N0") items</span><span>@FormatCurrency(item.Premium)</span><span>@item.GoalPct.ToString("N1")% goal</span><span>due @FormatDate(item.DueDateUtc)</span></div>
+                                </div>
+                                <span class="ap-row-score">@ItemScore(item)</span>
+                            </button>
+                        }
+                    </div>
+                }
+            </article>
+
+            <aside class="ap-side">
+                @if (_selectedItem is null)
+                {
+                    <div class="ap-panel"><div class="ap-empty ap-empty--side"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a producer priority</strong><span>Choose a goal, pipeline, quote, retention, or commission priority to inspect workflow and actions.</span></div></div>
+                }
+                else
+                {
+                    <article class="ap-panel">
+                        <div class="ap-panel-header"><i class="bi @CategoryIcon(_selectedItem.Category)" aria-hidden="true"></i><div><strong>Producer command</strong><span>@_selectedItem.Priority · @_selectedItem.Status</span></div></div>
+                        <div class="ap-detail">
+                            <div class="ap-detail-head">
+                                <span class="ap-module-icon ap-module-icon--@CategoryCss(_selectedItem.Category)"><i class="bi @CategoryIcon(_selectedItem.Category)" aria-hidden="true"></i></span>
+                                <div><strong>@_selectedItem.Title</strong><span>@_selectedItem.Insight</span></div>
+                            </div>
+                            <dl>
+                                <dt>Premium</dt><dd>@FormatCurrency(_selectedItem.Premium)</dd>
+                                <dt>Pipeline</dt><dd>@FormatCurrency(_selectedItem.Pipeline)</dd>
+                                <dt>Items</dt><dd>@_selectedItem.Count.ToString("N0")</dd>
+                                <dt>Goal</dt><dd>@_selectedItem.GoalPct.ToString("N1")%</dd>
+                                <dt>Conversion</dt><dd>@_selectedItem.ConversionPct.ToString("N1")%</dd>
+                                <dt>Retention</dt><dd>@_selectedItem.RetentionPct.ToString("N1")%</dd>
+                                <dt>Trend</dt><dd class="@TrendCss(_selectedItem.TrendPct)">@FormatSigned(_selectedItem.TrendPct)%</dd>
+                                <dt>Next action</dt><dd>@_selectedItem.NextAction</dd>
+                            </dl>
+                            <div class="ap-detail-actions">
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="CreateForecastFromSelectionAsync" disabled="@_busy"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i> Add Forecast</button>
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="LogSelectedContactAsync" disabled="@(!CanLogContact || _busy)"><i class="bi bi-telephone-outbound" aria-hidden="true"></i> Log Contact</button>
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="FocusProducerReport" disabled="@(_selectedReport is null)"><i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i> Focus Report</button>
+                                <button type="button" class="um-btn um-btn-primary" @onclick="RunSelectedReportAsync" disabled="@(_selectedReport is null || _busy)"><i class="bi bi-play-fill" aria-hidden="true"></i> Run</button>
+                            </div>
+                        </div>
+                    </article>
+                }
+
+                <article class="ap-panel">
+                    <div class="ap-panel-header"><i class="bi bi-trophy" aria-hidden="true"></i><div><strong>Producer leaderboard</strong><span>Live agency producer performance by premium and goal health.</span></div></div>
+                    <div class="ap-case-list">
+                        @foreach (var producer in ProducersByImportance.Take(6))
+                        {
+                            <button type="button" class="ap-case-row @(_selectedProducer?.UserId == producer.UserId ? "ap-case-row--active" : null)" @onclick="() => SelectProducer(producer)">
+                                <div><strong>@producer.DisplayName</strong><span>@producer.BranchName · @FormatCurrency(producer.WrittenPremiumYtd) YTD · @producer.QuoteConversionRate.ToString("N1")% quote</span></div>
+                                <div class="ap-case-metrics"><strong>@ProducerScore(producer)</strong><span class="ap-risk-label ap-risk-label--@ProducerRiskClass(producer)">score</span></div>
+                            </button>
+                        }
+                        @if (!_producers.Any())
+                        {
+                            <div class="ap-empty ap-empty--compact"><i class="bi bi-people" aria-hidden="true"></i><strong>No producer performance loaded</strong><span>Refresh to sync agency dashboard producer performance.</span></div>
+                        }
+                    </div>
+                </article>
+
+                <article class="ap-panel">
+                    <div class="ap-panel-header"><i class="bi bi-lightning-charge" aria-hidden="true"></i><div><strong>Producer actions</strong><span>Goal, pipeline, activity, commission, and report workflow.</span></div></div>
+                    <div class="ap-action-list">
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="CreateForecastFromProducerAsync" disabled="@(_selectedProducer is null || _busy)"><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Add Producer Forecast</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="RescoreSelectedCrossSellAsync" disabled="@(_selectedCrossSell is null || _busy)"><i class="bi bi-stars" aria-hidden="true"></i> Rescore Cross-Sell</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="SyncCommissionDataAsync" disabled="@_busy"><i class="bi bi-cash-stack" aria-hidden="true"></i> Sync Commission Seeds</button>
+                        <button type="button" class="um-btn um-btn-primary" @onclick="RunProducerReportsAsync" disabled="@(!_producerReports.Any() || _busy)"><i class="bi bi-play-fill" aria-hidden="true"></i> Run Reports</button>
+                    </div>
+                </article>
+            </aside>
+        </section>
+
+        <section class="ap-lower-grid">
+            <article class="ap-panel">
+                <div class="ap-panel-header"><i class="bi bi-clipboard2-pulse" aria-hidden="true"></i><div><strong>Workbench workflow</strong><span>Producer queues sorted by urgency and revenue impact.</span></div></div>
+                <div class="ap-workflow-list">
+                    @foreach (var row in WorkbenchRows.Take(8))
+                    {
+                        <button type="button" class="ap-workflow-row @(_selectedWorkbenchItem?.Id == row.Id ? "ap-workflow-row--active" : null)" @onclick="() => SelectWorkbenchItem(row)">
+                            <span class="ap-workflow-icon"><i class="bi @row.Icon" aria-hidden="true"></i></span>
+                            <div><strong>@row.Title</strong><span>@row.Detail</span></div>
+                            <strong>@row.Score</strong>
+                        </button>
+                    }
+                    @if (!WorkbenchRows.Any())
+                    {
+                        <div class="ap-empty ap-empty--compact"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No producer workbench rows loaded</strong><span>Refresh to sync leads, opportunities, quotes, renewals, and cross-sell.</span></div>
+                    }
+                </div>
+            </article>
+
+            <article class="ap-panel">
+                <div class="ap-panel-header"><i class="bi bi-pie-chart" aria-hidden="true"></i><div><strong>Pipeline and revenue mix</strong><span>Highest-value producer growth pools.</span></div></div>
+                <div class="ap-mix-list">
+                    @foreach (var row in ProducerMix)
+                    {
+                        <div class="ap-mix-row">
+                            <span>@row.Label</span>
+                            <div><span style="width:@row.Percent.ToString("N0")%"></span></div>
+                            <strong>@FormatCurrency(row.Amount)</strong>
+                        </div>
+                    }
+                </div>
+            </article>
+
+            <article class="ap-panel">
+                <div class="ap-panel-header"><i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i><div><strong>Producer report workflow</strong><span>Preview, run, export, and scheduled delivery.</span></div></div>
+                <div class="ap-report-list">
+                    @foreach (var report in ProducerReportsByImportance.Take(6))
+                    {
+                        <button type="button" class="ap-report-row @(_selectedReport?.ReportDefinitionId == report.ReportDefinitionId ? "ap-report-row--active" : null)" @onclick="() => SelectReport(report)">
+                            <div><strong>@report.ReportName</strong><span>@report.ReportTypeCode · @report.OutputFormats · @LastRunLabel(report.ReportDefinitionId)</span></div>
+                            <span>@ReportScore(report)</span>
+                        </button>
+                    }
+                    @if (!_producerReports.Any())
+                    {
+                        <div class="ap-empty ap-empty--compact"><i class="bi bi-file-earmark-x" aria-hidden="true"></i><strong>No Producer module reports found</strong><span>Producer analytics still uses seeded records, workbench queues, commission data, and live performance data.</span></div>
+                    }
+                </div>
+            </article>
+        </section>
+    }
+</div>
+
+@if (_showSchedule)
+{
+    <div class="ap-modal-backdrop" role="presentation" @onclick="CloseSchedule">
+        <div class="ap-modal" role="dialog" aria-modal="true" aria-label="Schedule producer report" @onclick:stopPropagation="true">
+            <EditForm EditContext="_scheduleEditContext" OnValidSubmit="ScheduleAsync">
+                <DataAnnotationsValidator />
+                <div class="ap-modal-header">
+                    <i class="bi bi-calendar-plus" aria-hidden="true"></i>
+                    <span>Schedule producer report</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseSchedule"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="ap-modal-body">
+                    @if (!string.IsNullOrWhiteSpace(_formError))
+                    {
+                        <div class="alert alert-danger ap-load-error" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_formError</div>
+                    }
+                    <div class="ap-form-grid">
+                        <label>Report
+                            <select class="ap-input" @bind="_scheduleForm.ReportDefinitionId">
+                                @foreach (var report in ProducerReportsByImportance)
+                                {
+                                    <option value="@report.ReportDefinitionId">@report.ReportName</option>
+                                }
+                            </select>
+                            <ValidationMessage For="() => _scheduleForm.ReportDefinitionId" class="text-danger" />
+                        </label>
+                        <label>Frequency
+                            <select class="ap-input" @bind="_scheduleForm.FrequencyCode">
+                                @foreach (var frequency in _frequencyOptions)
+                                {
+                                    <option value="@frequency">@frequency</option>
+                                }
+                            </select>
+                            <ValidationMessage For="() => _scheduleForm.FrequencyCode" class="text-danger" />
+                        </label>
+                        <label>Output format
+                            <select class="ap-input" @bind="_scheduleForm.OutputFormat">
+                                @foreach (var format in _formatOptions)
+                                {
+                                    <option value="@format">@format</option>
+                                }
+                            </select>
+                            <ValidationMessage For="() => _scheduleForm.OutputFormat" class="text-danger" />
+                        </label>
+                        <label>Delivery email
+                            <input class="ap-input" @bind="_scheduleForm.DeliveryEmail" />
+                            <ValidationMessage For="() => _scheduleForm.DeliveryEmail" class="text-danger" />
+                        </label>
+                    </div>
+                </div>
+                <div class="ap-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseSchedule">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check2" aria-hidden="true"></i> Schedule</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@code {
+    private readonly TabItem[] _tabs =
+    [
+        new("all", "Command", "bi-speedometer2"),
+        new("goals", "Goals", "bi-trophy"),
+        new("pipeline", "Pipeline", "bi-funnel"),
+        new("quotes", "Quotes", "bi-file-earmark-text"),
+        new("renewals", "Renewals", "bi-arrow-repeat"),
+        new("commissions", "Commissions", "bi-cash-stack"),
+        new("reports", "Reports", "bi-file-earmark-bar-graph")
+    ];
+
+    private readonly string[] _frequencyOptions = ["Daily", "Weekly", "Monthly", "Quarterly"];
+    private readonly string[] _formatOptions = ["PDF", "Excel", "CSV"];
+
+    private Guid _tenantId;
+    private Guid? _currentUserId;
+    private bool _loading;
+    private bool _saving;
+    private bool _showSchedule;
+    private string _search = string.Empty;
+    private string _activeKpi = "all";
+    private string _activeTab = "all";
+    private string _segmentFilter = string.Empty;
+    private string _priorityFilter = string.Empty;
+    private string? _loadError;
+    private string? _formError;
+    private string? _toastMessage;
+    private string _toastClass = "ap-toast--success";
+    private List<ProducerAnalyticsRecord> _producerItems = [];
+    private List<ProducerPerformanceDto> _producers = [];
+    private ProducerWorkbenchDto _workbench = new();
+    private List<CommissionPayeeDto> _payees = [];
+    private List<CommissionTransactionDto> _commissionTransactions = [];
+    private List<CommissionPayoutStatementDto> _payoutStatements = [];
+    private List<CommissionExceptionDto> _commissionExceptions = [];
+    private List<MarketingCrossSellOpportunityDto> _crossSell = [];
+    private List<ForecastEntryDto> _forecastEntries = [];
+    private RenewalPipelineDto _renewalPipeline = new();
+    private List<ReportDefinitionDto> _producerReports = [];
+    private List<ReportExecutionDto> _executions = [];
+    private List<ReportScheduleDto> _schedules = [];
+    private ProducerAnalyticsRecord? _selectedItem;
+    private ProducerPerformanceDto? _selectedProducer;
+    private WorkbenchRow? _selectedWorkbenchItem;
+    private MarketingCrossSellOpportunityDto? _selectedCrossSell;
+    private ReportDefinitionDto? _selectedReport;
+    private ScheduleForm _scheduleForm = new();
+    private EditContext _scheduleEditContext = default!;
+    private bool _busy => _loading || _saving;
+
+    private decimal TotalProducerPremium => _producers.Sum(p => p.WrittenPremiumYtd);
+    private decimal TotalPipeline => _producerItems.Sum(i => i.Pipeline) + _workbench.Counts.OppsPremium + _workbench.Goal.PipelineValue + _forecastEntries.Sum(f => f.PipelineAmount);
+    private decimal TotalManagedPremium => _producerItems.Sum(i => i.Premium) + TotalProducerPremium + _workbench.Goal.WrittenPremium;
+    private decimal NetCommissionPayout => _payoutStatements.Sum(s => s.NetPayout) + _commissionTransactions.Sum(t => t.CommissionAmount);
+    private int QuoteFollowupCount => _workbench.Counts.QuoteFollowups + _workbench.QuoteFollowups.Count + _producers.Sum(p => p.QuotesMtd);
+    private int ScheduledReportCount => _producerReports.Count(r => IsScheduled(r.ReportDefinitionId));
+    private double AverageGoalPct => _producers.Any() ? _producers.Average(ProducerGoalPct) : _workbench.Goal.WrittenPct;
+    private int ProducerReadinessScore => Math.Clamp(55 + Math.Min(12, _producerItems.Count * 2) + Math.Min(12, _producers.Count(p => ProducerGoalPct(p) >= 90) * 3) + Math.Min(10, ScheduledReportCount * 4) + Math.Min(11, _workbench.Messages.Count(m => !m.IsRead) == 0 ? 11 : 6), 0, 100);
+    private string ProducerReadinessSummary => ProducerReadinessScore >= 90 ? "Producer performance is executive ready" : ProducerReadinessScore >= 80 ? "Producer workflow is healthy with focused coaching and pipeline actions" : "Sync commissions, run producer reports, and coach low-conversion or under-goal producers";
+    private IEnumerable<string> Segments => _producerItems.Select(i => i.Segment).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().OrderBy(s => s);
+    private IEnumerable<ProducerAnalyticsRecord> PriorityItems => _producerItems.OrderByDescending(ItemScore).ThenBy(i => i.DueDateUtc).Take(4);
+    private IEnumerable<ProducerPerformanceDto> ProducersByImportance => _producers.OrderByDescending(ProducerScore).ThenByDescending(p => p.WrittenPremiumYtd);
+    private IEnumerable<ReportDefinitionDto> ProducerReportsByImportance => _producerReports.OrderByDescending(ReportScore).ThenBy(r => r.ReportName);
+    private IEnumerable<WorkbenchRow> WorkbenchRows => BuildWorkbenchRows().OrderByDescending(r => r.Score).ThenBy(r => r.Title).ToList();
+    private IEnumerable<MixRow> ProducerMix
+    {
+        get
+        {
+            var rows = new[]
+            {
+                new MixRow("Written premium YTD", TotalProducerPremium),
+                new MixRow("Pipeline and forecast", TotalPipeline),
+                new MixRow("Cross-sell premium", _workbench.Counts.CrossSellPremium + _crossSell.Sum(c => c.EstimatedPremium)),
+                new MixRow("Net commissions", NetCommissionPayout)
+            };
+            var max = Math.Max(1, rows.Max(r => r.Amount));
+            return rows.Select(r => r with { Percent = Math.Clamp((double)(r.Amount / max * 100), 4, 100) });
+        }
+    }
+    private IEnumerable<ProducerAnalyticsRecord> FilteredItems => _producerItems
+        .Where(MatchesSearch)
+        .Where(i => string.IsNullOrWhiteSpace(_segmentFilter) || i.Segment == _segmentFilter)
+        .Where(i => string.IsNullOrWhiteSpace(_priorityFilter) || i.Priority == _priorityFilter)
+        .Where(MatchesActiveView)
+        .OrderByDescending(ItemScore)
+        .ThenBy(i => i.DueDateUtc)
+        .ToList();
+    private int FilteredItemCount => FilteredItems.Count();
+    private bool CanLogContact => _selectedWorkbenchItem is not null && (_selectedWorkbenchItem.Type == "Lead" || _selectedWorkbenchItem.Type == "Opportunity" || _selectedWorkbenchItem.Type == "Quote" || _selectedWorkbenchItem.Type == "Renewal" || _selectedWorkbenchItem.Type == "CrossSell");
+
+    private IEnumerable<KpiItem> Kpis =>
+    [
+        new("all", "Premium", "bi-speedometer2", FormatCurrency(TotalManagedPremium), $"{_producerItems.Count:N0} priorities", "Show all producer command records"),
+        new("goals", "Goals", "bi-trophy", $"{AverageGoalPct:N1}%", $"{_producers.Count:N0} producers", "Filter producer goal attainment records"),
+        new("pipeline", "Pipeline", "bi-funnel", FormatCurrency(TotalPipeline), $"{_workbench.Counts.OpenOpportunities:N0} opportunities", "Filter pipeline and forecast records"),
+        new("quotes", "Quotes", "bi-file-earmark-text", QuoteFollowupCount.ToString("N0"), $"{AverageQuoteConversion:N1}% conversion", "Filter quote follow-up and conversion records"),
+        new("renewals", "Renewals", "bi-arrow-repeat", RenewalCount.ToString("N0"), $"{AverageRetention:N1}% retention", "Filter renewal retention records"),
+        new("commissions", "Commissions", "bi-cash-stack", FormatCurrency(NetCommissionPayout), $"{_commissionExceptions.Count:N0} exceptions", "Filter commission payout and exception records"),
+        new("reports", "Reports", "bi-file-earmark-bar-graph", _producerReports.Count.ToString("N0"), $"{ScheduledReportCount:N0} scheduled", "Filter Producer module reports")
+    ];
+
+    private double AverageQuoteConversion => _producers.Any() ? _producers.Average(p => (double)p.QuoteConversionRate) : 0;
+    private double AverageRetention => _producers.Any() ? _producers.Average(p => (double)p.RetentionRate) : _workbench.Goal.RetentionRate;
+    private int RenewalCount => _workbench.Counts.RenewalCallList + _workbench.RenewalCallList.Count + _renewalPipeline.Rows.Count;
+    private string ActiveListTitle => _activeTab switch
+    {
+        "goals" => "Producer goal attainment and coaching queue",
+        "pipeline" => "Producer pipeline acceleration and forecast queue",
+        "quotes" => "Quote conversion and follow-up discipline",
+        "renewals" => "Renewal retention and producer save workflow",
+        "commissions" => "Commission payout, split, and exception review",
+        "reports" => "Producer reporting workflow",
+        _ => "Enterprise producer command queue"
+    };
+    private string ActiveIcon => _activeTab switch
+    {
+        "goals" => "bi-trophy",
+        "pipeline" => "bi-funnel",
+        "quotes" => "bi-file-earmark-text",
+        "renewals" => "bi-arrow-repeat",
+        "commissions" => "bi-cash-stack",
+        "reports" => "bi-file-earmark-bar-graph",
+        _ => "bi-speedometer2"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _currentUserId = context.UserId;
+        _scheduleEditContext = new(_scheduleForm);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var records = await Api.SearchDashboardRecordsAsync(_tenantId, "ProducerAnalytics", _search);
+            var producers = await Api.GetProducerPerformanceAsync(_tenantId, 50);
+            var workbench = await ProducerWorkbench.GetWorkbenchAsync(_tenantId, _currentUserId);
+            var payees = await Api.SearchCommissionPayeesAsync(_tenantId, _search);
+            var transactions = await Api.SearchCommissionTransactionsAsync(_tenantId, _search);
+            var statements = await Api.SearchCommissionPayoutStatementsAsync(_tenantId, _search);
+            var exceptions = await Api.SearchCommissionExceptionsAsync(_tenantId, _search);
+            var crossSell = await Api.SearchMarketingCrossSellAsync(_tenantId);
+            var forecast = await Api.SearchForecastEntriesAsync(_tenantId, _search);
+            var renewals = await Api.GetRenewalPipelineAsync(_tenantId);
+            var definitions = await Api.SearchReportDefinitionsAsync("Producer");
+            var executions = await Api.SearchReportExecutionsAsync(_tenantId, null);
+            var schedules = await Api.SearchReportSchedulesAsync(_tenantId, "Producer");
+
+            _producerItems = records?.Items.Select(r => DeserializeProducerRecord(r.Id, r.JsonData)).Where(r => r is not null).Cast<ProducerAnalyticsRecord>().ToList() ?? [];
+            _producers = producers?.ToList() ?? [];
+            _workbench = workbench ?? new();
+            _payees = payees?.Items.ToList() ?? [];
+            _commissionTransactions = transactions?.Items.ToList() ?? [];
+            _payoutStatements = statements?.Items.ToList() ?? [];
+            _commissionExceptions = exceptions?.Items.ToList() ?? [];
+            _crossSell = crossSell?.Items.ToList() ?? [];
+            _forecastEntries = forecast?.Items.ToList() ?? [];
+            _renewalPipeline = renewals ?? new();
+            _producerReports = definitions?.Items.Where(IsProducerReport).ToList() ?? [];
+            _executions = executions?.Items.Where(e => _producerReports.Any(r => r.ReportDefinitionId == e.ReportDefinitionId)).ToList() ?? [];
+            _schedules = schedules?.Items.Where(s => _producerReports.Any(r => r.ReportDefinitionId == s.ReportDefinitionId)).ToList() ?? [];
+            _selectedItem = _selectedItem is null ? FilteredItems.FirstOrDefault() : _producerItems.FirstOrDefault(i => i.Title == _selectedItem.Title) ?? FilteredItems.FirstOrDefault();
+            _selectedProducer = _selectedProducer is null ? ProducersByImportance.FirstOrDefault() : _producers.FirstOrDefault(p => p.UserId == _selectedProducer.UserId) ?? ProducersByImportance.FirstOrDefault();
+            _selectedWorkbenchItem = _selectedWorkbenchItem is null ? WorkbenchRows.FirstOrDefault() : WorkbenchRows.FirstOrDefault(w => w.Id == _selectedWorkbenchItem.Id) ?? WorkbenchRows.FirstOrDefault();
+            _selectedCrossSell = _selectedCrossSell is null ? _crossSell.OrderByDescending(c => c.Score).FirstOrDefault() : _crossSell.FirstOrDefault(c => c.OpportunityId == _selectedCrossSell.OpportunityId) ?? _crossSell.OrderByDescending(c => c.Score).FirstOrDefault();
+            _selectedReport = _selectedReport is null ? ProducerReportsByImportance.FirstOrDefault() : _producerReports.FirstOrDefault(r => r.ReportDefinitionId == _selectedReport.ReportDefinitionId) ?? ProducerReportsByImportance.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load producer analytics: {ex.Message}";
+            _producerItems = [];
+            ShowToast(_loadError, true);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static ProducerAnalyticsRecord? DeserializeProducerRecord(Guid id, string json)
+    {
+        try
+        {
+            var item = System.Text.Json.JsonSerializer.Deserialize<ProducerAnalyticsRecord>(json, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            if (item is not null) item.Id = id;
+            return item;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool IsProducerReport(ReportDefinitionDto report) => report.ModuleCode.Contains("Producer", StringComparison.OrdinalIgnoreCase) || report.ModuleCode.Contains("Commission", StringComparison.OrdinalIgnoreCase) || report.ReportName.Contains("Producer", StringComparison.OrdinalIgnoreCase) || report.ReportName.Contains("Commission", StringComparison.OrdinalIgnoreCase) || report.ReportName.Contains("Goal", StringComparison.OrdinalIgnoreCase) || report.ReportName.Contains("Activity", StringComparison.OrdinalIgnoreCase);
+    private bool MatchesSearch(ProducerAnalyticsRecord item) => string.IsNullOrWhiteSpace(_search) || item.Title.Contains(_search, StringComparison.OrdinalIgnoreCase) || item.Category.Contains(_search, StringComparison.OrdinalIgnoreCase) || item.Owner.Contains(_search, StringComparison.OrdinalIgnoreCase) || item.Segment.Contains(_search, StringComparison.OrdinalIgnoreCase) || item.Workflow.Contains(_search, StringComparison.OrdinalIgnoreCase) || item.Status.Contains(_search, StringComparison.OrdinalIgnoreCase) || item.Insight.Contains(_search, StringComparison.OrdinalIgnoreCase) || _producers.Any(p => p.DisplayName.Contains(_search, StringComparison.OrdinalIgnoreCase) || (p.BranchName?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false)) || _producerReports.Any(r => r.ReportName.Contains(_search, StringComparison.OrdinalIgnoreCase));
+    private bool MatchesActiveView(ProducerAnalyticsRecord item) => _activeTab switch
+    {
+        "goals" => item.Category == "Goal" || item.Workflow.Contains("Goal", StringComparison.OrdinalIgnoreCase),
+        "pipeline" => item.Category == "Pipeline" || item.Workflow.Contains("Pipeline", StringComparison.OrdinalIgnoreCase),
+        "quotes" => item.Category == "Quotes" || item.Workflow.Contains("Quote", StringComparison.OrdinalIgnoreCase),
+        "renewals" => item.Category == "Retention" || item.Workflow.Contains("Renewal", StringComparison.OrdinalIgnoreCase),
+        "commissions" => item.Category == "Commissions" || item.Workflow.Contains("Commission", StringComparison.OrdinalIgnoreCase),
+        "reports" => _producerReports.Any(),
+        _ => true
+    };
+
+    private void SetKpi(string key) { _activeKpi = key; _activeTab = key; }
+    private void SetTab(string key) { _activeTab = key; _activeKpi = key; }
+    private void ResetFilters() { _search = string.Empty; _segmentFilter = string.Empty; _priorityFilter = string.Empty; _activeKpi = "all"; _activeTab = "all"; }
+    private bool IsActiveKpi(string key) => _activeKpi == key;
+    private void SelectAnalyticsItem(ProducerAnalyticsRecord item) => _selectedItem = item;
+    private void SelectProducer(ProducerPerformanceDto producer) => _selectedProducer = producer;
+    private void SelectWorkbenchItem(WorkbenchRow row) => _selectedWorkbenchItem = row;
+    private void SelectReport(ReportDefinitionDto report) => _selectedReport = report;
+    private void FocusProducerReport() { if (_selectedReport is null) return; _activeTab = "reports"; _activeKpi = "reports"; ShowToast($"Focused report workflow: {_selectedReport.ReportName}"); }
+
+    private int TabCount(string key) => key switch
+    {
+        "goals" => _producerItems.Count(i => i.Category == "Goal") + _producers.Count,
+        "pipeline" => _producerItems.Count(i => i.Category == "Pipeline") + _workbench.MyOpportunities.Count + _forecastEntries.Count,
+        "quotes" => _producerItems.Count(i => i.Category == "Quotes") + _workbench.QuoteFollowups.Count,
+        "renewals" => _producerItems.Count(i => i.Category == "Retention") + _workbench.RenewalCallList.Count + _renewalPipeline.Rows.Count,
+        "commissions" => _producerItems.Count(i => i.Category == "Commissions") + _commissionTransactions.Count + _payoutStatements.Count,
+        "reports" => _producerReports.Count,
+        _ => _producerItems.Count
+    };
+
+    private async Task SyncCommissionDataAsync()
+    {
+        _saving = true;
+        try
+        {
+            await Api.EnsureCommissionSeedAsync(_tenantId, _currentUserId);
+            await Api.EnsureCommissionPayoutStatementsSeedAsync(_tenantId, _currentUserId);
+            await Api.EnsureCommissionSplitRulesSeedAsync(_tenantId, _currentUserId);
+            await Api.EnsureCommissionExceptionsSeedAsync(_tenantId);
+            ShowToast("Commission producer data synced and seeded.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Commission sync failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task LogSelectedContactAsync()
+    {
+        if (_selectedWorkbenchItem is null) return;
+        _saving = true;
+        try
+        {
+            await ProducerWorkbench.LogContactAsync(_tenantId, _selectedWorkbenchItem.Id, _selectedWorkbenchItem.Type);
+            ShowToast($"Contact logged for {_selectedWorkbenchItem.Title}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Log contact failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task CreateForecastFromSelectionAsync()
+    {
+        if (_selectedItem is null) return;
+        _saving = true;
+        try
+        {
+            await Api.CreateForecastEntryAsync(new global::Ams.Application.Features.Forecast.CreateForecastEntryRequest
+            {
+                TenantId = _tenantId,
+                OwnerUserId = _selectedProducer?.UserId ?? _currentUserId,
+                ForecastPeriod = DateTime.UtcNow.ToString("yyyy-MM"),
+                ForecastAmount = Math.Max(1, _selectedItem.Premium),
+                PipelineAmount = Math.Max(1, _selectedItem.Pipeline),
+                CategoryCode = _selectedItem.Category == "Goal" ? "Commit" : "Pipeline",
+                CloseDate = DateTime.UtcNow.AddDays(30),
+                WinProbability = (decimal)Math.Clamp(_selectedItem.ConversionPct, 1, 95),
+                Notes = $"Producer analytics forecast: {_selectedItem.Title}. {_selectedItem.NextAction}",
+                CreatedByUserId = _currentUserId
+            });
+            ShowToast($"Forecast entry created for {_selectedItem.Title}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Create forecast failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task CreateForecastFromProducerAsync()
+    {
+        if (_selectedProducer is null) return;
+        _saving = true;
+        try
+        {
+            await Api.CreateForecastEntryAsync(new global::Ams.Application.Features.Forecast.CreateForecastEntryRequest
+            {
+                TenantId = _tenantId,
+                OwnerUserId = _selectedProducer.UserId,
+                ForecastPeriod = DateTime.UtcNow.ToString("yyyy-MM"),
+                ForecastAmount = Math.Max(1, _selectedProducer.WrittenPremiumMtd),
+                PipelineAmount = Math.Max(1, _selectedProducer.WrittenPremiumYtd * 0.2m),
+                CategoryCode = ProducerGoalPct(_selectedProducer) >= 100 ? "Commit" : "BestCase",
+                CloseDate = DateTime.UtcNow.AddDays(30),
+                WinProbability = Math.Clamp(_selectedProducer.QuoteConversionRate, 1, 95),
+                Notes = $"Producer analytics forecast for {_selectedProducer.DisplayName}: {_selectedProducer.OpenOpportunities} open opportunities, {_selectedProducer.OpenLeads} open leads.",
+                CreatedByUserId = _currentUserId
+            });
+            ShowToast($"Forecast entry created for {_selectedProducer.DisplayName}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Create producer forecast failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task RescoreSelectedCrossSellAsync()
+    {
+        if (_selectedCrossSell is null) return;
+        _saving = true;
+        try
+        {
+            await Api.RescoreMarketingCrossSellAsync(_selectedCrossSell.OpportunityId);
+            ShowToast($"Cross-sell rescore requested for {_selectedCrossSell.AccountName}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Cross-sell rescore failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task RunProducerReportsAsync()
+    {
+        _saving = true;
+        try
+        {
+            foreach (var report in ProducerReportsByImportance.Take(5))
+            {
+                await RunReportAsync(report, reload: false);
+            }
+            ShowToast($"Producer report run completed for {Math.Min(5, _producerReports.Count):N0} report(s).");
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task RunSelectedReportAsync()
+    {
+        if (_selectedReport is null) return;
+        await RunReportAsync(_selectedReport);
+    }
+
+    private async Task RunReportAsync(ReportDefinitionDto report, bool reload = true)
+    {
+        try
+        {
+            var format = PreferredFormat(report);
+            await Api.RunReportAsync(report.ReportDefinitionId, new RunReportRequest(_tenantId, format, _currentUserId));
+            if (reload) await LoadAsync();
+            if (reload) ShowToast($"Report run completed: {report.ReportName}");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Run failed: {ex.Message}", true);
+        }
+    }
+
+    private async Task ExportProducerPackAsync()
+    {
+        _saving = true;
+        try
+        {
+            var file = await Api.DownloadReportsExcelAsync(new DownloadReportsRequest { TenantId = _tenantId, ReportDefinitionIds = ProducerReportsByImportance.Select(r => r.ReportDefinitionId).Take(12).ToList(), SearchTerm = _search, ModuleCode = "Producer", Format = "Excel" });
+            await DownloadFileAsync(file);
+            ShowToast($"Producer pack exported for {Math.Min(12, _producerReports.Count):N0} report(s).");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Export producer pack failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task ExportSelectedReportAsync()
+    {
+        if (_selectedReport is null) return;
+        try
+        {
+            var file = await Api.DownloadReportExcelAsync(_selectedReport.ReportDefinitionId, _tenantId);
+            await DownloadFileAsync(file);
+            ShowToast($"Excel downloaded: {_selectedReport.ReportName}");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Export failed: {ex.Message}", true);
+        }
+    }
+
+    private void OpenScheduleForSelected()
+    {
+        if (_selectedReport is null) return;
+        _scheduleForm = new ScheduleForm { ReportDefinitionId = _selectedReport.ReportDefinitionId, OutputFormat = PreferredFormat(_selectedReport), FrequencyCode = "Weekly", DeliveryEmail = "sales@agencybinder.local" };
+        _scheduleEditContext = new(_scheduleForm);
+        _formError = null;
+        _showSchedule = true;
+    }
+
+    private void CloseSchedule() => _showSchedule = false;
+
+    private async Task ScheduleAsync()
+    {
+        _formError = null;
+        if (!_scheduleEditContext.Validate()) return;
+        _saving = true;
+        try
+        {
+            await Api.ScheduleReportAsync(new ScheduleReportRequest(_tenantId, _scheduleForm.ReportDefinitionId, _scheduleForm.FrequencyCode, _scheduleForm.OutputFormat, _scheduleForm.DeliveryEmail));
+            _showSchedule = false;
+            ShowToast($"Producer report scheduled for {_scheduleForm.DeliveryEmail}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Schedule failed: {ex.Message}";
+            ShowToast(_formError, true);
+        }
+        finally { _saving = false; }
+    }
+
+    private IEnumerable<WorkbenchRow> BuildWorkbenchRows()
+    {
+        foreach (var lead in _workbench.MyLeads)
+            yield return new WorkbenchRow(lead.LeadId, "Lead", lead.FullName.Length == 0 ? lead.LeadNumber : lead.FullName, $"{lead.PriorityCode ?? "Lead"} · score {lead.Score?.ToString() ?? "n/a"} · {lead.DaysSinceActivity} days since activity", "bi-person-plus", Math.Clamp((lead.Score ?? 40) + Math.Min(30, lead.DaysSinceActivity * 3), 0, 100));
+        foreach (var opp in _workbench.MyOpportunities)
+            yield return new WorkbenchRow(opp.OpportunityId, "Opportunity", opp.OpportunityName, $"{opp.AccountName} · {FormatCurrency(opp.EstimatedAmount)} · {opp.WinProbability}% win", "bi-funnel", Math.Clamp((int)Math.Min(45, opp.EstimatedAmount / 10000) + opp.WinProbability + (opp.IsClosingSoon ? 20 : 0), 0, 100));
+        foreach (var quote in _workbench.QuoteFollowups)
+            yield return new WorkbenchRow(quote.QuoteId, "Quote", quote.AccountName ?? quote.QuoteNumber, $"{FormatCurrency(quote.TotalAmount)} · {quote.StatusCode} · valid {FormatDate(quote.ValidUntilDate ?? quote.CreatedDateUtc)}", "bi-file-earmark-text", Math.Clamp((int)Math.Min(45, quote.TotalAmount / 10000) + (quote.IsExpired ? 45 : quote.IsExpiringSoon ? 30 : 12), 0, 100));
+        foreach (var renewal in _workbench.RenewalCallList)
+            yield return new WorkbenchRow(renewal.RenewalId, "Renewal", renewal.AccountName ?? renewal.RenewalNumber, $"{FormatCurrency(renewal.TotalContractValue ?? 0)} · {renewal.DaysTillRenewal} days · {renewal.StatusCode}", "bi-arrow-repeat", Math.Clamp((int)Math.Min(50, (renewal.TotalContractValue ?? 0) / 10000) + (renewal.IsUrgent ? 35 : 12), 0, 100));
+        foreach (var cross in _workbench.CrossSellList)
+            yield return new WorkbenchRow(cross.AccountId, "CrossSell", cross.AccountName, $"{cross.TargetLob} · {FormatCurrency(cross.OppPremium)} · score {cross.Score:N0}", "bi-bullseye", Math.Clamp((int)Math.Min(45, cross.OppPremium / 10000) + (int)cross.Score, 0, 100));
+    }
+
+    private async Task DownloadFileAsync(ReportDownloadFile file)
+    {
+        var fileName = file.FileName.Replace("'", string.Empty);
+        var base64 = Convert.ToBase64String(file.Content);
+        var script = $"(() => {{ const a = document.createElement(\"a\"); a.href = \"data:application/vnd.ms-excel;base64,{base64}\"; a.download = \"{fileName}\"; document.body.appendChild(a); a.click(); a.remove(); }})()";
+        await Js.InvokeVoidAsync("eval", script);
+    }
+
+    private static string PreferredFormat(ReportDefinitionDto report) => report.OutputFormats.Contains("Excel", StringComparison.OrdinalIgnoreCase) ? "Excel" : report.OutputFormats.Contains("CSV", StringComparison.OrdinalIgnoreCase) ? "CSV" : "PDF";
+    private bool IsScheduled(Guid reportId) => _schedules.Any(s => s.ReportDefinitionId == reportId && s.IsActive);
+    private string LastRunLabel(Guid reportId) => _executions.Where(e => e.ReportDefinitionId == reportId).OrderByDescending(e => e.CreatedDateUtc).Select(e => e.CompletedDateUtc.HasValue ? $"last {FormatDate(e.CompletedDateUtc.Value)}" : e.StatusCode).FirstOrDefault() ?? "not run";
+    private int ReportScore(ReportDefinitionDto report) => (report.IsSystemReport ? 20 : 10) + (IsScheduled(report.ReportDefinitionId) ? 20 : 0) + (report.OutputFormats.Contains("Excel", StringComparison.OrdinalIgnoreCase) ? 10 : 0) + (IsProducerReport(report) ? 30 : 12);
+    private static int ItemScore(ProducerAnalyticsRecord item) => Math.Clamp((item.Priority == "Critical" ? 44 : item.Priority == "High" ? 30 : 18) + (int)Math.Min(20, item.Premium / 25000) + (int)Math.Min(16, item.Pipeline / 50000) + (int)Math.Max(0, 12 - (item.DueDateUtc - DateTime.UtcNow).TotalDays) + (int)Math.Max(0, 100 - item.GoalPct) / 4, 0, 100);
+    private static double ProducerGoalPct(ProducerPerformanceDto producer) => producer.WrittenPremiumYtd <= 0 ? 0 : Math.Clamp((double)(producer.WrittenPremiumMtd * 12 / producer.WrittenPremiumYtd * 100), 0, 150);
+    private static int ProducerScore(ProducerPerformanceDto producer) => Math.Clamp((int)Math.Min(45, producer.WrittenPremiumYtd / 25000) + (int)Math.Min(20, producer.QuoteConversionRate) + (int)Math.Min(20, producer.RetentionRate / 5) + Math.Min(15, producer.OpenOpportunities), 0, 100);
+    private static string ProducerRiskClass(ProducerPerformanceDto producer) => ProducerScore(producer) >= 75 ? "normal" : ProducerScore(producer) >= 55 ? "high" : "critical";
+    private static string PriorityCss(string priority) => priority switch { "Critical" => "critical", "High" => "high", "Normal" => "normal", _ => "standard" };
+    private static string CategoryCss(string category) => category switch { "Goal" => "blue", "Pipeline" => "green", "Quotes" => "purple", "Retention" => "cyan", "Commissions" => "amber", _ => "slate" };
+    private static string CategoryIcon(string category) => category switch { "Goal" => "bi-trophy", "Pipeline" => "bi-funnel", "Quotes" => "bi-file-earmark-text", "Retention" => "bi-arrow-repeat", "Commissions" => "bi-cash-stack", _ => "bi-person-badge" };
+    private static string TrendCss(double value) => value >= 0 ? "ap-trend-up" : "ap-trend-down";
+    private static string FormatSigned(double value) => value >= 0 ? $"+{value:N1}" : value.ToString("N1");
+    private static string FormatCurrency(decimal value) => value >= 1000000 ? $"{value / 1000000m:C1}M" : value >= 1000 ? $"{value / 1000m:C0}K" : value.ToString("C0");
+    private static string FormatDate(DateTime value) => value.ToLocalTime().ToString("MMM d");
+    private void ShowToast(string message, bool danger = false) { _toastMessage = message; _toastClass = danger ? "ap-toast--danger" : "ap-toast--success"; }
+    private void ClearToast() => _toastMessage = null;
+
+    private sealed record TabItem(string Key, string Label, string Icon);
+    private sealed record KpiItem(string Key, string Label, string Icon, string Value, string Detail, string Tooltip);
+    private sealed record MixRow(string Label, decimal Amount) { public double Percent { get; init; } }
+    private sealed record WorkbenchRow(Guid Id, string Type, string Title, string Detail, string Icon, int Score);
+
+    private sealed class ProducerAnalyticsRecord
+    {
+        public Guid Id { get; set; }
+        public string Category { get; set; } = string.Empty;
+        public string Priority { get; set; } = string.Empty;
+        public string Title { get; set; } = string.Empty;
+        public string Owner { get; set; } = string.Empty;
+        public string Segment { get; set; } = string.Empty;
+        public string Workflow { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public decimal Premium { get; set; }
+        public decimal Pipeline { get; set; }
+        public int Count { get; set; }
+        public double ConversionPct { get; set; }
+        public double RetentionPct { get; set; }
+        public double GoalPct { get; set; }
+        public double TrendPct { get; set; }
+        public DateTime DueDateUtc { get; set; }
+        public string NextAction { get; set; } = string.Empty;
+        public string Insight { get; set; } = string.Empty;
+    }
+
+    private sealed class ScheduleForm
+    {
+        [Required]
+        public Guid ReportDefinitionId { get; set; }
+
+        [Required, StringLength(50)]
+        public string FrequencyCode { get; set; } = "Weekly";
+
+        [Required, StringLength(20)]
+        public string OutputFormat { get; set; } = "Excel";
+
+        [Required, EmailAddress, StringLength(254)]
+        public string DeliveryEmail { get; set; } = "sales@agencybinder.local";
+    }
+}

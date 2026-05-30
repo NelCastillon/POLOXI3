@@ -1,6 +1,7 @@
 @page "/admin/agency/profile"
 @page "/tenant/agency/profile"
 @namespace Ams.Web.Components.Pages.AgencyAdmin
+@using Ams.Application.Features.Agency
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
@@ -8,296 +9,380 @@
 <PageTitle>Agency Profile — Agency Setup</PageTitle>
 
 <AppPageHeader Title="Agency Profile"
-               Subtitle="Legal name, address, licensing, E&amp;O coverage and branding settings"
-               Icon="bi-building">
+               Subtitle="Enterprise agency identity, compliance, contact, operating footprint, and workflow readiness."
+               Icon="bi-building-check">
     <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_loading">
             <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
         </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenEditDrawer">
-            <i class="bi bi-pencil" aria-hidden="true"></i> Edit Profile
-        </button>
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/branding"><i class="bi bi-palette" aria-hidden="true"></i> Branding</a>
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/hours"><i class="bi bi-clock" aria-hidden="true"></i> Hours</a>
+        <button class="um-btn um-btn-primary" type="button" @onclick="OpenEditModal"><i class="bi bi-pencil-square" aria-hidden="true"></i> Edit Profile</button>
     </Actions>
 </AppPageHeader>
 
-<section class="ma-hero as-tenant-hero">
-    <div>
-        <span class="ma-eyebrow">Tenant · Agency Setup</span>
-        <h2>Agency Profile Command Center</h2>
-        <p>Maintain the agency record clients, staff, carriers, workflows, and portal experiences depend on.</p>
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
+{
+    <div class="ap-toast @_toastClass" role="status">
+        <i class="bi @(_toastClass == "ap-toast--danger" ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ap-toast-close" @onclick="ClearToast" aria-label="Dismiss message"><i class="bi bi-x-lg"></i></button>
     </div>
-    <div class="ma-hero-actions">
-        <a class="um-btn um-btn-ghost" href="/tenant/agency/branding"><i class="bi bi-palette" aria-hidden="true"></i> Branding</a>
-        <a class="um-btn um-btn-ghost" href="/tenant/agency/hours"><i class="bi bi-clock" aria-hidden="true"></i> Business Hours</a>
-        <button class="um-btn um-btn-primary" @onclick="OpenEditDrawer"><i class="bi bi-pencil" aria-hidden="true"></i> Edit Profile</button>
-    </div>
-</section>
+}
 
-<div class="as-kpi-strip" aria-label="Agency profile filters">
-    <button type="button" class='as-kpi-card @KpiClass("Overview")' @onclick='() => SetFilter("Overview")' title="Show all profile sections">
-        <span class="as-kpi-icon"><i class="bi bi-diagram-3-fill" aria-hidden="true"></i></span>
-        <div>
-            <div class="as-kpi-value">@_branchCount</div>
-            <div class="as-kpi-label">Branches</div>
+<div class="ap-page">
+    <section class="ap-hero">
+        <div class="ap-hero-main">
+            <span class="ap-eyebrow"><i class="bi bi-command" aria-hidden="true"></i> Tenant · Agency Setup</span>
+            <h2>@DisplayAgencyName</h2>
+            <p>Maintain the agency record used by client servicing, staff workflows, carrier relationships, compliance evidence, and portal-facing experiences.</p>
+            <div class="ap-hero-meta">
+                <span><i class="bi bi-upc-scan" aria-hidden="true"></i> @DisplayValue(_profile?.AgencyCode)</span>
+                <span><i class="bi bi-geo-alt" aria-hidden="true"></i> @LocationSummary</span>
+                <span><i class="bi bi-shield-check" aria-hidden="true"></i> @ComplianceSummary</span>
+            </div>
         </div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Legal")' @onclick='() => SetFilter("Legal")' title="Show legal and licensing details">
-        <span class="as-kpi-icon as-kpi-icon--success"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
-        <div>
-            <div class="as-kpi-value">@_staffCount</div>
-            <div class="as-kpi-label">Staff</div>
+        <div class="ap-hero-panel">
+            <div class="ap-readiness-card">
+                <span>Profile readiness</span>
+                <strong>@ProfileReadinessScore%</strong>
+                <div class="ap-score-track"><div style="width:@ProfileReadinessScore%"></div></div>
+                <small>@ProfileReadinessSummary</small>
+            </div>
+            <div class="ap-action-list">
+                @foreach (var action in PriorityActions)
+                {
+                    <button type="button" class="ap-action-item" @onclick="() => SetTab(action.Tab)">
+                        <i class="bi @action.Icon" aria-hidden="true"></i>
+                        <span><strong>@action.Title</strong><small>@action.Detail</small></span>
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                    </button>
+                }
+            </div>
         </div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Address")' @onclick='() => SetFilter("Address")' title="Show contact and address details">
-        <span class="as-kpi-icon as-kpi-icon--violet"><i class="bi bi-shield-check" aria-hidden="true"></i></span>
-        <div>
-            <div class="as-kpi-value">@_carrierCount</div>
-            <div class="as-kpi-label">Appointed Carriers</div>
-        </div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Coverage")' @onclick='() => SetFilter("Coverage")' title="Show E&O coverage details">
-        <span class="as-kpi-icon @EoIconClass"><i class="bi bi-file-earmark-check" aria-hidden="true"></i></span>
-        <div>
-            <div class="as-kpi-value">@(_profile?.EoExpiryDate.HasValue == true ? _profile.EoExpiryDate.Value.ToString("d") : "—")</div>
-            <div class="as-kpi-label">E&amp;O Expiry</div>
-        </div>
-    </button>
-</div>
+    </section>
 
-<div class="as-card">
-    @if (_loading)
-    {
-        <div class="um-loading-overlay" aria-live="polite" aria-label="Loading agency profile…">
-            <div class="um-spinner" aria-hidden="true"></div>
-            <span>Loading…</span>
+    <section class="ap-kpi-strip" aria-label="Agency profile KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="ap-kpi-card @(IsActiveTab(kpi.Key) ? "ap-kpi-card--active" : null)" title="@kpi.Tooltip" @onclick="() => SetTab(kpi.Key)">
+                <span class="ap-kpi-icon ap-kpi-icon--@kpi.Tone"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="ap-kpi-label">@kpi.Label</span>
+                <strong>@kpi.Value</strong>
+                <small>@kpi.Detail</small>
+            </button>
+        }
+    </section>
+
+    <section class="ap-command-bar">
+        <div class="ap-tabs" role="tablist" aria-label="Agency profile sections">
+            @foreach (var tab in Tabs)
+            {
+                <button type="button" role="tab" class="ap-tab @(IsActiveTab(tab.Key) ? "ap-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                    <i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label
+                </button>
+            }
         </div>
-    }
+        <div class="ap-command-actions">
+            <button class="um-btn um-btn-ghost" type="button" @onclick="CopyProfileSummaryAsync" disabled="@(_profile is null)"><i class="bi bi-clipboard" aria-hidden="true"></i> Copy Summary</button>
+            <button class="um-btn um-btn-primary" type="button" @onclick="OpenEditModal"><i class="bi bi-pencil-square" aria-hidden="true"></i> Update</button>
+        </div>
+    </section>
+
     @if (!string.IsNullOrWhiteSpace(_loadError))
     {
-        <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
-            @_loadError
+        <div class="alert alert-danger ap-load-error" role="alert"><i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError</div>
+    }
+
+    <section class="ap-content-grid">
+        <div class="ap-main-panel">
+            @if (_loading)
+            {
+                <div class="ap-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Loading agency profile...</div>
+            }
+            else if (_profile is null)
+            {
+                <div class="ap-empty-state">
+                    <i class="bi bi-building" aria-hidden="true"></i>
+                    <strong>No agency profile found</strong>
+                    <span>Create the agency identity record used by tenant operations.</span>
+                    <button class="um-btn um-btn-primary" type="button" @onclick="OpenEditModal"><i class="bi bi-plus-lg" aria-hidden="true"></i> Create Profile</button>
+                </div>
+            }
+            else
+            {
+                @if (ShowTab("overview"))
+                {
+                    <section class="ap-section">
+                        <div class="ap-section-header"><i class="bi bi-speedometer2" aria-hidden="true"></i><div><strong>Executive Overview</strong><span>Most important profile information for tenant operations.</span></div></div>
+                        <div class="ap-overview-grid">
+                            <div class="ap-identity-card">
+                                <span class="ap-module-icon ap-module-icon--blue"><i class="bi bi-building-check" aria-hidden="true"></i></span>
+                                <div><strong>@DisplayAgencyName</strong><span>@DisplayValue(_profile.DbaName, "No DBA configured")</span></div>
+                            </div>
+                            <div class="ap-identity-card">
+                                <span class="ap-module-icon ap-module-icon--green"><i class="bi bi-shield-check" aria-hidden="true"></i></span>
+                                <div><strong>@ComplianceSummary</strong><span>@EoDetail</span></div>
+                            </div>
+                            <div class="ap-identity-card">
+                                <span class="ap-module-icon ap-module-icon--purple"><i class="bi bi-diagram-3" aria-hidden="true"></i></span>
+                                <div><strong>@_branchCount branch(es)</strong><span>@_staffCount staff · @_carrierCount carriers</span></div>
+                            </div>
+                        </div>
+                    </section>
+                }
+
+                @if (ShowTab("legal"))
+                {
+                    <section class="ap-section">
+                        <div class="ap-section-header"><i class="bi bi-bank" aria-hidden="true"></i><div><strong>Legal & Licensing</strong><span>Agency identity, tax, entity, and licensing data.</span></div></div>
+                        <div class="ap-fields">
+                            @Field("Legal Name", _profile.AgencyName)
+                            @Field("DBA / Trade Name", _profile.DbaName)
+                            @Field("Agency Code", _profile.AgencyCode, true)
+                            @Field("NPN", _profile.Npn, true)
+                            @Field("FEIN / Tax ID", _profile.Fein, true)
+                            @Field("License Number", _profile.LicenseNumber, true)
+                            @Field("Entity Type", _profile.EntityType)
+                            @Field("Domicile State", _profile.DomicileState)
+                        </div>
+                    </section>
+                }
+
+                @if (ShowTab("contact"))
+                {
+                    <section class="ap-section">
+                        <div class="ap-section-header"><i class="bi bi-geo-alt" aria-hidden="true"></i><div><strong>Contact & Location</strong><span>Client-facing contact and agency headquarters data.</span></div></div>
+                        <div class="ap-fields">
+                            @Field("Address Line 1", _profile.AddressLine1)
+                            @Field("Address Line 2", _profile.AddressLine2)
+                            @Field("City", _profile.City)
+                            @Field("State", _profile.StateProvince)
+                            @Field("Postal Code", _profile.PostalCode, true)
+                            @Field("Country", _profile.CountryCode)
+                            @Field("Phone", _profile.Phone, true)
+                            @Field("Email", _profile.Email)
+                            @Field("Website", _profile.Website)
+                        </div>
+                    </section>
+                }
+
+                @if (ShowTab("compliance"))
+                {
+                    <section class="ap-section">
+                        <div class="ap-section-header"><i class="bi bi-file-earmark-check" aria-hidden="true"></i><div><strong>E&O Coverage</strong><span>Errors and omissions coverage readiness.</span></div></div>
+                        <div class="ap-fields">
+                            @Field("Carrier", _profile.EoCarrier)
+                            @Field("Policy Number", _profile.EoPolicyNumber, true)
+                            @Field("Coverage Limit", _profile.EoCoverageLimit.HasValue ? _profile.EoCoverageLimit.Value.ToString("C0") : null)
+                            @Field("Expiry Date", _profile.EoExpiryDate.HasValue ? _profile.EoExpiryDate.Value.ToString("MMM d, yyyy") : null)
+                            @Field("Coverage Status", ComplianceSummary)
+                            @Field("Renewal Window", EoRenewalWindow)
+                        </div>
+                    </section>
+                }
+
+                @if (ShowTab("operations"))
+                {
+                    <section class="ap-section">
+                        <div class="ap-section-header"><i class="bi bi-gear-wide-connected" aria-hidden="true"></i><div><strong>Operating Standards</strong><span>Regionalization, locale, currency, and workflow support.</span></div></div>
+                        <div class="ap-fields">
+                            @Field("Locale", _profile.Locale)
+                            @Field("Currency", _profile.CurrencyCode)
+                            @Field("Time Zone", _profile.TimeZoneId)
+                            @Field("Branches", _branchCount.ToString("N0"))
+                            @Field("Staff", _staffCount.ToString("N0"))
+                            @Field("Appointed Carriers", _carrierCount.ToString("N0"))
+                        </div>
+                    </section>
+                }
+            }
         </div>
-    }
-    @if (_profile is not null)
-    {
-        @if (ShowSection("Legal"))
-        {
-            <div class="as-section">
-                <h3 class="as-section-title"><i class="bi bi-building" aria-hidden="true"></i> Legal Information</h3>
-                <div class="as-fields">
-                    <div class="as-field"><span class="as-field-label">Legal Name</span><span class="as-field-value">@_profile.LegalName</span></div>
-                    <div class="as-field"><span class="as-field-label">DBA / Trade Name</span><span class="as-field-value">@(_profile.DbaName ?? "—")</span></div>
-                    <div class="as-field"><span class="as-field-label">NPN</span><span class="as-field-value as-mono">@_profile.Npn</span></div>
-                    <div class="as-field"><span class="as-field-label">FEIN / Tax ID</span><span class="as-field-value as-mono">@_profile.Fein</span></div>
-                    <div class="as-field"><span class="as-field-label">Entity Type</span><span class="as-field-value">@_profile.EntityType</span></div>
-                    <div class="as-field"><span class="as-field-label">Domicile State</span><span class="as-field-value">@_profile.DomicileState</span></div>
-                </div>
+
+        <aside class="ap-side-panel">
+            <div class="ap-side-card">
+                <div class="ap-side-title"><i class="bi bi-list-check" aria-hidden="true"></i><strong>Readiness Checklist</strong></div>
+                @foreach (var item in Checklist)
+                {
+                    <div class="ap-check-item @(item.Done ? "ap-check-item--done" : null)">
+                        <i class="bi @(item.Done ? "bi-check-circle-fill" : "bi-exclamation-circle")" aria-hidden="true"></i>
+                        <span><strong>@item.Label</strong><small>@item.Detail</small></span>
+                    </div>
+                }
             </div>
-        }
-        @if (ShowSection("Address"))
-        {
-            <div class="as-section">
-                <h3 class="as-section-title"><i class="bi bi-geo-alt" aria-hidden="true"></i> Primary Address</h3>
-                <div class="as-fields">
-                    <div class="as-field"><span class="as-field-label">Address Line 1</span><span class="as-field-value">@_profile.Address1</span></div>
-                    <div class="as-field"><span class="as-field-label">Address Line 2</span><span class="as-field-value">@(_profile.Address2 ?? "—")</span></div>
-                    <div class="as-field"><span class="as-field-label">City</span><span class="as-field-value">@_profile.City</span></div>
-                    <div class="as-field"><span class="as-field-label">State</span><span class="as-field-value">@_profile.State</span></div>
-                    <div class="as-field"><span class="as-field-label">ZIP</span><span class="as-field-value as-mono">@_profile.Zip</span></div>
-                    <div class="as-field"><span class="as-field-label">Phone</span><span class="as-field-value as-mono">@_profile.Phone</span></div>
-                    <div class="as-field"><span class="as-field-label">Website</span><span class="as-field-value">@(_profile.Website ?? "—")</span></div>
-                </div>
+            <div class="ap-side-card">
+                <div class="ap-side-title"><i class="bi bi-lightning-charge" aria-hidden="true"></i><strong>Workflow Shortcuts</strong></div>
+                <a class="ap-link-action" href="/tenant/agency/branches"><i class="bi bi-diagram-3" aria-hidden="true"></i> Manage Branches</a>
+                <a class="ap-link-action" href="/tenant/agency/producers"><i class="bi bi-person-badge" aria-hidden="true"></i> Manage Producers</a>
+                <a class="ap-link-action" href="/tenant/agency/carriers"><i class="bi bi-shield-check" aria-hidden="true"></i> Manage Carriers</a>
+                <a class="ap-link-action" href="/tenant/agency/branding"><i class="bi bi-palette" aria-hidden="true"></i> Branding Settings</a>
             </div>
-        }
-        @if (ShowSection("Coverage"))
-        {
-            <div class="as-section">
-                <h3 class="as-section-title"><i class="bi bi-file-earmark-check" aria-hidden="true"></i> E&amp;O Coverage</h3>
-                <div class="as-fields">
-                    <div class="as-field"><span class="as-field-label">Carrier</span><span class="as-field-value">@(_profile.EoCarrier ?? "—")</span></div>
-                    <div class="as-field"><span class="as-field-label">Policy #</span><span class="as-field-value as-mono">@(_profile.EoPolicyNumber ?? "—")</span></div>
-                    <div class="as-field"><span class="as-field-label">Coverage Limit</span><span class="as-field-value">@(_profile.EoCoverageLimit.HasValue ? _profile.EoCoverageLimit.Value.ToString("C0") : "—")</span></div>
-                    <div class="as-field"><span class="as-field-label">Expiry Date</span><span class="as-field-value">@(_profile.EoExpiryDate.HasValue ? _profile.EoExpiryDate.Value.ToString("d") : "—")</span></div>
-                </div>
-            </div>
-        }
-    }
-    else if (!_loading)
-    {
-        <div class="as-empty-state">
-            <i class="bi bi-building as-empty-icon" aria-hidden="true"></i>
-            <p>No agency profile data loaded. Click <strong>Edit Profile</strong> to get started.</p>
-        </div>
-    }
+        </aside>
+    </section>
 </div>
 
-<!-- Edit Drawer -->
-<AppCrudDrawer @bind-Visible="_showEditDrawer"
-               Title="Edit Agency Profile"
-               OnConfirm="SaveProfileAsync"
-               OnClose="CloseEditDrawer">
-    <Content>
-        <div class="as-form">
-            <label class="ap-form-label">Legal Name</label>
-            <input class="um-input" @bind="_editModel.LegalName" placeholder="Agency legal name" />
-
-            <label class="ap-form-label">DBA / Trade Name</label>
-            <input class="um-input" @bind="_editModel.DbaName" placeholder="Optional trade name" />
-
-            <label class="ap-form-label">NPN</label>
-            <input class="um-input ap-mono" @bind="_editModel.Npn" placeholder="National Producer Number" />
-
-            <label class="ap-form-label">FEIN / Tax ID</label>
-            <input class="um-input ap-mono" @bind="_editModel.Fein" placeholder="Federal Employer ID" />
-
-            <label class="ap-form-label">Entity Type</label>
-            <SfDropDownList TValue="string" TItem="LabelValue"
-                            DataSource="_entityTypeOptions"
-                            @bind-Value="_editModel.EntityType"
-                            Width="100%">
-                <DropDownListFieldSettings Value="Value" Text="Label" />
-            </SfDropDownList>
-
-            <label class="ap-form-label">Domicile State</label>
-            <input class="um-input" @bind="_editModel.DomicileState" placeholder="State abbreviation" />
-
-            <label class="ap-form-label">Address Line 1</label>
-            <input class="um-input" @bind="_editModel.Address1" />
-
-            <label class="ap-form-label">Address Line 2</label>
-            <input class="um-input" @bind="_editModel.Address2" />
-
-            <div class="ap-form-row">
-                <div>
-                    <label class="ap-form-label">City</label>
-                    <input class="um-input" @bind="_editModel.City" />
+@if (_showEditModal)
+{
+    <div class="ap-modal-backdrop" role="presentation">
+        <div class="ap-modal" role="dialog" aria-modal="true" aria-labelledby="agency-profile-edit-title">
+            <EditForm EditContext="_editContext" OnValidSubmit="SaveProfileAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-header">
+                    <i class="bi bi-building-check" aria-hidden="true"></i>
+                    <span id="agency-profile-edit-title">Edit Agency Profile</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseEditModal"><i class="bi bi-x-lg"></i></button>
                 </div>
-                <div>
-                    <label class="ap-form-label">State</label>
-                    <input class="um-input" @bind="_editModel.State" />
+                <div class="um-modal-body">
+                    <div class="ap-form-grid">
+                        <div class="ap-form-section ap-form-section--full"><strong>Legal identity</strong><span>Core identity data used across tenant workflows.</span></div>
+                        <div class="um-field ap-form-section--full">
+                            <label>Agency Name <span class="text-danger">*</span></label>
+                            <InputText class="um-input" @bind-Value="_form.AgencyName" />
+                            <ValidationMessage For="() => _form.AgencyName" class="text-danger" />
+                        </div>
+                        <div class="um-field"><label>DBA / Trade Name</label><InputText class="um-input" @bind-Value="_form.DbaName" /><ValidationMessage For="() => _form.DbaName" class="text-danger" /></div>
+                        <div class="um-field"><label>NPN</label><InputText class="um-input ap-mono" @bind-Value="_form.Npn" /><ValidationMessage For="() => _form.Npn" class="text-danger" /></div>
+                        <div class="um-field"><label>FEIN / Tax ID</label><InputText class="um-input ap-mono" @bind-Value="_form.Fein" /><ValidationMessage For="() => _form.Fein" class="text-danger" /></div>
+                        <div class="um-field"><label>Entity Type</label><InputSelect class="um-input" @bind-Value="_form.EntityType">@foreach (var option in EntityTypeOptions) { <option value="@option">@option</option> }</InputSelect><ValidationMessage For="() => _form.EntityType" class="text-danger" /></div>
+                        <div class="um-field"><label>License Number</label><InputText class="um-input ap-mono" @bind-Value="_form.LicenseNumber" /><ValidationMessage For="() => _form.LicenseNumber" class="text-danger" /></div>
+                        <div class="um-field"><label>Domicile State</label><InputText class="um-input" @bind-Value="_form.DomicileState" /><ValidationMessage For="() => _form.DomicileState" class="text-danger" /></div>
+
+                        <div class="ap-form-section ap-form-section--full"><strong>Contact & address</strong><span>Primary contact and headquarters information.</span></div>
+                        <div class="um-field ap-form-section--full"><label>Address Line 1</label><InputText class="um-input" @bind-Value="_form.AddressLine1" /><ValidationMessage For="() => _form.AddressLine1" class="text-danger" /></div>
+                        <div class="um-field ap-form-section--full"><label>Address Line 2</label><InputText class="um-input" @bind-Value="_form.AddressLine2" /><ValidationMessage For="() => _form.AddressLine2" class="text-danger" /></div>
+                        <div class="um-field"><label>City</label><InputText class="um-input" @bind-Value="_form.City" /><ValidationMessage For="() => _form.City" class="text-danger" /></div>
+                        <div class="um-field"><label>State</label><InputText class="um-input" @bind-Value="_form.StateProvince" /><ValidationMessage For="() => _form.StateProvince" class="text-danger" /></div>
+                        <div class="um-field"><label>Postal Code</label><InputText class="um-input ap-mono" @bind-Value="_form.PostalCode" /><ValidationMessage For="() => _form.PostalCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Country</label><InputText class="um-input" @bind-Value="_form.CountryCode" /><ValidationMessage For="() => _form.CountryCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Phone</label><InputText class="um-input ap-mono" @bind-Value="_form.Phone" /><ValidationMessage For="() => _form.Phone" class="text-danger" /></div>
+                        <div class="um-field"><label>Email</label><InputText class="um-input" @bind-Value="_form.Email" /><ValidationMessage For="() => _form.Email" class="text-danger" /></div>
+                        <div class="um-field ap-form-section--full"><label>Website</label><InputText class="um-input" @bind-Value="_form.Website" /><ValidationMessage For="() => _form.Website" class="text-danger" /></div>
+
+                        <div class="ap-form-section ap-form-section--full"><strong>E&O coverage and operating standards</strong><span>Compliance and default tenant localization settings.</span></div>
+                        <div class="um-field"><label>E&O Carrier</label><InputText class="um-input" @bind-Value="_form.EoCarrier" /><ValidationMessage For="() => _form.EoCarrier" class="text-danger" /></div>
+                        <div class="um-field"><label>Policy Number</label><InputText class="um-input ap-mono" @bind-Value="_form.EoPolicyNumber" /><ValidationMessage For="() => _form.EoPolicyNumber" class="text-danger" /></div>
+                        <div class="um-field"><label>Coverage Limit</label><InputNumber class="um-input ap-mono" @bind-Value="_form.EoCoverageLimit" /><ValidationMessage For="() => _form.EoCoverageLimit" class="text-danger" /></div>
+                        <div class="um-field"><label>Expiry Date</label><InputDate class="um-input" @bind-Value="_form.EoExpiryDate" /><ValidationMessage For="() => _form.EoExpiryDate" class="text-danger" /></div>
+                        <div class="um-field"><label>Locale <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_form.Locale" /><ValidationMessage For="() => _form.Locale" class="text-danger" /></div>
+                        <div class="um-field"><label>Currency <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_form.CurrencyCode" /><ValidationMessage For="() => _form.CurrencyCode" class="text-danger" /></div>
+                        <div class="um-field ap-form-section--full"><label>Time Zone <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_form.TimeZoneId" /><ValidationMessage For="() => _form.TimeZoneId" class="text-danger" /></div>
+
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger ap-load-error ap-form-section--full" role="alert">@_formError</div>
+                        }
+                    </div>
                 </div>
-                <div>
-                    <label class="ap-form-label">ZIP</label>
-                    <input class="um-input ap-mono" @bind="_editModel.Zip" />
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseEditModal">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-save" aria-hidden="true"></i> Save Profile</button>
                 </div>
-            </div>
-
-            <label class="ap-form-label">Phone</label>
-            <input class="um-input ap-mono" @bind="_editModel.Phone" />
-
-            <label class="ap-form-label">Website</label>
-            <input class="um-input" @bind="_editModel.Website" />
-
-            <h4 class="ap-form-section-heading">E&amp;O Coverage</h4>
-
-            <label class="ap-form-label">E&amp;O Carrier</label>
-            <input class="um-input" @bind="_editModel.EoCarrier" />
-
-            <label class="ap-form-label">Policy Number</label>
-            <input class="um-input ap-mono" @bind="_editModel.EoPolicyNumber" />
-
-            <label class="ap-form-label">Coverage Limit</label>
-            <input class="um-input ap-mono" type="number" @bind="_editModel.EoCoverageLimit" />
-
-            <label class="ap-form-label">Expiry Date</label>
-            <input class="um-input" type="date" @bind="_editModel.EoExpiryDate" />
+            </EditForm>
         </div>
-    </Content>
-</AppCrudDrawer>
+    </div>
+}
 
-<!-- Toast -->
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+<style>
+@@keyframes um-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }
+</style>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
-    private Guid _tenantId;
-
-    private SfToast? _toast;
-    private bool _loading      = false;
-    private bool _showEditDrawer = false;
-
-    private int _branchCount  = 0;
-    private int _staffCount   = 0;
-    private int _carrierCount = 0;
-    private string _activeFilter = "Overview";
-    private string? _loadError;
-
-    private AgencyProfileDto? _profile;
-    private AgencyProfileDto  _editModel = new();
-
-    private static readonly List<LabelValue> _entityTypeOptions =
+    private static readonly string[] EntityTypeOptions = ["", "Corporation", "LLC", "Partnership", "Sole Proprietor", "Nonprofit", "Other"];
+    private static readonly TabItem[] Tabs =
     [
-        new("Corporation",    "Corporation"),
-        new("LLC",            "LLC"),
-        new("Partnership",    "Partnership"),
-        new("SoleProprietor", "Sole Proprietor"),
+        new("overview", "Overview", "bi-speedometer2"),
+        new("legal", "Legal", "bi-bank"),
+        new("contact", "Contact", "bi-geo-alt"),
+        new("compliance", "Compliance", "bi-shield-check"),
+        new("operations", "Operations", "bi-gear-wide-connected")
     ];
+
+    private Guid _tenantId;
+    private Guid? _currentUserId;
+    private bool _loading;
+    private bool _saving;
+    private bool _showEditModal;
+    private int _branchCount;
+    private int _staffCount;
+    private int _carrierCount;
+    private string _activeTab = "overview";
+    private string? _loadError;
+    private string? _formError;
+    private string? _toastMessage;
+    private string _toastClass = "ap-toast--success";
+    private Ams.Application.Common.Dtos.AgencyProfileDto? _profile;
+    private AgencyProfileForm _form = new();
+    private EditContext _editContext = default!;
+
+    private string DisplayAgencyName => DisplayValue(_profile?.AgencyName, "Agency Profile");
+    private string LocationSummary
+    {
+        get
+        {
+            var location = string.Join(", ", new[] { _profile?.City, _profile?.StateProvince }.Where(s => !string.IsNullOrWhiteSpace(s)));
+            return string.IsNullOrWhiteSpace(location) ? "Location incomplete" : location;
+        }
+    }
+    private bool EoIsExpired => _profile?.EoExpiryDate is DateTime expiry && expiry.Date < DateTime.Today;
+    private bool EoExpiresSoon => _profile?.EoExpiryDate is DateTime expiry && expiry.Date >= DateTime.Today && expiry.Date <= DateTime.Today.AddDays(45);
+    private string ComplianceSummary => EoIsExpired ? "E&O expired" : EoExpiresSoon ? "E&O renewal due" : _profile?.EoExpiryDate is null ? "E&O missing" : "E&O active";
+    private string EoDetail => _profile?.EoExpiryDate is DateTime expiry ? $"Expires {expiry:MMM d, yyyy}" : "No expiration date configured";
+    private string EoRenewalWindow => _profile?.EoExpiryDate is DateTime expiry ? (expiry.Date - DateTime.Today).TotalDays switch { < 0 => "Expired", <= 45 => "Renewal due now", <= 90 => "Renewal upcoming", _ => "Outside renewal window" } : "Unknown";
+    private int ProfileReadinessScore => _profile is null ? 0 : Math.Clamp(Checklist.Count(c => c.Done) * 100 / Math.Max(1, Checklist.Count), 0, 100);
+    private string ProfileReadinessSummary => ProfileReadinessScore >= 90 ? "Agency profile is enterprise ready" : ProfileReadinessScore >= 70 ? "Core profile is ready with some gaps" : "Complete missing identity and compliance details";
+
+    private IReadOnlyList<ChecklistItem> Checklist =>
+    [
+        new("Legal identity", !string.IsNullOrWhiteSpace(_profile?.AgencyName) && !string.IsNullOrWhiteSpace(_profile?.EntityType), "Agency name and entity type"),
+        new("Tax and licensing", !string.IsNullOrWhiteSpace(_profile?.Fein) || !string.IsNullOrWhiteSpace(_profile?.LicenseNumber), "FEIN or license number"),
+        new("Primary contact", !string.IsNullOrWhiteSpace(_profile?.Phone) || !string.IsNullOrWhiteSpace(_profile?.Email), "Phone or email configured"),
+        new("Headquarters", !string.IsNullOrWhiteSpace(_profile?.AddressLine1) && !string.IsNullOrWhiteSpace(_profile?.City), "Address and city configured"),
+        new("E&O coverage", _profile?.EoExpiryDate is not null && !EoIsExpired, "Active E&O expiration date"),
+        new("Operating footprint", _branchCount > 0 && _staffCount > 0, "Branches and staff loaded")
+    ];
+
+    private IEnumerable<KpiItem> Kpis =>
+    [
+        new("overview", "Readiness", "bi-speedometer2", $"{ProfileReadinessScore}%", "profile score", "Show the enterprise readiness overview", ProfileReadinessScore >= 80 ? "green" : "amber"),
+        new("legal", "Branches", "bi-diagram-3", _branchCount.ToString("N0"), "operating footprint", "Show legal profile details", "blue"),
+        new("contact", "Staff", "bi-people", _staffCount.ToString("N0"), "active users", "Show contact and headquarters details", "purple"),
+        new("compliance", "E&O", "bi-shield-check", _profile?.EoExpiryDate?.ToString("MMM d") ?? "Missing", ComplianceSummary, "Show E&O compliance details", EoIsExpired || EoExpiresSoon ? "red" : "green"),
+        new("operations", "Carriers", "bi-building-gear", _carrierCount.ToString("N0"), "appointed markets", "Show operating standards", "slate")
+    ];
+
+    private IEnumerable<PriorityAction> PriorityActions => Checklist.Where(c => !c.Done).Take(3).Select(c => new PriorityAction(c.Label, c.Detail, ActionIcon(c.Label), ActionTab(c.Label))).DefaultIfEmpty(new("Review profile", "All critical profile checks are complete", "bi-check2-circle", "overview"));
 
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(
-            new("Home",          "/"),
-            new("Agency Setup",  "/admin/agency/profile"),
-            new("Agency Profile", "/admin/agency/profile"));
-
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _currentUserId = context.UserId;
+        _editContext = new(_form);
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Agency Setup", "/tenant/agency/profile"), new("Agency Profile", "/tenant/agency/profile"));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
         _loading = true;
-        StateHasChanged();
+        _loadError = null;
         try
         {
-            _loadError = null;
-            var dto = await Api.GetAgencyProfileAsync(_tenantId);
-            if (dto is not null)
-            {
-                _profile = new AgencyProfileDto
-                {
-                    LegalName       = dto.AgencyName,
-                    DbaName         = dto.DbaName,
-                    Npn             = dto.Npn,
-                    Fein            = dto.Fein,
-                    EntityType      = dto.EntityType,
-                    DomicileState   = dto.DomicileState,
-                    Address1        = dto.AddressLine1,
-                    Address2        = dto.AddressLine2,
-                    City            = dto.City,
-                    State           = dto.StateProvince,
-                    Zip             = dto.PostalCode,
-                    Phone           = dto.Phone,
-                    Website         = dto.Website,
-                    EoCarrier       = dto.EoCarrier,
-                    EoPolicyNumber  = dto.EoPolicyNumber,
-                    EoCoverageLimit = dto.EoCoverageLimit,
-                    EoExpiryDate    = dto.EoExpiryDate,
-                };
-            }
-            else
-            {
-                _profile = null;
-            }
+            var profileTask = Api.GetAgencyProfileAsync(_tenantId);
+            var branchesTask = Api.SearchBranchesAsync(_tenantId, null, pageSize: 1);
+            var carriersTask = Api.SearchCarriersAsync(_tenantId, null, pageSize: 1);
+            var staffTask = Api.GetStaffAsync(_tenantId);
+            await Task.WhenAll(profileTask, branchesTask, carriersTask, staffTask);
 
-            var branches = await Api.SearchBranchesAsync(_tenantId, null, pageSize: 1);
-            _branchCount = branches?.TotalCount ?? 0;
-
-            var carriers = await Api.SearchCarriersAsync(_tenantId, null, pageSize: 1);
-            _carrierCount = carriers?.TotalCount ?? 0;
-
-            var staff = await Api.GetStaffAsync(_tenantId);
-            _staffCount = staff?.Count ?? 0;
+            _profile = await profileTask;
+            _branchCount = (await branchesTask)?.TotalCount ?? 0;
+            _carrierCount = (await carriersTask)?.TotalCount ?? 0;
+            _staffCount = (await staffTask)?.Count ?? 0;
         }
         catch (Exception ex)
         {
             _loadError = $"Load failed: {ex.Message}";
+            ShowToast(_loadError, true);
         }
         finally
         {
@@ -305,122 +390,144 @@
         }
     }
 
-    private void OpenEditDrawer()
+    private void OpenEditModal()
     {
-        _editModel = _profile is not null
-            ? new AgencyProfileDto
-            {
-                LegalName       = _profile.LegalName,
-                DbaName         = _profile.DbaName,
-                Npn             = _profile.Npn,
-                Fein            = _profile.Fein,
-                EntityType      = _profile.EntityType,
-                DomicileState   = _profile.DomicileState,
-                Address1        = _profile.Address1,
-                Address2        = _profile.Address2,
-                City            = _profile.City,
-                State           = _profile.State,
-                Zip             = _profile.Zip,
-                Phone           = _profile.Phone,
-                Website         = _profile.Website,
-                EoCarrier       = _profile.EoCarrier,
-                EoPolicyNumber  = _profile.EoPolicyNumber,
-                EoCoverageLimit = _profile.EoCoverageLimit,
-                EoExpiryDate    = _profile.EoExpiryDate,
-            }
-            : new();
-        _showEditDrawer = true;
+        _form = AgencyProfileForm.FromDto(_profile);
+        _editContext = new(_form);
+        _formError = null;
+        _showEditModal = true;
     }
 
-    private void CloseEditDrawer() => _showEditDrawer = false;
+    private void CloseEditModal()
+    {
+        _showEditModal = false;
+        _formError = null;
+    }
 
     private async Task SaveProfileAsync()
     {
+        _saving = true;
+        _formError = null;
         try
         {
-            await Api.UpdateAgencyProfileAsync(_tenantId, new(
-                AgencyName:     _editModel.LegalName,
-                DbaName:        _editModel.DbaName,
-                Npn:            _editModel.Npn,
-                Fein:           _editModel.Fein,
-                EntityType:     _editModel.EntityType,
-                LicenseNumber:  null,
-                DomicileState:  _editModel.DomicileState,
-                Phone:          _editModel.Phone,
-                Email:          null,
-                Website:        _editModel.Website,
-                AddressLine1:   _editModel.Address1,
-                AddressLine2:   _editModel.Address2,
-                City:           _editModel.City,
-                StateProvince:  _editModel.State,
-                PostalCode:     _editModel.Zip,
-                CountryCode:    null,
-                EoCarrier:      _editModel.EoCarrier,
-                EoPolicyNumber: _editModel.EoPolicyNumber,
-                EoCoverageLimit: _editModel.EoCoverageLimit,
-                EoExpiryDate:   _editModel.EoExpiryDate,
-                Locale:         "en-US",
-                CurrencyCode:   "USD",
-                TimeZoneId:     "UTC"));
-            _profile = _editModel;
-            _showEditDrawer = false;
+            await Api.UpdateAgencyProfileAsync(_tenantId, new Ams.Application.Features.Agency.UpdateAgencyProfileRequest(
+                _form.AgencyName,
+                _form.DbaName,
+                _form.Npn,
+                _form.Fein,
+                _form.EntityType,
+                _form.LicenseNumber,
+                _form.DomicileState,
+                _form.Phone,
+                _form.Email,
+                _form.Website,
+                _form.AddressLine1,
+                _form.AddressLine2,
+                _form.City,
+                _form.StateProvince,
+                _form.PostalCode,
+                _form.CountryCode,
+                _form.EoCarrier,
+                _form.EoPolicyNumber,
+                _form.EoCoverageLimit,
+                _form.EoExpiryDate,
+                _form.Locale,
+                _form.CurrencyCode,
+                _form.TimeZoneId));
+            _showEditModal = false;
+            ShowToast("Agency profile saved.");
             await LoadAsync();
-            await ShowToastAsync("Agency profile saved.", "e-toast-success");
         }
         catch (Exception ex)
         {
-            await ShowToastAsync($"Failed to save agency profile: {ex.Message}", "e-toast-danger");
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast($"Save failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
         }
     }
 
-    private void SetFilter(string filter) => _activeFilter = _activeFilter == filter && filter != "Overview" ? "Overview" : filter;
-
-    private bool ShowSection(string section) => _activeFilter == "Overview" || _activeFilter == section;
-
-    private string KpiClass(string filter) => _activeFilter == filter ? "as-kpi-card--active" : string.Empty;
-
-    private string EoIconClass => _profile?.EoExpiryDate is DateTime expiry && expiry < DateTime.Today.AddDays(45)
-        ? "as-kpi-icon--warning"
-        : "as-kpi-icon--success";
-
-    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    private Task CopyProfileSummaryAsync()
     {
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+        if (_profile is null) return Task.CompletedTask;
+        var summary = $"{_profile.AgencyName} | {_profile.City}, {_profile.StateProvince} | {ComplianceSummary} | Branches: {_branchCount} | Staff: {_staffCount} | Carriers: {_carrierCount}";
+        ShowToast($"Profile summary ready: {summary}");
+        return Task.CompletedTask;
     }
 
-    // ── Inner models ──────────────────────────────────────────────────────────────
-    private sealed record LabelValue(string Value, string Label);
+    private void SetTab(string key) => _activeTab = key;
+    private bool IsActiveTab(string key) => _activeTab == key;
+    private bool ShowTab(string key) => _activeTab == key;
+    private void ShowToast(string message, bool danger = false) { _toastMessage = message; _toastClass = danger ? "ap-toast--danger" : "ap-toast--success"; }
+    private void ClearToast() => _toastMessage = null;
 
-    private sealed class AgencyProfileDto
-    {
-        public string  LegalName       { get; set; } = string.Empty;
-        public string? DbaName         { get; set; }
-        public string  Npn             { get; set; } = string.Empty;
-        public string  Fein            { get; set; } = string.Empty;
-        public string  EntityType      { get; set; } = string.Empty;
-        public string  DomicileState   { get; set; } = string.Empty;
-        public string  Address1        { get; set; } = string.Empty;
-        public string? Address2        { get; set; }
-        public string  City            { get; set; } = string.Empty;
-        public string  State           { get; set; } = string.Empty;
-        public string  Zip             { get; set; } = string.Empty;
-        public string  Phone           { get; set; } = string.Empty;
-        public string? Website         { get; set; }
-        public string? EoCarrier       { get; set; }
-        public string? EoPolicyNumber  { get; set; }
-        public decimal? EoCoverageLimit { get; set; }
-        public DateTime? EoExpiryDate  { get; set; }
-    }
+    private static string DisplayValue(string? value, string fallback = "—") => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private static string ActionIcon(string label) => label.Contains("E&O", StringComparison.OrdinalIgnoreCase) ? "bi-shield-exclamation" : label.Contains("contact", StringComparison.OrdinalIgnoreCase) ? "bi-telephone" : label.Contains("Headquarters", StringComparison.OrdinalIgnoreCase) ? "bi-geo-alt" : "bi-pencil-square";
+    private static string ActionTab(string label) => label.Contains("E&O", StringComparison.OrdinalIgnoreCase) ? "compliance" : label.Contains("contact", StringComparison.OrdinalIgnoreCase) || label.Contains("Headquarters", StringComparison.OrdinalIgnoreCase) ? "contact" : label.Contains("footprint", StringComparison.OrdinalIgnoreCase) ? "operations" : "legal";
 
-    async Task ResolveCurrentUserContextAsync()
+    private RenderFragment Field(string label, string? value, bool mono = false) => @<div class="ap-field">
+        <span class="ap-field-label">@label</span>
+        <span class="ap-field-value @(mono ? "ap-mono" : null)">@DisplayValue(value)</span>
+    </div>;
+
+    private sealed record TabItem(string Key, string Label, string Icon);
+    private sealed record KpiItem(string Key, string Label, string Icon, string Value, string Detail, string Tooltip, string Tone);
+    private sealed record ChecklistItem(string Label, bool Done, string Detail);
+    private sealed record PriorityAction(string Title, string Detail, string Icon, string Tab);
+
+    private sealed class AgencyProfileForm
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        [Required, StringLength(200)] public string AgencyName { get; set; } = string.Empty;
+        [StringLength(200)] public string? DbaName { get; set; }
+        [StringLength(100)] public string? Npn { get; set; }
+        [StringLength(100)] public string? Fein { get; set; }
+        [StringLength(50)] public string? EntityType { get; set; }
+        [StringLength(100)] public string? LicenseNumber { get; set; }
+        [StringLength(50)] public string? DomicileState { get; set; }
+        [StringLength(50)] public string? Phone { get; set; }
+        [EmailAddress, StringLength(254)] public string? Email { get; set; }
+        [StringLength(255)] public string? Website { get; set; }
+        [StringLength(255)] public string? AddressLine1 { get; set; }
+        [StringLength(255)] public string? AddressLine2 { get; set; }
+        [StringLength(100)] public string? City { get; set; }
+        [StringLength(50)] public string? StateProvince { get; set; }
+        [StringLength(30)] public string? PostalCode { get; set; }
+        [StringLength(100)] public string? CountryCode { get; set; } = "United States";
+        [StringLength(150)] public string? EoCarrier { get; set; }
+        [StringLength(100)] public string? EoPolicyNumber { get; set; }
+        [Range(0, 999999999)] public decimal? EoCoverageLimit { get; set; }
+        public DateTime? EoExpiryDate { get; set; }
+        [Required, StringLength(20)] public string Locale { get; set; } = "en-US";
+        [Required, StringLength(10)] public string CurrencyCode { get; set; } = "USD";
+        [Required, StringLength(100)] public string TimeZoneId { get; set; } = "UTC";
+
+        public static AgencyProfileForm FromDto(Ams.Application.Common.Dtos.AgencyProfileDto? dto) => new()
+        {
+            AgencyName = dto?.AgencyName ?? string.Empty,
+            DbaName = dto?.DbaName,
+            Npn = dto?.Npn,
+            Fein = dto?.Fein,
+            EntityType = dto?.EntityType,
+            LicenseNumber = dto?.LicenseNumber,
+            DomicileState = dto?.DomicileState,
+            Phone = dto?.Phone,
+            Email = dto?.Email,
+            Website = dto?.Website,
+            AddressLine1 = dto?.AddressLine1,
+            AddressLine2 = dto?.AddressLine2,
+            City = dto?.City,
+            StateProvince = dto?.StateProvince,
+            PostalCode = dto?.PostalCode,
+            CountryCode = dto?.CountryCode ?? "United States",
+            EoCarrier = dto?.EoCarrier,
+            EoPolicyNumber = dto?.EoPolicyNumber,
+            EoCoverageLimit = dto?.EoCoverageLimit,
+            EoExpiryDate = dto?.EoExpiryDate,
+            Locale = dto?.Locale ?? "en-US",
+            CurrencyCode = dto?.CurrencyCode ?? "USD",
+            TimeZoneId = dto?.TimeZoneId ?? "UTC"
+        };
     }
 }

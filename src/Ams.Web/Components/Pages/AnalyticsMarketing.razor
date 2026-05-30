@@ -1,9 +1,942 @@
 @page "/analytics/marketing"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using Microsoft.AspNetCore.Components.Forms
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject IJSRuntime Js
 
-<PageTitle>Marketing Reports — AMS</PageTitle>
+<PageTitle>Marketing Analytics — AMS</PageTitle>
 
-<SharedReportExplorer Title="Marketing Reports"
-                      Subtitle="Campaign ROI, lead source, cross-sell, referral, and attribution reports from DB data"
-                      Icon="bi-megaphone-fill"
-                      Module="Marketing" />
+<AppPageHeader Title="Marketing Analytics"
+               Subtitle="Enterprise marketing command center for ROI, attribution, lead conversion, campaigns, landing pages, cross-sell, win-back, referrals, reputation, reports, and scheduled delivery."
+               Icon="bi-megaphone-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_busy"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="SyncMarketingDataAsync" disabled="@_busy"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Sync Marketing Data</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="OpenScheduleForSelected" disabled="@(_selectedReport is null || _busy)"><i class="bi bi-calendar-plus" aria-hidden="true"></i> Schedule Report</button>
+        <button class="um-btn um-btn-primary" type="button" @onclick="ExportMarketingPackAsync" disabled="@(!_marketingReports.Any() || _busy)"><i class="bi bi-download" aria-hidden="true"></i> Export Marketing Pack</button>
+    </Actions>
+</AppPageHeader>
+
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
+{
+    <div class="am-toast @_toastClass" role="status">
+        <i class="bi @(_toastClass == "am-toast--danger" ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="am-toast-close" @onclick="ClearToast" aria-label="Dismiss message"><i class="bi bi-x-lg"></i></button>
+    </div>
+}
+
+<div class="am-page">
+    <section class="am-hero">
+        <div class="am-hero-main">
+            <div class="am-eyebrow"><i class="bi bi-broadcast-pin" aria-hidden="true"></i> Marketing growth cockpit</div>
+            <h2>@FormatCurrency(TotalRevenue) attributed revenue with @MarketingReadinessScore% execution readiness</h2>
+            <p>Rank marketing work by business impact: ROI, attribution, lead conversion, campaign engagement, landing page conversion, cross-sell premium, win-back saves, referrals, reviews, and report delivery.</p>
+            <div class="am-hero-meta">
+                <span><i class="bi bi-cash-stack"></i> @FormatRoas(BlendedRoas) blended ROAS</span>
+                <span><i class="bi bi-people"></i> @TotalReach.ToString("N0") reached contacts</span>
+                <span><i class="bi bi-bullseye"></i> @TotalConversions.ToString("N0") conversions</span>
+                <span><i class="bi bi-file-earmark-bar-graph"></i> @_marketingReports.Count reports</span>
+            </div>
+        </div>
+        <div class="am-hero-panel">
+            <div class="am-score-card">
+                <span>Marketing readiness score</span>
+                <strong>@MarketingReadinessScore%</strong>
+                <div class="am-score-track"><div style="@($"width:{MarketingReadinessScore}%")"></div></div>
+                <small>@MarketingReadinessSummary</small>
+            </div>
+            <div class="am-priority-list">
+                @foreach (var item in PriorityItems)
+                {
+                    <button type="button" class="am-priority-item" @onclick="() => SelectMarketingItem(item)">
+                        <span class="am-risk am-risk--@PriorityCss(item.Priority)">@ItemScore(item)</span>
+                        <div><strong>@item.Title</strong><small>@item.NextAction</small></div>
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                    </button>
+                }
+            </div>
+        </div>
+    </section>
+
+    <section class="am-kpi-strip" aria-label="Marketing KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="am-kpi-card @(IsActiveKpi(kpi.Key) ? "am-kpi-card--active" : null)" title="@kpi.Tooltip" @onclick="() => SetKpi(kpi.Key)">
+                <span class="am-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="am-kpi-label">@kpi.Label</span>
+                <strong>@kpi.Value</strong>
+                <small>@kpi.Detail</small>
+            </button>
+        }
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger am-load-error" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
+        </div>
+    }
+
+    <section class="am-command-bar">
+        <div class="am-search-wrap">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="am-search" placeholder="Search marketing analytics, campaigns, channels, segments, referrals, reviews, landing pages, reports, or owners…" @bind="_search" @bind:event="oninput" />
+        </div>
+        <select class="am-select" @bind="_segmentFilter">
+            <option value="">All segments</option>
+            @foreach (var segment in Segments)
+            {
+                <option value="@segment">@segment</option>
+            }
+        </select>
+        <select class="am-select" @bind="_priorityFilter">
+            <option value="">All priorities</option>
+            <option value="Critical">Critical</option>
+            <option value="High">High</option>
+            <option value="Normal">Normal</option>
+        </select>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="RunMarketingReportsAsync" disabled="@(!_marketingReports.Any() || _busy)"><i class="bi bi-play-fill" aria-hidden="true"></i> Run Marketing Reports</button>
+    </section>
+
+    <div class="am-tabs" role="tablist" aria-label="Marketing analytics views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" role="tab" class="am-tab @(_activeTab == tab.Key ? "am-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </div>
+
+    @if (_loading)
+    {
+        <div class="am-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Loading marketing analytics...</div>
+    }
+    else
+    {
+        <section class="am-grid">
+            <article class="am-panel am-panel--main">
+                <div class="am-panel-header"><i class="bi @ActiveIcon" aria-hidden="true"></i><div><strong>@ActiveListTitle</strong><span>@FilteredItemCount.ToString("N0") marketing priorities ranked by revenue, ROAS, engagement, conversion, urgency, and workflow status.</span></div></div>
+                @if (!FilteredItems.Any())
+                {
+                    <div class="am-empty"><i class="bi bi-megaphone" aria-hidden="true"></i><strong>No marketing records match this view</strong><span>Adjust filters or sync seeded marketing data.</span></div>
+                }
+                else
+                {
+                    <div class="am-item-list">
+                        @foreach (var item in FilteredItems)
+                        {
+                            <button type="button" class="am-item-row @(_selectedItem?.Title == item.Title ? "am-item-row--active" : null)" @onclick="() => SelectMarketingItem(item)">
+                                <span class="am-module-icon am-module-icon--@CategoryCss(item.Category)"><i class="bi @CategoryIcon(item.Category)" aria-hidden="true"></i></span>
+                                <div class="am-item-main">
+                                    <div class="am-item-title"><strong>@item.Title</strong><span class="am-badge am-badge--@CategoryCss(item.Category)">@item.Category</span><span class="am-badge am-badge--type">@item.Workflow</span></div>
+                                    <p>@item.Insight</p>
+                                    <div class="am-item-meta"><span>@item.Owner</span><span>@item.Segment</span><span>@item.Channel</span><span>@FormatCurrency(item.Revenue)</span><span>@FormatRoas(item.Roas) ROAS</span><span>@item.ConversionPct.ToString("N1")% conversion</span><span>due @FormatDate(item.DueDateUtc)</span></div>
+                                </div>
+                                <span class="am-row-score">@ItemScore(item)</span>
+                            </button>
+                        }
+                    </div>
+                }
+            </article>
+
+            <aside class="am-side">
+                @if (_selectedItem is null)
+                {
+                    <div class="am-panel"><div class="am-empty am-empty--side"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a marketing priority</strong><span>Choose an ROI, lead, cross-sell, retention, or reputation priority to inspect workflow and actions.</span></div></div>
+                }
+                else
+                {
+                    <article class="am-panel">
+                        <div class="am-panel-header"><i class="bi @CategoryIcon(_selectedItem.Category)" aria-hidden="true"></i><div><strong>Marketing command</strong><span>@_selectedItem.Priority · @_selectedItem.Status</span></div></div>
+                        <div class="am-detail">
+                            <div class="am-detail-head">
+                                <span class="am-module-icon am-module-icon--@CategoryCss(_selectedItem.Category)"><i class="bi @CategoryIcon(_selectedItem.Category)" aria-hidden="true"></i></span>
+                                <div><strong>@_selectedItem.Title</strong><span>@_selectedItem.Insight</span></div>
+                            </div>
+                            <dl>
+                                <dt>Revenue</dt><dd>@FormatCurrency(_selectedItem.Revenue)</dd>
+                                <dt>Spend</dt><dd>@FormatCurrency(_selectedItem.Spend)</dd>
+                                <dt>ROAS</dt><dd>@FormatRoas(_selectedItem.Roas)</dd>
+                                <dt>Engagement</dt><dd>@_selectedItem.EngagementPct.ToString("N1")%</dd>
+                                <dt>Conversion</dt><dd>@_selectedItem.ConversionPct.ToString("N1")%</dd>
+                                <dt>Trend</dt><dd class="@TrendCss(_selectedItem.TrendPct)">@FormatSigned(_selectedItem.TrendPct)%</dd>
+                                <dt>Next action</dt><dd>@_selectedItem.NextAction</dd>
+                            </dl>
+                            <div class="am-detail-actions">
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="FocusMarketingReport" disabled="@(_selectedReport is null)"><i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i> Focus Report</button>
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="RescoreSelectedCrossSellAsync" disabled="@(_selectedCrossSell is null || _busy)"><i class="bi bi-stars" aria-hidden="true"></i> Rescore Cross-sell</button>
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="SendSelectedEmailBlastAsync" disabled="@(_selectedEmailBlast is null || _busy)"><i class="bi bi-send" aria-hidden="true"></i> Send Blast</button>
+                                <button type="button" class="um-btn um-btn-primary" @onclick="RunSelectedReportAsync" disabled="@(_selectedReport is null || _busy)"><i class="bi bi-play-fill" aria-hidden="true"></i> Run</button>
+                            </div>
+                        </div>
+                    </article>
+                }
+
+                <article class="am-panel">
+                    <div class="am-panel-header"><i class="bi bi-lightning-charge" aria-hidden="true"></i><div><strong>Marketing actions</strong><span>Existing campaign, landing page, cross-sell, and reputation workflow.</span></div></div>
+                    <div class="am-action-list">
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="RescoreSelectedCrossSellAsync" disabled="@(_selectedCrossSell is null || _busy)"><i class="bi bi-stars" aria-hidden="true"></i> Rescore Cross-sell</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="PublishSelectedLandingPageAsync" disabled="@(_selectedLandingPage is null || _busy)"><i class="bi bi-globe2" aria-hidden="true"></i> Publish Landing Page</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="ReplySelectedReviewAsync" disabled="@(_selectedReview is null || _busy)"><i class="bi bi-chat-quote" aria-hidden="true"></i> Reply Review</button>
+                        <button type="button" class="um-btn um-btn-primary" @onclick="SyncMarketingDataAsync" disabled="@_busy"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Sync Seeds</button>
+                    </div>
+                </article>
+            </aside>
+        </section>
+
+        <section class="am-lower-grid">
+            <article class="am-panel">
+                <div class="am-panel-header"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i><div><strong>Channel performance</strong><span>Existing marketing analytics by revenue and reach.</span></div></div>
+                <div class="am-channel-list">
+                    @foreach (var channel in ChannelsByImportance.Take(6))
+                    {
+                        <div class="am-channel-row">
+                            <div><strong>@channel.Name</strong><span>@channel.Reached.ToString("N0") reached · @FormatCurrency(channel.Revenue)</span></div>
+                            <div class="am-bar"><span style="@($"width:{Math.Clamp(channel.Percent, 2, 100)}%")"></span></div>
+                            <strong>@channel.Percent%</strong>
+                        </div>
+                    }
+                    @if (!_analytics.Channels.Any())
+                    {
+                        <div class="am-empty am-empty--compact"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No channel summaries loaded</strong><span>Sync marketing analytics to seed channel performance.</span></div>
+                    }
+                </div>
+            </article>
+
+            <article class="am-panel">
+                <div class="am-panel-header"><i class="bi bi-envelope-paper" aria-hidden="true"></i><div><strong>Email campaigns</strong><span>Engagement and delivery quality by active blast.</span></div></div>
+                <div class="am-case-list">
+                    @foreach (var blast in EmailBlastsByImportance.Take(6))
+                    {
+                        <button type="button" class="am-case-row @(_selectedEmailBlast?.EmailBlastId == blast.EmailBlastId ? "am-case-row--active" : null)" @onclick="() => SelectEmailBlast(blast)">
+                            <div><strong>@blast.Name</strong><span>@blast.Status · @blast.AudienceSegment · @blast.RecipientCount.ToString("N0") recipients</span></div>
+                            <div class="am-case-metrics"><strong>@EmailEngagementPct(blast).ToString("N1")%</strong><span>engaged</span></div>
+                        </button>
+                    }
+                </div>
+            </article>
+
+            <article class="am-panel">
+                <div class="am-panel-header"><i class="bi bi-window-sidebar" aria-hidden="true"></i><div><strong>Landing pages</strong><span>Conversion health and publish workflow.</span></div></div>
+                <div class="am-case-list">
+                    @foreach (var lp in LandingPagesByImportance.Take(6))
+                    {
+                        <button type="button" class="am-case-row @(_selectedLandingPage?.LandingPageId == lp.LandingPageId ? "am-case-row--active" : null)" @onclick="() => SelectLandingPage(lp)">
+                            <div><strong>@lp.Name</strong><span>@lp.CampaignName · @lp.Status · @lp.ViewCount.ToString("N0") views</span></div>
+                            <div class="am-case-metrics"><strong>@lp.ConversionRate.ToString("N1")%</strong><span>conversion</span></div>
+                        </button>
+                    }
+                </div>
+            </article>
+
+            <article class="am-panel">
+                <div class="am-panel-header"><i class="bi bi-diagram-3" aria-hidden="true"></i><div><strong>Segments</strong><span>Dynamic audiences ranked by size and freshness.</span></div></div>
+                <div class="am-segment-list">
+                    @foreach (var segment in SegmentsByImportance.Take(6))
+                    {
+                        <div class="am-segment-row">
+                            <span class="am-module-icon am-module-icon--green"><i class="bi @(string.IsNullOrWhiteSpace(segment.Icon) ? "bi-people" : segment.Icon)" aria-hidden="true"></i></span>
+                            <div><strong>@segment.Name</strong><span>@segment.Description</span></div>
+                            <strong>@segment.ContactCount.ToString("N0")</strong>
+                        </div>
+                    }
+                </div>
+            </article>
+        </section>
+
+        <section class="am-lower-grid am-lower-grid--wide">
+            <article class="am-panel">
+                <div class="am-panel-header"><i class="bi bi-person-plus" aria-hidden="true"></i><div><strong>Cross-sell and win-back queue</strong><span>Premium expansion and save opportunities.</span></div></div>
+                <div class="am-case-list">
+                    @foreach (var item in CrossSellByImportance.Take(5))
+                    {
+                        <button type="button" class="am-case-row @(_selectedCrossSell?.OpportunityId == item.OpportunityId ? "am-case-row--active" : null)" @onclick="() => SelectCrossSell(item)">
+                            <div><strong>@item.AccountName</strong><span>@item.OpportunityType · @item.Producer · @item.TriggerSignal</span></div>
+                            <div class="am-case-metrics"><strong>@FormatCurrency(item.EstimatedPremium)</strong><span>score @item.Score</span></div>
+                        </button>
+                    }
+                    @foreach (var item in WinBackByImportance.Take(3))
+                    {
+                        <div class="am-case-row am-case-row--static">
+                            <div><strong>@item.AccountName</strong><span>@item.PolicyType · @item.DaysLapsed days lapsed · @item.LapseReason</span></div>
+                            <div class="am-case-metrics"><strong>@FormatCurrency(item.LastPremium)</strong><span>@item.StatusCode</span></div>
+                        </div>
+                    }
+                </div>
+            </article>
+
+            <article class="am-panel">
+                <div class="am-panel-header"><i class="bi bi-star-half" aria-hidden="true"></i><div><strong>Referral and reputation loop</strong><span>Warm referrals, reviews, and NPS follow-up.</span></div></div>
+                <div class="am-case-list">
+                    @foreach (var referral in ReferralsByImportance.Take(4))
+                    {
+                        <div class="am-case-row am-case-row--static">
+                            <div><strong>@referral.ProspectName</strong><span>@referral.ReferralType from @referral.ReferredBy · @referral.Producer</span></div>
+                            <div class="am-case-metrics"><strong>@FormatCurrency(referral.EstimatedPremium)</strong><span>@referral.StatusCode</span></div>
+                        </div>
+                    }
+                    @foreach (var review in ReviewsByImportance.Take(4))
+                    {
+                        <button type="button" class="am-case-row @(_selectedReview?.ReviewId == review.ReviewId ? "am-case-row--active" : null)" @onclick="() => SelectReview(review)">
+                            <div><strong>@review.ClientName</strong><span>@review.Platform · @review.Content</span></div>
+                            <div class="am-case-metrics"><strong>@review.Rating/5</strong><span>@(string.IsNullOrWhiteSpace(review.Response) ? "reply" : "replied")</span></div>
+                        </button>
+                    }
+                </div>
+            </article>
+
+            <article class="am-panel am-panel--reports">
+                <div class="am-panel-header"><i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i><div><strong>Marketing report workflow</strong><span>Run, export, and schedule Marketing module reports.</span></div></div>
+                <div class="am-report-list">
+                    @foreach (var report in MarketingReportsByImportance.Take(7))
+                    {
+                        <button type="button" class="am-report-row @(_selectedReport?.ReportDefinitionId == report.ReportDefinitionId ? "am-report-row--active" : null)" @onclick="() => SelectReport(report)">
+                            <div><strong>@report.ReportName</strong><span>@report.ReportTypeCode · @report.OutputFormats · @LastRunLabel(report.ReportDefinitionId)</span></div>
+                            <div class="am-report-actions">
+                                <span class="am-badge @(IsScheduled(report.ReportDefinitionId) ? "am-badge--green" : "am-badge--slate")">@(IsScheduled(report.ReportDefinitionId) ? "Scheduled" : "On demand")</span>
+                                <span class="am-row-score">@ReportScore(report)</span>
+                            </div>
+                        </button>
+                    }
+                    @if (!_marketingReports.Any())
+                    {
+                        <div class="am-empty am-empty--compact"><i class="bi bi-file-earmark" aria-hidden="true"></i><strong>No Marketing reports found</strong><span>Report definitions for the Marketing module will appear here when configured.</span></div>
+                    }
+                </div>
+            </article>
+        </section>
+    }
+</div>
+
+@if (_showSchedule)
+{
+    <div class="am-modal-backdrop" role="presentation">
+        <div class="am-modal" role="dialog" aria-modal="true" aria-labelledby="marketingScheduleTitle">
+            <EditForm EditContext="_scheduleEditContext" OnValidSubmit="ScheduleAsync">
+                <DataAnnotationsValidator />
+                <div class="am-modal-header">
+                    <i class="bi bi-calendar-plus" aria-hidden="true"></i>
+                    <span id="marketingScheduleTitle">Schedule marketing report</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseSchedule"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="am-modal-body">
+                    @if (!string.IsNullOrWhiteSpace(_formError))
+                    {
+                        <div class="alert alert-danger am-load-error" role="alert"><i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_formError</div>
+                    }
+                    <div class="am-form-grid">
+                        <label>Frequency
+                            <select class="am-input" @bind="_scheduleForm.FrequencyCode">
+                                @foreach (var option in _frequencyOptions)
+                                {
+                                    <option value="@option">@option</option>
+                                }
+                            </select>
+                            <ValidationMessage For="() => _scheduleForm.FrequencyCode" class="text-danger" />
+                        </label>
+                        <label>Format
+                            <select class="am-input" @bind="_scheduleForm.OutputFormat">
+                                @foreach (var option in _formatOptions)
+                                {
+                                    <option value="@option">@option</option>
+                                }
+                            </select>
+                            <ValidationMessage For="() => _scheduleForm.OutputFormat" class="text-danger" />
+                        </label>
+                        <label class="am-form-wide">Delivery email
+                            <input class="am-input" @bind="_scheduleForm.DeliveryEmail" />
+                            <ValidationMessage For="() => _scheduleForm.DeliveryEmail" class="text-danger" />
+                        </label>
+                    </div>
+                </div>
+                <div class="am-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseSchedule">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check2-circle" aria-hidden="true"></i> Schedule</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@code {
+    private readonly TabItem[] _tabs =
+    [
+        new("all", "Command", "bi-speedometer2"),
+        new("roi", "ROI", "bi-cash-stack"),
+        new("leads", "Leads", "bi-funnel"),
+        new("campaigns", "Campaigns", "bi-envelope-paper"),
+        new("growth", "Growth Plays", "bi-lightning-charge"),
+        new("reputation", "Reputation", "bi-star-half"),
+        new("reports", "Reports", "bi-file-earmark-bar-graph")
+    ];
+
+    private readonly string[] _frequencyOptions = ["Daily", "Weekly", "Monthly", "Quarterly"];
+    private readonly string[] _formatOptions = ["PDF", "Excel", "CSV"];
+
+    private Guid _tenantId;
+    private Guid? _currentUserId;
+    private bool _loading;
+    private bool _saving;
+    private bool _showSchedule;
+    private string _search = string.Empty;
+    private string _activeKpi = "all";
+    private string _activeTab = "all";
+    private string _segmentFilter = string.Empty;
+    private string _priorityFilter = string.Empty;
+    private string? _loadError;
+    private string? _formError;
+    private string? _toastMessage;
+    private string _toastClass = "am-toast--success";
+    private MarketingAnalyticsResult _analytics = new();
+    private MarketingReviewsResult _reviews = new();
+    private List<MarketingAnalyticsRecord> _marketingItems = [];
+    private List<MarketingEmailBlastDto> _emailBlasts = [];
+    private List<MarketingLandingPageDto> _landingPages = [];
+    private List<MarketingSegmentDto> _segments = [];
+    private List<MarketingCrossSellOpportunityDto> _crossSell = [];
+    private List<MarketingWinBackDto> _winBack = [];
+    private List<MarketingReferralDto> _referrals = [];
+    private List<ReportDefinitionDto> _marketingReports = [];
+    private List<ReportExecutionDto> _executions = [];
+    private List<ReportScheduleDto> _schedules = [];
+    private MarketingAnalyticsRecord? _selectedItem;
+    private MarketingEmailBlastDto? _selectedEmailBlast;
+    private MarketingLandingPageDto? _selectedLandingPage;
+    private MarketingCrossSellOpportunityDto? _selectedCrossSell;
+    private MarketingReviewDto? _selectedReview;
+    private ReportDefinitionDto? _selectedReport;
+    private ScheduleForm _scheduleForm = new();
+    private EditContext _scheduleEditContext = default!;
+    private bool _busy => _loading || _saving;
+
+    private decimal TotalRevenue => _analytics.Items.Sum(i => i.Revenue) + _marketingItems.Sum(i => i.Revenue);
+    private decimal TotalSpend => _analytics.Items.Sum(i => i.Spend) + _marketingItems.Sum(i => i.Spend);
+    private decimal BlendedRoas => TotalSpend > 0 ? TotalRevenue / TotalSpend : 0;
+    private int TotalReach => _analytics.Items.Sum(i => i.Reached) + _emailBlasts.Sum(e => e.RecipientCount);
+    private int TotalConversions => _analytics.Items.Sum(i => i.Conversions) + _landingPages.Sum(p => p.ConversionCount);
+    private int CriticalCount => _marketingItems.Count(i => i.Priority == "Critical");
+    private int ActiveReportCount => _marketingReports.Count;
+    private int ScheduledReportCount => _marketingReports.Count(r => IsScheduled(r.ReportDefinitionId));
+    private int MarketingReadinessScore => Math.Clamp(60 + Math.Min(12, _marketingItems.Count * 2) + Math.Min(10, ScheduledReportCount * 4) + Math.Min(10, _analytics.Items.Count) + Math.Min(8, _emailBlasts.Count(e => e.Status.Contains("Sent", StringComparison.OrdinalIgnoreCase))), 0, 100);
+    private string MarketingReadinessSummary => MarketingReadinessScore >= 90 ? "Marketing execution is board ready" : MarketingReadinessScore >= 80 ? "Marketing workflow is healthy with optimization opportunities" : "Sync data, run reports, and schedule delivery to improve readiness";
+    private IEnumerable<string> Segments => _marketingItems.Select(i => i.Segment).Concat(_analytics.Items.Select(i => i.SegmentName)).Concat(_segments.Select(s => s.Name)).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().OrderBy(s => s);
+    private IEnumerable<MarketingAnalyticsRecord> PriorityItems => _marketingItems.OrderByDescending(ItemScore).ThenBy(i => i.DueDateUtc).Take(4);
+    private IEnumerable<MarketingAnalyticsMetricDto> MetricsByImportance => _analytics.Items.OrderByDescending(i => i.Roas).ThenByDescending(i => i.Revenue);
+    private IEnumerable<MarketingAnalyticsChannelSummaryDto> ChannelsByImportance => _analytics.Channels.OrderByDescending(c => c.Revenue).ThenByDescending(c => c.Percent);
+    private IEnumerable<MarketingEmailBlastDto> EmailBlastsByImportance => _emailBlasts.OrderByDescending(EmailEngagementPct).ThenByDescending(e => e.RecipientCount);
+    private IEnumerable<MarketingLandingPageDto> LandingPagesByImportance => _landingPages.OrderByDescending(p => p.ConversionRate).ThenByDescending(p => p.ViewCount);
+    private IEnumerable<MarketingSegmentDto> SegmentsByImportance => _segments.OrderByDescending(s => s.IsDynamic).ThenByDescending(s => s.ContactCount);
+    private IEnumerable<MarketingCrossSellOpportunityDto> CrossSellByImportance => _crossSell.OrderByDescending(c => c.Score).ThenByDescending(c => c.EstimatedPremium);
+    private IEnumerable<MarketingWinBackDto> WinBackByImportance => _winBack.OrderBy(w => w.DaysLapsed).ThenByDescending(w => w.LastPremium);
+    private IEnumerable<MarketingReferralDto> ReferralsByImportance => _referrals.OrderByDescending(r => r.EstimatedPremium).ThenByDescending(r => r.ReceivedDate);
+    private IEnumerable<MarketingReviewDto> ReviewsByImportance => _reviews.Reviews.OrderBy(r => string.IsNullOrWhiteSpace(r.Response) ? 0 : 1).ThenByDescending(r => r.Rating).ThenByDescending(r => r.ReviewDate);
+    private IEnumerable<ReportDefinitionDto> MarketingReportsByImportance => _marketingReports.OrderByDescending(ReportScore).ThenBy(r => r.ReportName);
+    private IEnumerable<MarketingAnalyticsRecord> FilteredItems => _marketingItems
+        .Where(MatchesSearch)
+        .Where(i => string.IsNullOrWhiteSpace(_segmentFilter) || i.Segment == _segmentFilter)
+        .Where(i => string.IsNullOrWhiteSpace(_priorityFilter) || i.Priority == _priorityFilter)
+        .Where(MatchesActiveView)
+        .OrderByDescending(ItemScore)
+        .ThenBy(i => i.DueDateUtc)
+        .ToList();
+    private int FilteredItemCount => FilteredItems.Count();
+
+    private IEnumerable<KpiItem> Kpis =>
+    [
+        new("all", "Revenue", "bi-cash-stack", FormatCurrency(TotalRevenue), $"{FormatRoas(BlendedRoas)} ROAS", "Show all marketing command records"),
+        new("roi", "ROI", "bi-graph-up-arrow", FormatRoas(BlendedRoas), FormatCurrency(TotalSpend) + " spend", "Filter ROI and attribution priorities"),
+        new("leads", "Leads", "bi-funnel", TotalConversions.ToString("N0"), $"{TotalReach:N0} reached", "Filter lead conversion priorities"),
+        new("campaigns", "Campaigns", "bi-envelope-paper", _emailBlasts.Count.ToString("N0"), $"{_landingPages.Count:N0} pages", "Filter campaign execution views"),
+        new("growth", "Growth", "bi-lightning-charge", (_crossSell.Count + _winBack.Count + _referrals.Count).ToString("N0"), "plays", "Filter cross-sell, win-back, and referral plays"),
+        new("reputation", "Reputation", "bi-star-half", _reviews.Reviews.Count.ToString("N0"), $"{_reviews.Requests.Count:N0} requests", "Filter review and referral reputation workflow"),
+        new("reports", "Reports", "bi-file-earmark-bar-graph", ActiveReportCount.ToString("N0"), $"{ScheduledReportCount:N0} scheduled", "Filter Marketing module reports")
+    ];
+
+    private string ActiveListTitle => _activeTab switch
+    {
+        "roi" => "ROI and attribution priorities",
+        "leads" => "Lead conversion priorities",
+        "campaigns" => "Campaign execution priorities",
+        "growth" => "Cross-sell, win-back, and referral growth plays",
+        "reputation" => "Review and reputation priorities",
+        "reports" => "Marketing reporting workflow",
+        _ => "Enterprise marketing command queue"
+    };
+
+    private string ActiveIcon => _activeTab switch
+    {
+        "roi" => "bi-graph-up-arrow",
+        "leads" => "bi-funnel",
+        "campaigns" => "bi-envelope-paper",
+        "growth" => "bi-lightning-charge",
+        "reputation" => "bi-star-half",
+        "reports" => "bi-file-earmark-bar-graph",
+        _ => "bi-speedometer2"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _currentUserId = context.UserId;
+        _scheduleEditContext = new(_scheduleForm);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var records = await Api.SearchDashboardRecordsAsync(_tenantId, "MarketingAnalytics", _search);
+            var analytics = await Api.SearchMarketingAnalyticsAsync(_tenantId, null, _search);
+            var emailBlasts = await Api.SearchMarketingEmailBlastsAsync(_tenantId, _search);
+            var landingPages = await Api.SearchMarketingLandingPagesAsync(_tenantId, _search);
+            var segments = await Api.SearchMarketingSegmentsAsync(_tenantId, _search);
+            var crossSell = await Api.SearchMarketingCrossSellAsync(_tenantId);
+            var winBack = await Api.SearchMarketingWinBackAsync(_tenantId);
+            var referrals = await Api.SearchMarketingReferralsAsync(_tenantId);
+            var reviews = await Api.SearchMarketingReviewsAsync(_tenantId);
+            var definitions = await Api.SearchReportDefinitionsAsync("Marketing");
+            var executions = await Api.SearchReportExecutionsAsync(_tenantId, null);
+            var schedules = await Api.SearchReportSchedulesAsync(_tenantId, "Marketing");
+
+            _marketingItems = records?.Items.Select(r => DeserializeMarketingRecord(r.Id, r.JsonData)).Where(r => r is not null).Cast<MarketingAnalyticsRecord>().ToList() ?? [];
+            _analytics = analytics ?? new();
+            _emailBlasts = emailBlasts?.Items.ToList() ?? [];
+            _landingPages = landingPages?.Items.ToList() ?? [];
+            _segments = segments?.Items.ToList() ?? [];
+            _crossSell = crossSell?.Items.ToList() ?? [];
+            _winBack = winBack?.Items.ToList() ?? [];
+            _referrals = referrals?.Items.ToList() ?? [];
+            _reviews = reviews ?? new();
+            _marketingReports = definitions?.Items.Where(r => r.ModuleCode == "Marketing").ToList() ?? [];
+            _executions = executions?.Items.Where(e => _marketingReports.Any(r => r.ReportDefinitionId == e.ReportDefinitionId)).ToList() ?? [];
+            _schedules = schedules?.Items.Where(s => _marketingReports.Any(r => r.ReportDefinitionId == s.ReportDefinitionId)).ToList() ?? [];
+            _selectedItem = _selectedItem is null ? FilteredItems.FirstOrDefault() : _marketingItems.FirstOrDefault(i => i.Title == _selectedItem.Title) ?? FilteredItems.FirstOrDefault();
+            _selectedEmailBlast = _selectedEmailBlast is null ? EmailBlastsByImportance.FirstOrDefault() : _emailBlasts.FirstOrDefault(e => e.EmailBlastId == _selectedEmailBlast.EmailBlastId) ?? EmailBlastsByImportance.FirstOrDefault();
+            _selectedLandingPage = _selectedLandingPage is null ? LandingPagesByImportance.FirstOrDefault() : _landingPages.FirstOrDefault(p => p.LandingPageId == _selectedLandingPage.LandingPageId) ?? LandingPagesByImportance.FirstOrDefault();
+            _selectedCrossSell = _selectedCrossSell is null ? CrossSellByImportance.FirstOrDefault() : _crossSell.FirstOrDefault(c => c.OpportunityId == _selectedCrossSell.OpportunityId) ?? CrossSellByImportance.FirstOrDefault();
+            _selectedReview = _selectedReview is null ? ReviewsByImportance.FirstOrDefault() : _reviews.Reviews.FirstOrDefault(r => r.ReviewId == _selectedReview.ReviewId) ?? ReviewsByImportance.FirstOrDefault();
+            _selectedReport = _selectedReport is null ? MarketingReportsByImportance.FirstOrDefault() : _marketingReports.FirstOrDefault(r => r.ReportDefinitionId == _selectedReport.ReportDefinitionId) ?? MarketingReportsByImportance.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load marketing analytics: {ex.Message}";
+            _marketingItems = [];
+            _analytics = new();
+            _emailBlasts = [];
+            _landingPages = [];
+            _segments = [];
+            _crossSell = [];
+            _winBack = [];
+            _referrals = [];
+            _reviews = new();
+            _marketingReports = [];
+            _executions = [];
+            _schedules = [];
+            ShowToast(_loadError, true);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task SyncMarketingDataAsync()
+    {
+        _saving = true;
+        try
+        {
+            await Api.EnsureMarketingAnalyticsSeedAsync(_tenantId);
+            await Api.EnsureMarketingEmailBlastSeedAsync(_tenantId);
+            await Api.EnsureMarketingLandingPageSeedAsync(_tenantId);
+            await Api.EnsureMarketingSegmentSeedAsync(_tenantId);
+            await Api.EnsureMarketingCrossSellSeedAsync(_tenantId);
+            await Api.EnsureMarketingWinBackSeedAsync(_tenantId);
+            await Api.EnsureMarketingReferralSeedAsync(_tenantId);
+            await Api.EnsureMarketingReviewSeedAsync(_tenantId);
+            ShowToast("Marketing seed data synchronized.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Marketing sync failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private static MarketingAnalyticsRecord? DeserializeMarketingRecord(Guid id, string json)
+    {
+        try
+        {
+            var item = System.Text.Json.JsonSerializer.Deserialize<MarketingAnalyticsRecord>(json, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            if (item is not null) item.Id = id;
+            return item;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private bool MatchesSearch(MarketingAnalyticsRecord item)
+    {
+        if (string.IsNullOrWhiteSpace(_search)) return true;
+        return item.Title.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Category.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Owner.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Segment.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Channel.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Workflow.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Status.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Insight.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || _analytics.Items.Any(m => m.CampaignName.Contains(_search, StringComparison.OrdinalIgnoreCase) || m.Channel.Contains(_search, StringComparison.OrdinalIgnoreCase))
+            || _emailBlasts.Any(e => e.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || e.Subject.Contains(_search, StringComparison.OrdinalIgnoreCase))
+            || _landingPages.Any(p => p.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || p.CampaignName.Contains(_search, StringComparison.OrdinalIgnoreCase))
+            || _marketingReports.Any(r => r.ReportName.Contains(_search, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private bool MatchesActiveView(MarketingAnalyticsRecord item) => _activeTab switch
+    {
+        "roi" => item.Category == "ROI",
+        "leads" => item.Category == "Leads",
+        "campaigns" => item.Category is "ROI" or "Leads",
+        "growth" => item.Category is "Cross-sell" or "Retention",
+        "reputation" => item.Category == "Reputation",
+        "reports" => _marketingReports.Any(),
+        _ => true
+    };
+
+    private void SetKpi(string key)
+    {
+        _activeKpi = key;
+        _activeTab = key;
+    }
+
+    private void SetTab(string key)
+    {
+        _activeTab = key;
+        _activeKpi = key;
+    }
+
+    private void ResetFilters()
+    {
+        _search = string.Empty;
+        _segmentFilter = string.Empty;
+        _priorityFilter = string.Empty;
+        _activeKpi = "all";
+        _activeTab = "all";
+    }
+
+    private bool IsActiveKpi(string key) => _activeKpi == key;
+    private void SelectMarketingItem(MarketingAnalyticsRecord item) => _selectedItem = item;
+    private void SelectEmailBlast(MarketingEmailBlastDto item) => _selectedEmailBlast = item;
+    private void SelectLandingPage(MarketingLandingPageDto item) => _selectedLandingPage = item;
+    private void SelectCrossSell(MarketingCrossSellOpportunityDto item) => _selectedCrossSell = item;
+    private void SelectReview(MarketingReviewDto item) => _selectedReview = item;
+    private void SelectReport(ReportDefinitionDto report) => _selectedReport = report;
+
+    private void FocusMarketingReport()
+    {
+        if (_selectedReport is null) return;
+        _activeTab = "reports";
+        _activeKpi = "reports";
+        ShowToast($"Focused report workflow: {_selectedReport.ReportName}");
+    }
+
+    private int TabCount(string key) => key switch
+    {
+        "roi" => _marketingItems.Count(i => i.Category == "ROI"),
+        "leads" => _marketingItems.Count(i => i.Category == "Leads"),
+        "campaigns" => _emailBlasts.Count + _landingPages.Count,
+        "growth" => _crossSell.Count + _winBack.Count + _referrals.Count,
+        "reputation" => _reviews.Reviews.Count + _reviews.Requests.Count,
+        "reports" => _marketingReports.Count,
+        _ => _marketingItems.Count
+    };
+
+    private async Task SendSelectedEmailBlastAsync()
+    {
+        if (_selectedEmailBlast is null) return;
+        _saving = true;
+        try
+        {
+            await Api.SendMarketingEmailBlastAsync(_selectedEmailBlast.EmailBlastId);
+            ShowToast($"Marketing email blast sent: {_selectedEmailBlast.Name}");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Send blast failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task PublishSelectedLandingPageAsync()
+    {
+        if (_selectedLandingPage is null) return;
+        _saving = true;
+        try
+        {
+            await Api.PublishMarketingLandingPageAsync(_selectedLandingPage.LandingPageId);
+            ShowToast($"Landing page published: {_selectedLandingPage.Name}");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Publish failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task RescoreSelectedCrossSellAsync()
+    {
+        if (_selectedCrossSell is null) return;
+        _saving = true;
+        try
+        {
+            await Api.RescoreMarketingCrossSellAsync(_selectedCrossSell.OpportunityId);
+            await Api.UpdateMarketingCrossSellStatusAsync(_selectedCrossSell.OpportunityId, "Reviewed");
+            ShowToast($"Cross-sell opportunity rescored: {_selectedCrossSell.AccountName}");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Cross-sell rescore failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task ReplySelectedReviewAsync()
+    {
+        if (_selectedReview is null) return;
+        _saving = true;
+        try
+        {
+            await Api.ReplyMarketingReviewAsync(_selectedReview.ReviewId, "Thank you for sharing your experience with our agency. We appreciate the feedback and will continue improving your service experience.");
+            ShowToast($"Review response posted for {_selectedReview.ClientName}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Review reply failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task RunSelectedReportAsync()
+    {
+        if (_selectedReport is not null)
+        {
+            await RunReportAsync(_selectedReport);
+        }
+    }
+
+    private async Task RunMarketingReportsAsync()
+    {
+        var candidates = MarketingReportsByImportance.Take(2).ToList();
+        foreach (var report in candidates)
+        {
+            await RunReportAsync(report);
+        }
+        if (candidates.Count > 0)
+        {
+            ShowToast($"Marketing report run completed for {candidates.Count} report(s).");
+        }
+    }
+
+    private async Task RunReportAsync(ReportDefinitionDto report)
+    {
+        _saving = true;
+        try
+        {
+            await Api.RunReportAsync(report.ReportDefinitionId, new RunReportRequest(_tenantId, PreferredFormat(report), _currentUserId));
+            ShowToast($"Marketing report run completed: {report.ReportName}");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Run failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task ExportMarketingPackAsync()
+    {
+        _saving = true;
+        try
+        {
+            var file = await Api.DownloadReportsExcelAsync(new DownloadReportsRequest
+            {
+                TenantId = _tenantId,
+                ReportDefinitionIds = _marketingReports.Select(r => r.ReportDefinitionId).ToList(),
+                SearchTerm = _search,
+                ModuleCode = "Marketing",
+                Format = "Excel"
+            });
+            await DownloadFileAsync(file);
+            ShowToast($"Marketing analytics pack downloaded for {_marketingReports.Count} report(s).");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Export marketing pack failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private void OpenScheduleForSelected()
+    {
+        if (_selectedReport is not null)
+        {
+            OpenSchedule(_selectedReport);
+        }
+    }
+
+    private void OpenSchedule(ReportDefinitionDto report)
+    {
+        _scheduleForm = new ScheduleForm
+        {
+            ReportDefinitionId = report.ReportDefinitionId,
+            OutputFormat = PreferredFormat(report),
+            FrequencyCode = "Weekly",
+            DeliveryEmail = "marketing-ops@agencybinder.local"
+        };
+        _scheduleEditContext = new(_scheduleForm);
+        _formError = null;
+        _showSchedule = true;
+    }
+
+    private void CloseSchedule()
+    {
+        _showSchedule = false;
+        _formError = null;
+    }
+
+    private async Task ScheduleAsync()
+    {
+        _formError = null;
+        if (!_scheduleEditContext.Validate()) return;
+        _saving = true;
+        try
+        {
+            await Api.ScheduleReportAsync(new ScheduleReportRequest(_tenantId, _scheduleForm.ReportDefinitionId, _scheduleForm.FrequencyCode, _scheduleForm.OutputFormat, _scheduleForm.DeliveryEmail));
+            _showSchedule = false;
+            ShowToast($"Marketing report scheduled for {_scheduleForm.DeliveryEmail}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Schedule failed: {ex.Message}";
+            ShowToast($"Schedule failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task DownloadFileAsync(ReportDownloadFile file)
+    {
+        var fileName = file.FileName.Replace("'", string.Empty).Replace("\"", string.Empty);
+        var base64 = Convert.ToBase64String(file.Content);
+        var script = $"(() => {{ const a = document.createElement(\"a\"); a.href = \"data:application/vnd.ms-excel;base64,{base64}\"; a.download = \"{fileName}\"; document.body.appendChild(a); a.click(); a.remove(); }})()";
+        await Js.InvokeVoidAsync("eval", script);
+    }
+
+    private void ShowToast(string message, bool danger = false)
+    {
+        _toastMessage = message;
+        _toastClass = danger ? "am-toast--danger" : "am-toast--success";
+    }
+
+    private void ClearToast() => _toastMessage = null;
+
+    private bool IsScheduled(Guid reportDefinitionId) => _schedules.Any(s => s.ReportDefinitionId == reportDefinitionId && s.IsActive);
+    private static bool IsExportable(ReportDefinitionDto report) => report.OutputFormats.Contains("Excel", StringComparison.OrdinalIgnoreCase) || report.OutputFormats.Contains("CSV", StringComparison.OrdinalIgnoreCase);
+    private static string PreferredFormat(ReportDefinitionDto report) => report.OutputFormats.Contains("Excel", StringComparison.OrdinalIgnoreCase) ? "Excel" : report.OutputFormats.Contains("CSV", StringComparison.OrdinalIgnoreCase) ? "CSV" : "PDF";
+
+    private int ReportScore(ReportDefinitionDto report)
+    {
+        var score = 35;
+        if (report.ReportTypeCode == "Analytics") score += 20;
+        if (report.ReportTypeCode == "Detail") score += 12;
+        if (IsScheduled(report.ReportDefinitionId)) score += 18;
+        if (_executions.Any(e => e.ReportDefinitionId == report.ReportDefinitionId)) score += 16;
+        if (IsExportable(report)) score += 8;
+        return Math.Clamp(score, 0, 100);
+    }
+
+    private int ItemScore(MarketingAnalyticsRecord item)
+    {
+        var score = item.Priority switch { "Critical" => 40, "High" => 28, "Normal" => 16, _ => 10 };
+        score += item.Category switch { "ROI" => 18, "Leads" => 16, "Cross-sell" => 14, "Retention" => 12, "Reputation" => 8, _ => 6 };
+        score += Math.Min(18, (int)(item.Revenue / 35000m));
+        score += Math.Min(12, (int)(item.Roas * 2));
+        if (item.DueDateUtc <= DateTime.UtcNow.AddDays(7)) score += 12;
+        return Math.Clamp(score, 0, 100);
+    }
+
+    private string LastRunLabel(Guid reportDefinitionId)
+        => _executions.Where(e => e.ReportDefinitionId == reportDefinitionId).OrderByDescending(e => e.CreatedDateUtc).FirstOrDefault() is { } execution
+            ? $"Run {FormatRelative(execution.CompletedDateUtc ?? execution.CreatedDateUtc)}"
+            : "Never run";
+
+    private static double EmailEngagementPct(MarketingEmailBlastDto blast) => blast.SentCount <= 0 ? 0 : (double)(blast.OpenCount + blast.ClickCount) / blast.SentCount * 100;
+    private static string FormatCurrency(decimal value) => value >= 1000000 ? $"${value / 1000000m:N1}M" : $"${value / 1000m:N0}K";
+    private static string FormatRoas(decimal value) => value <= 0 ? "0.0x" : $"{value:N1}x";
+    private static string FormatDate(DateTime value) => value.ToLocalTime().ToString("MMM d");
+    private static string FormatRelative(DateTime? utc)
+    {
+        if (utc is null || utc == default) return "never";
+        var diff = DateTime.UtcNow - utc.Value.ToUniversalTime();
+        if (diff.TotalMinutes < 60) return $"{Math.Max(1, (int)diff.TotalMinutes)}m ago";
+        if (diff.TotalHours < 24) return $"{(int)diff.TotalHours}h ago";
+        return $"{(int)diff.TotalDays}d ago";
+    }
+
+    private static string FormatSigned(double value) => value >= 0 ? $"+{value:N1}" : value.ToString("N1");
+    private static string TrendCss(double value) => value >= 0 ? "am-positive" : "am-negative";
+    private static string PriorityCss(string value) => value.ToLowerInvariant();
+    private static string CategoryCss(string value) => value switch { "ROI" => "green", "Leads" => "blue", "Cross-sell" => "purple", "Retention" => "amber", "Reputation" => "slate", _ => "slate" };
+    private static string CategoryIcon(string value) => value switch { "ROI" => "bi-graph-up-arrow", "Leads" => "bi-funnel", "Cross-sell" => "bi-person-plus", "Retention" => "bi-arrow-repeat", "Reputation" => "bi-star-half", _ => "bi-megaphone" };
+
+    private sealed record TabItem(string Key, string Label, string Icon);
+    private sealed record KpiItem(string Key, string Label, string Icon, string Value, string Detail, string Tooltip);
+
+    private sealed class MarketingAnalyticsRecord
+    {
+        public Guid Id { get; set; }
+        public string Category { get; set; } = string.Empty;
+        public string Priority { get; set; } = string.Empty;
+        public string Title { get; set; } = string.Empty;
+        public string Owner { get; set; } = string.Empty;
+        public string Segment { get; set; } = string.Empty;
+        public string Channel { get; set; } = string.Empty;
+        public string Workflow { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public decimal Revenue { get; set; }
+        public decimal Spend { get; set; }
+        public int Count { get; set; }
+        public double ConversionPct { get; set; }
+        public double EngagementPct { get; set; }
+        public double TrendPct { get; set; }
+        public DateTime DueDateUtc { get; set; }
+        public string NextAction { get; set; } = string.Empty;
+        public string Insight { get; set; } = string.Empty;
+        public decimal Roas => Spend > 0 ? Revenue / Spend : 0;
+    }
+
+    private sealed class ScheduleForm
+    {
+        [Required] public Guid ReportDefinitionId { get; set; }
+        [Required, StringLength(40)] public string FrequencyCode { get; set; } = "Weekly";
+        [Required, StringLength(20)] public string OutputFormat { get; set; } = "Excel";
+        [Required, EmailAddress, StringLength(254)] public string DeliveryEmail { get; set; } = "marketing-ops@agencybinder.local";
+    }
+}

@@ -5,390 +5,638 @@
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
 <PageTitle>Branches — Agency Setup</PageTitle>
 
 <AppPageHeader Title="Branches"
-               Subtitle="Agency office locations and branch codes used system-wide"
+               Subtitle="Enterprise office network, branch governance, territory coverage, and operating status."
                Icon="bi-diagram-3-fill">
     <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_loading">
             <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
         </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Branch
-        </button>
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/profile"><i class="bi bi-building-check" aria-hidden="true"></i> Profile</a>
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/branding"><i class="bi bi-palette" aria-hidden="true"></i> Branding</a>
+        <button class="um-btn um-btn-primary" type="button" @onclick="OpenAddModal"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Branch</button>
     </Actions>
 </AppPageHeader>
 
-<section class="ma-hero as-tenant-hero">
-    <div>
-        <span class="ma-eyebrow">Tenant · Agency Structure</span>
-        <h2>Branch Network Command Center</h2>
-        <p>Manage office locations, branch codes, and active operating sites used across users, routing, accounting, and reporting.</p>
-    </div>
-    <div class="ma-hero-actions">
-        <a class="um-btn um-btn-ghost" href="/tenant/agency/departments"><i class="bi bi-grid" aria-hidden="true"></i> Departments</a>
-        <a class="um-btn um-btn-ghost" href="/tenant/agency/teams"><i class="bi bi-people" aria-hidden="true"></i> Teams</a>
-        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Branch</button>
-    </div>
-</section>
-
-<!-- KPI strip -->
-<div class="as-kpi-strip" aria-label="Branch filters">
-    <button type="button" class='as-kpi-card @KpiClass("Overview")' @onclick='() => SetKpiFilter("Overview")' title="Show all branches">
-        <span class="as-kpi-icon"><i class="bi bi-diagram-3-fill" aria-hidden="true"></i></span>
-        <div><div class="br-kpi-value">@_totalCount</div><div class="br-kpi-label">Total Branches</div></div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Active")' @onclick='() => SetKpiFilter("Active")' title="Show active branches">
-        <span class="as-kpi-icon as-kpi-icon--success"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
-        <div><div class="br-kpi-value">@_activeCount</div><div class="br-kpi-label">Active</div></div>
-    </button>
-    <button type="button" class='as-kpi-card @KpiClass("Inactive")' @onclick='() => SetKpiFilter("Inactive")' title="Show inactive branches">
-        <span class="as-kpi-icon as-kpi-icon--warning"><i class="bi bi-dash-circle" aria-hidden="true"></i></span>
-        <div><div class="br-kpi-value">@(_totalCount - _activeCount)</div><div class="br-kpi-label">Inactive</div></div>
-    </button>
-</div>
-
-<!-- Filter toolbar -->
-<AppFilterPanel @bind-SearchValue="_search"
-                OnSearch="OnSearchAsync"
-                SearchPlaceholder="Search branch name or code…">
-    <Filters>
-        <label class="br-toggle-label">
-            <input type="checkbox" @bind="_filterActiveOnly" @bind:after="ApplyFilters" />
-            Active only
-        </label>
-    </Filters>
-</AppFilterPanel>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
-        @_loadError
+    <div class="br-toast @_toastClass" role="status">
+        <i class="bi @(_toastClass == "br-toast--danger" ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="br-toast-close" @onclick="ClearToast" aria-label="Dismiss message"><i class="bi bi-x-lg"></i></button>
     </div>
 }
 
-<!-- Grid -->
-<div class="um-grid-card app-datagrid">
-    @if (_loading)
-    {
-        <div class="um-loading-overlay" aria-live="polite">
-            <div class="um-spinner" aria-hidden="true"></div>
-            <span>Loading…</span>
+<div class="br-page">
+    <section class="br-hero">
+        <div class="br-hero-main">
+            <span class="br-eyebrow"><i class="bi bi-command" aria-hidden="true"></i> Tenant · Agency Structure</span>
+            <h2>Branch Network Command Center</h2>
+            <p>Manage office locations, branch codes, active operating sites, and territory coverage used by users, routing, accounting, reporting, and servicing workflows.</p>
+            <div class="br-hero-meta">
+                <span><i class="bi bi-diagram-3-fill" aria-hidden="true"></i> @_totalCount total branches</span>
+                <span><i class="bi bi-check-circle" aria-hidden="true"></i> @_activeCount active</span>
+                <span><i class="bi bi-geo-alt" aria-hidden="true"></i> @CoverageSummary</span>
+            </div>
         </div>
-    }
-    <SfGrid TValue="BranchEntry"
-            DataSource="_entries"
-            AllowPaging="true"
-            AllowSorting="true"
-            EnableHover="true"
-            RowHeight="52">
-        <GridEvents TValue="BranchEntry" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
-        <GridColumns>
-            <GridColumn Field="@nameof(BranchEntry.BranchCode)" HeaderText="Code" Width="130">
-                <Template>
-                    @{ var e = (BranchEntry)context; }
-                    <span class="br-mono">@e.BranchCode</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(BranchEntry.BranchName)" HeaderText="Branch Name" Width="220" />
-            <GridColumn Field="@nameof(BranchEntry.City)" HeaderText="City" Width="140" />
-            <GridColumn Field="@nameof(BranchEntry.StateProvince)" HeaderText="State" Width="110" />
-            <GridColumn Field="@nameof(BranchEntry.CountryCode)" HeaderText="Country" Width="100" />
-            <GridColumn Field="@nameof(BranchEntry.IsActive)" HeaderText="Status" Width="110">
-                <Template>
-                    @{ var e = (BranchEntry)context; }
-                    <AppStatusBadge Status="@(e.IsActive ? "Active" : "Inactive")" Label="@(e.IsActive ? "Active" : "Inactive")" />
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="" Width="120" TextAlign="TextAlign.Right">
-                <Template>
-                    @{ var e = (BranchEntry)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEditDrawer(e)" title="Edit">
-                        <i class="bi bi-pencil" aria-hidden="true"></i>
+        <div class="br-hero-panel">
+            <div class="br-readiness-card">
+                <span>Network readiness</span>
+                <strong>@BranchReadinessScore%</strong>
+                <div class="br-score-track"><div style="width:@BranchReadinessScore%"></div></div>
+                <small>@BranchReadinessSummary</small>
+            </div>
+            <div class="br-action-list">
+                @foreach (var action in PriorityActions)
+                {
+                    <button type="button" class="br-action-item" @onclick="() => RunPriorityAction(action)">
+                        <i class="bi @action.Icon" aria-hidden="true"></i>
+                        <span><strong>@action.Title</strong><small>@action.Detail</small></span>
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
                     </button>
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(e)" title="Delete">
-                        <i class="bi bi-trash" aria-hidden="true"></i>
-                    </button>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
+                }
+            </div>
+        </div>
+    </section>
 
-<!-- Add/Edit Drawer -->
-<AppCrudDrawer @bind-Visible="_showDrawer"
-               Title="@(_editModel.BranchId == Guid.Empty ? "Add Branch" : "Edit Branch")"
-               OnConfirm="SaveBranchAsync"
-               OnClose="CloseDrawer">
-    <Content>
-        <EditForm EditContext="_editContext" OnValidSubmit="SaveBranchAsync">
-            <DataAnnotationsValidator />
-        <div class="br-form">
-            <label class="br-form-label">Branch Code *</label>
-            <InputText class="um-input br-mono" @bind-Value="_editModel.BranchCode" placeholder="e.g. HQ, WEST-01" />
-            <ValidationMessage For="() => _editModel.BranchCode" class="text-danger" />
+    <section class="br-kpi-strip" aria-label="Branch KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="br-kpi-card @(IsActiveTab(kpi.Key) ? "br-kpi-card--active" : null)" title="@kpi.Tooltip" @onclick="() => SetTab(kpi.Key)">
+                <span class="br-kpi-icon br-kpi-icon--@kpi.Tone"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="br-kpi-label">@kpi.Label</span>
+                <strong>@kpi.Value</strong>
+                <small>@kpi.Detail</small>
+            </button>
+        }
+    </section>
 
-            <label class="br-form-label">Branch Name *</label>
-            <InputText class="um-input" @bind-Value="_editModel.BranchName" placeholder="Full branch name" />
-            <ValidationMessage For="() => _editModel.BranchName" class="text-danger" />
-
-            <label class="br-form-label">City</label>
-            <InputText class="um-input" @bind-Value="_editModel.City" />
-            <ValidationMessage For="() => _editModel.City" class="text-danger" />
-
-            <label class="br-form-label">State / Province</label>
-            <InputText class="um-input" @bind-Value="_editModel.StateProvince" placeholder="e.g. CA, TX" />
-            <ValidationMessage For="() => _editModel.StateProvince" class="text-danger" />
-
-            <label class="br-form-label">Country Code</label>
-            <InputText class="um-input br-mono" @bind-Value="_editModel.CountryCode" placeholder="e.g. US" />
-            <ValidationMessage For="() => _editModel.CountryCode" class="text-danger" />
-
-            @if (_editModel.BranchId != Guid.Empty)
+    <section class="br-command-bar">
+        <div class="br-tabs" role="tablist" aria-label="Branch sections">
+            @foreach (var tab in Tabs)
             {
-                <label class="br-form-label">Active</label>
-                <SfSwitch @bind-Checked="_editModel.IsActive" />
+                <button type="button" role="tab" class="br-tab @(IsActiveTab(tab.Key) ? "br-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                    <i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label
+                </button>
             }
         </div>
-        </EditForm>
-    </Content>
-</AppCrudDrawer>
+        <div class="br-command-actions">
+            <button class="um-btn um-btn-ghost" type="button" @onclick="CopyBranchSummaryAsync" disabled="@(!_allEntries.Any())"><i class="bi bi-clipboard" aria-hidden="true"></i> Copy Summary</button>
+            <button class="um-btn um-btn-ghost" type="button" @onclick="ClearFilters"><i class="bi bi-x-circle" aria-hidden="true"></i> Clear Filters</button>
+            <button class="um-btn um-btn-primary" type="button" @onclick="OpenAddModal"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Branch</button>
+        </div>
+    </section>
 
-<SfDialog Width="420px" IsModal="true" ShowCloseIcon="false" Visible="_showDeleteDialog">
-    <DialogTemplates>
-        <Content>
-            <div class="um-confirm-dialog">
-                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div>
-                <div class="um-confirm-message">
-                    <h6>Delete branch?</h6>
-                    <p>This will remove <strong>@_deleteTarget?.BranchName</strong> from the active branch list.</p>
+    <section class="br-filter-bar" aria-label="Branch filters">
+        <div class="br-search-box">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="um-input" value="@_search" @oninput="@(args => _search = args.Value?.ToString() ?? string.Empty)" placeholder="Search branch name, code, city, state, or country…" />
+        </div>
+        <label class="br-toggle-label">
+            <input type="checkbox" checked="@_activeOnly" @onchange="@(args => ToggleActiveOnly(args.Value is bool value && value))" />
+            Active only
+        </label>
+        <span class="br-result-count">@FilteredEntries.Count branch(es) shown</span>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger br-load-error" role="alert"><i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError</div>
+    }
+
+    <section class="br-content-grid">
+        <div class="br-main-panel">
+            @if (_loading)
+            {
+                <div class="br-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Loading branches...</div>
+            }
+            else if (!_allEntries.Any())
+            {
+                <div class="br-empty-state">
+                    <i class="bi bi-diagram-3" aria-hidden="true"></i>
+                    <strong>No branches configured</strong>
+                    <span>Create the first operating branch for tenant routing, reporting, and servicing workflows.</span>
+                    <button class="um-btn um-btn-primary" type="button" @onclick="OpenAddModal"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Branch</button>
+                </div>
+            }
+            else
+            {
+                @if (ShowTab("overview"))
+                {
+                    <section class="br-section">
+                        <div class="br-section-header"><i class="bi bi-speedometer2" aria-hidden="true"></i><div><strong>Executive Overview</strong><span>Most important operating network signals for branch governance.</span></div></div>
+                        <div class="br-overview-grid">
+                            <div class="br-identity-card"><span class="br-module-icon br-module-icon--blue"><i class="bi bi-diagram-3-fill"></i></span><div><strong>@_totalCount branches</strong><span>@_activeCount active · @_inactiveCount inactive</span></div></div>
+                            <div class="br-identity-card"><span class="br-module-icon br-module-icon--green"><i class="bi bi-geo-alt-fill"></i></span><div><strong>@_stateCount state(s)</strong><span>@_countryCount country / region code(s)</span></div></div>
+                            <div class="br-identity-card"><span class="br-module-icon br-module-icon--purple"><i class="bi bi-shield-check"></i></span><div><strong>@BranchReadinessScore% ready</strong><span>@BranchReadinessSummary</span></div></div>
+                        </div>
+                        <div class="br-branch-board">
+                            @foreach (var branch in FilteredEntries.Take(6))
+                            {
+                                <button type="button" class="br-branch-card @(SelectedBranch?.BranchId == branch.BranchId ? "br-branch-card--selected" : null)" @onclick="() => SelectBranch(branch)">
+                                    <span class="br-branch-avatar">@Initials(branch.BranchName)</span>
+                                    <span class="br-branch-content"><strong>@branch.BranchName</strong><small><span class="br-code">@branch.BranchCode</span> · @LocationText(branch)</small></span>
+                                    <span class="br-status @(branch.IsActive ? "br-status--active" : "br-status--inactive")">@(branch.IsActive ? "Active" : "Inactive")</span>
+                                </button>
+                            }
+                        </div>
+                    </section>
+                }
+
+                @if (ShowTab("directory") || ShowTab("active") || ShowTab("inactive"))
+                {
+                    <section class="br-section">
+                        <div class="br-section-header"><i class="bi bi-list-ul" aria-hidden="true"></i><div><strong>@DirectoryTitle</strong><span>Native branch directory with inline actions.</span></div></div>
+                        <div class="br-table-wrap">
+                            <table class="br-table">
+                                <thead>
+                                    <tr>
+                                        <th>Branch</th>
+                                        <th>Location</th>
+                                        <th>Status</th>
+                                        <th>Created</th>
+                                        <th class="br-actions-cell">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var branch in FilteredEntries)
+                                    {
+                                        <tr class="@(SelectedBranch?.BranchId == branch.BranchId ? "br-row--selected" : null)" @onclick="() => SelectBranch(branch)">
+                                            <td><span class="br-code">@branch.BranchCode</span><strong>@branch.BranchName</strong></td>
+                                            <td>@LocationText(branch)</td>
+                                            <td><span class="br-status @(branch.IsActive ? "br-status--active" : "br-status--inactive")">@(branch.IsActive ? "Active" : "Inactive")</span></td>
+                                            <td>@branch.CreatedDateUtc.ToString("MMM d, yyyy")</td>
+                                            <td class="br-actions-cell">
+                                                <button class="um-btn um-btn-ghost um-btn-sm" type="button" @onclick:stopPropagation="true" @onclick="() => OpenEditModal(branch)" title="Edit branch"><i class="bi bi-pencil"></i></button>
+                                                <button class="um-btn um-btn-ghost um-btn-sm" type="button" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(branch)" title="Delete branch"><i class="bi bi-trash"></i></button>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                }
+
+                @if (ShowTab("coverage"))
+                {
+                    <section class="br-section">
+                        <div class="br-section-header"><i class="bi bi-map" aria-hidden="true"></i><div><strong>Coverage & Territory</strong><span>Branch coverage by state/province and country code.</span></div></div>
+                        <div class="br-coverage-grid">
+                            @foreach (var group in CoverageGroups)
+                            {
+                                <div class="br-coverage-card">
+                                    <strong>@group.Label</strong>
+                                    <span>@group.Count branch(es)</span>
+                                    <small>@group.Active active</small>
+                                </div>
+                            }
+                        </div>
+                    </section>
+                }
+
+                @if (ShowTab("governance"))
+                {
+                    <section class="br-section">
+                        <div class="br-section-header"><i class="bi bi-shield-check" aria-hidden="true"></i><div><strong>Branch Governance</strong><span>Readiness controls for branch data quality and operating workflow health.</span></div></div>
+                        <div class="br-governance-list">
+                            @foreach (var item in Checklist)
+                            {
+                                <div class="br-governance-item @(item.Done ? "br-governance-item--done" : null)">
+                                    <i class="bi @(item.Done ? "bi-check-circle-fill" : "bi-exclamation-circle")" aria-hidden="true"></i>
+                                    <span><strong>@item.Label</strong><small>@item.Detail</small></span>
+                                </div>
+                            }
+                        </div>
+                    </section>
+                }
+            }
+        </div>
+
+        <aside class="br-side-panel">
+            <div class="br-side-card">
+                <div class="br-side-title"><i class="bi bi-building" aria-hidden="true"></i><strong>Selected Branch</strong></div>
+                @if (SelectedBranch is null)
+                {
+                    <div class="br-side-empty">Select a branch to inspect location, status, and workflow actions.</div>
+                }
+                else if (SelectedBranch is { } selectedBranch)
+                {
+                    <div class="br-selected-card">
+                        <span class="br-selected-avatar">@Initials(selectedBranch.BranchName)</span>
+                        <strong>@selectedBranch.BranchName</strong>
+                        <small class="br-code">@selectedBranch.BranchCode</small>
+                        <span class="br-status @(selectedBranch.IsActive ? "br-status--active" : "br-status--inactive")">@(selectedBranch.IsActive ? "Active" : "Inactive")</span>
+                        <div class="br-selected-fields">
+                            <div class="br-selected-field"><span>Location</span><strong>@LocationText(selectedBranch)</strong></div>
+                            <div class="br-selected-field"><span>Country</span><strong>@DisplayValue(selectedBranch.CountryCode)</strong></div>
+                            <div class="br-selected-field"><span>Created</span><strong>@selectedBranch.CreatedDateUtc.ToString("MMM d, yyyy")</strong></div>
+                        </div>
+                        <div class="br-selected-actions">
+                            <button class="um-btn um-btn-ghost" type="button" @onclick="() => OpenEditModal(selectedBranch)"><i class="bi bi-pencil"></i> Edit</button>
+                            <button class="um-btn um-btn-danger" type="button" @onclick="() => ConfirmDelete(selectedBranch)"><i class="bi bi-trash"></i> Delete</button>
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <div class="br-side-card">
+                <div class="br-side-title"><i class="bi bi-list-check" aria-hidden="true"></i><strong>Readiness Checklist</strong></div>
+                @foreach (var item in Checklist)
+                {
+                    <div class="br-check-item @(item.Done ? "br-check-item--done" : null)">
+                        <i class="bi @(item.Done ? "bi-check-circle-fill" : "bi-exclamation-circle")" aria-hidden="true"></i>
+                        <span><strong>@item.Label</strong><small>@item.Detail</small></span>
+                    </div>
+                }
+            </div>
+
+            <div class="br-side-card">
+                <div class="br-side-title"><i class="bi bi-lightning-charge" aria-hidden="true"></i><strong>Workflow Shortcuts</strong></div>
+                <a class="br-link-action" href="/tenant/agency/profile"><i class="bi bi-building-check" aria-hidden="true"></i> Agency Profile</a>
+                <a class="br-link-action" href="/tenant/agency/producers"><i class="bi bi-person-badge" aria-hidden="true"></i> Producers</a>
+                <a class="br-link-action" href="/tenant/agency/carriers"><i class="bi bi-shield-check" aria-hidden="true"></i> Carriers</a>
+                <a class="br-link-action" href="/tenant/agency/hours"><i class="bi bi-clock" aria-hidden="true"></i> Business Hours</a>
+            </div>
+        </aside>
+    </section>
+</div>
+
+@if (_showEditModal)
+{
+    <div class="br-modal-backdrop" role="presentation">
+        <div class="br-modal" role="dialog" aria-modal="true" aria-labelledby="branch-edit-title">
+            <EditForm EditContext="_editContext" OnValidSubmit="SaveBranchAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-header">
+                    <i class="bi bi-diagram-3-fill" aria-hidden="true"></i>
+                    <span id="branch-edit-title">@(_form.BranchId == Guid.Empty ? "Add Branch" : "Edit Branch")</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseEditModal"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="br-form-grid">
+                        <div class="br-form-section br-form-section--full"><strong>Branch identity</strong><span>Core office identity used by routing, reporting, and servicing workflows.</span></div>
+                        <div class="um-field"><label>Branch Code <span class="text-danger">*</span></label><InputText class="um-input br-mono" @bind-Value="_form.BranchCode" /><ValidationMessage For="() => _form.BranchCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Branch Name <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_form.BranchName" /><ValidationMessage For="() => _form.BranchName" class="text-danger" /></div>
+
+                        <div class="br-form-section br-form-section--full"><strong>Location and status</strong><span>Location data drives coverage, filtering, and territory reporting.</span></div>
+                        <div class="um-field"><label>City</label><InputText class="um-input" @bind-Value="_form.City" /><ValidationMessage For="() => _form.City" class="text-danger" /></div>
+                        <div class="um-field"><label>State / Province</label><InputText class="um-input" @bind-Value="_form.StateProvince" /><ValidationMessage For="() => _form.StateProvince" class="text-danger" /></div>
+                        <div class="um-field"><label>Country Code</label><InputText class="um-input br-mono" @bind-Value="_form.CountryCode" /><ValidationMessage For="() => _form.CountryCode" class="text-danger" /></div>
+                        <label class="br-form-toggle"><InputCheckbox @bind-Value="_form.IsActive" /> Active operating branch</label>
+
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger br-load-error br-form-section--full" role="alert">@_formError</div>
+                        }
+                    </div>
                 </div>
                 <div class="um-modal-footer">
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showDeleteDialog = false">Cancel</button>
-                    <button type="button" class="um-btn um-btn-danger" @onclick="DeleteBranchAsync">Delete</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseEditModal">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-save" aria-hidden="true"></i> Save Branch</button>
                 </div>
-            </div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+            </EditForm>
+        </div>
+    </div>
+}
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+@if (_showDeleteModal)
+{
+    <div class="br-modal-backdrop" role="presentation">
+        <div class="br-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="branch-delete-title">
+            <div class="um-modal-header">
+                <i class="bi bi-trash" aria-hidden="true"></i>
+                <span id="branch-delete-title">Delete branch?</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDeleteModal"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="um-modal-body">
+                <p class="br-confirm-copy">This will remove <strong>@_deleteTarget?.BranchName</strong> from the active branch list and deactivate it for tenant workflows.</p>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseDeleteModal">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" disabled="@_saving" @onclick="DeleteBranchAsync"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+@@keyframes br-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }
+</style>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
+    private static readonly TabItem[] Tabs =
+    [
+        new("overview", "Overview", "bi-speedometer2"),
+        new("directory", "Directory", "bi-list-ul"),
+        new("active", "Active", "bi-check-circle"),
+        new("inactive", "Inactive", "bi-dash-circle"),
+        new("coverage", "Coverage", "bi-map"),
+        new("governance", "Governance", "bi-shield-check")
+    ];
+
     private Guid _tenantId;
-    private SfToast? _toast;
-
-    private List<BranchEntry> _allEntries = [];
-    private List<BranchEntry> _entries    = [];
-
-    private bool _loading        = false;
-    private bool _showDrawer     = false;
-    private bool _filterActiveOnly = false;
-    private string _search       = string.Empty;
-    private string _activeFilter = "Overview";
+    private bool _loading;
+    private bool _saving;
+    private bool _activeOnly;
+    private bool _showEditModal;
+    private bool _showDeleteModal;
+    private string _activeTab = "overview";
+    private string _search = string.Empty;
     private string? _loadError;
-
-    private int _totalCount  = 0;
-    private int _activeCount = 0;
-
-    private BranchEntry _editModel = new();
+    private string? _formError;
+    private string? _toastMessage;
+    private string _toastClass = "br-toast--success";
+    private List<BranchEntry> _allEntries = [];
+    private BranchForm _form = new();
     private EditContext _editContext = default!;
-    private bool _showDeleteDialog;
+    private BranchEntry? SelectedBranch { get; set; }
     private BranchEntry? _deleteTarget;
 
-    public Branches()
-    {
-        _editContext = new EditContext(_editModel);
-    }
+    private int _totalCount => _allEntries.Count;
+    private int _activeCount => _allEntries.Count(e => e.IsActive);
+    private int _inactiveCount => _totalCount - _activeCount;
+    private int _stateCount => _allEntries.Select(e => e.StateProvince).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    private int _countryCount => _allEntries.Select(e => e.CountryCode).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    private string CoverageSummary => _stateCount > 0 ? $"{_stateCount} state/province coverage" : "Coverage incomplete";
+    private string DirectoryTitle => _activeTab == "active" ? "Active Branch Directory" : _activeTab == "inactive" ? "Inactive Branch Directory" : "Branch Directory";
+    private int BranchReadinessScore => Math.Clamp(Checklist.Count(c => c.Done) * 100 / Math.Max(1, Checklist.Count), 0, 100);
+    private string BranchReadinessSummary => BranchReadinessScore >= 90 ? "Branch network is enterprise ready" : BranchReadinessScore >= 70 ? "Core branch network is ready with some gaps" : "Complete branch identity, status, and location data";
+
+    private List<BranchEntry> FilteredEntries => _allEntries
+        .Where(e => TabMatches(e) && (!_activeOnly || e.IsActive) && SearchMatches(e))
+        .OrderByDescending(e => e.IsActive)
+        .ThenBy(e => e.BranchName)
+        .ToList();
+
+    private IReadOnlyList<ChecklistItem> Checklist =>
+    [
+        new("Branch network", _totalCount > 0, "At least one branch configured"),
+        new("Active operating site", _activeCount > 0, "At least one active branch available"),
+        new("Location coverage", _allEntries.Any(e => !string.IsNullOrWhiteSpace(e.City) && !string.IsNullOrWhiteSpace(e.StateProvince)), "City and state/province data configured"),
+        new("Country governance", _allEntries.All(e => !string.IsNullOrWhiteSpace(e.CountryCode)) && _totalCount > 0, "Country code is populated for every branch"),
+        new("Code quality", _allEntries.Select(e => e.BranchCode).Distinct(StringComparer.OrdinalIgnoreCase).Count() == _totalCount && _totalCount > 0, "Branch codes are unique"),
+        new("Inactive review", _inactiveCount == 0 || _activeCount > 0, "Inactive branches do not block active operations")
+    ];
+
+    private IEnumerable<KpiItem> Kpis =>
+    [
+        new("overview", "Readiness", "bi-speedometer2", $"{BranchReadinessScore}%", "network score", "Show branch network overview", BranchReadinessScore >= 80 ? "green" : "amber"),
+        new("directory", "Total", "bi-diagram-3-fill", _totalCount.ToString("N0"), "all branches", "Show all branches", "blue"),
+        new("active", "Active", "bi-check-circle-fill", _activeCount.ToString("N0"), "operating sites", "Show active branches", "green"),
+        new("inactive", "Inactive", "bi-dash-circle", _inactiveCount.ToString("N0"), "review queue", "Show inactive branches", _inactiveCount > 0 ? "amber" : "slate"),
+        new("coverage", "Coverage", "bi-map", _stateCount.ToString("N0"), "states/provinces", "Show territory coverage", _stateCount > 0 ? "purple" : "red")
+    ];
+
+    private IEnumerable<PriorityAction> PriorityActions => Checklist.Where(c => !c.Done).Take(3).Select(c => new PriorityAction(c.Label, c.Detail, ActionIcon(c.Label), ActionTab(c.Label))).DefaultIfEmpty(new("Review branches", "All critical branch checks are complete", "bi-check2-circle", "overview"));
+
+    private IEnumerable<CoverageGroup> CoverageGroups => _allEntries
+        .GroupBy(e => string.IsNullOrWhiteSpace(e.StateProvince) ? "Unassigned" : e.StateProvince.Trim(), StringComparer.OrdinalIgnoreCase)
+        .Select(g => new CoverageGroup(g.Key, g.Count(), g.Count(e => e.IsActive)))
+        .OrderByDescending(g => g.Count)
+        .ThenBy(g => g.Label);
 
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(
-            new("Home",        "/"),
-            new("Agency Setup", "/tenant/agency/profile"),
-            new("Branches",    "/tenant/agency/branches"));
-
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _editContext = new(_form);
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Agency Setup", "/tenant/agency/profile"), new("Branches", "/tenant/agency/branches"));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
         _loading = true;
-        StateHasChanged();
+        _loadError = null;
         try
         {
-            _loadError = null;
             var result = await Api.SearchBranchesAsync(_tenantId, _search, pageSize: 500);
-            _allEntries = result?.Items.Select(d => new BranchEntry
-            {
-                BranchId      = d.BranchId,
-                BranchCode    = d.BranchCode,
-                BranchName    = d.BranchName,
-                City          = d.City,
-                StateProvince = d.StateProvince,
-                CountryCode   = d.CountryCode,
-                IsActive      = d.IsActive,
-            }).ToList() ?? [];
-
-            _totalCount  = _allEntries.Count;
-            _activeCount = _allEntries.Count(e => e.IsActive);
-            ApplyFilters();
+            _allEntries = result?.Items.Select(BranchEntry.FromDto).ToList() ?? [];
+            SelectedBranch = SelectedBranch is null ? _allEntries.FirstOrDefault() : _allEntries.FirstOrDefault(e => e.BranchId == SelectedBranch.BranchId) ?? _allEntries.FirstOrDefault();
         }
         catch (Exception ex)
         {
             _loadError = $"Load failed: {ex.Message}";
-            await ShowToastAsync($"Error loading branches: {ex.Message}", "e-toast-danger");
+            ShowToast($"Error loading branches: {ex.Message}", true);
         }
-        finally { _loading = false; }
-    }
-
-    private Task OnSearchAsync(string _) => LoadAsync();
-
-    private void ApplyFilters()
-    {
-        _entries = _allEntries.Where(e =>
-            (_activeFilter switch
-            {
-                "Active" => e.IsActive,
-                "Inactive" => !e.IsActive,
-                _ => true
-            }) &&
-            (!_filterActiveOnly || e.IsActive) &&
-            (string.IsNullOrEmpty(_search) ||
-             e.BranchName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             e.BranchCode.Contains(_search, StringComparison.OrdinalIgnoreCase))
-        ).ToList();
-        StateHasChanged();
-    }
-
-    private void SetKpiFilter(string filter)
-    {
-        _activeFilter = _activeFilter == filter && filter != "Overview" ? "Overview" : filter;
-        _filterActiveOnly = _activeFilter == "Active";
-        ApplyFilters();
-    }
-
-    private string KpiClass(string filter) => _activeFilter == filter ? "as-kpi-card--active" : string.Empty;
-
-    private void OnRowSelected(RowSelectEventArgs<BranchEntry> args) => OpenEditDrawer(args.Data);
-
-    private void OpenAddDrawer()  { _editModel = new(); _editContext = new EditContext(_editModel); _showDrawer = true; }
-    private void OpenEditDrawer(BranchEntry e)
-    {
-        _editModel = new BranchEntry
+        finally
         {
-            BranchId      = e.BranchId,
-            BranchCode    = e.BranchCode,
-            BranchName    = e.BranchName,
-            City          = e.City,
-            StateProvince = e.StateProvince,
-            CountryCode   = e.CountryCode,
-            IsActive      = e.IsActive,
-        };
-        _editContext = new EditContext(_editModel);
-        _showDrawer = true;
+            _loading = false;
+        }
     }
-    private void CloseDrawer() => _showDrawer = false;
+
+    private void ToggleActiveOnly(bool value)
+    {
+        _activeOnly = value;
+        if (_activeOnly && _activeTab == "inactive")
+        {
+            _activeTab = "active";
+        }
+    }
+
+    private void ClearFilters()
+    {
+        _search = string.Empty;
+        _activeOnly = false;
+        _activeTab = "overview";
+    }
+
+    private void SetTab(string key)
+    {
+        _activeTab = key;
+        if (key == "active") _activeOnly = true;
+        if (key == "inactive") _activeOnly = false;
+    }
+
+    private bool IsActiveTab(string key) => _activeTab == key;
+    private bool ShowTab(string key) => _activeTab == key;
+    private void SelectBranch(BranchEntry branch) => SelectedBranch = branch;
+
+    private void OpenAddModal()
+    {
+        _form = new BranchForm { CountryCode = "US", IsActive = true };
+        _editContext = new(_form);
+        _formError = null;
+        _showEditModal = true;
+    }
+
+    private void OpenEditModal(BranchEntry branch)
+    {
+        _form = BranchForm.FromEntry(branch);
+        _editContext = new(_form);
+        _formError = null;
+        _showEditModal = true;
+    }
+
+    private void CloseEditModal()
+    {
+        _showEditModal = false;
+        _formError = null;
+    }
 
     private async Task SaveBranchAsync()
     {
+        _saving = true;
+        _formError = null;
         try
         {
-            if (_editModel.BranchId == Guid.Empty)
+            if (_form.BranchId == Guid.Empty)
             {
-                await Api.CreateBranchAsync(new(
-                    _tenantId,
-                    _editModel.BranchCode,
-                    _editModel.BranchName,
-                    _editModel.City,
-                    _editModel.StateProvince,
-                    _editModel.CountryCode));
+                await Api.CreateBranchAsync(new(_tenantId, _form.BranchCode, _form.BranchName, _form.City, _form.StateProvince, _form.CountryCode));
+                ShowToast("Branch created.");
             }
             else
             {
-                await Api.UpdateBranchAsync(_editModel.BranchId, new(
-                    _editModel.BranchCode,
-                    _editModel.BranchName,
-                    _editModel.City,
-                    _editModel.StateProvince,
-                    _editModel.CountryCode,
-                    _editModel.IsActive));
+                await Api.UpdateBranchAsync(_form.BranchId, new(_form.BranchCode, _form.BranchName, _form.City, _form.StateProvince, _form.CountryCode, _form.IsActive));
+                ShowToast("Branch saved.");
             }
-            _showDrawer = false;
+
+            _showEditModal = false;
             await LoadAsync();
-            await ShowToastAsync("Branch saved.", "e-toast-success");
         }
         catch (Exception ex)
         {
-            await ShowToastAsync($"Failed to save branch: {ex.Message}", "e-toast-danger");
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast($"Failed to save branch: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
         }
     }
 
-    private void ConfirmDelete(BranchEntry entry)
+    private void ConfirmDelete(BranchEntry branch)
     {
-        _deleteTarget = entry;
-        _showDeleteDialog = true;
+        _deleteTarget = branch;
+        _showDeleteModal = true;
+    }
+
+    private void CloseDeleteModal()
+    {
+        _showDeleteModal = false;
+        _deleteTarget = null;
     }
 
     private async Task DeleteBranchAsync()
     {
-        if (_deleteTarget is null)
-            return;
+        if (_deleteTarget is null) return;
 
+        _saving = true;
         try
         {
             await Api.DeleteBranchAsync(_deleteTarget.BranchId);
-            _showDeleteDialog = false;
+            ShowToast("Branch deleted.");
+            _showDeleteModal = false;
+            _deleteTarget = null;
             await LoadAsync();
-            await ShowToastAsync("Branch deleted.", "e-toast-success");
         }
         catch (Exception ex)
         {
-            await ShowToastAsync($"Delete failed: {ex.Message}", "e-toast-danger");
+            ShowToast($"Delete failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
         }
     }
 
-    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    private async Task CopyBranchSummaryAsync()
     {
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+        var summary = $"Branches: {_totalCount} total | {_activeCount} active | {_inactiveCount} inactive | {_stateCount} states/provinces | readiness {BranchReadinessScore}%";
+        try
+        {
+            await Js.InvokeVoidAsync("navigator.clipboard.writeText", summary);
+            ShowToast("Branch summary copied to clipboard.");
+        }
+        catch
+        {
+            ShowToast($"Branch summary ready: {summary}");
+        }
     }
+
+    private void RunPriorityAction(PriorityAction action)
+    {
+        if (action.Tab == "new") OpenAddModal();
+        else SetTab(action.Tab);
+    }
+
+    private bool TabMatches(BranchEntry entry) => _activeTab switch
+    {
+        "active" => entry.IsActive,
+        "inactive" => !entry.IsActive,
+        _ => true
+    };
+
+    private bool SearchMatches(BranchEntry entry) => string.IsNullOrWhiteSpace(_search)
+        || entry.BranchName.Contains(_search, StringComparison.OrdinalIgnoreCase)
+        || entry.BranchCode.Contains(_search, StringComparison.OrdinalIgnoreCase)
+        || (entry.City?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false)
+        || (entry.StateProvince?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false)
+        || (entry.CountryCode?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false);
+
+    private void ShowToast(string message, bool danger = false) { _toastMessage = message; _toastClass = danger ? "br-toast--danger" : "br-toast--success"; }
+    private void ClearToast() => _toastMessage = null;
+
+    private static string ActionIcon(string label) => label.Contains("network", StringComparison.OrdinalIgnoreCase) ? "bi-plus-lg" : label.Contains("Location", StringComparison.OrdinalIgnoreCase) ? "bi-geo-alt" : label.Contains("Country", StringComparison.OrdinalIgnoreCase) ? "bi-globe2" : label.Contains("Code", StringComparison.OrdinalIgnoreCase) ? "bi-upc-scan" : "bi-shield-check";
+    private static string ActionTab(string label) => label.Contains("network", StringComparison.OrdinalIgnoreCase) ? "new" : label.Contains("Location", StringComparison.OrdinalIgnoreCase) || label.Contains("Country", StringComparison.OrdinalIgnoreCase) ? "coverage" : label.Contains("Code", StringComparison.OrdinalIgnoreCase) ? "directory" : "governance";
+    private static string LocationText(BranchEntry entry) => string.Join(", ", new[] { entry.City, entry.StateProvince, entry.CountryCode }.Where(v => !string.IsNullOrWhiteSpace(v))).Trim() is { Length: > 0 } text ? text : "Location incomplete";
+    private static string Initials(string value) => string.Join(string.Empty, value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(s => char.ToUpperInvariant(s[0])));
+    private static string DisplayValue(string? value, string fallback = "—") => string.IsNullOrWhiteSpace(value) ? fallback : value;
+
+    private sealed record TabItem(string Key, string Label, string Icon);
+    private sealed record KpiItem(string Key, string Label, string Icon, string Value, string Detail, string Tooltip, string Tone);
+    private sealed record ChecklistItem(string Label, bool Done, string Detail);
+    private sealed record PriorityAction(string Title, string Detail, string Icon, string Tab);
+    private sealed record CoverageGroup(string Label, int Count, int Active);
 
     private sealed class BranchEntry
     {
-        public Guid    BranchId      { get; set; } = Guid.Empty;
-        [Required, StringLength(50)]
-        public string  BranchCode    { get; set; } = string.Empty;
-        [Required, StringLength(200)]
-        public string  BranchName    { get; set; } = string.Empty;
-        [StringLength(100)]
-        public string? City          { get; set; }
-        [StringLength(100)]
+        public Guid BranchId { get; set; }
+        public string BranchCode { get; set; } = string.Empty;
+        public string BranchName { get; set; } = string.Empty;
+        public string? City { get; set; }
         public string? StateProvince { get; set; }
-        [StringLength(10)]
-        public string? CountryCode   { get; set; }
-        public bool    IsActive      { get; set; } = true;
+        public string? CountryCode { get; set; }
+        public bool IsActive { get; set; }
+        public DateTime CreatedDateUtc { get; set; }
+
+        public static BranchEntry FromDto(BranchDto dto) => new()
+        {
+            BranchId = dto.BranchId,
+            BranchCode = dto.BranchCode,
+            BranchName = dto.BranchName,
+            City = dto.City,
+            StateProvince = dto.StateProvince,
+            CountryCode = dto.CountryCode,
+            IsActive = dto.IsActive,
+            CreatedDateUtc = dto.CreatedDateUtc
+        };
     }
 
-    async Task ResolveCurrentUserContextAsync()
+    private sealed class BranchForm
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        public Guid BranchId { get; set; }
+        [Required, StringLength(50)] public string BranchCode { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string BranchName { get; set; } = string.Empty;
+        [StringLength(100)] public string? City { get; set; }
+        [StringLength(100)] public string? StateProvince { get; set; }
+        [StringLength(10)] public string? CountryCode { get; set; }
+        public bool IsActive { get; set; } = true;
+
+        public static BranchForm FromEntry(BranchEntry entry) => new()
+        {
+            BranchId = entry.BranchId,
+            BranchCode = entry.BranchCode,
+            BranchName = entry.BranchName,
+            City = entry.City,
+            StateProvince = entry.StateProvince,
+            CountryCode = entry.CountryCode,
+            IsActive = entry.IsActive
+        };
     }
 }

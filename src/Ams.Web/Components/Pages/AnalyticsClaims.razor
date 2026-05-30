@@ -1,9 +1,1076 @@
 @page "/analytics/claims"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject IJSRuntime Js
 
-<PageTitle>Claims Reports — AMS</PageTitle>
+<PageTitle>Claims Analytics — AMS</PageTitle>
 
-<SharedReportExplorer Title="Claims Reports"
-                      Subtitle="Open claims, loss ratio, severity, reserve, and carrier claim reports from DB data"
-                      Icon="bi-exclamation-circle-fill"
-                      Module="Claims" />
+<AppPageHeader Title="Claims Analytics"
+               Subtitle="Enterprise claims command center for open claims, reserve exposure, severity, litigation, catastrophe response, follow-up queues, reporting, and workflow execution."
+               Icon="bi-exclamation-circle-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_busy"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="CreateClaimFromAnalyticsAsync" disabled="@(_selectedItem is null || _busy)"><i class="bi bi-plus-circle" aria-hidden="true"></i> Create Claim</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="OpenScheduleForSelected" disabled="@(_selectedReport is null || _busy)"><i class="bi bi-calendar-plus" aria-hidden="true"></i> Schedule Report</button>
+        <button class="um-btn um-btn-primary" type="button" @onclick="ExportClaimsPackAsync" disabled="@(!_claimReports.Any() || _busy)"><i class="bi bi-download" aria-hidden="true"></i> Export Claims Pack</button>
+    </Actions>
+</AppPageHeader>
+
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
+{
+    <div class="ac-toast @_toastClass" role="status">
+        <i class="bi @(_toastClass == "ac-toast--danger" ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ac-toast-close" @onclick="ClearToast" aria-label="Dismiss message"><i class="bi bi-x-lg"></i></button>
+    </div>
+}
+
+<div class="ac-page">
+    <section class="ac-hero">
+        <div class="ac-hero-main">
+            <div class="ac-eyebrow"><i class="bi bi-shield-exclamation" aria-hidden="true"></i> Claims command cockpit</div>
+            <h2>@OpenClaimCount.ToString("N0") open claims with @FormatCurrency(ReserveExposure) reserves under management</h2>
+            <p>Prioritize high-severity files, reserve adequacy, litigated matters, catastrophe response, adjuster follow-up, subrogation recovery, client communications, and executive reporting from one native dashboard.</p>
+            <div class="ac-hero-meta">
+                <span><i class="bi bi-cash-stack"></i> @FormatCurrency(TotalIncurred) incurred</span>
+                <span><i class="bi bi-percent"></i> @AverageLossRatio.ToString("N1")% loss ratio</span>
+                <span><i class="bi bi-bank2"></i> @LitigationCount.ToString("N0") litigated</span>
+                <span><i class="bi bi-cloud-lightning-rain"></i> @CatastropheCount.ToString("N0") CAT impacted</span>
+            </div>
+        </div>
+        <div class="ac-hero-panel">
+            <div class="ac-score-card">
+                <span>Claims readiness score</span>
+                <strong>@ClaimsReadinessScore%</strong>
+                <div class="ac-score-track"><div style="width:@ClaimsReadinessScore%"></div></div>
+                <small>@ClaimsReadinessSummary</small>
+            </div>
+            <div class="ac-priority-list">
+                @foreach (var item in PriorityItems)
+                {
+                    <button type="button" class="ac-priority-item" @onclick="() => SelectAnalyticsItem(item)">
+                        <span class="ac-risk ac-risk--@PriorityCss(item.Priority)">@ItemScore(item)</span>
+                        <div><strong>@item.Title</strong><small>@item.NextAction</small></div>
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                    </button>
+                }
+            </div>
+        </div>
+    </section>
+
+    <section class="ac-kpi-strip" aria-label="Claims KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="ac-kpi-card @(IsActiveKpi(kpi.Key) ? "ac-kpi-card--active" : null)" title="@kpi.Tooltip" @onclick="() => SetKpi(kpi.Key)">
+                <span class="ac-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="ac-kpi-label">@kpi.Label</span>
+                <strong>@kpi.Value</strong>
+                <small>@kpi.Detail</small>
+            </button>
+        }
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger ac-load-error" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
+        </div>
+    }
+
+    <section class="ac-command-bar">
+        <div class="ac-search-wrap">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="ac-search" placeholder="Search claims analytics, accounts, handlers, carriers, CAT events, priorities, loss types, or reports…" @bind="_search" @bind:event="oninput" />
+        </div>
+        <select class="ac-select" @bind="_segmentFilter">
+            <option value="">All segments</option>
+            @foreach (var segment in Segments)
+            {
+                <option value="@segment">@segment</option>
+            }
+        </select>
+        <select class="ac-select" @bind="_priorityFilter">
+            <option value="">All priorities</option>
+            <option value="Critical">Critical</option>
+            <option value="High">High</option>
+            <option value="Normal">Normal</option>
+        </select>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="RunClaimsReportsAsync" disabled="@(!_claimReports.Any() || _busy)"><i class="bi bi-play-fill" aria-hidden="true"></i> Run Claims Reports</button>
+    </section>
+
+    <div class="ac-tabs" role="tablist" aria-label="Claims analytics views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" role="tab" class="ac-tab @(_activeTab == tab.Key ? "ac-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </div>
+
+    @if (_loading)
+    {
+        <div class="ac-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Loading claims analytics...</div>
+    }
+    else
+    {
+        <section class="ac-grid">
+            <article class="ac-panel ac-panel--main">
+                <div class="ac-panel-header"><i class="bi @ActiveIcon" aria-hidden="true"></i><div><strong>@ActiveListTitle</strong><span>@FilteredItemCount.ToString("N0") analytics records ranked by severity, reserves, litigation, CAT impact, and due date.</span></div></div>
+                @if (!FilteredItems.Any())
+                {
+                    <div class="ac-empty"><i class="bi bi-exclamation-circle" aria-hidden="true"></i><strong>No claims records match this view</strong><span>Adjust filters or refresh seeded claims analytics.</span></div>
+                }
+                else
+                {
+                    <div class="ac-item-list">
+                        @foreach (var item in FilteredItems)
+                        {
+                            <button type="button" class="ac-item-row @(_selectedItem?.Title == item.Title ? "ac-item-row--active" : null)" @onclick="() => SelectAnalyticsItem(item)">
+                                <span class="ac-module-icon ac-module-icon--@CategoryCss(item.Category)"><i class="bi @CategoryIcon(item.Category)" aria-hidden="true"></i></span>
+                                <div class="ac-item-main">
+                                    <div class="ac-item-title"><strong>@item.Title</strong><span class="ac-badge ac-badge--@CategoryCss(item.Category)">@item.Category</span><span class="ac-badge ac-badge--type">@item.LossType</span></div>
+                                    <p>@item.Insight</p>
+                                    <div class="ac-item-meta"><span>@item.Owner</span><span>@item.Segment</span><span>@item.OpenClaims.ToString("N0") open</span><span>@FormatCurrency(item.TotalReserves) reserves</span><span>@item.LossRatioPct.ToString("N1")% LR</span><span>due @FormatDate(item.DueDateUtc)</span></div>
+                                </div>
+                                <span class="ac-row-score">@ItemScore(item)</span>
+                            </button>
+                        }
+                    </div>
+                }
+            </article>
+
+            <aside class="ac-side">
+                @if (_selectedItem is null)
+                {
+                    <div class="ac-panel"><div class="ac-empty ac-empty--side"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a claims priority</strong><span>Choose a severity queue, litigated matter, CAT response, follow-up backlog, or recovery opportunity to inspect actions and workflow.</span></div></div>
+                }
+                else
+                {
+                    <article class="ac-panel">
+                        <div class="ac-panel-header"><i class="bi @CategoryIcon(_selectedItem.Category)" aria-hidden="true"></i><div><strong>Claims command</strong><span>@_selectedItem.Priority · @_selectedItem.Status</span></div></div>
+                        <div class="ac-detail">
+                            <div class="ac-detail-head">
+                                <span class="ac-module-icon ac-module-icon--@CategoryCss(_selectedItem.Category)"><i class="bi @CategoryIcon(_selectedItem.Category)" aria-hidden="true"></i></span>
+                                <div><strong>@_selectedItem.Title</strong><span>@_selectedItem.Insight</span></div>
+                            </div>
+                            <dl>
+                                <dt>Open claims</dt><dd>@_selectedItem.OpenClaims.ToString("N0")</dd>
+                                <dt>Total incurred</dt><dd>@FormatCurrency(_selectedItem.TotalIncurred)</dd>
+                                <dt>Reserves</dt><dd>@FormatCurrency(_selectedItem.TotalReserves)</dd>
+                                <dt>Paid</dt><dd>@FormatCurrency(_selectedItem.TotalPaid)</dd>
+                                <dt>Loss ratio</dt><dd>@_selectedItem.LossRatioPct.ToString("N1")%</dd>
+                                <dt>Average age</dt><dd>@_selectedItem.AverageDaysOpen.ToString("N0") days</dd>
+                                <dt>Trend</dt><dd class="@TrendCss(_selectedItem.TrendPct)">@FormatSigned(_selectedItem.TrendPct)%</dd>
+                                <dt>Next action</dt><dd>@_selectedItem.NextAction</dd>
+                            </dl>
+                            <div class="ac-detail-actions">
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="CreateClaimFromAnalyticsAsync" disabled="@_busy"><i class="bi bi-plus-circle" aria-hidden="true"></i> Create Claim</button>
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="FocusClaimsReport" disabled="@(_selectedReport is null)"><i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i> Focus Report</button>
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="RunSelectedReportAsync" disabled="@(_selectedReport is null || _busy)"><i class="bi bi-play-fill" aria-hidden="true"></i> Run</button>
+                                <button type="button" class="um-btn um-btn-primary" @onclick="ExportSelectedReportAsync" disabled="@(_selectedReport is null || _busy)"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+                            </div>
+                        </div>
+                    </article>
+                }
+
+                <article class="ac-panel">
+                    <div class="ac-panel-header"><i class="bi bi-folder2-open" aria-hidden="true"></i><div><strong>Live claim queue</strong><span>Existing claims sorted by enterprise impact.</span></div></div>
+                    <div class="ac-case-list">
+                        @foreach (var claim in ClaimsByImportance.Take(6))
+                        {
+                            <button type="button" class="ac-case-row @(_selectedClaim?.ClaimId == claim.ClaimId ? "ac-case-row--active" : null)" @onclick="() => SelectClaimAsync(claim)">
+                                <div><strong>@claim.ClaimNumber</strong><span>@claim.AccountName · @claim.Lob · @claim.AssignedHandler</span></div>
+                                <div class="ac-case-metrics"><strong>@FormatCurrency(claim.TotalIncurred)</strong><span class="ac-risk-label ac-risk-label--@ClaimRiskClass(claim)">@claim.DaysOpen days</span></div>
+                            </button>
+                        }
+                        @if (!_claims.Any())
+                        {
+                            <div class="ac-empty ac-empty--compact"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No live claims loaded</strong><span>Create one from a claims analytics priority.</span></div>
+                        }
+                    </div>
+                </article>
+
+                <article class="ac-panel">
+                    <div class="ac-panel-header"><i class="bi bi-lightning-charge" aria-hidden="true"></i><div><strong>Claim actions</strong><span>Status, follow-up, and activity workflow.</span></div></div>
+                    @if (_selectedClaim is null)
+                    {
+                        <div class="ac-empty ac-empty--compact"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a live claim</strong><span>Choose a claim to log advocacy activity or update follow-up.</span></div>
+                    }
+                    else
+                    {
+                        <div class="ac-action-list">
+                            <div class="ac-selected-claim"><strong>@_selectedClaim.AccountName</strong><span>@_selectedClaim.ClaimNumber · @_selectedClaim.Status · @FormatCurrency(_selectedClaim.TotalReserves) reserves</span></div>
+                            <button type="button" class="um-btn um-btn-ghost" @onclick="LogClaimActivityAsync" disabled="@_busy"><i class="bi bi-journal-plus" aria-hidden="true"></i> Log Advocacy Activity</button>
+                            <button type="button" class="um-btn um-btn-ghost" @onclick="MarkClaimFollowUpAsync" disabled="@_busy"><i class="bi bi-flag" aria-hidden="true"></i> Set Follow-Up</button>
+                            <button type="button" class="um-btn um-btn-ghost" @onclick="EscalateClaimAsync" disabled="@_busy"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Escalate Claim</button>
+                        </div>
+                    }
+                </article>
+            </aside>
+        </section>
+
+        <section class="ac-lower-grid">
+            <article class="ac-panel">
+                <div class="ac-panel-header"><i class="bi bi-cloud-lightning-rain" aria-hidden="true"></i><div><strong>CAT response center</strong><span>Events, outreach, FNOL, and geo-tag workflow.</span></div></div>
+                <div class="ac-cat-list">
+                    @foreach (var catEvent in CatEventsByImportance.Take(5))
+                    {
+                        <button type="button" class="ac-cat-row @(_selectedCatEvent?.CatEventId == catEvent.CatEventId ? "ac-cat-row--active" : null)" @onclick="() => SelectCatEvent(catEvent)">
+                            <div><strong>@catEvent.Name</strong><span>@catEvent.CatCode · @catEvent.EventType · @catEvent.AffectedStates</span></div>
+                            <span class="ac-badge ac-badge--red">@catEvent.Severity</span>
+                        </button>
+                    }
+                    @if (!_catEvents.Any())
+                    {
+                        <div class="ac-empty ac-empty--compact"><i class="bi bi-cloud" aria-hidden="true"></i><strong>No CAT events loaded</strong><span>CAT panels still use claims analytics and live claim data.</span></div>
+                    }
+                    <div class="ac-detail-actions ac-detail-actions--stacked">
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="ApplyCatGeoTagAsync" disabled="@(_selectedCatEvent is null || _busy)"><i class="bi bi-geo-alt" aria-hidden="true"></i> Apply Geo Tag</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="SendCatBlastAsync" disabled="@(_selectedCatEvent is null || _busy)"><i class="bi bi-megaphone" aria-hidden="true"></i> Send CAT Blast</button>
+                        <button type="button" class="um-btn um-btn-primary" @onclick="CreateFastFnolAsync" disabled="@(_selectedCatEvent is null || !_affectedInsureds.Any() || _busy)"><i class="bi bi-lightning-fill" aria-hidden="true"></i> Fast FNOL</button>
+                    </div>
+                </div>
+            </article>
+
+            <article class="ac-panel">
+                <div class="ac-panel-header"><i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i><div><strong>Claims report workflow</strong><span>Preview, run, export, and scheduled delivery.</span></div></div>
+                <div class="ac-report-list">
+                    @foreach (var report in ClaimsReportsByImportance.Take(6))
+                    {
+                        <button type="button" class="ac-report-row @(_selectedReport?.ReportDefinitionId == report.ReportDefinitionId ? "ac-report-row--active" : null)" @onclick="() => SelectReport(report)">
+                            <div><strong>@report.ReportName</strong><span>@report.ReportTypeCode · @report.OutputFormats · @LastRunLabel(report.ReportDefinitionId)</span></div>
+                            <span>@ReportScore(report)</span>
+                        </button>
+                    }
+                    @if (!_claimReports.Any())
+                    {
+                        <div class="ac-empty ac-empty--compact"><i class="bi bi-file-earmark-x" aria-hidden="true"></i><strong>No Claims module reports found</strong><span>Claims analytics still uses seeded records and live claims workflow data.</span></div>
+                    }
+                </div>
+            </article>
+        </section>
+    }
+</div>
+
+@if (_showSchedule)
+{
+    <div class="ac-modal-backdrop" role="presentation" @onclick="CloseSchedule">
+        <div class="ac-modal" role="dialog" aria-modal="true" aria-label="Schedule claims report" @onclick:stopPropagation="true">
+            <EditForm EditContext="_scheduleEditContext" OnValidSubmit="ScheduleAsync">
+                <DataAnnotationsValidator />
+                <div class="ac-modal-header">
+                    <i class="bi bi-calendar-plus" aria-hidden="true"></i>
+                    <span>Schedule claims report</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseSchedule"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="ac-modal-body">
+                    @if (!string.IsNullOrWhiteSpace(_formError))
+                    {
+                        <div class="alert alert-danger ac-load-error" role="alert">@_formError</div>
+                    }
+                    <div class="ac-form-grid">
+                        <label>Report
+                            <select class="ac-input" @bind="_scheduleForm.ReportDefinitionId">
+                                @foreach (var report in ClaimsReportsByImportance)
+                                {
+                                    <option value="@report.ReportDefinitionId">@report.ReportName</option>
+                                }
+                            </select>
+                            <ValidationMessage For="() => _scheduleForm.ReportDefinitionId" class="text-danger" />
+                        </label>
+                        <label>Frequency
+                            <select class="ac-input" @bind="_scheduleForm.FrequencyCode">
+                                @foreach (var frequency in _frequencyOptions)
+                                {
+                                    <option value="@frequency">@frequency</option>
+                                }
+                            </select>
+                            <ValidationMessage For="() => _scheduleForm.FrequencyCode" class="text-danger" />
+                        </label>
+                        <label>Output format
+                            <select class="ac-input" @bind="_scheduleForm.OutputFormat">
+                                @foreach (var format in _formatOptions)
+                                {
+                                    <option value="@format">@format</option>
+                                }
+                            </select>
+                            <ValidationMessage For="() => _scheduleForm.OutputFormat" class="text-danger" />
+                        </label>
+                        <label>Delivery email
+                            <input class="ac-input" @bind="_scheduleForm.DeliveryEmail" />
+                            <ValidationMessage For="() => _scheduleForm.DeliveryEmail" class="text-danger" />
+                        </label>
+                    </div>
+                </div>
+                <div class="ac-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseSchedule">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check2" aria-hidden="true"></i> Schedule</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@code {
+    private readonly TabItem[] _tabs =
+    [
+        new("all", "Command", "bi-speedometer2"),
+        new("severity", "Severity", "bi-graph-up-arrow"),
+        new("litigation", "Litigation", "bi-bank2"),
+        new("catastrophe", "CAT", "bi-cloud-lightning-rain"),
+        new("follow-up", "Follow-Up", "bi-flag"),
+        new("subrogation", "Recovery", "bi-arrow-repeat"),
+        new("reports", "Reports", "bi-file-earmark-bar-graph")
+    ];
+
+    private readonly string[] _frequencyOptions = ["Daily", "Weekly", "Monthly", "Quarterly"];
+    private readonly string[] _formatOptions = ["PDF", "Excel", "CSV"];
+
+    private Guid _tenantId;
+    private Guid? _currentUserId;
+    private bool _loading;
+    private bool _saving;
+    private bool _showSchedule;
+    private string _search = string.Empty;
+    private string _activeKpi = "all";
+    private string _activeTab = "all";
+    private string _segmentFilter = string.Empty;
+    private string _priorityFilter = string.Empty;
+    private string? _loadError;
+    private string? _formError;
+    private string? _toastMessage;
+    private string _toastClass = "ac-toast--success";
+    private List<ClaimsAnalyticsRecord> _claimsItems = [];
+    private List<ClaimDto> _claims = [];
+    private List<CatEventDto> _catEvents = [];
+    private List<AffectedInsuredDto> _affectedInsureds = [];
+    private List<ReportDefinitionDto> _claimReports = [];
+    private List<ReportExecutionDto> _executions = [];
+    private List<ReportScheduleDto> _schedules = [];
+    private ClaimsAnalyticsRecord? _selectedItem;
+    private ClaimDto? _selectedClaim;
+    private CatEventDto? _selectedCatEvent;
+    private ReportDefinitionDto? _selectedReport;
+    private ScheduleForm _scheduleForm = new();
+    private EditContext _scheduleEditContext = default!;
+    private bool _busy => _loading || _saving;
+
+    private int OpenClaimCount => _claims.Count(c => !ClosedStatuses.Contains(c.Status, StringComparer.OrdinalIgnoreCase)) + _claimsItems.Sum(i => i.OpenClaims);
+    private decimal ReserveExposure => _claims.Sum(c => c.TotalReserves) + _claimsItems.Sum(i => i.TotalReserves);
+    private decimal TotalIncurred => _claims.Sum(c => c.TotalIncurred) + _claimsItems.Sum(i => i.TotalIncurred);
+    private decimal TotalPaid => _claims.Sum(c => c.TotalPaid) + _claimsItems.Sum(i => i.TotalPaid);
+    private int LitigationCount => _claims.Count(c => c.IsLitigation) + _claimsItems.Sum(i => i.LitigationCount);
+    private int CatastropheCount => _claims.Count(c => c.IsCatastrophe) + _claimsItems.Sum(i => i.CatastropheCount) + _affectedInsureds.Count;
+    private double AverageLossRatio => _claimsItems.Count == 0 ? CalculateLossRatio(TotalIncurred, TotalPaid + ReserveExposure) : _claimsItems.Average(i => i.LossRatioPct);
+    private int ScheduledReportCount => _claimReports.Count(r => IsScheduled(r.ReportDefinitionId));
+    private int ClaimsReadinessScore => Math.Clamp(58 + Math.Min(14, _claimsItems.Count * 2) + Math.Min(14, ScheduledReportCount * 5) + Math.Min(14, _claims.Count(c => !string.IsNullOrWhiteSpace(c.AssignedHandler))), 0, 100);
+    private string ClaimsReadinessSummary => ClaimsReadinessScore >= 90 ? "Claims command workflow is executive ready" : ClaimsReadinessScore >= 80 ? "Claims operations are healthy with focused severity and CAT actions" : "Run reports, schedule delivery, and clear follow-up queues to improve readiness";
+    private IEnumerable<string> Segments => _claimsItems.Select(i => i.Segment).Concat(_claims.Select(c => c.Lob)).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().OrderBy(s => s);
+    private IEnumerable<ClaimsAnalyticsRecord> PriorityItems => _claimsItems.OrderByDescending(ItemScore).ThenBy(i => i.DueDateUtc).Take(4);
+    private IEnumerable<ClaimDto> ClaimsByImportance => _claims.OrderByDescending(ClaimScore).ThenByDescending(c => c.TotalIncurred).ThenByDescending(c => c.DaysOpen);
+    private IEnumerable<CatEventDto> CatEventsByImportance => _catEvents.OrderByDescending(CatScore).ThenByDescending(c => c.StartDate);
+    private IEnumerable<ReportDefinitionDto> ClaimsReportsByImportance => _claimReports.OrderByDescending(ReportScore).ThenBy(r => r.ReportName);
+    private IEnumerable<ClaimsAnalyticsRecord> FilteredItems => _claimsItems
+        .Where(MatchesSearch)
+        .Where(i => string.IsNullOrWhiteSpace(_segmentFilter) || i.Segment == _segmentFilter)
+        .Where(i => string.IsNullOrWhiteSpace(_priorityFilter) || i.Priority == _priorityFilter)
+        .Where(MatchesActiveView)
+        .OrderByDescending(ItemScore)
+        .ThenBy(i => i.DueDateUtc)
+        .ToList();
+    private int FilteredItemCount => FilteredItems.Count();
+
+    private static readonly string[] ClosedStatuses = ["Closed", "Resolved", "Denied", "Withdrawn"];
+
+    private IEnumerable<KpiItem> Kpis =>
+    [
+        new("all", "Open Claims", "bi-folder2-open", OpenClaimCount.ToString("N0"), FormatCurrency(ReserveExposure), "Show all claims command records"),
+        new("severity", "Severity", "bi-graph-up-arrow", FormatCurrency(TotalIncurred), $"{AverageLossRatio:N1}% LR", "Filter large-loss reserve and severity records"),
+        new("litigation", "Litigation", "bi-bank2", LitigationCount.ToString("N0"), "active matters", "Filter litigated and disputed claims"),
+        new("catastrophe", "CAT", "bi-cloud-lightning-rain", CatastropheCount.ToString("N0"), $"{_catEvents.Count:N0} events", "Filter catastrophe response records"),
+        new("follow-up", "Follow-Up", "bi-flag", _claims.Count(c => c.FollowUpDueDate.HasValue && c.FollowUpDueDate <= DateTime.UtcNow.AddDays(7)).ToString("N0"), "due soon", "Filter overdue adjuster and client follow-up"),
+        new("reports", "Reports", "bi-file-earmark-bar-graph", _claimReports.Count.ToString("N0"), $"{ScheduledReportCount:N0} scheduled", "Filter Claims module reports")
+    ];
+
+    private string ActiveListTitle => _activeTab switch
+    {
+        "severity" => "Large-loss and reserve severity queue",
+        "litigation" => "Litigated and disputed claim strategy",
+        "catastrophe" => "Catastrophe response and FNOL outreach",
+        "follow-up" => "Adjuster and client follow-up backlog",
+        "subrogation" => "Subrogation and recovery opportunities",
+        "reports" => "Claims reporting workflow",
+        _ => "Enterprise claims command queue"
+    };
+
+    private string ActiveIcon => _activeTab switch
+    {
+        "severity" => "bi-graph-up-arrow",
+        "litigation" => "bi-bank2",
+        "catastrophe" => "bi-cloud-lightning-rain",
+        "follow-up" => "bi-flag",
+        "subrogation" => "bi-arrow-repeat",
+        "reports" => "bi-file-earmark-bar-graph",
+        _ => "bi-speedometer2"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _currentUserId = context.UserId;
+        _scheduleEditContext = new(_scheduleForm);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var records = await Api.SearchDashboardRecordsAsync(_tenantId, "ClaimsAnalytics", _search);
+            var claims = await Api.SearchClaimsAsync(_tenantId, _search, pageSize: 100);
+            var catPage = await Api.GetCatastrophePageAsync(_tenantId);
+            var definitions = await Api.SearchReportDefinitionsAsync("Claims");
+            var executions = await Api.SearchReportExecutionsAsync(_tenantId, null);
+            var schedules = await Api.SearchReportSchedulesAsync(_tenantId, "Claims");
+
+            _claimsItems = records?.Items.Select(r => DeserializeClaimsRecord(r.Id, r.JsonData)).Where(r => r is not null).Cast<ClaimsAnalyticsRecord>().ToList() ?? [];
+            _claims = claims?.Items.ToList() ?? catPage?.Claims ?? [];
+            _catEvents = catPage?.Events ?? [];
+            _affectedInsureds = catPage?.AffectedInsureds ?? [];
+            _claimReports = definitions?.Items.Where(r => r.ModuleCode == "Claims" || r.ReportName.Contains("Claim", StringComparison.OrdinalIgnoreCase) || r.ReportName.Contains("Loss", StringComparison.OrdinalIgnoreCase)).ToList() ?? [];
+            _executions = executions?.Items.Where(e => _claimReports.Any(r => r.ReportDefinitionId == e.ReportDefinitionId)).ToList() ?? [];
+            _schedules = schedules?.Items.Where(s => _claimReports.Any(r => r.ReportDefinitionId == s.ReportDefinitionId)).ToList() ?? [];
+            _selectedItem = _selectedItem is null ? FilteredItems.FirstOrDefault() : _claimsItems.FirstOrDefault(i => i.Title == _selectedItem.Title) ?? FilteredItems.FirstOrDefault();
+            _selectedClaim = _selectedClaim is null ? ClaimsByImportance.FirstOrDefault() : _claims.FirstOrDefault(c => c.ClaimId == _selectedClaim.ClaimId) ?? ClaimsByImportance.FirstOrDefault();
+            _selectedCatEvent = _selectedCatEvent is null ? CatEventsByImportance.FirstOrDefault() : _catEvents.FirstOrDefault(c => c.CatEventId == _selectedCatEvent.CatEventId) ?? CatEventsByImportance.FirstOrDefault();
+            _selectedReport = _selectedReport is null ? ClaimsReportsByImportance.FirstOrDefault() : _claimReports.FirstOrDefault(r => r.ReportDefinitionId == _selectedReport.ReportDefinitionId) ?? ClaimsReportsByImportance.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load claims analytics: {ex.Message}";
+            _claimsItems = [];
+            _claims = [];
+            _catEvents = [];
+            _affectedInsureds = [];
+            _claimReports = [];
+            _executions = [];
+            _schedules = [];
+            ShowToast(_loadError, true);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static ClaimsAnalyticsRecord? DeserializeClaimsRecord(Guid id, string json)
+    {
+        try
+        {
+            var item = System.Text.Json.JsonSerializer.Deserialize<ClaimsAnalyticsRecord>(json, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            if (item is not null) item.Id = id;
+            return item;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private bool MatchesSearch(ClaimsAnalyticsRecord item)
+    {
+        if (string.IsNullOrWhiteSpace(_search)) return true;
+        return item.Title.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Category.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Owner.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Segment.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.LossType.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Status.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Insight.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || _claims.Any(c => c.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) || c.ClaimNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) || c.Carrier.Contains(_search, StringComparison.OrdinalIgnoreCase) || c.AssignedHandler.Contains(_search, StringComparison.OrdinalIgnoreCase))
+            || _catEvents.Any(e => e.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || e.CatCode.Contains(_search, StringComparison.OrdinalIgnoreCase))
+            || _claimReports.Any(r => r.ReportName.Contains(_search, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private bool MatchesActiveView(ClaimsAnalyticsRecord item) => _activeTab switch
+    {
+        "severity" => item.Category == "Severity" || item.TotalIncurred >= 500000 || item.LossRatioPct >= 65,
+        "litigation" => item.Category == "Litigation" || item.LitigationCount > 0,
+        "catastrophe" => item.Category == "Catastrophe" || item.CatastropheCount > 0,
+        "follow-up" => item.Category == "Follow Up",
+        "subrogation" => item.Category == "Subrogation",
+        "reports" => _claimReports.Any(),
+        _ => true
+    };
+
+    private void SetKpi(string key)
+    {
+        _activeKpi = key;
+        _activeTab = key;
+    }
+
+    private void SetTab(string key)
+    {
+        _activeTab = key;
+        _activeKpi = key;
+    }
+
+    private void ResetFilters()
+    {
+        _search = string.Empty;
+        _segmentFilter = string.Empty;
+        _priorityFilter = string.Empty;
+        _activeKpi = "all";
+        _activeTab = "all";
+    }
+
+    private bool IsActiveKpi(string key) => _activeKpi == key;
+    private void SelectAnalyticsItem(ClaimsAnalyticsRecord item) => _selectedItem = item;
+    private void SelectReport(ReportDefinitionDto report) => _selectedReport = report;
+    private void SelectCatEvent(CatEventDto catEvent) => _selectedCatEvent = catEvent;
+
+    private async Task SelectClaimAsync(ClaimDto claim)
+    {
+        _selectedClaim = claim;
+        try
+        {
+            var detail = await Api.GetClaimDetailAsync(claim.ClaimId);
+            ShowToast(detail is null ? $"Focused claim: {claim.ClaimNumber}" : $"Focused claim: {detail.Claim.ClaimNumber} · {detail.Activities.Count} activities");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Claim focus failed: {ex.Message}", true);
+        }
+    }
+
+    private void FocusClaimsReport()
+    {
+        if (_selectedReport is null) return;
+        _activeTab = "reports";
+        _activeKpi = "reports";
+        ShowToast($"Focused report workflow: {_selectedReport.ReportName}");
+    }
+
+    private int TabCount(string key) => key switch
+    {
+        "severity" => _claimsItems.Count(i => i.Category == "Severity" || i.TotalIncurred >= 500000 || i.LossRatioPct >= 65),
+        "litigation" => _claimsItems.Count(i => i.Category == "Litigation" || i.LitigationCount > 0) + _claims.Count(c => c.IsLitigation),
+        "catastrophe" => _claimsItems.Count(i => i.Category == "Catastrophe" || i.CatastropheCount > 0) + _catEvents.Count,
+        "follow-up" => _claimsItems.Count(i => i.Category == "Follow Up") + _claims.Count(c => c.FollowUpDueDate.HasValue),
+        "subrogation" => _claimsItems.Count(i => i.Category == "Subrogation") + _claims.Count(c => c.HasSubrogation),
+        "reports" => _claimReports.Count,
+        _ => _claimsItems.Count
+    };
+
+    private async Task CreateClaimFromAnalyticsAsync()
+    {
+        if (_selectedItem is null) return;
+        _saving = true;
+        try
+        {
+            var id = await Api.CreateClaimAsync(new Ams.Application.Features.Claims.CreateClaimRequest
+            {
+                TenantId = _tenantId,
+                PolicyNumber = $"CLAIM-{DateTime.UtcNow:yyyyMMddHHmm}",
+                AccountName = _selectedItem.Title,
+                Lob = _selectedItem.Segment,
+                Carrier = "Claims Advocacy Review",
+                LossType = _selectedItem.LossType,
+                PrimaryClaimant = _selectedItem.Owner,
+                DateOfLoss = DateTime.UtcNow.AddDays(-Math.Max(1, _selectedItem.AverageDaysOpen)),
+                DateReported = DateTime.UtcNow,
+                LossDescription = _selectedItem.Insight,
+                LossLocation = "Claims analytics generated",
+                StateOfLoss = _selectedItem.CatastropheCount > 0 ? "Multi" : null,
+                CauseOfLoss = _selectedItem.Category,
+                AssignedHandler = _selectedItem.Owner,
+                Priority = _selectedItem.Priority,
+                Status = "Open",
+                CatCode = _selectedItem.CatastropheCount > 0 ? "CAT-ANALYTICS" : null,
+                TotalIncurred = _selectedItem.TotalIncurred,
+                TotalReserves = _selectedItem.TotalReserves,
+                TotalPaid = _selectedItem.TotalPaid,
+                IsLitigation = _selectedItem.LitigationCount > 0,
+                HasSubrogation = _selectedItem.Category == "Subrogation",
+                IsCatastrophe = _selectedItem.CatastropheCount > 0,
+                IsDisputed = _selectedItem.Category == "Litigation",
+                CreatedByUserId = _currentUserId
+            });
+
+            await Api.AddClaimActivityAsync(new Ams.Application.Features.Claims.CreateClaimActivityRequest
+            {
+                ClaimId = id,
+                ActivityType = "Plan",
+                Title = $"Created from claims analytics: {_selectedItem.Title}",
+                Category = _selectedItem.Category,
+                Party = _selectedItem.Owner,
+                Notes = _selectedItem.NextAction,
+                Amount = _selectedItem.TotalIncurred,
+                ActivityDate = DateTime.UtcNow,
+                CreatedBy = "Claims Analytics",
+                IsPinned = _selectedItem.Priority == "Critical"
+            });
+
+            ShowToast($"Claim created from analytics: {_selectedItem.Title}");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Create claim failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task LogClaimActivityAsync()
+    {
+        if (_selectedClaim is null) return;
+        _saving = true;
+        try
+        {
+            await Api.AddClaimActivityAsync(new Ams.Application.Features.Claims.CreateClaimActivityRequest
+            {
+                ClaimId = _selectedClaim.ClaimId,
+                ActivityType = "Advocacy",
+                Title = "Claims analytics advocacy review logged",
+                Category = _selectedItem?.Category ?? "Claims Review",
+                Party = _selectedClaim.Carrier,
+                Notes = _selectedItem?.NextAction ?? "Reviewed claim status, reserves, and next follow-up from claims analytics.",
+                Amount = _selectedClaim.TotalIncurred,
+                PriorAmount = _selectedClaim.TotalPaid,
+                ActivityDate = DateTime.UtcNow,
+                CreatedBy = "Claims Analytics",
+                IsPinned = _selectedClaim.IsLitigation || _selectedClaim.TotalIncurred >= 75000
+            });
+            ShowToast($"Activity logged for {_selectedClaim.ClaimNumber}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Log activity failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task MarkClaimFollowUpAsync()
+    {
+        if (_selectedClaim is null) return;
+        _saving = true;
+        try
+        {
+            await Api.UpdateClaimFollowUpAsync(_selectedClaim.ClaimId, new Ams.Application.Features.Claims.UpdateClaimFollowUpRequest
+            {
+                FollowUpReason = _selectedItem?.NextAction ?? "Claims analytics follow-up",
+                Priority = ClaimPriority(_selectedClaim),
+                FollowUpDueDate = DateTime.UtcNow.AddDays(_selectedClaim.IsLitigation ? 2 : 5),
+                IsSnoozed = false,
+                ModifiedByUserId = _currentUserId
+            });
+            ShowToast($"Follow-up set for {_selectedClaim.ClaimNumber}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Follow-up update failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task EscalateClaimAsync()
+    {
+        if (_selectedClaim is null) return;
+        _saving = true;
+        try
+        {
+            await Api.UpdateClaimStatusAsync(_selectedClaim.ClaimId, new Ams.Application.Features.Claims.UpdateClaimStatusRequest
+            {
+                Status = "Escalated",
+                ModifiedByUserId = _currentUserId
+            });
+            await Api.AddClaimActivityAsync(new Ams.Application.Features.Claims.CreateClaimActivityRequest
+            {
+                ClaimId = _selectedClaim.ClaimId,
+                ActivityType = "Escalation",
+                Title = "Claim escalated from analytics command center",
+                Category = "Escalation",
+                Party = _selectedClaim.AssignedHandler,
+                Notes = _selectedItem?.Insight ?? "Escalated based on severity, litigation, CAT, or follow-up risk.",
+                Amount = _selectedClaim.TotalIncurred,
+                ActivityDate = DateTime.UtcNow,
+                CreatedBy = "Claims Analytics",
+                IsPinned = true
+            });
+            ShowToast($"Claim escalated: {_selectedClaim.ClaimNumber}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Escalation failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ApplyCatGeoTagAsync()
+    {
+        if (_selectedCatEvent is null) return;
+        _saving = true;
+        try
+        {
+            var count = await Api.ApplyGeoTagAsync(_selectedCatEvent.CatEventId, _selectedCatEvent.AffectedStates, null, null, _segmentFilter, null);
+            ShowToast($"CAT geo-tag applied to {count:N0} insured(s).");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Geo-tag failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task SendCatBlastAsync()
+    {
+        if (_selectedCatEvent is null) return;
+        _saving = true;
+        try
+        {
+            var count = await Api.SendCatBlastAsync(new Ams.Application.Features.Claims.CatBlastRequest
+            {
+                TenantId = _tenantId,
+                CatEventId = _selectedCatEvent.CatEventId,
+                Channel = "Email",
+                Template = "CAT Client Outreach",
+                Subject = $"Important claim support for {_selectedCatEvent.Name}",
+                Body = "Our claims advocacy team is monitoring the event and can assist with FNOL, carrier contact, documentation, and recovery next steps.",
+                Status = "Delivered",
+                SentAt = DateTime.UtcNow
+            });
+            ShowToast($"CAT blast sent to {count:N0} insured(s).");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"CAT blast failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task CreateFastFnolAsync()
+    {
+        if (_selectedCatEvent is null) return;
+        var insured = _affectedInsureds.OrderByDescending(a => a.TivAtRisk).FirstOrDefault(a => !a.FnolFiled) ?? _affectedInsureds.OrderByDescending(a => a.TivAtRisk).FirstOrDefault();
+        if (insured is null) return;
+        _saving = true;
+        try
+        {
+            await Api.CreateFastCatFnolAsync(new Ams.Application.Features.Claims.FastCatFnolRequest
+            {
+                TenantId = _tenantId,
+                CatEventId = _selectedCatEvent.CatEventId,
+                PolicyNumber = insured.PolicyNumber,
+                InsuredName = insured.AccountName,
+                Phone = "555-0100",
+                LossType = _selectedCatEvent.EventType,
+                EstimatedRange = FormatCurrency(insured.TivAtRisk),
+                Description = $"Fast FNOL generated from CAT response dashboard for {_selectedCatEvent.Name}."
+            });
+            ShowToast($"Fast FNOL created for {insured.AccountName}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Fast FNOL failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task RunSelectedReportAsync()
+    {
+        if (_selectedReport is not null)
+        {
+            await RunReportAsync(_selectedReport);
+        }
+    }
+
+    private async Task ExportSelectedReportAsync()
+    {
+        if (_selectedReport is not null)
+        {
+            await ExportReportAsync(_selectedReport);
+        }
+    }
+
+    private async Task RunClaimsReportsAsync()
+    {
+        var candidates = ClaimsReportsByImportance.Take(2).ToList();
+        foreach (var report in candidates)
+        {
+            await RunReportAsync(report);
+        }
+        if (candidates.Count > 0)
+        {
+            ShowToast($"Claims report run completed for {candidates.Count} report(s).");
+        }
+    }
+
+    private async Task RunReportAsync(ReportDefinitionDto report)
+    {
+        _saving = true;
+        try
+        {
+            await Api.RunReportAsync(report.ReportDefinitionId, new RunReportRequest(_tenantId, PreferredFormat(report), _currentUserId));
+            ShowToast($"Claims report run completed: {report.ReportName}");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Run failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ExportReportAsync(ReportDefinitionDto report)
+    {
+        _saving = true;
+        try
+        {
+            var file = await Api.DownloadReportExcelAsync(report.ReportDefinitionId, _tenantId);
+            await DownloadFileAsync(file);
+            ShowToast($"Claims export downloaded: {report.ReportName}");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Export failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ExportClaimsPackAsync()
+    {
+        _saving = true;
+        try
+        {
+            var file = await Api.DownloadReportsExcelAsync(new DownloadReportsRequest
+            {
+                TenantId = _tenantId,
+                ReportDefinitionIds = _claimReports.Select(r => r.ReportDefinitionId).ToList(),
+                SearchTerm = _search,
+                ModuleCode = "Claims",
+                Format = "Excel"
+            });
+            await DownloadFileAsync(file);
+            ShowToast($"Claims analytics pack downloaded for {_claimReports.Count} report(s).");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Export claims pack failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void OpenScheduleForSelected()
+    {
+        if (_selectedReport is not null)
+        {
+            OpenSchedule(_selectedReport);
+        }
+    }
+
+    private void OpenSchedule(ReportDefinitionDto report)
+    {
+        _scheduleForm = new ScheduleForm
+        {
+            ReportDefinitionId = report.ReportDefinitionId,
+            OutputFormat = PreferredFormat(report),
+            FrequencyCode = "Weekly",
+            DeliveryEmail = "claims-ops@agencybinder.local"
+        };
+        _scheduleEditContext = new(_scheduleForm);
+        _formError = null;
+        _showSchedule = true;
+    }
+
+    private void CloseSchedule()
+    {
+        _showSchedule = false;
+        _formError = null;
+    }
+
+    private async Task ScheduleAsync()
+    {
+        _formError = null;
+        if (!_scheduleEditContext.Validate()) return;
+        _saving = true;
+        try
+        {
+            await Api.ScheduleReportAsync(new ScheduleReportRequest(_tenantId, _scheduleForm.ReportDefinitionId, _scheduleForm.FrequencyCode, _scheduleForm.OutputFormat, _scheduleForm.DeliveryEmail));
+            _showSchedule = false;
+            ShowToast($"Claims report scheduled for {_scheduleForm.DeliveryEmail}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Schedule failed: {ex.Message}";
+            ShowToast($"Schedule failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task DownloadFileAsync(ReportDownloadFile file)
+    {
+        var fileName = file.FileName.Replace("'", string.Empty).Replace("\"", string.Empty);
+        var base64 = Convert.ToBase64String(file.Content);
+        var script = $"(() => {{ const a = document.createElement(\"a\"); a.href = \"data:application/vnd.ms-excel;base64,{base64}\"; a.download = \"{fileName}\"; document.body.appendChild(a); a.click(); a.remove(); }})()";
+        await Js.InvokeVoidAsync("eval", script);
+    }
+
+    private void ShowToast(string message, bool danger = false)
+    {
+        _toastMessage = message;
+        _toastClass = danger ? "ac-toast--danger" : "ac-toast--success";
+    }
+
+    private void ClearToast() => _toastMessage = null;
+
+    private bool IsScheduled(Guid reportDefinitionId) => _schedules.Any(s => s.ReportDefinitionId == reportDefinitionId && s.IsActive);
+    private static bool IsExportable(ReportDefinitionDto report) => report.OutputFormats.Contains("Excel", StringComparison.OrdinalIgnoreCase) || report.OutputFormats.Contains("CSV", StringComparison.OrdinalIgnoreCase);
+    private static string PreferredFormat(ReportDefinitionDto report) => report.OutputFormats.Contains("Excel", StringComparison.OrdinalIgnoreCase) ? "Excel" : report.OutputFormats.Contains("CSV", StringComparison.OrdinalIgnoreCase) ? "CSV" : "PDF";
+
+    private int ReportScore(ReportDefinitionDto report)
+    {
+        var score = 35;
+        if (report.ReportTypeCode == "Analytics") score += 20;
+        if (report.ReportTypeCode == "Detail") score += 12;
+        if (IsScheduled(report.ReportDefinitionId)) score += 18;
+        if (_executions.Any(e => e.ReportDefinitionId == report.ReportDefinitionId)) score += 16;
+        if (IsExportable(report)) score += 8;
+        return Math.Clamp(score, 0, 100);
+    }
+
+    private int ItemScore(ClaimsAnalyticsRecord item)
+    {
+        var score = item.Priority switch { "Critical" => 40, "High" => 28, "Normal" => 16, _ => 10 };
+        score += item.Category switch { "Severity" => 22, "Litigation" => 20, "Catastrophe" => 18, "Follow Up" => 15, "Subrogation" => 10, _ => 6 };
+        score += Math.Min(18, (int)(item.TotalIncurred / 75000m));
+        score += Math.Min(12, (int)(item.LossRatioPct / 8));
+        score += Math.Min(8, item.LitigationCount * 2 + item.CatastropheCount / 5);
+        if (item.DueDateUtc <= DateTime.UtcNow.AddDays(7)) score += 10;
+        return Math.Clamp(score, 0, 100);
+    }
+
+    private static int ClaimScore(ClaimDto claim)
+    {
+        var score = 20;
+        if (claim.IsLitigation || claim.IsDisputed) score += 20;
+        if (claim.IsCatastrophe) score += 16;
+        if (claim.TotalIncurred >= 75000) score += 18;
+        if (claim.TotalReserves >= 50000) score += 12;
+        if (claim.DaysOpen >= 60) score += 10;
+        if (claim.FollowUpDueDate.HasValue && claim.FollowUpDueDate <= DateTime.UtcNow.AddDays(7)) score += 10;
+        return Math.Clamp(score, 0, 100);
+    }
+
+    private static int CatScore(CatEventDto item)
+        => item.Severity switch { "Critical" => 100, "High" => 82, "Medium" => 62, _ => 45 };
+
+    private string LastRunLabel(Guid reportDefinitionId)
+        => _executions.Where(e => e.ReportDefinitionId == reportDefinitionId).OrderByDescending(e => e.CreatedDateUtc).FirstOrDefault() is { } execution
+            ? $"Run {FormatRelative(execution.CompletedDateUtc ?? execution.CreatedDateUtc)}"
+            : "Never run";
+
+    private static double CalculateLossRatio(decimal incurred, decimal exposure) => exposure <= 0 ? 0 : (double)(incurred / exposure * 100m);
+    private static string FormatCurrency(decimal value) => value >= 1000000 ? $"${value / 1000000m:N1}M" : $"${value / 1000m:N0}K";
+    private static string FormatDate(DateTime value) => value.ToLocalTime().ToString("MMM d");
+    private static string FormatRelative(DateTime? utc)
+    {
+        if (utc is null || utc == default) return "never";
+        var diff = DateTime.UtcNow - utc.Value.ToUniversalTime();
+        if (diff.TotalMinutes < 60) return $"{Math.Max(1, (int)diff.TotalMinutes)}m ago";
+        if (diff.TotalHours < 24) return $"{(int)diff.TotalHours}h ago";
+        return $"{(int)diff.TotalDays}d ago";
+    }
+
+    private static string FormatSigned(double value) => value >= 0 ? $"+{value:N1}" : value.ToString("N1");
+    private static string TrendCss(double value) => value >= 0 ? "ac-negative" : "ac-positive";
+    private static string PriorityCss(string value) => value.ToLowerInvariant();
+    private static string ClaimPriority(ClaimDto claim) => claim.IsLitigation || claim.TotalIncurred >= 75000 ? "Critical" : claim.IsCatastrophe || claim.DaysOpen >= 45 ? "High" : "Standard";
+    private static string ClaimRiskClass(ClaimDto claim) => ClaimScore(claim) >= 75 ? "high" : ClaimScore(claim) >= 55 ? "medium" : "low";
+    private static string CategoryCss(string value) => value switch { "Severity" => "red", "Litigation" => "purple", "Catastrophe" => "amber", "Follow Up" => "blue", "Subrogation" => "green", _ => "slate" };
+    private static string CategoryIcon(string value) => value switch { "Severity" => "bi-graph-up-arrow", "Litigation" => "bi-bank2", "Catastrophe" => "bi-cloud-lightning-rain", "Follow Up" => "bi-flag", "Subrogation" => "bi-arrow-repeat", _ => "bi-exclamation-circle" };
+
+    private sealed record TabItem(string Key, string Label, string Icon);
+    private sealed record KpiItem(string Key, string Label, string Icon, string Value, string Detail, string Tooltip);
+
+    private sealed class ClaimsAnalyticsRecord
+    {
+        public Guid Id { get; set; }
+        public string Category { get; set; } = string.Empty;
+        public string Priority { get; set; } = string.Empty;
+        public string Title { get; set; } = string.Empty;
+        public string Owner { get; set; } = string.Empty;
+        public string Segment { get; set; } = string.Empty;
+        public string LossType { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public int OpenClaims { get; set; }
+        public decimal TotalIncurred { get; set; }
+        public decimal TotalReserves { get; set; }
+        public decimal TotalPaid { get; set; }
+        public double LossRatioPct { get; set; }
+        public int AverageDaysOpen { get; set; }
+        public int LitigationCount { get; set; }
+        public int CatastropheCount { get; set; }
+        public double TrendPct { get; set; }
+        public DateTime DueDateUtc { get; set; }
+        public string NextAction { get; set; } = string.Empty;
+        public string Insight { get; set; } = string.Empty;
+    }
+
+    private sealed class ScheduleForm
+    {
+        [Required] public Guid ReportDefinitionId { get; set; }
+        [Required, StringLength(40)] public string FrequencyCode { get; set; } = "Weekly";
+        [Required, StringLength(20)] public string OutputFormat { get; set; } = "Excel";
+        [Required, EmailAddress, StringLength(254)] public string DeliveryEmail { get; set; } = "claims-ops@agencybinder.local";
+    }
+}

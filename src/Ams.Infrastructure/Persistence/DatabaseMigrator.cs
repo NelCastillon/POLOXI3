@@ -176,6 +176,8 @@ public sealed class DatabaseMigrator
         new("0143_Portal_WhiteLabelConfiguration_CreateSeed", Migration0143_PortalWhiteLabelConfigurationCreateSeed),
         new("0144_Portal_ActivityEvent_CreateSeed", Migration0144_PortalActivityEventCreateSeed),
         new("0145_Portal_MyAccountProfile_CreateSeed", Migration0145_PortalMyAccountProfileCreateSeed),
+        new("0146_Portal_MobileInstall_CreateSeed", Migration0146_PortalMobileInstallCreateSeed),
+        new("0147_Portal_ApiUsage_CreateSeed", Migration0147_PortalApiUsageCreateSeed),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -7721,5 +7723,156 @@ SELECT NEWID(), @TenantId, @AgencyName, N'Tenant Admin', @AdminEmail, N'Tenant A
        N'[{""title"":""Branding published"",""detail"":""White-label portal configuration is live"",""severity"":""Healthy"",""icon"":""bi-palette""},{""title"":""Urgent request queue"",""detail"":""3 urgent self-service requests need review"",""severity"":""Watch"",""icon"":""bi-exclamation-triangle""},{""title"":""Admin login"",""detail"":""Tenant admin accessed portal console"",""severity"":""Info"",""icon"":""bi-person-check""}]',
        SYSUTCDATETIME(), @AdminUserId, 0
 WHERE NOT EXISTS (SELECT 1 FROM Portal.MyAccountProfile WHERE TenantId = @TenantId AND IsDeleted = 0);
+";
+
+    private const string Migration0146_PortalMobileInstallCreateSeed = @"
+IF SCHEMA_ID(N'Portal') IS NULL EXEC(N'CREATE SCHEMA Portal');
+
+IF OBJECT_ID(N'Portal.MobileInstall', N'U') IS NULL
+BEGIN
+    CREATE TABLE Portal.MobileInstall
+    (
+        MobileInstallId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Portal_MobileInstall PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        InstallNumber NVARCHAR(40) NOT NULL,
+        AccountName NVARCHAR(200) NOT NULL,
+        UserName NVARCHAR(200) NOT NULL,
+        UserEmail NVARCHAR(320) NOT NULL CONSTRAINT DF_MobileInstall_UserEmail DEFAULT N'',
+        Platform NVARCHAR(40) NOT NULL,
+        DeviceModel NVARCHAR(160) NOT NULL,
+        AppVersion NVARCHAR(40) NOT NULL,
+        OsVersion NVARCHAR(80) NOT NULL CONSTRAINT DF_MobileInstall_OsVersion DEFAULT N'',
+        Status NVARCHAR(80) NOT NULL,
+        ComplianceStatus NVARCHAR(80) NOT NULL CONSTRAINT DF_MobileInstall_Compliance DEFAULT N'Compliant',
+        RiskLevel NVARCHAR(40) NOT NULL CONSTRAINT DF_MobileInstall_Risk DEFAULT N'Low',
+        EnrollmentType NVARCHAR(80) NOT NULL CONSTRAINT DF_MobileInstall_Enroll DEFAULT N'Client Self-Service',
+        LastIpAddress NVARCHAR(80) NOT NULL CONSTRAINT DF_MobileInstall_Ip DEFAULT N'',
+        LastLocation NVARCHAR(160) NOT NULL CONSTRAINT DF_MobileInstall_Location DEFAULT N'',
+        PushTokenStatus NVARCHAR(80) NOT NULL CONSTRAINT DF_MobileInstall_Push DEFAULT N'Healthy',
+        RecommendedAction NVARCHAR(500) NOT NULL CONSTRAINT DF_MobileInstall_Action DEFAULT N'',
+        InstalledDateUtc DATETIME2 NOT NULL,
+        LastSeenDateUtc DATETIME2 NOT NULL,
+        LastPushDateUtc DATETIME2 NULL,
+        Sessions30d INT NOT NULL CONSTRAINT DF_MobileInstall_Sessions DEFAULT 0,
+        DocumentsViewed30d INT NOT NULL CONSTRAINT DF_MobileInstall_Docs DEFAULT 0,
+        RequestsSubmitted30d INT NOT NULL CONSTRAINT DF_MobileInstall_Requests DEFAULT 0,
+        PushesSent30d INT NOT NULL CONSTRAINT DF_MobileInstall_Pushes DEFAULT 0,
+        BiometricEnabled BIT NOT NULL CONSTRAINT DF_MobileInstall_Biometric DEFAULT 0,
+        MfaVerified BIT NOT NULL CONSTRAINT DF_MobileInstall_Mfa DEFAULT 0,
+        OfflineAccessEnabled BIT NOT NULL CONSTRAINT DF_MobileInstall_Offline DEFAULT 0,
+        UpdateRequired BIT NOT NULL CONSTRAINT DF_MobileInstall_Update DEFAULT 0,
+        TrustedDevice BIT NOT NULL CONSTRAINT DF_MobileInstall_Trusted DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_MobileInstall_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_MobileInstall_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Portal.MobileInstall') AND name = N'IX_MobileInstall_Tenant_Status')
+    CREATE INDEX IX_MobileInstall_Tenant_Status ON Portal.MobileInstall(TenantId, IsDeleted, Status, ComplianceStatus, LastSeenDateUtc DESC);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Portal.MobileInstall') AND name = N'UX_MobileInstall_Tenant_Number')
+    CREATE UNIQUE INDEX UX_MobileInstall_Tenant_Number ON Portal.MobileInstall(TenantId, InstallNumber) WHERE IsDeleted = 0;
+
+DECLARE @TenantId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM Core.Tenant ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000001');
+DECLARE @AdminUserId UNIQUEIDENTIFIER = (SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId ORDER BY CreatedDateUtc);
+
+DECLARE @Installs TABLE
+(
+    InstallNumber NVARCHAR(40), AccountName NVARCHAR(200), UserName NVARCHAR(200), UserEmail NVARCHAR(320), Platform NVARCHAR(40), DeviceModel NVARCHAR(160), AppVersion NVARCHAR(40), OsVersion NVARCHAR(80), Status NVARCHAR(80), ComplianceStatus NVARCHAR(80), RiskLevel NVARCHAR(40), EnrollmentType NVARCHAR(80), LastIpAddress NVARCHAR(80), LastLocation NVARCHAR(160), PushTokenStatus NVARCHAR(80), RecommendedAction NVARCHAR(500), InstalledDaysAgo INT, LastSeenHoursAgo INT, LastPushHoursAgo INT NULL, Sessions30d INT, DocumentsViewed30d INT, RequestsSubmitted30d INT, PushesSent30d INT, BiometricEnabled BIT, MfaVerified BIT, OfflineAccessEnabled BIT, UpdateRequired BIT, TrustedDevice BIT
+);
+
+INSERT INTO @Installs VALUES
+(N'MOB-1001', N'Chen Family', N'Rachel Chen', N'rachel.chen@example.com', N'iOS', N'iPhone 15 Pro', N'2.4.1', N'iOS 18.2', N'Active', N'Compliant', N'Low', N'Client Self-Service', N'72.14.20.18', N'Austin, TX', N'Healthy', N'No action required.', 32, 2, 5, 42, 18, 4, 16, 1, 1, 1, 0, 1),
+(N'MOB-1002', N'Webb Holdings LLC', N'Marcus Webb', N'marcus.webb@example.com', N'Android', N'Pixel 8', N'2.4.0', N'Android 15', N'Active', N'Update Recommended', N'Medium', N'Client Self-Service', N'98.21.44.77', N'Fort Worth, TX', N'Healthy', N'Ask client to update to 2.4.1 for latest document fixes.', 21, 18, 20, 31, 12, 2, 11, 1, 1, 1, 1, 1),
+(N'MOB-1003', N'Riverside Construction LLC', N'Beth Owens', N'beth@riverside.example', N'iOS', N'iPad Air', N'2.3.8', N'iPadOS 17.6', N'Active', N'Update Required', N'High', N'Broker Assisted', N'24.18.42.8', N'Dallas, TX', N'Registration Stale', N'Force mobile update and refresh push token before renewal campaign.', 74, 7, NULL, 58, 33, 8, 0, 0, 1, 1, 1, 0),
+(N'MOB-1004', N'Torres Household', N'Pamela Torres', N'pamela.torres@example.com', N'Android', N'Samsung Galaxy S24', N'2.4.1', N'Android 14', N'Active', N'Compliant', N'Low', N'Client Self-Service', N'67.44.12.91', N'San Antonio, TX', N'Healthy', N'No action required.', 12, 4, 12, 24, 8, 3, 9, 1, 1, 0, 0, 1),
+(N'MOB-1005', N'Kim Dental Group', N'David Kim', N'david.kim@example.com', N'iOS', N'iPhone 13', N'2.2.9', N'iOS 16.7', N'Suspended', N'Non-Compliant', N'Critical', N'Client Self-Service', N'104.44.12.9', N'Plano, TX', N'Disabled', N'Review suspended account before reactivating device access.', 120, 96, NULL, 9, 1, 0, 0, 0, 0, 0, 1, 0),
+(N'MOB-1006', N'Sato Tech LLC', N'Ken Sato', N'ken@sato.example', N'Android', N'OnePlus 12', N'2.4.1', N'Android 15', N'Active', N'Compliant', N'Low', N'SSO Provisioned', N'71.42.88.19', N'Round Rock, TX', N'Healthy', N'No action required.', 18, 30, 30, 37, 15, 6, 14, 1, 1, 1, 0, 1),
+(N'MOB-1007', N'Grant Farms', N'Alisha Grant', N'alisha@grantfarms.example', N'iOS', N'iPhone 14', N'2.4.1', N'iOS 18.1', N'Pending MFA', N'Needs Verification', N'Medium', N'Client Self-Service', N'69.18.22.14', N'Waco, TX', N'Healthy', N'Send MFA enrollment reminder before enabling payments.', 5, 60, 62, 7, 2, 1, 3, 1, 0, 0, 0, 0),
+(N'MOB-1008', N'Patel Logistics', N'Noah Patel', N'noah@patellogistics.example', N'Android', N'Pixel Fold', N'2.4.1', N'Android 15', N'Active', N'Compliant', N'Low', N'Client Self-Service', N'66.31.10.44', N'Houston, TX', N'Healthy', N'No action required.', 9, 14, 16, 28, 21, 5, 13, 1, 1, 1, 0, 1);
+
+INSERT INTO Portal.MobileInstall
+(MobileInstallId, TenantId, InstallNumber, AccountName, UserName, UserEmail, Platform, DeviceModel, AppVersion, OsVersion, Status, ComplianceStatus, RiskLevel, EnrollmentType, LastIpAddress, LastLocation, PushTokenStatus, RecommendedAction, InstalledDateUtc, LastSeenDateUtc, LastPushDateUtc, Sessions30d, DocumentsViewed30d, RequestsSubmitted30d, PushesSent30d, BiometricEnabled, MfaVerified, OfflineAccessEnabled, UpdateRequired, TrustedDevice, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @TenantId, i.InstallNumber, i.AccountName, i.UserName, i.UserEmail, i.Platform, i.DeviceModel, i.AppVersion, i.OsVersion, i.Status, i.ComplianceStatus, i.RiskLevel, i.EnrollmentType, i.LastIpAddress, i.LastLocation, i.PushTokenStatus, i.RecommendedAction,
+       DATEADD(DAY, -i.InstalledDaysAgo, SYSUTCDATETIME()), DATEADD(HOUR, -i.LastSeenHoursAgo, SYSUTCDATETIME()), CASE WHEN i.LastPushHoursAgo IS NULL THEN NULL ELSE DATEADD(HOUR, -i.LastPushHoursAgo, SYSUTCDATETIME()) END,
+       i.Sessions30d, i.DocumentsViewed30d, i.RequestsSubmitted30d, i.PushesSent30d, i.BiometricEnabled, i.MfaVerified, i.OfflineAccessEnabled, i.UpdateRequired, i.TrustedDevice, SYSUTCDATETIME(), @AdminUserId, 0
+FROM @Installs i
+WHERE NOT EXISTS (SELECT 1 FROM Portal.MobileInstall mi WHERE mi.TenantId = @TenantId AND mi.InstallNumber = i.InstallNumber AND mi.IsDeleted = 0);
+";
+
+    private const string Migration0147_PortalApiUsageCreateSeed = @"
+IF SCHEMA_ID(N'Portal') IS NULL EXEC(N'CREATE SCHEMA Portal');
+
+IF OBJECT_ID(N'Portal.ApiUsage', N'U') IS NULL
+BEGIN
+    CREATE TABLE Portal.ApiUsage
+    (
+        ApiUsageId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Portal_ApiUsage PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        EndpointCode NVARCHAR(80) NOT NULL,
+        EndpointName NVARCHAR(200) NOT NULL,
+        Method NVARCHAR(12) NOT NULL,
+        Route NVARCHAR(300) NOT NULL,
+        IntegrationName NVARCHAR(160) NOT NULL,
+        ApiKeyName NVARCHAR(160) NOT NULL,
+        Status NVARCHAR(80) NOT NULL,
+        HealthStatus NVARCHAR(80) NOT NULL CONSTRAINT DF_ApiUsage_Health DEFAULT N'Healthy',
+        Priority NVARCHAR(40) NOT NULL CONSTRAINT DF_ApiUsage_Priority DEFAULT N'Normal',
+        Owner NVARCHAR(160) NOT NULL CONSTRAINT DF_ApiUsage_Owner DEFAULT N'Portal Ops',
+        Detail NVARCHAR(1000) NOT NULL CONSTRAINT DF_ApiUsage_Detail DEFAULT N'',
+        RecommendedAction NVARCHAR(500) NOT NULL CONSTRAINT DF_ApiUsage_Action DEFAULT N'',
+        LastCallUtc DATETIME2 NOT NULL,
+        Calls30d INT NOT NULL CONSTRAINT DF_ApiUsage_Calls DEFAULT 0,
+        SuccessCount30d INT NOT NULL CONSTRAINT DF_ApiUsage_Success DEFAULT 0,
+        WarningCount30d INT NOT NULL CONSTRAINT DF_ApiUsage_Warning DEFAULT 0,
+        ErrorCount30d INT NOT NULL CONSTRAINT DF_ApiUsage_Error DEFAULT 0,
+        AvgLatencyMs INT NOT NULL CONSTRAINT DF_ApiUsage_AvgLatency DEFAULT 0,
+        P95LatencyMs INT NOT NULL CONSTRAINT DF_ApiUsage_P95 DEFAULT 0,
+        RateLimitPerMinute INT NOT NULL CONSTRAINT DF_ApiUsage_RateLimit DEFAULT 0,
+        QuotaUsedPercent INT NOT NULL CONSTRAINT DF_ApiUsage_Quota DEFAULT 0,
+        WebhookDeliveries30d INT NOT NULL CONSTRAINT DF_ApiUsage_Webhooks DEFAULT 0,
+        RetryCount30d INT NOT NULL CONSTRAINT DF_ApiUsage_Retries DEFAULT 0,
+        RequiresReview BIT NOT NULL CONSTRAINT DF_ApiUsage_Review DEFAULT 0,
+        ReviewedDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ApiUsage_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_ApiUsage_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Portal.ApiUsage') AND name = N'IX_ApiUsage_Tenant_Status')
+    CREATE INDEX IX_ApiUsage_Tenant_Status ON Portal.ApiUsage(TenantId, IsDeleted, Status, HealthStatus, LastCallUtc DESC);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Portal.ApiUsage') AND name = N'UX_ApiUsage_Tenant_Endpoint')
+    CREATE UNIQUE INDEX UX_ApiUsage_Tenant_Endpoint ON Portal.ApiUsage(TenantId, EndpointCode) WHERE IsDeleted = 0;
+
+DECLARE @TenantId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM Core.Tenant ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000001');
+DECLARE @AdminUserId UNIQUEIDENTIFIER = (SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId ORDER BY CreatedDateUtc);
+
+DECLARE @Usage TABLE
+(
+    EndpointCode NVARCHAR(80), EndpointName NVARCHAR(200), Method NVARCHAR(12), Route NVARCHAR(300), IntegrationName NVARCHAR(160), ApiKeyName NVARCHAR(160), Status NVARCHAR(80), HealthStatus NVARCHAR(80), Priority NVARCHAR(40), Owner NVARCHAR(160), Detail NVARCHAR(1000), RecommendedAction NVARCHAR(500), LastCallMinutesAgo INT, Calls30d INT, SuccessCount30d INT, WarningCount30d INT, ErrorCount30d INT, AvgLatencyMs INT, P95LatencyMs INT, RateLimitPerMinute INT, QuotaUsedPercent INT, WebhookDeliveries30d INT, RetryCount30d INT, RequiresReview BIT, Reviewed BIT
+);
+
+INSERT INTO @Usage VALUES
+(N'documents-list', N'Document center list', N'GET', N'/portal/documents', N'Client Portal', N'portal-web', N'Successful', N'Healthy', N'Normal', N'Portal Ops', N'High-volume document center read endpoint for client portal and mobile app.', N'Monitor cache hit rate and preserve current rate limit.', 12, 48200, 48011, 151, 38, 118, 390, 1200, 62, 0, 151, 0, 1),
+(N'request-submit', N'Self-service request intake', N'POST', N'/portal/requests', N'Self-Service', N'portal-web', N'Successful', N'Healthy', N'High', N'CSR Queue', N'Creates COI, policy change, billing, and document service requests from the portal.', N'Keep priority routing enabled and audit payload validation weekly.', 42, 2210, 2187, 18, 5, 246, 780, 450, 48, 2205, 18, 0, 1),
+(N'auth-login', N'Portal authentication', N'POST', N'/portal/auth', N'Authentication', N'portal-auth', N'Warning', N'Watch', N'Critical', N'Security Team', N'Elevated failed login attempts and lockout warnings in the last 24 hours.', N'Review suspicious IP patterns and tune lockout messaging.', 18, 18640, 18172, 431, 37, 164, 610, 900, 71, 0, 431, 1, 0),
+(N'webhook-documents', N'Document webhook delivery', N'POST', N'/webhooks/portal/documents', N'Webhook', N'portal-webhook', N'Warning', N'Degraded', N'High', N'Automation', N'Document webhook retries increased after carrier callback timeouts.', N'Validate destination acknowledgements and pause failed subscriptions if retry volume grows.', 27, 3940, 3788, 126, 26, 512, 1840, 300, 83, 3814, 126, 1, 0),
+(N'payments-session', N'Payment session creation', N'POST', N'/portal/payments/session', N'Billing', N'payments-client', N'Successful', N'Healthy', N'High', N'Accounting', N'Creates secure payment provider sessions for client portal invoices.', N'Review quota before billing campaign launch.', 9, 1280, 1272, 7, 1, 302, 920, 240, 55, 0, 7, 0, 1),
+(N'mobile-sync', N'Mobile offline sync', N'POST', N'/portal/mobile/sync', N'Mobile App', N'mobile-app', N'Successful', N'Healthy', N'Normal', N'Mobile Ops', N'Synchronizes documents, policy summaries, notifications, and service request updates.', N'Continue monitoring P95 latency during renewal document releases.', 64, 9120, 9055, 51, 14, 238, 810, 600, 58, 0, 51, 0, 1),
+(N'chat-assistant', N'AI assistant ask', N'POST', N'/portal/chat/assistant', N'AI Assistant', N'aria-assistant', N'Successful', N'Healthy', N'Normal', N'Automation', N'Answers client portal questions and opens service workflows when needed.', N'Review top intents and refresh knowledge base articles.', 6, 3120, 3097, 20, 3, 690, 2100, 180, 42, 0, 20, 0, 1),
+(N'invites-send', N'Portal invite send', N'POST', N'/portal/invites/send', N'Admin Console', N'portal-admin', N'Error', N'At Risk', N'Critical', N'Portal Ops', N'Invite delivery errors are concentrated on unverified domains.', N'Verify sender domain and retry failed invites after DNS validation.', 135, 780, 712, 31, 37, 284, 970, 180, 64, 0, 31, 1, 0);
+
+INSERT INTO Portal.ApiUsage
+(ApiUsageId, TenantId, EndpointCode, EndpointName, Method, Route, IntegrationName, ApiKeyName, Status, HealthStatus, Priority, Owner, Detail, RecommendedAction, LastCallUtc, Calls30d, SuccessCount30d, WarningCount30d, ErrorCount30d, AvgLatencyMs, P95LatencyMs, RateLimitPerMinute, QuotaUsedPercent, WebhookDeliveries30d, RetryCount30d, RequiresReview, ReviewedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @TenantId, u.EndpointCode, u.EndpointName, u.Method, u.Route, u.IntegrationName, u.ApiKeyName, u.Status, u.HealthStatus, u.Priority, u.Owner, u.Detail, u.RecommendedAction, DATEADD(MINUTE, -u.LastCallMinutesAgo, SYSUTCDATETIME()), u.Calls30d, u.SuccessCount30d, u.WarningCount30d, u.ErrorCount30d, u.AvgLatencyMs, u.P95LatencyMs, u.RateLimitPerMinute, u.QuotaUsedPercent, u.WebhookDeliveries30d, u.RetryCount30d, u.RequiresReview, CASE WHEN u.Reviewed = 1 THEN DATEADD(MINUTE, -15, SYSUTCDATETIME()) ELSE NULL END, SYSUTCDATETIME(), @AdminUserId, 0
+FROM @Usage u
+WHERE NOT EXISTS (SELECT 1 FROM Portal.ApiUsage a WHERE a.TenantId = @TenantId AND a.EndpointCode = u.EndpointCode AND a.IsDeleted = 0);
 ";
 }

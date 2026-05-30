@@ -341,6 +341,126 @@ public sealed class PortalMetricRecordDto
     public decimal Amount { get; set; }
 }
 
+public sealed class PortalApiUsageDto
+{
+    public Guid Id { get; set; }
+    public Guid TenantId { get; set; }
+    public string EndpointCode { get; set; } = string.Empty;
+    public string EndpointName { get; set; } = string.Empty;
+    public string Method { get; set; } = string.Empty;
+    public string Route { get; set; } = string.Empty;
+    public string IntegrationName { get; set; } = string.Empty;
+    public string ApiKeyName { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public string HealthStatus { get; set; } = string.Empty;
+    public string Priority { get; set; } = string.Empty;
+    public string Owner { get; set; } = string.Empty;
+    public string Detail { get; set; } = string.Empty;
+    public string RecommendedAction { get; set; } = string.Empty;
+    public DateTime LastCallUtc { get; set; }
+    public int Calls30d { get; set; }
+    public int SuccessCount30d { get; set; }
+    public int WarningCount30d { get; set; }
+    public int ErrorCount30d { get; set; }
+    public int AvgLatencyMs { get; set; }
+    public int P95LatencyMs { get; set; }
+    public int RateLimitPerMinute { get; set; }
+    public int QuotaUsedPercent { get; set; }
+    public int WebhookDeliveries30d { get; set; }
+    public int RetryCount30d { get; set; }
+    public bool RequiresReview { get; set; }
+    public DateTime? ReviewedDateUtc { get; set; }
+    public DateTime CreatedDateUtc { get; set; }
+    public DateTime? ModifiedDateUtc { get; set; }
+}
+
+public sealed class UpdatePortalApiUsageRequest
+{
+    [Required]
+    public Guid TenantId { get; set; }
+
+    [Required]
+    [StringLength(80)]
+    public string Status { get; set; } = string.Empty;
+
+    [Required]
+    [StringLength(80)]
+    public string HealthStatus { get; set; } = string.Empty;
+
+    [Required]
+    [StringLength(40)]
+    public string Priority { get; set; } = string.Empty;
+
+    [Required]
+    [StringLength(160)]
+    public string Owner { get; set; } = string.Empty;
+
+    [StringLength(500)]
+    public string RecommendedAction { get; set; } = string.Empty;
+
+    public bool RequiresReview { get; set; }
+}
+
+public sealed class PortalMobileInstallDto
+{
+    public Guid Id { get; set; }
+    public Guid TenantId { get; set; }
+    public string InstallNumber { get; set; } = string.Empty;
+    public string AccountName { get; set; } = string.Empty;
+    public string UserName { get; set; } = string.Empty;
+    public string UserEmail { get; set; } = string.Empty;
+    public string Platform { get; set; } = string.Empty;
+    public string DeviceModel { get; set; } = string.Empty;
+    public string AppVersion { get; set; } = string.Empty;
+    public string OsVersion { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public string ComplianceStatus { get; set; } = string.Empty;
+    public string RiskLevel { get; set; } = string.Empty;
+    public string EnrollmentType { get; set; } = string.Empty;
+    public string LastIpAddress { get; set; } = string.Empty;
+    public string LastLocation { get; set; } = string.Empty;
+    public string PushTokenStatus { get; set; } = string.Empty;
+    public string RecommendedAction { get; set; } = string.Empty;
+    public DateTime InstalledDateUtc { get; set; }
+    public DateTime LastSeenDateUtc { get; set; }
+    public DateTime? LastPushDateUtc { get; set; }
+    public int Sessions30d { get; set; }
+    public int DocumentsViewed30d { get; set; }
+    public int RequestsSubmitted30d { get; set; }
+    public int PushesSent30d { get; set; }
+    public bool BiometricEnabled { get; set; }
+    public bool MfaVerified { get; set; }
+    public bool OfflineAccessEnabled { get; set; }
+    public bool UpdateRequired { get; set; }
+    public bool TrustedDevice { get; set; }
+    public DateTime CreatedDateUtc { get; set; }
+    public DateTime? ModifiedDateUtc { get; set; }
+}
+
+public sealed class UpdatePortalMobileInstallRequest
+{
+    [Required]
+    public Guid TenantId { get; set; }
+
+    [Required]
+    [StringLength(80)]
+    public string Status { get; set; } = string.Empty;
+
+    [Required]
+    [StringLength(80)]
+    public string ComplianceStatus { get; set; } = string.Empty;
+
+    [Required]
+    [StringLength(40)]
+    public string RiskLevel { get; set; } = string.Empty;
+
+    [StringLength(500)]
+    public string RecommendedAction { get; set; } = string.Empty;
+
+    public bool UpdateRequired { get; set; }
+    public bool TrustedDevice { get; set; }
+}
+
 public sealed class PortalChatSessionDto
 {
     public Guid Id { get; set; }

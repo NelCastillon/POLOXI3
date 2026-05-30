@@ -1,0 +1,588 @@
+@page "/admin/agency/branding"
+@page "/tenant/agency/branding"
+@namespace Ams.Web.Components.Pages.Agency
+@using Ams.Application.Features.Tenants
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
+
+<PageTitle>Agency Branding — Agency Setup</PageTitle>
+
+<AppPageHeader Title="Agency Branding"
+               Subtitle="Enterprise brand system, portal identity, support channels, and tenant-facing experience governance."
+               Icon="bi-palette">
+    <Actions>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/profile"><i class="bi bi-building-check" aria-hidden="true"></i> Profile</a>
+        <a class="um-btn um-btn-ghost" href="/tenant/portal"><i class="bi bi-window-sidebar" aria-hidden="true"></i> Portal Preview</a>
+        <button class="um-btn um-btn-primary" type="button" @onclick="OpenEditModal"><i class="bi bi-pencil-square" aria-hidden="true"></i> Edit Branding</button>
+    </Actions>
+</AppPageHeader>
+
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
+{
+    <div class="ab-toast @_toastClass" role="status">
+        <i class="bi @(_toastClass == "ab-toast--danger" ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ab-toast-close" @onclick="ClearToast" aria-label="Dismiss message"><i class="bi bi-x-lg"></i></button>
+    </div>
+}
+
+<div class="ab-page">
+    <section class="ab-hero" style="@HeroStyle">
+        <div class="ab-hero-main">
+            <span class="ab-eyebrow"><i class="bi bi-stars" aria-hidden="true"></i> Tenant · Brand Experience</span>
+            <h2>@DisplayBrandName</h2>
+            <p>Control the client-facing brand system used by portals, documents, communications, support workflows, and tenant identity touchpoints.</p>
+            <div class="ab-hero-meta">
+                <span><i class="bi bi-patch-check" aria-hidden="true"></i> @BrandStatus</span>
+                <span><i class="bi bi-globe2" aria-hidden="true"></i> @DisplayValue(_branding?.CustomDomain, "Default tenant domain")</span>
+                <span><i class="bi bi-headset" aria-hidden="true"></i> @SupportSummary</span>
+            </div>
+        </div>
+        <div class="ab-hero-panel">
+            <div class="ab-readiness-card">
+                <span>Brand readiness</span>
+                <strong>@BrandReadinessScore%</strong>
+                <div class="ab-score-track"><div style="width:@BrandReadinessScore%"></div></div>
+                <small>@BrandReadinessSummary</small>
+            </div>
+            <div class="ab-action-list">
+                @foreach (var action in PriorityActions)
+                {
+                    <button type="button" class="ab-action-item" @onclick="() => SetTab(action.Tab)">
+                        <i class="bi @action.Icon" aria-hidden="true"></i>
+                        <span><strong>@action.Title</strong><small>@action.Detail</small></span>
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                    </button>
+                }
+            </div>
+        </div>
+    </section>
+
+    <section class="ab-kpi-strip" aria-label="Agency branding KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="ab-kpi-card @(IsActiveTab(kpi.Key) ? "ab-kpi-card--active" : null)" title="@kpi.Tooltip" @onclick="() => SetTab(kpi.Key)">
+                <span class="ab-kpi-icon ab-kpi-icon--@kpi.Tone"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="ab-kpi-label">@kpi.Label</span>
+                <strong>@kpi.Value</strong>
+                <small>@kpi.Detail</small>
+            </button>
+        }
+    </section>
+
+    <section class="ab-command-bar">
+        <div class="ab-tabs" role="tablist" aria-label="Agency branding sections">
+            @foreach (var tab in Tabs)
+            {
+                <button type="button" role="tab" class="ab-tab @(IsActiveTab(tab.Key) ? "ab-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                    <i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label
+                </button>
+            }
+        </div>
+        <div class="ab-command-actions">
+            <button class="um-btn um-btn-ghost" type="button" @onclick="CopyBrandSummaryAsync" disabled="@(_branding is null)"><i class="bi bi-clipboard" aria-hidden="true"></i> Copy Summary</button>
+            <button class="um-btn um-btn-ghost" type="button" @onclick="OpenResetModal"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset Defaults</button>
+            <button class="um-btn um-btn-primary" type="button" @onclick="OpenEditModal"><i class="bi bi-pencil-square" aria-hidden="true"></i> Update</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger ab-load-error" role="alert"><i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError</div>
+    }
+
+    <section class="ab-content-grid">
+        <div class="ab-main-panel">
+            @if (_loading)
+            {
+                <div class="ab-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Loading agency branding...</div>
+            }
+            else
+            {
+                @if (ShowTab("overview"))
+                {
+                    <section class="ab-section">
+                        <div class="ab-section-header"><i class="bi bi-speedometer2" aria-hidden="true"></i><div><strong>Executive Overview</strong><span>Most important brand readiness signals for tenant experience.</span></div></div>
+                        <div class="ab-overview-grid">
+                            <div class="ab-identity-card">
+                                <span class="ab-module-icon ab-module-icon--blue"><i class="bi bi-type" aria-hidden="true"></i></span>
+                                <div><strong>@DisplayBrandName</strong><span>@BrandStatus</span></div>
+                            </div>
+                            <div class="ab-identity-card">
+                                <span class="ab-module-icon ab-module-icon--green"><i class="bi bi-palette2" aria-hidden="true"></i></span>
+                                <div><strong>@PaletteSummary</strong><span>@ContrastSummary</span></div>
+                            </div>
+                            <div class="ab-identity-card">
+                                <span class="ab-module-icon ab-module-icon--purple"><i class="bi bi-life-preserver" aria-hidden="true"></i></span>
+                                <div><strong>@SupportSummary</strong><span>@LastUpdatedSummary</span></div>
+                            </div>
+                        </div>
+                    </section>
+                }
+
+                @if (ShowTab("identity"))
+                {
+                    <section class="ab-section">
+                        <div class="ab-section-header"><i class="bi bi-fingerprint" aria-hidden="true"></i><div><strong>Brand Identity</strong><span>White-label name, tenant domain, and active brand status.</span></div></div>
+                        <div class="ab-fields">
+                            @Field("White-label Name", _branding?.WhiteLabelName)
+                            @Field("Custom Domain", _branding?.CustomDomain, true)
+                            @Field("Status", BrandStatus)
+                            @Field("Branding Id", _branding?.BrandingId.ToString(), true)
+                            @Field("Tenant Id", _tenantId.ToString(), true)
+                            @Field("Last Updated", LastUpdatedSummary)
+                        </div>
+                    </section>
+                }
+
+                @if (ShowTab("assets"))
+                {
+                    <section class="ab-section">
+                        <div class="ab-section-header"><i class="bi bi-images" aria-hidden="true"></i><div><strong>Assets & Palette</strong><span>Logo, favicon, color tokens, and custom stylesheet references.</span></div></div>
+                        <div class="ab-fields">
+                            @Field("Logo URL", _branding?.LogoUrl, true)
+                            @Field("Favicon URL", _branding?.FaviconUrl, true)
+                            @ColorField("Primary Color", PrimaryColor)
+                            @ColorField("Secondary Color", SecondaryColor)
+                            @ColorField("Accent Color", AccentColor)
+                            @Field("Custom CSS URL", _branding?.CustomCssUrl, true)
+                        </div>
+                    </section>
+                }
+
+                @if (ShowTab("support"))
+                {
+                    <section class="ab-section">
+                        <div class="ab-section-header"><i class="bi bi-headset" aria-hidden="true"></i><div><strong>Support Experience</strong><span>Client-facing help channels and footer messaging.</span></div></div>
+                        <div class="ab-fields">
+                            @Field("Support Email", _branding?.SupportEmail)
+                            @Field("Support Phone", _branding?.SupportPhone, true)
+                            @Field("Footer Text", _branding?.FooterText)
+                            @Field("Support Readiness", SupportSummary)
+                        </div>
+                    </section>
+                }
+
+                @if (ShowTab("governance"))
+                {
+                    <section class="ab-section">
+                        <div class="ab-section-header"><i class="bi bi-shield-check" aria-hidden="true"></i><div><strong>Brand Governance</strong><span>Enterprise controls for accessibility, completeness, and workflow health.</span></div></div>
+                        <div class="ab-governance-list">
+                            @foreach (var item in Checklist)
+                            {
+                                <div class="ab-governance-item @(item.Done ? "ab-governance-item--done" : null)">
+                                    <i class="bi @(item.Done ? "bi-check-circle-fill" : "bi-exclamation-circle")" aria-hidden="true"></i>
+                                    <span><strong>@item.Label</strong><small>@item.Detail</small></span>
+                                </div>
+                            }
+                        </div>
+                    </section>
+                }
+            }
+        </div>
+
+        <aside class="ab-side-panel">
+            <div class="ab-side-card ab-preview-card">
+                <div class="ab-side-title"><i class="bi bi-window-sidebar" aria-hidden="true"></i><strong>Experience Preview</strong></div>
+                <div class="ab-preview-shell">
+                    <div class="ab-preview-topbar" style="background:@PrimaryColor"><span></span><span></span><span></span></div>
+                    <div class="ab-preview-body">
+                        <div class="ab-preview-logo">
+                            @if (!string.IsNullOrWhiteSpace(_branding?.LogoUrl))
+                            {
+                                <img src="@_branding.LogoUrl" alt="@DisplayBrandName logo" />
+                            }
+                            else
+                            {
+                                <span style="background:@PrimaryColor">@BrandInitials</span>
+                            }
+                            <strong>@DisplayBrandName</strong>
+                        </div>
+                        <div class="ab-preview-copy">
+                            <span>Client portal</span>
+                            <strong>Your protected insurance workspace</strong>
+                            <p>@DisplayValue(_branding?.FooterText, "Configure footer messaging to guide clients through the branded portal experience.")</p>
+                        </div>
+                        <button type="button" style="background:@AccentColor">Continue</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="ab-side-card">
+                <div class="ab-side-title"><i class="bi bi-list-check" aria-hidden="true"></i><strong>Readiness Checklist</strong></div>
+                @foreach (var item in Checklist)
+                {
+                    <div class="ab-check-item @(item.Done ? "ab-check-item--done" : null)">
+                        <i class="bi @(item.Done ? "bi-check-circle-fill" : "bi-exclamation-circle")" aria-hidden="true"></i>
+                        <span><strong>@item.Label</strong><small>@item.Detail</small></span>
+                    </div>
+                }
+            </div>
+
+            <div class="ab-side-card">
+                <div class="ab-side-title"><i class="bi bi-lightning-charge" aria-hidden="true"></i><strong>Workflow Shortcuts</strong></div>
+                <a class="ab-link-action" href="/tenant/agency/profile"><i class="bi bi-building-check" aria-hidden="true"></i> Agency Profile</a>
+                <a class="ab-link-action" href="/tenant/portal-admin/branding"><i class="bi bi-window-dock" aria-hidden="true"></i> Portal Branding</a>
+                <a class="ab-link-action" href="/tenant/communications/templates"><i class="bi bi-envelope-paper" aria-hidden="true"></i> Communication Templates</a>
+                <a class="ab-link-action" href="/tenant/documents"><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Document Library</a>
+            </div>
+        </aside>
+    </section>
+</div>
+
+@if (_showEditModal)
+{
+    <div class="ab-modal-backdrop" role="presentation">
+        <div class="ab-modal" role="dialog" aria-modal="true" aria-labelledby="agency-branding-edit-title">
+            <EditForm EditContext="_editContext" OnValidSubmit="SaveBrandingAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-header">
+                    <i class="bi bi-palette" aria-hidden="true"></i>
+                    <span id="agency-branding-edit-title">Edit Agency Branding</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseEditModal"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="ab-form-grid">
+                        <div class="ab-form-section ab-form-section--full"><strong>Brand identity</strong><span>White-label and domain values used across tenant-facing experiences.</span></div>
+                        <div class="um-field"><label>White-label Name</label><InputText class="um-input" @bind-Value="_form.WhiteLabelName" /><ValidationMessage For="() => _form.WhiteLabelName" class="text-danger" /></div>
+                        <div class="um-field"><label>Custom Domain</label><InputText class="um-input ab-mono" @bind-Value="_form.CustomDomain" /><ValidationMessage For="() => _form.CustomDomain" class="text-danger" /></div>
+                        <div class="um-field ab-form-section--full"><label>Logo URL</label><InputText class="um-input" @bind-Value="_form.LogoUrl" /><ValidationMessage For="() => _form.LogoUrl" class="text-danger" /></div>
+                        <div class="um-field ab-form-section--full"><label>Favicon URL</label><InputText class="um-input" @bind-Value="_form.FaviconUrl" /><ValidationMessage For="() => _form.FaviconUrl" class="text-danger" /></div>
+
+                        <div class="ab-form-section ab-form-section--full"><strong>Enterprise palette</strong><span>Use high-contrast colors for accessible portals and branded workflows.</span></div>
+                        <div class="um-field"><label>Primary Color</label><div class="ab-color-input"><InputText class="um-input ab-mono" @bind-Value="_form.PrimaryColor" /><input type="color" class="ab-color-picker" @bind="_form.PrimaryColor" /></div><ValidationMessage For="() => _form.PrimaryColor" class="text-danger" /></div>
+                        <div class="um-field"><label>Secondary Color</label><div class="ab-color-input"><InputText class="um-input ab-mono" @bind-Value="_form.SecondaryColor" /><input type="color" class="ab-color-picker" @bind="_form.SecondaryColor" /></div><ValidationMessage For="() => _form.SecondaryColor" class="text-danger" /></div>
+                        <div class="um-field"><label>Accent Color</label><div class="ab-color-input"><InputText class="um-input ab-mono" @bind-Value="_form.AccentColor" /><input type="color" class="ab-color-picker" @bind="_form.AccentColor" /></div><ValidationMessage For="() => _form.AccentColor" class="text-danger" /></div>
+                        <div class="um-field ab-form-section--full"><label>Custom CSS URL</label><InputText class="um-input" @bind-Value="_form.CustomCssUrl" /><ValidationMessage For="() => _form.CustomCssUrl" class="text-danger" /></div>
+
+                        <div class="ab-form-section ab-form-section--full"><strong>Support and footer</strong><span>Client-facing help channels and trust messaging.</span></div>
+                        <div class="um-field"><label>Support Email</label><InputText class="um-input" @bind-Value="_form.SupportEmail" /><ValidationMessage For="() => _form.SupportEmail" class="text-danger" /></div>
+                        <div class="um-field"><label>Support Phone</label><InputText class="um-input ab-mono" @bind-Value="_form.SupportPhone" /><ValidationMessage For="() => _form.SupportPhone" class="text-danger" /></div>
+                        <div class="um-field ab-form-section--full"><label>Footer Text</label><InputTextArea class="um-input ab-textarea" @bind-Value="_form.FooterText" /><ValidationMessage For="() => _form.FooterText" class="text-danger" /></div>
+
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger ab-load-error ab-form-section--full" role="alert">@_formError</div>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseEditModal">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-save" aria-hidden="true"></i> Save Branding</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showResetModal)
+{
+    <div class="ab-modal-backdrop" role="presentation">
+        <div class="ab-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="agency-branding-reset-title">
+            <div class="um-modal-header">
+                <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>
+                <span id="agency-branding-reset-title">Reset branding defaults?</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseResetModal"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="um-modal-body">
+                <p class="ab-confirm-copy">This resets white-label values, assets, custom domain, custom CSS, support channels, footer text, and colors to enterprise defaults for this tenant.</p>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseResetModal">Cancel</button>
+                <button type="button" class="um-btn um-btn-primary" disabled="@_saving" @onclick="ResetBrandingAsync"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset Defaults</button>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+@@keyframes ab-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }
+</style>
+
+@code {
+    private const string DefaultPrimaryColor = "#0d6efd";
+    private const string DefaultSecondaryColor = "#6c757d";
+    private const string DefaultAccentColor = "#198754";
+
+    private static readonly TabItem[] Tabs =
+    [
+        new("overview", "Overview", "bi-speedometer2"),
+        new("identity", "Identity", "bi-fingerprint"),
+        new("assets", "Assets", "bi-images"),
+        new("support", "Support", "bi-headset"),
+        new("governance", "Governance", "bi-shield-check")
+    ];
+
+    private Guid _tenantId;
+    private bool _loading;
+    private bool _saving;
+    private bool _showEditModal;
+    private bool _showResetModal;
+    private string _activeTab = "overview";
+    private string? _loadError;
+    private string? _formError;
+    private string? _toastMessage;
+    private string _toastClass = "ab-toast--success";
+    private TenantBrandingDto? _branding;
+    private BrandingForm _form = new();
+    private EditContext _editContext = default!;
+
+    private string DisplayBrandName => DisplayValue(_branding?.WhiteLabelName, "Agency Brand");
+    private string PrimaryColor => NormalizeColor(_branding?.PrimaryColor, DefaultPrimaryColor);
+    private string SecondaryColor => NormalizeColor(_branding?.SecondaryColor, DefaultSecondaryColor);
+    private string AccentColor => NormalizeColor(_branding?.AccentColor, DefaultAccentColor);
+    private string HeroStyle => $"--ab-primary:{PrimaryColor}; --ab-secondary:{SecondaryColor}; --ab-accent:{AccentColor};";
+    private string BrandStatus => _branding is null ? "Not configured" : _branding.IsActive ? "Active brand system" : "Inactive brand system";
+    private string SupportSummary => !string.IsNullOrWhiteSpace(_branding?.SupportEmail) && !string.IsNullOrWhiteSpace(_branding?.SupportPhone) ? "Email and phone configured" : !string.IsNullOrWhiteSpace(_branding?.SupportEmail) ? "Email support configured" : !string.IsNullOrWhiteSpace(_branding?.SupportPhone) ? "Phone support configured" : "Support channels missing";
+    private string PaletteSummary => HasCustomPalette ? "Custom palette configured" : "Default palette active";
+    private string ContrastSummary => AccessibleColorPairs >= 2 ? "Accessible color contrast" : AccessibleColorPairs == 1 ? "Review one color contrast" : "Review palette contrast";
+    private string LastUpdatedSummary => _branding?.ModifiedDateUtc?.ToString("MMM d, yyyy h:mm tt") ?? _branding?.CreatedDateUtc.ToString("MMM d, yyyy h:mm tt") ?? "Not saved yet";
+    private bool HasCustomPalette => !string.Equals(PrimaryColor, DefaultPrimaryColor, StringComparison.OrdinalIgnoreCase) || !string.Equals(SecondaryColor, DefaultSecondaryColor, StringComparison.OrdinalIgnoreCase) || !string.Equals(AccentColor, DefaultAccentColor, StringComparison.OrdinalIgnoreCase);
+    private int AssetCount => new[] { _branding?.LogoUrl, _branding?.FaviconUrl, _branding?.CustomCssUrl }.Count(v => !string.IsNullOrWhiteSpace(v));
+    private int AccessibleColorPairs => new[] { PrimaryColor, SecondaryColor, AccentColor }.Count(color => ContrastRatio(color, "#ffffff") >= 4.5 || ContrastRatio(color, "#0f172a") >= 4.5);
+    private int BrandReadinessScore => Math.Clamp(Checklist.Count(c => c.Done) * 100 / Math.Max(1, Checklist.Count), 0, 100);
+    private string BrandReadinessSummary => BrandReadinessScore >= 90 ? "Brand system is enterprise ready" : BrandReadinessScore >= 70 ? "Core brand is ready with some gaps" : "Complete critical brand identity, support, and asset details";
+    private string BrandInitials => string.Join(string.Empty, DisplayBrandName.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(s => char.ToUpperInvariant(s[0])));
+
+    private IReadOnlyList<ChecklistItem> Checklist =>
+    [
+        new("White-label identity", !string.IsNullOrWhiteSpace(_branding?.WhiteLabelName), "Client-facing brand name configured"),
+        new("Logo asset", !string.IsNullOrWhiteSpace(_branding?.LogoUrl), "Primary logo URL configured"),
+        new("Accessible palette", AccessibleColorPairs >= 2, "At least two brand colors meet contrast guidance"),
+        new("Support channel", !string.IsNullOrWhiteSpace(_branding?.SupportEmail) || !string.IsNullOrWhiteSpace(_branding?.SupportPhone), "Email or phone support configured"),
+        new("Domain governance", !string.IsNullOrWhiteSpace(_branding?.CustomDomain), "Custom domain configured for portal readiness"),
+        new("Footer messaging", !string.IsNullOrWhiteSpace(_branding?.FooterText), "Trust and support messaging configured")
+    ];
+
+    private IEnumerable<KpiItem> Kpis =>
+    [
+        new("overview", "Readiness", "bi-speedometer2", $"{BrandReadinessScore}%", "brand score", "Show the enterprise readiness overview", BrandReadinessScore >= 80 ? "green" : "amber"),
+        new("identity", "Domain", "bi-globe2", string.IsNullOrWhiteSpace(_branding?.CustomDomain) ? "Default" : "Custom", "portal route", "Show brand identity and domain details", string.IsNullOrWhiteSpace(_branding?.CustomDomain) ? "amber" : "blue"),
+        new("assets", "Assets", "bi-images", AssetCount.ToString("N0"), "logo, favicon, css", "Show brand assets and palette details", AssetCount >= 2 ? "green" : "purple"),
+        new("support", "Support", "bi-headset", SupportSummary.StartsWith("Support", StringComparison.OrdinalIgnoreCase) ? "Missing" : "Ready", "client help", "Show support channel details", SupportSummary.StartsWith("Support", StringComparison.OrdinalIgnoreCase) ? "red" : "green"),
+        new("governance", "Contrast", "bi-universal-access", $"{AccessibleColorPairs}/3", "AA checks", "Show brand governance checks", AccessibleColorPairs >= 2 ? "blue" : "red")
+    ];
+
+    private IEnumerable<PriorityAction> PriorityActions => Checklist.Where(c => !c.Done).Take(3).Select(c => new PriorityAction(c.Label, c.Detail, ActionIcon(c.Label), ActionTab(c.Label))).DefaultIfEmpty(new("Review brand", "All critical branding checks are complete", "bi-check2-circle", "overview"));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _editContext = new(_form);
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Agency Setup", "/tenant/agency/profile"), new("Agency Branding", "/tenant/agency/branding"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _branding = await Api.GetTenantBrandingAsync(_tenantId);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Load failed: {ex.Message}";
+            ShowToast(_loadError, true);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void OpenEditModal()
+    {
+        _form = BrandingForm.FromDto(_branding);
+        _editContext = new(_form);
+        _formError = null;
+        _showEditModal = true;
+    }
+
+    private void CloseEditModal()
+    {
+        _showEditModal = false;
+        _formError = null;
+    }
+
+    private void OpenResetModal() => _showResetModal = true;
+    private void CloseResetModal() => _showResetModal = false;
+
+    private async Task SaveBrandingAsync()
+    {
+        _saving = true;
+        _formError = null;
+        try
+        {
+            await Api.UpdateTenantBrandingAsync(_tenantId, _form.ToRequest());
+            _showEditModal = false;
+            ShowToast("Agency branding saved.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast($"Save failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ResetBrandingAsync()
+    {
+        _saving = true;
+        try
+        {
+            await Api.UpdateTenantBrandingAsync(_tenantId, BrandingForm.Defaults().ToRequest());
+            _showResetModal = false;
+            ShowToast("Agency branding reset to defaults.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Reset failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task CopyBrandSummaryAsync()
+    {
+        if (_branding is null) return;
+        var summary = $"{DisplayBrandName} | {BrandStatus} | Domain: {DisplayValue(_branding.CustomDomain, "Default tenant domain")} | Palette: {PrimaryColor}/{SecondaryColor}/{AccentColor} | Support: {SupportSummary} | Readiness: {BrandReadinessScore}%";
+        try
+        {
+            await Js.InvokeVoidAsync("navigator.clipboard.writeText", summary);
+            ShowToast("Branding summary copied to clipboard.");
+        }
+        catch
+        {
+            ShowToast($"Branding summary ready: {summary}");
+        }
+    }
+
+    private void SetTab(string key) => _activeTab = key;
+    private bool IsActiveTab(string key) => _activeTab == key;
+    private bool ShowTab(string key) => _activeTab == key;
+    private void ShowToast(string message, bool danger = false) { _toastMessage = message; _toastClass = danger ? "ab-toast--danger" : "ab-toast--success"; }
+    private void ClearToast() => _toastMessage = null;
+
+    private static string DisplayValue(string? value, string fallback = "—") => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private static string NormalizeColor(string? value, string fallback) => !string.IsNullOrWhiteSpace(value) && value.Trim().StartsWith('#') && (value.Trim().Length is 4 or 7) ? value.Trim() : fallback;
+    private static string ActionIcon(string label) => label.Contains("Logo", StringComparison.OrdinalIgnoreCase) ? "bi-images" : label.Contains("Support", StringComparison.OrdinalIgnoreCase) ? "bi-headset" : label.Contains("Domain", StringComparison.OrdinalIgnoreCase) ? "bi-globe2" : label.Contains("palette", StringComparison.OrdinalIgnoreCase) ? "bi-universal-access" : "bi-pencil-square";
+    private static string ActionTab(string label) => label.Contains("Logo", StringComparison.OrdinalIgnoreCase) || label.Contains("palette", StringComparison.OrdinalIgnoreCase) ? "assets" : label.Contains("Support", StringComparison.OrdinalIgnoreCase) || label.Contains("Footer", StringComparison.OrdinalIgnoreCase) ? "support" : label.Contains("Domain", StringComparison.OrdinalIgnoreCase) || label.Contains("identity", StringComparison.OrdinalIgnoreCase) ? "identity" : "governance";
+
+    private RenderFragment Field(string label, string? value, bool mono = false) => @<div class="ab-field">
+        <span class="ab-field-label">@label</span>
+        <span class="ab-field-value @(mono ? "ab-mono" : null)">@DisplayValue(value)</span>
+    </div>;
+
+    private RenderFragment ColorField(string label, string value) => @<div class="ab-field ab-color-field">
+        <span class="ab-field-label">@label</span>
+        <span class="ab-color-row"><span class="ab-color-swatch" style="background:@value"></span><span class="ab-field-value ab-mono">@value</span></span>
+    </div>;
+
+    private static double ContrastRatio(string foreground, string background)
+    {
+        var fg = RelativeLuminance(foreground);
+        var bg = RelativeLuminance(background);
+        var lighter = Math.Max(fg, bg);
+        var darker = Math.Min(fg, bg);
+        return (lighter + 0.05) / (darker + 0.05);
+    }
+
+    private static double RelativeLuminance(string hex)
+    {
+        var (r, g, b) = ParseColor(hex);
+        static double Channel(int c)
+        {
+            var value = c / 255d;
+            return value <= 0.03928 ? value / 12.92 : Math.Pow((value + 0.055) / 1.055, 2.4);
+        }
+        return 0.2126 * Channel(r) + 0.7152 * Channel(g) + 0.0722 * Channel(b);
+    }
+
+    private static (int R, int G, int B) ParseColor(string hex)
+    {
+        var value = hex.Trim().TrimStart('#');
+        if (value.Length == 3)
+        {
+            value = string.Concat(value.Select(c => new string(c, 2)));
+        }
+
+        return value.Length == 6
+            && int.TryParse(value[..2], System.Globalization.NumberStyles.HexNumber, null, out var r)
+            && int.TryParse(value.Substring(2, 2), System.Globalization.NumberStyles.HexNumber, null, out var g)
+            && int.TryParse(value.Substring(4, 2), System.Globalization.NumberStyles.HexNumber, null, out var b)
+            ? (r, g, b)
+            : (13, 110, 253);
+    }
+
+    private sealed record TabItem(string Key, string Label, string Icon);
+    private sealed record KpiItem(string Key, string Label, string Icon, string Value, string Detail, string Tooltip, string Tone);
+    private sealed record ChecklistItem(string Label, bool Done, string Detail);
+    private sealed record PriorityAction(string Title, string Detail, string Icon, string Tab);
+
+    private sealed class BrandingForm
+    {
+        [StringLength(200)] public string? WhiteLabelName { get; set; }
+        [Url, StringLength(500)] public string? LogoUrl { get; set; }
+        [Url, StringLength(500)] public string? FaviconUrl { get; set; }
+        [RegularExpression("^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$", ErrorMessage = "Use a valid hex color.")] public string? PrimaryColor { get; set; } = DefaultPrimaryColor;
+        [RegularExpression("^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$", ErrorMessage = "Use a valid hex color.")] public string? SecondaryColor { get; set; } = DefaultSecondaryColor;
+        [RegularExpression("^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$", ErrorMessage = "Use a valid hex color.")] public string? AccentColor { get; set; } = DefaultAccentColor;
+        [StringLength(255)] public string? CustomDomain { get; set; }
+        [Url, StringLength(500)] public string? CustomCssUrl { get; set; }
+        [EmailAddress, StringLength(254)] public string? SupportEmail { get; set; }
+        [StringLength(50)] public string? SupportPhone { get; set; }
+        [StringLength(500)] public string? FooterText { get; set; }
+
+        public UpdateTenantBrandingRequest ToRequest() => new()
+        {
+            WhiteLabelName = WhiteLabelName,
+            LogoUrl = LogoUrl,
+            FaviconUrl = FaviconUrl,
+            PrimaryColor = PrimaryColor,
+            SecondaryColor = SecondaryColor,
+            AccentColor = AccentColor,
+            CustomDomain = CustomDomain,
+            CustomCssUrl = CustomCssUrl,
+            SupportEmail = SupportEmail,
+            SupportPhone = SupportPhone,
+            FooterText = FooterText
+        };
+
+        public static BrandingForm Defaults() => new()
+        {
+            PrimaryColor = DefaultPrimaryColor,
+            SecondaryColor = DefaultSecondaryColor,
+            AccentColor = DefaultAccentColor
+        };
+
+        public static BrandingForm FromDto(TenantBrandingDto? dto) => new()
+        {
+            WhiteLabelName = dto?.WhiteLabelName,
+            LogoUrl = dto?.LogoUrl,
+            FaviconUrl = dto?.FaviconUrl,
+            PrimaryColor = NormalizeColor(dto?.PrimaryColor, DefaultPrimaryColor),
+            SecondaryColor = NormalizeColor(dto?.SecondaryColor, DefaultSecondaryColor),
+            AccentColor = NormalizeColor(dto?.AccentColor, DefaultAccentColor),
+            CustomDomain = dto?.CustomDomain,
+            CustomCssUrl = dto?.CustomCssUrl,
+            SupportEmail = dto?.SupportEmail,
+            SupportPhone = dto?.SupportPhone,
+            FooterText = dto?.FooterText
+        };
+    }
+}

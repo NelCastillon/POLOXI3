@@ -1210,6 +1210,15 @@ public sealed partial class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
+    public Task<PagedResult<PortalMobileInstallDto>?> SearchPortalMobileInstallsAsync(Guid tenantId, string? searchTerm = null, CancellationToken ct = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PortalMobileInstallDto>>($"api/portal-admin/mobile-installs?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", ct);
+
+    public async Task UpdatePortalMobileInstallStatusAsync(Guid id, UpdatePortalMobileInstallRequest request, CancellationToken ct = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/portal-admin/mobile-installs/{id}/status", request, ct);
+        response.EnsureSuccessStatusCode();
+    }
+
     public Task<PagedResult<PortalCapabilityDto>?> GetPortalCapabilitiesAsync(Guid tenantId, CancellationToken ct = default)
         => _httpClient.GetFromJsonAsync<PagedResult<PortalCapabilityDto>>($"api/portal-admin/capabilities?tenantId={tenantId}", ct);
 
@@ -1251,6 +1260,15 @@ public sealed partial class ApiClient
 
     public Task<PagedResult<PortalMetricRecordDto>?> SearchPortalMetricRecordsAsync(Guid tenantId, string kind, string? searchTerm = null, CancellationToken ct = default)
         => _httpClient.GetFromJsonAsync<PagedResult<PortalMetricRecordDto>>($"api/portal-admin/metrics/{Uri.EscapeDataString(kind)}?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", ct);
+
+    public Task<PagedResult<PortalApiUsageDto>?> SearchPortalApiUsageAsync(Guid tenantId, string? searchTerm = null, CancellationToken ct = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PortalApiUsageDto>>($"api/portal-admin/api-usage?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", ct);
+
+    public async Task UpdatePortalApiUsageStatusAsync(Guid id, UpdatePortalApiUsageRequest request, CancellationToken ct = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/portal-admin/api-usage/{id}/status", request, ct);
+        response.EnsureSuccessStatusCode();
+    }
 
     public Task<PagedResult<PortalChatSessionDto>?> SearchPortalChatSessionsAsync(Guid tenantId, string? searchTerm = null, CancellationToken ct = default)
         => _httpClient.GetFromJsonAsync<PagedResult<PortalChatSessionDto>>($"api/portal-admin/chat-sessions?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", ct);
@@ -4576,6 +4594,16 @@ public sealed partial class ApiClient
     public async Task UpdateAgencyProfileAsync(Guid tenantId, UpdateAgencyProfileRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PutAsJsonAsync($"api/agency/{tenantId}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // -- Agency Business Hours --------------------------------
+    public Task<AgencyBusinessHoursDto?> GetAgencyBusinessHoursAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<AgencyBusinessHoursDto>($"api/agency/business-hours/tenant/{tenantId}", cancellationToken);
+
+    public async Task UpdateAgencyBusinessHoursAsync(Guid tenantId, UpdateAgencyBusinessHoursRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/agency/business-hours/tenant/{tenantId}", request, cancellationToken);
         response.EnsureSuccessStatusCode();
     }
 

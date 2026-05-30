@@ -7,84 +7,400 @@
 
 <PageTitle>Mobile Installs — AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true"><ToastPosition X="Right" Y="Bottom" /></SfToast>
-
-<AppPageHeader Title="Mobile Installs" Subtitle="Native mobile app installations and adoption for client portal users" Icon="bi-phone">
+<AppPageHeader Title="Mobile Installs"
+               Subtitle="Enterprise command center for client portal mobile adoption, device compliance, security posture, and app update workflows."
+               Icon="bi-phone">
     <Actions>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/portal/my-account")'><i class="bi bi-arrow-left" aria-hidden="true"></i> My Account</button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
-        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/portal/mobile")'><i class="bi bi-gear" aria-hidden="true"></i> Mobile Config</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick='() => Nav.NavigateTo("/portal/my-account")'><i class="bi bi-arrow-left" aria-hidden="true"></i> My Account</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_busy"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+        <button class="um-btn um-btn-primary" type="button" @onclick='() => Nav.NavigateTo("/portal/mobile")'><i class="bi bi-gear" aria-hidden="true"></i> Mobile Config</button>
     </Actions>
 </AppPageHeader>
 
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError</div>
+    <div class="pmi-toast @_toastClass" role="status">
+        <i class="bi @(_toastClass == "pmi-toast--danger" ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="pmi-toast-close" @onclick="ClearToast" aria-label="Dismiss message"><i class="bi bi-x-lg"></i></button>
+    </div>
 }
 
-<div class="pma-kpi-strip">
-    @Kpi("Total Installs", _items.Sum(x => x.Count).ToString("N0"), "bi-phone", "")
-    @Kpi("iOS", _items.Where(x => x.Category == "iOS").Sum(x => x.Count).ToString("N0"), "bi-apple", "iOS")
-    @Kpi("Android", _items.Where(x => x.Category == "Android").Sum(x => x.Count).ToString("N0"), "bi-android2", "Android")
-    @Kpi("Active", _items.Where(x => x.Status == "Active").Sum(x => x.Count).ToString("N0"), "bi-check-circle", "Active")
-</div>
+<div class="pmi-page">
+    <section class="pmi-hero">
+        <div class="pmi-hero-main">
+            <div class="pmi-eyebrow"><i class="bi bi-phone-fill" aria-hidden="true"></i> Mobile adoption control center</div>
+            <h2>@TotalInstalls.ToString("N0") active device records</h2>
+            <p>Prioritize mobile device health by security risk, update compliance, client adoption, push readiness, and self-service activity.</p>
+            <div class="pmi-hero-meta">
+                <span><i class="bi bi-apple"></i> @IosInstalls.ToString("N0") iOS</span>
+                <span><i class="bi bi-android2"></i> @AndroidInstalls.ToString("N0") Android</span>
+                <span><i class="bi bi-shield-check"></i> @CompliantInstalls.ToString("N0") compliant</span>
+                <span><i class="bi bi-arrow-up-circle"></i> @UpdateRequiredCount.ToString("N0") need update</span>
+            </div>
+        </div>
+        <div class="pmi-hero-panel">
+            <div class="pmi-score-card">
+                <span>Mobile readiness</span>
+                <strong>@ReadinessScore%</strong>
+                <div class="pmi-score-track"><div style="width:@ReadinessScore%"></div></div>
+                <small>@ReadinessSummary</small>
+            </div>
+            <div class="pmi-priority-list">
+                @foreach (var install in PriorityInstalls)
+                {
+                    <button type="button" class="pmi-priority-item" @onclick="() => SelectInstall(install)">
+                        <span class="pmi-risk pmi-risk--@RiskCss(install.RiskLevel)">@RiskScore(install)</span>
+                        <div><strong>@install.UserName</strong><small>@install.RecommendedAction</small></div>
+                        <i class="bi bi-chevron-right"></i>
+                    </button>
+                }
+            </div>
+        </div>
+    </section>
 
-<div class="pma-panel app-datagrid">
-    <div class="pma-panel-hdr"><i class="bi bi-phone" aria-hidden="true"></i> Install Detail</div>
-    <div class="api-filter-bar">
-        <input class="api-search" placeholder="Search account, owner, or device…" @bind="_search" @bind:event="oninput" />
-        <select class="api-search" @bind="_filter"><option value="">All</option><option>iOS</option><option>Android</option><option>Active</option><option>Inactive</option></select>
+    <section class="pmi-kpi-strip" aria-label="Mobile install KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="pmi-kpi-card @(IsActiveKpi(kpi.Key) ? "pmi-kpi-card--active" : null)" title="@kpi.Tooltip" @onclick="() => SetKpi(kpi.Key)">
+                <span class="pmi-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="pmi-kpi-label">@kpi.Label</span>
+                <strong>@kpi.Value</strong>
+                <small>@kpi.Detail</small>
+            </button>
+        }
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger pmi-load-error" role="alert">
+            <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+            @_loadError
+        </div>
+    }
+
+    <section class="pmi-command-bar">
+        <div class="pmi-search-wrap">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="pmi-search" placeholder="Search account, user, email, platform, device, status…" @bind="_search" @bind:event="oninput" />
+        </div>
+        <select class="pmi-select" @bind="_platformFilter">
+            <option value="">All platforms</option>
+            <option>iOS</option>
+            <option>Android</option>
+        </select>
+        <select class="pmi-select" @bind="_statusFilter">
+            <option value="">All statuses</option>
+            @foreach (var status in Statuses)
+            {
+                <option value="@status">@status</option>
+            }
+        </select>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="RequireUpdatesForOutdatedAsync" disabled="@_busy"><i class="bi bi-arrow-up-circle"></i> Require updates</button>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="TrustCompliantDevicesAsync" disabled="@_busy"><i class="bi bi-shield-check"></i> Trust compliant</button>
+    </section>
+
+    <div class="pmi-tabs" role="tablist" aria-label="Mobile install tabs">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" role="tab" class="pmi-tab @(_activeTab == tab.Key ? "pmi-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
     </div>
-    <SfGrid TValue="PortalMetricRecordDto" DataSource="Filtered" AllowSorting="true" AllowPaging="true" AllowTextWrap="true" RowHeight="56">
-        <GridTextWrapSettings WrapMode="WrapMode.Content" />
-        <GridPageSettings PageSize="20" />
-        <GridColumns>
-            <GridColumn Field="@nameof(PortalMetricRecordDto.Name)" HeaderText="Account / User" MinWidth="220" />
-            <GridColumn Field="@nameof(PortalMetricRecordDto.Category)" HeaderText="Platform" Width="120" />
-            <GridColumn Field="@nameof(PortalMetricRecordDto.Status)" HeaderText="Status" Width="120" />
-            <GridColumn Field="@nameof(PortalMetricRecordDto.Owner)" HeaderText="Owner" MinWidth="160" />
-            <GridColumn Field="@nameof(PortalMetricRecordDto.Detail)" HeaderText="Device / Version" MinWidth="220" />
-            <GridColumn Field="@nameof(PortalMetricRecordDto.EventDateUtc)" HeaderText="Last Seen" Width="140" Type="ColumnType.DateTime" Format="MMM d, yyyy" />
-            <GridColumn Field="@nameof(PortalMetricRecordDto.Count)" HeaderText="Installs" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
-        </GridColumns>
-    </SfGrid>
+
+    @if (_loading)
+    {
+        <div class="pmi-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Loading mobile installs...</div>
+    }
+    else
+    {
+        <section class="pmi-grid">
+            <article class="pmi-panel">
+                <div class="pmi-panel-header"><i class="bi bi-phone"></i><div><strong>@ActiveListTitle</strong><span>@FilteredInstalls.Count().ToString("N0") installs sorted by importance.</span></div></div>
+                @if (!FilteredInstalls.Any())
+                {
+                    <div class="pmi-empty"><i class="bi bi-phone"></i><strong>No installs match this view</strong><span>Adjust filters or refresh mobile install data.</span></div>
+                }
+                else
+                {
+                    <div class="pmi-install-list">
+                        @foreach (var install in FilteredInstalls)
+                        {
+                            <button type="button" class="pmi-install-row @(_selected?.Id == install.Id ? "pmi-install-row--active" : null)" @onclick="() => SelectInstall(install)">
+                                <span class="pmi-platform pmi-platform--@install.Platform.ToLowerInvariant()"><i class="bi @(install.Platform == "iOS" ? "bi-apple" : "bi-android2")"></i></span>
+                                <div class="pmi-install-main">
+                                    <div class="pmi-install-title"><strong>@install.UserName</strong><span class="pmi-badge pmi-badge--@StatusCss(install.Status)">@install.Status</span><span class="pmi-badge pmi-badge--@RiskCss(install.RiskLevel)">@install.RiskLevel</span></div>
+                                    <p>@install.AccountName · @install.DeviceModel · v@install.AppVersion</p>
+                                    <div class="pmi-install-meta"><span>@install.ComplianceStatus</span><span>@install.PushTokenStatus</span><span>Seen @FormatRelative(install.LastSeenDateUtc)</span></div>
+                                </div>
+                                <span class="pmi-row-score">@RiskScore(install)</span>
+                            </button>
+                        }
+                    </div>
+                }
+            </article>
+
+            <aside class="pmi-side">
+                @if (_selected is null)
+                {
+                    <div class="pmi-panel"><div class="pmi-empty pmi-empty--side"><i class="bi bi-cursor"></i><strong>Select a device</strong><span>Choose an install to review compliance and actions.</span></div></div>
+                }
+                else
+                {
+                    <article class="pmi-panel">
+                        <div class="pmi-panel-header"><i class="bi bi-shield-lock"></i><div><strong>Device command</strong><span>@_selected.InstallNumber · @_selected.Platform</span></div></div>
+                        <div class="pmi-detail">
+                            <div class="pmi-detail-head"><span class="pmi-platform pmi-platform--@_selected.Platform.ToLowerInvariant()"><i class="bi @(_selected.Platform == "iOS" ? "bi-apple" : "bi-android2")"></i></span><div><strong>@_selected.UserName</strong><span>@_selected.UserEmail</span></div></div>
+                            <dl>
+                                <dt>Account</dt><dd>@_selected.AccountName</dd>
+                                <dt>Device</dt><dd>@_selected.DeviceModel <small>@_selected.OsVersion</small></dd>
+                                <dt>App version</dt><dd>@_selected.AppVersion</dd>
+                                <dt>Compliance</dt><dd>@_selected.ComplianceStatus</dd>
+                                <dt>Location</dt><dd>@_selected.LastLocation <small>@_selected.LastIpAddress</small></dd>
+                                <dt>Last push</dt><dd>@FormatRelative(_selected.LastPushDateUtc)</dd>
+                                <dt>Action</dt><dd>@_selected.RecommendedAction</dd>
+                            </dl>
+                            <div class="pmi-detail-actions">
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="() => MarkActiveAsync(_selected)" disabled="@_busy"><i class="bi bi-check-circle"></i> Mark active</button>
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="() => RequireUpdateAsync(_selected)" disabled="@_busy"><i class="bi bi-arrow-up-circle"></i> Require update</button>
+                                <button type="button" class="um-btn um-btn-ghost" @onclick="() => TrustDeviceAsync(_selected)" disabled="@_busy"><i class="bi bi-shield-check"></i> Trust device</button>
+                                <button type="button" class="um-btn um-btn-danger" @onclick="() => SuspendAsync(_selected)" disabled="@_busy"><i class="bi bi-slash-circle"></i> Suspend</button>
+                            </div>
+                        </div>
+                    </article>
+                    <article class="pmi-panel">
+                        <div class="pmi-panel-header"><i class="bi bi-bar-chart"></i><div><strong>30-day activity</strong><span>Mobile self-service engagement.</span></div></div>
+                        <div class="pmi-metric-list">
+                            <div class="pmi-metric-row"><span>Sessions</span><strong>@_selected.Sessions30d</strong></div>
+                            <div class="pmi-metric-row"><span>Documents viewed</span><strong>@_selected.DocumentsViewed30d</strong></div>
+                            <div class="pmi-metric-row"><span>Requests submitted</span><strong>@_selected.RequestsSubmitted30d</strong></div>
+                            <div class="pmi-metric-row"><span>Pushes sent</span><strong>@_selected.PushesSent30d</strong></div>
+                        </div>
+                    </article>
+                }
+            </aside>
+        </section>
+    }
 </div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
+    private readonly TabItem[] _tabs =
+    [
+        new("all", "All", "bi-stack"),
+        new("attention", "Needs Attention", "bi-exclamation-triangle"),
+        new("compliant", "Compliant", "bi-shield-check"),
+        new("updates", "Updates", "bi-arrow-up-circle"),
+        new("suspended", "Suspended", "bi-slash-circle")
+    ];
+
     private Guid _tenantId;
-    private SfToast? _toast;
+    private bool _loading;
+    private bool _saving;
     private string _search = string.Empty;
-    private string _filter = string.Empty;
+    private string _activeKpi = "all";
+    private string _activeTab = "all";
+    private string _platformFilter = string.Empty;
+    private string _statusFilter = string.Empty;
     private string? _loadError;
-    private List<PortalMetricRecordDto> _items = [];
+    private string? _toastMessage;
+    private string _toastClass = "pmi-toast--success";
+    private List<PortalMobileInstallDto> _items = [];
+    private PortalMobileInstallDto? _selected;
+    private bool _busy => _loading || _saving;
 
-    private IEnumerable<PortalMetricRecordDto> Filtered => _items.Where(i =>
-        (string.IsNullOrEmpty(_filter) || i.Category == _filter || i.Status == _filter) &&
-        (string.IsNullOrEmpty(_search) || i.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || i.Owner.Contains(_search, StringComparison.OrdinalIgnoreCase) || i.Detail.Contains(_search, StringComparison.OrdinalIgnoreCase)));
+    private IEnumerable<string> Statuses => _items.Select(i => i.Status).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().OrderBy(s => s);
+    private int TotalInstalls => _items.Count;
+    private int IosInstalls => _items.Count(i => i.Platform == "iOS");
+    private int AndroidInstalls => _items.Count(i => i.Platform == "Android");
+    private int ActiveInstalls => _items.Count(i => i.Status == "Active");
+    private int CompliantInstalls => _items.Count(i => i.ComplianceStatus == "Compliant");
+    private int UpdateRequiredCount => _items.Count(i => i.UpdateRequired || i.ComplianceStatus.Contains("Update", StringComparison.OrdinalIgnoreCase));
+    private int RiskCount => _items.Count(i => i.RiskLevel is "Critical" or "High" || i.Status is "Suspended" or "Pending MFA");
+    private int ReadinessScore => TotalInstalls == 0 ? 0 : Math.Clamp((int)Math.Round((CompliantInstalls * 100m / TotalInstalls) - (RiskCount * 4m) - (UpdateRequiredCount * 3m)), 0, 100);
+    private string ReadinessSummary => ReadinessScore >= 90 ? "Mobile fleet is enterprise ready" : ReadinessScore >= 75 ? "Mostly healthy with update follow-up" : "Security and update actions required";
 
-    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Portal", "/portal/users"), new("Mobile Installs", "")); await LoadAsync(); }
+    private IEnumerable<KpiItem> Kpis =>
+    [
+        new("all", "Total", "bi-phone", TotalInstalls.ToString("N0"), "all mobile installs", "Show all installs"),
+        new("ios", "iOS", "bi-apple", IosInstalls.ToString("N0"), "Apple devices", "Filter iOS installs"),
+        new("android", "Android", "bi-android2", AndroidInstalls.ToString("N0"), "Android devices", "Filter Android installs"),
+        new("attention", "Attention", "bi-exclamation-triangle", RiskCount.ToString("N0"), "risk or MFA issues", "Filter installs needing attention"),
+        new("updates", "Updates", "bi-arrow-up-circle", UpdateRequiredCount.ToString("N0"), "require app update", "Filter update-required installs"),
+        new("compliant", "Compliant", "bi-shield-check", CompliantInstalls.ToString("N0"), "trusted posture", "Filter compliant installs")
+    ];
+
+    private IEnumerable<PortalMobileInstallDto> PriorityInstalls => _items.OrderByDescending(RiskScore).ThenByDescending(i => i.UpdateRequired).ThenByDescending(i => i.LastSeenDateUtc).Take(4);
+
+    private IEnumerable<PortalMobileInstallDto> FilteredInstalls => _items
+        .Where(MatchesSearch)
+        .Where(i => string.IsNullOrWhiteSpace(_platformFilter) || i.Platform == _platformFilter)
+        .Where(i => string.IsNullOrWhiteSpace(_statusFilter) || i.Status == _statusFilter)
+        .Where(MatchesActiveView)
+        .OrderByDescending(RiskScore)
+        .ThenByDescending(i => i.UpdateRequired)
+        .ThenByDescending(i => i.LastSeenDateUtc);
+
+    private string ActiveListTitle => _activeTab switch
+    {
+        "attention" => "Installs needing attention",
+        "compliant" => "Compliant installs",
+        "updates" => "Update workflow",
+        "suspended" => "Suspended devices",
+        _ => "Mobile install inventory"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Portal", "/portal/users"), new("Mobile Installs", ""));
+        await LoadAsync();
+    }
 
     private async Task LoadAsync()
     {
-        try { _loadError = null; _items = (await Api.SearchPortalMetricRecordsAsync(_tenantId, "PortalMobileInstall"))?.Items.ToList() ?? []; }
-        catch (Exception ex) { _loadError = $"Unable to load mobile installs: {ex.Message}"; if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = _loadError, CssClass = "e-toast-danger" }); }
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _items = (await Api.SearchPortalMobileInstallsAsync(_tenantId, _search))?.Items.ToList() ?? [];
+            _selected = _selected is null ? _items.OrderByDescending(RiskScore).FirstOrDefault() : _items.FirstOrDefault(i => i.Id == _selected.Id) ?? _items.OrderByDescending(RiskScore).FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Unable to load mobile installs: {ex.Message}";
+            ShowToast(_loadError, true);
+        }
+        finally { _loading = false; }
     }
 
-    private RenderFragment Kpi(string label, string value, string icon, string filter) => @<button type="button" class="pma-kpi-card pma-ki-purple" @onclick="() => _filter = _filter == filter ? string.Empty : filter"><i class="bi @icon pma-kpi-icon"></i><div><div class="pma-kpi-value">@value</div><div class="pma-kpi-label">@label</div><span>@(string.IsNullOrEmpty(filter) ? "all records" : "click to filter")</span></div></button>;
-
-    async Task ResolveCurrentUserContextAsync()
+    private void SetKpi(string key)
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        _activeKpi = key;
+        _activeTab = key switch
+        {
+            "ios" or "android" => "all",
+            "attention" => "attention",
+            "updates" => "updates",
+            "compliant" => "compliant",
+            _ => "all"
+        };
+        _platformFilter = key switch { "ios" => "iOS", "android" => "Android", _ => string.Empty };
     }
+
+    private void SetTab(string key)
+    {
+        _activeTab = key;
+        _activeKpi = key;
+        if (key is not "all") _platformFilter = string.Empty;
+    }
+
+    private bool IsActiveKpi(string key) => _activeKpi == key;
+    private void SelectInstall(PortalMobileInstallDto install) => _selected = install;
+
+    private bool MatchesSearch(PortalMobileInstallDto item)
+    {
+        if (string.IsNullOrWhiteSpace(_search)) return true;
+        return item.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.UserName.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.UserEmail.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Platform.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.DeviceModel.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.Status.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || item.ComplianceStatus.Contains(_search, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool MatchesActiveView(PortalMobileInstallDto item) => _activeTab switch
+    {
+        "attention" => RiskScore(item) >= 70 || item.Status == "Pending MFA",
+        "compliant" => item.ComplianceStatus == "Compliant",
+        "updates" => item.UpdateRequired || item.ComplianceStatus.Contains("Update", StringComparison.OrdinalIgnoreCase),
+        "suspended" => item.Status == "Suspended",
+        _ => true
+    };
+
+    private int TabCount(string key) => key switch
+    {
+        "attention" => _items.Count(i => RiskScore(i) >= 70 || i.Status == "Pending MFA"),
+        "compliant" => CompliantInstalls,
+        "updates" => UpdateRequiredCount,
+        "suspended" => _items.Count(i => i.Status == "Suspended"),
+        _ => TotalInstalls
+    };
+
+    private async Task MarkActiveAsync(PortalMobileInstallDto install) => await UpdateInstallAsync(install, "Active", "Compliant", "Low", "No action required.", false, true);
+    private async Task RequireUpdateAsync(PortalMobileInstallDto install) => await UpdateInstallAsync(install, install.Status, "Update Required", install.RiskLevel is "Critical" ? "Critical" : "High", "Force mobile update and confirm client installs the latest app version.", true, install.TrustedDevice);
+    private async Task TrustDeviceAsync(PortalMobileInstallDto install) => await UpdateInstallAsync(install, install.Status == "Suspended" ? "Active" : install.Status, "Compliant", "Low", "Device trusted after compliance review.", false, true);
+    private async Task SuspendAsync(PortalMobileInstallDto install) => await UpdateInstallAsync(install, "Suspended", "Non-Compliant", "Critical", "Device access suspended pending administrator review.", true, false);
+
+    private async Task RequireUpdatesForOutdatedAsync()
+    {
+        foreach (var install in _items.Where(i => i.UpdateRequired || i.ComplianceStatus.Contains("Update", StringComparison.OrdinalIgnoreCase)).ToList())
+            await RequireUpdateAsync(install);
+    }
+
+    private async Task TrustCompliantDevicesAsync()
+    {
+        foreach (var install in _items.Where(i => i.ComplianceStatus == "Compliant" && i.MfaVerified).ToList())
+            await TrustDeviceAsync(install);
+    }
+
+    private async Task UpdateInstallAsync(PortalMobileInstallDto install, string status, string compliance, string risk, string action, bool updateRequired, bool trusted)
+    {
+        _saving = true;
+        try
+        {
+            await Api.UpdatePortalMobileInstallStatusAsync(install.Id, new UpdatePortalMobileInstallRequest
+            {
+                TenantId = _tenantId,
+                Status = status,
+                ComplianceStatus = compliance,
+                RiskLevel = risk,
+                RecommendedAction = action,
+                UpdateRequired = updateRequired,
+                TrustedDevice = trusted
+            });
+            ShowToast($"{install.UserName} mobile install updated.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Update failed: {ex.Message}", true);
+        }
+        finally { _saving = false; }
+    }
+
+    private void ShowToast(string message, bool danger = false)
+    {
+        _toastMessage = message;
+        _toastClass = danger ? "pmi-toast--danger" : "pmi-toast--success";
+    }
+
+    private void ClearToast() => _toastMessage = null;
+
+    private static int RiskScore(PortalMobileInstallDto install) => install.RiskLevel switch
+    {
+        "Critical" => 96,
+        "High" => 84,
+        "Medium" => install.UpdateRequired ? 72 : 58,
+        _ => install.Status == "Pending MFA" ? 68 : 24
+    };
+
+    private static string RiskCss(string value) => value.ToLowerInvariant();
+    private static string StatusCss(string value) => value.ToLowerInvariant().Replace(" ", "-");
+
+    private static string FormatRelative(DateTime? utc)
+    {
+        if (utc is null || utc == default) return "never";
+        var diff = DateTime.UtcNow - utc.Value.ToUniversalTime();
+        if (diff.TotalMinutes < 60) return $"{Math.Max(1, (int)diff.TotalMinutes)}m ago";
+        if (diff.TotalHours < 24) return $"{(int)diff.TotalHours}h ago";
+        return $"{(int)diff.TotalDays}d ago";
+    }
+
+    private sealed record TabItem(string Key, string Label, string Icon);
+    private sealed record KpiItem(string Key, string Label, string Icon, string Value, string Detail, string Tooltip);
 }
