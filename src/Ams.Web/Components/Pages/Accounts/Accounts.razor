@@ -1,0 +1,876 @@
+@page "/accounts"
+@namespace Ams.Web.Components.Pages.Accounts
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Common.Validation
+@using Ams.Application.Features.Accounts
+@using Microsoft.AspNetCore.Components.Forms
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationContextService NavContext
+@inject CurrentUserContext CurrentUser
+
+<PageTitle>Account Command Center</PageTitle>
+
+<div class="acc-page">
+    <section class="acc-hero">
+        <div class="acc-hero-copy">
+            <span class="acc-eyebrow">Tenant Admin · Account Intelligence</span>
+            <h1>Account Command Center</h1>
+            <p>Prioritize revenue, lifecycle risk, servicing readiness, and relationship workflows across every customer and prospect account.</p>
+        </div>
+        <div class="acc-hero-actions">
+            <button type="button" class="acc-btn acc-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+                <i class="bi bi-arrow-clockwise @(_loading ? "acc-spin" : null)" aria-hidden="true"></i>
+                Refresh
+            </button>
+            <button type="button" class="acc-btn acc-btn-ghost" @onclick="ResetWorkspace">
+                <i class="bi bi-sliders" aria-hidden="true"></i>
+                Reset View
+            </button>
+            <button type="button" class="acc-btn acc-btn-primary" @onclick="OpenCreate">
+                <i class="bi bi-plus-lg" aria-hidden="true"></i>
+                New Account
+            </button>
+        </div>
+    </section>
+
+    <section class="acc-kpi-grid" aria-label="Account performance indicators">
+        @KpiCard("all", "Total Accounts", _accounts.Count.ToString("N0"), "bi-buildings", "blue", "Active book and prospect records")
+        @KpiCard("active", "Active Customers", ActiveAccounts.ToString("N0"), "bi-check-circle", "green", $"{ActiveRate:P0} of account base")
+        @KpiCard("strategic", "Enterprise / Key", StrategicAccounts.ToString("N0"), "bi-gem", "purple", "High-priority relationship coverage")
+        @KpiCard("risk", "At Risk", AtRiskAccounts.ToString("N0"), "bi-exclamation-triangle", AtRiskAccounts > 0 ? "red" : "green", "Suspended, inactive, or at-risk lifecycle")
+        @KpiCard("pipeline", "Open Pipeline", ProspectAccounts.ToString("N0"), "bi-funnel", "amber", "Prospects and lead-stage accounts")
+        @KpiCard("revenue", "Annual Revenue", TotalRevenue.ToString("C0"), "bi-cash-stack", "green", "Known revenue profile")
+    </section>
+
+    <section class="acc-workflows" aria-label="Account workflows">
+        <button type="button" class="acc-workflow-card" @onclick="OpenCreate">
+            <span class="acc-workflow-icon acc-tone-blue"><i class="bi bi-building-add" aria-hidden="true"></i></span>
+            <span><strong>Create account</strong><small>Start customer or prospect onboarding</small></span>
+        </button>
+        <button type="button" class="acc-workflow-card" @onclick='() => SetTab("strategic")'>
+            <span class="acc-workflow-icon acc-tone-purple"><i class="bi bi-stars" aria-hidden="true"></i></span>
+            <span><strong>Review strategic book</strong><small>Enterprise and key accounts</small></span>
+        </button>
+        <button type="button" class="acc-workflow-card" @onclick='() => SetTab("risk")'>
+            <span class="acc-workflow-icon acc-tone-red"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></span>
+            <span><strong>Resolve account risk</strong><small>At-risk lifecycle and inactive accounts</small></span>
+        </button>
+        <button type="button" class="acc-workflow-card" @onclick='() => SetTab("pipeline")'>
+            <span class="acc-workflow-icon acc-tone-amber"><i class="bi bi-diagram-3" aria-hidden="true"></i></span>
+            <span><strong>Advance pipeline</strong><small>Lead and prospect follow-up</small></span>
+        </button>
+    </section>
+
+    <section class="acc-shell">
+        <div class="acc-toolbar">
+            <div class="acc-search">
+                <i class="bi bi-search" aria-hidden="true"></i>
+                <input value="@_search" @oninput="OnSearchChanged" placeholder="Search account name, number, email, industry, or segment…" aria-label="Search accounts" />
+            </div>
+            <select class="acc-select" value="@_statusFilter" @onchange="OnStatusChanged" aria-label="Filter by status">
+                <option value="">All statuses</option>
+                @foreach (var status in _statusOptions)
+                {
+                    <option value="@status.Code">@status.Name</option>
+                }
+            </select>
+            <select class="acc-select" value="@_typeFilter" @onchange="OnTypeChanged" aria-label="Filter by type">
+                <option value="">All types</option>
+                @foreach (var type in _typeOptions)
+                {
+                    <option value="@type.Code">@type.Name</option>
+                }
+            </select>
+            <button type="button" class="acc-btn acc-btn-ghost" @onclick="ResetFilters">
+                <i class="bi bi-x-lg" aria-hidden="true"></i>
+                Clear
+            </button>
+        </div>
+
+        <div class="acc-tabs" role="tablist" aria-label="Account command center sections">
+            @foreach (var tab in _tabs)
+            {
+                <button type="button" class="@TabClass(tab.Key)" role="tab" aria-selected="@(_activeTab == tab.Key)" @onclick="() => SetTab(tab.Key)">
+                    <i class="bi @tab.Icon" aria-hidden="true"></i>
+                    <span>@tab.Label</span>
+                    <strong>@TabCount(tab.Key)</strong>
+                </button>
+            }
+        </div>
+
+        @if (_loadError is not null)
+        {
+            <div class="acc-alert acc-alert-danger" role="alert">
+                <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                @_loadError
+            </div>
+        }
+
+        @if (_loading)
+        {
+            <div class="acc-loading"><span class="acc-spinner" aria-hidden="true"></span><span>Loading account command center…</span></div>
+        }
+        else if (!FilteredAccounts.Any())
+        {
+            <div class="acc-empty">
+                <i class="bi bi-buildings acc-empty-icon" aria-hidden="true"></i>
+                <h2>No accounts found</h2>
+                <p>Adjust filters or create a new account master record.</p>
+                <button type="button" class="acc-btn acc-btn-primary" @onclick="OpenCreate">Create Account</button>
+            </div>
+        }
+        else
+        {
+            <div class="acc-table-wrap">
+                <table class="acc-table">
+                    <thead>
+                        <tr>
+                            <th>Priority</th>
+                            <th>Account</th>
+                            <th>Lifecycle</th>
+                            <th>Segment</th>
+                            <th>Contact</th>
+                            <th>Revenue</th>
+                            <th>Last Touch</th>
+                            <th class="acc-actions-col">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var account in FilteredAccounts)
+                        {
+                            <tr class="@(SelectedAccount?.AccountId == account.AccountId ? "acc-row-selected" : null)" @onclick="() => SelectAccount(account)">
+                                <td>
+                                    <span class="@PriorityBadge(account)">@PriorityLabel(account)</span>
+                                </td>
+                                <td>
+                                    <div class="acc-account-cell">
+                                        <span class="acc-avatar @AvatarTone(account.AccountName)">@Initials(account.AccountName)</span>
+                                        <span>
+                                            <strong>@account.AccountName</strong>
+                                            <small>@account.AccountNumber · @account.AccountTypeCode</small>
+                                        </span>
+                                    </div>
+                                </td>
+                                <td>
+                                    <span class="@StatusBadge(account.StatusCode)">@account.StatusCode</span>
+                                    <small class="acc-muted">@(account.LifecycleStageCode ?? "No lifecycle")</small>
+                                </td>
+                                <td>
+                                    <span class="acc-segment">@(account.SegmentCode ?? "Unsegmented")</span>
+                                    <small class="acc-muted">@(account.Industry ?? "No industry")</small>
+                                </td>
+                                <td>
+                                    <div class="acc-contact-cell">
+                                        @if (!string.IsNullOrWhiteSpace(account.MainEmail))
+                                        {
+                                            <a href="mailto:@account.MainEmail" @onclick:stopPropagation="true"><i class="bi bi-envelope" aria-hidden="true"></i>@account.MainEmail</a>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(account.MainPhone))
+                                        {
+                                            <a href="tel:@NormalizePhoneLink(account.MainPhone)" @onclick:stopPropagation="true"><i class="bi bi-telephone" aria-hidden="true"></i>@FormatPhone(account.MainPhone)</a>
+                                        }
+                                        @if (string.IsNullOrWhiteSpace(account.MainEmail) && string.IsNullOrWhiteSpace(account.MainPhone))
+                                        {
+                                            <span class="acc-muted">No contact data</span>
+                                        }
+                                    </div>
+                                </td>
+                                <td><span class="acc-money">@((account.AnnualRevenue ?? 0).ToString("C0"))</span></td>
+                                <td><span class="acc-mono">@((account.ModifiedDateUtc ?? account.CreatedDateUtc).ToLocalTime().ToString("MMM d, yyyy"))</span></td>
+                                <td>
+                                    <div class="acc-row-actions" @onclick:stopPropagation="true">
+                                        <button type="button" class="acc-icon-btn" title="Open Account 360" @onclick="() => OpenAccount(account)"><i class="bi bi-person-vcard" aria-hidden="true"></i></button>
+                                        <button type="button" class="acc-icon-btn" title="Timeline" @onclick='() => Nav.NavigateTo($"/accounts/{account.AccountId}/timeline")'><i class="bi bi-clock-history" aria-hidden="true"></i></button>
+                                        <button type="button" class="acc-icon-btn" title="Relationships" @onclick='() => Nav.NavigateTo($"/accounts/{account.AccountId}/relationships")'><i class="bi bi-link-45deg" aria-hidden="true"></i></button>
+                                        <button type="button" class="acc-icon-btn" title="Edit account" @onclick="() => OpenEdit(account)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <aside class="acc-inspector" aria-label="Selected account intelligence">
+        @if (SelectedAccount is null)
+        {
+            <div class="acc-inspector-empty">
+                <i class="bi bi-cursor" aria-hidden="true"></i>
+                <strong>Select an account</strong>
+                <span>Review command actions, lifecycle status, contact readiness, and account intelligence.</span>
+            </div>
+        }
+        else
+        {
+            <div class="acc-inspector-header">
+                <span class="acc-avatar acc-avatar-large @AvatarTone(SelectedAccount.AccountName)">@Initials(SelectedAccount.AccountName)</span>
+                <div>
+                    <h2>@SelectedAccount.AccountName</h2>
+                    <p>@SelectedAccount.AccountNumber · @SelectedAccount.AccountTypeCode</p>
+                </div>
+            </div>
+            <div class="acc-inspector-kpis">
+                @MiniMetric("Status", SelectedAccount.StatusCode)
+                @MiniMetric("Lifecycle", SelectedAccount.LifecycleStageCode ?? "Not set")
+                @MiniMetric("Segment", SelectedAccount.SegmentCode ?? "Unsegmented")
+                @MiniMetric("Revenue", (SelectedAccount.AnnualRevenue ?? 0).ToString("C0"))
+            </div>
+            <div class="acc-inspector-actions">
+                <button type="button" class="acc-btn acc-btn-primary" @onclick="() => OpenAccount(SelectedAccount)"><i class="bi bi-person-vcard" aria-hidden="true"></i> Account 360</button>
+                <button type="button" class="acc-btn acc-btn-ghost" @onclick='() => Nav.NavigateTo($"/accounts/{SelectedAccount.AccountId}/hierarchy")'><i class="bi bi-diagram-3" aria-hidden="true"></i> Hierarchy</button>
+                <button type="button" class="acc-btn acc-btn-ghost" @onclick='() => Nav.NavigateTo($"/accounts/{SelectedAccount.AccountId}/timeline")'><i class="bi bi-clock-history" aria-hidden="true"></i> Timeline</button>
+                <button type="button" class="acc-btn acc-btn-ghost" @onclick='() => Nav.NavigateTo($"/accounts/{SelectedAccount.AccountId}/relationships")'><i class="bi bi-link-45deg" aria-hidden="true"></i> Relationships</button>
+                <button type="button" class="acc-btn acc-btn-ghost" @onclick="() => OpenEdit(SelectedAccount)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                <button type="button" class="acc-btn acc-btn-danger" @onclick="() => ConfirmDelete(SelectedAccount)"><i class="bi bi-trash3" aria-hidden="true"></i> Delete</button>
+            </div>
+        }
+    </aside>
+</div>
+
+@if (_showEditor)
+{
+    <div class="acc-modal-backdrop" role="presentation" @onclick="CloseEditor">
+        <div class="acc-modal" role="dialog" aria-modal="true" aria-labelledby="acc-editor-title" @onclick:stopPropagation="true">
+            <div class="acc-modal-header">
+                <div>
+                    <span class="acc-eyebrow">Account master record</span>
+                    <h2 id="acc-editor-title">@(_editingAccount is null ? "Create Account" : "Edit Account")</h2>
+                </div>
+                <button type="button" class="acc-icon-btn" @onclick="CloseEditor" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm EditContext="@_editContext" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <ValidationSummary class="acc-validation-summary" />
+                <div class="acc-form-grid">
+                    @if (_editingAccount is null)
+                    {
+                        <div class="acc-field">
+                            <label>Account Number <span>*</span></label>
+                            <InputText @bind-Value="_form.AccountNumber" class="acc-input" />
+                        </div>
+                    }
+                    <div class="acc-field">
+                        <label>Account Name <span>*</span></label>
+                        <InputText @bind-Value="_form.AccountName" class="acc-input" />
+                    </div>
+                    <div class="acc-field">
+                        <label>Account Type <span>*</span></label>
+                        <InputSelect @bind-Value="_form.AccountTypeCode" class="acc-input">
+                            @foreach (var type in _typeOptions)
+                            {
+                                <option value="@type.Code">@type.Name</option>
+                            }
+                        </InputSelect>
+                    </div>
+                    <div class="acc-field">
+                        <label>Status <span>*</span></label>
+                        <InputSelect @bind-Value="_form.StatusCode" class="acc-input">
+                            @foreach (var status in _statusOptions)
+                            {
+                                <option value="@status.Code">@status.Name</option>
+                            }
+                        </InputSelect>
+                    </div>
+                    <div class="acc-field">
+                        <label>Segment</label>
+                        <InputSelect @bind-Value="_form.SegmentCode" class="acc-input">
+                            <option value="">None</option>
+                            @foreach (var segment in _segmentOptions)
+                            {
+                                <option value="@segment.Code">@segment.Name</option>
+                            }
+                        </InputSelect>
+                    </div>
+                    <div class="acc-field">
+                        <label>Lifecycle Stage</label>
+                        <InputSelect @bind-Value="_form.LifecycleStageCode" class="acc-input">
+                            <option value="">None</option>
+                            @foreach (var stage in _lifecycleStageOptions)
+                            {
+                                <option value="@stage.Code">@stage.Name</option>
+                            }
+                        </InputSelect>
+                    </div>
+                    <div class="acc-field">
+                        <label>Email</label>
+                        <InputText @bind-Value="_form.MainEmail" class="acc-input" />
+                        <small>Use enterprise email format, for example client@example.com.</small>
+                    </div>
+                    <div class="acc-field">
+                        <label>Phone</label>
+                        <InputText Value="_form.MainPhone" ValueChanged="OnPhoneChanged" ValueExpression="() => _form.MainPhone" class="acc-input" />
+                        <small>Phone is normalized for dialing and display.</small>
+                    </div>
+                    <div class="acc-field">
+                        <label>Industry</label>
+                        <InputText @bind-Value="_form.Industry" class="acc-input" />
+                    </div>
+                    <div class="acc-field">
+                        <label>Website</label>
+                        <InputText @bind-Value="_form.Website" class="acc-input" placeholder="https://example.com" />
+                    </div>
+                    <div class="acc-field">
+                        <label>Annual Revenue</label>
+                        <InputNumber @bind-Value="_form.AnnualRevenue" class="acc-input" />
+                    </div>
+                </div>
+                <div class="acc-modal-footer">
+                    <button type="button" class="acc-btn acc-btn-ghost" @onclick="CloseEditor">Cancel</button>
+                    <button type="submit" class="acc-btn acc-btn-primary" disabled="@_saving">
+                        <i class="bi bi-check-lg" aria-hidden="true"></i>
+                        @(_saving ? "Saving…" : _editingAccount is null ? "Create Account" : "Save Changes")
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_confirmDeleteAccount is not null)
+{
+    <div class="acc-modal-backdrop" role="presentation" @onclick="CancelDelete">
+        <div class="acc-confirm" role="dialog" aria-modal="true" aria-labelledby="acc-delete-title" @onclick:stopPropagation="true">
+            <div class="acc-confirm-icon"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
+            <h2 id="acc-delete-title">Delete account?</h2>
+            <p>This removes <strong>@_confirmDeleteAccount.AccountName</strong> from the account directory. This action cannot be undone.</p>
+            <div class="acc-modal-footer">
+                <button type="button" class="acc-btn acc-btn-ghost" @onclick="CancelDelete">Cancel</button>
+                <button type="button" class="acc-btn acc-btn-danger" @onclick="DeleteAsync" disabled="@_saving">Delete</button>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="acc-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="acc-toast acc-toast-@toast.Tone">
+            <i class="bi @toast.Icon" aria-hidden="true"></i>
+            <span>@toast.Message</span>
+            <button type="button" @onclick="() => DismissToast(toast.Id)" aria-label="Dismiss notification"><i class="bi bi-x" aria-hidden="true"></i></button>
+        </div>
+    }
+</div>
+
+@code {
+    private readonly IReadOnlyList<AccountCommandTab> _tabs =
+    [
+        new("all", "All", "bi-grid-3x3-gap"),
+        new("strategic", "Strategic", "bi-gem"),
+        new("risk", "Risk", "bi-exclamation-triangle"),
+        new("pipeline", "Pipeline", "bi-funnel"),
+        new("recent", "Recent", "bi-clock-history")
+    ];
+
+    private List<AccountDto> _accounts = [];
+    private string _search = string.Empty;
+    private string? _statusFilter;
+    private string? _typeFilter;
+    private string _activeTab = "all";
+    private bool _loading = true;
+    private bool _saving;
+    private string? _loadError;
+    private Guid? _selectedAccountId;
+    private bool _showEditor;
+    private AccountDto? _editingAccount;
+    private AccountDto? _confirmDeleteAccount;
+    private AccountCommandFormModel _form = new();
+    private EditContext _editContext;
+    private readonly List<AccountToast> _toasts = [];
+    private Guid _tenantId;
+    private List<AccountOption> _statusOptions = [];
+    private List<AccountOption> _typeOptions = [];
+    private List<AccountOption> _segmentOptions = [];
+    private List<AccountOption> _lifecycleStageOptions = [];
+
+    private IEnumerable<AccountDto> BaseTabAccounts => _activeTab switch
+    {
+        "strategic" => _accounts.Where(IsStrategic),
+        "risk" => _accounts.Where(IsAtRisk),
+        "pipeline" => _accounts.Where(IsPipeline),
+        "recent" => _accounts.OrderByDescending(LastTouched).Take(15),
+        _ => _accounts
+    };
+
+    private IEnumerable<AccountDto> FilteredAccounts => BaseTabAccounts
+        .Where(MatchesSearch)
+        .Where(a => string.IsNullOrWhiteSpace(_statusFilter) || a.StatusCode == _statusFilter)
+        .Where(a => string.IsNullOrWhiteSpace(_typeFilter) || a.AccountTypeCode == _typeFilter)
+        .OrderByDescending(PriorityScore)
+        .ThenBy(a => a.AccountName);
+
+    private AccountDto? SelectedAccount => _accounts.FirstOrDefault(a => a.AccountId == _selectedAccountId) ?? FilteredAccounts.FirstOrDefault();
+    private int ActiveAccounts => _accounts.Count(a => a.StatusCode == "Active");
+    private int StrategicAccounts => _accounts.Count(IsStrategic);
+    private int AtRiskAccounts => _accounts.Count(IsAtRisk);
+    private int ProspectAccounts => _accounts.Count(IsPipeline);
+    private decimal TotalRevenue => _accounts.Sum(a => a.AnnualRevenue ?? 0);
+    private double ActiveRate => _accounts.Count == 0 ? 0 : (double)ActiveAccounts / _accounts.Count;
+
+    public Accounts()
+    {
+        _editContext = new EditContext(_form);
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Accounts", "/accounts"), new("Command Center", "/accounts"));
+        await LoadReferenceDataAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadReferenceDataAsync()
+    {
+        var accountTypes = await Api.SearchAccountTypesAsync(_tenantId, pageSize: 200);
+        _typeOptions = accountTypes?.Items
+            .Where(t => t.IsActive)
+            .OrderBy(t => t.SortOrder)
+            .ThenBy(t => t.TypeName)
+            .Select(t => new AccountOption(t.TypeCode, t.TypeName, t.IsDefault))
+            .ToList() ?? [];
+
+        var options = await Api.GetAccountReferenceOptionsAsync(_tenantId);
+        var activeOptions = options?.Where(o => o.IsActive).ToList() ?? [];
+        _statusOptions = ToOptions(activeOptions, "Status");
+        _segmentOptions = ToOptions(activeOptions, "Segment");
+        _lifecycleStageOptions = ToOptions(activeOptions, "LifecycleStage");
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchAccountsAsync(_tenantId, pageSize: 500);
+            _accounts = result?.Items.ToList() ?? [];
+            if (_selectedAccountId is null && _accounts.Count > 0)
+            {
+                _selectedAccountId = _accounts.OrderByDescending(PriorityScore).First().AccountId;
+            }
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load accounts: {ex.Message}";
+            Toast(_loadError, "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void OpenCreate()
+    {
+        _editingAccount = null;
+        SetForm(new AccountCommandFormModel
+        {
+            AccountTypeCode = DefaultOptionCode(_typeOptions),
+            StatusCode = DefaultOptionCode(_statusOptions),
+            LifecycleStageCode = DefaultOptionCode(_lifecycleStageOptions),
+            SegmentCode = null
+        });
+        _showEditor = true;
+    }
+
+    private void OpenEdit(AccountDto account)
+    {
+        _editingAccount = account;
+        SetForm(new AccountCommandFormModel
+        {
+            AccountNumber = account.AccountNumber,
+            AccountName = account.AccountName,
+            AccountTypeCode = account.AccountTypeCode,
+            MainEmail = account.MainEmail,
+            MainPhone = FormatPhone(account.MainPhone),
+            StatusCode = account.StatusCode,
+            SegmentCode = account.SegmentCode,
+            LifecycleStageCode = account.LifecycleStageCode,
+            Industry = account.Industry,
+            Website = account.Website,
+            AnnualRevenue = account.AnnualRevenue
+        });
+        _showEditor = true;
+    }
+
+    private void SetForm(AccountCommandFormModel form)
+    {
+        _form = form;
+        _editContext = new EditContext(_form);
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!_editContext.Validate())
+        {
+            Toast("Review highlighted account fields before saving.", "warning");
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            if (_editingAccount is null)
+            {
+                var id = await Api.CreateAccountAsync(new CreateAccountRequest
+                {
+                    TenantId = _tenantId,
+                    AccountNumber = Normalize(_form.AccountNumber) ?? string.Empty,
+                    AccountName = Normalize(_form.AccountName) ?? string.Empty,
+                    AccountTypeCode = Normalize(_form.AccountTypeCode) ?? DefaultOptionCode(_typeOptions),
+                    MainEmail = Normalize(_form.MainEmail),
+                    MainPhone = Normalize(NormalizePhone(_form.MainPhone)),
+                    StatusCode = Normalize(_form.StatusCode) ?? DefaultOptionCode(_statusOptions),
+                    SegmentCode = Normalize(_form.SegmentCode),
+                    LifecycleStageCode = Normalize(_form.LifecycleStageCode),
+                    Industry = Normalize(_form.Industry),
+                    Website = Normalize(_form.Website),
+                    AnnualRevenue = _form.AnnualRevenue
+                });
+                _selectedAccountId = id;
+                Toast("Account created.", "success");
+            }
+            else
+            {
+                await Api.UpdateAccountAsync(_editingAccount.AccountId, new UpdateAccountRequest
+                {
+                    AccountName = Normalize(_form.AccountName) ?? string.Empty,
+                    AccountTypeCode = Normalize(_form.AccountTypeCode) ?? DefaultOptionCode(_typeOptions),
+                    MainEmail = Normalize(_form.MainEmail),
+                    MainPhone = Normalize(NormalizePhone(_form.MainPhone)),
+                    StatusCode = Normalize(_form.StatusCode) ?? DefaultOptionCode(_statusOptions),
+                    SegmentCode = Normalize(_form.SegmentCode),
+                    LifecycleStageCode = Normalize(_form.LifecycleStageCode),
+                    Industry = Normalize(_form.Industry),
+                    Website = Normalize(_form.Website),
+                    AnnualRevenue = _form.AnnualRevenue
+                });
+                _selectedAccountId = _editingAccount.AccountId;
+                Toast("Account updated.", "success");
+            }
+
+            CloseEditor();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Toast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void ConfirmDelete(AccountDto account) => _confirmDeleteAccount = account;
+    private void CancelDelete() => _confirmDeleteAccount = null;
+
+    private async Task DeleteAsync()
+    {
+        if (_confirmDeleteAccount is null)
+        {
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            await Api.DeleteAccountAsync(_confirmDeleteAccount.AccountId);
+            Toast("Account deleted.", "success");
+            _confirmDeleteAccount = null;
+            _selectedAccountId = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Toast($"Delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void CloseEditor()
+    {
+        _showEditor = false;
+        _editingAccount = null;
+    }
+
+    private void SelectAccount(AccountDto account)
+    {
+        _selectedAccountId = account.AccountId;
+        NavContext.SetAccount(account.AccountId, account.AccountName);
+    }
+
+    private void OpenAccount(AccountDto account)
+    {
+        SelectAccount(account);
+        Nav.NavigateTo($"/accounts/{account.AccountId}");
+    }
+
+    private void SetTab(string tab)
+    {
+        _activeTab = tab;
+        _selectedAccountId = FilteredAccounts.FirstOrDefault()?.AccountId;
+    }
+
+    private void SetKpi(string key)
+    {
+        ResetFilters();
+        _activeTab = key switch
+        {
+            "active" => "all",
+            "strategic" => "strategic",
+            "risk" => "risk",
+            "pipeline" => "pipeline",
+            "revenue" => "strategic",
+            _ => "all"
+        };
+
+        if (key == "active")
+        {
+            _statusFilter = "Active";
+        }
+
+        _selectedAccountId = FilteredAccounts.FirstOrDefault()?.AccountId;
+    }
+
+    private void ResetFilters()
+    {
+        _search = string.Empty;
+        _statusFilter = null;
+        _typeFilter = null;
+    }
+
+    private void ResetWorkspace()
+    {
+        ResetFilters();
+        _activeTab = "all";
+        _selectedAccountId = _accounts.OrderByDescending(PriorityScore).FirstOrDefault()?.AccountId;
+    }
+
+    private void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _search = e.Value?.ToString() ?? string.Empty;
+        _selectedAccountId = FilteredAccounts.FirstOrDefault()?.AccountId;
+    }
+
+    private void OnStatusChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _statusFilter = Normalize(e.Value?.ToString());
+        _selectedAccountId = FilteredAccounts.FirstOrDefault()?.AccountId;
+    }
+
+    private void OnTypeChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _typeFilter = Normalize(e.Value?.ToString());
+        _selectedAccountId = FilteredAccounts.FirstOrDefault()?.AccountId;
+    }
+
+    private void OnPhoneChanged(string? value) => _form.MainPhone = FormatPhone(value);
+
+    private bool MatchesSearch(AccountDto account)
+    {
+        if (string.IsNullOrWhiteSpace(_search))
+        {
+            return true;
+        }
+
+        var search = _search.Trim();
+        return account.AccountName.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || account.AccountNumber.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || account.AccountTypeCode.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || account.StatusCode.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || (account.MainEmail?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false)
+            || (account.MainPhone?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false)
+            || (account.SegmentCode?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false)
+            || (account.Industry?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false);
+    }
+
+    private static List<AccountOption> ToOptions(IEnumerable<AccountReferenceOptionDto> options, string group) =>
+        options
+            .Where(o => string.Equals(o.OptionGroup, group, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(o => o.SortOrder)
+            .ThenBy(o => o.OptionName)
+            .Select(o => new AccountOption(o.OptionCode, o.OptionName, o.IsDefault))
+            .ToList();
+
+    private static string DefaultOptionCode(IReadOnlyList<AccountOption> options) =>
+        options.FirstOrDefault(o => o.IsDefault)?.Code ?? options.FirstOrDefault()?.Code ?? string.Empty;
+
+    private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string Initials(string name)
+    {
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length > 0 ? name[..1] : "?";
+    }
+
+    private static bool IsStrategic(AccountDto account) => account.SegmentCode is "Enterprise" or "Key Account" || (account.AnnualRevenue ?? 0) >= 1_000_000;
+    private static bool IsAtRisk(AccountDto account) => account.StatusCode is "Suspended" or "Inactive" || account.LifecycleStageCode == "At Risk";
+    private static bool IsPipeline(AccountDto account) => account.StatusCode == "Prospect" || account.LifecycleStageCode is "Lead" or "Prospect";
+    private static DateTime LastTouched(AccountDto account) => account.ModifiedDateUtc ?? account.CreatedDateUtc;
+
+    private static int PriorityScore(AccountDto account)
+    {
+        var score = 0;
+        if (IsAtRisk(account)) score += 70;
+        if (IsStrategic(account)) score += 50;
+        if (IsPipeline(account)) score += 25;
+        if (string.IsNullOrWhiteSpace(account.MainEmail) && string.IsNullOrWhiteSpace(account.MainPhone)) score += 15;
+        if (LastTouched(account) < DateTime.UtcNow.AddDays(-30)) score += 10;
+        return score;
+    }
+
+    private int TabCount(string tab) => tab switch
+    {
+        "strategic" => StrategicAccounts,
+        "risk" => AtRiskAccounts,
+        "pipeline" => ProspectAccounts,
+        "recent" => Math.Min(_accounts.Count, 15),
+        _ => _accounts.Count
+    };
+
+    private string TabClass(string tab) => _activeTab == tab ? "acc-tab acc-tab-active" : "acc-tab";
+    private static string StatusBadge(string status) => status switch
+    {
+        "Active" => "acc-status acc-status-active",
+        "Prospect" => "acc-status acc-status-prospect",
+        "Suspended" => "acc-status acc-status-warning",
+        "Inactive" => "acc-status acc-status-muted",
+        _ => "acc-status acc-status-muted"
+    };
+
+    private static string PriorityLabel(AccountDto account) => IsAtRisk(account) ? "Risk" : IsStrategic(account) ? "Strategic" : IsPipeline(account) ? "Pipeline" : "Standard";
+    private static string PriorityBadge(AccountDto account) => IsAtRisk(account) ? "acc-priority acc-priority-risk" : IsStrategic(account) ? "acc-priority acc-priority-strategic" : IsPipeline(account) ? "acc-priority acc-priority-pipeline" : "acc-priority";
+    private static string AvatarTone(string name) { var tones = new[] { "acc-avatar-blue", "acc-avatar-purple", "acc-avatar-green", "acc-avatar-amber", "acc-avatar-rose" }; return tones[Math.Abs(name.GetHashCode()) % tones.Length]; }
+
+    private static string? NormalizePhone(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var digits = new string(value.Where(char.IsDigit).ToArray());
+        return digits.Length == 10 ? $"{digits[..3]}-{digits[3..6]}-{digits[6..]}" : value.Trim();
+    }
+
+    private static string FormatPhone(string? value)
+    {
+        var normalized = NormalizePhone(value);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return string.Empty;
+        }
+
+        var digits = new string(normalized.Where(char.IsDigit).ToArray());
+        return digits.Length == 10 ? $"({digits[..3]}) {digits[3..6]}-{digits[6..]}" : normalized;
+    }
+
+    private static string NormalizePhoneLink(string value) => new(value.Where(c => char.IsDigit(c) || c == '+').ToArray());
+
+    private void Toast(string message, string tone)
+    {
+        var toast = new AccountToast(Guid.NewGuid(), message, tone, tone switch
+        {
+            "danger" => "bi-exclamation-triangle-fill",
+            "warning" => "bi-exclamation-circle-fill",
+            _ => "bi-check-circle-fill"
+        });
+        _toasts.Add(toast);
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(4500);
+            await InvokeAsync(() => DismissToast(toast.Id));
+        });
+    }
+
+    private void DismissToast(Guid id)
+    {
+        _toasts.RemoveAll(t => t.Id == id);
+        StateHasChanged();
+    }
+
+    private RenderFragment KpiCard(string key, string label, string value, string icon, string tone, string caption) => __builder =>
+    {
+        <button type="button" class="@KpiClass(key)" @onclick="() => SetKpi(key)">
+            <span class="acc-kpi-icon acc-tone-@tone"><i class="bi @icon" aria-hidden="true"></i></span>
+            <span class="acc-kpi-copy"><small>@label</small><strong>@value</strong><em>@caption</em></span>
+        </button>
+    };
+
+    private string KpiClass(string key)
+    {
+        var active = key switch
+        {
+            "active" => _statusFilter == "Active" && _activeTab == "all",
+            "strategic" => _activeTab == "strategic",
+            "risk" => _activeTab == "risk",
+            "pipeline" => _activeTab == "pipeline",
+            "revenue" => _activeTab == "strategic",
+            _ => _activeTab == "all" && string.IsNullOrWhiteSpace(_statusFilter) && string.IsNullOrWhiteSpace(_typeFilter) && string.IsNullOrWhiteSpace(_search)
+        };
+        return active ? "acc-kpi-card acc-kpi-card-active" : "acc-kpi-card";
+    }
+
+    private static RenderFragment MiniMetric(string label, string value) => __builder =>
+    {
+        <div class="acc-mini-metric"><span>@label</span><strong>@value</strong></div>
+    };
+
+    private sealed class AccountCommandFormModel
+    {
+        [Required(ErrorMessage = "Account Number is required.")]
+        [StringLength(50, ErrorMessage = "Account Number cannot exceed 50 characters.")]
+        public string AccountNumber { get; set; } = $"ACC-{DateTime.UtcNow:yyyyMMddHHmmss}";
+
+        [Required(ErrorMessage = "Account Name is required.")]
+        [StringLength(200, ErrorMessage = "Account Name cannot exceed 200 characters.")]
+        public string AccountName { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Account Type is required.")]
+        [StringLength(50, ErrorMessage = "Account Type cannot exceed 50 characters.")]
+        public string AccountTypeCode { get; set; } = string.Empty;
+
+        [AmsEmailAddress]
+        [StringLength(200, ErrorMessage = "Email cannot exceed 200 characters.")]
+        public string? MainEmail { get; set; }
+
+        [AmsPhone]
+        [StringLength(50, ErrorMessage = "Phone cannot exceed 50 characters.")]
+        public string? MainPhone { get; set; }
+
+        [Required(ErrorMessage = "Status is required.")]
+        [StringLength(50, ErrorMessage = "Status cannot exceed 50 characters.")]
+        public string StatusCode { get; set; } = string.Empty;
+
+        [StringLength(50, ErrorMessage = "Segment cannot exceed 50 characters.")]
+        public string? SegmentCode { get; set; }
+
+        [StringLength(50, ErrorMessage = "Lifecycle Stage cannot exceed 50 characters.")]
+        public string? LifecycleStageCode { get; set; }
+
+        [StringLength(100, ErrorMessage = "Industry cannot exceed 100 characters.")]
+        public string? Industry { get; set; }
+
+        [Url(ErrorMessage = "Enter a valid website URL.")]
+        [StringLength(200, ErrorMessage = "Website cannot exceed 200 characters.")]
+        public string? Website { get; set; }
+
+        [Range(0, 999999999999, ErrorMessage = "Annual Revenue must be 0 or greater.")]
+        public decimal? AnnualRevenue { get; set; }
+    }
+
+    private sealed record AccountOption(string Code, string Name, bool IsDefault);
+    private sealed record AccountCommandTab(string Key, string Label, string Icon);
+    private sealed record AccountToast(Guid Id, string Message, string Tone, string Icon);
+}

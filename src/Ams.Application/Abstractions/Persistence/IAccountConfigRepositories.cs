@@ -22,6 +22,11 @@ public interface IRelationshipTypeRepository
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 }
 
+public interface IAccountReferenceOptionRepository
+{
+    Task<List<AccountReferenceOptionDto>> GetAllAsync(Guid tenantId, string? optionGroup = null, CancellationToken ct = default);
+}
+
 public interface IHouseholdSettingRepository
 {
     Task<List<HouseholdSettingDto>> GetAllAsync(Guid tenantId, CancellationToken ct = default);

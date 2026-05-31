@@ -22,10 +22,47 @@ public sealed class AccountTypeRepository : IAccountTypeRepository
     {
         var sql = RepositorySql.BuildPagedSearchSql("Client.AccountType", Cols, "TypeName LIKE '%'+@SearchTerm+'%' OR TypeCode LIKE '%'+@SearchTerm+'%'", "SortOrder ASC, TypeName ASC");
         using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await EnsureAccountTypesAsync(cn, tenantId, ct);
         using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { TenantId = tenantId, SearchTerm = searchTerm ?? "", Offset = (Math.Max(pageNumber, 1) - 1) * pageSize, PageSize = pageSize }, cancellationToken: ct));
         var items = (await multi.ReadAsync<AccountTypeDto>()).AsList();
         var total = await multi.ReadSingleAsync<int>();
         return new PagedResult<AccountTypeDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
+    }
+
+    private static async Task EnsureAccountTypesAsync(System.Data.IDbConnection cn, Guid tenantId, CancellationToken ct)
+    {
+        const string sql = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'Client') EXEC('CREATE SCHEMA Client');
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Client.AccountType'))
+CREATE TABLE Client.AccountType (
+    AccountTypeId   UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    TenantId        UNIQUEIDENTIFIER NOT NULL,
+    TypeCode        NVARCHAR(50)     NOT NULL,
+    TypeName        NVARCHAR(100)    NOT NULL,
+    Category        NVARCHAR(50)     NULL,
+    Description     NVARCHAR(500)    NULL,
+    IsDefault       BIT              NOT NULL DEFAULT 0,
+    IsActive        BIT              NOT NULL DEFAULT 1,
+    SortOrder       INT              NOT NULL DEFAULT 0,
+    CreatedDateUtc  DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc DATETIME2        NULL,
+    IsDeleted       BIT              NOT NULL DEFAULT 0,
+    CONSTRAINT UQ_AccountType_Tenant_Code UNIQUE (TenantId, TypeCode)
+);
+
+IF NOT EXISTS (SELECT 1 FROM Client.AccountType WHERE TenantId = @TenantId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Client.AccountType (TenantId, TypeCode, TypeName, Category, Description, IsDefault, SortOrder)
+    VALUES
+        (@TenantId, 'Commercial', 'Commercial', 'Commercial', 'Commercial insurance or business account.', 1, 10),
+        (@TenantId, 'Personal', 'Personal', 'Personal', 'Personal lines account.', 0, 20),
+        (@TenantId, 'Non-Profit', 'Non-Profit', 'Commercial', 'Non-profit organization account.', 0, 30),
+        (@TenantId, 'Government', 'Government', 'Government', 'Public sector account.', 0, 40),
+        (@TenantId, 'Partner', 'Partner', 'Commercial', 'Partner or referral account.', 0, 50);
+END;";
+
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
     }
 
     public async Task<Guid> CreateAsync(CreateAccountTypeRequest r, CancellationToken ct = default)
@@ -93,6 +130,88 @@ public sealed class RelationshipTypeRepository : IRelationshipTypeRepository
     {
         using var cn = await _cf.CreateOpenConnectionAsync(ct);
         await cn.ExecuteAsync(new CommandDefinition("UPDATE Client.RelationshipType SET IsDeleted=1 WHERE RelationshipTypeId=@Id;", new { Id = id }, cancellationToken: ct));
+    }
+}
+
+public sealed class AccountReferenceOptionRepository : IAccountReferenceOptionRepository
+{
+    private readonly ISqlConnectionFactory _cf;
+    public AccountReferenceOptionRepository(ISqlConnectionFactory cf) => _cf = cf;
+
+    public async Task<List<AccountReferenceOptionDto>> GetAllAsync(Guid tenantId, string? optionGroup = null, CancellationToken ct = default)
+    {
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await EnsureReferenceDataAsync(cn, tenantId, ct);
+
+        const string sql = @"
+SELECT AccountReferenceOptionId, TenantId, OptionGroup, OptionCode, OptionName, Description,
+       IsDefault, IsActive, SortOrder, CreatedDateUtc
+FROM Client.AccountReferenceOption
+WHERE TenantId = @TenantId
+  AND IsDeleted = 0
+  AND (@OptionGroup IS NULL OR @OptionGroup = '' OR OptionGroup = @OptionGroup)
+ORDER BY OptionGroup, SortOrder, OptionName;";
+
+        var items = await cn.QueryAsync<AccountReferenceOptionDto>(new CommandDefinition(sql, new { TenantId = tenantId, OptionGroup = optionGroup }, cancellationToken: ct));
+        return items.AsList();
+    }
+
+    private static async Task EnsureReferenceDataAsync(System.Data.IDbConnection cn, Guid tenantId, CancellationToken ct)
+    {
+        const string sql = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'Client') EXEC('CREATE SCHEMA Client');
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Client.AccountReferenceOption'))
+CREATE TABLE Client.AccountReferenceOption (
+    AccountReferenceOptionId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    TenantId                 UNIQUEIDENTIFIER NOT NULL,
+    OptionGroup              NVARCHAR(50)     NOT NULL,
+    OptionCode               NVARCHAR(50)     NOT NULL,
+    OptionName               NVARCHAR(100)    NOT NULL,
+    Description              NVARCHAR(500)    NULL,
+    IsDefault                BIT              NOT NULL DEFAULT 0,
+    IsActive                 BIT              NOT NULL DEFAULT 1,
+    SortOrder                INT              NOT NULL DEFAULT 0,
+    CreatedDateUtc           DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc          DATETIME2        NULL,
+    IsDeleted                BIT              NOT NULL DEFAULT 0,
+    CONSTRAINT UQ_AccountReferenceOption_Tenant_Group_Code UNIQUE (TenantId, OptionGroup, OptionCode)
+);
+
+IF NOT EXISTS (SELECT 1 FROM Client.AccountReferenceOption WHERE TenantId = @TenantId AND OptionGroup = 'Status' AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Client.AccountReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    VALUES
+        (@TenantId, 'Status', 'Active', 'Active', 'Active customer or managed account.', 1, 10),
+        (@TenantId, 'Status', 'Prospect', 'Prospect', 'Prospective customer in pipeline.', 0, 20),
+        (@TenantId, 'Status', 'Inactive', 'Inactive', 'Inactive or archived account.', 0, 90),
+        (@TenantId, 'Status', 'Suspended', 'Suspended', 'Temporarily suspended account.', 0, 95);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Client.AccountReferenceOption WHERE TenantId = @TenantId AND OptionGroup = 'Segment' AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Client.AccountReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    VALUES
+        (@TenantId, 'Segment', 'Enterprise', 'Enterprise', 'Large strategic account.', 0, 10),
+        (@TenantId, 'Segment', 'Key Account', 'Key Account', 'High-value retained account.', 0, 20),
+        (@TenantId, 'Segment', 'Mid-Market', 'Mid-Market', 'Mid-market account segment.', 1, 30),
+        (@TenantId, 'Segment', 'SMB', 'SMB', 'Small and midsize business account.', 0, 40),
+        (@TenantId, 'Segment', 'Startup', 'Startup', 'Early-stage growth account.', 0, 50);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Client.AccountReferenceOption WHERE TenantId = @TenantId AND OptionGroup = 'LifecycleStage' AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Client.AccountReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    VALUES
+        (@TenantId, 'LifecycleStage', 'Lead', 'Lead', 'New account lead.', 0, 10),
+        (@TenantId, 'LifecycleStage', 'Prospect', 'Prospect', 'Qualified sales prospect.', 1, 20),
+        (@TenantId, 'LifecycleStage', 'Customer', 'Customer', 'Active customer relationship.', 0, 30),
+        (@TenantId, 'LifecycleStage', 'Renewal', 'Renewal', 'Renewal management stage.', 0, 40),
+        (@TenantId, 'LifecycleStage', 'At Risk', 'At Risk', 'Account needs retention attention.', 0, 80),
+        (@TenantId, 'LifecycleStage', 'Inactive', 'Inactive', 'Inactive lifecycle stage.', 0, 90);
+END;";
+
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
     }
 }
 

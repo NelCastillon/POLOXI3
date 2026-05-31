@@ -28,6 +28,34 @@ public sealed class RelationshipTypeDto
     public DateTime CreatedDateUtc     { get; set; }
 }
 
+public sealed class AccountReferenceOptionDto
+{
+    public Guid AccountReferenceOptionId { get; set; }
+    public Guid TenantId { get; set; }
+    public string OptionGroup { get; set; } = string.Empty;
+    public string OptionCode { get; set; } = string.Empty;
+    public string OptionName { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public bool IsDefault { get; set; }
+    public bool IsActive { get; set; }
+    public int SortOrder { get; set; }
+    public DateTime CreatedDateUtc { get; set; }
+}
+
+public sealed class SubmissionReferenceOptionDto
+{
+    public Guid SubmissionReferenceOptionId { get; set; }
+    public Guid TenantId { get; set; }
+    public string OptionGroup { get; set; } = string.Empty;
+    public string OptionCode { get; set; } = string.Empty;
+    public string OptionName { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public bool IsDefault { get; set; }
+    public bool IsActive { get; set; }
+    public int SortOrder { get; set; }
+    public DateTime CreatedDateUtc { get; set; }
+}
+
 public sealed class HouseholdSettingDto
 {
     public Guid     HouseholdSettingId { get; set; }

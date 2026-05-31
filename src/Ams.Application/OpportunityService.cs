@@ -1,6 +1,7 @@
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Abstractions.Services;
 using Ams.Application.Common.Dtos;
+using Ams.Application.Common.Guards;
 using Ams.Application.Common.Models;
 using Ams.Application.Features.Opportunities;
 
@@ -9,14 +10,22 @@ namespace Ams.Application;
 public sealed class OpportunityService : IOpportunityService
 {
     private readonly IOpportunityRepository _repository;
+    private readonly IAccountRepository _accountRepository;
 
-    public OpportunityService(IOpportunityRepository repository)
+    public OpportunityService(IOpportunityRepository repository, IAccountRepository accountRepository)
     {
         _repository = repository;
+        _accountRepository = accountRepository;
     }
 
-    public Task<Guid> CreateAsync(CreateOpportunityRequest request, CancellationToken cancellationToken = default)
-        => _repository.CreateAsync(request, cancellationToken);
+    public async Task<Guid> CreateAsync(CreateOpportunityRequest request, CancellationToken cancellationToken = default)
+    {
+        // Enterprise rule: an Opportunity must never be orphaned and must stay within tenant scope.
+        // Validate the parent Account exists and belongs to the same tenant before creating.
+        await TenantGuard.EnsureParentAsync(request.AccountId, request.TenantId, _accountRepository.GetByIdAsync, a => a.TenantId, "Account", "opportunity", cancellationToken);
+
+        return await _repository.CreateAsync(request, cancellationToken);
+    }
 
     public Task<OpportunityDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
         => _repository.GetByIdAsync(id, cancellationToken);

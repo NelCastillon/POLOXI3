@@ -16,7 +16,88 @@ IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'DMS')      EXEC('CREATE S
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'Audit')    EXEC('CREATE SCHEMA Audit');
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'Assistant') EXEC('CREATE SCHEMA Assistant');
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'Commercial') EXEC('CREATE SCHEMA Commercial');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'Submissions') EXEC('CREATE SCHEMA Submissions');
 GO
+
+-- ============================================================
+-- SUBMISSIONS: Reference Data
+-- ============================================================
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Submissions.SubmissionReferenceOption'))
+CREATE TABLE Submissions.SubmissionReferenceOption (
+    SubmissionReferenceOptionId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    TenantId                    UNIQUEIDENTIFIER NOT NULL,
+    OptionGroup                 NVARCHAR(50)     NOT NULL,
+    OptionCode                  NVARCHAR(100)    NOT NULL,
+    OptionName                  NVARCHAR(150)    NOT NULL,
+    Description                 NVARCHAR(500)    NULL,
+    IsDefault                   BIT              NOT NULL DEFAULT 0,
+    IsActive                    BIT              NOT NULL DEFAULT 1,
+    SortOrder                   INT              NOT NULL DEFAULT 0,
+    CreatedDateUtc              DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc             DATETIME2        NULL,
+    IsDeleted                   BIT              NOT NULL DEFAULT 0,
+    CONSTRAINT UQ_SubmissionReferenceOption_Tenant_Group_Code UNIQUE (TenantId, OptionGroup, OptionCode)
+);
+
+DECLARE @SubmissionSeedTenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+
+IF NOT EXISTS (SELECT 1 FROM Submissions.SubmissionReferenceOption WHERE TenantId = @SubmissionSeedTenantId AND OptionGroup = 'SubmissionStatus')
+BEGIN
+    INSERT INTO Submissions.SubmissionReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    VALUES
+        (@SubmissionSeedTenantId, 'SubmissionStatus', 'New', 'New', 'New submission intake record.', 1, 10),
+        (@SubmissionSeedTenantId, 'SubmissionStatus', 'In Review', 'In Review', 'Submission is in underwriting or carrier review.', 0, 20),
+        (@SubmissionSeedTenantId, 'SubmissionStatus', 'Quoted', 'Quoted', 'Submission has one or more quotes.', 0, 30),
+        (@SubmissionSeedTenantId, 'SubmissionStatus', 'Bound', 'Bound', 'Submission has been bound into policy workflow.', 0, 40),
+        (@SubmissionSeedTenantId, 'SubmissionStatus', 'Declined', 'Declined', 'Submission was declined by underwriting or market.', 0, 80),
+        (@SubmissionSeedTenantId, 'SubmissionStatus', 'Withdrawn', 'Withdrawn', 'Submission was withdrawn by client or producer.', 0, 90);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Submissions.SubmissionReferenceOption WHERE TenantId = @SubmissionSeedTenantId AND OptionGroup = 'LineOfBusiness')
+BEGIN
+    INSERT INTO Submissions.SubmissionReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    VALUES
+        (@SubmissionSeedTenantId, 'LineOfBusiness', 'General Liability', 'General Liability', 'Commercial general liability placement.', 1, 10),
+        (@SubmissionSeedTenantId, 'LineOfBusiness', 'Commercial Property', 'Commercial Property', 'Commercial property placement.', 0, 20),
+        (@SubmissionSeedTenantId, 'LineOfBusiness', 'Commercial Auto', 'Commercial Auto', 'Commercial automobile placement.', 0, 30),
+        (@SubmissionSeedTenantId, 'LineOfBusiness', 'Workers Comp', 'Workers Comp', 'Workers compensation placement.', 0, 40),
+        (@SubmissionSeedTenantId, 'LineOfBusiness', 'Umbrella / Excess', 'Umbrella / Excess', 'Umbrella or excess liability placement.', 0, 50),
+        (@SubmissionSeedTenantId, 'LineOfBusiness', 'Professional Liability', 'Professional Liability', 'Professional liability placement.', 0, 60),
+        (@SubmissionSeedTenantId, 'LineOfBusiness', 'Home / Dwelling', 'Home / Dwelling', 'Personal home or dwelling placement.', 0, 70),
+        (@SubmissionSeedTenantId, 'LineOfBusiness', 'Personal Auto', 'Personal Auto', 'Personal automobile placement.', 0, 80);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Submissions.SubmissionReferenceOption WHERE TenantId = @SubmissionSeedTenantId AND OptionGroup = 'ApplicationStatus')
+BEGIN
+    INSERT INTO Submissions.SubmissionReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    VALUES
+        (@SubmissionSeedTenantId, 'ApplicationStatus', 'Draft', 'Draft', 'Application package is being drafted.', 1, 10),
+        (@SubmissionSeedTenantId, 'ApplicationStatus', 'Submitted', 'Submitted', 'Application has been submitted.', 0, 20),
+        (@SubmissionSeedTenantId, 'ApplicationStatus', 'Under Review', 'Under Review', 'Application is under review.', 0, 30),
+        (@SubmissionSeedTenantId, 'ApplicationStatus', 'Requirements Pending', 'Requirements Pending', 'Additional requirements are pending.', 0, 40),
+        (@SubmissionSeedTenantId, 'ApplicationStatus', 'Approved', 'Approved', 'Application is approved for quote workflow.', 0, 50),
+        (@SubmissionSeedTenantId, 'ApplicationStatus', 'Rejected', 'Rejected', 'Application was rejected.', 0, 90);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Submissions.SubmissionReferenceOption WHERE TenantId = @SubmissionSeedTenantId AND OptionGroup = 'QuoteStatus')
+BEGIN
+    INSERT INTO Submissions.SubmissionReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    VALUES
+        (@SubmissionSeedTenantId, 'QuoteStatus', 'Pending', 'Pending', 'Quote is pending market response.', 1, 10),
+        (@SubmissionSeedTenantId, 'QuoteStatus', 'Accepted', 'Accepted', 'Quote has been accepted or presented.', 0, 20),
+        (@SubmissionSeedTenantId, 'QuoteStatus', 'Declined', 'Declined', 'Quote has been declined.', 0, 80),
+        (@SubmissionSeedTenantId, 'QuoteStatus', 'Expired', 'Expired', 'Quote has expired.', 0, 90);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Submissions.SubmissionReferenceOption WHERE TenantId = @SubmissionSeedTenantId AND OptionGroup = 'DeclineType')
+BEGIN
+    INSERT INTO Submissions.SubmissionReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    VALUES
+        (@SubmissionSeedTenantId, 'DeclineType', 'Carrier', 'Carrier', 'Carrier or market declined the submission.', 1, 10),
+        (@SubmissionSeedTenantId, 'DeclineType', 'Internal', 'Internal', 'Agency or underwriting team declined the submission.', 0, 20),
+        (@SubmissionSeedTenantId, 'DeclineType', 'Withdrawn', 'Withdrawn', 'Client or producer withdrew the submission.', 0, 30);
+END;
 
 -- ============================================================
 -- COMMERCIAL: Plans
@@ -393,6 +474,7 @@ CREATE TABLE CRM.Lead (
     Email             NVARCHAR(300)    NULL,
     Phone             NVARCHAR(50)     NULL,
     InterestedService NVARCHAR(200)    NULL,
+    AccountId         UNIQUEIDENTIFIER NULL,
     Score             INT              NULL,
     PriorityCode      NVARCHAR(50)     NULL,
     AssignedToUserId  UNIQUEIDENTIFIER NULL,
@@ -403,6 +485,10 @@ CREATE TABLE CRM.Lead (
     ModifiedByUserId  UNIQUEIDENTIFIER NULL,
     IsDeleted         BIT              NOT NULL DEFAULT 0
 );
+
+IF EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('CRM.Lead'))
+AND COL_LENGTH('CRM.Lead', 'AccountId') IS NULL
+    ALTER TABLE CRM.Lead ADD AccountId UNIQUEIDENTIFIER NULL;
 
 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('CRM.Opportunity'))
 CREATE TABLE CRM.Opportunity (
@@ -479,6 +565,118 @@ CREATE TABLE Client.Contact (
     CreatedByUserId   UNIQUEIDENTIFIER NULL,
     IsDeleted         BIT              NOT NULL DEFAULT 0
 );
+
+-- ============================================================
+-- CLIENT: Account Configuration Reference Data
+-- ============================================================
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Client.AccountReferenceOption'))
+CREATE TABLE Client.AccountReferenceOption (
+    AccountReferenceOptionId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    TenantId                 UNIQUEIDENTIFIER NOT NULL,
+    OptionGroup              NVARCHAR(50)     NOT NULL,
+    OptionCode               NVARCHAR(50)     NOT NULL,
+    OptionName               NVARCHAR(100)    NOT NULL,
+    Description              NVARCHAR(500)    NULL,
+    IsDefault                BIT              NOT NULL DEFAULT 0,
+    IsActive                 BIT              NOT NULL DEFAULT 1,
+    SortOrder                INT              NOT NULL DEFAULT 0,
+    CreatedDateUtc           DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc          DATETIME2        NULL,
+    IsDeleted                BIT              NOT NULL DEFAULT 0,
+    CONSTRAINT UQ_AccountReferenceOption_Tenant_Group_Code UNIQUE (TenantId, OptionGroup, OptionCode)
+);
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Client.AccountType'))
+CREATE TABLE Client.AccountType (
+    AccountTypeId   UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    TenantId        UNIQUEIDENTIFIER NOT NULL,
+    TypeCode        NVARCHAR(50)     NOT NULL,
+    TypeName        NVARCHAR(100)    NOT NULL,
+    Category        NVARCHAR(50)     NULL,
+    Description     NVARCHAR(500)    NULL,
+    IsDefault       BIT              NOT NULL DEFAULT 0,
+    IsActive        BIT              NOT NULL DEFAULT 1,
+    SortOrder       INT              NOT NULL DEFAULT 0,
+    CreatedDateUtc  DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc DATETIME2        NULL,
+    IsDeleted       BIT              NOT NULL DEFAULT 0,
+    CONSTRAINT UQ_AccountType_Tenant_Code UNIQUE (TenantId, TypeCode)
+);
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Client.RelationshipType'))
+CREATE TABLE Client.RelationshipType (
+    RelationshipTypeId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    TenantId           UNIQUEIDENTIFIER NOT NULL,
+    TypeCode           NVARCHAR(50)     NOT NULL,
+    TypeName           NVARCHAR(100)    NOT NULL,
+    IsBidirectional    BIT              NOT NULL DEFAULT 0,
+    InverseTypeCode    NVARCHAR(50)     NULL,
+    Description        NVARCHAR(500)    NULL,
+    IsActive           BIT              NOT NULL DEFAULT 1,
+    SortOrder          INT              NOT NULL DEFAULT 0,
+    CreatedDateUtc     DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc    DATETIME2        NULL,
+    IsDeleted          BIT              NOT NULL DEFAULT 0,
+    CONSTRAINT UQ_RelationshipType_Tenant_Code UNIQUE (TenantId, TypeCode)
+);
+
+DECLARE @SeedTenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+
+IF NOT EXISTS (SELECT 1 FROM Client.AccountReferenceOption WHERE TenantId = @SeedTenantId AND OptionGroup = 'Status')
+BEGIN
+    INSERT INTO Client.AccountReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    VALUES
+        (@SeedTenantId, 'Status', 'Active', 'Active', 'Active customer or managed account.', 1, 10),
+        (@SeedTenantId, 'Status', 'Prospect', 'Prospect', 'Prospective customer in pipeline.', 0, 20),
+        (@SeedTenantId, 'Status', 'Inactive', 'Inactive', 'Inactive or archived account.', 0, 90),
+        (@SeedTenantId, 'Status', 'Suspended', 'Suspended', 'Temporarily suspended account.', 0, 95);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Client.AccountReferenceOption WHERE TenantId = @SeedTenantId AND OptionGroup = 'Segment')
+BEGIN
+    INSERT INTO Client.AccountReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    VALUES
+        (@SeedTenantId, 'Segment', 'Enterprise', 'Enterprise', 'Large strategic account.', 0, 10),
+        (@SeedTenantId, 'Segment', 'Key Account', 'Key Account', 'High-value retained account.', 0, 20),
+        (@SeedTenantId, 'Segment', 'Mid-Market', 'Mid-Market', 'Mid-market account segment.', 1, 30),
+        (@SeedTenantId, 'Segment', 'SMB', 'SMB', 'Small and midsize business account.', 0, 40),
+        (@SeedTenantId, 'Segment', 'Startup', 'Startup', 'Early-stage growth account.', 0, 50);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Client.AccountReferenceOption WHERE TenantId = @SeedTenantId AND OptionGroup = 'LifecycleStage')
+BEGIN
+    INSERT INTO Client.AccountReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    VALUES
+        (@SeedTenantId, 'LifecycleStage', 'Lead', 'Lead', 'New account lead.', 0, 10),
+        (@SeedTenantId, 'LifecycleStage', 'Prospect', 'Prospect', 'Qualified sales prospect.', 1, 20),
+        (@SeedTenantId, 'LifecycleStage', 'Customer', 'Customer', 'Active customer relationship.', 0, 30),
+        (@SeedTenantId, 'LifecycleStage', 'Renewal', 'Renewal', 'Renewal management stage.', 0, 40),
+        (@SeedTenantId, 'LifecycleStage', 'At Risk', 'At Risk', 'Account needs retention attention.', 0, 80),
+        (@SeedTenantId, 'LifecycleStage', 'Inactive', 'Inactive', 'Inactive lifecycle stage.', 0, 90);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Client.AccountType WHERE TenantId = @SeedTenantId)
+BEGIN
+    INSERT INTO Client.AccountType (TenantId, TypeCode, TypeName, Category, Description, IsDefault, SortOrder)
+    VALUES
+        (@SeedTenantId, 'Commercial', 'Commercial', 'Commercial', 'Commercial insurance or business account.', 1, 10),
+        (@SeedTenantId, 'Personal', 'Personal', 'Personal', 'Personal lines account.', 0, 20),
+        (@SeedTenantId, 'Non-Profit', 'Non-Profit', 'Commercial', 'Non-profit organization account.', 0, 30),
+        (@SeedTenantId, 'Government', 'Government', 'Government', 'Public sector account.', 0, 40),
+        (@SeedTenantId, 'Partner', 'Partner', 'Commercial', 'Partner or referral account.', 0, 50);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Client.RelationshipType WHERE TenantId = @SeedTenantId)
+BEGIN
+    INSERT INTO Client.RelationshipType (TenantId, TypeCode, TypeName, IsBidirectional, InverseTypeCode, Description, SortOrder)
+    VALUES
+        (@SeedTenantId, 'Parent', 'Parent', 0, 'Subsidiary', 'Parent company account relationship.', 10),
+        (@SeedTenantId, 'Subsidiary', 'Subsidiary', 0, 'Parent', 'Subsidiary account relationship.', 20),
+        (@SeedTenantId, 'Related', 'Related', 1, 'Related', 'Related account relationship.', 30),
+        (@SeedTenantId, 'Partner', 'Partner', 1, 'Partner', 'Partner account relationship.', 40),
+        (@SeedTenantId, 'Referred By', 'Referred By', 0, 'Referred', 'Referral source relationship.', 50);
+END;
 
 -- ============================================================
 -- 2.5  POLICY / SERVICE / ENGAGEMENT / OPERATIONS

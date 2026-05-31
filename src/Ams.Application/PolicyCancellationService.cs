@@ -1,6 +1,7 @@
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Abstractions.Services;
 using Ams.Application.Common.Dtos;
+using Ams.Application.Common.Guards;
 using Ams.Application.Features.PolicyCancellations;
 
 namespace Ams.Application;
@@ -8,8 +9,13 @@ namespace Ams.Application;
 public sealed class PolicyCancellationService : IPolicyCancellationService
 {
     private readonly IPolicyCancellationRepository _repository;
+    private readonly IAccountRepository _accountRepository;
 
-    public PolicyCancellationService(IPolicyCancellationRepository repository) => _repository = repository;
+    public PolicyCancellationService(IPolicyCancellationRepository repository, IAccountRepository accountRepository)
+    {
+        _repository = repository;
+        _accountRepository = accountRepository;
+    }
 
     public Task<PolicyCancellationCenterDto> GetCenterAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _repository.GetCenterAsync(tenantId, cancellationToken);
@@ -17,8 +23,14 @@ public sealed class PolicyCancellationService : IPolicyCancellationService
     public Task<PolicyCancellationDetailDto?> GetDetailAsync(Guid cancellationId, CancellationToken cancellationToken = default)
         => _repository.GetDetailAsync(cancellationId, cancellationToken);
 
-    public Task<Guid> CreateAsync(CreatePolicyCancellationRequest request, CancellationToken cancellationToken = default)
-        => _repository.CreateAsync(request, cancellationToken);
+    public async Task<Guid> CreateAsync(CreatePolicyCancellationRequest request, CancellationToken cancellationToken = default)
+    {
+        // Enterprise rule: a post-policy Cancellation must stay tenant-safe. When a parent
+        // Account is supplied it must exist and belong to the same tenant.
+        await TenantGuard.EnsureOptionalParentAsync(request.AccountId, request.TenantId, _accountRepository.GetByIdAsync, a => a.TenantId, "Parent account", "cancellation", cancellationToken);
+
+        return await _repository.CreateAsync(request, cancellationToken);
+    }
 
     public Task UpdateAsync(Guid cancellationId, UpdatePolicyCancellationRequest request, CancellationToken cancellationToken = default)
         => _repository.UpdateAsync(cancellationId, request, cancellationToken);

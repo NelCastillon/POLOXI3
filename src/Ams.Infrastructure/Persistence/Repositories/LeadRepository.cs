@@ -3,6 +3,7 @@ using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
 using Ams.Application.Features.Leads;
 using Dapper;
+using System.Data;
 using System.Globalization;
 
 namespace Ams.Infrastructure.Persistence.Repositories;
@@ -71,8 +72,9 @@ VALUES
 
     public async Task<LeadDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        const string sql = @"SELECT LeadId, TenantId, LeadNumber, AccountName, FirstName, LastName, Email, Phone, InterestedService, AnnualRevenue, Score, PriorityCode, SourceCode, NurturingStageCode, QualifiedDate, StatusCodeId AS StatusCode, AssignedToUserId, CreatedDateUtc, ModifiedDateUtc FROM CRM.Lead WHERE LeadId = @Id AND IsDeleted = 0;";
+        const string sql = @"SELECT LeadId, TenantId, LeadNumber, AccountName, FirstName, LastName, Email, Phone, InterestedService, AnnualRevenue, Score, PriorityCode, SourceCode, NurturingStageCode, QualifiedDate, StatusCodeId AS StatusCode, AccountId, AssignedToUserId, CreatedDateUtc, ModifiedDateUtc FROM CRM.Lead WHERE LeadId = @Id AND IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureLeadAccountIdColumnAsync(cn, cancellationToken);
         var lead = await cn.QuerySingleOrDefaultAsync<LeadDto>(
             new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
 
@@ -88,12 +90,13 @@ VALUES
     {
         var sql = RepositorySql.BuildPagedSearchSql(
             "CRM.Lead",
-            "LeadId, TenantId, LeadNumber, AccountName, FirstName, LastName, Email, Phone, InterestedService, AnnualRevenue, Score, PriorityCode, SourceCode, NurturingStageCode, QualifiedDate, StatusCodeId AS StatusCode, AssignedToUserId, CreatedDateUtc, ModifiedDateUtc",
+            "LeadId, TenantId, LeadNumber, AccountName, FirstName, LastName, Email, Phone, InterestedService, AnnualRevenue, Score, PriorityCode, SourceCode, NurturingStageCode, QualifiedDate, StatusCodeId AS StatusCode, AccountId, AssignedToUserId, CreatedDateUtc, ModifiedDateUtc",
             "FirstName LIKE '%' + @SearchTerm + '%' OR LastName LIKE '%' + @SearchTerm + '%' OR Email LIKE '%' + @SearchTerm + '%' OR AccountName LIKE '%' + @SearchTerm + '%' OR LeadNumber LIKE '%' + @SearchTerm + '%'",
             "CreatedDateUtc DESC",
             true);
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureLeadAccountIdColumnAsync(cn, cancellationToken);
         using var multi = await cn.QueryMultipleAsync(
             new CommandDefinition(sql, new
             {
@@ -213,12 +216,14 @@ SET AccountName = COALESCE(@AccountName, AccountName),
     NurturingStageCode = @NurturingStageCode,
     QualifiedDate = @QualifiedDate,
     StatusCodeId = COALESCE(@StatusCode, StatusCodeId),
+    AccountId = COALESCE(@AccountId, AccountId),
     AssignedToUserId = @AssignedToUserId,
     ModifiedByUserId = @UpdatedByUserId,
     ModifiedDateUtc = SYSUTCDATETIME()
 WHERE LeadId = @LeadId AND IsDeleted = 0;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureLeadAccountIdColumnAsync(cn, cancellationToken);
         const string currentSql = @"
 SELECT LeadId, TenantId, AccountName, FirstName, LastName, Email, Phone, InterestedService, AnnualRevenue, Score, SourceCode, CreatedDateUtc
 FROM CRM.Lead
@@ -256,10 +261,18 @@ WHERE LeadId = @LeadId AND IsDeleted = 0;";
             request.NurturingStageCode,
             request.QualifiedDate,
             request.StatusCode,
+            request.AccountId,
             request.AssignedToUserId,
             request.UpdatedByUserId
         }, cancellationToken: cancellationToken));
     }
+
+    private static Task EnsureLeadAccountIdColumnAsync(IDbConnection connection, CancellationToken cancellationToken)
+        => connection.ExecuteAsync(new CommandDefinition(@"
+IF EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('CRM.Lead'))
+AND COL_LENGTH('CRM.Lead', 'AccountId') IS NULL
+    ALTER TABLE CRM.Lead ADD AccountId UNIQUEIDENTIFIER NULL;",
+            cancellationToken: cancellationToken));
 
     public Task<IReadOnlyList<LeadContactDto>> GetContactsAsync(Guid leadId, CancellationToken cancellationToken = default)
         => QueryListAsync<LeadContactDto>("SELECT ContactId, TenantId, LeadId, FirstName, LastName, Title, Email, Phone, IsPrimary, CreatedDateUtc, ModifiedDateUtc FROM CRM.LeadContact WHERE LeadId = @LeadId AND IsDeleted = 0 ORDER BY IsPrimary DESC, CreatedDateUtc DESC;", new { LeadId = leadId }, cancellationToken);

@@ -19,7 +19,26 @@ public sealed class ClaimsService : IClaimsService
         => _repository.GetDetailAsync(claimId, cancellationToken);
 
     public Task<Guid> CreateAsync(CreateClaimRequest request, CancellationToken cancellationToken = default)
-        => _repository.CreateAsync(request, cancellationToken);
+    {
+        // Enterprise rule: a Claim must always be tenant-scoped and tied to a real policy
+        // and claimant. It must never be created without a tenant context or parent policy.
+        if (request.TenantId == Guid.Empty)
+        {
+            throw new InvalidOperationException("A Claim requires a tenant context. TenantId was not supplied.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.PolicyNumber))
+        {
+            throw new InvalidOperationException("A Claim requires a parent Policy. PolicyNumber was not supplied.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.AccountName))
+        {
+            throw new InvalidOperationException("A Claim requires an Account context. AccountName was not supplied.");
+        }
+
+        return _repository.CreateAsync(request, cancellationToken);
+    }
 
     public Task UpdateStatusAsync(Guid claimId, UpdateClaimStatusRequest request, CancellationToken cancellationToken = default)
         => _repository.UpdateStatusAsync(claimId, request, cancellationToken);

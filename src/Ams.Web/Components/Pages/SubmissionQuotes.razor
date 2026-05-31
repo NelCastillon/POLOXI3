@@ -6,6 +6,7 @@
 @inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject CurrentUserContext CurrentUser
 
 <PageTitle>Quote Command Center â€” AMS</PageTitle>
 
@@ -502,6 +503,7 @@
     string? _lobFilter;
     string _refreshIconClass = string.Empty;
     Guid? _openActionMenuFor;
+    Guid _tenantId;
     int _page = 1;
     const int PageSize = 18;
 
@@ -519,6 +521,8 @@
     readonly List<QuoteRow> _rows = [];
     readonly List<QuoteRow> _compareRows = [];
     readonly List<ToastMessage> _toasts = [];
+    List<SubmissionOption> _quoteStatusOptions = [];
+    List<SubmissionOption> _lobOptions = [];
 
     readonly TabDef[] _tabs =
     [
@@ -566,9 +570,9 @@
     string ConfirmButtonClass => _pendingAction == "Decline Quote" ? "qde-btn qde-btn--danger" : "qde-btn qde-btn--primary";
     string ActionNotesLabel => _pendingAction == "Request Revision" ? "Revision Instructions" : "Notes";
 
-    IEnumerable<string> StatusOptions => _rows.Select(r => r.Status).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    IEnumerable<string> StatusOptions => MergeOptions(_quoteStatusOptions.Select(o => o.Code), _rows.Select(r => r.Status));
     IEnumerable<string> CarrierOptions => _rows.Select(r => Safe(r.Carrier, "Pending Market")).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
-    IEnumerable<string> LobOptions => _rows.Select(r => Safe(r.Lob, "Unknown")).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    IEnumerable<string> LobOptions => MergeOptions(_lobOptions.Select(o => o.Code), _rows.Select(r => Safe(r.Lob, "Unknown")));
 
     IEnumerable<QuoteRow> TabRows => _activeTab switch
     {
@@ -615,8 +619,19 @@
 
     protected override async Task OnInitializedAsync()
     {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Submissions", "/submissions"), new("Quotes", "/submissions/quotes"));
+        await LoadReferenceDataAsync();
         await LoadAsync();
+    }
+
+    async Task LoadReferenceDataAsync()
+    {
+        var options = await Api.GetSubmissionReferenceOptionsAsync(_tenantId);
+        var activeOptions = options?.Where(o => o.IsActive).ToList() ?? [];
+        _quoteStatusOptions = ToOptions(activeOptions, "QuoteStatus");
+        _lobOptions = ToOptions(activeOptions, "LineOfBusiness");
     }
 
     async Task LoadAsync()
@@ -626,7 +641,7 @@
         _loadError = null;
         try
         {
-            var result = await Api.SearchSubmissionsAsync(SubmissionPageConstants.TenantId, pageSize: 500);
+            var result = await Api.SearchSubmissionsAsync(_tenantId, pageSize: 500);
             _rows.Clear();
             var submissions = (result?.Items ?? [])
                 .Where(s => s.QuoteCount > 0 || s.Status is "Quoted" or "Bound" or "Declined")
@@ -688,7 +703,7 @@
             ShowToast($"Quote comparison unavailable for {submission.SubmissionNumber}: {ex.Message}", "qde-toast--danger");
         }
 
-        var x = SubmissionPageData.ToQuoteRow(submission);
+        var x = ToQuoteRow(submission);
         return
         [
             new QuoteRow
@@ -1025,10 +1040,10 @@
         {
             var result = _pendingAction switch
             {
-                "Accept Quote" => await Api.RequestSubmissionQuoteAsync(_selected.SubId, new RequestSubmissionQuoteRequest(SubmissionPageConstants.TenantId, _selected.CarrierId == Guid.Empty ? null : _selected.CarrierId, _actionForm.AnnualPremium, _selected.Deductible, _selected.Limit, _actionForm.Notes ?? "Quote accepted from quote command center.")),
-                "Request Revision" => await Api.RequestSubmissionQuoteAsync(_selected.SubId, new RequestSubmissionQuoteRequest(SubmissionPageConstants.TenantId, _selected.CarrierId == Guid.Empty ? null : _selected.CarrierId, _actionForm.AnnualPremium, _selected.Deductible, _selected.Limit, _actionForm.Notes)),
-                "Bind" => await Api.CreatePolicyFromSubmissionAsync(_selected.SubId, new CreatePolicyFromSubmissionRequest(SubmissionPageConstants.TenantId, _selected.QuoteId == Guid.Empty ? null : _selected.QuoteId, _selected.CarrierId == Guid.Empty ? null : _selected.CarrierId, _actionForm.AnnualPremium, _actionForm.EffectiveDate, _actionForm.EffectiveDate?.AddYears(1))),
-                "Decline Quote" => await Api.DeclineSubmissionAsync(_selected.SubId, new DeclineSubmissionRequest(SubmissionPageConstants.TenantId, $"Quote declined from quote command center: {_selected.QuoteNo}.")),
+            "Accept Quote" => await Api.RequestSubmissionQuoteAsync(_selected.SubId, new RequestSubmissionQuoteRequest(_tenantId, _selected.CarrierId == Guid.Empty ? null : _selected.CarrierId, _actionForm.AnnualPremium, _selected.Deductible, _selected.Limit, _actionForm.Notes ?? "Quote accepted from quote command center.")),
+            "Request Revision" => await Api.RequestSubmissionQuoteAsync(_selected.SubId, new RequestSubmissionQuoteRequest(_tenantId, _selected.CarrierId == Guid.Empty ? null : _selected.CarrierId, _actionForm.AnnualPremium, _selected.Deductible, _selected.Limit, _actionForm.Notes)),
+            "Bind" => await Api.CreatePolicyFromSubmissionAsync(_selected.SubId, new CreatePolicyFromSubmissionRequest(_tenantId, _selected.QuoteId == Guid.Empty ? null : _selected.QuoteId, _selected.CarrierId == Guid.Empty ? null : _selected.CarrierId, _actionForm.AnnualPremium, _actionForm.EffectiveDate, _actionForm.EffectiveDate?.AddYears(1))),
+            "Decline Quote" => await Api.DeclineSubmissionAsync(_selected.SubId, new DeclineSubmissionRequest(_tenantId, $"Quote declined from quote command center: {_selected.QuoteNo}.")),
                 "Download PDF" => await GenerateProposalAsync(),
                 _ => new SubmissionActionResult(_selected.SubId, "No action executed.")
             };
@@ -1053,7 +1068,7 @@
         if (_selected is null) return new SubmissionActionResult(Guid.Empty, "No quote selected.");
 
         var quoteIds = _selected.QuoteId == Guid.Empty ? Array.Empty<Guid>() : new[] { _selected.QuoteId };
-        var proposalId = await Api.GenerateProposalAsync(new GenerateProposalRequest(_selected.SubId, SubmissionPageConstants.TenantId, $"Quote Proposal - {_selected.QuoteNo}", quoteIds, _actionForm.Notes));
+        var proposalId = await Api.GenerateProposalAsync(new GenerateProposalRequest(_selected.SubId, _tenantId, $"Quote Proposal - {_selected.QuoteNo}", quoteIds, _actionForm.Notes));
         return new SubmissionActionResult(proposalId, "Quote proposal generated.");
     }
 
@@ -1126,6 +1141,41 @@
     static bool Contains(string? source, string term) => !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
     static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
     static string Slug(string value) => value.ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
+    static IEnumerable<string> MergeOptions(IEnumerable<string> configured, IEnumerable<string> observed) => configured.Concat(observed).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    static List<SubmissionOption> ToOptions(IEnumerable<SubmissionReferenceOptionDto> options, string group) => options.Where(o => string.Equals(o.OptionGroup, group, StringComparison.OrdinalIgnoreCase)).OrderBy(o => o.SortOrder).ThenBy(o => o.OptionName).Select(o => new SubmissionOption(o.OptionCode, o.OptionName, o.IsDefault)).ToList();
+    static QuoteRegisterRow ToQuoteRow(SubmissionDto dto) => new()
+    {
+        QuoteId = dto.SubmissionId,
+        QuoteNo = $"QUO-{dto.SubmissionNumber.Replace("SUB-", string.Empty)}",
+        SubmissionNo = dto.SubmissionNumber,
+        SubId = dto.SubmissionId,
+        Account = dto.AccountName,
+        Lob = dto.LineOfBusiness,
+        Carrier = dto.QuoteCount > 0 ? "Multiple Markets" : "Pending Market",
+        Status = dto.Status == "Bound" ? "Accepted" : dto.Status == "Declined" ? "Declined" : dto.QuoteCount > 0 ? "Pending" : "Expired",
+        QuotedPremium = dto.TargetPremium ?? 0,
+        EffDate = dto.EffectiveDate,
+        ExpiryDate = dto.ExpirationDate,
+        Producer = dto.AssignedToUserName ?? "Unassigned"
+    };
+
+    sealed record SubmissionOption(string Code, string Name, bool IsDefault);
+
+    class QuoteRegisterRow
+    {
+        public Guid QuoteId { get; set; }
+        public string QuoteNo { get; set; } = string.Empty;
+        public string SubmissionNo { get; set; } = string.Empty;
+        public Guid SubId { get; set; }
+        public string Account { get; set; } = string.Empty;
+        public string Lob { get; set; } = string.Empty;
+        public string Carrier { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public decimal QuotedPremium { get; set; }
+        public DateTime EffDate { get; set; }
+        public DateTime ExpiryDate { get; set; }
+        public string Producer { get; set; } = string.Empty;
+    }
 
     sealed class QuoteRow : QuoteRegisterRow
     {

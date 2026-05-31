@@ -28,6 +28,13 @@ public sealed class RelationshipTypeService : IRelationshipTypeService
     public Task DeleteAsync(Guid id, CancellationToken ct = default) => _repo.DeleteAsync(id, ct);
 }
 
+public sealed class AccountReferenceOptionService : IAccountReferenceOptionService
+{
+    private readonly IAccountReferenceOptionRepository _repo;
+    public AccountReferenceOptionService(IAccountReferenceOptionRepository repo) => _repo = repo;
+    public Task<List<AccountReferenceOptionDto>> GetAllAsync(Guid tenantId, string? optionGroup = null, CancellationToken ct = default) => _repo.GetAllAsync(tenantId, optionGroup, ct);
+}
+
 public sealed class HouseholdSettingService : IHouseholdSettingService
 {
     private readonly IHouseholdSettingRepository _repo;

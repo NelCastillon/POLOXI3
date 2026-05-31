@@ -114,3 +114,18 @@ public sealed class SubmissionsController : ControllerBase
         return policy is null ? NotFound() : Ok(policy);
     }
 }
+
+[ApiController]
+[Route("api/submissions/reference-options")]
+public sealed class SubmissionReferenceOptionsController : ControllerBase
+{
+    private readonly ISubmissionReferenceOptionService _service;
+    public SubmissionReferenceOptionsController(ISubmissionReferenceOptionService service) => _service = service;
+
+    [HttpGet]
+    public async Task<IActionResult> GetAll(
+        [FromQuery] Guid tenantId,
+        [FromQuery] string? optionGroup = null,
+        CancellationToken cancellationToken = default)
+        => Ok(await _service.GetAllAsync(tenantId, optionGroup, cancellationToken));
+}

@@ -412,6 +412,13 @@ public static class ServiceCollectionExtensions
         // ── Submissions & Quoting Engine ─────────────────────────────
         services.AddScoped<ISubmissionRepository, SubmissionRepository>();
         services.AddScoped<ISubmissionService, SubmissionService>();
+        services.AddScoped<ISubmissionReferenceOptionRepository, SubmissionReferenceOptionRepository>();
+        services.AddScoped<ISubmissionReferenceOptionService, SubmissionReferenceOptionService>();
+
+        // ── Direct Submission Intake (normalize into Account -> Opportunity -> Submission) ─
+        services.AddScoped<ISubmissionIntakeRepository, SubmissionIntakeRepository>();
+        services.AddScoped<IAccountMatchingService, AccountMatchingService>();
+        services.AddScoped<ISubmissionIntakeService, SubmissionIntakeService>();
 
         // ── Policy Endorsements Workflow ─────────────────────────────
         services.AddScoped<IPolicyEndorsementRepository, PolicyEndorsementRepository>();
@@ -464,6 +471,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAccountTypeService, AccountTypeService>();
         services.AddScoped<IRelationshipTypeRepository, RelationshipTypeRepository>();
         services.AddScoped<IRelationshipTypeService, RelationshipTypeService>();
+        services.AddScoped<IAccountReferenceOptionRepository, AccountReferenceOptionRepository>();
+        services.AddScoped<IAccountReferenceOptionService, AccountReferenceOptionService>();
         services.AddScoped<IHouseholdSettingRepository, HouseholdSettingRepository>();
         services.AddScoped<IHouseholdSettingService, HouseholdSettingService>();
         services.AddScoped<ICommercialEntitySettingRepository, CommercialEntitySettingRepository>();

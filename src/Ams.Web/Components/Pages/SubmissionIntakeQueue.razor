@@ -1,0 +1,1027 @@
+@page "/submissions/intake"
+@namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Common.Validation
+@using Ams.Application.Features.Accounts
+@using Ams.Application.Features.SubmissionIntake
+@using Microsoft.AspNetCore.Components.Forms
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Submission Intake Queue — AMS</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="sin-toast sin-toast--@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="sin-toast__close" @onclick="HideToast" aria-label="Dismiss"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+<div class="sin-page">
+    <section class="sin-hero">
+        <div class="sin-hero__content">
+            <div class="sin-hero__eyebrow"><i class="bi bi-inbox-fill" aria-hidden="true"></i> Direct submission intake</div>
+            <h1>Submission Intake Queue</h1>
+            <p>Stage out-of-band submissions from email, portal, API, producer upload, carrier requests, and walk-ins, then normalize each into the mandatory Account → Opportunity → Submission chain. No submission is ever orphaned without an account context.</p>
+            <div class="sin-hero__meta">
+                <span><i class="bi bi-stack" aria-hidden="true"></i>@_rows.Count staged</span>
+                <span><i class="bi bi-hourglass-split" aria-hidden="true"></i>@CountByStatus("Pending") pending</span>
+                <span><i class="bi bi-diagram-3" aria-hidden="true"></i>@CountByStatus("Processed") normalized</span>
+                <span><i class="bi bi-cash-stack" aria-hidden="true"></i>@PendingPremium.ToString("C0") pending premium</span>
+            </div>
+        </div>
+        <div class="sin-hero__actions">
+            <button type="button" class="sin-btn sin-btn--light" @onclick="LoadAsync" disabled="@_loading">
+                <i class="bi bi-arrow-clockwise @(_loading ? "sin-spin" : null)" aria-hidden="true"></i> Refresh
+            </button>
+            <button type="button" class="sin-btn sin-btn--primary" @onclick="OpenCapture">
+                <i class="bi bi-plus-lg" aria-hidden="true"></i> Capture intake
+            </button>
+            <button type="button" class="sin-btn sin-btn--light" @onclick='() => Nav.NavigateTo("/submissions")'>
+                <i class="bi bi-send-check" aria-hidden="true"></i> Submissions
+            </button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger sin-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span>@_loadError</span>
+        </div>
+    }
+
+    <section class="sin-kpi-strip" aria-label="Intake KPIs">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricCardClass(metric)" title="@metric.Tooltip" @onclick="@(() => SetKpiFilter(metric.Filter))">
+                <span class="sin-kpi__icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                <span class="sin-kpi__body">
+                    <span class="sin-kpi__val">@metric.Value</span>
+                    <span class="sin-kpi__lbl">@metric.Label</span>
+                    <small>@metric.Caption</small>
+                </span>
+            </button>
+        }
+    </section>
+
+    <section class="sin-filter-panel" aria-label="Intake filters">
+        <div class="sin-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input @bind="_search" @bind:event="oninput" placeholder="Search intake #, business, applicant, email, phone, LOB, source…" />
+        </div>
+        <label class="sin-filter">
+            <span>Source</span>
+            <select class="sin-select" @bind="_sourceFilter">
+                <option value="">All sources</option>
+                @foreach (var source in _sourceOptions)
+                {
+                    <option value="@source">@source</option>
+                }
+            </select>
+        </label>
+        <label class="sin-filter">
+            <span>Status</span>
+            <select class="sin-select" @bind="_statusFilter">
+                <option value="">All statuses</option>
+                @foreach (var status in _statusOptions)
+                {
+                    <option value="@status">@status</option>
+                }
+            </select>
+        </label>
+        <button type="button" class="sin-clear-filter" @onclick="ClearFilters" disabled="@(!HasFilters)">
+            <i class="bi bi-x-circle" aria-hidden="true"></i> Clear
+        </button>
+        <div class="sin-result"><strong>@FilteredRows.Count</strong><span>matches</span></div>
+    </section>
+
+    <section class="sin-view-tabs" aria-label="Intake dashboard views">
+        @foreach (var view in _views)
+        {
+            <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))">
+                <i class="bi @view.Icon" aria-hidden="true"></i> @view.Label
+            </button>
+        }
+    </section>
+
+    <section class="sin-layout">
+        <main class="sin-main-card">
+            @if (_loading)
+            {
+                <div class="sin-empty"><i class="bi bi-arrow-repeat sin-spin" aria-hidden="true"></i><strong>Loading intake queue…</strong></div>
+            }
+            else if (FilteredRows.Count == 0)
+            {
+                <div class="sin-empty"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No intake records match this view</strong><span>Capture a direct submission or adjust filters.</span><button class="sin-btn sin-btn--primary" @onclick="OpenCapture">Capture intake</button></div>
+            }
+            else if (_view == "queue")
+            {
+                <div class="sin-table-scroll">
+                    <table class="sin-table">
+                        <thead>
+                            <tr><th>Intake</th><th>Business</th><th>Priority</th><th>Source</th><th>Line of Business</th><th class="sin-num">Est. Premium</th><th>Status</th><th>Received</th><th class="sin-actions-col">Actions</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in FilteredRows)
+                            {
+                                <tr class="@RowClass(row)" @onclick="@(() => SelectRow(row))">
+                                    <td><strong>@row.IntakeNumber</strong></td>
+                                    <td>
+                                        <div class="sin-biz">
+                                            <span class="sin-biz__name">@row.BusinessName</span>
+                                            <small>@(string.IsNullOrWhiteSpace(row.ApplicantName) ? row.Email : row.ApplicantName)</small>
+                                        </div>
+                                    </td>
+                                    <td><span class="@PriorityBadge(row)">@PriorityLabel(row)</span></td>
+                                    <td><span class="sin-source"><i class="bi @SourceIcon(row.Source)" aria-hidden="true"></i> @row.Source</span></td>
+                                    <td>@row.LineOfBusiness</td>
+                                    <td class="sin-num">@((row.EstimatedPremium ?? 0).ToString("C0", CultureInfo.CurrentCulture))</td>
+                                    <td><span class="@StatusBadge(row.IntakeStatus)">@row.IntakeStatus</span></td>
+                                    <td>@row.ReceivedDate.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture)</td>
+                                    <td class="sin-row-actions" @onclick:stopPropagation="true">
+                                        <button type="button" class="sin-icon-btn" title="Edit intake" aria-label="Edit intake @row.IntakeNumber" @onclick="@(() => OpenEditCapture(row))"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                        <button type="button" class="sin-icon-btn sin-icon-btn--danger" title="Delete intake" aria-label="Delete intake @row.IntakeNumber" @onclick="@(() => ConfirmDelete(row))"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+            else if (_view == "analytics")
+            {
+                <div class="sin-analytics-grid">
+                    <section>
+                        <h3>Source performance</h3>
+                        @foreach (var source in SourceBreakdown)
+                        {
+                            <button type="button" class="@SourceRowClass(source.Source)" @onclick="@(() => SetSourceFilter(source.Source))">
+                                <span><i class="bi @SourceIcon(source.Source)" aria-hidden="true"></i> @source.Source</span>
+                                <div><i style="width:@source.WidthPercent.ToString("F0", CultureInfo.InvariantCulture)%"></i></div>
+                                <strong>@source.Count</strong>
+                            </button>
+                        }
+                    </section>
+                    <section>
+                        <h3>Status mix</h3>
+                        @foreach (var status in StatusBreakdown)
+                        {
+                            <button type="button" class="@StatusRowClass(status.Status)" @onclick="@(() => SetStatusQuickFilter(status.Status))">
+                                <span>@status.Status</span>
+                                <div><i style="width:@status.WidthPercent.ToString("F0", CultureInfo.InvariantCulture)%"></i></div>
+                                <strong>@status.Count</strong>
+                            </button>
+                        }
+                    </section>
+                </div>
+            }
+            else
+            {
+                <div class="sin-workflow-board">
+                    @foreach (var status in _statusOptions)
+                    {
+                        var statusRows = FilteredRows.Where(r => string.Equals(r.IntakeStatus, status, StringComparison.OrdinalIgnoreCase)).ToList();
+                        <section class="sin-workflow-col">
+                            <header><strong>@status</strong><span>@statusRows.Count</span></header>
+                            @foreach (var row in statusRows)
+                            {
+                                <article class="sin-workflow-card" @onclick="@(() => SelectRow(row))">
+                                    <div><strong>@row.BusinessName</strong><span>@row.IntakeNumber</span></div>
+                                    <div><span class="@PriorityBadge(row)">@PriorityLabel(row)</span><span>@((row.EstimatedPremium ?? 0).ToString("C0"))</span></div>
+                                    <small>@row.LineOfBusiness · @row.Source</small>
+                                </article>
+                            }
+                        </section>
+                    }
+                </div>
+            }
+        </main>
+
+        <aside class="sin-detail-card">
+            @if (_selected is null)
+            {
+                <div class="sin-detail-empty"><i class="bi bi-clipboard-data" aria-hidden="true"></i><strong>Select an intake record</strong><span>Review staged details, run account matching, and normalize into the enterprise model.</span></div>
+            }
+            else
+            {
+                <div class="sin-detail-head">
+                    <div>
+                        <span class="sin-detail-eyebrow"><i class="bi @SourceIcon(_selected.Source)" aria-hidden="true"></i> @_selected.Source intake</span>
+                        <h2>@_selected.BusinessName</h2>
+                        <p>@_selected.IntakeNumber · @_selected.LineOfBusiness</p>
+                    </div>
+                    <span class="@StatusBadge(_selected.IntakeStatus)">@_selected.IntakeStatus</span>
+                </div>
+                <div class="sin-detail-body">
+                    <div class="sin-detail-grid">
+                        <div><span>Applicant</span><strong>@(string.IsNullOrWhiteSpace(_selected.ApplicantName) ? "—" : _selected.ApplicantName)</strong></div>
+                        <div><span>FEIN</span><strong>@(string.IsNullOrWhiteSpace(_selected.Fein) ? "—" : _selected.Fein)</strong></div>
+                        <div><span>Est. Premium</span><strong>@((_selected.EstimatedPremium ?? 0).ToString("C0"))</strong></div>
+                        <div><span>Effective</span><strong>@(_selected.RequestedEffectiveDate?.ToString("MMM d, yyyy") ?? "—")</strong></div>
+                    </div>
+                    <div class="sin-management-actions" aria-label="Selected intake actions">
+                        <button type="button" class="sin-btn sin-btn--ghost" @onclick="@(() => OpenEditCapture(_selected))"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                        @if (_selected.IntakeStatus == "Pending")
+                        {
+                            <button type="button" class="sin-btn sin-btn--light" @onclick="@(() => UpdateSelectedStatusAsync("Reviewing"))" disabled="@_promoting"><i class="bi bi-search" aria-hidden="true"></i> Mark reviewing</button>
+                        }
+                        @if (_selected.IntakeStatus is not "Processed" and not "Archived")
+                        {
+                            <button type="button" class="sin-btn sin-btn--light" @onclick="@(() => UpdateSelectedStatusAsync("Archived"))" disabled="@_promoting"><i class="bi bi-archive" aria-hidden="true"></i> Archive</button>
+                        }
+                        <button type="button" class="sin-btn sin-btn--danger" @onclick="@(() => ConfirmDelete(_selected))"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
+                    </div>
+                    <div class="sin-contact">
+                        <span><i class="bi bi-envelope" aria-hidden="true"></i> @(string.IsNullOrWhiteSpace(_selected.Email) ? "No email" : _selected.Email)</span>
+                        <span><i class="bi bi-telephone" aria-hidden="true"></i> @(string.IsNullOrWhiteSpace(_selected.Phone) ? "No phone" : _selected.Phone)</span>
+                        <span><i class="bi bi-geo-alt" aria-hidden="true"></i> @AddressLine(_selected)</span>
+                        <span><i class="bi bi-card-text" aria-hidden="true"></i> @(string.IsNullOrWhiteSpace(_selected.Notes) ? "No notes captured" : _selected.Notes)</span>
+                    </div>
+
+                    @if (_selected.SubmissionId.HasValue)
+                    {
+                        <div class="sin-normalized">
+                            <div class="sin-normalized__title"><i class="bi bi-check2-circle" aria-hidden="true"></i> Normalized into enterprise model</div>
+                            <div class="sin-normalized__chain">
+                                <span><i class="bi bi-building" aria-hidden="true"></i> Account</span>
+                                <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                                <span><i class="bi bi-graph-up-arrow" aria-hidden="true"></i> Opportunity</span>
+                                <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                                <span><i class="bi bi-send-check" aria-hidden="true"></i> Submission</span>
+                            </div>
+                            <button class="sin-btn sin-btn--primary sin-w-100" @onclick='() => Nav.NavigateTo("/submissions")'><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open submission</button>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="sin-detail-actions">
+                            <button class="sin-btn sin-btn--light" @onclick="PreviewMatchAsync" disabled="@_matching"><i class="bi bi-search" aria-hidden="true"></i> Run account match</button>
+                            <button class="sin-btn sin-btn--primary" @onclick="OpenNormalize"><i class="bi bi-diagram-3" aria-hidden="true"></i> Normalize</button>
+                            <button class="sin-btn sin-btn--danger" @onclick="ConfirmReject"><i class="bi bi-x-octagon" aria-hidden="true"></i> Reject</button>
+                        </div>
+
+                        @if (_matchResult is not null)
+                        {
+                            <div class="sin-match">
+                                <div class="sin-match__head">
+                                    <span class="sin-match__score @MatchScoreTone(_matchResult.MatchScore)">@_matchResult.MatchScore%</span>
+                                    <div>
+                                        <strong>@MatchHeadline(_matchResult)</strong>
+                                        <small>@_matchResult.Candidates.Count candidate account(s) found</small>
+                                    </div>
+                                </div>
+                                @foreach (var candidate in _matchResult.Candidates)
+                                {
+                                    <div class="sin-candidate">
+                                        <div><strong>@candidate.AccountName</strong><small>@candidate.AccountNumber · @candidate.LifecycleStageCode · @candidate.MatchReason</small></div>
+                                        <span class="sin-candidate__score @MatchScoreTone(candidate.MatchScore)">@candidate.MatchScore%</span>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    }
+                </div>
+            }
+        </aside>
+    </section>
+</div>
+
+@if (_showCapture)
+{
+    <div class="sin-modal-backdrop" role="presentation" @onclick="CloseCapture">
+        <div class="sin-modal" role="dialog" aria-modal="true" aria-labelledby="sinCaptureTitle" @onclick:stopPropagation="true">
+            <div class="sin-modal__header">
+                <div class="sin-modal__title">
+                    <span class="sin-modal__icon"><i class="bi bi-inbox-fill" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 id="sinCaptureTitle">@(_editingIntake is null ? "Capture direct submission" : "Edit captured intake")</h2>
+                        <p>@(_editingIntake is null ? "Stage an out-of-band submission for account matching and normalization." : "Update staged intake details before account matching and normalization.")</p>
+                    </div>
+                </div>
+                <button type="button" class="sin-btn sin-btn--ghost sin-btn--sm" @onclick="CloseCapture" disabled="@_saving" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm EditContext="@_formEditContext" OnValidSubmit="SaveCaptureAsync">
+                <DataAnnotationsValidator />
+                <div class="sin-modal__body">
+                    <div class="sin-form-grid">
+                        <div class="sin-field">
+                            <label>Source <span>*</span></label>
+                            <InputSelect class="sin-input" @bind-Value="_form.Source">
+                                @foreach (var source in _sourceOptions)
+                                {
+                                    <option value="@source">@source</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.Source" class="text-danger" />
+                        </div>
+                        <div class="sin-field">
+                            <label>Line of business <span>*</span></label>
+                            <InputSelect class="sin-input" @bind-Value="_form.LineOfBusiness">
+                                @foreach (var lob in _lobOptions)
+                                {
+                                    <option value="@lob">@lob</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.LineOfBusiness" class="text-danger" />
+                        </div>
+                        <div class="sin-field sin-field--wide">
+                            <label>Business name <span>*</span></label>
+                            <InputText class="sin-input" @bind-Value="_form.BusinessName" placeholder="Insured / account name" />
+                            <ValidationMessage For="() => _form.BusinessName" class="text-danger" />
+                        </div>
+                        <div class="sin-field">
+                            <label>Applicant name</label>
+                            <InputText class="sin-input" @bind-Value="_form.ApplicantName" placeholder="Primary contact" />
+                            <ValidationMessage For="() => _form.ApplicantName" class="text-danger" />
+                        </div>
+                        <div class="sin-field">
+                            <label>FEIN</label>
+                            <InputText class="sin-input" @bind-Value="_form.Fein" placeholder="00-0000000" />
+                            <ValidationMessage For="() => _form.Fein" class="text-danger" />
+                        </div>
+                        <div class="sin-field">
+                            <label>Email</label>
+                            <InputText class="sin-input" type="email" @bind-Value="_form.Email" placeholder="name@company.com" />
+                            <ValidationMessage For="() => _form.Email" class="text-danger" />
+                        </div>
+                        <div class="sin-field">
+                            <label>Phone</label>
+                            <InputText class="sin-input" type="tel" @bind-Value="_form.Phone" @bind-Value:after="OnPhoneChanged" placeholder="(555) 123-4567" />
+                            <ValidationMessage For="() => _form.Phone" class="text-danger" />
+                        </div>
+                        <div class="sin-field sin-field--wide">
+                            <label>Address</label>
+                            <InputText class="sin-input" @bind-Value="_form.AddressLine" placeholder="Street address" />
+                            <ValidationMessage For="() => _form.AddressLine" class="text-danger" />
+                        </div>
+                        <div class="sin-field">
+                            <label>City</label>
+                            <InputText class="sin-input" @bind-Value="_form.City" />
+                            <ValidationMessage For="() => _form.City" class="text-danger" />
+                        </div>
+                        <div class="sin-field">
+                            <label>State</label>
+                            <InputText class="sin-input" @bind-Value="_form.State" />
+                            <ValidationMessage For="() => _form.State" class="text-danger" />
+                        </div>
+                        <div class="sin-field">
+                            <label>Postal code</label>
+                            <InputText class="sin-input" @bind-Value="_form.PostalCode" />
+                            <ValidationMessage For="() => _form.PostalCode" class="text-danger" />
+                        </div>
+                        <div class="sin-field">
+                            <label>Existing policy #</label>
+                            <InputText class="sin-input" @bind-Value="_form.ExistingPolicyNumber" />
+                            <ValidationMessage For="() => _form.ExistingPolicyNumber" class="text-danger" />
+                        </div>
+                        <div class="sin-field">
+                            <label>Producer code</label>
+                            <InputText class="sin-input" @bind-Value="_form.ProducerCode" />
+                            <ValidationMessage For="() => _form.ProducerCode" class="text-danger" />
+                        </div>
+                        <div class="sin-field">
+                            <label>Requested effective date</label>
+                            <InputDate class="sin-input" @bind-Value="_form.RequestedEffectiveDate" />
+                            <ValidationMessage For="() => _form.RequestedEffectiveDate" class="text-danger" />
+                        </div>
+                        <div class="sin-field">
+                            <label>Estimated premium</label>
+                            <InputNumber class="sin-input" @bind-Value="_form.EstimatedPremium" />
+                            <ValidationMessage For="() => _form.EstimatedPremium" class="text-danger" />
+                        </div>
+                        <div class="sin-field sin-field--wide">
+                            <label>Notes</label>
+                            <InputTextArea class="sin-input" rows="3" @bind-Value="_form.Notes" placeholder="Submission context, coverage requested, attachments summary" />
+                            <ValidationMessage For="() => _form.Notes" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="sin-modal__footer">
+                    <button type="button" class="sin-btn sin-btn--ghost" @onclick="CloseCapture" disabled="@_saving">Cancel</button>
+                    <button type="submit" class="sin-btn sin-btn--primary" disabled="@_saving">
+                        @if (_saving)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        @(_editingIntake is null ? "Stage intake" : "Save intake")
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showNormalize && _selected is not null)
+{
+    <div class="sin-modal-backdrop" role="presentation" @onclick="CloseNormalize">
+        <div class="sin-modal sin-modal--narrow" role="dialog" aria-modal="true" aria-labelledby="sinNormalizeTitle" @onclick:stopPropagation="true">
+            <div class="sin-modal__header">
+                <div class="sin-modal__title">
+                    <span class="sin-modal__icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 id="sinNormalizeTitle">Normalize into enterprise model</h2>
+                        <p>Match or create the account, then create the opportunity and submission.</p>
+                    </div>
+                </div>
+                <button type="button" class="sin-btn sin-btn--ghost sin-btn--sm" @onclick="CloseNormalize" disabled="@_promoting" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="sin-modal__body">
+                <div class="sin-form-banner">
+                    <i class="bi bi-building-check" aria-hidden="true"></i>
+                    <div>
+                        <strong>Account context is mandatory</strong>
+                        <span>The submission will be created under an account and opportunity so it is never orphaned.</span>
+                    </div>
+                </div>
+
+                @if (_matchResult is not null && _matchResult.Candidates.Count > 0)
+                {
+                    <div class="sin-normalize-options">
+                        <label class="@NormalizeOptionClass(false)">
+                            <input type="radio" name="normalize-mode" checked="@(!_forceNewAccount && _selectedAccountId is null)" @onchange="UseAutoMatch" />
+                            <div>
+                                <strong>Use best account match (@_matchResult.MatchScore%)</strong>
+                                <small>@MatchHeadline(_matchResult)</small>
+                            </div>
+                        </label>
+                        @foreach (var candidate in _matchResult.Candidates)
+                        {
+                            <label class="@NormalizeOptionClass(candidate.AccountId)">
+                                <input type="radio" name="normalize-mode" checked="@(_selectedAccountId == candidate.AccountId)" @onchange="@(() => UseCandidate(candidate.AccountId))" />
+                                <div>
+                                    <strong>@candidate.AccountName</strong>
+                                    <small>@candidate.AccountNumber · @candidate.MatchReason · @candidate.MatchScore%</small>
+                                </div>
+                            </label>
+                        }
+                        <label class="@NormalizeOptionClass(true)">
+                            <input type="radio" name="normalize-mode" checked="@_forceNewAccount" @onchange="UseNewAccount" />
+                            <div>
+                                <strong>Create a new Prospect account</strong>
+                                <small>Force a brand-new account even though matches exist.</small>
+                            </div>
+                        </label>
+                    </div>
+                }
+                else
+                {
+                    <div class="sin-form-banner sin-form-banner--muted">
+                        <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                        <div>
+                            <strong>No confident match found</strong>
+                            <span>A new Prospect account will be created for @_selected.BusinessName.</span>
+                        </div>
+                    </div>
+                }
+            </div>
+            <div class="sin-modal__footer">
+                <button type="button" class="sin-btn sin-btn--ghost" @onclick="CloseNormalize" disabled="@_promoting">Cancel</button>
+                <button type="button" class="sin-btn sin-btn--primary" @onclick="ConfirmNormalizeAsync" disabled="@_promoting">
+                    @if (_promoting)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    Normalize submission
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showReject && _selected is not null)
+{
+    <div class="sin-modal-backdrop" role="presentation" @onclick="CloseReject">
+        <div class="sin-confirm" role="dialog" aria-modal="true" aria-labelledby="sinRejectTitle" @onclick:stopPropagation="true">
+            <div class="sin-confirm__icon sin-confirm__icon--danger"><i class="bi bi-x-octagon" aria-hidden="true"></i></div>
+            <h2 id="sinRejectTitle">Reject intake</h2>
+            <p>Reject staged intake <strong>@_selected.IntakeNumber</strong> for @_selected.BusinessName? This marks the record rejected without creating an account.</p>
+            <div class="sin-modal__footer">
+                <button type="button" class="sin-btn sin-btn--ghost" @onclick="CloseReject" disabled="@_promoting">Cancel</button>
+                <button type="button" class="sin-btn sin-btn--danger" @onclick="RejectAsync" disabled="@_promoting">
+                    @if (_promoting)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    Reject intake
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showDelete && _deleteTarget is not null)
+{
+    <div class="sin-modal-backdrop" role="presentation" @onclick="CloseDelete">
+        <div class="sin-confirm" role="dialog" aria-modal="true" aria-labelledby="sinDeleteTitle" @onclick:stopPropagation="true">
+            <div class="sin-confirm__icon sin-confirm__icon--danger"><i class="bi bi-trash3" aria-hidden="true"></i></div>
+            <h2 id="sinDeleteTitle">Delete captured intake</h2>
+            <p>Delete staged intake <strong>@_deleteTarget.IntakeNumber</strong> for @_deleteTarget.BusinessName? This removes it from the active queue.</p>
+            <div class="sin-modal__footer">
+                <button type="button" class="sin-btn sin-btn--ghost" @onclick="CloseDelete" disabled="@_promoting">Cancel</button>
+                <button type="button" class="sin-btn sin-btn--danger" @onclick="DeleteAsync" disabled="@_promoting">
+                    @if (_promoting)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    Delete intake
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private Guid _tenantId;
+    private Guid _userId;
+    private bool _loading;
+    private bool _saving;
+    private bool _matching;
+    private bool _promoting;
+    private string? _loadError;
+    private string _search = string.Empty;
+    private string _sourceFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _kpiFilter = string.Empty;
+    private string _view = "queue";
+
+    private bool _showCapture;
+    private bool _showNormalize;
+    private bool _showReject;
+    private bool _showDelete;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "info";
+
+    private bool _forceNewAccount;
+    private Guid? _selectedAccountId;
+
+    private List<SubmissionIntakeDto> _rows = [];
+    private SubmissionIntakeDto? _selected;
+    private SubmissionIntakeDto? _editingIntake;
+    private SubmissionIntakeDto? _deleteTarget;
+    private AccountMatchResult? _matchResult;
+    private IntakeFormModel _form = new();
+    private EditContext _formEditContext = new(new IntakeFormModel());
+
+    private static readonly ViewDef[] _views = [new("queue", "Queue", "bi-table"), new("analytics", "Analytics", "bi-bar-chart"), new("workflow", "Workflow", "bi-kanban")];
+    private static readonly string[] _sourceOptions = ["Email", "Portal", "API", "Producer Upload", "Carrier Request", "Walk-in", "Fax"];
+    private static readonly string[] _statusOptions = ["Pending", "Reviewing", "Processed", "Rejected", "Archived"];
+    private static readonly string[] _lobOptions = ["Commercial Property", "General Liability", "Commercial Auto", "Workers Compensation", "Cyber Liability", "Professional Liability", "Umbrella", "Business Owners Policy"];
+
+    private string ToastIcon => _toastKind switch { "danger" => "bi-exclamation-octagon", "warning" => "bi-exclamation-triangle", "success" => "bi-check2-circle", _ => "bi-info-circle" };
+    private decimal PendingPremium => _rows.Where(r => r.IntakeStatus is "Pending" or "Reviewing").Sum(r => r.EstimatedPremium ?? 0);
+    private bool HasFilters => !string.IsNullOrWhiteSpace(_search) || !string.IsNullOrWhiteSpace(_sourceFilter) || !string.IsNullOrWhiteSpace(_statusFilter) || !string.IsNullOrWhiteSpace(_kpiFilter);
+    private List<SubmissionIntakeDto> FilteredRows => Filtered.ToList();
+
+    private IEnumerable<KpiModel> Metrics =>
+    [
+        new("Total", _rows.Count.ToString(), "All staged intake", "bi-stack", "blue", "all", "All staged direct submissions"),
+        new("Pending", CountByStatus("Pending").ToString(), PendingPremium.ToString("C0"), "bi-hourglass-split", "amber", "Pending", "Awaiting account match and normalization"),
+        new("Reviewing", CountByStatus("Reviewing").ToString(), "Needs decision", "bi-search", "cyan", "Reviewing", "Under intake review before promotion"),
+        new("Normalized", CountByStatus("Processed").ToString(), ProcessedPremium.ToString("C0"), "bi-diagram-3", "green", "Processed", "Promoted into Account → Opportunity → Submission"),
+        new("Archived", (CountByStatus("Archived") + CountByStatus("Rejected")).ToString(), "Closed intake", "bi-archive", "slate", "closed", "Archived or rejected intake records"),
+        new("High Value", HighValueCount.ToString(), HighValuePremium.ToString("C0"), "bi-cash-coin", "purple", "high-value", "Open intake with premium at or above $50K")
+    ];
+
+    private decimal ProcessedPremium => _rows.Where(r => r.IntakeStatus == "Processed").Sum(r => r.EstimatedPremium ?? 0);
+    private int HighValueCount => _rows.Count(r => r.IntakeStatus is "Pending" or "Reviewing" && (r.EstimatedPremium ?? 0) >= 50000m);
+    private decimal HighValuePremium => _rows.Where(r => r.IntakeStatus is "Pending" or "Reviewing" && (r.EstimatedPremium ?? 0) >= 50000m).Sum(r => r.EstimatedPremium ?? 0);
+
+    private IEnumerable<BreakdownRow> SourceBreakdown
+    {
+        get
+        {
+            var rows = FilteredRows.GroupBy(r => r.Source).Select(g => new BreakdownRow(g.Key, g.Count(), 0)).ToList();
+            var max = rows.Count == 0 ? 1 : rows.Max(r => r.Count);
+            return rows.OrderByDescending(r => r.Count).Select(r => r with { WidthPercent = max == 0 ? 0 : (double)r.Count / max * 100 });
+        }
+    }
+
+    private IEnumerable<StatusBreakdownRow> StatusBreakdown
+    {
+        get
+        {
+            var rows = FilteredRows.GroupBy(r => r.IntakeStatus).Select(g => new StatusBreakdownRow(g.Key, g.Count(), 0)).ToList();
+            var max = rows.Count == 0 ? 1 : rows.Max(r => r.Count);
+            return rows.OrderBy(r => StatusOrder(r.Status)).Select(r => r with { WidthPercent = max == 0 ? 0 : (double)r.Count / max * 100 });
+        }
+    }
+
+    private IEnumerable<SubmissionIntakeDto> Filtered
+    {
+        get
+        {
+            IEnumerable<SubmissionIntakeDto> query = _rows;
+            if (!string.IsNullOrWhiteSpace(_search))
+            {
+                var term = _search.Trim();
+                query = query.Where(r => Contains(r.IntakeNumber, term) || Contains(r.BusinessName, term) || Contains(r.ApplicantName, term) || Contains(r.Email, term) || Contains(r.Phone, term) || Contains(r.LineOfBusiness, term) || Contains(r.Source, term));
+            }
+            if (!string.IsNullOrWhiteSpace(_sourceFilter)) query = query.Where(r => r.Source == _sourceFilter);
+            if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(r => r.IntakeStatus == _statusFilter);
+            query = _kpiFilter switch
+            {
+                "closed" => query.Where(r => r.IntakeStatus is "Archived" or "Rejected"),
+                "high-value" => query.Where(r => r.IntakeStatus is "Pending" or "Reviewing" && (r.EstimatedPremium ?? 0) >= 50000m),
+                _ => query
+            };
+            return query.OrderByDescending(r => r.ReceivedDate);
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Submissions", "/submissions"), new("Intake Queue", "/submissions/intake"));
+        await ResolveContextAsync();
+        await LoadAsync();
+    }
+
+    private async Task ResolveContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _userId = context.UserId;
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            if (_tenantId == Guid.Empty) await ResolveContextAsync();
+            var result = await Api.SearchSubmissionIntakesAsync(_tenantId, pageSize: 500);
+            _rows = result?.Items?.ToList() ?? [];
+            _selected = _selected is null ? _rows.FirstOrDefault() : _rows.FirstOrDefault(r => r.IntakeId == _selected.IntakeId) ?? _rows.FirstOrDefault();
+            _matchResult = null;
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load intake queue: {ex.Message}";
+            await ShowToastAsync($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void SelectRow(SubmissionIntakeDto row) { _selected = row; _matchResult = null; }
+
+    private void OpenCapture()
+    {
+        _editingIntake = null;
+        SetForm(new IntakeFormModel { Source = "Email", LineOfBusiness = "Commercial Property", RequestedEffectiveDate = DateTime.UtcNow.Date.AddDays(30) });
+        _showCapture = true;
+    }
+    private void OpenEditCapture(SubmissionIntakeDto row)
+    {
+        _editingIntake = row;
+        SetForm(new IntakeFormModel
+        {
+            Source = row.Source,
+            ApplicantName = row.ApplicantName,
+            BusinessName = row.BusinessName,
+            Fein = row.Fein,
+            Email = row.Email,
+            Phone = row.Phone,
+            AddressLine = row.AddressLine,
+            City = row.City,
+            State = row.State,
+            PostalCode = row.PostalCode,
+            ExistingPolicyNumber = row.ExistingPolicyNumber,
+            ProducerCode = row.ProducerCode,
+            LineOfBusiness = row.LineOfBusiness,
+            RequestedEffectiveDate = row.RequestedEffectiveDate,
+            EstimatedPremium = row.EstimatedPremium,
+            Notes = row.Notes
+        });
+        _showCapture = true;
+    }
+    private void CloseCapture() { if (!_saving) { _showCapture = false; _editingIntake = null; SetForm(new()); } }
+
+    private void SetForm(IntakeFormModel model)
+    {
+        _form = model;
+        _formEditContext = new EditContext(_form);
+    }
+
+    private async Task SaveCaptureAsync()
+    {
+        _saving = true;
+        try
+        {
+            var wasEditing = _editingIntake is not null;
+            if (!wasEditing)
+            {
+                await Api.CaptureSubmissionIntakeAsync(new CreateSubmissionIntakeRequest
+                {
+                    TenantId = _tenantId,
+                    Source = _form.Source,
+                    ApplicantName = _form.ApplicantName,
+                    BusinessName = _form.BusinessName.Trim(),
+                    Fein = _form.Fein,
+                    Email = _form.Email,
+                    Phone = NormalizePhone(_form.Phone),
+                    AddressLine = _form.AddressLine,
+                    City = _form.City,
+                    State = _form.State,
+                    PostalCode = _form.PostalCode,
+                    ExistingPolicyNumber = _form.ExistingPolicyNumber,
+                    ProducerCode = _form.ProducerCode,
+                    LineOfBusiness = _form.LineOfBusiness,
+                    RequestedEffectiveDate = _form.RequestedEffectiveDate,
+                    EstimatedPremium = _form.EstimatedPremium,
+                    Notes = _form.Notes,
+                    AssignedToUserId = _userId,
+                    CreatedByUserId = _userId
+                });
+            }
+            else
+            {
+                await Api.UpdateSubmissionIntakeAsync(_editingIntake.IntakeId, new UpdateSubmissionIntakeRequest
+                {
+                    TenantId = _tenantId,
+                    Source = _form.Source,
+                    ApplicantName = _form.ApplicantName,
+                    BusinessName = _form.BusinessName.Trim(),
+                    Fein = _form.Fein,
+                    Email = _form.Email,
+                    Phone = NormalizePhone(_form.Phone),
+                    AddressLine = _form.AddressLine,
+                    City = _form.City,
+                    State = _form.State,
+                    PostalCode = _form.PostalCode,
+                    ExistingPolicyNumber = _form.ExistingPolicyNumber,
+                    ProducerCode = _form.ProducerCode,
+                    LineOfBusiness = _form.LineOfBusiness,
+                    RequestedEffectiveDate = _form.RequestedEffectiveDate,
+                    EstimatedPremium = _form.EstimatedPremium,
+                    Notes = _form.Notes,
+                    AssignedToUserId = _userId,
+                    ModifiedByUserId = _userId
+                });
+            }
+            _showCapture = false;
+            _editingIntake = null;
+            await ShowToastAsync(wasEditing ? "Intake updated." : "Intake staged for normalization.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Capture failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task PreviewMatchAsync()
+    {
+        if (_selected is null) return;
+        _matching = true;
+        try
+        {
+            _matchResult = await Api.PreviewSubmissionIntakeMatchAsync(_selected.IntakeId);
+            var count = _matchResult?.Candidates.Count ?? 0;
+            await ShowToastAsync(count == 0 ? "No matching accounts found." : $"Found {count} candidate account(s).", count == 0 ? "info" : "success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Match failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _matching = false;
+        }
+    }
+
+    private async Task OpenNormalize()
+    {
+        if (_selected is null) return;
+        _forceNewAccount = false;
+        _selectedAccountId = null;
+        if (_matchResult is null)
+        {
+            await PreviewMatchAsync();
+        }
+        _showNormalize = true;
+    }
+    private void CloseNormalize() { if (!_promoting) _showNormalize = false; }
+
+    private void UseAutoMatch() { _forceNewAccount = false; _selectedAccountId = null; }
+    private void UseCandidate(Guid accountId) { _forceNewAccount = false; _selectedAccountId = accountId; }
+    private void UseNewAccount() { _forceNewAccount = true; _selectedAccountId = null; }
+
+    private async Task ConfirmNormalizeAsync()
+    {
+        if (_selected is null) return;
+        _promoting = true;
+        try
+        {
+            var result = await Api.PromoteSubmissionIntakeAsync(_selected.IntakeId, new PromoteSubmissionIntakeRequest
+            {
+                TenantId = _tenantId,
+                AccountId = _selectedAccountId,
+                CreateNewAccount = _forceNewAccount,
+                ProcessedByUserId = _userId
+            });
+            _showNormalize = false;
+            await ShowToastAsync(result.Message, "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Normalize failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _promoting = false;
+        }
+    }
+
+    private void ConfirmReject() => _showReject = true;
+    private void CloseReject() { if (!_promoting) _showReject = false; }
+
+    private void ConfirmDelete(SubmissionIntakeDto row) { _deleteTarget = row; _showDelete = true; }
+    private void CloseDelete() { if (!_promoting) { _showDelete = false; _deleteTarget = null; } }
+
+    private async Task RejectAsync()
+    {
+        await UpdateSelectedStatusAsync("Rejected");
+    }
+
+    private async Task UpdateSelectedStatusAsync(string status)
+    {
+        if (_selected is null) return;
+        _promoting = true;
+        try
+        {
+            await Api.UpdateSubmissionIntakeStatusAsync(_selected.IntakeId, new UpdateSubmissionIntakeStatusRequest
+            {
+                TenantId = _tenantId,
+                IntakeStatus = status,
+                ModifiedByUserId = _userId
+            });
+            if (string.Equals(status, "Rejected", StringComparison.OrdinalIgnoreCase))
+            {
+                _showReject = false;
+            }
+            await ShowToastAsync(string.Equals(status, "Rejected", StringComparison.OrdinalIgnoreCase) ? "Intake rejected." : $"Intake marked {status.ToLowerInvariant()}.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Status update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _promoting = false;
+        }
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _promoting = true;
+        try
+        {
+            await Api.DeleteSubmissionIntakeAsync(_deleteTarget.IntakeId, _userId);
+            _showDelete = false;
+            if (_selected?.IntakeId == _deleteTarget.IntakeId)
+                _selected = null;
+            _deleteTarget = null;
+            await ShowToastAsync("Intake deleted from the active queue.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _promoting = false;
+        }
+    }
+
+    private void OnPhoneChanged() { if (IsPhoneValid(_form.Phone)) _form.Phone = NormalizePhone(_form.Phone) ?? string.Empty; }
+
+    private async Task ShowToastAsync(string message, string kind)
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
+        StateHasChanged();
+        try { await Task.Delay(kind == "danger" ? 9000 : 6000); _toastVisible = false; await InvokeAsync(StateHasChanged); }
+        catch (TaskCanceledException) { }
+    }
+    private void HideToast() => _toastVisible = false;
+
+    private int CountByStatus(string status) => _rows.Count(r => string.Equals(r.IntakeStatus, status, StringComparison.OrdinalIgnoreCase));
+
+    private void SetKpiFilter(string filter)
+    {
+        if (filter == "all")
+        {
+            _statusFilter = string.Empty;
+            _kpiFilter = string.Empty;
+            return;
+        }
+
+        if (filter is "closed" or "high-value")
+        {
+            _statusFilter = string.Empty;
+            _kpiFilter = string.Equals(_kpiFilter, filter, StringComparison.OrdinalIgnoreCase) ? string.Empty : filter;
+            return;
+        }
+
+        _kpiFilter = string.Empty;
+        _statusFilter = string.Equals(_statusFilter, filter, StringComparison.OrdinalIgnoreCase) ? string.Empty : filter;
+    }
+
+    private void SetStatusQuickFilter(string status) { _kpiFilter = string.Empty; _statusFilter = string.Equals(_statusFilter, status, StringComparison.OrdinalIgnoreCase) ? string.Empty : status; }
+    private void SetSourceFilter(string source) => _sourceFilter = string.Equals(_sourceFilter, source, StringComparison.OrdinalIgnoreCase) ? string.Empty : source;
+    private void SetView(string view) => _view = view;
+    private void ClearFilters() { _search = string.Empty; _sourceFilter = string.Empty; _statusFilter = string.Empty; _kpiFilter = string.Empty; }
+
+    private string MatchHeadline(AccountMatchResult result) => result.IsAutoMatch
+        ? "High-confidence account match — safe to reuse"
+        : result.Candidates.Count > 0 ? "Possible duplicates — choose an account or create new" : "No confident match — a new account will be created";
+
+    private static string AddressLine(SubmissionIntakeDto dto)
+    {
+        var parts = new[] { dto.AddressLine, dto.City, dto.State, dto.PostalCode }.Where(p => !string.IsNullOrWhiteSpace(p));
+        var joined = string.Join(", ", parts);
+        return string.IsNullOrWhiteSpace(joined) ? "No address" : joined;
+    }
+
+    private string RowClass(SubmissionIntakeDto row) => row.IntakeId == _selected?.IntakeId ? "sin-row sin-row--selected" : "sin-row";
+    private static string StatusBadge(string status) => $"sin-status sin-status--{status.ToLowerInvariant()}";
+    private string MetricCardClass(KpiModel metric)
+    {
+        var active = metric.Filter switch
+        {
+            "all" => string.IsNullOrWhiteSpace(_statusFilter) && string.IsNullOrWhiteSpace(_kpiFilter),
+            "closed" or "high-value" => string.Equals(_kpiFilter, metric.Filter, StringComparison.OrdinalIgnoreCase),
+            _ => string.Equals(_statusFilter, metric.Filter, StringComparison.OrdinalIgnoreCase)
+        };
+        return $"sin-kpi sin-kpi--{metric.Tone}{(active ? " sin-kpi--active" : string.Empty)}";
+    }
+    private string ViewButtonClass(ViewDef view) => _view == view.Id ? "sin-view-btn sin-view-btn--active" : "sin-view-btn";
+    private string SourceRowClass(string source) => string.Equals(_sourceFilter, source, StringComparison.OrdinalIgnoreCase) ? "sin-breakdown-row sin-breakdown-row--active" : "sin-breakdown-row";
+    private string StatusRowClass(string status) => string.Equals(_statusFilter, status, StringComparison.OrdinalIgnoreCase) ? "sin-breakdown-row sin-breakdown-row--active" : "sin-breakdown-row";
+    private static string PriorityLabel(SubmissionIntakeDto row) => row.IntakeStatus is "Processed" or "Archived" or "Rejected" ? "Closed" : (row.EstimatedPremium ?? 0) >= 50000m ? "High" : row.ReceivedDate <= DateTime.UtcNow.AddDays(-7) ? "Aging" : "Standard";
+    private static string PriorityBadge(SubmissionIntakeDto row) => $"sin-priority sin-priority--{PriorityLabel(row).ToLowerInvariant()}";
+    private static int StatusOrder(string status) => status switch { "Pending" => 1, "Reviewing" => 2, "Processed" => 3, "Rejected" => 4, "Archived" => 5, _ => 99 };
+    private static string MatchScoreTone(int score) => score >= 95 ? "sin-score--high" : score >= 70 ? "sin-score--mid" : "sin-score--low";
+    private string NormalizeOptionClass(bool isNew) => (isNew ? _forceNewAccount : (!_forceNewAccount && _selectedAccountId is null)) ? "sin-normalize-option sin-normalize-option--active" : "sin-normalize-option";
+    private string NormalizeOptionClass(Guid accountId) => _selectedAccountId == accountId ? "sin-normalize-option sin-normalize-option--active" : "sin-normalize-option";
+
+    private static string SourceIcon(string source) => source switch
+    {
+        "Email" => "bi-envelope-fill",
+        "Portal" => "bi-globe",
+        "API" => "bi-hdd-network",
+        "Producer Upload" => "bi-cloud-arrow-up-fill",
+        "Carrier Request" => "bi-building",
+        "Walk-in" => "bi-person-walking",
+        _ => "bi-inbox-fill"
+    };
+
+    private static bool Contains(string? value, string term) => !string.IsNullOrEmpty(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static bool IsPhoneValid(string? value) { if (string.IsNullOrWhiteSpace(value)) return true; var digits = new string(value.Where(char.IsDigit).ToArray()); if (digits.Length == 11 && digits[0] == '1') digits = digits[1..]; return digits.Length == 10; }
+    private static string? NormalizePhone(string? value) { if (string.IsNullOrWhiteSpace(value)) return null; var digits = new string(value.Where(char.IsDigit).ToArray()); if (digits.Length == 11 && digits[0] == '1') digits = digits[1..]; return digits.Length == 10 ? $"({digits[..3]}) {digits.Substring(3, 3)}-{digits[6..]}" : value.Trim(); }
+
+    private sealed class IntakeFormModel
+    {
+        [Required, StringLength(50)] public string Source { get; set; } = "Email";
+        [StringLength(200)] public string? ApplicantName { get; set; }
+        [Required, StringLength(200)] public string BusinessName { get; set; } = string.Empty;
+        [StringLength(50)] public string? Fein { get; set; }
+        [AmsEmailAddress, StringLength(200)] public string? Email { get; set; }
+        [AmsPhone, StringLength(50)] public string? Phone { get; set; }
+        [StringLength(250)] public string? AddressLine { get; set; }
+        [StringLength(100)] public string? City { get; set; }
+        [StringLength(50)] public string? State { get; set; }
+        [StringLength(20)] public string? PostalCode { get; set; }
+        [StringLength(50)] public string? ExistingPolicyNumber { get; set; }
+        [StringLength(50)] public string? ProducerCode { get; set; }
+        [Required, StringLength(100)] public string LineOfBusiness { get; set; } = "Commercial Property";
+        public DateTime? RequestedEffectiveDate { get; set; }
+        [Range(0, 999999999999)] public decimal? EstimatedPremium { get; set; }
+        [StringLength(1000)] public string? Notes { get; set; }
+    }
+
+    private sealed record ViewDef(string Id, string Label, string Icon);
+    private sealed record KpiModel(string Label, string Value, string Caption, string Icon, string Tone, string Filter, string Tooltip);
+    private sealed record BreakdownRow(string Source, int Count, double WidthPercent);
+    private sealed record StatusBreakdownRow(string Status, int Count, double WidthPercent);
+}

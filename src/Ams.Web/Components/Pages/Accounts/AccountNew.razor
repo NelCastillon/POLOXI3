@@ -1,9 +1,14 @@
-﻿@page "/accounts/new"
+@page "/accounts/new"
 @namespace Ams.Web.Components.Pages.Accounts
 @inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject CurrentUserContext CurrentUser
 @using Ams.Application.Features.Accounts
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Common.Validation
+@using System.ComponentModel.DataAnnotations
+@using Microsoft.AspNetCore.Components.Forms
 
 <PageTitle>New Account â€” Tenant Admin</PageTitle>
 
@@ -33,15 +38,15 @@
 }
 
 <div class="acct-form-card">
-    <EditForm EditContext="_editContext" OnValidSubmit="SubmitAsync">
+    <EditForm EditContext="@_editContext" OnValidSubmit="SubmitAsync">
         <DataAnnotationsValidator />
         <div class="um-modal-body"><div class="um-form-grid">
             <div class="um-field"><label>Account Number <span class="text-danger">*</span></label><InputText @bind-Value="_form.AccountNumber" class="um-input" /></div>
             <div class="um-field"><label>Account Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.AccountName" class="um-input" /></div>
-            <div class="um-field"><label>Account Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.AccountTypeCode" class="um-input">@foreach (var type in AccountPageConstants.Types) { <option value="@type">@type</option> }</InputSelect></div>
-            <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input">@foreach (var status in AccountPageConstants.Statuses) { <option value="@status">@status</option> }</InputSelect></div>
-            <div class="um-field"><label>Segment</label><InputSelect @bind-Value="_form.SegmentCode" class="um-input"><option value="">None</option>@foreach (var segment in AccountPageConstants.Segments) { <option value="@segment">@segment</option> }</InputSelect></div>
-            <div class="um-field"><label>Lifecycle Stage</label><InputSelect @bind-Value="_form.LifecycleStageCode" class="um-input"><option value="">None</option>@foreach (var stage in AccountPageConstants.LifecycleStages) { <option value="@stage">@stage</option> }</InputSelect></div>
+            <div class="um-field"><label>Account Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.AccountTypeCode" class="um-input">@foreach (var type in _typeOptions) { <option value="@type.Code">@type.Name</option> }</InputSelect></div>
+            <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input">@foreach (var status in _statusOptions) { <option value="@status.Code">@status.Name</option> }</InputSelect></div>
+            <div class="um-field"><label>Segment</label><InputSelect @bind-Value="_form.SegmentCode" class="um-input"><option value="">None</option>@foreach (var segment in _segmentOptions) { <option value="@segment.Code">@segment.Name</option> }</InputSelect></div>
+            <div class="um-field"><label>Lifecycle Stage</label><InputSelect @bind-Value="_form.LifecycleStageCode" class="um-input"><option value="">None</option>@foreach (var stage in _lifecycleStageOptions) { <option value="@stage.Code">@stage.Name</option> }</InputSelect></div>
             <div class="um-field"><label>Email</label><InputText @bind-Value="_form.MainEmail" class="um-input" /></div>
             <div class="um-field"><label>Phone</label><InputText @bind-Value="_form.MainPhone" class="um-input" /></div>
             <div class="um-field"><label>Industry</label><InputText @bind-Value="_form.Industry" class="um-input" /></div>
@@ -55,16 +60,36 @@
 <SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
 
 @code {
-    AccountFormModel _form = new();
+    AccountNewFormModel _form = new();
     EditContext _editContext = default!;
     SfToast _toast = default!;
     bool _saving;
     string? _loadError;
+    Guid _tenantId;
+    List<AccountOption> _typeOptions = [];
+    List<AccountOption> _statusOptions = [];
+    List<AccountOption> _segmentOptions = [];
+    List<AccountOption> _lifecycleStageOptions = [];
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
         Breadcrumbs.SetCrumbs(new("Accounts", "/accounts"), new("New Account", "/accounts/new"));
-        _editContext = new(_form);
+        await LoadReferenceDataAsync();
+        ResetForm();
+    }
+
+    async Task LoadReferenceDataAsync()
+    {
+        var accountTypes = await Api.SearchAccountTypesAsync(_tenantId, pageSize: 200);
+        _typeOptions = accountTypes?.Items.Where(t => t.IsActive).OrderBy(t => t.SortOrder).ThenBy(t => t.TypeName).Select(t => new AccountOption(t.TypeCode, t.TypeName, t.IsDefault)).ToList() ?? [];
+
+        var options = await Api.GetAccountReferenceOptionsAsync(_tenantId);
+        var activeOptions = options?.Where(o => o.IsActive).ToList() ?? [];
+        _statusOptions = ToOptions(activeOptions, "Status");
+        _segmentOptions = ToOptions(activeOptions, "Segment");
+        _lifecycleStageOptions = ToOptions(activeOptions, "LifecycleStage");
     }
 
     async Task SubmitAsync()
@@ -75,17 +100,17 @@
         {
             var id = await Api.CreateAccountAsync(new CreateAccountRequest
             {
-                TenantId = AccountPageConstants.TenantId,
-                AccountNumber = _form.AccountNumber,
-                AccountName = _form.AccountName,
-                AccountTypeCode = _form.AccountTypeCode,
-                MainEmail = AccountPageConstants.Normalize(_form.MainEmail),
-                MainPhone = AccountPageConstants.Normalize(_form.MainPhone),
-                StatusCode = _form.StatusCode,
-                SegmentCode = AccountPageConstants.Normalize(_form.SegmentCode),
-                LifecycleStageCode = AccountPageConstants.Normalize(_form.LifecycleStageCode),
-                Industry = AccountPageConstants.Normalize(_form.Industry),
-                Website = AccountPageConstants.Normalize(_form.Website),
+                TenantId = _tenantId,
+                AccountNumber = Normalize(_form.AccountNumber) ?? string.Empty,
+                AccountName = Normalize(_form.AccountName) ?? string.Empty,
+                AccountTypeCode = Normalize(_form.AccountTypeCode) ?? DefaultOptionCode(_typeOptions),
+                MainEmail = Normalize(_form.MainEmail),
+                MainPhone = Normalize(_form.MainPhone),
+                StatusCode = Normalize(_form.StatusCode) ?? DefaultOptionCode(_statusOptions),
+                SegmentCode = Normalize(_form.SegmentCode),
+                LifecycleStageCode = Normalize(_form.LifecycleStageCode),
+                Industry = Normalize(_form.Industry),
+                Website = Normalize(_form.Website),
                 AnnualRevenue = _form.AnnualRevenue
             });
             await _toast.ShowAsync(new() { Content = "Account created", CssClass = "e-toast-success" });
@@ -101,7 +126,36 @@
 
     void ResetForm()
     {
-        _form = new();
+        _form = new()
+        {
+            AccountTypeCode = DefaultOptionCode(_typeOptions),
+            StatusCode = DefaultOptionCode(_statusOptions),
+            LifecycleStageCode = DefaultOptionCode(_lifecycleStageOptions)
+        };
         _editContext = new(_form);
+    }
+
+    static List<AccountOption> ToOptions(IEnumerable<AccountReferenceOptionDto> options, string group) =>
+        options.Where(o => string.Equals(o.OptionGroup, group, StringComparison.OrdinalIgnoreCase)).OrderBy(o => o.SortOrder).ThenBy(o => o.OptionName).Select(o => new AccountOption(o.OptionCode, o.OptionName, o.IsDefault)).ToList();
+
+    static string DefaultOptionCode(IReadOnlyList<AccountOption> options) => options.FirstOrDefault(o => o.IsDefault)?.Code ?? options.FirstOrDefault()?.Code ?? string.Empty;
+
+    static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    sealed record AccountOption(string Code, string Name, bool IsDefault);
+
+    sealed class AccountNewFormModel
+    {
+        [Required, StringLength(50)] public string AccountNumber { get; set; } = $"ACC-{DateTime.UtcNow:yyyyMMddHHmmss}";
+        [Required, StringLength(200)] public string AccountName { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string AccountTypeCode { get; set; } = string.Empty;
+        [AmsEmailAddress, StringLength(200)] public string? MainEmail { get; set; }
+        [AmsPhone, StringLength(50)] public string? MainPhone { get; set; }
+        [Required, StringLength(50)] public string StatusCode { get; set; } = string.Empty;
+        [StringLength(50)] public string? SegmentCode { get; set; }
+        [StringLength(50)] public string? LifecycleStageCode { get; set; }
+        [StringLength(100)] public string? Industry { get; set; }
+        [Url, StringLength(200)] public string? Website { get; set; }
+        [Range(0, 999999999999)] public decimal? AnnualRevenue { get; set; }
     }
 }

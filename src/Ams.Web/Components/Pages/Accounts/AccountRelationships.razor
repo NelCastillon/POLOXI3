@@ -4,6 +4,7 @@
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationContextService NavContext
+@inject CurrentUserContext CurrentUser
 @using Ams.Application.Common.Dtos
 
 <PageTitle>@(_account?.AccountName ?? "Account") Relationships — Tenant Admin</PageTitle>
@@ -98,7 +99,7 @@
                 {
                     <article class="rel-row" role="listitem" @onclick='() => Nav.NavigateTo($"/accounts/{r.AccountId}")'>
                         <div class="rel-row-main">
-                            <div class="rel-avatar @RelationshipTone(r.RelationshipType)">@AccountPageConstants.Initials(r.AccountName)</div>
+                            <div class="rel-avatar @RelationshipTone(r.RelationshipType)">@Initials(r.AccountName)</div>
                             <div class="rel-account-copy">
                                 <div class="rel-account-name">@r.AccountName</div>
                                 <div class="rel-account-meta"><span>@r.AccountNumber</span><span>@r.AccountTypeCode</span></div>
@@ -106,7 +107,7 @@
                         </div>
                         <div class="rel-row-details">
                             <span class="rel-type @RelationshipTone(r.RelationshipType)"><i class="bi @RelationshipIcon(r.RelationshipType)" aria-hidden="true"></i>@r.RelationshipType</span>
-                            <span class="@AccountPageConstants.StatusBadge(r.StatusCode)">@r.StatusCode</span>
+                            <span class="@StatusBadge(r.StatusCode)">@r.StatusCode</span>
                         </div>
                         <button type="button" class="um-btn um-btn-ghost um-btn-sm rel-open" title="Open related account" @onclick='() => Nav.NavigateTo($"/accounts/{r.AccountId}")' @onclick:stopPropagation="true">
                             <i class="bi bi-arrow-right" aria-hidden="true"></i>
@@ -126,13 +127,34 @@
     string _search = string.Empty;
     string? _activeFilter, _loadError;
     bool _loading;
+    Guid _tenantId;
     IEnumerable<AccountRelationshipItem> Filtered => _relationships.Where(x => (_activeFilter is null || x.RelationshipType == _activeFilter) && (string.IsNullOrWhiteSpace(_search) || x.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.AccountNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.AccountTypeCode.Contains(_search, StringComparison.OrdinalIgnoreCase)));
 
-    protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Accounts", "/accounts"), new("Relationships")); await LoadAsync(); }
-    async Task LoadAsync() { _loading = true; _loadError = null; try { _account = await Api.GetAccountByIdAsync(AccountId); var result = await Api.SearchAccountsAsync(AccountPageConstants.TenantId); _accounts = result?.Items.ToList() ?? []; if (_account is not null) { _relationships = AccountPageData.BuildRelationships(_account, _accounts); NavContext.SetAccount(AccountId, _account.AccountName); Breadcrumbs.SetCrumbs(new("Accounts", "/accounts"), new(_account.AccountName, $"/accounts/{AccountId}"), new("Relationships")); } } catch (Exception ex) { _loadError = $"Failed to load relationships: {ex.Message}"; } finally { _loading = false; } }
+    protected override async Task OnInitializedAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; Breadcrumbs.SetCrumbs(new("Accounts", "/accounts"), new("Relationships")); await LoadAsync(); }
+    async Task LoadAsync() { _loading = true; _loadError = null; try { _account = await Api.GetAccountByIdAsync(AccountId); var result = await Api.SearchAccountsAsync(_tenantId); _accounts = result?.Items.ToList() ?? []; if (_account is not null) { _relationships = BuildRelationships(_account, _accounts); NavContext.SetAccount(AccountId, _account.AccountName); Breadcrumbs.SetCrumbs(new("Accounts", "/accounts"), new(_account.AccountName, $"/accounts/{AccountId}"), new("Relationships")); } } catch (Exception ex) { _loadError = $"Failed to load relationships: {ex.Message}"; } finally { _loading = false; } }
     void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) => _search = e.Value?.ToString() ?? string.Empty;
     void SetFilter(string? key) => _activeFilter = key;
     void ResetFilters() { _activeFilter = null; _search = string.Empty; }
     static string RelationshipIcon(string type) => type switch { "Parent" => "bi-arrow-up-circle", "Child" => "bi-arrow-down-circle", _ => "bi-intersect" };
     static string RelationshipTone(string type) => type switch { "Parent" => "rel-tone--parent", "Child" => "rel-tone--child", _ => "rel-tone--related" };
+    static string StatusBadge(string status) => status switch { "Active" => "um-badge um-badge-success", "Prospect" => "um-badge um-badge-info", "Suspended" => "um-badge um-badge-warning", "Inactive" => "um-badge um-badge-neutral", _ => "um-badge um-badge-neutral" };
+    static string Initials(string name) { var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length > 0 ? name[..1] : "?"; }
+    static List<AccountRelationshipItem> BuildRelationships(AccountDto account, IReadOnlyList<AccountDto> allAccounts)
+    {
+        var results = new List<AccountRelationshipItem>();
+        if (account.ParentAccountId.HasValue)
+        {
+            var parent = allAccounts.FirstOrDefault(a => a.AccountId == account.ParentAccountId.Value);
+            if (parent is not null)
+            {
+                results.Add(new(parent.AccountId, parent.AccountName, parent.AccountNumber, "Parent", parent.StatusCode, parent.AccountTypeCode));
+            }
+        }
+
+        results.AddRange(allAccounts.Where(a => a.ParentAccountId == account.AccountId).Select(a => new AccountRelationshipItem(a.AccountId, a.AccountName, a.AccountNumber, "Child", a.StatusCode, a.AccountTypeCode)));
+        results.AddRange(allAccounts.Where(a => a.AccountId != account.AccountId && a.ParentAccountId != account.AccountId && a.AccountId != account.ParentAccountId).Take(3).Select(a => new AccountRelationshipItem(a.AccountId, a.AccountName, a.AccountNumber, "Related", a.StatusCode, a.AccountTypeCode)));
+        return results;
+    }
+
+    sealed record AccountRelationshipItem(Guid AccountId, string AccountName, string AccountNumber, string RelationshipType, string StatusCode, string AccountTypeCode);
 }

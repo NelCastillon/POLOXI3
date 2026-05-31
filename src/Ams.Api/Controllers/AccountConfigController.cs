@@ -85,6 +85,18 @@ public sealed class RelationshipTypesController : ControllerBase
 }
 
 [ApiController]
+[Route("api/accounts/reference-options")]
+public sealed class AccountReferenceOptionsController : ControllerBase
+{
+    private readonly IAccountReferenceOptionService _service;
+    public AccountReferenceOptionsController(IAccountReferenceOptionService service) => _service = service;
+
+    [HttpGet]
+    public async Task<IActionResult> GetAll([FromQuery] Guid tenantId, [FromQuery] string? optionGroup = null, CancellationToken ct = default)
+        => Ok(await _service.GetAllAsync(tenantId, optionGroup, ct));
+}
+
+[ApiController]
 [Route("api/accounts/household-settings")]
 public sealed class HouseholdSettingsController : ControllerBase
 {

@@ -195,4 +195,31 @@ ORDER BY c.LastName, c.FirstName;";
             new CommandDefinition(sql, new { AccountId = accountId }, cancellationToken: cancellationToken));
         return results.AsList();
     }
+
+    public async Task<IReadOnlyList<AccountDto>> FindMatchCandidatesAsync(AccountMatchCriteria criteria, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT TOP 50 AccountId, TenantId, AccountNumber, AccountName, AccountTypeCode,
+       MainEmail, MainPhone, StatusCode, SegmentCode, OwnerUserId,
+       ParentAccountId, LifecycleStageCode, Industry, Website, AnnualRevenue,
+       CreatedDateUtc, ModifiedDateUtc
+FROM Client.Account
+WHERE TenantId = @TenantId AND IsDeleted = 0
+  AND (
+        (@BusinessName IS NOT NULL AND @BusinessName <> '' AND AccountName LIKE '%' + @BusinessName + '%')
+     OR (@Email IS NOT NULL AND @Email <> '' AND MainEmail = @Email)
+     OR (@Phone IS NOT NULL AND @Phone <> '' AND MainPhone = @Phone)
+  )
+ORDER BY AccountName;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var results = await cn.QueryAsync<AccountDto>(new CommandDefinition(sql, new
+        {
+            criteria.TenantId,
+            criteria.BusinessName,
+            criteria.Email,
+            criteria.Phone
+        }, cancellationToken: cancellationToken));
+        return results.AsList();
+    }
 }

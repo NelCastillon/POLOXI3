@@ -6,6 +6,7 @@
 @inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject CurrentUserContext CurrentUser
 
 <PageTitle>Decline Command Center â€” AMS</PageTitle>
 
@@ -457,6 +458,7 @@
     string? _lobFilter;
     string _refreshIconClass = string.Empty;
     Guid? _openActionMenuFor;
+    Guid _tenantId;
     int _page = 1;
     const int PageSize = 18;
 
@@ -464,6 +466,7 @@
     readonly DeclineActionForm _actionForm = new();
     readonly List<DeclineRow> _rows = [];
     readonly List<ToastMessage> _toasts = [];
+    List<SubmissionOption> _declineTypeOptions = [];
     string _pendingAction = string.Empty;
     string _actionTitle = "Decline Action";
     string _actionIcon = "bi-x-circle";
@@ -521,7 +524,7 @@
     string? ProducerFilter { get => _producerFilter; set { _producerFilter = value; _page = 1; } }
     string SortMode { get => _sortMode; set { _sortMode = value; _page = 1; } }
 
-    IEnumerable<string> TypeOptions => _rows.Select(r => r.DeclineType).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    IEnumerable<string> TypeOptions => MergeOptions(_declineTypeOptions.Select(o => o.Code), _rows.Select(r => r.DeclineType));
     IEnumerable<string> RemarketingOptions => _rows.Select(r => r.RemarketingStatus).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
     IEnumerable<string> ProducerOptions => _rows.Select(r => Safe(r.Producer, "Unassigned")).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
     IEnumerable<DeclineRow> PriorityRows => _rows.Where(r => !r.Archived && ImportanceLevel(r) is "Critical" or "High");
@@ -576,8 +579,17 @@
 
     protected override async Task OnInitializedAsync()
     {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Submissions", "/submissions"), new("Declines", "/submissions/declines"));
+        await LoadReferenceDataAsync();
         await LoadAsync();
+    }
+
+    async Task LoadReferenceDataAsync()
+    {
+        var options = await Api.GetSubmissionReferenceOptionsAsync(_tenantId, "DeclineType");
+        _declineTypeOptions = options?.Where(o => o.IsActive).OrderBy(o => o.SortOrder).ThenBy(o => o.OptionName).Select(o => new SubmissionOption(o.OptionCode, o.OptionName, o.IsDefault)).ToList() ?? [];
     }
 
     async Task LoadAsync()
@@ -587,7 +599,7 @@
         _loadError = null;
         try
         {
-            var result = await Api.SearchSubmissionsAsync(SubmissionPageConstants.TenantId, pageSize: 500);
+            var result = await Api.SearchSubmissionsAsync(_tenantId, pageSize: 500);
             _rows.Clear();
             _rows.AddRange((result?.Items ?? [])
                 .Where(s => s.Status is "Declined" or "Withdrawn")
@@ -610,7 +622,7 @@
 
     static DeclineRow ToDeclineRow(SubmissionDto dto)
     {
-        var row = SubmissionPageData.ToDeclineRow(dto);
+        var row = ToDeclineRegisterRow(dto);
         return new DeclineRow
         {
             DeclineId = row.DeclineId,
@@ -982,7 +994,7 @@
     async Task<string> ResubmitAsync()
     {
         if (_selected is null) return "No decline selected.";
-        var response = await Api.CopySubmissionAsync(_selected.SubId, new CopySubmissionRequest(SubmissionPageConstants.TenantId, _actionForm.EffectiveDate, _selected.Lob, _selected.Priority));
+        var response = await Api.CopySubmissionAsync(_selected.SubId, new CopySubmissionRequest(_tenantId, _actionForm.EffectiveDate, _selected.Lob, _selected.Priority));
         return response.Message;
     }
 
@@ -1057,6 +1069,40 @@
     static bool Contains(string? source, string term) => !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
     static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
     static string Slug(string value) => value.ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
+    static IEnumerable<string> MergeOptions(IEnumerable<string> configured, IEnumerable<string> observed) => configured.Concat(observed).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    static DeclineRegisterRow ToDeclineRegisterRow(SubmissionDto dto) => new()
+    {
+        DeclineId = dto.SubmissionId,
+        SubmissionNo = dto.SubmissionNumber,
+        SubId = dto.SubmissionId,
+        Account = dto.AccountName,
+        Lob = dto.LineOfBusiness,
+        Carrier = dto.MarketCount > 0 ? "Market Response" : "Internal",
+        DeclineType = dto.Status == "Withdrawn" ? "Withdrawn" : "Carrier",
+        DeclineReason = dto.Status == "Withdrawn" ? "Client withdrawn" : "Underwriting declined",
+        DeclineDate = dto.ModifiedDateUtc ?? dto.CreatedDateUtc,
+        LostPremium = dto.TargetPremium ?? 0,
+        RemarketingStatus = dto.Status == "Declined" ? "Pending" : "Not Started",
+        Producer = dto.AssignedToUserName ?? "Unassigned"
+    };
+
+    sealed record SubmissionOption(string Code, string Name, bool IsDefault);
+
+    class DeclineRegisterRow
+    {
+        public Guid DeclineId { get; set; }
+        public string SubmissionNo { get; set; } = string.Empty;
+        public Guid SubId { get; set; }
+        public string Account { get; set; } = string.Empty;
+        public string Lob { get; set; } = string.Empty;
+        public string Carrier { get; set; } = string.Empty;
+        public string DeclineType { get; set; } = string.Empty;
+        public string DeclineReason { get; set; } = string.Empty;
+        public DateTime DeclineDate { get; set; }
+        public decimal LostPremium { get; set; }
+        public string RemarketingStatus { get; set; } = string.Empty;
+        public string Producer { get; set; } = string.Empty;
+    }
 
     sealed class DeclineRow : DeclineRegisterRow
     {

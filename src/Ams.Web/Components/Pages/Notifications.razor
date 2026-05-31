@@ -20,12 +20,12 @@
     </div>
 }
 
-@if (_showCreate && _form is not null)
+@if (_showCreate)
 {
     <div class="nt-modal-backdrop" role="presentation" @onclick="CloseCreate">
         <div class="nt-modal nt-form-modal" role="dialog" aria-modal="true" aria-labelledby="nt-form-title" @onclick:stopPropagation="true">
             <div class="um-modal-header"><i class="bi bi-bell-plus" aria-hidden="true"></i><span id="nt-form-title">Create Notification</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseCreate" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button></div>
-            <EditForm Model="_form" OnValidSubmit="CreateNotification" OnInvalidSubmit="NotifyValidation">
+            <EditForm EditContext="@_formEditContext" OnValidSubmit="CreateNotification" OnInvalidSubmit="NotifyValidation">
                 <DataAnnotationsValidator />
                 <div class="um-modal-body">
                     <div class="nt-modal-intro"><span><i class="bi bi-shield-check"></i> Tenant notification governance</span><p>Create a tenant notification, choose delivery channel, priority, category, entity context, and sync it into delivery tracking.</p></div>
@@ -149,7 +149,8 @@
     private string _priorityFilter = string.Empty;
     private Guid? SelectedId;
     private bool _showCreate;
-    private NotificationForm? _form;
+    private NotificationForm _form = new();
+    private EditContext _formEditContext = new(new NotificationForm());
     private NotificationDto? _confirmTarget;
     private Func<Task>? _confirmAction;
     private string _confirmTitle = string.Empty;
@@ -202,12 +203,17 @@
     private bool MatchesActiveFilter(NotificationDto n) => _activeFilter switch { "Unread" => !n.IsRead, "Delivered" => n.StatusCode is "Sent" or "Delivered", "Failed" => n.StatusCode == "Failed" || n.DeliveryStatus == "Failed", "Retrying" => n.DeliveryStatus == "Retrying" || n.StatusCode == "Queued", _ => true };
     private void Select(NotificationDto item) => SelectedId = item.NotificationId;
     private void ResetFilters() { _activeFilter = null; _searchTerm = string.Empty; _channelFilter = string.Empty; _categoryFilter = string.Empty; _priorityFilter = string.Empty; }
-    private void OpenCreate() { _form = new NotificationForm { ChannelCode = "InApp", StatusCode = "Delivered", Priority = "Normal", Category = "General" }; _showCreate = true; }
-    private void CloseCreate() { if (_actionBusy) return; _showCreate = false; _form = null; }
+    private void OpenCreate() { SetForm(new NotificationForm { ChannelCode = "InApp", StatusCode = "Delivered", Priority = "Normal", Category = "General" }); _showCreate = true; }
+    private void CloseCreate() { if (_actionBusy) return; _showCreate = false; SetForm(new()); }
+
+    private void SetForm(NotificationForm form)
+    {
+        _form = form;
+        _formEditContext = new EditContext(_form);
+    }
 
     private async Task CreateNotification()
     {
-        if (_form is null) return;
         await ExecuteActionAsync("Notification created", async () =>
         {
             await Api.CreateNotificationAsync(new CreateNotificationRequest { TenantId = _tenantId, RecipientUserId = _tenantAdminUserId, ChannelCode = _form.ChannelCode, Subject = _form.Subject, Body = _form.Body, EntityName = _form.EntityName, StatusCode = _form.StatusCode, SentDateUtc = _form.StatusCode is "Sent" or "Delivered" ? DateTime.UtcNow : null, ErrorMessage = _form.ErrorMessage, CreatedByUserId = _tenantAdminUserId, Priority = _form.Priority, Category = _form.Category });

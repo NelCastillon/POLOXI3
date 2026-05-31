@@ -556,3 +556,117 @@ WHERE  SubmissionId = @SubmissionId;";
         return id;
     }
 }
+
+public sealed class SubmissionReferenceOptionRepository : ISubmissionReferenceOptionRepository
+{
+    private readonly ISqlConnectionFactory _connectionFactory;
+
+    public SubmissionReferenceOptionRepository(ISqlConnectionFactory connectionFactory)
+    {
+        _connectionFactory = connectionFactory;
+    }
+
+    public async Task<List<SubmissionReferenceOptionDto>> GetAllAsync(Guid tenantId, string? optionGroup = null, CancellationToken cancellationToken = default)
+    {
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureReferenceDataAsync(connection, tenantId, cancellationToken);
+
+        const string sql = @"
+SELECT SubmissionReferenceOptionId, TenantId, OptionGroup, OptionCode, OptionName, Description,
+       IsDefault, IsActive, SortOrder, CreatedDateUtc
+FROM Submissions.SubmissionReferenceOption
+WHERE TenantId = @TenantId
+  AND IsDeleted = 0
+  AND (@OptionGroup IS NULL OR @OptionGroup = '' OR OptionGroup = @OptionGroup)
+ORDER BY OptionGroup, SortOrder, OptionName;";
+
+        var items = await connection.QueryAsync<SubmissionReferenceOptionDto>(new CommandDefinition(sql, new
+        {
+            TenantId = tenantId,
+            OptionGroup = optionGroup,
+        }, cancellationToken: cancellationToken));
+        return items.AsList();
+    }
+
+    private static async Task EnsureReferenceDataAsync(System.Data.IDbConnection connection, Guid tenantId, CancellationToken cancellationToken)
+    {
+        const string sql = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'Submissions') EXEC('CREATE SCHEMA Submissions');
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Submissions.SubmissionReferenceOption'))
+CREATE TABLE Submissions.SubmissionReferenceOption (
+    SubmissionReferenceOptionId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    TenantId                    UNIQUEIDENTIFIER NOT NULL,
+    OptionGroup                 NVARCHAR(50)     NOT NULL,
+    OptionCode                  NVARCHAR(100)    NOT NULL,
+    OptionName                  NVARCHAR(150)    NOT NULL,
+    Description                 NVARCHAR(500)    NULL,
+    IsDefault                   BIT              NOT NULL DEFAULT 0,
+    IsActive                    BIT              NOT NULL DEFAULT 1,
+    SortOrder                   INT              NOT NULL DEFAULT 0,
+    CreatedDateUtc              DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc             DATETIME2        NULL,
+    IsDeleted                   BIT              NOT NULL DEFAULT 0,
+    CONSTRAINT UQ_SubmissionReferenceOption_Tenant_Group_Code UNIQUE (TenantId, OptionGroup, OptionCode)
+);
+
+IF NOT EXISTS (SELECT 1 FROM Submissions.SubmissionReferenceOption WHERE TenantId = @TenantId AND OptionGroup = 'SubmissionStatus' AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Submissions.SubmissionReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    VALUES
+        (@TenantId, 'SubmissionStatus', 'New', 'New', 'New submission intake record.', 1, 10),
+        (@TenantId, 'SubmissionStatus', 'In Review', 'In Review', 'Submission is in underwriting or carrier review.', 0, 20),
+        (@TenantId, 'SubmissionStatus', 'Quoted', 'Quoted', 'Submission has one or more quotes.', 0, 30),
+        (@TenantId, 'SubmissionStatus', 'Bound', 'Bound', 'Submission has been bound into policy workflow.', 0, 40),
+        (@TenantId, 'SubmissionStatus', 'Declined', 'Declined', 'Submission was declined by underwriting or market.', 0, 80),
+        (@TenantId, 'SubmissionStatus', 'Withdrawn', 'Withdrawn', 'Submission was withdrawn by client or producer.', 0, 90);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Submissions.SubmissionReferenceOption WHERE TenantId = @TenantId AND OptionGroup = 'LineOfBusiness' AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Submissions.SubmissionReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    VALUES
+        (@TenantId, 'LineOfBusiness', 'General Liability', 'General Liability', 'Commercial general liability placement.', 1, 10),
+        (@TenantId, 'LineOfBusiness', 'Commercial Property', 'Commercial Property', 'Commercial property placement.', 0, 20),
+        (@TenantId, 'LineOfBusiness', 'Commercial Auto', 'Commercial Auto', 'Commercial automobile placement.', 0, 30),
+        (@TenantId, 'LineOfBusiness', 'Workers Comp', 'Workers Comp', 'Workers compensation placement.', 0, 40),
+        (@TenantId, 'LineOfBusiness', 'Umbrella / Excess', 'Umbrella / Excess', 'Umbrella or excess liability placement.', 0, 50),
+        (@TenantId, 'LineOfBusiness', 'Professional Liability', 'Professional Liability', 'Professional liability placement.', 0, 60),
+        (@TenantId, 'LineOfBusiness', 'Home / Dwelling', 'Home / Dwelling', 'Personal home or dwelling placement.', 0, 70),
+        (@TenantId, 'LineOfBusiness', 'Personal Auto', 'Personal Auto', 'Personal automobile placement.', 0, 80);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Submissions.SubmissionReferenceOption WHERE TenantId = @TenantId AND OptionGroup = 'ApplicationStatus' AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Submissions.SubmissionReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    VALUES
+        (@TenantId, 'ApplicationStatus', 'Draft', 'Draft', 'Application package is being drafted.', 1, 10),
+        (@TenantId, 'ApplicationStatus', 'Submitted', 'Submitted', 'Application has been submitted.', 0, 20),
+        (@TenantId, 'ApplicationStatus', 'Under Review', 'Under Review', 'Application is under review.', 0, 30),
+        (@TenantId, 'ApplicationStatus', 'Requirements Pending', 'Requirements Pending', 'Additional requirements are pending.', 0, 40),
+        (@TenantId, 'ApplicationStatus', 'Approved', 'Approved', 'Application is approved for quote workflow.', 0, 50),
+        (@TenantId, 'ApplicationStatus', 'Rejected', 'Rejected', 'Application was rejected.', 0, 90);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Submissions.SubmissionReferenceOption WHERE TenantId = @TenantId AND OptionGroup = 'QuoteStatus' AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Submissions.SubmissionReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    VALUES
+        (@TenantId, 'QuoteStatus', 'Pending', 'Pending', 'Quote is pending market response.', 1, 10),
+        (@TenantId, 'QuoteStatus', 'Accepted', 'Accepted', 'Quote has been accepted or presented.', 0, 20),
+        (@TenantId, 'QuoteStatus', 'Declined', 'Declined', 'Quote has been declined.', 0, 80),
+        (@TenantId, 'QuoteStatus', 'Expired', 'Expired', 'Quote has expired.', 0, 90);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Submissions.SubmissionReferenceOption WHERE TenantId = @TenantId AND OptionGroup = 'DeclineType' AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Submissions.SubmissionReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    VALUES
+        (@TenantId, 'DeclineType', 'Carrier', 'Carrier', 'Carrier or market declined the submission.', 1, 10),
+        (@TenantId, 'DeclineType', 'Internal', 'Internal', 'Agency or underwriting team declined the submission.', 0, 20),
+        (@TenantId, 'DeclineType', 'Withdrawn', 'Withdrawn', 'Client or producer withdrew the submission.', 0, 30);
+END;";
+
+        await connection.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken));
+    }
+}

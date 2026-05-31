@@ -40,3 +40,8 @@ public interface ISubmissionRepository
     Task<PolicyBindDto?> GetPolicyBySubmissionAsync(Guid submissionId, CancellationToken cancellationToken = default);
     Task<Guid> BindPolicyAsync(BindPolicyRequest request, CancellationToken cancellationToken = default);
 }
+
+public interface ISubmissionReferenceOptionRepository
+{
+    Task<List<SubmissionReferenceOptionDto>> GetAllAsync(Guid tenantId, string? optionGroup = null, CancellationToken cancellationToken = default);
+}

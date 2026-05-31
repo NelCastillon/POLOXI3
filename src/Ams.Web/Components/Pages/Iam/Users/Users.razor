@@ -1,449 +1,431 @@
-﻿@page "/users"
+@page "/users"
 @page "/tenant/security/users"
 @using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 
-<PageTitle>Users â€“ AMS Enterprise</PageTitle>
+<PageTitle>User Security Command Center — AMS</PageTitle>
 
-<div class="um-page">
-
-    <!-- â”€â”€ Page Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
-    <div class="page-header">
-        <div>
-            <h1 class="page-title"><i class="bi bi-people" aria-hidden="true"></i> Users</h1>
-            <p class="page-subtitle">Manage platform users, access, and security</p>
+<div class="use-page">
+    <section class="use-hero">
+        <div class="use-hero__content">
+            <div class="use-hero__eyebrow"><i class="bi bi-shield-lock" aria-hidden="true"></i> Enterprise identity command center</div>
+            <h1>User Security Command Center</h1>
+            <p>Provision access, monitor identity risk, and run security workflows across every platform user.</p>
+            <div class="use-hero__meta">
+                <span><i class="bi bi-people" aria-hidden="true"></i>@_users.Count users</span>
+                <span><i class="bi bi-exclamation-octagon" aria-hidden="true"></i>@_users.Count(IsHighRisk) high risk</span>
+                <span><i class="bi bi-shield-check" aria-hidden="true"></i>@_users.Count(u => u.MfaEnabled) MFA protected</span>
+                <span><i class="bi bi-lock" aria-hidden="true"></i>@_users.Count(u => u.IsLockedOut) locked</span>
+            </div>
         </div>
-        <div class="page-actions">
-            <button class="um-btn um-btn-ghost" @onclick="RefreshAsync" title="Refresh list" aria-label="Refresh">
-                <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+        <div class="use-hero__actions">
+            <button type="button" class="use-btn use-btn--light" @onclick="RefreshAsync" disabled="@_loading">
+                <i class="bi bi-arrow-clockwise @(_loading ? "use-spin" : null)" aria-hidden="true"></i> Refresh
             </button>
-            <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <button type="button" class="use-btn use-btn--primary" @onclick="OpenCreate">
                 <i class="bi bi-person-plus" aria-hidden="true"></i> Create User
             </button>
         </div>
-    </div>
+    </section>
 
-    <!-- â”€â”€ KPI strip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
-    <div class="um-kpi-strip">
-        <div class="kpi-card @KpiClass(null)" @onclick="() => SetKpiFilter(null)" role="button" tabindex="0" title="Show all users">
-            <div class="kpi-icon kpi-icon-blue"><i class="bi bi-people"></i></div>
-            <div class="kpi-body">
-                <div class="kpi-label">Total Users</div>
-                <div class="kpi-value">@_users.Count</div>
-            </div>
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger use-alert" style="border-left: 4px solid #dc3545; animation: use-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span>@_loadError</span>
         </div>
-        <div class="kpi-card @KpiClass("active")" @onclick='() => SetKpiFilter("active")' role="button" tabindex="0" title="Show active users">
-            <div class="kpi-icon kpi-icon-green"><i class="bi bi-check-circle"></i></div>
-            <div class="kpi-body">
-                <div class="kpi-label">Active</div>
-                <div class="kpi-value">@_users.Count(u => IsActive(u))</div>
-            </div>
-        </div>
-        <div class="kpi-card @KpiClass("locked")" @onclick='() => SetKpiFilter("locked")' role="button" tabindex="0" title="Show locked users">
-            <div class="kpi-icon kpi-icon-amber"><i class="bi bi-lock"></i></div>
-            <div class="kpi-body">
-                <div class="kpi-label">Locked Out</div>
-                <div class="kpi-value">@_users.Count(u => u.IsLockedOut)</div>
-            </div>
-        </div>
-        <div class="kpi-card @KpiClass("mfa")" @onclick='() => SetKpiFilter("mfa")' role="button" tabindex="0" title="Show MFA-enabled users">
-            <div class="kpi-icon kpi-icon-purple"><i class="bi bi-shield-check"></i></div>
-            <div class="kpi-body">
-                <div class="kpi-label">MFA Enabled</div>
-                <div class="kpi-value">@_users.Count(u => u.MfaEnabled)</div>
-            </div>
-        </div>
-    </div>
+    }
 
-    <!-- â”€â”€ Toolbar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
-    <div class="toolbar">
-        <div class="um-search-box">
+    <section class="use-kpi-strip" aria-label="User security KPIs">
+        @KpiCard("all", "Total Users", _users.Count.ToString(), "All users in this tenant", "bi-people", "blue")
+        @KpiCard("active", "Active", _users.Count(IsActive).ToString(), "Users with enabled access", "bi-check-circle", "green")
+        @KpiCard("risk", "High Risk", _users.Count(IsHighRisk).ToString(), "Locked, unprotected, stale, or role-gap users", "bi-exclamation-octagon", "red")
+        @KpiCard("locked", "Locked", _users.Count(u => u.IsLockedOut).ToString(), "Accounts currently locked out", "bi-lock", "amber")
+        @KpiCard("mfa", "MFA Disabled", _users.Count(u => !u.MfaEnabled).ToString(), "Users without MFA protection", "bi-shield-x", "purple")
+        @KpiCard("stale", "Stale", _users.Count(IsStale).ToString(), "No login in 30+ days or never logged in", "bi-hourglass-bottom", "cyan")
+    </section>
+
+    <section class="use-workflows" aria-label="User workflows">
+        @WorkflowButton("Security review", "Prioritize highest-risk identities", "bi-shield-exclamation", () => SetDashboardFocus("risk", "risk"))
+        @WorkflowButton("Unlock queue", "Review locked-out users", "bi-unlock", () => SetDashboardFocus("locked", "risk"))
+        @WorkflowButton("MFA enrollment", "Find users missing MFA", "bi-shield-plus", () => SetDashboardFocus("mfa", "risk"))
+        @WorkflowButton("Dormant cleanup", "Audit stale identities", "bi-hourglass-split", () => SetDashboardFocus("stale", "login"))
+        @WorkflowButton("Role gaps", "Find active users without roles", "bi-diagram-3", () => SetDashboardFocus("noroles", "risk"))
+    </section>
+
+    <section class="use-filter-panel" aria-label="User filters">
+        <div class="use-search">
             <i class="bi bi-search" aria-hidden="true"></i>
-            <input class="um-search-input"
-                   type="search"
-                   placeholder="Search by name, email, or usernameâ€¦"
+            <input type="search"
+                   placeholder="Search name, email, username, department, job title, or roles…"
                    aria-label="Search users"
                    value="@_searchTerm"
                    @oninput="OnSearchInput" />
         </div>
-        <div class="toolbar-end">
-            @if (_selectedUsers.Count > 0)
+        <div class="use-filter-grid">
+            <label>
+                <span>Status</span>
+                <select class="form-select" @bind="_statusFilter" @bind:after="ApplyFilters">
+                    <option value="">All statuses</option>
+                    @foreach (var status in StatusOptions)
+                    {
+                        <option value="@status">@status</option>
+                    }
+                </select>
+            </label>
+            <label>
+                <span>Type</span>
+                <select class="form-select" @bind="_typeFilter" @bind:after="ApplyFilters">
+                    <option value="">All types</option>
+                    @foreach (var type in TypeOptions)
+                    {
+                        <option value="@type">@type</option>
+                    }
+                </select>
+            </label>
+            <label>
+                <span>Risk</span>
+                <select class="form-select" @bind="_riskFilter" @bind:after="ApplyFilters">
+                    <option value="">All risk levels</option>
+                    <option value="Critical">Critical</option>
+                    <option value="High">High</option>
+                    <option value="Medium">Medium</option>
+                    <option value="Low">Low</option>
+                </select>
+            </label>
+            <label>
+                <span>Sort</span>
+                <select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters">
+                    <option value="risk">Risk / importance</option>
+                    <option value="name">Name</option>
+                    <option value="login">Last login</option>
+                    <option value="created">Newest</option>
+                    <option value="roles">Role coverage</option>
+                </select>
+            </label>
+        </div>
+        <button type="button" class="use-btn use-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)">
+            <i class="bi bi-x-lg" aria-hidden="true"></i> Reset
+        </button>
+    </section>
+
+    <nav class="use-tabs" aria-label="User views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="use-tab @(_activeTab == tab.Key ? "use-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </nav>
+
+    <main class="use-dashboard">
+        <section class="use-main-card">
+            <div class="use-card-header">
+                <div>
+                    <span class="use-section-kicker">@ActiveViewTitle</span>
+                    <h2>@FilteredUsers.Count() users</h2>
+                    <p>Ranked by enterprise importance: lockout, MFA coverage, stale access, failed attempts, status, and roles.</p>
+                </div>
+                <div class="use-card-actions">
+                    @if (_selectedUsers.Count > 0)
+                    {
+                        <span class="use-sel-count">@_selectedUsers.Count selected</span>
+                        <button type="button" class="use-btn use-btn--ghost" @onclick="() => ConfirmBulkToggle(true)"><i class="bi bi-check-circle" aria-hidden="true"></i> Enable</button>
+                        <button type="button" class="use-btn use-btn--ghost" @onclick="() => ConfirmBulkToggle(false)"><i class="bi bi-slash-circle" aria-hidden="true"></i> Disable</button>
+                        <button type="button" class="use-btn use-btn--danger-ghost" @onclick="ConfirmBulkDelete"><i class="bi bi-trash3" aria-hidden="true"></i> Remove</button>
+                    }
+                    <button type="button" class="use-btn use-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Prev</button>
+                    <span class="use-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="use-btn use-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
             {
-                <span class="um-sel-count">@_selectedUsers.Count selected</span>
-                <div class="um-bulk-wrap @(_bulkMenuOpen ? "is-open" : "")">
-                    <button class="um-btn um-btn-secondary"
-                            @onclick="() => _bulkMenuOpen = !_bulkMenuOpen"
-                            aria-haspopup="true"
-                            aria-expanded="@_bulkMenuOpen.ToString().ToLowerInvariant()">
-                        Bulk Actions <i class="bi bi-chevron-down" aria-hidden="true"></i>
-                    </button>
-                    <div class="um-bulk-drop" role="menu">
-                        <button role="menuitem" @onclick="BulkEnableAsync">
-                            <i class="bi bi-check-circle" aria-hidden="true"></i> Enable Selected
-                        </button>
-                        <button role="menuitem" @onclick="() => ConfirmBulkToggle(false)">
-                            <i class="bi bi-slash-circle" aria-hidden="true"></i> Disable Selected
-                        </button>
-                        <div class="um-bulk-sep"></div>
-                        <button class="danger" role="menuitem" @onclick="ConfirmBulkDelete">
-                            <i class="bi bi-trash" aria-hidden="true"></i> Delete Selected
-                        </button>
-                    </div>
+                <div class="use-loading"><span class="use-spinner"></span> Loading users…</div>
+            }
+            else if (!FilteredUsers.Any())
+            {
+                <div class="use-empty">
+                    <i class="bi bi-people" aria-hidden="true"></i>
+                    <strong>No users found</strong>
+                    <span>Adjust the active tab, KPI, search, or filters.</span>
                 </div>
             }
-        </div>
-    </div>
-
-    <!-- â”€â”€ Grid â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
-    <div class="um-grid-card">
-        @if (_loading)
-        {
-            <div class="um-loading-overlay" aria-live="polite" aria-label="Loading users">
-                <div class="um-spinner" aria-hidden="true"></div>
-                <span>Loading usersâ€¦</span>
-            </div>
-        }
-        <SfGrid TValue="UserDto"
-                DataSource="@_filteredUsers"
-                @ref="_grid"
-                AllowPaging="true"
-                AllowSorting="true"
-                AllowFiltering="true"
-                EnableHover="true"
-                RowHeight="52">
-            <GridPageSettings PageSize="25" PageSizes="@(new[] { 10, 25, 50, 100 })" />
-            <GridFilterSettings Type="@(Syncfusion.Blazor.Grids.FilterType.Menu)" />
-            <GridSelectionSettings Mode="@(Syncfusion.Blazor.Grids.SelectionMode.Row)" Type="@(Syncfusion.Blazor.Grids.SelectionType.Multiple)" />
-            <GridEvents TValue="UserDto"
-                        RowSelected="OnRowSelected"
-                        RowDeselected="OnRowDeselected"
-                        OnRecordDoubleClick="OnRowDoubleClick" />
-            <GridColumns>
-                <GridColumn Type="ColumnType.CheckBox" Width="48" />
-
-                <GridColumn Field="FullName" HeaderText="User" Width="230" AllowSorting="true">
-                    <Template Context="u">
-                        @{ var user = (UserDto)u; }
-                        <div class="um-user-cell">
-                            <div class="um-avatar" style="@AvatarStyle(user.FullName)" aria-hidden="true">@Initials(user.FullName)</div>
-                            <div class="um-user-meta">
-                                <div class="um-user-name">@user.FullName</div>
-                                <div class="um-user-email">@user.Email</div>
+            else if (_activeTab == "department")
+            {
+                <div class="use-dept-grid">
+                    @foreach (var group in DepartmentGroups)
+                    {
+                        <article class="use-dept-card">
+                            <div class="use-dept-icon"><i class="bi bi-building" aria-hidden="true"></i></div>
+                            <div class="use-dept-meta">
+                                <h3>@group.Name</h3>
+                                <p>@group.Count users • @group.HighRisk high risk • @group.MfaOff MFA off</p>
+                                <div class="use-mini-bar"><span style="width:@group.Percent%"></span></div>
                             </div>
-                        </div>
-                    </Template>
-                </GridColumn>
-                <GridColumn Field="UserName" HeaderText="Username" Width="150" />
-
-                <GridColumn Field="UserTypeCode" HeaderText="Type" Width="100">
-                    <Template Context="u">
-                        @{ var user = (UserDto)u; }
-                        <span class="badge @TypeBadgeClass(user.UserTypeCode)">@user.UserTypeCode</span>
-                    </Template>
-                </GridColumn>
-
-                <GridColumn Field="StatusCode" HeaderText="Status" Width="120">
-                    <Template Context="u">
-                        @{ var user = (UserDto)u; }
-                        @if (user.IsLockedOut)
-                        {
-                            <span class="badge badge-amber"><i class="bi bi-lock-fill" aria-hidden="true"></i> Locked</span>
-                        }
-                        else
-                        {
-                            <span class="badge @StatusBadgeClass(user.StatusCode)">
-                                <i class="bi @StatusIcon(user.StatusCode)" aria-hidden="true"></i>
-                                @user.StatusCode
-                            </span>
-                        }
-                    </Template>
-                </GridColumn>
-
-                <GridColumn HeaderText="MFA" Width="68" TextAlign="TextAlign.Center" AllowSorting="false">
-                    <Template Context="u">
-                        @{ var user = (UserDto)u; }
-                        <i class="bi @(user.MfaEnabled ? "bi-shield-fill-check um-mfa-on" : "bi-shield um-mfa-off")"
-                           title="@(user.MfaEnabled ? "MFA Enabled" : "MFA Disabled")"
-                           aria-label="@(user.MfaEnabled ? "MFA enabled" : "MFA disabled")"></i>
-                    </Template>
-                </GridColumn>
-
-                <GridColumn Field="AssignedRoleNames" HeaderText="Roles" Width="190" AllowSorting="false">
-                    <Template Context="u">
-                        @{ var user = (UserDto)u; }
-                        <div class="um-role-list" title="@RoleTitle(user)">
-                            @foreach (var roleName in RoleNames(user).Take(2))
+                            <button type="button" class="use-btn use-btn--ghost" @onclick="() => FilterByDepartment(group.Name)">Open</button>
+                        </article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="use-table-wrap">
+                    <table class="use-table">
+                        <thead>
+                            <tr>
+                                <th class="use-check-col"><input type="checkbox" checked="@AllPageSelected" @onchange="ToggleSelectAllPage" aria-label="Select all users on page" /></th>
+                                <th>Risk</th>
+                                <th>User</th>
+                                <th>Type</th>
+                                <th>Status</th>
+                                <th>MFA</th>
+                                <th>Roles</th>
+                                <th>Last Login</th>
+                                <th>Created</th>
+                                <th class="use-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var user in PagedUsers)
                             {
-                                <span class="badge badge-blue">@roleName</span>
+                                <tr class="@(_selected?.UserId == user.UserId ? "use-row use-row--selected" : "use-row")" @onclick="() => SelectRow(user)">
+                                    <td class="use-check-col" @onclick:stopPropagation="true">
+                                        <input type="checkbox" checked="@IsSelected(user)" @onchange="() => ToggleSelect(user)" aria-label="Select user" />
+                                    </td>
+                                    <td>@RiskBadge(user)</td>
+                                    <td>
+                                        <div class="use-user-cell">
+                                            <div class="use-avatar" style="@AvatarStyle(user.FullName)" aria-hidden="true">@Initials(user.FullName)</div>
+                                            <div class="use-user-meta">
+                                                <button type="button" class="use-link-button" @onclick:stopPropagation="true" @onclick="() => ViewUser(user)">@user.FullName</button>
+                                                <small>@user.Email</small>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td><span class="use-pill @TypeBadgeClass(user.UserTypeCode)">@Safe(user.UserTypeCode, "Unknown")</span></td>
+                                    <td>@StatusBadge(user)</td>
+                                    <td class="use-center"><i class="bi @(user.MfaEnabled ? "bi-shield-fill-check use-mfa-on" : "bi-shield-x use-mfa-off")" title="@(user.MfaEnabled ? "MFA enabled" : "MFA disabled")" aria-hidden="true"></i></td>
+                                    <td>
+                                        <div class="use-role-list" title="@RoleTitle(user)">
+                                            @foreach (var roleName in RoleNames(user).Take(2))
+                                            {
+                                                <span class="use-pill use-pill--blue">@roleName</span>
+                                            }
+                                            @if (RoleNames(user).Count > 2)
+                                            {
+                                                <span class="use-count-pill">+@(RoleNames(user).Count - 2)</span>
+                                            }
+                                            @if (RoleNames(user).Count == 0)
+                                            {
+                                                <span class="use-muted">None</span>
+                                            }
+                                        </div>
+                                    </td>
+                                    <td><span class="use-date" title="@user.LastLoginDateUtc?.ToString("f")">@FormatRelative(user.LastLoginDateUtc)</span></td>
+                                    <td><span class="use-date">@user.CreatedDateUtc.ToString("MMM d, yyyy")</span></td>
+                                    <td class="use-actions-col">
+                                        <button type="button" class="use-icon-btn" title="Open action menu" @onclick:stopPropagation="true" @onclick="() => ToggleActionMenu(user)"><i class="bi bi-three-dots-vertical" aria-hidden="true"></i></button>
+                                        @if (_openActionMenuFor == user.UserId)
+                                        {
+                                            <div class="use-menu" role="menu" @onclick:stopPropagation="true">
+                                                <div class="use-menu__summary"><strong>@user.FullName</strong><span>@user.UserName</span></div>
+                                                <button type="button" class="use-menu-item" role="menuitem" @onclick="() => ViewUser(user)"><i class="bi bi-eye" aria-hidden="true"></i><span>View details</span></button>
+                                                <button type="button" class="use-menu-item" role="menuitem" @onclick="() => OpenEdit(user)"><i class="bi bi-pencil" aria-hidden="true"></i><span>Edit user</span></button>
+                                                <button type="button" class="use-menu-item" role="menuitem" @onclick="() => ConfirmToggleActive(user)"><i class="bi @(IsActive(user) ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i><span>@(IsActive(user) ? "Deactivate" : "Activate")</span></button>
+                                                @if (user.IsLockedOut)
+                                                {
+                                                    <button type="button" class="use-menu-item" role="menuitem" @onclick="() => ConfirmUnlock(user)"><i class="bi bi-unlock" aria-hidden="true"></i><span>Unlock account</span></button>
+                                                }
+                                                else
+                                                {
+                                                    <button type="button" class="use-menu-item" role="menuitem" @onclick="() => ConfirmLock(user)"><i class="bi bi-lock" aria-hidden="true"></i><span>Lock account</span></button>
+                                                }
+                                                <button type="button" class="use-menu-item" role="menuitem" @onclick="() => ConfirmToggleMfa(user)"><i class="bi @(user.MfaEnabled ? "bi-shield-x" : "bi-shield-check")" aria-hidden="true"></i><span>@(user.MfaEnabled ? "Disable MFA" : "Enable MFA")</span></button>
+                                                <button type="button" class="use-menu-item use-menu-item--danger" role="menuitem" @onclick="() => ConfirmDelete(user)"><i class="bi bi-trash3" aria-hidden="true"></i><span>Remove access</span></button>
+                                            </div>
+                                        }
+                                    </td>
+                                </tr>
                             }
-                            @if (RoleNames(user).Count > 2)
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="use-side-panel">
+            <section class="use-panel-card">
+                <span class="use-section-kicker">Selected user</span>
+                @if (_selected is null)
+                {
+                    <div class="use-empty use-empty--compact"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a row</strong><span>Choose a user to inspect risk and actions.</span></div>
+                }
+                else
+                {
+                    <div class="use-selected">
+                        <div class="use-selected__title">
+                            <div class="use-avatar use-avatar--lg" style="@AvatarStyle(_selected.FullName)">@Initials(_selected.FullName)</div>
+                            <div><h3>@_selected.FullName</h3><span>@_selected.Email</span></div>
+                        </div>
+                        <div class="use-score-card use-score-card--@RiskTone(_selected)"><span>Security risk score</span><strong>@RiskScore(_selected)</strong><small>@RiskLevel(_selected)</small></div>
+                        <dl class="use-detail-list">
+                            <div><dt>Username</dt><dd>@_selected.UserName</dd></div>
+                            <div><dt>Type</dt><dd>@_selected.UserTypeCode</dd></div>
+                            <div><dt>Status</dt><dd>@(_selected.IsLockedOut ? "Locked" : _selected.StatusCode)</dd></div>
+                            <div><dt>MFA</dt><dd>@(_selected.MfaEnabled ? "Enabled" : "Disabled")</dd></div>
+                            <div><dt>Roles</dt><dd>@RoleNames(_selected).Count assigned</dd></div>
+                            <div><dt>Department</dt><dd>@Safe(_selected.Department, "—")</dd></div>
+                            <div><dt>Job title</dt><dd>@Safe(_selected.JobTitle, "—")</dd></div>
+                            <div><dt>Last login</dt><dd>@FormatRelative(_selected.LastLoginDateUtc)</dd></div>
+                            <div><dt>Failed attempts</dt><dd>@_selected.FailedLoginAttempts</dd></div>
+                        </dl>
+                        <div class="use-selected-actions">
+                            <button type="button" class="use-btn use-btn--primary" @onclick="() => ViewUser(_selected)"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open</button>
+                            <button type="button" class="use-btn use-btn--ghost" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                            @if (_selected.IsLockedOut)
                             {
-                                <span class="um-count-pill">+@(RoleNames(user).Count - 2)</span>
+                                <button type="button" class="use-btn use-btn--ghost" @onclick="() => ConfirmUnlock(_selected)"><i class="bi bi-unlock" aria-hidden="true"></i> Unlock</button>
                             }
-                            @if (RoleNames(user).Count == 0)
+                            else if (!_selected.MfaEnabled)
                             {
-                                <span class="text-muted">None</span>
+                                <button type="button" class="use-btn use-btn--ghost" @onclick="() => ConfirmToggleMfa(_selected)"><i class="bi bi-shield-check" aria-hidden="true"></i> Enable MFA</button>
                             }
                         </div>
-                    </Template>
-                </GridColumn>
+                    </div>
+                }
+            </section>
 
-                <GridColumn Field="LastLoginDateUtc" HeaderText="Last Login" Width="140">
-                    <Template Context="u">
-                        @{ var user = (UserDto)u; }
-                        <span class="um-date" title="@user.LastLoginDateUtc?.ToString("f")">@FormatRelative(user.LastLoginDateUtc)</span>
-                    </Template>
-                </GridColumn>
-
-                <GridColumn Field="CreatedDateUtc" HeaderText="Created" Width="120">
-                    <Template Context="u">
-                        @{ var user = (UserDto)u; }
-                        <span class="um-date">@user.CreatedDateUtc.ToString("MMM d, yyyy")</span>
-                    </Template>
-                </GridColumn>
-
-                <GridColumn HeaderText="" Width="128" AllowSorting="false" TextAlign="TextAlign.Right">
-                    <Template Context="u">
-                        @{ var user = (UserDto)u; }
-                        <div class="um-row-actions">
-                            <button class="ra-btn" title="View details" @onclick:stopPropagation="true" @onclick="() => ViewUser(user)">
-                                <i class="bi bi-eye" aria-hidden="true"></i>
-                            </button>
-                            <button class="ra-btn" title="Edit user" @onclick:stopPropagation="true" @onclick="() => OpenEdit(user)">
-                                <i class="bi bi-pencil" aria-hidden="true"></i>
-                            </button>
-                            <button class="ra-btn @(IsActive(user) ? "" : "ra-btn-success")" title="@(IsActive(user) ? "Deactivate" : "Activate")" @onclick:stopPropagation="true" @onclick="() => ConfirmToggleActive(user)">
-                                <i class="bi @(IsActive(user) ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i>
-                            </button>
-                            <button class="ra-btn ra-btn-danger" title="Delete user" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(user)">
-                                <i class="bi bi-trash3" aria-hidden="true"></i>
-                            </button>
-                        </div>
-                    </Template>
-                </GridColumn>
-            </GridColumns>
-        </SfGrid>
-    </div>
+            <section class="use-panel-card">
+                <span class="use-section-kicker">Security intelligence</span>
+                <div class="use-insight-list">
+                    @foreach (var insight in Insights)
+                    {
+                        <div class="use-insight"><i class="bi @insight.Icon" aria-hidden="true"></i><div><strong>@insight.Title</strong><span>@insight.Description</span></div></div>
+                    }
+                </div>
+            </section>
+        </aside>
+    </main>
 </div>
 
-<!-- â”€â”€ Create / Edit Dialog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
-<SfDialog @bind-Visible="_showForm"
-          Width="620px"
-          IsModal="true"
-          ShowCloseIcon="true"
-          CloseOnEscape="true">
-    <DialogTemplates>
-        <Header>
-            <span class="dlg-hd-icon">
-                <i class="bi @(_editUser is null ? "bi-person-plus" : "bi-pencil-square")" aria-hidden="true"></i>
-            </span>
-            @(_editUser is null ? "Create User" : $"Edit: {_editUser.FullName}")
-        </Header>
-        <Content>
-            <EditForm EditContext="_editContext">
+@if (_showForm)
+{
+    <div class="use-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="use-modal" role="dialog" aria-modal="true" aria-labelledby="use-form-title" @onclick:stopPropagation="true">
+            <div class="use-modal__header"><i class="bi @(_editUser is null ? "bi-person-plus" : "bi-pencil-square")" aria-hidden="true"></i><span id="use-form-title">@(_editUser is null ? "Create User" : $"Edit: {_editUser.FullName}")</span><button type="button" class="use-icon-btn use-icon-btn--light ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm EditContext="@_editContext" OnValidSubmit="SaveUserAsync">
                 <DataAnnotationsValidator />
-                <div class="um-modal-body"><div class="um-form-grid">
-                    @if (_editUser is null)
-                    {
-                        <div class="um-field">
-                            <label for="f-username">Username <span class="text-danger">*</span></label>
-                            <InputText id="f-username" @bind-Value="_form.UserName" class="um-input" placeholder="john.doe" />
+                <div class="use-modal__body">
+                    <div class="use-validation-note">
+                        <i class="bi bi-shield-check" aria-hidden="true"></i>
+                        <div>
+                            <strong>Enterprise validations enabled</strong>
+                            <span>Required identity, email format, phone format, profile, department, time zone, and locale checks are enforced before save.</span>
                         </div>
-                        <div class="um-field">
-                            <label for="f-email">Email <span class="text-danger">*</span></label>
-                            <InputText id="f-email" @bind-Value="_form.Email" class="um-input" placeholder="john.doe@company.com" />
-                        </div>
-                    }
-                    <div class="um-field">
-                        <label for="f-fullname">Full Name <span class="text-danger">*</span></label>
-                        <InputText id="f-fullname" @bind-Value="_form.FullName" class="um-input" placeholder="John Doe" />
                     </div>
-                    <div class="um-field">
-                        <label for="f-displayname">Display Name</label>
-                        <InputText id="f-displayname" @bind-Value="_form.DisplayName" class="um-input" placeholder="Optional nickname" />
-                    </div>
-                    @if (_editUser is null)
-                    {
-                        <div class="um-field">
-                            <label>User Type</label>
-                            <InputSelect @bind-Value="_form.UserTypeCode" class="um-input">
-                                @foreach (var type in _userTypes)
-                                {
-                                    <option value="@type">@type</option>
-                                }
-                            </InputSelect>
-                        </div>
-                        <div class="um-field"></div>
-                    }
-                    <div class="um-field">
-                        <label for="f-phone">Phone Number</label>
-                        <InputText id="f-phone" type="tel" @bind-Value="_form.PhoneNumber" class="um-input" placeholder="(555) 123-4567" inputmode="tel" autocomplete="tel" />
-                        <small class="text-muted">Use enterprise phone format: (555) 123-4567 or +1 555 123 4567 x123.</small>
-                    </div>
-                    <div class="um-field">
-                        <label for="f-title">Job Title</label>
-                        <InputText id="f-title" @bind-Value="_form.JobTitle" class="um-input" placeholder="Software Engineer" />
-                    </div>
-                    <div class="um-field">
-                        <label for="f-dept">Department</label>
-                        <InputSelect id="f-dept" @bind-Value="_form.Department" class="um-input">
-                            <option value="">Select departmentâ€¦</option>
-                            @foreach (var department in _departments)
-                            {
-                                <option value="@department.DepartmentName">@department.DepartmentName</option>
-                            }
-                        </InputSelect>
-                    </div>
-                    <div class="um-field">
-                        <label>Time Zone</label>
-                        <InputSelect @bind-Value="_form.TimeZoneCode" class="um-input">
-                            <option value="">Select time zoneâ€¦</option>
-                            @foreach (var timeZone in _tzOptions)
-                            {
-                                <option value="@timeZone">@timeZone</option>
-                            }
-                        </InputSelect>
-                    </div>
-                    <div class="um-field">
-                        <label>Locale</label>
-                        <InputSelect @bind-Value="_form.LocaleCode" class="um-input">
-                            <option value="">Select localeâ€¦</option>
-                            @foreach (var locale in _localeOptions)
-                            {
-                                <option value="@locale">@locale</option>
-                            }
-                        </InputSelect>
+                    <div class="use-form-grid">
+                        @if (_editUser is null)
+                        {
+                            <label class="use-field"><span>Username <em>*</em></span><InputText @bind-Value="_form.UserName" class="form-control" placeholder="john.doe" /></label>
+                            <label class="use-field"><span>Email <em>*</em></span><InputText @bind-Value="_form.Email" class="form-control" type="email" placeholder="john.doe@company.com" />@if (!string.IsNullOrWhiteSpace(_form.Email)) { <span class="@EmailHintClass">@EmailStatusText</span> }</label>
+                        }
+                        <label class="use-field"><span>Full Name <em>*</em></span><InputText @bind-Value="_form.FullName" class="form-control" placeholder="John Doe" /></label>
+                        <label class="use-field"><span>Display Name</span><InputText @bind-Value="_form.DisplayName" class="form-control" /></label>
+                        @if (_editUser is null)
+                        {
+                            <label class="use-field"><span>User Type</span><InputSelect @bind-Value="_form.UserTypeCode" class="form-select">@foreach (var type in _userTypes) { <option value="@type">@type</option> }</InputSelect></label>
+                        }
+                        <label class="use-field"><span>Phone Number</span><InputText @bind-Value="_form.PhoneNumber" @bind-Value:after="OnPhoneChanged" class="form-control" type="tel" placeholder="(555) 123-4567" />@if (!string.IsNullOrWhiteSpace(_form.PhoneNumber)) { <span class="@PhoneHintClass">@PhoneStatusText</span> }</label>
+                        <label class="use-field"><span>Job Title</span><InputText @bind-Value="_form.JobTitle" class="form-control" /></label>
+                        <label class="use-field"><span>Department</span><InputSelect @bind-Value="_form.Department" class="form-select"><option value="">Select department…</option>@foreach (var department in _departments) { <option value="@department.DepartmentName">@department.DepartmentName</option> }</InputSelect></label>
+                        <label class="use-field"><span>Time Zone</span><InputSelect @bind-Value="_form.TimeZoneCode" class="form-select"><option value="">Select time zone…</option>@foreach (var timeZone in _tzOptions) { <option value="@timeZone">@timeZone</option> }</InputSelect></label>
+                        <label class="use-field"><span>Locale</span><InputSelect @bind-Value="_form.LocaleCode" class="form-select"><option value="">Select locale…</option>@foreach (var locale in _localeOptions) { <option value="@locale">@locale</option> }</InputSelect></label>
                     </div>
                     @if (!string.IsNullOrEmpty(_formError))
                     {
-                        <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-                            <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_formError
-                        </div>
+                        <div class="alert alert-danger use-form-alert" style="border-left: 4px solid #dc3545; animation: use-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_formError</div>
                     }
-                </div></div>
+                </div>
+                <div class="use-modal__footer"><button type="button" class="use-btn use-btn--ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="use-btn use-btn--primary" disabled="@_saving">@if (_saving) { <span class="use-spin-sm" aria-hidden="true"></span> } @(_editUser is null ? "Create User" : "Save Changes")</button></div>
             </EditForm>
-        </Content>
-        <FooterTemplate>
-            <div class="um-modal-footer">
-                <button class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="SaveUserAsync" disabled="@_saving">
-                    @if (_saving) { <span class="um-spin" aria-hidden="true"></span> }
-                    @(_editUser is null ? "Create User" : "Save Changes")
-                </button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+    </div>
+}
 
-<SfDialog @bind-Visible="_showActionConfirm"
-          Width="420px"
-          IsModal="true"
-          ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-confirm-dialog">
-                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></div>
-                <div class="um-confirm-message">
-                    <h6>@_actionConfirmTitle</h6>
-                    <p>@_actionConfirmMessage</p>
-                </div>
-                <div class="um-modal-footer">
-                    <button class="um-btn um-btn-danger" @onclick="ExecuteConfirmedActionAsync" disabled="@_saving">
-                        @if (_saving) { <span class="um-spin" aria-hidden="true"></span> }
-                        Confirm
-                    </button>
-                    <button class="um-btn um-btn-ghost" @onclick="CloseActionConfirm">Cancel</button>
-                </div>
-            </div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+@if (_showConfirm)
+{
+    <div class="use-modal-backdrop" role="presentation" @onclick="CloseConfirm">
+        <div class="use-confirm" role="dialog" aria-modal="true" aria-labelledby="use-confirm-title" @onclick:stopPropagation="true">
+            <div class="use-modal__header"><i class="bi @_confirmIcon" aria-hidden="true"></i><span>Confirm action</span><button type="button" class="use-icon-btn use-icon-btn--light ms-auto" @onclick="CloseConfirm" disabled="@_saving"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <div class="use-confirm__body"><div class="@(_confirmDanger ? "use-confirm-icon use-confirm-icon--danger" : "use-confirm-icon")"><i class="bi @_confirmIcon" aria-hidden="true"></i></div><div><h3 id="use-confirm-title">@_confirmTitle</h3><p>@_confirmMessage</p></div></div>
+            <div class="use-modal__footer"><button type="button" class="use-btn use-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button><button type="button" class="@(_confirmDanger ? "use-btn use-btn--danger" : "use-btn use-btn--primary")" @onclick="ExecuteConfirmedActionAsync" disabled="@_saving">@if (_saving) { <span class="use-spin-sm" aria-hidden="true"></span> } Confirm</button></div>
+        </div>
+    </div>
+}
 
-<!-- â”€â”€ Delete Confirmation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
-<SfDialog @bind-Visible="_showDeleteConfirm"
-          Width="420px"
-          IsModal="true"
-          ShowCloseIcon="false"
-          CloseOnEscape="true">
-    <DialogTemplates>
-        <Content>
-            <div class="um-confirm-dialog">
-                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash" aria-hidden="true"></i></div>
-                <div class="um-confirm-message">
-                    <h6>Remove user?</h6>
-                    <p>Are you sure you want to deactivate <strong>@_deleteTarget?.FullName</strong>? This user will be disabled and lose access to the platform.</p>
-                </div>
-                <div class="um-modal-footer">
-                    <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">
-                        @if (_saving) { <span class="um-spin" aria-hidden="true"></span> }
-                        Remove User
-                    </button>
-                    <button class="um-btn um-btn-ghost" @onclick="() => _showDeleteConfirm = false">Cancel</button>
-                </div>
-            </div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
-
-<!-- â”€â”€ Toast â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
-<SfToast @ref="_toast" ID="um-toast" ShowCloseButton="true" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+<div class="use-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="use-toast @toast.CssClass"><i class="bi @(toast.CssClass.Contains("danger") ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i><span>@toast.Message</span><button type="button" @onclick="() => DismissToast(toast.Id)"><i class="bi bi-x" aria-hidden="true"></i></button></div>
+    }
+</div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
-    // â”€â”€ Well-known demo tenant (replace with auth context) â”€â”€â”€â”€
     private Guid _tenantId;
+    private Guid _currentUserId;
+    private static readonly string[] _userTypes = ["Internal", "External", "Service", "System"];
+    private static readonly string[] _tzOptions = ["UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "Europe/London", "Europe/Paris", "Asia/Tokyo", "Asia/Singapore"];
+    private static readonly string[] _localeOptions = ["en-US", "en-GB", "fr-FR", "de-DE", "ja-JP", "es-ES", "zh-CN"];
 
-    private static readonly string[] _userTypes    = ["Internal", "External", "Service", "System"];
-    private static readonly string[] _tzOptions    = ["UTC", "America/New_York", "America/Chicago",
-                                                       "America/Denver", "America/Los_Angeles",
-                                                       "Europe/London", "Europe/Paris",
-                                                       "Asia/Tokyo", "Asia/Singapore"];
-    private static readonly string[] _localeOptions = ["en-US", "en-GB", "fr-FR",
-                                                        "de-DE", "ja-JP", "es-ES", "zh-CN"];
+    private readonly TabDef[] _tabs = [new("all", "All", "bi-people"), new("risk", "High Risk", "bi-exclamation-octagon"), new("locked", "Locked", "bi-lock"), new("mfa", "MFA Disabled", "bi-shield-x"), new("stale", "Stale", "bi-hourglass-bottom"), new("department", "By Department", "bi-building")];
+    private readonly InsightDef[] _baselineInsights = [new("Least privilege", "Review active users with no assigned roles or stale activity.", "bi-shield-lock"), new("MFA mandate", "Keep every internal user protected with multi-factor authentication.", "bi-shield-check"), new("Access lifecycle", "Deactivate users who no longer require platform access.", "bi-arrow-left-right")];
 
-    // â”€â”€ Grid state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    private SfGrid<UserDto>? _grid;
-    private List<UserDto>    _users         = [];
-    private List<UserDto>    _filteredUsers = [];
-    private List<UserDto>    _selectedUsers = [];
+    private List<UserDto> _users = [];
     private List<DepartmentDto> _departments = [];
-    private bool             _loading       = true;
-    private string           _searchTerm    = string.Empty;
-    private string?          _activeKpiFilter;
-    private bool             _bulkMenuOpen;
+    private readonly List<UserDto> _selectedUsers = [];
+    private UserDto? _selected;
+    private bool _loading = true;
+    private string? _loadError;
     private CancellationTokenSource _cts = new();
 
-    // â”€â”€ Form state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    private bool     _showForm;
-    private bool     _saving;
-    private string   _formError = string.Empty;
+    private string _activeTab = "all";
+    private string _activeKpi = "all";
+    private string _searchTerm = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _typeFilter = string.Empty;
+    private string _riskFilter = string.Empty;
+    private string _sortMode = "risk";
+    private int _page = 1;
+    private const int PageSize = 12;
+    private Guid? _openActionMenuFor;
+
+    private bool _showForm;
+    private bool _saving;
+    private string _formError = string.Empty;
     private UserDto? _editUser;
     private UserFormModel _form = new();
     private EditContext _editContext = default!;
 
-    // â”€â”€ Delete confirm â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    private bool     _showDeleteConfirm;
-    private UserDto? _deleteTarget;
-    private bool _showActionConfirm;
-    private string _actionConfirmTitle = string.Empty;
-    private string _actionConfirmMessage = string.Empty;
+    private bool _showConfirm;
+    private bool _confirmDanger;
+    private string _confirmTitle = string.Empty;
+    private string _confirmMessage = string.Empty;
+    private string _confirmIcon = "bi-question-circle";
     private Func<Task>? _confirmedAction;
+    private readonly List<ToastMessage> _toasts = [];
 
-    // â”€â”€ Toast â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    private SfToast? _toast;
-
-    // â”€â”€ Lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _currentUserId = context.UserId;
         _editContext = new(_form);
         await LoadDepartmentsAsync();
         await LoadAsync();
@@ -454,116 +436,185 @@
         try
         {
             var departments = await Api.GetDepartmentsAsync(_tenantId, _cts.Token);
-            _departments = departments?
-                .Where(d => d.IsActive)
-                .OrderBy(d => d.DepartmentName)
-                .ToList() ?? [];
+            _departments = departments?.Where(d => d.IsActive).OrderBy(d => d.DepartmentName).ToList() ?? [];
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { await ShowToastAsync($"Failed to load departments: {ex.Message}", isError: true); }
+        catch (Exception ex) { ShowToast($"Failed to load departments: {ex.Message}", "use-toast--danger"); }
     }
 
     private async Task LoadAsync()
     {
         _loading = true;
+        _loadError = null;
         StateHasChanged();
         try
         {
             await _cts.CancelAsync();
             _cts = new CancellationTokenSource();
-            var result = await Api.SearchUsersAsync(_tenantId, _searchTerm.Trim(), _cts.Token);
+            var result = await Api.SearchUsersAsync(_tenantId, _searchTerm.Trim(), 1, 500, _cts.Token);
             _users = result?.Items.ToList() ?? [];
-            ApplyKpiFilter();
+            _selected = _selected is null ? _users.FirstOrDefault() : _users.FirstOrDefault(u => u.UserId == _selected.UserId) ?? _users.FirstOrDefault();
+            _selectedUsers.RemoveAll(selected => _users.All(u => u.UserId != selected.UserId));
+            _page = 1;
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        catch (Exception ex) { _loadError = $"Failed to load users: {ex.Message}"; }
         finally { _loading = false; StateHasChanged(); }
     }
 
     private Task RefreshAsync() => LoadAsync();
-
-    private void SetKpiFilter(string? filter)
-    {
-        _activeKpiFilter = _activeKpiFilter == filter ? null : filter;
-        ApplyKpiFilter();
-    }
-
-    private void ApplyKpiFilter()
-    {
-        _filteredUsers = _activeKpiFilter switch
-        {
-            "active" => _users.Where(IsActive).ToList(),
-            "locked" => _users.Where(u => u.IsLockedOut).ToList(),
-            "mfa" => _users.Where(u => u.MfaEnabled).ToList(),
-            _ => _users.ToList(),
-        };
-        StateHasChanged();
-    }
-
-    private string KpiClass(string? filter) => _activeKpiFilter == filter ? "kpi-card--active" : string.Empty;
 
     private System.Timers.Timer? _debounce;
     private async Task OnSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
     {
         _searchTerm = e.Value?.ToString() ?? string.Empty;
         _debounce?.Dispose();
-        _debounce = new System.Timers.Timer(380);
-        _debounce.Elapsed += async (_, _) =>
-        {
-            _debounce?.Dispose();
-            _debounce = null;
-            await InvokeAsync(LoadAsync);
-        };
-        _debounce.AutoReset = false;
+        _debounce = new System.Timers.Timer(360) { AutoReset = false };
+        _debounce.Elapsed += async (_, _) => { _debounce?.Dispose(); _debounce = null; await InvokeAsync(LoadAsync); };
         _debounce.Start();
         await Task.CompletedTask;
     }
 
-    // â”€â”€ Grid selection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    private void OnRowSelected(RowSelectEventArgs<UserDto> args)
+    private void SetActiveKpi(string key)
     {
-        if (!_selectedUsers.Any(u => u.UserId == args.Data.UserId))
-            _selectedUsers.Add(args.Data);
+        _activeKpi = _activeKpi == key ? "all" : key;
+        _activeTab = _activeKpi switch { "risk" => "risk", "locked" => "locked", "mfa" => "mfa", "stale" => "stale", _ => "all" };
+        _page = 1;
     }
 
-    private void OnRowDeselected(RowDeselectEventArgs<UserDto> args)
-        => _selectedUsers.RemoveAll(u => u.UserId == args.Data.UserId);
-
-    private void OnRowDoubleClick(RecordDoubleClickEventArgs<UserDto> args)
+    private void SetActiveTab(string key)
     {
-        if (args.RowData is not null)
-            OpenEdit(args.RowData);
+        _activeTab = key;
+        _activeKpi = key is "risk" or "locked" or "mfa" or "stale" ? key : "all";
+        _page = 1;
     }
 
-    // â”€â”€ Navigation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    private void SetDashboardFocus(string tab, string sortMode)
+    {
+        _activeTab = tab;
+        _activeKpi = tab is "risk" or "locked" or "mfa" or "stale" ? tab : "all";
+        _sortMode = sortMode;
+        _page = 1;
+    }
+
+    private void ApplyFilters() => _page = 1;
+
+    private void ClearFilters()
+    {
+        _statusFilter = string.Empty;
+        _typeFilter = string.Empty;
+        _riskFilter = string.Empty;
+        _sortMode = "risk";
+        _activeTab = "all";
+        _activeKpi = "all";
+        _page = 1;
+    }
+
+    private bool HasFilters => !string.IsNullOrEmpty(_statusFilter) || !string.IsNullOrEmpty(_typeFilter) || !string.IsNullOrEmpty(_riskFilter) || _sortMode != "risk" || _activeTab != "all";
+    private string PhoneStatusText => IsPhoneValid(_form.PhoneNumber) ? $"Phone formatted as {NormalizePhone(_form.PhoneNumber)}" : "Enter a valid 10-digit phone number.";
+    private string PhoneHintClass => IsPhoneValid(_form.PhoneNumber) ? "use-field-hint use-hint-good" : "use-field-hint use-hint-bad";
+    private string EmailStatusText => IsEmailValid(_form.Email) ? "Email format verified." : "Enter a valid business email address.";
+    private string EmailHintClass => IsEmailValid(_form.Email) ? "use-field-hint use-hint-good" : "use-field-hint use-hint-bad";
+
+    private void FilterByDepartment(string department)
+    {
+        _searchTerm = department == "Unassigned" ? string.Empty : department;
+        _activeTab = "all";
+        _activeKpi = "all";
+        _page = 1;
+        _ = LoadAsync();
+    }
+
+    private IEnumerable<UserDto> TabFiltered => _activeTab switch
+    {
+        "risk" => _users.Where(IsHighRisk),
+        "locked" => _users.Where(u => u.IsLockedOut),
+        "mfa" => _users.Where(u => !u.MfaEnabled),
+        "stale" => _users.Where(IsStale),
+        "noroles" => _users.Where(u => IsActive(u) && RoleNames(u).Count == 0),
+        _ => _users,
+    };
+
+    private IEnumerable<UserDto> FilteredUsers
+    {
+        get
+        {
+            var query = TabFiltered;
+            if (!string.IsNullOrEmpty(_statusFilter)) query = query.Where(u => string.Equals(u.StatusCode, _statusFilter, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrEmpty(_typeFilter)) query = query.Where(u => string.Equals(u.UserTypeCode, _typeFilter, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrEmpty(_riskFilter)) query = query.Where(u => RiskLevel(u) == _riskFilter);
+            return _sortMode switch
+            {
+                "name" => query.OrderBy(u => u.FullName),
+                "login" => query.OrderByDescending(u => u.LastLoginDateUtc ?? DateTime.MinValue),
+                "created" => query.OrderByDescending(u => u.CreatedDateUtc),
+                "roles" => query.OrderByDescending(u => RoleNames(u).Count).ThenBy(u => u.FullName),
+                _ => query.OrderByDescending(RiskScore).ThenBy(u => u.FullName),
+            };
+        }
+    }
+
+    private IEnumerable<UserDto> PagedUsers => FilteredUsers.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredUsers.Count() / (double)PageSize));
+    private void PreviousPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private string ActiveViewTitle => _tabs.FirstOrDefault(t => t.Key == _activeTab)?.Label ?? (_activeTab == "noroles" ? "Role gaps" : "Users");
+
+    private int TabCount(string key) => key switch
+    {
+        "risk" => _users.Count(IsHighRisk),
+        "locked" => _users.Count(u => u.IsLockedOut),
+        "mfa" => _users.Count(u => !u.MfaEnabled),
+        "stale" => _users.Count(IsStale),
+        "department" => DepartmentGroups.Count,
+        _ => _users.Count,
+    };
+
+    private IEnumerable<string> StatusOptions => _users.Select(u => u.StatusCode).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    private IEnumerable<string> TypeOptions => _users.Select(u => u.UserTypeCode).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+
+    private List<DeptGroup> DepartmentGroups
+    {
+        get
+        {
+            var groups = _users.GroupBy(u => string.IsNullOrWhiteSpace(u.Department) ? "Unassigned" : u.Department!).ToList();
+            var max = Math.Max(1, groups.Count == 0 ? 1 : groups.Max(g => g.Count()));
+            return groups.Select(g => new DeptGroup(g.Key, g.Count(), g.Count(IsHighRisk), g.Count(u => !u.MfaEnabled), (int)Math.Round(g.Count() * 100.0 / max))).OrderByDescending(g => g.HighRisk).ThenByDescending(g => g.Count).ToList();
+        }
+    }
+
+    private void SelectRow(UserDto u) { _selected = u; _openActionMenuFor = null; }
+    private bool IsSelected(UserDto u) => _selectedUsers.Any(x => x.UserId == u.UserId);
+    private void ToggleSelect(UserDto u) { if (IsSelected(u)) _selectedUsers.RemoveAll(x => x.UserId == u.UserId); else _selectedUsers.Add(u); }
+    private bool AllPageSelected => PagedUsers.Any() && PagedUsers.All(IsSelected);
+    private void ToggleSelectAllPage()
+    {
+        var page = PagedUsers.ToList();
+        if (page.All(IsSelected)) foreach (var u in page) _selectedUsers.RemoveAll(x => x.UserId == u.UserId);
+        else foreach (var u in page.Where(u => !IsSelected(u))) _selectedUsers.Add(u);
+    }
+
+    private void ToggleActionMenu(UserDto u) => _openActionMenuFor = _openActionMenuFor == u.UserId ? null : u.UserId;
     private void ViewUser(UserDto u) => Nav.NavigateTo($"/tenant/security/users/{u.UserId}");
 
-    // â”€â”€ Create / Edit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private void OpenCreate()
     {
-        _editUser  = null;
+        _editUser = null;
         _form = new UserFormModel();
         _editContext = new(_form);
         _formError = string.Empty;
-        _showForm  = true;
+        _showForm = true;
+        _openActionMenuFor = null;
     }
 
     private void OpenEdit(UserDto u)
     {
         _editUser = u;
-        _form = new UserFormModel
-        {
-            FullName     = u.FullName,
-            DisplayName  = u.DisplayName,
-            PhoneNumber  = u.PhoneNumber,
-            JobTitle     = u.JobTitle,
-            Department   = u.Department,
-            TimeZoneCode = u.TimeZoneCode,
-            LocaleCode   = u.LocaleCode,
-        };
+        _form = new UserFormModel { FullName = u.FullName, DisplayName = u.DisplayName, PhoneNumber = u.PhoneNumber, JobTitle = u.JobTitle, Department = u.Department, TimeZoneCode = u.TimeZoneCode, LocaleCode = u.LocaleCode };
         _editContext = new(_form);
         _formError = string.Empty;
-        _showForm  = true;
+        _showForm = true;
+        _openActionMenuFor = null;
     }
 
     private void CloseForm() { _showForm = false; _formError = string.Empty; }
@@ -572,235 +623,200 @@
     {
         if (_saving) return;
         _formError = string.Empty;
-
-        if (!_editContext.Validate())
-        {
-            return;
-        }
-
         _saving = true;
         try
         {
             if (_editUser is null)
             {
-                var req = new CreateUserRequest
-                {
-                    TenantId     = _tenantId,
-                    UserName     = _form.UserName.Trim(),
-                    Email        = _form.Email.Trim(),
-                    FullName     = _form.FullName.Trim(),
-                    DisplayName  = _form.DisplayName?.Trim(),
-                    PhoneNumber  = _form.PhoneNumber?.Trim(),
-                    JobTitle     = _form.JobTitle?.Trim(),
-                    Department   = _form.Department?.Trim(),
-                    UserTypeCode = _form.UserTypeCode,
-                    TimeZoneCode = _form.TimeZoneCode,
-                    LocaleCode   = _form.LocaleCode,
-                };
-                var id = await Api.CreateUserAsync(req);
+                var req = new CreateUserRequest { TenantId = _tenantId, UserName = _form.UserName.Trim(), Email = _form.Email.Trim(), FullName = _form.FullName.Trim(), DisplayName = _form.DisplayName?.Trim(), PhoneNumber = _form.PhoneNumber?.Trim(), JobTitle = _form.JobTitle?.Trim(), Department = _form.Department?.Trim(), UserTypeCode = _form.UserTypeCode, TimeZoneCode = _form.TimeZoneCode, LocaleCode = _form.LocaleCode };
+                await Api.CreateUserAsync(req);
                 CloseForm();
-                await ShowToastAsync($"User '{req.FullName}' created.");
+                ShowToast($"User '{req.FullName}' created.", "use-toast--success");
             }
             else
             {
-                var req = new UpdateUserRequest
-                {
-                    UserId       = _editUser.UserId,
-                    FullName     = _form.FullName.Trim(),
-                    DisplayName  = _form.DisplayName?.Trim(),
-                    PhoneNumber  = _form.PhoneNumber?.Trim(),
-                    JobTitle     = _form.JobTitle?.Trim(),
-                    Department   = _form.Department?.Trim(),
-                    TimeZoneCode = _form.TimeZoneCode,
-                    LocaleCode   = _form.LocaleCode,
-                };
+                var req = new UpdateUserRequest { UserId = _editUser.UserId, FullName = _form.FullName.Trim(), DisplayName = _form.DisplayName?.Trim(), PhoneNumber = _form.PhoneNumber?.Trim(), JobTitle = _form.JobTitle?.Trim(), Department = _form.Department?.Trim(), TimeZoneCode = _form.TimeZoneCode, LocaleCode = _form.LocaleCode };
                 await Api.UpdateUserAsync(_editUser.UserId, req);
                 CloseForm();
-                await ShowToastAsync($"User '{req.FullName}' updated.");
+                ShowToast($"User '{req.FullName}' updated.", "use-toast--success");
             }
             await LoadAsync();
         }
-        catch (Exception ex) { _formError = $"Error: {ex.Message}"; }
+        catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; }
         finally { _saving = false; }
     }
 
-    // â”€â”€ Activate / Deactivate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    private static bool IsActive(UserDto u)
-        => u.StatusCode.Equals("Active", StringComparison.OrdinalIgnoreCase);
+    private void OpenConfirm(string title, string message, string icon, bool danger, Func<Task> action)
+    {
+        _confirmTitle = title;
+        _confirmMessage = message;
+        _confirmIcon = icon;
+        _confirmDanger = danger;
+        _confirmedAction = action;
+        _showConfirm = true;
+        _openActionMenuFor = null;
+    }
+
+    private void CloseConfirm() { _showConfirm = false; _confirmedAction = null; }
+
+    private async Task ExecuteConfirmedActionAsync()
+    {
+        if (_confirmedAction is null) return;
+        _saving = true;
+        try { await _confirmedAction.Invoke(); }
+        finally { _saving = false; }
+    }
 
     private void ConfirmToggleActive(UserDto u)
     {
         var activate = !IsActive(u);
-        _actionConfirmTitle = activate ? "Activate user?" : "Deactivate user?";
-        _actionConfirmMessage = $"{(activate ? "Activate" : "Deactivate")} {u.FullName}?";
-        _confirmedAction = () => ToggleActiveAsync(u);
-        _showActionConfirm = true;
+        OpenConfirm(activate ? "Activate user?" : "Deactivate user?", $"{(activate ? "Activate" : "Deactivate")} access for {u.FullName}?", activate ? "bi-check-circle" : "bi-slash-circle", !activate, () => ToggleActiveAsync(u, activate));
     }
 
-    private async Task ToggleActiveAsync(UserDto u)
+    private async Task ToggleActiveAsync(UserDto u, bool activate)
     {
         try
         {
-            var activate = !IsActive(u);
-            await Api.SetUserActiveAsync(u.UserId, activate);
-            CloseActionConfirm();
-            await ShowToastAsync($"User '{u.FullName}' {(activate ? "activated" : "deactivated")}.");
+            await Api.SetUserActiveAsync(u.UserId, activate, _currentUserId);
+            CloseConfirm();
+            ShowToast($"User '{u.FullName}' {(activate ? "activated" : "deactivated")}." , "use-toast--success");
             await LoadAsync();
         }
-        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        catch (Exception ex) { CloseConfirm(); ShowToast($"Status update failed: {ex.Message}", "use-toast--danger"); }
     }
 
-    // â”€â”€ Delete â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    private void ConfirmDelete(UserDto u) { _deleteTarget = u; _showDeleteConfirm = true; }
-
-    private async Task ExecuteDeleteAsync()
+    private void ConfirmLock(UserDto u) => OpenConfirm("Lock account?", $"Lock {u.FullName}'s account and block sign-in?", "bi-lock", true, () => LockAsync(u));
+    private async Task LockAsync(UserDto u)
     {
-        if (_deleteTarget is null) return;
-        _saving = true;
-        try
-        {
-            await Api.SetUserActiveAsync(_deleteTarget.UserId, false);
-            _showDeleteConfirm = false;
-            await ShowToastAsync($"User '{_deleteTarget.FullName}' removed.");
-            await LoadAsync();
-        }
-        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
-        finally { _saving = false; }
+        try { await Api.LockUserAsync(u.UserId, null, _currentUserId); CloseConfirm(); ShowToast($"User '{u.FullName}' locked.", "use-toast--success"); await LoadAsync(); }
+        catch (Exception ex) { CloseConfirm(); ShowToast($"Lock failed: {ex.Message}", "use-toast--danger"); }
     }
 
-    // â”€â”€ Bulk actions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    private async Task BulkEnableAsync()  => await BulkToggleAsync(true);
-    private async Task BulkDisableAsync() => await BulkToggleAsync(false);
-
-    private void ConfirmBulkToggle(bool activate)
+    private void ConfirmUnlock(UserDto u) => OpenConfirm("Unlock account?", $"Restore sign-in access for {u.FullName}?", "bi-unlock", false, () => UnlockAsync(u));
+    private async Task UnlockAsync(UserDto u)
     {
-        _bulkMenuOpen = false;
-        _actionConfirmTitle = activate ? "Enable selected users?" : "Disable selected users?";
-        _actionConfirmMessage = $"{(activate ? "Enable" : "Disable")} {_selectedUsers.Count} selected user(s)?";
-        _confirmedAction = () => BulkToggleAsync(activate);
-        _showActionConfirm = true;
+        try { await Api.UnlockUserAsync(u.UserId, _currentUserId); CloseConfirm(); ShowToast($"User '{u.FullName}' unlocked.", "use-toast--success"); await LoadAsync(); }
+        catch (Exception ex) { CloseConfirm(); ShowToast($"Unlock failed: {ex.Message}", "use-toast--danger"); }
     }
 
-    private void ConfirmBulkDelete()
+    private void ConfirmToggleMfa(UserDto u)
     {
-        _bulkMenuOpen = false;
-        _actionConfirmTitle = "Remove selected users?";
-        _actionConfirmMessage = $"Disable and remove access for {_selectedUsers.Count} selected user(s)?";
-        _confirmedAction = BulkDeleteAsync;
-        _showActionConfirm = true;
+        var enable = !u.MfaEnabled;
+        OpenConfirm(enable ? "Enable MFA?" : "Disable MFA?", $"{(enable ? "Enable" : "Disable")} multi-factor authentication for {u.FullName}?", enable ? "bi-shield-check" : "bi-shield-x", !enable, () => ToggleMfaAsync(u, enable));
     }
 
+    private async Task ToggleMfaAsync(UserDto u, bool enable)
+    {
+        try { await Api.SetUserMfaAsync(u.UserId, enable, _currentUserId); CloseConfirm(); ShowToast($"MFA {(enable ? "enabled" : "disabled")} for '{u.FullName}'.", "use-toast--success"); await LoadAsync(); }
+        catch (Exception ex) { CloseConfirm(); ShowToast($"MFA update failed: {ex.Message}", "use-toast--danger"); }
+    }
+
+    private void ConfirmDelete(UserDto u) => OpenConfirm("Remove user access?", $"Deactivate {u.FullName} and revoke platform access?", "bi-trash3", true, () => DeleteAsync(u));
+    private async Task DeleteAsync(UserDto u)
+    {
+        try { await Api.SetUserActiveAsync(u.UserId, false, _currentUserId); CloseConfirm(); ShowToast($"User '{u.FullName}' removed.", "use-toast--success"); await LoadAsync(); }
+        catch (Exception ex) { CloseConfirm(); ShowToast($"Remove failed: {ex.Message}", "use-toast--danger"); }
+    }
+
+    private void ConfirmBulkToggle(bool activate) => OpenConfirm(activate ? "Enable selected users?" : "Disable selected users?", $"{(activate ? "Enable" : "Disable")} {_selectedUsers.Count} selected user(s)?", activate ? "bi-check-circle" : "bi-slash-circle", !activate, () => BulkToggleAsync(activate));
     private async Task BulkToggleAsync(bool activate)
     {
-        _bulkMenuOpen = false;
         var targets = _selectedUsers.ToList();
-        foreach (var u in targets)
-            try { await Api.SetUserActiveAsync(u.UserId, activate); } catch { /* continue */ }
+        var failures = 0;
+        foreach (var u in targets) try { await Api.SetUserActiveAsync(u.UserId, activate, _currentUserId); } catch { failures++; }
         _selectedUsers.Clear();
-        CloseActionConfirm();
-        await ShowToastAsync($"{(activate ? "Activated" : "Disabled")} {targets.Count} user(s).");
+        CloseConfirm();
+        ShowToast($"{(activate ? "Enabled" : "Disabled")} {targets.Count - failures} user(s)." + (failures > 0 ? $" {failures} failed." : string.Empty), failures > 0 ? "use-toast--danger" : "use-toast--success");
         await LoadAsync();
     }
 
+    private void ConfirmBulkDelete() => OpenConfirm("Remove selected users?", $"Disable and revoke access for {_selectedUsers.Count} selected user(s)?", "bi-trash3", true, BulkDeleteAsync);
     private async Task BulkDeleteAsync()
     {
-        _bulkMenuOpen = false;
         var targets = _selectedUsers.ToList();
-        foreach (var u in targets)
-            try { await Api.SetUserActiveAsync(u.UserId, false); } catch { /* continue */ }
+        var failures = 0;
+        foreach (var u in targets) try { await Api.SetUserActiveAsync(u.UserId, false, _currentUserId); } catch { failures++; }
         _selectedUsers.Clear();
-        CloseActionConfirm();
-        await ShowToastAsync($"Removed {targets.Count} user(s).");
+        CloseConfirm();
+        ShowToast($"Removed {targets.Count - failures} user(s)." + (failures > 0 ? $" {failures} failed." : string.Empty), failures > 0 ? "use-toast--danger" : "use-toast--success");
         await LoadAsync();
     }
 
-    private void CloseActionConfirm()
+    private void ShowToast(string message, string cssClass)
     {
-        _showActionConfirm = false;
-        _confirmedAction = null;
+        var toast = new ToastMessage(Guid.NewGuid(), message, cssClass);
+        _toasts.Add(toast);
+        _ = Task.Run(async () => { await Task.Delay(5000); await InvokeAsync(() => DismissToast(toast.Id)); });
     }
 
-    private async Task ExecuteConfirmedActionAsync()
+    private void DismissToast(Guid id) { _toasts.RemoveAll(t => t.Id == id); StateHasChanged(); }
+
+    private static bool IsActive(UserDto u) => u.StatusCode.Equals("Active", StringComparison.OrdinalIgnoreCase);
+    private static bool IsStale(UserDto u) => u.LastLoginDateUtc is null || (DateTime.UtcNow - u.LastLoginDateUtc.Value).TotalDays >= 30;
+
+    private static int RiskScore(UserDto u)
     {
-        if (_confirmedAction is not null)
-            await _confirmedAction.Invoke();
+        var score = 0;
+        if (u.IsLockedOut) score += 40;
+        if (!u.MfaEnabled) score += 25;
+        if (u.LastLoginDateUtc is null) score += 18;
+        else if ((DateTime.UtcNow - u.LastLoginDateUtc.Value).TotalDays >= 30) score += 12;
+        if (u.AssignedRoleCount == 0 && IsActive(u)) score += 10;
+        if (u.FailedLoginAttempts >= 3) score += 10;
+        if (u.StatusCode.Equals("Pending", StringComparison.OrdinalIgnoreCase)) score += 8;
+        return Math.Min(100, score);
     }
 
-    // â”€â”€ Display helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    private static string Initials(string? name) =>
-        string.IsNullOrWhiteSpace(name) ? "?" :
-        string.Concat(name.Split(' ', StringSplitOptions.RemoveEmptyEntries)
-                          .Take(2).Select(w => char.ToUpperInvariant(w[0])));
+    private static string RiskLevel(UserDto u) => RiskScore(u) switch { >= 60 => "Critical", >= 40 => "High", >= 20 => "Medium", _ => "Low" };
+    private static string RiskTone(UserDto u) => RiskLevel(u) switch { "Critical" => "red", "High" => "amber", "Medium" => "cyan", _ => "green" };
+    private static bool IsHighRisk(UserDto u) => RiskScore(u) >= 40;
 
-    private static readonly string[] _avatarColors =
-        ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#06b6d4", "#6366f1", "#ec4899"];
-
-    private static string AvatarStyle(string? name)
+    private IEnumerable<InsightDef> Insights
     {
-        var idx = Math.Abs((name ?? string.Empty).GetHashCode()) % _avatarColors.Length;
-        return $"background:{_avatarColors[idx]}";
-    }
-
-    private static string TypeBadgeClass(string type) => type.ToLowerInvariant() switch
-    {
-        "internal" => "badge-blue",
-        "external" => "badge-neutral",
-        "service"  => "badge-amber",
-        "system"   => "badge-red",
-        _          => "badge-neutral",
-    };
-
-    private static string StatusBadgeClass(string s) => s.ToLowerInvariant() switch
-    {
-        "active"  => "badge-green",
-        "pending" => "badge-amber",
-        _         => "badge-neutral",
-    };
-
-    private static string StatusIcon(string s) => s.ToLowerInvariant() switch
-    {
-        "active"   => "bi-check-circle-fill",
-        "inactive" => "bi-dash-circle",
-        "pending"  => "bi-clock",
-        _          => "bi-circle",
-    };
-
-    private static string FormatRelative(DateTime? dt) =>
-        dt is null ? "Never" :
-        (DateTime.UtcNow - dt.Value) switch
+        get
         {
-            var d when d.TotalMinutes < 1  => "Just now",
-            var d when d.TotalHours   < 1  => $"{(int)d.TotalMinutes}m ago",
-            var d when d.TotalDays    < 1  => $"{(int)d.TotalHours}h ago",
-            var d when d.TotalDays    < 7  => $"{(int)d.TotalDays}d ago",
-            var d when d.TotalDays    < 30 => $"{(int)(d.TotalDays / 7)}w ago",
-            _                              => dt.Value.ToString("MMM d, yyyy"),
-        };
-
-    private static IReadOnlyList<string> RoleNames(UserDto user)
-        => string.IsNullOrWhiteSpace(user.AssignedRoleNames)
-            ? []
-            : user.AssignedRoleNames
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Where(roleName => !string.IsNullOrWhiteSpace(roleName))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-    private static string RoleTitle(UserDto user)
-        => RoleNames(user).Count == 0 ? "No assigned roles" : string.Join(", ", RoleNames(user));
-
-    private async Task ShowToastAsync(string message, bool isError = false)
-    {
-        if (_toast is null) return;
-        await _toast.ShowAsync(new ToastModel
-        {
-            Content  = message,
-            CssClass = isError ? "e-toast-danger" : "e-toast-success",
-            Timeout  = 4000,
-        });
+            var list = new List<InsightDef>();
+            var mfaOff = _users.Count(u => !u.MfaEnabled);
+            if (mfaOff > 0) list.Add(new("MFA gaps", $"{mfaOff} user(s) need MFA enabled.", "bi-shield-x"));
+            var locked = _users.Count(u => u.IsLockedOut);
+            if (locked > 0) list.Add(new("Locked accounts", $"{locked} user(s) are blocked from sign-in.", "bi-lock"));
+            var stale = _users.Count(IsStale);
+            if (stale > 0) list.Add(new("Dormant access", $"{stale} user(s) have stale or no login activity.", "bi-hourglass-bottom"));
+            var noRoles = _users.Count(u => IsActive(u) && RoleNames(u).Count == 0);
+            if (noRoles > 0) list.Add(new("Role gaps", $"{noRoles} active user(s) have no assigned roles.", "bi-diagram-3"));
+            list.AddRange(_baselineInsights);
+            return list.Take(5);
+        }
     }
 
-    // â”€â”€ Form models â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    private static string Initials(string? name) => string.IsNullOrWhiteSpace(name) ? "?" : string.Concat(name.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(w => char.ToUpperInvariant(w[0])));
+    private static readonly string[] _avatarColors = ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#06b6d4", "#6366f1", "#ec4899"];
+    private static string AvatarStyle(string? name) => $"background:{_avatarColors[Math.Abs((name ?? string.Empty).GetHashCode()) % _avatarColors.Length]}";
+    private static string TypeBadgeClass(string? type) => (type ?? string.Empty).ToLowerInvariant() switch { "internal" => "use-pill--blue", "external" => "use-pill--neutral", "service" => "use-pill--amber", "system" => "use-pill--red", _ => "use-pill--neutral" };
+    private static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private void OnPhoneChanged() { if (IsPhoneValid(_form.PhoneNumber)) _form.PhoneNumber = NormalizePhone(_form.PhoneNumber); }
+    private static bool IsPhoneValid(string? value) { if (string.IsNullOrWhiteSpace(value)) return true; var digits = new string(value.Where(char.IsDigit).ToArray()); if (digits.Length == 11 && digits[0] == '1') digits = digits[1..]; return digits.Length == 10; }
+    private static string? NormalizePhone(string? value) { if (string.IsNullOrWhiteSpace(value)) return null; var digits = new string(value.Where(char.IsDigit).ToArray()); if (digits.Length == 11 && digits[0] == '1') digits = digits[1..]; return digits.Length == 10 ? $"({digits[..3]}) {digits.Substring(3, 3)}-{digits[6..]}" : value.Trim(); }
+    private static bool IsEmailValid(string? value) => string.IsNullOrWhiteSpace(value) || new EmailAddressAttribute().IsValid(value.Trim());
+
+    private static string FormatRelative(DateTime? dt) => dt is null ? "Never" : (DateTime.UtcNow - dt.Value) switch
+    {
+        var d when d.TotalMinutes < 1 => "Just now",
+        var d when d.TotalHours < 1 => $"{(int)d.TotalMinutes}m ago",
+        var d when d.TotalDays < 1 => $"{(int)d.TotalHours}h ago",
+        var d when d.TotalDays < 7 => $"{(int)d.TotalDays}d ago",
+        var d when d.TotalDays < 30 => $"{(int)(d.TotalDays / 7)}w ago",
+        _ => dt.Value.ToString("MMM d, yyyy"),
+    };
+
+    private static IReadOnlyList<string> RoleNames(UserDto user) => string.IsNullOrWhiteSpace(user.AssignedRoleNames) ? [] : user.AssignedRoleNames.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(roleName => !string.IsNullOrWhiteSpace(roleName)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    private static string RoleTitle(UserDto user) => RoleNames(user).Count == 0 ? "No assigned roles" : string.Join(", ", RoleNames(user));
+
+    private RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string tone) => @<button type="button" class="use-kpi-card use-kpi-card--@tone @(_activeKpi == key ? "use-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveKpi(key)"><div class="use-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></div><div class="use-kpi-body"><span class="use-kpi-label">@label</span><strong class="use-kpi-value">@value</strong><span class="use-kpi-sub">@subtitle</span></div></button>;
+    private RenderFragment WorkflowButton(string title, string description, string icon, System.Action onClick) => @<button type="button" class="use-workflow" @onclick="onClick"><div class="use-workflow-icon"><i class="bi @icon" aria-hidden="true"></i></div><div class="use-workflow-meta"><strong>@title</strong><span>@description</span></div></button>;
+    private RenderFragment RiskBadge(UserDto u) => @<span class="use-risk-badge use-risk-badge--@RiskTone(u)" title="Security risk score: @RiskScore(u)/100"><i class="bi bi-shield-fill" aria-hidden="true"></i> @RiskLevel(u)</span>;
+    private RenderFragment StatusBadge(UserDto u) => u.IsLockedOut ? @<span class="use-pill use-pill--amber"><i class="bi bi-lock-fill" aria-hidden="true"></i> Locked</span> : @<span class="use-pill @(u.StatusCode.ToLowerInvariant() switch { "active" => "use-pill--green", "pending" => "use-pill--amber", _ => "use-pill--neutral" })">@u.StatusCode</span>;
+
     private sealed class UserFormModel
     {
         [Required(ErrorMessage = "Full Name is required.")]
@@ -821,7 +837,6 @@
         public string? Department { get; set; }
 
         public string? TimeZoneCode { get; set; }
-
         public string? LocaleCode { get; set; }
 
         [Required(ErrorMessage = "Username is required.")]
@@ -836,14 +851,8 @@
         public string UserTypeCode { get; set; } = "Internal";
     }
 
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
-    }
+    private sealed record TabDef(string Key, string Label, string Icon);
+    private sealed record InsightDef(string Title, string Description, string Icon);
+    private sealed record ToastMessage(Guid Id, string Message, string CssClass);
+    private sealed record DeptGroup(string Name, int Count, int HighRisk, int MfaOff, int Percent);
 }

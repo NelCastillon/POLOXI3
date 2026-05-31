@@ -1,0 +1,340 @@
+@page "/accounts/directory"
+@page "/accounts/{Id:guid}/directory"
+@namespace Ams.Web.Components.Pages.Accounts
+@using Ams.Application.Common.Dtos
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationContextService NavContext
+@inject CurrentUserContext CurrentUser
+
+<PageTitle>Account Directory</PageTitle>
+
+<div class="adir-page">
+    <section class="adir-hero">
+        <div class="adir-hero-copy">
+            <span class="adir-eyebrow"><i class="bi bi-list-ul" aria-hidden="true"></i> Tenant Admin · Account Directory</span>
+            <h1>Account Directory</h1>
+            <p>Search, segment, prioritize, and act on the customer and prospect book from a focused enterprise directory experience.</p>
+            <div class="adir-hero-meta">
+                <span><i class="bi bi-buildings" aria-hidden="true"></i>@_accounts.Count.ToString("N0") accounts</span>
+                <span><i class="bi bi-gem" aria-hidden="true"></i>@StrategicAccounts.ToString("N0") strategic</span>
+                <span><i class="bi bi-shield-exclamation" aria-hidden="true"></i>@AtRiskAccounts.ToString("N0") risk</span>
+                <span><i class="bi bi-cash-stack" aria-hidden="true"></i>@TotalRevenue.ToString("C0") revenue</span>
+            </div>
+        </div>
+        <div class="adir-hero-actions">
+            <button type="button" class="adir-btn adir-btn-light" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "adir-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="adir-btn adir-btn-light" @onclick="ResetDirectory"><i class="bi bi-sliders" aria-hidden="true"></i> Reset</button>
+            <button type="button" class="adir-btn adir-btn-primary" @onclick='() => Nav.NavigateTo("/accounts/new")'><i class="bi bi-plus-lg" aria-hidden="true"></i> New Account</button>
+        </div>
+    </section>
+
+    <section class="adir-kpis" aria-label="Account directory KPIs">
+        @KpiCard("Total Accounts", _accounts.Count.ToString("N0"), "Active book and prospect records", "bi-buildings", "blue")
+        @KpiCard("Strategic", StrategicAccounts.ToString("N0"), "Enterprise, key, or high revenue", "bi-gem", "purple")
+        @KpiCard("At Risk", AtRiskAccounts.ToString("N0"), "Suspended, inactive, or at-risk", "bi-exclamation-triangle", AtRiskAccounts > 0 ? "red" : "green")
+        @KpiCard("Pipeline", PipelineAccounts.ToString("N0"), "Prospect and lead-stage accounts", "bi-funnel", "amber")
+        @KpiCard("Missing Contact", ContactGaps.ToString("N0"), "No email and no phone", "bi-person-x", ContactGaps > 0 ? "red" : "green")
+        @KpiCard("Revenue", TotalRevenue.ToString("C0"), "Known annual revenue profile", "bi-cash-stack", "green")
+    </section>
+
+    <section class="adir-workflows" aria-label="Directory workflows">
+        <button type="button" class="adir-workflow" @onclick='() => SetTab("priority")'><i class="bi bi-lightning-charge" aria-hidden="true"></i><span><strong>Priority review</strong><small>Highest importance accounts first</small></span></button>
+        <button type="button" class="adir-workflow" @onclick='() => SetTab("strategic")'><i class="bi bi-stars" aria-hidden="true"></i><span><strong>Strategic coverage</strong><small>Enterprise and key relationships</small></span></button>
+        <button type="button" class="adir-workflow" @onclick='() => SetTab("risk")'><i class="bi bi-shield-exclamation" aria-hidden="true"></i><span><strong>Resolve risk</strong><small>Lifecycle and inactivity concerns</small></span></button>
+        <button type="button" class="adir-workflow" @onclick='() => SetTab("contact")'><i class="bi bi-envelope-exclamation" aria-hidden="true"></i><span><strong>Fix contact gaps</strong><small>Accounts missing contact readiness</small></span></button>
+        <button type="button" class="adir-workflow" @onclick='() => SetTab("recent")'><i class="bi bi-clock-history" aria-hidden="true"></i><span><strong>Recent changes</strong><small>Recently touched records</small></span></button>
+    </section>
+
+    <section class="adir-shell">
+        <div class="adir-toolbar">
+            <div class="adir-search"><i class="bi bi-search" aria-hidden="true"></i><input value="@_search" @oninput="OnSearchChanged" placeholder="Search name, number, email, phone, industry, segment, lifecycle…" aria-label="Search account directory" /></div>
+            <select class="adir-select" value="@_statusFilter" @onchange="OnStatusChanged" aria-label="Filter by status"><option value="">All statuses</option>@foreach (var option in _statusOptions) { <option value="@option.Code">@option.Name</option> }</select>
+            <select class="adir-select" value="@_typeFilter" @onchange="OnTypeChanged" aria-label="Filter by account type"><option value="">All types</option>@foreach (var option in _typeOptions) { <option value="@option.Code">@option.Name</option> }</select>
+            <select class="adir-select" value="@_segmentFilter" @onchange="OnSegmentChanged" aria-label="Filter by segment"><option value="">All segments</option>@foreach (var option in _segmentOptions) { <option value="@option.Code">@option.Name</option> }</select>
+            <button type="button" class="adir-btn adir-btn-ghost" @onclick="ClearFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button>
+        </div>
+
+        <div class="adir-tabs" role="tablist" aria-label="Account directory views">
+            @foreach (var tab in _tabs)
+            {
+                <button type="button" class="@TabClass(tab.Key)" role="tab" aria-selected="@(_activeTab == tab.Key)" @onclick="() => SetTab(tab.Key)"><i class="bi @tab.Icon" aria-hidden="true"></i><span>@tab.Label</span><strong>@TabCount(tab.Key)</strong></button>
+            }
+        </div>
+
+        @if (_loadError is not null)
+        {
+            <div class="adir-alert" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>@_loadError</div>
+        }
+
+        @if (_loading)
+        {
+            <div class="adir-loading"><span class="adir-spinner" aria-hidden="true"></span><span>Loading account directory…</span></div>
+        }
+        else if (!FilteredAccounts.Any())
+        {
+            <div class="adir-empty"><i class="bi bi-buildings" aria-hidden="true"></i><h2>No accounts found</h2><p>Adjust filters or create a new account master record.</p><button type="button" class="adir-btn adir-btn-primary" @onclick='() => Nav.NavigateTo("/accounts/new")'>Create Account</button></div>
+        }
+        else
+        {
+            <div class="adir-content">
+                <div class="adir-list" role="list" aria-label="Account directory results">
+                    @foreach (var account in PagedAccounts)
+                    {
+                        <article class="@RowClass(account)" role="listitem" @onclick="() => SelectAccount(account)">
+                            <div class="adir-row-main">
+                                <span class="adir-avatar @AvatarTone(account.AccountName)">@Initials(account.AccountName)</span>
+                                <div>
+                                    <div class="adir-row-title"><strong>@account.AccountName</strong><span class="@PriorityClass(account)">@PriorityLabel(account)</span></div>
+                                    <div class="adir-row-meta"><span>@account.AccountNumber</span><span>@account.AccountTypeCode</span><span>@(account.Industry ?? "No industry")</span></div>
+                                </div>
+                            </div>
+                            <div class="adir-row-grid">
+                                <span class="@StatusClass(account.StatusCode)">@account.StatusCode</span>
+                                <span>@(account.SegmentCode ?? "Unsegmented")</span>
+                                <span>@(account.LifecycleStageCode ?? "No lifecycle")</span>
+                                <strong>@((account.AnnualRevenue ?? 0).ToString("C0"))</strong>
+                            </div>
+                            <div class="adir-row-contact">
+                                @if (!string.IsNullOrWhiteSpace(account.MainEmail)) { <a href="mailto:@account.MainEmail" @onclick:stopPropagation="true"><i class="bi bi-envelope" aria-hidden="true"></i>@account.MainEmail</a> }
+                                @if (!string.IsNullOrWhiteSpace(account.MainPhone)) { <a href="tel:@NormalizePhoneLink(account.MainPhone)" @onclick:stopPropagation="true"><i class="bi bi-telephone" aria-hidden="true"></i>@account.MainPhone</a> }
+                                @if (string.IsNullOrWhiteSpace(account.MainEmail) && string.IsNullOrWhiteSpace(account.MainPhone)) { <span class="adir-muted"><i class="bi bi-exclamation-circle" aria-hidden="true"></i>No contact data</span> }
+                            </div>
+                            <div class="adir-row-actions" @onclick:stopPropagation="true">
+                                <button type="button" class="adir-icon-btn" title="Open Account 360" @onclick="() => OpenAccount(account)"><i class="bi bi-person-vcard" aria-hidden="true"></i></button>
+                                <button type="button" class="adir-icon-btn" title="Hierarchy" @onclick='() => Nav.NavigateTo($"/accounts/{account.AccountId}/hierarchy")'><i class="bi bi-diagram-3" aria-hidden="true"></i></button>
+                                <button type="button" class="adir-icon-btn" title="Timeline" @onclick='() => Nav.NavigateTo($"/accounts/{account.AccountId}/timeline")'><i class="bi bi-clock-history" aria-hidden="true"></i></button>
+                                <button type="button" class="adir-icon-btn" title="Relationships" @onclick='() => Nav.NavigateTo($"/accounts/{account.AccountId}/relationships")'><i class="bi bi-link-45deg" aria-hidden="true"></i></button>
+                            </div>
+                        </article>
+                    }
+                </div>
+
+                <aside class="adir-inspector" aria-label="Selected account details">
+                    @if (SelectedAccount is null)
+                    {
+                        <div class="adir-inspector-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select an account</strong><span>Review account intelligence and workflow actions.</span></div>
+                    }
+                    else
+                    {
+                        <div class="adir-inspector-header"><span class="adir-avatar adir-avatar-large @AvatarTone(SelectedAccount.AccountName)">@Initials(SelectedAccount.AccountName)</span><div><h2>@SelectedAccount.AccountName</h2><p>@SelectedAccount.AccountNumber · @SelectedAccount.AccountTypeCode</p></div></div>
+                        <div class="adir-score"><span>Importance score</span><strong>@ImportanceScore(SelectedAccount)</strong><em>@PriorityLabel(SelectedAccount)</em></div>
+                        <div class="adir-mini-grid">
+                            @MiniMetric("Status", SelectedAccount.StatusCode)
+                            @MiniMetric("Segment", SelectedAccount.SegmentCode ?? "Unsegmented")
+                            @MiniMetric("Lifecycle", SelectedAccount.LifecycleStageCode ?? "Not set")
+                            @MiniMetric("Revenue", (SelectedAccount.AnnualRevenue ?? 0).ToString("C0"))
+                        </div>
+                        <div class="adir-readiness">
+                            <h3>Readiness</h3>
+                            <span class="@ReadinessClass(SelectedAccount)">@ReadinessLabel(SelectedAccount)</span>
+                            <p>@ReadinessText(SelectedAccount)</p>
+                        </div>
+                        <div class="adir-inspector-actions">
+                            <button type="button" class="adir-btn adir-btn-primary" @onclick="() => OpenAccount(SelectedAccount)"><i class="bi bi-person-vcard" aria-hidden="true"></i> Account 360</button>
+                            <button type="button" class="adir-btn adir-btn-ghost" @onclick='() => Nav.NavigateTo($"/accounts/{SelectedAccount.AccountId}/timeline")'><i class="bi bi-clock-history" aria-hidden="true"></i> Timeline</button>
+                            <button type="button" class="adir-btn adir-btn-ghost" @onclick='() => Nav.NavigateTo($"/accounts/{SelectedAccount.AccountId}/relationships")'><i class="bi bi-link-45deg" aria-hidden="true"></i> Relationships</button>
+                            <button type="button" class="adir-btn adir-btn-ghost" @onclick='() => Nav.NavigateTo("/accounts")'><i class="bi bi-speedometer2" aria-hidden="true"></i> Command Center</button>
+                        </div>
+                    }
+                </aside>
+            </div>
+            <div class="adir-pagination"><button type="button" class="adir-btn adir-btn-ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Previous</button><span>Page @_page of @TotalPages · @FilteredAccounts.Count().ToString("N0") accounts</span><button type="button" class="adir-btn adir-btn-ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button></div>
+        }
+    </section>
+</div>
+
+@code {
+    [Parameter] public Guid? Id { get; set; }
+
+    private readonly IReadOnlyList<DirectoryTab> _tabs =
+    [
+        new("all", "All", "bi-grid-3x3-gap"),
+        new("priority", "Priority", "bi-lightning-charge"),
+        new("strategic", "Strategic", "bi-gem"),
+        new("risk", "Risk", "bi-exclamation-triangle"),
+        new("pipeline", "Pipeline", "bi-funnel"),
+        new("contact", "Contact Gaps", "bi-person-x"),
+        new("recent", "Recent", "bi-clock-history")
+    ];
+
+    private const int PageSize = 20;
+    private readonly List<AccountDto> _accounts = [];
+    private List<AccountOption> _statusOptions = [];
+    private List<AccountOption> _typeOptions = [];
+    private List<AccountOption> _segmentOptions = [];
+    private string _activeTab = "all";
+    private string _search = string.Empty;
+    private string? _statusFilter;
+    private string? _typeFilter;
+    private string? _segmentFilter;
+    private bool _loading = true;
+    private string? _loadError;
+    private Guid _tenantId;
+    private Guid? _selectedAccountId;
+    private int _page = 1;
+
+    private IEnumerable<AccountDto> TabAccounts => _activeTab switch
+    {
+        "priority" => _accounts.Where(a => ImportanceScore(a) >= 50),
+        "strategic" => _accounts.Where(IsStrategic),
+        "risk" => _accounts.Where(IsAtRisk),
+        "pipeline" => _accounts.Where(IsPipeline),
+        "contact" => _accounts.Where(HasContactGap),
+        "recent" => _accounts.OrderByDescending(LastTouched).Take(25),
+        _ => _accounts
+    };
+
+    private IEnumerable<AccountDto> FilteredAccounts => TabAccounts
+        .Where(MatchesSearch)
+        .Where(a => string.IsNullOrWhiteSpace(_statusFilter) || a.StatusCode == _statusFilter)
+        .Where(a => string.IsNullOrWhiteSpace(_typeFilter) || a.AccountTypeCode == _typeFilter)
+        .Where(a => string.IsNullOrWhiteSpace(_segmentFilter) || a.SegmentCode == _segmentFilter)
+        .OrderByDescending(ImportanceScore)
+        .ThenBy(a => a.AccountName);
+
+    private IEnumerable<AccountDto> PagedAccounts => FilteredAccounts.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredAccounts.Count() / (double)PageSize));
+    private AccountDto? SelectedAccount => _accounts.FirstOrDefault(a => a.AccountId == _selectedAccountId) ?? FilteredAccounts.FirstOrDefault();
+    private int StrategicAccounts => _accounts.Count(IsStrategic);
+    private int AtRiskAccounts => _accounts.Count(IsAtRisk);
+    private int PipelineAccounts => _accounts.Count(IsPipeline);
+    private int ContactGaps => _accounts.Count(HasContactGap);
+    private decimal TotalRevenue => _accounts.Sum(a => a.AnnualRevenue ?? 0);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Accounts", "/accounts"), new("Directory", "/accounts/directory"));
+        await LoadReferenceDataAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadReferenceDataAsync()
+    {
+        var accountTypes = await Api.SearchAccountTypesAsync(_tenantId, pageSize: 200);
+        _typeOptions = accountTypes?.Items.Where(t => t.IsActive).OrderBy(t => t.SortOrder).ThenBy(t => t.TypeName).Select(t => new AccountOption(t.TypeCode, t.TypeName, t.IsDefault)).ToList() ?? [];
+        var options = await Api.GetAccountReferenceOptionsAsync(_tenantId);
+        var activeOptions = options?.Where(o => o.IsActive).ToList() ?? [];
+        _statusOptions = ToOptions(activeOptions, "Status");
+        _segmentOptions = ToOptions(activeOptions, "Segment");
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchAccountsAsync(_tenantId, pageSize: 1000);
+            _accounts.Clear();
+            _accounts.AddRange(result?.Items ?? []);
+            _selectedAccountId = Id ?? _selectedAccountId ?? _accounts.OrderByDescending(ImportanceScore).FirstOrDefault()?.AccountId;
+            if (_selectedAccountId is not null && _accounts.Any(a => a.AccountId == _selectedAccountId))
+            {
+                var selected = _accounts.First(a => a.AccountId == _selectedAccountId);
+                NavContext.SetAccount(selected.AccountId, selected.AccountName);
+            }
+            _page = Math.Min(_page, TotalPages);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load account directory: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private bool MatchesSearch(AccountDto account)
+    {
+        if (string.IsNullOrWhiteSpace(_search)) return true;
+        var term = _search.Trim();
+        return Contains(account.AccountName, term) || Contains(account.AccountNumber, term) || Contains(account.AccountTypeCode, term) || Contains(account.StatusCode, term) || Contains(account.MainEmail, term) || Contains(account.MainPhone, term) || Contains(account.SegmentCode, term) || Contains(account.LifecycleStageCode, term) || Contains(account.Industry, term) || Contains(account.Website, term);
+    }
+
+    private void SelectAccount(AccountDto account)
+    {
+        _selectedAccountId = account.AccountId;
+        NavContext.SetAccount(account.AccountId, account.AccountName);
+    }
+
+    private void OpenAccount(AccountDto account)
+    {
+        SelectAccount(account);
+        Nav.NavigateTo($"/accounts/{account.AccountId}");
+    }
+
+    private void SetTab(string tab) { _activeTab = tab; _page = 1; _selectedAccountId = FilteredAccounts.FirstOrDefault()?.AccountId; }
+    private void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; _page = 1; }
+    private void OnStatusChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _statusFilter = Normalize(e.Value?.ToString()); _page = 1; }
+    private void OnTypeChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _typeFilter = Normalize(e.Value?.ToString()); _page = 1; }
+    private void OnSegmentChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _segmentFilter = Normalize(e.Value?.ToString()); _page = 1; }
+    private void ClearFilters() { _search = string.Empty; _statusFilter = null; _typeFilter = null; _segmentFilter = null; _page = 1; }
+    private void ResetDirectory() { ClearFilters(); _activeTab = "all"; _selectedAccountId = _accounts.OrderByDescending(ImportanceScore).FirstOrDefault()?.AccountId; }
+    private void PreviousPage() => _page = Math.Max(1, _page - 1);
+    private void NextPage() => _page = Math.Min(TotalPages, _page + 1);
+
+    private int TabCount(string tab) => tab switch
+    {
+        "priority" => _accounts.Count(a => ImportanceScore(a) >= 50),
+        "strategic" => StrategicAccounts,
+        "risk" => AtRiskAccounts,
+        "pipeline" => PipelineAccounts,
+        "contact" => ContactGaps,
+        "recent" => Math.Min(_accounts.Count, 25),
+        _ => _accounts.Count
+    };
+
+    private string TabClass(string tab) => _activeTab == tab ? "adir-tab adir-tab-active" : "adir-tab";
+    private string RowClass(AccountDto account) => SelectedAccount?.AccountId == account.AccountId ? "adir-row adir-row-selected" : "adir-row";
+
+    private static bool IsStrategic(AccountDto account) => account.SegmentCode is "Enterprise" or "Key Account" || (account.AnnualRevenue ?? 0) >= 1_000_000;
+    private static bool IsAtRisk(AccountDto account) => account.StatusCode is "Suspended" or "Inactive" || account.LifecycleStageCode == "At Risk";
+    private static bool IsPipeline(AccountDto account) => account.StatusCode == "Prospect" || account.LifecycleStageCode is "Lead" or "Prospect";
+    private static bool HasContactGap(AccountDto account) => string.IsNullOrWhiteSpace(account.MainEmail) && string.IsNullOrWhiteSpace(account.MainPhone);
+    private static DateTime LastTouched(AccountDto account) => account.ModifiedDateUtc ?? account.CreatedDateUtc;
+    private static int ImportanceScore(AccountDto account)
+    {
+        var score = 0;
+        if (IsAtRisk(account)) score += 70;
+        if (IsStrategic(account)) score += 50;
+        if (IsPipeline(account)) score += 25;
+        if (HasContactGap(account)) score += 15;
+        if (LastTouched(account) < DateTime.UtcNow.AddDays(-30)) score += 10;
+        return score;
+    }
+
+    private static string PriorityLabel(AccountDto account) => IsAtRisk(account) ? "Risk" : IsStrategic(account) ? "Strategic" : IsPipeline(account) ? "Pipeline" : ImportanceScore(account) >= 50 ? "Priority" : "Standard";
+    private static string PriorityClass(AccountDto account) => $"adir-priority adir-priority-{PriorityLabel(account).ToLowerInvariant()}";
+    private static string StatusClass(string status) => status switch { "Active" => "adir-status adir-status-active", "Prospect" => "adir-status adir-status-prospect", "Suspended" => "adir-status adir-status-warning", "Inactive" => "adir-status adir-status-muted", _ => "adir-status adir-status-muted" };
+    private static string ReadinessLabel(AccountDto account) => HasContactGap(account) ? "Contact gap" : IsAtRisk(account) ? "Needs attention" : IsStrategic(account) ? "Executive-ready" : "Ready";
+    private static string ReadinessClass(AccountDto account) => HasContactGap(account) || IsAtRisk(account) ? "adir-readiness-badge adir-readiness-risk" : "adir-readiness-badge adir-readiness-ready";
+    private static string ReadinessText(AccountDto account) => HasContactGap(account) ? "Add email or phone before outreach and servicing workflows." : IsAtRisk(account) ? "Review lifecycle, servicing notes, and renewal readiness." : "Account has enough directory data for standard servicing workflows.";
+    private static string AvatarTone(string name) { var tones = new[] { "adir-avatar-blue", "adir-avatar-purple", "adir-avatar-green", "adir-avatar-amber", "adir-avatar-rose" }; return tones[Math.Abs(name.GetHashCode()) % tones.Length]; }
+    private static string Initials(string name) { var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length > 0 ? name[..1] : "?"; }
+    private static string NormalizePhoneLink(string value) => new(value.Where(c => char.IsDigit(c) || c == '+').ToArray());
+    private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static List<AccountOption> ToOptions(IEnumerable<AccountReferenceOptionDto> options, string group) => options.Where(o => string.Equals(o.OptionGroup, group, StringComparison.OrdinalIgnoreCase)).OrderBy(o => o.SortOrder).ThenBy(o => o.OptionName).Select(o => new AccountOption(o.OptionCode, o.OptionName, o.IsDefault)).ToList();
+
+    private RenderFragment KpiCard(string label, string value, string subtitle, string icon, string tone) => __builder =>
+    {
+        <article class="adir-kpi adir-kpi-@tone">
+            <span><i class="bi @icon" aria-hidden="true"></i>@label</span>
+            <strong>@value</strong>
+            <small>@subtitle</small>
+        </article>
+    };
+
+    private RenderFragment MiniMetric(string label, string value) => __builder =>
+    {
+        <div class="adir-mini"><span>@label</span><strong>@value</strong></div>
+    };
+
+    private sealed record AccountOption(string Code, string Name, bool IsDefault);
+    private sealed record DirectoryTab(string Key, string Label, string Icon);
+}

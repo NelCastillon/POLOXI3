@@ -5,6 +5,8 @@
 @using Ams.Application.Common.Dtos
 @using Ams.Application.Common.Validation
 @using Ams.Application.Features.Leads
+@using Ams.Application.Features.Accounts
+@using Ams.Application.Features.Opportunities
 @using Microsoft.AspNetCore.Components.Forms
 @using Microsoft.JSInterop
 @using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
@@ -296,7 +298,7 @@
     <div id="lead-convert-modal-root" class="ld-modal-backdrop" role="presentation" @onclick="CloseConvert">
         <div class="ld-action-modal" role="dialog" aria-modal="true" aria-labelledby="convertTitle" @onclick:stopPropagation="true">
             <div class="ld-modal-header"><div class="ld-modal-title"><span class="ld-modal-icon"><i class="bi bi-trophy" aria-hidden="true"></i></span><div><h2 id="convertTitle">Convert to pipeline</h2><p>Move selected leads into converted workflow state and record activity.</p></div></div><button class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseConvert"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
-            <div class="ld-modal-body"><div class="ld-form-banner"><i class="bi bi-diagram-3" aria-hidden="true"></i><div><strong>@_selected.Count lead(s) ready for conversion</strong><span>Stage becomes Converted, status is updated, score is lifted if needed.</span></div></div><ul class="ld-action-list">@foreach (var lead in _selected.Take(5)) { <li>@lead.FullName — @lead.CompanyName (@lead.EstPremium.ToString("C0"))</li> }</ul><div class="ld-check-row"><label><InputCheckbox @bind-Value="_convertKeepLead" /> Keep lead visible after conversion</label><label><InputCheckbox @bind-Value="_convertCreateActivity" /> Create follow-up workflow activity</label></div></div>
+            <div class="ld-modal-body"><div class="ld-form-banner"><i class="bi bi-diagram-3" aria-hidden="true"></i><div><strong>@_selected.Count lead(s) ready for conversion</strong><span>Each lead creates a Prospect account and opportunity, then the lead is marked Converted.</span></div></div><ul class="ld-action-list">@foreach (var lead in _selected.Take(5)) { <li>@lead.FullName — @lead.CompanyName (@lead.EstPremium.ToString("C0"))</li> }</ul><div class="ld-check-row"><label><InputCheckbox @bind-Value="_convertCreateOpportunity" /> Create Prospect account and opportunity</label><label><InputCheckbox @bind-Value="_convertKeepLead" /> Keep lead visible after conversion</label><label><InputCheckbox @bind-Value="_convertCreateActivity" /> Create follow-up workflow activity</label></div></div>
             <div class="ld-modal-footer"><button class="um-btn um-btn-ghost" @onclick="CloseConvert">Cancel</button><button class="um-btn um-btn-primary" @onclick="ConfirmCommitConvert">Convert leads</button></div>
         </div>
     </div>
@@ -449,6 +451,7 @@
     private bool _assignNotify = true;
     private bool _convertKeepLead;
     private bool _convertCreateActivity = true;
+    private bool _convertCreateOpportunity = true;
     private bool _campaignSendImmediately;
     private bool _importDedupe = true;
     private bool _importAssignRoundRobin;
@@ -797,12 +800,77 @@
 
     private async Task CommitConvertAsync()
     {
+        var convertedCount = 0;
+        var accountCount = 0;
+        var opportunityCount = 0;
+        var failures = new List<string>();
+
         foreach (var lead in _selected.ToList())
         {
-            await UpdateLeadWorkflowAsync(lead, "Converted", 4, lead.AssignedToUserId, "Hot", Math.Max(lead.Score, 85), lead.Notes, DateTime.UtcNow);
-            if (_convertCreateActivity) await Api.CreateLeadCommunicationAsync(lead.LeadId, new CreateLeadCommunicationRequest { TenantId = _tenantId, LeadId = lead.LeadId, Channel = "Workflow", Subject = "Lead converted", Preview = "Lead converted from enterprise Leads workspace.", SentByUserId = TenantAdminUserId, SentAt = DateTime.UtcNow, Opened = true, Clicked = false });
+            try
+            {
+                Guid? accountId = null;
+                if (_convertCreateOpportunity)
+                {
+                    var stamp = DateTime.UtcNow.ToString("yyyyMMddHHmmssfff", CultureInfo.InvariantCulture);
+                    var accountName = string.IsNullOrWhiteSpace(lead.CompanyName) ? lead.FullName : lead.CompanyName;
+                    accountId = await Api.CreateAccountAsync(new CreateAccountRequest
+                    {
+                        TenantId = _tenantId,
+                        AccountNumber = $"ACC-{stamp}",
+                        AccountName = string.IsNullOrWhiteSpace(accountName) ? $"Prospect {stamp}" : accountName,
+                        AccountTypeCode = "Prospect",
+                        MainEmail = string.IsNullOrWhiteSpace(lead.Email) ? null : lead.Email,
+                        MainPhone = string.IsNullOrWhiteSpace(lead.Phone) ? null : lead.Phone,
+                        StatusCode = "Active",
+                        LifecycleStageCode = "Prospect",
+                        AnnualRevenue = lead.EstPremium > 0 ? lead.EstPremium : null,
+                        OwnerUserId = lead.AssignedToUserId,
+                        CreatedByUserId = TenantAdminUserId
+                    });
+                    accountCount++;
+
+                    await Api.CreateOpportunityAsync(new CreateOpportunityRequest
+                    {
+                        TenantId = _tenantId,
+                        OpportunityNumber = $"OPP-{stamp}",
+                        AccountId = accountId.Value,
+                        OpportunityName = $"{(string.IsNullOrWhiteSpace(accountName) ? lead.FullName : accountName)} Opportunity",
+                        EstimatedAmount = lead.EstPremium,
+                        OwnerUserId = lead.AssignedToUserId,
+                        CloseDate = DateTime.UtcNow.AddDays(30),
+                        LeadId = lead.LeadId,
+                        WinProbability = 25m,
+                        ForecastCategoryCode = "Pipeline",
+                        CreatedByUserId = TenantAdminUserId
+                    });
+                    opportunityCount++;
+                }
+
+                await UpdateLeadWorkflowAsync(lead, "Converted", 4, lead.AssignedToUserId, "Hot", Math.Max(lead.Score, 85), lead.Notes, DateTime.UtcNow, accountId);
+                if (_convertCreateActivity) await Api.CreateLeadCommunicationAsync(lead.LeadId, new CreateLeadCommunicationRequest { TenantId = _tenantId, LeadId = lead.LeadId, Channel = "Workflow", Subject = "Lead converted", Preview = "Lead converted to Prospect account and opportunity from enterprise Leads workspace.", SentByUserId = TenantAdminUserId, SentAt = DateTime.UtcNow, Opened = true, Clicked = false });
+                convertedCount++;
+            }
+            catch (Exception ex)
+            {
+                failures.Add($"{lead.FullName}: {ex.Message}");
+            }
         }
-        await CloseConvert(); _selected.Clear(); await ShowToastAsync("Lead conversion completed.", "success"); await LoadAsync();
+
+        await CloseConvert(); _selected.Clear();
+        if (failures.Count > 0)
+        {
+            await ShowToastAsync($"Converted {convertedCount} lead(s); {failures.Count} failed: {failures[0]}", "danger");
+        }
+        else if (_convertCreateOpportunity)
+        {
+            await ShowToastAsync($"Converted {convertedCount} lead(s), created {accountCount} Prospect account(s) and {opportunityCount} opportunity(ies).", "success");
+        }
+        else
+        {
+            await ShowToastAsync($"Converted {convertedCount} lead(s).", "success");
+        }
+        await LoadAsync();
     }
 
     private async Task CommitCampaignAsync()
@@ -821,9 +889,9 @@
 
     private async Task DisqualifyLeadAsync(LeadRow lead) { await UpdateLeadWorkflowAsync(lead, "Lost", 5, lead.AssignedToUserId, lead.Rating, lead.Score, lead.Notes); _selected.RemoveAll(x => x.LeadId == lead.LeadId); _detail = null; await ShowToastAsync("Lead disqualified.", "success"); await LoadAsync(); }
 
-    private async Task UpdateLeadWorkflowAsync(LeadRow lead, string stage, int status, Guid? ownerId, string priority, int score, string? notes, DateTime? qualifiedDate = null)
+    private async Task UpdateLeadWorkflowAsync(LeadRow lead, string stage, int status, Guid? ownerId, string priority, int score, string? notes, DateTime? qualifiedDate = null, Guid? accountId = null)
     {
-        await Api.UpdateLeadAsync(lead.LeadId, new UpdateLeadRequest { LeadId = lead.LeadId, AccountName = lead.CompanyName, FirstName = lead.FirstName, LastName = lead.LastName, Email = lead.Email, Phone = lead.Phone, InterestedService = notes, AnnualRevenue = lead.EstPremium, Score = score, PriorityCode = priority, SourceCode = lead.Source, NurturingStageCode = stage, QualifiedDate = qualifiedDate, StatusCode = status, AssignedToUserId = ownerId, UpdatedByUserId = TenantAdminUserId });
+        await Api.UpdateLeadAsync(lead.LeadId, new UpdateLeadRequest { LeadId = lead.LeadId, AccountName = lead.CompanyName, FirstName = lead.FirstName, LastName = lead.LastName, Email = lead.Email, Phone = lead.Phone, InterestedService = notes, AnnualRevenue = lead.EstPremium, Score = score, PriorityCode = priority, SourceCode = lead.Source, NurturingStageCode = stage, QualifiedDate = qualifiedDate, StatusCode = status, AccountId = accountId, AssignedToUserId = ownerId, UpdatedByUserId = TenantAdminUserId });
     }
 
     private void OpenConfirm(ConfirmAction action) { _confirmAction = action; _showConfirm = true; }

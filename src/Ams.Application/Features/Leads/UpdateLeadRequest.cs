@@ -31,6 +31,7 @@ public sealed class UpdateLeadRequest
     public string? NurturingStageCode { get; set; }
     public DateTime? QualifiedDate { get; set; }
     public int? StatusCode { get; set; }
+    public Guid? AccountId { get; set; }
     public Guid? AssignedToUserId { get; set; }
     public Guid? UpdatedByUserId { get; set; }
 }

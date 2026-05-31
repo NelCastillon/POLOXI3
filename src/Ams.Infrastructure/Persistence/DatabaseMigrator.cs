@@ -178,6 +178,8 @@ public sealed class DatabaseMigrator
         new("0145_Portal_MyAccountProfile_CreateSeed", Migration0145_PortalMyAccountProfileCreateSeed),
         new("0146_Portal_MobileInstall_CreateSeed", Migration0146_PortalMobileInstallCreateSeed),
         new("0147_Portal_ApiUsage_CreateSeed", Migration0147_PortalApiUsageCreateSeed),
+        new("0148_Submissions_SubmissionIntake_Create", Migration0148_SubmissionsSubmissionIntakeCreate),
+        new("0149_Submissions_SubmissionIntake_Seed", Migration0149_SubmissionsSubmissionIntakeSeed),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -762,6 +764,97 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissio
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionMarket') AND name = N'IX_SubmissionMarket_Submission') CREATE INDEX IX_SubmissionMarket_Submission ON Submissions.SubmissionMarket(SubmissionId, IsDeleted, IsRecommended DESC);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.Quote') AND name = N'IX_Submissions_Quote_Submission') CREATE INDEX IX_Submissions_Quote_Submission ON Submissions.Quote(SubmissionId, IsDeleted, AnnualPremium DESC);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.BoundPolicy') AND name = N'IX_BoundPolicy_Submission') CREATE INDEX IX_BoundPolicy_Submission ON Submissions.BoundPolicy(SubmissionId, IsDeleted);
+
+-- Direct Submission Intake staging table: captures submissions arriving outside the CRM lead path
+-- (email, portal, API, producer upload, carrier request, walk-in) and normalizes them into
+-- Account -> Opportunity -> Submission. No Submission should exist without an Account context.
+IF OBJECT_ID(N'Submissions.SubmissionIntake', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionIntake (
+        IntakeId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionIntake PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        IntakeNumber NVARCHAR(50) NOT NULL,
+        Source NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionIntake_Source DEFAULT N'Email',
+        ReceivedDate DATETIME2 NOT NULL CONSTRAINT DF_SubmissionIntake_Received DEFAULT SYSUTCDATETIME(),
+        ApplicantName NVARCHAR(200) NULL,
+        BusinessName NVARCHAR(200) NOT NULL,
+        Fein NVARCHAR(50) NULL,
+        Email NVARCHAR(200) NULL,
+        Phone NVARCHAR(50) NULL,
+        AddressLine NVARCHAR(250) NULL,
+        City NVARCHAR(100) NULL,
+        [State] NVARCHAR(50) NULL,
+        PostalCode NVARCHAR(20) NULL,
+        ExistingPolicyNumber NVARCHAR(50) NULL,
+        ProducerCode NVARCHAR(50) NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL CONSTRAINT DF_SubmissionIntake_Lob DEFAULT N'Commercial Property',
+        RequestedEffectiveDate DATETIME2 NULL,
+        EstimatedPremium DECIMAL(18,2) NULL,
+        Attachments NVARCHAR(MAX) NULL,
+        RawPayload NVARCHAR(MAX) NULL,
+        Notes NVARCHAR(1000) NULL,
+        IntakeStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionIntake_Status DEFAULT N'Pending',
+        MatchScore INT NOT NULL CONSTRAINT DF_SubmissionIntake_MatchScore DEFAULT 0,
+        MatchedAccountId UNIQUEIDENTIFIER NULL,
+        AccountId UNIQUEIDENTIFIER NULL,
+        OpportunityId UNIQUEIDENTIFIER NULL,
+        SubmissionId UNIQUEIDENTIFIER NULL,
+        AssignedToUserId UNIQUEIDENTIFIER NULL,
+        ProcessedDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionIntake_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionIntake_IsDeleted DEFAULT 0
+    );
+END
+
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'TenantId') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_SubmissionIntake_TenantId_0126 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'IntakeNumber') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD IntakeNumber NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionIntake_Number_0126 DEFAULT N'INT-SEEDED';
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'Source') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD Source NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionIntake_Source_0126 DEFAULT N'Email';
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'ReceivedDate') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD ReceivedDate DATETIME2 NOT NULL CONSTRAINT DF_SubmissionIntake_Received_0126 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'ApplicantName') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD ApplicantName NVARCHAR(200) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'BusinessName') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD BusinessName NVARCHAR(200) NOT NULL CONSTRAINT DF_SubmissionIntake_Business_0126 DEFAULT N'Unknown Business';
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'Fein') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD Fein NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'Email') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD Email NVARCHAR(200) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'Phone') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD Phone NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'AddressLine') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD AddressLine NVARCHAR(250) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'City') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD City NVARCHAR(100) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'State') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD [State] NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'PostalCode') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD PostalCode NVARCHAR(20) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'ExistingPolicyNumber') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD ExistingPolicyNumber NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'ProducerCode') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD ProducerCode NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'LineOfBusiness') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD LineOfBusiness NVARCHAR(100) NOT NULL CONSTRAINT DF_SubmissionIntake_Lob_0126 DEFAULT N'Commercial Property';
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'RequestedEffectiveDate') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD RequestedEffectiveDate DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'EstimatedPremium') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD EstimatedPremium DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'Attachments') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD Attachments NVARCHAR(MAX) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'RawPayload') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD RawPayload NVARCHAR(MAX) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'Notes') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD Notes NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'IntakeStatus') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD IntakeStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionIntake_Status_0126 DEFAULT N'Pending';
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'MatchScore') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD MatchScore INT NOT NULL CONSTRAINT DF_SubmissionIntake_MatchScore_0126 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'MatchedAccountId') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD MatchedAccountId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'AccountId') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD AccountId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'OpportunityId') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD OpportunityId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'SubmissionId') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD SubmissionId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'AssignedToUserId') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD AssignedToUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'ProcessedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD ProcessedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'CreatedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionIntake_Created_0126 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionIntake', N'IsDeleted') IS NULL ALTER TABLE Submissions.SubmissionIntake ADD IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionIntake_IsDeleted_0126 DEFAULT 0;
+
+IF OBJECT_ID(N'Submissions.IntakeSeq', N'SO') IS NULL EXEC(N'CREATE SEQUENCE Submissions.IntakeSeq AS INT START WITH 3000 INCREMENT BY 1');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionIntake') AND name = N'IX_SubmissionIntake_Tenant_Status') CREATE INDEX IX_SubmissionIntake_Tenant_Status ON Submissions.SubmissionIntake(TenantId, IsDeleted, IntakeStatus, ReceivedDate DESC);
+
+IF NOT EXISTS (SELECT 1 FROM Submissions.SubmissionIntake WHERE TenantId = @TenantId AND IntakeNumber = N'INT-SEED-0001' AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Submissions.SubmissionIntake (IntakeId, TenantId, IntakeNumber, Source, ReceivedDate, ApplicantName, BusinessName, Fein, Email, Phone, AddressLine, City, [State], PostalCode, ExistingPolicyNumber, ProducerCode, LineOfBusiness, RequestedEffectiveDate, EstimatedPremium, Notes, IntakeStatus, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES
+    ('e1000000-0000-0000-0000-000000000001', @TenantId, N'INT-SEED-0001', N'Email', DATEADD(day, -2, SYSUTCDATETIME()), N'Maria Alvarez', N'Pacific Crest Manufacturing Inc.', N'95-1234567', N'maria@pacificcrestmfg.com', N'(310) 555-0142', N'1450 Industrial Way', N'Torrance', N'CA', N'90501', NULL, N'PRD-1042', N'Commercial Property', DATEADD(day, 28, SYSUTCDATETIME()), 184500, N'Inbound carrier-forwarded submission packet; needs property + GL.', N'Pending', SYSUTCDATETIME(), @AdminUserId, 0),
+    ('e1000000-0000-0000-0000-000000000002', @TenantId, N'INT-SEED-0002', N'Producer Upload', DATEADD(day, -1, SYSUTCDATETIME()), N'David Chen', N'Harborline Logistics LLC', NULL, N'dchen@harborlinelog.com', N'(562) 555-0199', N'88 Dockside Blvd', N'Long Beach', N'CA', N'90802', N'POL-44821', N'PRD-1019', N'Commercial Auto', DATEADD(day, 21, SYSUTCDATETIME()), 96200, N'Producer-uploaded fleet auto renewal submission.', N'Pending', SYSUTCDATETIME(), @AdminUserId, 0);
+END
 
 IF NOT EXISTS (SELECT 1 FROM Core.Carrier WHERE TenantId = @TenantId AND CarrierName = N'Travelers' AND IsDeleted = 0)
 BEGIN
@@ -5938,6 +6031,7 @@ IF COL_LENGTH(N'CRM.Lead', N'QualifiedDate') IS NULL ALTER TABLE CRM.Lead ADD Qu
 IF COL_LENGTH(N'CRM.Lead', N'AnnualRevenue') IS NULL ALTER TABLE CRM.Lead ADD AnnualRevenue DECIMAL(18,2) NULL;
 IF COL_LENGTH(N'CRM.Lead', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.Lead ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
 IF COL_LENGTH(N'CRM.Lead', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.Lead ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'CRM.Lead', N'AccountId') IS NULL ALTER TABLE CRM.Lead ADD AccountId UNIQUEIDENTIFIER NULL;
 
 IF OBJECT_ID(N'CRM.LeadContact') IS NULL
 BEGIN
@@ -7874,5 +7968,211 @@ INSERT INTO Portal.ApiUsage
 SELECT NEWID(), @TenantId, u.EndpointCode, u.EndpointName, u.Method, u.Route, u.IntegrationName, u.ApiKeyName, u.Status, u.HealthStatus, u.Priority, u.Owner, u.Detail, u.RecommendedAction, DATEADD(MINUTE, -u.LastCallMinutesAgo, SYSUTCDATETIME()), u.Calls30d, u.SuccessCount30d, u.WarningCount30d, u.ErrorCount30d, u.AvgLatencyMs, u.P95LatencyMs, u.RateLimitPerMinute, u.QuotaUsedPercent, u.WebhookDeliveries30d, u.RetryCount30d, u.RequiresReview, CASE WHEN u.Reviewed = 1 THEN DATEADD(MINUTE, -15, SYSUTCDATETIME()) ELSE NULL END, SYSUTCDATETIME(), @AdminUserId, 0
 FROM @Usage u
 WHERE NOT EXISTS (SELECT 1 FROM Portal.ApiUsage a WHERE a.TenantId = @TenantId AND a.EndpointCode = u.EndpointCode AND a.IsDeleted = 0);
+";
+
+    // ── 0148 — Create Submissions.SubmissionIntake staging table and IntakeSeq sequence ──
+    // Backs the staged submission intake workflow (Account -> Opportunity -> Submission).
+
+    private const string Migration0148_SubmissionsSubmissionIntakeCreate = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF NOT EXISTS (SELECT 1 FROM sys.sequences WHERE name = N'IntakeSeq' AND schema_id = SCHEMA_ID(N'Submissions'))
+    EXEC(N'CREATE SEQUENCE Submissions.IntakeSeq AS INT START WITH 1 INCREMENT BY 1');
+
+IF OBJECT_ID(N'Submissions.SubmissionIntake', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionIntake
+    (
+        IntakeId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_SubmissionIntake PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        IntakeNumber NVARCHAR(50) NOT NULL,
+        Source NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionIntake_Source DEFAULT N'Email',
+        ReceivedDate DATETIME2 NOT NULL CONSTRAINT DF_SubmissionIntake_ReceivedDate DEFAULT SYSUTCDATETIME(),
+        ApplicantName NVARCHAR(200) NULL,
+        BusinessName NVARCHAR(200) NOT NULL,
+        Fein NVARCHAR(50) NULL,
+        Email NVARCHAR(200) NULL,
+        Phone NVARCHAR(50) NULL,
+        AddressLine NVARCHAR(250) NULL,
+        City NVARCHAR(100) NULL,
+        [State] NVARCHAR(50) NULL,
+        PostalCode NVARCHAR(20) NULL,
+        ExistingPolicyNumber NVARCHAR(50) NULL,
+        ProducerCode NVARCHAR(50) NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        RequestedEffectiveDate DATETIME2 NULL,
+        EstimatedPremium DECIMAL(18,2) NULL,
+        Attachments NVARCHAR(4000) NULL,
+        RawPayload NVARCHAR(MAX) NULL,
+        Notes NVARCHAR(1000) NULL,
+        IntakeStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionIntake_Status DEFAULT N'Pending',
+        MatchScore INT NOT NULL CONSTRAINT DF_SubmissionIntake_MatchScore DEFAULT 0,
+        MatchedAccountId UNIQUEIDENTIFIER NULL,
+        AccountId UNIQUEIDENTIFIER NULL,
+        OpportunityId UNIQUEIDENTIFIER NULL,
+        SubmissionId UNIQUEIDENTIFIER NULL,
+        AssignedToUserId UNIQUEIDENTIFIER NULL,
+        ProcessedDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionIntake_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionIntake_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionIntake') AND name = N'IX_SubmissionIntake_Tenant_Status')
+    CREATE INDEX IX_SubmissionIntake_Tenant_Status ON Submissions.SubmissionIntake(TenantId, IsDeleted, IntakeStatus, ReceivedDate DESC);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionIntake') AND name = N'UX_SubmissionIntake_Tenant_Number')
+    CREATE UNIQUE INDEX UX_SubmissionIntake_Tenant_Number ON Submissions.SubmissionIntake(TenantId, IntakeNumber) WHERE IsDeleted = 0;
+
+DECLARE @IntakeTenantId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM Core.Tenant ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000001');
+DECLARE @IntakeAdminUserId UNIQUEIDENTIFIER = (SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @IntakeTenantId ORDER BY CreatedDateUtc);
+
+DECLARE @IntakeSeed TABLE
+(
+    IntakeNumber NVARCHAR(50), Source NVARCHAR(50), ApplicantName NVARCHAR(200), BusinessName NVARCHAR(200), Fein NVARCHAR(50), Email NVARCHAR(200), Phone NVARCHAR(50), AddressLine NVARCHAR(250), City NVARCHAR(100), [State] NVARCHAR(50), PostalCode NVARCHAR(20), ProducerCode NVARCHAR(50), LineOfBusiness NVARCHAR(100), EstimatedPremium DECIMAL(18,2), Attachments NVARCHAR(4000), Notes NVARCHAR(1000), IntakeStatus NVARCHAR(50), MatchScore INT, ReceivedDaysAgo INT, ProcessedDaysAgo INT, EffectiveInDays INT
+);
+
+INSERT INTO @IntakeSeed VALUES
+(N'INTK-100001', N'Email', N'Maria Alvarez', N'Summit Ridge Logistics LLC', N'82-1947365', N'maria.alvarez@summitridge.com', N'(415) 555-0182', N'1820 Harbor Blvd', N'Oakland', N'CA', N'94607', N'PR-0042', N'Commercial Auto', 48500.00, N'acord-125.pdf;loss-runs-3yr.pdf', N'New business submission received via broker email. Awaiting clearance.', N'Pending', 0, 1, NULL, 30),
+(N'INTK-100002', N'Portal', N'David Chen', N'Brightline Manufacturing Inc', N'47-3920184', N'dchen@brightlinemfg.com', N'(312) 555-0147', N'77 Industrial Park Rd', N'Chicago', N'IL', N'60616', N'PR-0017', N'General Liability', 32750.00, N'application.pdf', N'Submitted through producer portal; requires underwriting review.', N'Pending', 12, 2, NULL, 45),
+(N'INTK-100003', N'Phone', N'Jennifer Brooks', N'Cedar Hollow Property Group', N'91-5837201', N'jbrooks@cedarhollow.com', N'(206) 555-0193', N'940 Lakeview Dr', N'Seattle', N'WA', N'98109', N'PR-0029', N'Commercial Property', 61200.00, NULL, N'Phoned in by long-standing client requesting renewal quote.', N'Pending', 0, 3, NULL, 60),
+(N'INTK-100004', N'Email', N'Robert Sandoval', N'Pioneer Valley Contractors', N'58-2049173', N'rsandoval@pioneervalley.com', N'(617) 555-0166', N'212 Commonwealth Ave', N'Boston', N'MA', N'02116', N'PR-0011', N'Workers Compensation', 89400.00, N'acord-130.pdf;experience-mod.pdf', N'Matched to existing prospect account and promoted to submission.', N'Processed', 96, 9, 6, 20),
+(N'INTK-100005', N'Portal', N'Angela Reyes', N'Coastal Breeze Hospitality LLC', N'63-7184920', N'areyes@coastalbreeze.com', N'(305) 555-0175', N'500 Ocean Dr', N'Miami', N'FL', N'33139', N'PR-0034', N'Business Owners Policy', 27800.00, N'application.pdf;property-schedule.xlsx', N'Auto-matched to account and converted into opportunity and submission.', N'Processed', 88, 14, 10, 35),
+(N'INTK-100006', N'API', N'Thomas Whitfield', N'Northgate Financial Advisors', N'74-6028391', N'twhitfield@northgatefa.com', N'(404) 555-0158', N'1100 Peachtree St NE', N'Atlanta', N'GA', N'30309', N'PR-0023', N'Professional Liability', 54300.00, N'acord-125.pdf', N'Integration-sourced intake processed into the enterprise pipeline.', N'Processed', 91, 20, 15, 25),
+(N'INTK-100007', N'Email', N'Karen Liu', N'Evergreen Tech Solutions', N'29-4817365', N'kliu@evergreentech.com', N'(503) 555-0139', N'88 Pioneer Sq', N'Portland', N'OR', N'97204', N'PR-0008', N'Cyber Liability', 18900.00, NULL, N'Duplicate of an existing submission; archived after review.', N'Archived', 35, 45, 40, NULL),
+(N'INTK-100008', N'Fax', N'Michael Torres', N'Lone Star Freight Co', N'66-9023847', N'mtorres@lonestarfreight.com', N'(214) 555-0121', N'3300 Trade Center Pkwy', N'Dallas', N'TX', N'75247', N'PR-0019', N'Commercial Auto', 41600.00, N'loss-runs.pdf', N'Insufficient information provided; archived pending applicant follow-up.', N'Archived', 22, 60, 52, NULL);
+
+INSERT INTO Submissions.SubmissionIntake
+(IntakeId, TenantId, IntakeNumber, Source, ReceivedDate, ApplicantName, BusinessName, Fein, Email, Phone, AddressLine, City, [State], PostalCode, ProducerCode, LineOfBusiness, RequestedEffectiveDate, EstimatedPremium, Attachments, Notes, IntakeStatus, MatchScore, ProcessedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @IntakeTenantId, s.IntakeNumber, s.Source, DATEADD(DAY, -s.ReceivedDaysAgo, SYSUTCDATETIME()), s.ApplicantName, s.BusinessName, s.Fein, s.Email, s.Phone, s.AddressLine, s.City, s.[State], s.PostalCode, s.ProducerCode, s.LineOfBusiness, CASE WHEN s.EffectiveInDays IS NULL THEN NULL ELSE DATEADD(DAY, s.EffectiveInDays, SYSUTCDATETIME()) END, s.EstimatedPremium, s.Attachments, s.Notes, s.IntakeStatus, s.MatchScore, CASE WHEN s.ProcessedDaysAgo IS NULL THEN NULL ELSE DATEADD(DAY, -s.ProcessedDaysAgo, SYSUTCDATETIME()) END, DATEADD(DAY, -s.ReceivedDaysAgo, SYSUTCDATETIME()), @IntakeAdminUserId, 0
+FROM @IntakeSeed s
+WHERE NOT EXISTS (SELECT 1 FROM Submissions.SubmissionIntake i WHERE i.TenantId = @IntakeTenantId AND i.IntakeNumber = s.IntakeNumber AND i.IsDeleted = 0);
+";
+
+    private const string Migration0149_SubmissionsSubmissionIntakeSeed = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Submissions.SubmissionIntake', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionIntake
+    (
+        IntakeId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_SubmissionIntake PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        IntakeNumber NVARCHAR(50) NOT NULL,
+        Source NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionIntake_Source_0149 DEFAULT N'Email',
+        ReceivedDate DATETIME2 NOT NULL CONSTRAINT DF_SubmissionIntake_ReceivedDate_0149 DEFAULT SYSUTCDATETIME(),
+        ApplicantName NVARCHAR(200) NULL,
+        BusinessName NVARCHAR(200) NOT NULL,
+        Fein NVARCHAR(50) NULL,
+        Email NVARCHAR(200) NULL,
+        Phone NVARCHAR(50) NULL,
+        AddressLine NVARCHAR(250) NULL,
+        City NVARCHAR(100) NULL,
+        [State] NVARCHAR(50) NULL,
+        PostalCode NVARCHAR(20) NULL,
+        ExistingPolicyNumber NVARCHAR(50) NULL,
+        ProducerCode NVARCHAR(50) NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        RequestedEffectiveDate DATETIME2 NULL,
+        EstimatedPremium DECIMAL(18,2) NULL,
+        Attachments NVARCHAR(4000) NULL,
+        RawPayload NVARCHAR(MAX) NULL,
+        Notes NVARCHAR(1000) NULL,
+        IntakeStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionIntake_Status_0149 DEFAULT N'Pending',
+        MatchScore INT NOT NULL CONSTRAINT DF_SubmissionIntake_MatchScore_0149 DEFAULT 0,
+        MatchedAccountId UNIQUEIDENTIFIER NULL,
+        AccountId UNIQUEIDENTIFIER NULL,
+        OpportunityId UNIQUEIDENTIFIER NULL,
+        SubmissionId UNIQUEIDENTIFIER NULL,
+        AssignedToUserId UNIQUEIDENTIFIER NULL,
+        ProcessedDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionIntake_Created_0149 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionIntake_IsDeleted_0149 DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.sequences WHERE name = N'IntakeSeq' AND schema_id = SCHEMA_ID(N'Submissions'))
+    EXEC(N'CREATE SEQUENCE Submissions.IntakeSeq AS INT START WITH 1 INCREMENT BY 1');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionIntake') AND name = N'IX_SubmissionIntake_Tenant_Status')
+    CREATE INDEX IX_SubmissionIntake_Tenant_Status ON Submissions.SubmissionIntake(TenantId, IsDeleted, IntakeStatus, ReceivedDate DESC);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionIntake') AND name = N'UX_SubmissionIntake_Tenant_Number')
+    CREATE UNIQUE INDEX UX_SubmissionIntake_Tenant_Number ON Submissions.SubmissionIntake(TenantId, IntakeNumber) WHERE IsDeleted = 0;
+
+DECLARE @SeedTenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+DECLARE @SeedAdminUserId UNIQUEIDENTIFIER = NULL;
+
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    SELECT TOP 1 @SeedTenantId = TenantId
+    FROM Core.Tenant
+    ORDER BY TenantId;
+END;
+
+IF OBJECT_ID(N'IAM.[User]', N'U') IS NOT NULL
+BEGIN
+    SELECT TOP 1 @SeedAdminUserId = UserId
+    FROM IAM.[User]
+    WHERE TenantId = @SeedTenantId
+    ORDER BY UserId;
+END;
+
+DECLARE @SeedIntakes TABLE
+(
+    IntakeNumber NVARCHAR(50),
+    Source NVARCHAR(50),
+    ApplicantName NVARCHAR(200),
+    BusinessName NVARCHAR(200),
+    Fein NVARCHAR(50),
+    Email NVARCHAR(200),
+    Phone NVARCHAR(50),
+    AddressLine NVARCHAR(250),
+    City NVARCHAR(100),
+    [State] NVARCHAR(50),
+    PostalCode NVARCHAR(20),
+    ExistingPolicyNumber NVARCHAR(50),
+    ProducerCode NVARCHAR(50),
+    LineOfBusiness NVARCHAR(100),
+    EstimatedPremium DECIMAL(18,2),
+    Attachments NVARCHAR(4000),
+    Notes NVARCHAR(1000),
+    IntakeStatus NVARCHAR(50),
+    MatchScore INT,
+    ReceivedDaysAgo INT,
+    ProcessedDaysAgo INT,
+    EffectiveInDays INT
+);
+
+INSERT INTO @SeedIntakes VALUES
+(N'INTK-100001', N'Email', N'Maria Alvarez', N'Summit Ridge Logistics LLC', N'82-1947365', N'maria.alvarez@summitridge.com', N'(415) 555-0182', N'1820 Harbor Blvd', N'Oakland', N'CA', N'94607', NULL, N'PR-0042', N'Commercial Auto', 48500.00, N'acord-125.pdf;loss-runs-3yr.pdf', N'New business submission received via broker email. Awaiting clearance.', N'Pending', 0, 1, NULL, 30),
+(N'INTK-100002', N'Portal', N'David Chen', N'Brightline Manufacturing Inc', N'47-3920184', N'dchen@brightlinemfg.com', N'(312) 555-0147', N'77 Industrial Park Rd', N'Chicago', N'IL', N'60616', NULL, N'PR-0017', N'General Liability', 32750.00, N'application.pdf', N'Submitted through producer portal; requires underwriting review.', N'Pending', 12, 2, NULL, 45),
+(N'INTK-100003', N'Phone', N'Jennifer Brooks', N'Cedar Hollow Property Group', N'91-5837201', N'jbrooks@cedarhollow.com', N'(206) 555-0193', N'940 Lakeview Dr', N'Seattle', N'WA', N'98109', N'CPP-24-88021', N'PR-0029', N'Commercial Property', 61200.00, NULL, N'Phoned in by long-standing client requesting renewal quote.', N'Pending', 0, 3, NULL, 60),
+(N'INTK-100004', N'Email', N'Robert Sandoval', N'Pioneer Valley Contractors', N'58-2049173', N'rsandoval@pioneervalley.com', N'(617) 555-0166', N'212 Commonwealth Ave', N'Boston', N'MA', N'02116', NULL, N'PR-0011', N'Workers Compensation', 89400.00, N'acord-130.pdf;experience-mod.pdf', N'Matched to existing prospect account and queued for normalization.', N'Reviewing', 96, 9, NULL, 20),
+(N'INTK-100005', N'Portal', N'Angela Reyes', N'Coastal Breeze Hospitality LLC', N'63-7184920', N'areyes@coastalbreeze.com', N'(305) 555-0175', N'500 Ocean Dr', N'Miami', N'FL', N'33139', NULL, N'PR-0034', N'Business Owners Policy', 27800.00, N'application.pdf;property-schedule.xlsx', N'Auto-matched to account and converted into opportunity and submission.', N'Processed', 88, 14, 10, 35),
+(N'INTK-100006', N'API', N'Thomas Whitfield', N'Northgate Financial Advisors', N'74-6028391', N'twhitfield@northgatefa.com', N'(404) 555-0158', N'1100 Peachtree St NE', N'Atlanta', N'GA', N'30309', NULL, N'PR-0023', N'Professional Liability', 54300.00, N'acord-125.pdf', N'Integration-sourced intake processed into the enterprise pipeline.', N'Processed', 91, 20, 15, 25),
+(N'INTK-100007', N'Email', N'Karen Liu', N'Evergreen Tech Solutions', N'29-4817365', N'kliu@evergreentech.com', N'(503) 555-0139', N'88 Pioneer Sq', N'Portland', N'OR', N'97204', NULL, N'PR-0008', N'Cyber Liability', 18900.00, NULL, N'Duplicate of an existing submission; archived after review.', N'Archived', 35, 45, 40, NULL),
+(N'INTK-100008', N'Fax', N'Michael Torres', N'Lone Star Freight Co', N'66-9023847', N'mtorres@lonestarfreight.com', N'(214) 555-0121', N'3300 Trade Center Pkwy', N'Dallas', N'TX', N'75247', NULL, N'PR-0019', N'Commercial Auto', 41600.00, N'loss-runs.pdf', N'Insufficient information provided; rejected pending applicant follow-up.', N'Rejected', 22, 60, 52, NULL),
+(N'INTK-100009', N'Email', N'Nadia Patel', N'Apex Specialty Foods Inc', N'31-8804572', N'nadia.patel@apexfoods.example', N'(713) 555-0191', N'415 Warehouse Row', N'Houston', N'TX', N'77002', NULL, N'PR-0031', N'Commercial Package', 126500.00, N'acord-125.pdf;property-schedule.xlsx;loss-runs.pdf', N'High-value package submission with complete intake packet and target effective date.', N'Reviewing', 78, 4, NULL, 21),
+(N'INTK-100010', N'Producer Upload', N'Lucas Morgan', N'Blue River Healthcare Partners', N'75-2249001', N'lmorgan@blueriverhealth.example', N'(614) 555-0188', N'900 Medical Center Dr', N'Columbus', N'OH', N'43215', N'PL-2024-44210', N'PR-0048', N'Professional Liability', 98500.00, N'application.pdf;claims-history.pdf', N'Renewal submission uploaded by producer; existing policy context included.', N'Pending', 64, 6, NULL, 38);
+
+INSERT INTO Submissions.SubmissionIntake
+(IntakeId, TenantId, IntakeNumber, Source, ReceivedDate, ApplicantName, BusinessName, Fein, Email, Phone, AddressLine, City, [State], PostalCode, ExistingPolicyNumber, ProducerCode, LineOfBusiness, RequestedEffectiveDate, EstimatedPremium, Attachments, Notes, IntakeStatus, MatchScore, ProcessedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @SeedTenantId, s.IntakeNumber, s.Source, DATEADD(DAY, -s.ReceivedDaysAgo, SYSUTCDATETIME()), s.ApplicantName, s.BusinessName, s.Fein, s.Email, s.Phone, s.AddressLine, s.City, s.[State], s.PostalCode, s.ExistingPolicyNumber, s.ProducerCode, s.LineOfBusiness, CASE WHEN s.EffectiveInDays IS NULL THEN NULL ELSE DATEADD(DAY, s.EffectiveInDays, SYSUTCDATETIME()) END, s.EstimatedPremium, s.Attachments, s.Notes, s.IntakeStatus, s.MatchScore, CASE WHEN s.ProcessedDaysAgo IS NULL THEN NULL ELSE DATEADD(DAY, -s.ProcessedDaysAgo, SYSUTCDATETIME()) END, DATEADD(DAY, -s.ReceivedDaysAgo, SYSUTCDATETIME()), @SeedAdminUserId, 0
+FROM @SeedIntakes s
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Submissions.SubmissionIntake i
+    WHERE i.TenantId = @SeedTenantId
+      AND i.IntakeNumber = s.IntakeNumber
+      AND i.IsDeleted = 0
+);
 ";
 }

@@ -12,4 +12,10 @@ public interface IAccountRepository
     Task UpdateAsync(Guid id, UpdateAccountRequest request, CancellationToken cancellationToken = default);
     Task DeleteAsync(Guid id, Guid? userId = null, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ContactDto>> GetContactsByAccountIdAsync(Guid accountId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns potential matching accounts for the supplied criteria (name/email/phone)
+    /// so the Account Match engine can score candidates before creating a new account.
+    /// </summary>
+    Task<IReadOnlyList<AccountDto>> FindMatchCandidatesAsync(Ams.Application.Features.Accounts.AccountMatchCriteria criteria, CancellationToken cancellationToken = default);
 }
