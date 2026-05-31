@@ -19,6 +19,12 @@
             <span class="acc-eyebrow">Tenant Admin · Account Intelligence</span>
             <h1>Account Command Center</h1>
             <p>Prioritize revenue, lifecycle risk, servicing readiness, and relationship workflows across every customer and prospect account.</p>
+            <div class="acc-hero-meta">
+                <span><i class="bi bi-buildings" aria-hidden="true"></i>@_accounts.Count.ToString("N0") accounts</span>
+                <span><i class="bi bi-gem" aria-hidden="true"></i>@StrategicAccounts.ToString("N0") strategic</span>
+                <span><i class="bi bi-shield-exclamation" aria-hidden="true"></i>@AtRiskAccounts.ToString("N0") risk</span>
+                <span><i class="bi bi-cash-stack" aria-hidden="true"></i>@TotalRevenue.ToString("C0") revenue</span>
+            </div>
         </div>
         <div class="acc-hero-actions">
             <button type="button" class="acc-btn acc-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
@@ -42,6 +48,7 @@
         @KpiCard("strategic", "Enterprise / Key", StrategicAccounts.ToString("N0"), "bi-gem", "purple", "High-priority relationship coverage")
         @KpiCard("risk", "At Risk", AtRiskAccounts.ToString("N0"), "bi-exclamation-triangle", AtRiskAccounts > 0 ? "red" : "green", "Suspended, inactive, or at-risk lifecycle")
         @KpiCard("pipeline", "Open Pipeline", ProspectAccounts.ToString("N0"), "bi-funnel", "amber", "Prospects and lead-stage accounts")
+        @KpiCard("contact", "Missing Contact", ContactGaps.ToString("N0"), "bi-person-x", ContactGaps > 0 ? "red" : "green", "No email and no phone")
         @KpiCard("revenue", "Annual Revenue", TotalRevenue.ToString("C0"), "bi-cash-stack", "green", "Known revenue profile")
     </section>
 
@@ -61,6 +68,14 @@
         <button type="button" class="acc-workflow-card" @onclick='() => SetTab("pipeline")'>
             <span class="acc-workflow-icon acc-tone-amber"><i class="bi bi-diagram-3" aria-hidden="true"></i></span>
             <span><strong>Advance pipeline</strong><small>Lead and prospect follow-up</small></span>
+        </button>
+        <button type="button" class="acc-workflow-card" @onclick='() => SetTab("contact")'>
+            <span class="acc-workflow-icon acc-tone-red"><i class="bi bi-envelope-exclamation" aria-hidden="true"></i></span>
+            <span><strong>Fix contact gaps</strong><small>Accounts missing contact readiness</small></span>
+        </button>
+        <button type="button" class="acc-workflow-card" @onclick='() => SetTab("recent")'>
+            <span class="acc-workflow-icon acc-tone-blue"><i class="bi bi-clock-history" aria-hidden="true"></i></span>
+            <span><strong>Recent changes</strong><small>Recently touched records</small></span>
         </button>
     </section>
 
@@ -82,6 +97,13 @@
                 @foreach (var type in _typeOptions)
                 {
                     <option value="@type.Code">@type.Name</option>
+                }
+            </select>
+            <select class="acc-select" value="@_segmentFilter" @onchange="OnSegmentChanged" aria-label="Filter by segment">
+                <option value="">All segments</option>
+                @foreach (var segment in _segmentOptions)
+                {
+                    <option value="@segment.Code">@segment.Name</option>
                 }
             </select>
             <button type="button" class="acc-btn acc-btn-ghost" @onclick="ResetFilters">
@@ -124,6 +146,70 @@
         }
         else
         {
+            <section class="acc-directory-panel" aria-label="Merged account directory">
+                <div class="acc-directory-header">
+                    <div>
+                        <span class="acc-eyebrow">Merged Directory</span>
+                        <h2>Focused account directory</h2>
+                        <p>Search, segment, prioritize, and act on the customer and prospect book from the unified accounts page.</p>
+                    </div>
+                    <span class="acc-directory-count">Page @_page of @TotalPages · @FilteredAccounts.Count().ToString("N0") accounts</span>
+                </div>
+                <div class="acc-directory-list" role="list" aria-label="Account directory results">
+                    @foreach (var account in PagedAccounts)
+                    {
+                        <article class="@DirectoryRowClass(account)" role="listitem" @onclick="() => SelectAccount(account)">
+                            <div class="acc-directory-main">
+                                <span class="acc-avatar @AvatarTone(account.AccountName)">@Initials(account.AccountName)</span>
+                                <div>
+                                    <div class="acc-directory-title">
+                                        <strong>@account.AccountName</strong>
+                                        <span class="@PriorityBadge(account)">@PriorityLabel(account)</span>
+                                    </div>
+                                    <div class="acc-directory-meta">
+                                        <span>@account.AccountNumber</span>
+                                        <span>@account.AccountTypeCode</span>
+                                        <span>@(account.Industry ?? "No industry")</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="acc-directory-grid">
+                                <span class="@StatusBadge(account.StatusCode)">@account.StatusCode</span>
+                                <span>@(account.SegmentCode ?? "Unsegmented")</span>
+                                <span>@(account.LifecycleStageCode ?? "No lifecycle")</span>
+                                <strong>@((account.AnnualRevenue ?? 0).ToString("C0"))</strong>
+                            </div>
+                            <div class="acc-directory-contact">
+                                @if (!string.IsNullOrWhiteSpace(account.MainEmail))
+                                {
+                                    <a href="mailto:@account.MainEmail" @onclick:stopPropagation="true"><i class="bi bi-envelope" aria-hidden="true"></i>@account.MainEmail</a>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(account.MainPhone))
+                                {
+                                    <a href="tel:@NormalizePhoneLink(account.MainPhone)" @onclick:stopPropagation="true"><i class="bi bi-telephone" aria-hidden="true"></i>@FormatPhone(account.MainPhone)</a>
+                                }
+                                @if (HasContactGap(account))
+                                {
+                                    <span class="acc-muted"><i class="bi bi-exclamation-circle" aria-hidden="true"></i>No contact data</span>
+                                }
+                            </div>
+                            <div class="acc-row-actions" @onclick:stopPropagation="true">
+                                <button type="button" class="acc-icon-btn" title="Open Account 360" @onclick="() => OpenAccount(account)"><i class="bi bi-person-vcard" aria-hidden="true"></i></button>
+                                <button type="button" class="acc-icon-btn" title="Hierarchy" @onclick='() => Nav.NavigateTo($"/accounts/{account.AccountId}/hierarchy")'><i class="bi bi-diagram-3" aria-hidden="true"></i></button>
+                                <button type="button" class="acc-icon-btn" title="Timeline" @onclick='() => Nav.NavigateTo($"/accounts/{account.AccountId}/timeline")'><i class="bi bi-clock-history" aria-hidden="true"></i></button>
+                                <button type="button" class="acc-icon-btn" title="Relationships" @onclick='() => Nav.NavigateTo($"/accounts/{account.AccountId}/relationships")'><i class="bi bi-link-45deg" aria-hidden="true"></i></button>
+                                <button type="button" class="acc-icon-btn" title="Edit account" @onclick="() => OpenEdit(account)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                            </div>
+                        </article>
+                    }
+                </div>
+                <div class="acc-pagination">
+                    <button type="button" class="acc-btn acc-btn-ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Previous</button>
+                    <span>Page @_page of @TotalPages</span>
+                    <button type="button" class="acc-btn acc-btn-ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </section>
+
             <div class="acc-table-wrap">
                 <table class="acc-table">
                     <thead>
@@ -219,6 +305,16 @@
                 @MiniMetric("Lifecycle", SelectedAccount.LifecycleStageCode ?? "Not set")
                 @MiniMetric("Segment", SelectedAccount.SegmentCode ?? "Unsegmented")
                 @MiniMetric("Revenue", (SelectedAccount.AnnualRevenue ?? 0).ToString("C0"))
+            </div>
+            <div class="acc-score-card">
+                <span>Importance score</span>
+                <strong>@PriorityScore(SelectedAccount)</strong>
+                <em>@PriorityLabel(SelectedAccount)</em>
+            </div>
+            <div class="acc-readiness-card">
+                <h3>Readiness</h3>
+                <span class="@ReadinessClass(SelectedAccount)">@ReadinessLabel(SelectedAccount)</span>
+                <p>@ReadinessText(SelectedAccount)</p>
             </div>
             <div class="acc-inspector-actions">
                 <button type="button" class="acc-btn acc-btn-primary" @onclick="() => OpenAccount(SelectedAccount)"><i class="bi bi-person-vcard" aria-hidden="true"></i> Account 360</button>
@@ -361,16 +457,20 @@
     private readonly IReadOnlyList<AccountCommandTab> _tabs =
     [
         new("all", "All", "bi-grid-3x3-gap"),
+        new("priority", "Priority", "bi-lightning-charge"),
         new("strategic", "Strategic", "bi-gem"),
         new("risk", "Risk", "bi-exclamation-triangle"),
         new("pipeline", "Pipeline", "bi-funnel"),
+        new("contact", "Contact Gaps", "bi-person-x"),
         new("recent", "Recent", "bi-clock-history")
     ];
 
+    private const int PageSize = 20;
     private List<AccountDto> _accounts = [];
     private string _search = string.Empty;
     private string? _statusFilter;
     private string? _typeFilter;
+    private string? _segmentFilter;
     private string _activeTab = "all";
     private bool _loading = true;
     private bool _saving;
@@ -387,13 +487,16 @@
     private List<AccountOption> _typeOptions = [];
     private List<AccountOption> _segmentOptions = [];
     private List<AccountOption> _lifecycleStageOptions = [];
+    private int _page = 1;
 
     private IEnumerable<AccountDto> BaseTabAccounts => _activeTab switch
     {
+        "priority" => _accounts.Where(a => PriorityScore(a) >= 50),
         "strategic" => _accounts.Where(IsStrategic),
         "risk" => _accounts.Where(IsAtRisk),
         "pipeline" => _accounts.Where(IsPipeline),
-        "recent" => _accounts.OrderByDescending(LastTouched).Take(15),
+        "contact" => _accounts.Where(HasContactGap),
+        "recent" => _accounts.OrderByDescending(LastTouched).Take(25),
         _ => _accounts
     };
 
@@ -401,14 +504,18 @@
         .Where(MatchesSearch)
         .Where(a => string.IsNullOrWhiteSpace(_statusFilter) || a.StatusCode == _statusFilter)
         .Where(a => string.IsNullOrWhiteSpace(_typeFilter) || a.AccountTypeCode == _typeFilter)
+        .Where(a => string.IsNullOrWhiteSpace(_segmentFilter) || a.SegmentCode == _segmentFilter)
         .OrderByDescending(PriorityScore)
         .ThenBy(a => a.AccountName);
 
+    private IEnumerable<AccountDto> PagedAccounts => FilteredAccounts.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredAccounts.Count() / (double)PageSize));
     private AccountDto? SelectedAccount => _accounts.FirstOrDefault(a => a.AccountId == _selectedAccountId) ?? FilteredAccounts.FirstOrDefault();
     private int ActiveAccounts => _accounts.Count(a => a.StatusCode == "Active");
     private int StrategicAccounts => _accounts.Count(IsStrategic);
     private int AtRiskAccounts => _accounts.Count(IsAtRisk);
     private int ProspectAccounts => _accounts.Count(IsPipeline);
+    private int ContactGaps => _accounts.Count(HasContactGap);
     private decimal TotalRevenue => _accounts.Sum(a => a.AnnualRevenue ?? 0);
     private double ActiveRate => _accounts.Count == 0 ? 0 : (double)ActiveAccounts / _accounts.Count;
 
@@ -455,6 +562,7 @@
             {
                 _selectedAccountId = _accounts.OrderByDescending(PriorityScore).First().AccountId;
             }
+            _page = Math.Min(_page, TotalPages);
         }
         catch (Exception ex)
         {
@@ -619,6 +727,7 @@
     private void SetTab(string tab)
     {
         _activeTab = tab;
+        _page = 1;
         _selectedAccountId = FilteredAccounts.FirstOrDefault()?.AccountId;
     }
 
@@ -631,6 +740,7 @@
             "strategic" => "strategic",
             "risk" => "risk",
             "pipeline" => "pipeline",
+            "contact" => "contact",
             "revenue" => "strategic",
             _ => "all"
         };
@@ -641,6 +751,7 @@
         }
 
         _selectedAccountId = FilteredAccounts.FirstOrDefault()?.AccountId;
+        _page = 1;
     }
 
     private void ResetFilters()
@@ -648,6 +759,8 @@
         _search = string.Empty;
         _statusFilter = null;
         _typeFilter = null;
+        _segmentFilter = null;
+        _page = 1;
     }
 
     private void ResetWorkspace()
@@ -660,20 +773,34 @@
     private void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e)
     {
         _search = e.Value?.ToString() ?? string.Empty;
+        _page = 1;
         _selectedAccountId = FilteredAccounts.FirstOrDefault()?.AccountId;
     }
 
     private void OnStatusChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e)
     {
         _statusFilter = Normalize(e.Value?.ToString());
+        _page = 1;
         _selectedAccountId = FilteredAccounts.FirstOrDefault()?.AccountId;
     }
 
     private void OnTypeChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e)
     {
         _typeFilter = Normalize(e.Value?.ToString());
+        _page = 1;
         _selectedAccountId = FilteredAccounts.FirstOrDefault()?.AccountId;
     }
+
+    private void OnSegmentChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _segmentFilter = Normalize(e.Value?.ToString());
+        _page = 1;
+        _selectedAccountId = FilteredAccounts.FirstOrDefault()?.AccountId;
+    }
+
+    private void PreviousPage() => _page = Math.Max(1, _page - 1);
+
+    private void NextPage() => _page = Math.Min(TotalPages, _page + 1);
 
     private void OnPhoneChanged(string? value) => _form.MainPhone = FormatPhone(value);
 
@@ -692,7 +819,9 @@
             || (account.MainEmail?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false)
             || (account.MainPhone?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false)
             || (account.SegmentCode?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false)
-            || (account.Industry?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false);
+            || (account.LifecycleStageCode?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false)
+            || (account.Industry?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false)
+            || (account.Website?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false);
     }
 
     private static List<AccountOption> ToOptions(IEnumerable<AccountReferenceOptionDto> options, string group) =>
@@ -717,6 +846,7 @@
     private static bool IsStrategic(AccountDto account) => account.SegmentCode is "Enterprise" or "Key Account" || (account.AnnualRevenue ?? 0) >= 1_000_000;
     private static bool IsAtRisk(AccountDto account) => account.StatusCode is "Suspended" or "Inactive" || account.LifecycleStageCode == "At Risk";
     private static bool IsPipeline(AccountDto account) => account.StatusCode == "Prospect" || account.LifecycleStageCode is "Lead" or "Prospect";
+    private static bool HasContactGap(AccountDto account) => string.IsNullOrWhiteSpace(account.MainEmail) && string.IsNullOrWhiteSpace(account.MainPhone);
     private static DateTime LastTouched(AccountDto account) => account.ModifiedDateUtc ?? account.CreatedDateUtc;
 
     private static int PriorityScore(AccountDto account)
@@ -725,21 +855,24 @@
         if (IsAtRisk(account)) score += 70;
         if (IsStrategic(account)) score += 50;
         if (IsPipeline(account)) score += 25;
-        if (string.IsNullOrWhiteSpace(account.MainEmail) && string.IsNullOrWhiteSpace(account.MainPhone)) score += 15;
+        if (HasContactGap(account)) score += 15;
         if (LastTouched(account) < DateTime.UtcNow.AddDays(-30)) score += 10;
         return score;
     }
 
     private int TabCount(string tab) => tab switch
     {
+        "priority" => _accounts.Count(a => PriorityScore(a) >= 50),
         "strategic" => StrategicAccounts,
         "risk" => AtRiskAccounts,
         "pipeline" => ProspectAccounts,
-        "recent" => Math.Min(_accounts.Count, 15),
+        "contact" => ContactGaps,
+        "recent" => Math.Min(_accounts.Count, 25),
         _ => _accounts.Count
     };
 
     private string TabClass(string tab) => _activeTab == tab ? "acc-tab acc-tab-active" : "acc-tab";
+    private string DirectoryRowClass(AccountDto account) => SelectedAccount?.AccountId == account.AccountId ? "acc-directory-row acc-directory-row-selected" : "acc-directory-row";
     private static string StatusBadge(string status) => status switch
     {
         "Active" => "acc-status acc-status-active",
@@ -749,9 +882,19 @@
         _ => "acc-status acc-status-muted"
     };
 
-    private static string PriorityLabel(AccountDto account) => IsAtRisk(account) ? "Risk" : IsStrategic(account) ? "Strategic" : IsPipeline(account) ? "Pipeline" : "Standard";
-    private static string PriorityBadge(AccountDto account) => IsAtRisk(account) ? "acc-priority acc-priority-risk" : IsStrategic(account) ? "acc-priority acc-priority-strategic" : IsPipeline(account) ? "acc-priority acc-priority-pipeline" : "acc-priority";
+    private static string PriorityLabel(AccountDto account) => IsAtRisk(account) ? "Risk" : IsStrategic(account) ? "Strategic" : IsPipeline(account) ? "Pipeline" : PriorityScore(account) >= 50 ? "Priority" : "Standard";
+    private static string PriorityBadge(AccountDto account) => PriorityLabel(account) switch
+    {
+        "Risk" => "acc-priority acc-priority-risk",
+        "Strategic" => "acc-priority acc-priority-strategic",
+        "Pipeline" => "acc-priority acc-priority-pipeline",
+        "Priority" => "acc-priority acc-priority-priority",
+        _ => "acc-priority"
+    };
     private static string AvatarTone(string name) { var tones = new[] { "acc-avatar-blue", "acc-avatar-purple", "acc-avatar-green", "acc-avatar-amber", "acc-avatar-rose" }; return tones[Math.Abs(name.GetHashCode()) % tones.Length]; }
+    private static string ReadinessLabel(AccountDto account) => HasContactGap(account) ? "Contact gap" : IsAtRisk(account) ? "Needs attention" : IsStrategic(account) ? "Executive-ready" : "Ready";
+    private static string ReadinessClass(AccountDto account) => HasContactGap(account) || IsAtRisk(account) ? "acc-readiness-badge acc-readiness-risk" : "acc-readiness-badge acc-readiness-ready";
+    private static string ReadinessText(AccountDto account) => HasContactGap(account) ? "Add email or phone before outreach and servicing workflows." : IsAtRisk(account) ? "Review lifecycle, servicing notes, and renewal readiness." : "Account has enough directory data for standard servicing workflows.";
 
     private static string? NormalizePhone(string? value)
     {
@@ -816,8 +959,9 @@
             "strategic" => _activeTab == "strategic",
             "risk" => _activeTab == "risk",
             "pipeline" => _activeTab == "pipeline",
+            "contact" => _activeTab == "contact",
             "revenue" => _activeTab == "strategic",
-            _ => _activeTab == "all" && string.IsNullOrWhiteSpace(_statusFilter) && string.IsNullOrWhiteSpace(_typeFilter) && string.IsNullOrWhiteSpace(_search)
+            _ => _activeTab == "all" && string.IsNullOrWhiteSpace(_statusFilter) && string.IsNullOrWhiteSpace(_typeFilter) && string.IsNullOrWhiteSpace(_segmentFilter) && string.IsNullOrWhiteSpace(_search)
         };
         return active ? "acc-kpi-card acc-kpi-card-active" : "acc-kpi-card";
     }

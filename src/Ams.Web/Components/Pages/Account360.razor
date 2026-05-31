@@ -5,7 +5,6 @@
 @using Ams.Application.Common.Validation
 @using Ams.Application.Features.Accounts
 @using Microsoft.AspNetCore.Components.Forms
-@using Syncfusion.Blazor.Diagram
 @inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
@@ -13,9 +12,16 @@
 
 <PageTitle>@(_acct is null ? "Account" : _acct.AccountName) â€” 360</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+<div class="a360-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="a360-toast @toast.CssClass">
+            <i class="bi @toast.Icon" aria-hidden="true"></i>
+            <span>@toast.Content</span>
+            <button type="button" @onclick="() => DismissToast(toast.Id)" aria-label="Dismiss notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+        </div>
+    }
+</div>
 
 @if (_loading)
 {
@@ -70,15 +76,33 @@ else
 
     <!-- â”€â”€ HEADLINE KPI CARDS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
     <div class="a360-kpi-bar">
-        @KpiCard("Total Premium",          _acct.TotalPremium.ToString("C0"),    "bi-shield-fill",     "a360-ki--green")
-        @KpiCard("Balances Due",           _acct.BalancesDue.ToString("C0"),     "bi-receipt",         _acct.BalancesDue > 0 ? "a360-ki--red" : "a360-ki--green")
+        @KpiCard("Total Premium",          DisplayTotalPremium.ToString("C0"),    "bi-shield-fill",     "a360-ki--green")
+        @KpiCard("Balances Due",           DisplayBalancesDue.ToString("C0"),     "bi-receipt",         DisplayBalancesDue > 0 ? "a360-ki--red" : "a360-ki--green")
         @KpiCard("Renewal Risk",           _acct.RenewalRisk,                    "bi-arrow-repeat",    RenewalRiskIcon(_acct.RenewalRisk))
-        @KpiCard("Open Claims",            _acct.OpenClaims.ToString(),          "bi-exclamation-triangle", _acct.OpenClaims > 0 ? "a360-ki--amber" : "a360-ki--green")
-        @KpiCard("Active Policies",        _acct.ActivePolicies.ToString(),      "bi-shield-check",    "a360-ki--blue")
+        @KpiCard("Open Claims",            DisplayOpenClaims.ToString(),          "bi-exclamation-triangle", DisplayOpenClaims > 0 ? "a360-ki--amber" : "a360-ki--green")
+        @KpiCard("Active Policies",        DisplayActivePolicies.ToString(),      "bi-shield-check",    "a360-ki--blue")
         @KpiCard("Open Opportunities",     _acct.OpenOpportunities.ToString(),   "bi-trophy",          "a360-ki--purple")
-        @KpiCard("YTD Commissions",        _acct.YtdCommissions.ToString("C0"),  "bi-percent",         "a360-ki--blue")
-        @KpiCard("Last Activity",          _acct.LastActivityDate?.ToString("d") ?? "â€”", "bi-lightning","a360-ki--gray")
+        @KpiCard("YTD Commissions",        DisplayYtdCommissions.ToString("C0"),  "bi-percent",         "a360-ki--blue")
+        @KpiCard("Last Activity",          DisplayLastActivity?.ToString("d") ?? "—", "bi-lightning","a360-ki--gray")
     </div>
+
+    <section class="a360-priority-grid" aria-label="Enterprise account priorities">
+        @foreach (var insight in PriorityInsights)
+        {
+            <button type="button" class="a360-priority-card @insight.Tone" @onclick="() => SelectTab(insight.TabIndex)">
+                <span class="a360-priority-icon"><i class="bi @insight.Icon" aria-hidden="true"></i></span>
+                <span><strong>@insight.Title</strong><small>@insight.Detail</small></span>
+                <i class="bi bi-arrow-right-short" aria-hidden="true"></i>
+            </button>
+        }
+    </section>
+
+    <section class="a360-action-strip" aria-label="Account workflow actions">
+        <button type="button" class="a360-action-card" @onclick="OpenLogActivity"><i class="bi bi-lightning" aria-hidden="true"></i><span><strong>Log activity</strong><small>Capture service, sales, or renewal touchpoints</small></span></button>
+        <button type="button" class="a360-action-card" @onclick="OpenCompose"><i class="bi bi-send" aria-hidden="true"></i><span><strong>Send communication</strong><small>Create email, call, SMS, or portal history</small></span></button>
+        <button type="button" class="a360-action-card" @onclick="OpenUpload"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i><span><strong>Upload document</strong><small>Add loss runs, policies, or financials</small></span></button>
+        <button type="button" class="a360-action-card" @onclick="OpenFnol"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span><strong>Start FNOL</strong><small>Open claim intake for account servicing</small></span></button>
+    </section>
 
     <!-- â”€â”€ 14-TAB BODY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
     <div class="a360-detail-shell">
@@ -214,30 +238,18 @@ else
                         @if (_policies.Count == 0) { @AEmpty("bi-shield","No policies","Bind new policies from quotes or add existing.") }
                         else
                         {
-                            <div class="app-datagrid">
-                                <SfGrid TValue="PolicyRow" DataSource="_policies" AllowSorting="true" AllowFiltering="true" EnableHover="true" RowHeight="56">
-                                    <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
-                                    <GridColumns>
-                                        <GridColumn Field="@nameof(PolicyRow.PolicyNumber)"   HeaderText="Policy #"    Width="150" />
-                                        <GridColumn Field="@nameof(PolicyRow.LineOfBusiness)" HeaderText="Line"        Width="160" />
-                                        <GridColumn Field="@nameof(PolicyRow.Carrier)"        HeaderText="Carrier"     Width="150" />
-                                        <GridColumn Field="@nameof(PolicyRow.Premium)"        HeaderText="Premium"     Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                            <Template>@{ var p = (PolicyRow)context; }<span class="a360-mono a360-bold">@p.Premium.ToString("C0")</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(PolicyRow.Status)"         HeaderText="Status"      Width="100">
-                                            <Template>@{ var p = (PolicyRow)context; }<span class="@PolicyStatusBadge(p.Status)">@p.Status</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(PolicyRow.EffectiveDate)"  HeaderText="Effective"   Width="120">
-                                            <Template>@{ var p = (PolicyRow)context; }<span class="a360-mono">@p.EffectiveDate.ToString("d")</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(PolicyRow.ExpirationDate)" HeaderText="Expiration"  Width="120">
-                                            <Template>@{ var p = (PolicyRow)context; }<span class="a360-mono @(p.ExpirationDate < DateTime.UtcNow.AddDays(30) && p.Status == "Active" ? "a360-due-soon" : "")">@p.ExpirationDate.ToString("d")</span></Template>
-                                        </GridColumn>
-                                        <GridColumn HeaderText="" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                            <Template>@{ var p = (PolicyRow)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo($"/policies/{p.PolicyId}")'><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template>
-                                        </GridColumn>
-                                    </GridColumns>
-                                </SfGrid>
+                            <div class="a360-native-table-wrap">
+                                <table class="a360-native-table">
+                                    <thead><tr><th>Policy #</th><th>Line</th><th>Carrier</th><th class="text-end">Premium</th><th>Status</th><th>Effective</th><th>Expiration</th><th class="text-end">Actions</th></tr></thead>
+                                    <tbody>
+                                        @foreach (var p in _policies.OrderByDescending(x => x.Premium))
+                                        {
+                                            <tr>
+                                                <td class="a360-mono a360-bold">@p.PolicyNumber</td><td>@p.LineOfBusiness</td><td>@p.Carrier</td><td class="text-end a360-mono a360-bold">@p.Premium.ToString("C0")</td><td><span class="@PolicyStatusBadge(p.Status)">@p.Status</span></td><td class="a360-mono">@p.EffectiveDate.ToString("d")</td><td class="a360-mono @(p.ExpirationDate < DateTime.UtcNow.AddDays(30) && p.Status == "Active" ? "a360-due-soon" : "")">@p.ExpirationDate.ToString("d")</td><td class="text-end"><button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo($"/policies/{p.PolicyId}")'><i class="bi bi-arrow-right" aria-hidden="true"></i></button></td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
                             </div>
                         }
                     </div>
@@ -254,27 +266,16 @@ else
                         @if (_submissions.Count == 0) { @AEmpty("bi-send","No submissions","Create carrier submissions for this account's lines.") }
                         else
                         {
-                            <div class="app-datagrid">
-                                <SfGrid TValue="SubmissionRow" DataSource="_submissions" AllowSorting="true" EnableHover="true" RowHeight="52">
-                                    <GridColumns>
-                                        <GridColumn Field="@nameof(SubmissionRow.SubmissionNumber)" HeaderText="Sub #"     Width="140" />
-                                        <GridColumn Field="@nameof(SubmissionRow.LineOfBusiness)"   HeaderText="Line"      Width="160" />
-                                        <GridColumn Field="@nameof(SubmissionRow.Carrier)"          HeaderText="Carrier"   Width="150" />
-                                        <GridColumn Field="@nameof(SubmissionRow.Status)"           HeaderText="Status"    Width="120">
-                                            <Template>@{ var s = (SubmissionRow)context; }<span class="@SubStatusBadge(s.Status)">@s.Status</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(SubmissionRow.SubmittedAt)"      HeaderText="Submitted"  Width="120">
-                                            <Template>@{ var s = (SubmissionRow)context; }<span class="a360-mono">@s.SubmittedAt.ToString("d")</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(SubmissionRow.DueDate)"          HeaderText="Due"        Width="120">
-                                            <Template>@{ var s = (SubmissionRow)context; }<span class="a360-mono @(s.DueDate.HasValue && s.DueDate < DateTime.UtcNow ? "a360-overdue" : "")">@(s.DueDate?.ToString("d") ?? "â€”")</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(SubmissionRow.Notes)"            HeaderText="Notes"     MinWidth="120" />
-                                        <GridColumn HeaderText="Actions" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                            <Template>@{ var s = (SubmissionRow)context; }<button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Edit submission" @onclick="() => OpenEditSubmission(s)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" title="Delete submission" @onclick="() => ConfirmDeleteSubmission(s)"><i class="bi bi-trash" aria-hidden="true"></i></button></Template>
-                                        </GridColumn>
-                                    </GridColumns>
-                                </SfGrid>
+                            <div class="a360-native-table-wrap">
+                                <table class="a360-native-table">
+                                    <thead><tr><th>Sub #</th><th>Line</th><th>Carrier</th><th>Status</th><th>Submitted</th><th>Due</th><th>Notes</th><th class="text-end">Actions</th></tr></thead>
+                                    <tbody>
+                                        @foreach (var s in _submissions.OrderByDescending(x => x.SubmittedAt))
+                                        {
+                                            <tr><td class="a360-mono a360-bold">@s.SubmissionNumber</td><td>@s.LineOfBusiness</td><td>@s.Carrier</td><td><span class="@SubStatusBadge(s.Status)">@s.Status</span></td><td class="a360-mono">@s.SubmittedAt.ToString("d")</td><td class="a360-mono @(s.DueDate.HasValue && s.DueDate < DateTime.UtcNow ? "a360-overdue" : "")">@(s.DueDate?.ToString("d") ?? "—")</td><td>@s.Notes</td><td class="text-end"><button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Edit submission" @onclick="() => OpenEditSubmission(s)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" title="Delete submission" @onclick="() => ConfirmDeleteSubmission(s)"><i class="bi bi-trash" aria-hidden="true"></i></button></td></tr>
+                                        }
+                                    </tbody>
+                                </table>
                             </div>
                         }
                     </div>
@@ -291,30 +292,16 @@ else
                         @if (_claims.Count == 0) { @AEmpty("bi-exclamation-triangle","No claims","First notice of loss will appear here.") }
                         else
                         {
-                            <div class="app-datagrid">
-                                <SfGrid TValue="ClaimRow" DataSource="_claims" AllowSorting="true" AllowFiltering="true" EnableHover="true" RowHeight="52">
-                                    <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
-                                    <GridColumns>
-                                        <GridColumn Field="@nameof(ClaimRow.ClaimNumber)"     HeaderText="Claim #"    Width="150" />
-                                        <GridColumn Field="@nameof(ClaimRow.LineOfBusiness)"  HeaderText="Line"       Width="160" />
-                                        <GridColumn Field="@nameof(ClaimRow.LossDate)"        HeaderText="Loss Date"  Width="120">
-                                            <Template>@{ var c = (ClaimRow)context; }<span class="a360-mono">@c.LossDate.ToString("d")</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(ClaimRow.Status)"          HeaderText="Status"     Width="110">
-                                            <Template>@{ var c = (ClaimRow)context; }<span class="@ClaimStatusBadge(c.Status)">@c.Status</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(ClaimRow.ReserveAmount)"   HeaderText="Reserve"    Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                            <Template>@{ var c = (ClaimRow)context; }<span class="a360-mono a360-bold">@c.ReserveAmount.ToString("C0")</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(ClaimRow.PaidAmount)"      HeaderText="Paid"       Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                            <Template>@{ var c = (ClaimRow)context; }<span class="a360-mono">@c.PaidAmount.ToString("C0")</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(ClaimRow.Adjuster)"        HeaderText="Adjuster"   Width="140" />
-                                        <GridColumn HeaderText="Actions" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                            <Template>@{ var c = (ClaimRow)context; }<button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Edit claim" @onclick="() => OpenEditClaim(c)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" title="Delete claim" @onclick="() => ConfirmDeleteClaim(c)"><i class="bi bi-trash" aria-hidden="true"></i></button></Template>
-                                        </GridColumn>
-                                    </GridColumns>
-                                </SfGrid>
+                            <div class="a360-native-table-wrap">
+                                <table class="a360-native-table">
+                                    <thead><tr><th>Claim #</th><th>Line</th><th>Loss Date</th><th>Status</th><th class="text-end">Reserve</th><th class="text-end">Paid</th><th>Adjuster</th><th class="text-end">Actions</th></tr></thead>
+                                    <tbody>
+                                        @foreach (var c in _claims.OrderByDescending(x => x.LossDate))
+                                        {
+                                            <tr><td class="a360-mono a360-bold">@c.ClaimNumber</td><td>@c.LineOfBusiness</td><td class="a360-mono">@c.LossDate.ToString("d")</td><td><span class="@ClaimStatusBadge(c.Status)">@c.Status</span></td><td class="text-end a360-mono a360-bold">@c.ReserveAmount.ToString("C0")</td><td class="text-end a360-mono">@c.PaidAmount.ToString("C0")</td><td>@c.Adjuster</td><td class="text-end"><button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Edit claim" @onclick="() => OpenEditClaim(c)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" title="Delete claim" @onclick="() => ConfirmDeleteClaim(c)"><i class="bi bi-trash" aria-hidden="true"></i></button></td></tr>
+                                        }
+                                    </tbody>
+                                </table>
                             </div>
                         }
                     </div>
@@ -330,26 +317,16 @@ else
                         @if (_billing.Count == 0) { @AEmpty("bi-receipt","No billing records","Invoices and installments will appear here.") }
                         else
                         {
-                            <div class="app-datagrid">
-                                <SfGrid TValue="BillingRow" DataSource="_billing" AllowSorting="true" EnableHover="true" RowHeight="52">
-                                    <GridColumns>
-                                        <GridColumn Field="@nameof(BillingRow.InvoiceNumber)" HeaderText="Invoice #"  Width="150" />
-                                        <GridColumn Field="@nameof(BillingRow.PolicyNumber)"  HeaderText="Policy #"   Width="150" />
-                                        <GridColumn Field="@nameof(BillingRow.Amount)"        HeaderText="Amount"     Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                            <Template>@{ var b = (BillingRow)context; }<span class="a360-mono a360-bold">@b.Amount.ToString("C0")</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(BillingRow.Balance)"       HeaderText="Balance"    Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                            <Template>@{ var b = (BillingRow)context; }<span class="a360-mono @(b.Balance > 0 ? "a360-overdue" : "")">@b.Balance.ToString("C0")</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(BillingRow.Status)"        HeaderText="Status"     Width="110">
-                                            <Template>@{ var b = (BillingRow)context; }<span class="@BillingStatusBadge(b.Status)">@b.Status</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(BillingRow.DueDate)"       HeaderText="Due"        Width="120">
-                                            <Template>@{ var b = (BillingRow)context; }<span class="a360-mono @(b.DueDate < DateTime.UtcNow && b.Status != "Paid" ? "a360-overdue" : "")">@b.DueDate.ToString("d")</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(BillingRow.PaymentMethod)" HeaderText="Method"     Width="120" />
-                                    </GridColumns>
-                                </SfGrid>
+                            <div class="a360-native-table-wrap">
+                                <table class="a360-native-table">
+                                    <thead><tr><th>Invoice #</th><th>Policy #</th><th class="text-end">Amount</th><th class="text-end">Balance</th><th>Status</th><th>Due</th><th>Method</th></tr></thead>
+                                    <tbody>
+                                        @foreach (var b in _billing.OrderBy(x => x.DueDate))
+                                        {
+                                            <tr><td class="a360-mono a360-bold">@b.InvoiceNumber</td><td class="a360-mono">@b.PolicyNumber</td><td class="text-end a360-mono a360-bold">@b.Amount.ToString("C0")</td><td class="text-end a360-mono @(b.Balance > 0 ? "a360-overdue" : "")">@b.Balance.ToString("C0")</td><td><span class="@BillingStatusBadge(b.Status)">@b.Status</span></td><td class="a360-mono @(b.DueDate < DateTime.UtcNow && b.Status != "Paid" ? "a360-overdue" : "")">@b.DueDate.ToString("d")</td><td>@b.PaymentMethod</td></tr>
+                                        }
+                                    </tbody>
+                                </table>
                             </div>
                         }
                     </div>
@@ -365,29 +342,16 @@ else
                         @if (_commissions.Count == 0) { @AEmpty("bi-percent","No commission records","Commission history will appear here.") }
                         else
                         {
-                            <div class="app-datagrid">
-                                <SfGrid TValue="CommissionRow" DataSource="_commissions" AllowSorting="true" EnableHover="true" RowHeight="52">
-                                    <GridColumns>
-                                        <GridColumn Field="@nameof(CommissionRow.PolicyNumber)"    HeaderText="Policy #"   Width="150" />
-                                        <GridColumn Field="@nameof(CommissionRow.LineOfBusiness)"  HeaderText="Line"       Width="160" />
-                                        <GridColumn Field="@nameof(CommissionRow.GrossPremium)"    HeaderText="Premium"    Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                            <Template>@{ var c = (CommissionRow)context; }<span class="a360-mono a360-bold">@c.GrossPremium.ToString("C0")</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(CommissionRow.CommissionRate)"  HeaderText="Rate"       Width="90" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                            <Template>@{ var c = (CommissionRow)context; }<span class="a360-mono">@c.CommissionRate.ToString("F1")%</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(CommissionRow.CommissionAmount)" HeaderText="Commission" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                            <Template>@{ var c = (CommissionRow)context; }<span class="a360-mono a360-bold">@c.CommissionAmount.ToString("C0")</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(CommissionRow.Status)"          HeaderText="Status"     Width="110">
-                                            <Template>@{ var c = (CommissionRow)context; }<span class="@CommStatusBadge(c.Status)">@c.Status</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(CommissionRow.PaidDate)"        HeaderText="Paid Date"  Width="120">
-                                            <Template>@{ var c = (CommissionRow)context; }<span class="a360-mono">@(c.PaidDate?.ToString("d") ?? "â€”")</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(CommissionRow.Producer)"        HeaderText="Producer"   Width="140" />
-                                    </GridColumns>
-                                </SfGrid>
+                            <div class="a360-native-table-wrap">
+                                <table class="a360-native-table">
+                                    <thead><tr><th>Policy #</th><th>Line</th><th class="text-end">Premium</th><th class="text-end">Rate</th><th class="text-end">Commission</th><th>Status</th><th>Paid Date</th><th>Producer</th></tr></thead>
+                                    <tbody>
+                                        @foreach (var c in _commissions.OrderByDescending(x => x.CommissionAmount))
+                                        {
+                                            <tr><td class="a360-mono a360-bold">@c.PolicyNumber</td><td>@c.LineOfBusiness</td><td class="text-end a360-mono a360-bold">@c.GrossPremium.ToString("C0")</td><td class="text-end a360-mono">@c.CommissionRate.ToString("F1")%</td><td class="text-end a360-mono a360-bold">@c.CommissionAmount.ToString("C0")</td><td><span class="@CommStatusBadge(c.Status)">@c.Status</span></td><td class="a360-mono">@(c.PaidDate?.ToString("d") ?? "—")</td><td>@c.Producer</td></tr>
+                                        }
+                                    </tbody>
+                                </table>
                             </div>
                         }
                     </div>
@@ -404,25 +368,16 @@ else
                         @if (_documents.Count == 0) { @AEmpty("bi-folder2","No documents","Upload loss runs, financials, policy documents or correspondence.") }
                         else
                         {
-                            <div class="app-datagrid">
-                                <SfGrid TValue="DocRow" DataSource="_documents" AllowSorting="true" EnableHover="true" RowHeight="52">
-                                    <GridColumns>
-                                        <GridColumn Field="@nameof(DocRow.FileName)"    HeaderText="File"        MinWidth="200">
-                                            <Template>@{ var d = (DocRow)context; }<span class="a360-doc-name"><i class="bi @DocIcon(d.Extension)" aria-hidden="true"></i> @d.FileName</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(DocRow.Category)"   HeaderText="Category"    Width="140" />
-                                        <GridColumn Field="@nameof(DocRow.SizeKb)"     HeaderText="Size"        Width="90" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                            <Template>@{ var d = (DocRow)context; }<span class="a360-mono">@d.SizeKb KB</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(DocRow.UploadedBy)" HeaderText="Uploaded By" Width="150" />
-                                        <GridColumn Field="@nameof(DocRow.UploadedAt)" HeaderText="Date"        Width="120">
-                                            <Template>@{ var d = (DocRow)context; }<span class="a360-mono">@d.UploadedAt.ToString("d")</span></Template>
-                                        </GridColumn>
-                                        <GridColumn HeaderText="" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                            <Template>@{ var d = (DocRow)context; }<button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Download" @onclick="() => DownloadDocumentAsync(d)"><i class="bi bi-download" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" title="Delete document" @onclick="() => ConfirmDeleteDocument(d)"><i class="bi bi-trash" aria-hidden="true"></i></button></Template>
-                                        </GridColumn>
-                                    </GridColumns>
-                                </SfGrid>
+                            <div class="a360-native-table-wrap">
+                                <table class="a360-native-table">
+                                    <thead><tr><th>File</th><th>Category</th><th class="text-end">Size</th><th>Uploaded By</th><th>Date</th><th class="text-end">Actions</th></tr></thead>
+                                    <tbody>
+                                        @foreach (var d in _documents.OrderByDescending(x => x.UploadedAt))
+                                        {
+                                            <tr><td><span class="a360-doc-name"><i class="bi @DocIcon(d.Extension)" aria-hidden="true"></i> @d.FileName</span></td><td>@d.Category</td><td class="text-end a360-mono">@d.SizeKb KB</td><td>@d.UploadedBy</td><td class="a360-mono">@d.UploadedAt.ToString("d")</td><td class="text-end"><button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Download" @onclick="() => DownloadDocumentAsync(d)"><i class="bi bi-download" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" title="Delete document" @onclick="() => ConfirmDeleteDocument(d)"><i class="bi bi-trash" aria-hidden="true"></i></button></td></tr>
+                                        }
+                                    </tbody>
+                                </table>
                             </div>
                         }
                     </div>
@@ -505,24 +460,16 @@ else
                         @if (_campaigns.Count == 0) { @AEmpty("bi-megaphone","No campaign enrollments","Enroll this account in renewal or cross-sell campaigns.") }
                         else
                         {
-                            <div class="app-datagrid">
-                                <SfGrid TValue="CampaignRow" DataSource="_campaigns" AllowSorting="true" EnableHover="true" RowHeight="52">
-                                    <GridColumns>
-                                        <GridColumn Field="@nameof(CampaignRow.CampaignName)" HeaderText="Campaign"    MinWidth="200" />
-                                        <GridColumn Field="@nameof(CampaignRow.Status)"       HeaderText="Status"      Width="110">
-                                            <Template>@{ var c = (CampaignRow)context; }<span class="@CampStatusBadge(c.Status)">@c.Status</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(CampaignRow.EnrolledAt)"  HeaderText="Enrolled"    Width="120">
-                                            <Template>@{ var c = (CampaignRow)context; }<span class="a360-mono">@c.EnrolledAt.ToString("d")</span></Template>
-                                        </GridColumn>
-                                        <GridColumn Field="@nameof(CampaignRow.EmailsSent)"  HeaderText="Sent"        Width="65" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
-                                        <GridColumn Field="@nameof(CampaignRow.Opens)"       HeaderText="Opens"       Width="65" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
-                                        <GridColumn Field="@nameof(CampaignRow.Clicks)"      HeaderText="Clicks"      Width="65" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
-                                        <GridColumn HeaderText="Actions" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                            <Template>@{ var c = (CampaignRow)context; }<button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Edit campaign" @onclick="() => OpenEditCampaign(c)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" title="Remove campaign" @onclick="() => ConfirmDeleteCampaign(c)"><i class="bi bi-trash" aria-hidden="true"></i></button></Template>
-                                        </GridColumn>
-                                    </GridColumns>
-                                </SfGrid>
+                            <div class="a360-native-table-wrap">
+                                <table class="a360-native-table">
+                                    <thead><tr><th>Campaign</th><th>Status</th><th>Enrolled</th><th class="text-end">Sent</th><th class="text-end">Opens</th><th class="text-end">Clicks</th><th class="text-end">Actions</th></tr></thead>
+                                    <tbody>
+                                        @foreach (var c in _campaigns.OrderByDescending(x => x.EnrolledAt))
+                                        {
+                                            <tr><td>@c.CampaignName</td><td><span class="@CampStatusBadge(c.Status)">@c.Status</span></td><td class="a360-mono">@c.EnrolledAt.ToString("d")</td><td class="text-end a360-mono">@c.EmailsSent</td><td class="text-end a360-mono">@c.Opens</td><td class="text-end a360-mono">@c.Clicks</td><td class="text-end"><button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Edit campaign" @onclick="() => OpenEditCampaign(c)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" title="Remove campaign" @onclick="() => ConfirmDeleteCampaign(c)"><i class="bi bi-trash" aria-hidden="true"></i></button></td></tr>
+                                        }
+                                    </tbody>
+                                </table>
                             </div>
                         }
                     </div>
@@ -559,21 +506,26 @@ else
                             <span class="a360-tab-count">Account relationship map</span>
                             <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenAddRelationship"><i class="bi bi-plus-lg" aria-hidden="true"></i> Link Account</button>
                         </div>
-                        <!-- SfDiagram for relationship visualization -->
-                        <div class="a360-diagram-wrap">
-                            <SfDiagramComponent @ref="_diagram"
-                                                Width="100%" Height="440px"
-                                                Nodes="_diagramNodes"
-                                                Connectors="_diagramConnectors"
-                                                Created="OnDiagramCreated">
-                                <SnapSettings Constraints="SnapConstraints.None" />
-                                <Layout Type="LayoutType.HierarchicalTree"
-                                        HorizontalSpacing="60"
-                                        VerticalSpacing="60"
-                                        Orientation="LayoutOrientation.TopToBottom" />
-                            </SfDiagramComponent>
+                        <div class="a360-rel-map" aria-label="Account relationship visualization">
+                            <div class="a360-rel-node a360-rel-node-root">
+                                <span class="a360-rel-avatar @AvatarColor(_acct.AccountName)">@Initials(_acct.AccountName)</span>
+                                <strong>@_acct.AccountName</strong>
+                                <small>Primary account</small>
+                            </div>
+                            <div class="a360-rel-branches">
+                                @foreach (var r in _relationships)
+                                {
+                                    <div class="a360-rel-branch">
+                                        <span class="a360-rel-line" aria-hidden="true"></span>
+                                        <div class="a360-rel-node">
+                                            <span class="a360-rel-avatar @AvatarColor(r.RelatedAccount)">@Initials(r.RelatedAccount)</span>
+                                            <strong>@r.RelatedAccount</strong>
+                                            <small>@r.RelationType</small>
+                                        </div>
+                                    </div>
+                                }
+                            </div>
                         </div>
-                        <!-- Relationship list -->
                         @if (_relationships.Count > 0)
                         {
                             <div class="a360-rel-list">
@@ -678,8 +630,10 @@ else
 <!-- â•â• DIALOGS â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
 
 <!-- Edit Account -->
-<SfDialog @bind-Visible="_showEdit" Width="720px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
+@if (_showEdit)
+{
+<div class="a360-modal-backdrop" role="presentation" @onclick="() => _showEdit = false">
+    <div class="a360-modal a360-modal-lg" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-modal-header">
             <i class="bi bi-building-gear" aria-hidden="true"></i>
             <span>Edit Account</span>
@@ -758,12 +712,15 @@ else
                 <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Save Changes</button>
             </div>
         </EditForm>
-    </DialogContent>
-</SfDialog>
+    </div>
+</div>
+}
 
 <!-- Add/Edit Contact -->
-<SfDialog @bind-Visible="_showAddContact" Width="620px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
+@if (_showAddContact)
+{
+<div class="a360-modal-backdrop" role="presentation" @onclick="CloseContactDialog">
+    <div class="a360-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-modal-header">
             <i class="bi bi-person-plus" aria-hidden="true"></i>
             <span>@(_editingContact is null ? "Add Contact" : "Edit Contact")</span>
@@ -786,12 +743,15 @@ else
                 <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_editingContact is null ? "Add" : "Save")</button>
             </div>
         </EditForm>
-    </DialogContent>
-</SfDialog>
+    </div>
+</div>
+}
 
 <!-- Log/Edit Activity -->
-<SfDialog @bind-Visible="_showLogActivity" Width="620px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
+@if (_showLogActivity)
+{
+<div class="a360-modal-backdrop" role="presentation" @onclick="CloseActivityDialog">
+    <div class="a360-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-modal-header"><i class="bi bi-lightning" aria-hidden="true"></i><span>@(_editingActivity is null ? "Log Activity" : "Edit Activity")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseActivityDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
         <EditForm Model="_activityForm" OnValidSubmit="CommitActivityAsync">
             <DataAnnotationsValidator />
@@ -803,12 +763,15 @@ else
             </div></div>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseActivityDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Save</button></div>
         </EditForm>
-    </DialogContent>
-</SfDialog>
+    </div>
+</div>
+}
 
 <!-- Compose/Edit Communication -->
-<SfDialog @bind-Visible="_showCompose" Width="620px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
+@if (_showCompose)
+{
+<div class="a360-modal-backdrop" role="presentation" @onclick="CloseCommunicationDialog">
+    <div class="a360-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-modal-header"><i class="bi bi-send" aria-hidden="true"></i><span>@(_editingCommunication is null ? "New Communication" : "Edit Communication")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseCommunicationDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
         <EditForm Model="_communicationForm" OnValidSubmit="CommitComposeAsync">
             <DataAnnotationsValidator />
@@ -819,12 +782,15 @@ else
             </div></div>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseCommunicationDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-send" aria-hidden="true"></i> Save</button></div>
         </EditForm>
-    </DialogContent>
-</SfDialog>
+    </div>
+</div>
+}
 
 <!-- Upload -->
-<SfDialog @bind-Visible="_showUpload" Width="540px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
+@if (_showUpload)
+{
+<div class="a360-modal-backdrop" role="presentation" @onclick="CloseUploadDialog">
+    <div class="a360-modal a360-modal-sm" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-modal-header"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i><span>Upload Document</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseUploadDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
         <EditForm Model="_documentForm" OnValidSubmit="CommitUploadAsync">
             <DataAnnotationsValidator />
@@ -834,12 +800,15 @@ else
             </div></div>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseUploadDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Upload</button></div>
         </EditForm>
-    </DialogContent>
-</SfDialog>
+    </div>
+</div>
+}
 
 <!-- FNOL/Edit Claim -->
-<SfDialog @bind-Visible="_showFnol" Width="620px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
+@if (_showFnol)
+{
+<div class="a360-modal-backdrop" role="presentation" @onclick="CloseClaimDialog">
+    <div class="a360-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-modal-header"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span>@(_editingClaim is null ? "First Notice of Loss" : "Edit Claim")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseClaimDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
         <EditForm Model="_claimForm" OnValidSubmit="CommitFnolAsync">
             <DataAnnotationsValidator />
@@ -852,12 +821,15 @@ else
             </div></div>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseClaimDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_editingClaim is null ? "Submit FNOL" : "Save")</button></div>
         </EditForm>
-    </DialogContent>
-</SfDialog>
+    </div>
+</div>
+}
 
 <!-- Add/Edit Relationship -->
-<SfDialog @bind-Visible="_showAddRel" Width="520px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
+@if (_showAddRel)
+{
+<div class="a360-modal-backdrop" role="presentation" @onclick="CloseRelationshipDialog">
+    <div class="a360-modal a360-modal-sm" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-modal-header"><i class="bi bi-diagram-3" aria-hidden="true"></i><span>@(_editingRelationship is null ? "Link Account" : "Edit Relationship")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseRelationshipDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
         <EditForm Model="_relationshipForm" OnValidSubmit="CommitAddRelAsync">
             <DataAnnotationsValidator />
@@ -867,36 +839,45 @@ else
             </div></div>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseRelationshipDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_editingRelationship is null ? "Link" : "Save")</button></div>
         </EditForm>
-    </DialogContent>
-</SfDialog>
+    </div>
+</div>
+}
 
 <!-- Enroll/Edit Campaign -->
-<SfDialog @bind-Visible="_showCampaign" Width="520px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
+@if (_showCampaign)
+{
+<div class="a360-modal-backdrop" role="presentation" @onclick="CloseCampaignDialog">
+    <div class="a360-modal a360-modal-sm" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-modal-header"><i class="bi bi-megaphone" aria-hidden="true"></i><span>@(_editingCampaign is null ? "Enroll in Campaign" : "Edit Campaign Enrollment")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseCampaignDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
         <EditForm Model="_campaignForm" OnValidSubmit="CommitCampaignAsync">
             <DataAnnotationsValidator />
             <div class="um-modal-body"><div class="um-form-grid"><div class="um-field um-field--full"><label>Campaign <span class="text-danger">*</span></label><InputSelect @bind-Value="_campaignForm.CampaignName" class="um-input"><option value="">Select campaign</option>@foreach (var option in _campOpts) { <option value="@option.Label">@option.Label</option> }</InputSelect></div></div></div>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseCampaignDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_editingCampaign is null ? "Enroll" : "Save")</button></div>
         </EditForm>
-    </DialogContent>
-</SfDialog>
+    </div>
+</div>
+}
 
 <!-- Add Note -->
-<SfDialog @bind-Visible="_showNote" Width="560px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
+@if (_showNote)
+{
+<div class="a360-modal-backdrop" role="presentation" @onclick="CloseNoteDialog">
+    <div class="a360-modal a360-modal-sm" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-modal-header"><i class="bi bi-sticky" aria-hidden="true"></i><span>Add Note</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseNoteDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
         <EditForm Model="_noteForm" OnValidSubmit="CommitNoteAsync">
             <DataAnnotationsValidator />
             <div class="um-modal-body"><div class="um-form-grid"><div class="um-field um-field--full"><label>Note Text <span class="text-danger">*</span></label><InputTextArea @bind-Value="_noteForm.Text" class="um-input" rows="5" /></div></div></div>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseNoteDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Save</button></div>
         </EditForm>
-    </DialogContent>
-</SfDialog>
+    </div>
+</div>
+}
 
 <!-- New/Edit Submission -->
-<SfDialog @bind-Visible="_showAddSubmission" Width="620px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
+@if (_showAddSubmission)
+{
+<div class="a360-modal-backdrop" role="presentation" @onclick="CloseSubmissionDialog">
+    <div class="a360-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-modal-header"><i class="bi bi-send" aria-hidden="true"></i><span>@(_editingSubmission is null ? "New Submission" : "Edit Submission")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseSubmissionDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
         <EditForm Model="_submissionForm" OnValidSubmit="CommitAddSubmissionAsync">
             <DataAnnotationsValidator />
@@ -908,11 +889,14 @@ else
             </div></div>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseSubmissionDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_editingSubmission is null ? "Submit" : "Save")</button></div>
         </EditForm>
-    </DialogContent>
-</SfDialog>
+    </div>
+</div>
+}
 
-<SfDialog @bind-Visible="_showDeleteConfirm" Width="440px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
+@if (_showDeleteConfirm)
+{
+<div class="a360-modal-backdrop" role="presentation" @onclick="() => _showDeleteConfirm = false">
+    <div class="a360-modal a360-modal-confirm" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-confirm-dialog">
             <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
             <div class="um-confirm-title">@_deleteTitle</div>
@@ -922,14 +906,13 @@ else
                 <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
             </div>
         </div>
-    </DialogContent>
-</SfDialog>
+    </div>
+</div>
+}
 
 @code {
     [Parameter] public Guid AccountId { get; set; }
 
-    private SfToast?                       _toast;
-    private SfDiagramComponent?            _diagram;
     private bool                           _loading = true;
     private int                            _tab     = 0;
     private Account360Model?               _acct;
@@ -972,9 +955,14 @@ else
     private ClaimsHistory           _claimsHistory      = new();
     private RiskInsight             _riskInsight        = new();
 
-    // Diagram
-    private Syncfusion.Blazor.Diagram.DiagramObjectCollection<Syncfusion.Blazor.Diagram.Node>      _diagramNodes      = new();
-    private Syncfusion.Blazor.Diagram.DiagramObjectCollection<Syncfusion.Blazor.Diagram.Connector> _diagramConnectors = new();
+    private decimal DisplayTotalPremium => _policies.Count > 0 ? _policies.Where(p => p.Status == "Active").Sum(p => p.Premium) : _acct?.TotalPremium ?? 0;
+    private decimal DisplayBalancesDue => _billing.Count > 0 ? _billing.Sum(b => b.Balance) : _acct?.BalancesDue ?? 0;
+    private int DisplayOpenClaims => _claims.Count > 0 ? _claims.Count(c => c.Status != "Closed") : _acct?.OpenClaims ?? 0;
+    private int DisplayActivePolicies => _policies.Count > 0 ? _policies.Count(p => p.Status == "Active") : _acct?.ActivePolicies ?? 0;
+    private decimal DisplayYtdCommissions => _commissions.Count > 0 ? _commissions.Sum(c => c.CommissionAmount) : _acct?.YtdCommissions ?? 0;
+    private DateTime? DisplayLastActivity => _activities.Select(a => (DateTime?)a.OccurredAt).Concat(_timelineEvents.Select(t => (DateTime?)t.OccurredAt)).Max() ?? _acct?.LastActivityDate;
+    private IReadOnlyList<PriorityInsight> PriorityInsights => BuildPriorityInsights();
+
     // Dialog state
     private bool          _showEdit          = false;
     private bool          _showDeleteConfirm = false;
@@ -1010,6 +998,7 @@ else
     private string        _deleteMessage = string.Empty;
     private Func<Task>?   _confirmDeleteAction;
     private bool          _saving;
+    private readonly List<AccountToast> _toasts = [];
 
     private static readonly List<LV> _actTypes     = [new("Call","Call"),new("Email","Email"),new("Meeting","Meeting"),new("Note","Note"),new("Task","Task")];
     private static readonly List<LV> _commChannels = [new("Email","Email"),new("Phone","Phone"),new("SMS","SMS"),new("Portal","Portal")];
@@ -1050,7 +1039,7 @@ else
 
             _acct = BuildAccountModel(account);
             BuildRightPanel();
-            BuildDiagram();
+            BuildRelationships();
             Breadcrumbs.SetCrumbs(new("Home", "/"), new("Accounts", "/accounts"), new(_acct.AccountName, $"/accounts/{AccountId}"));
             NavContext.SetAccount(AccountId, _acct.AccountName);
         }
@@ -1089,51 +1078,14 @@ else
         ];
     }
 
-    private void BuildDiagram()
+    private void BuildRelationships()
     {
-        _diagramNodes = new Syncfusion.Blazor.Diagram.DiagramObjectCollection<Syncfusion.Blazor.Diagram.Node>
-        {
-            new Syncfusion.Blazor.Diagram.Node { ID="root", OffsetX=300, OffsetY=80, Width=160, Height=50,
-                Style = new Syncfusion.Blazor.Diagram.ShapeStyle { Fill="#1d4ed8", StrokeColor="#1d4ed8" },
-                Annotations = new Syncfusion.Blazor.Diagram.DiagramObjectCollection<Syncfusion.Blazor.Diagram.ShapeAnnotation>
-                {
-                    new Syncfusion.Blazor.Diagram.ShapeAnnotation { Content=_acct?.AccountName ?? "Account", Style=new Syncfusion.Blazor.Diagram.TextStyle { Color="#fff",FontSize=12,Bold=true } }
-                }
-            },
-            new Syncfusion.Blazor.Diagram.Node { ID="sub1", OffsetX=160, OffsetY=220, Width=140, Height=44,
-                Style = new Syncfusion.Blazor.Diagram.ShapeStyle { Fill="#ede9fe", StrokeColor="#6d28d9" },
-                Annotations = new Syncfusion.Blazor.Diagram.DiagramObjectCollection<Syncfusion.Blazor.Diagram.ShapeAnnotation>
-                {
-                    new Syncfusion.Blazor.Diagram.ShapeAnnotation { Content="Sullivan Realty LLC", Style=new Syncfusion.Blazor.Diagram.TextStyle { Color="#6d28d9",FontSize=11 } }
-                }
-            },
-            new Syncfusion.Blazor.Diagram.Node { ID="sub2", OffsetX=440, OffsetY=220, Width=140, Height=44,
-                Style = new Syncfusion.Blazor.Diagram.ShapeStyle { Fill="#d1fae5", StrokeColor="#047857" },
-                Annotations = new Syncfusion.Blazor.Diagram.DiagramObjectCollection<Syncfusion.Blazor.Diagram.ShapeAnnotation>
-                {
-                    new Syncfusion.Blazor.Diagram.ShapeAnnotation { Content="Sullivan Holdings", Style=new Syncfusion.Blazor.Diagram.TextStyle { Color="#047857",FontSize=11 } }
-                }
-            },
-        };
-        _diagramConnectors = new Syncfusion.Blazor.Diagram.DiagramObjectCollection<Syncfusion.Blazor.Diagram.Connector>
-        {
-            new Syncfusion.Blazor.Diagram.Connector { ID="c1", SourceID="root", TargetID="sub1",
-                Type=Syncfusion.Blazor.Diagram.ConnectorSegmentType.Orthogonal,
-                Style=new Syncfusion.Blazor.Diagram.ShapeStyle { StrokeColor="#94a3b8" },
-                TargetDecorator=new Syncfusion.Blazor.Diagram.DecoratorSettings { Shape=Syncfusion.Blazor.Diagram.DecoratorShape.Arrow, Style=new Syncfusion.Blazor.Diagram.ShapeStyle { Fill="#94a3b8",StrokeColor="#94a3b8" } } },
-            new Syncfusion.Blazor.Diagram.Connector { ID="c2", SourceID="root", TargetID="sub2",
-                Type=Syncfusion.Blazor.Diagram.ConnectorSegmentType.Orthogonal,
-                Style=new Syncfusion.Blazor.Diagram.ShapeStyle { StrokeColor="#94a3b8" },
-                TargetDecorator=new Syncfusion.Blazor.Diagram.DecoratorSettings { Shape=Syncfusion.Blazor.Diagram.DecoratorShape.Arrow, Style=new Syncfusion.Blazor.Diagram.ShapeStyle { Fill="#94a3b8",StrokeColor="#94a3b8" } } },
-        };
         _relationships =
         [
             new RelationshipRow { RelatedAccountId=Guid.NewGuid(), RelatedAccount="Sullivan Realty LLC",  RelationType="Subsidiary" },
             new RelationshipRow { RelatedAccountId=Guid.NewGuid(), RelatedAccount="Sullivan Holdings",    RelationType="Parent" },
         ];
     }
-
-    private void OnDiagramCreated() { }
 
     // â”€â”€ Action handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private void OpenEditAccount()
@@ -1256,7 +1208,7 @@ else
         row.RelationType = Normalize(_relationshipForm.RelationType) ?? string.Empty;
         if (_editingRelationship is null)
             _relationships.Add(row);
-        BuildDiagram();
+            BuildRelationships();
         CloseRelationshipDialog();
         await ShowToast(_editingRelationship is null ? "Relationship linked." : "Relationship updated.");
     }
@@ -1341,7 +1293,7 @@ else
     private void ConfirmDeleteActivity(ActivityRow row) => ConfirmDelete("Delete Activity", $"Delete activity {row.Subject}?", async () => { _activities.Remove(row); await ShowToast("Activity deleted."); });
     private void ConfirmDeleteCommunication(CommRow row) => ConfirmDelete("Delete Communication", $"Delete communication {row.Subject}?", async () => { _comms.Remove(row); await ShowToast("Communication deleted."); });
     private void ConfirmDeleteCampaign(CampaignRow row) => ConfirmDelete("Remove Campaign", $"Remove campaign enrollment {row.CampaignName}?", async () => { _campaigns.Remove(row); await ShowToast("Campaign enrollment removed."); });
-    private void ConfirmDeleteRelationship(RelationshipRow row) => ConfirmDelete("Delete Relationship", $"Delete relationship to {row.RelatedAccount}?", async () => { _relationships.Remove(row); BuildDiagram(); await ShowToast("Relationship deleted."); });
+    private void ConfirmDeleteRelationship(RelationshipRow row) => ConfirmDelete("Delete Relationship", $"Delete relationship to {row.RelatedAccount}?", async () => { _relationships.Remove(row); await ShowToast("Relationship deleted."); });
 
     private void ConfirmDelete(string title, string message, Func<Task> action)
     {
@@ -1378,7 +1330,38 @@ else
 
     private async Task ShowToast(string msg, string css = "e-toast-success")
     {
-        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = css });
+        var toast = new AccountToast(Guid.NewGuid(), msg, css, css == "e-toast-danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill");
+        _toasts.Add(toast);
+        await InvokeAsync(StateHasChanged);
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(4500);
+            await InvokeAsync(() => DismissToast(toast.Id));
+        });
+    }
+
+    private void DismissToast(Guid id)
+    {
+        _toasts.RemoveAll(t => t.Id == id);
+        StateHasChanged();
+    }
+
+    private IReadOnlyList<PriorityInsight> BuildPriorityInsights()
+    {
+        var insights = new List<PriorityInsight>();
+        if (DisplayBalancesDue > 0)
+            insights.Add(new("Collect balance", $"{DisplayBalancesDue:C0} outstanding across billing records", "bi-receipt", "a360-priority-danger", 5));
+        if (DisplayOpenClaims > 0)
+            insights.Add(new("Resolve open claims", $"{DisplayOpenClaims:N0} claim(s) require servicing visibility", "bi-exclamation-triangle", "a360-priority-warning", 4));
+        if (string.Equals(_acct?.RenewalRisk, "High", StringComparison.OrdinalIgnoreCase) || string.Equals(_acct?.RenewalRisk, "Medium", StringComparison.OrdinalIgnoreCase))
+            insights.Add(new("Review renewal risk", $"Renewal risk is {_acct?.RenewalRisk ?? "unscored"}; inspect loss and engagement drivers", "bi-arrow-repeat", "a360-priority-warning", 13));
+        if (_submissions.Any(s => s.DueDate.HasValue && s.DueDate.Value.Date <= DateTime.UtcNow.AddDays(7).Date))
+            insights.Add(new("Advance submissions", "Carrier response due within 7 days", "bi-send", "a360-priority-info", 3));
+        if (DisplayLastActivity is null || DisplayLastActivity < DateTime.UtcNow.AddDays(-14))
+            insights.Add(new("Schedule outreach", "No recent activity in the last 14 days", "bi-lightning", "a360-priority-info", 8));
+        if (insights.Count == 0)
+            insights.Add(new("Account is operating normally", "No critical service, billing, claims, or renewal exceptions detected", "bi-check-circle", "a360-priority-success", 0));
+        return insights.Take(4).ToList();
     }
 
     // â”€â”€ Render helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1671,6 +1654,8 @@ else
     private sealed class ClaimsHistory  { public int TotalClaims { get; set; } public int OpenClaims { get; set; } public decimal TotalIncurred { get; set; } public decimal AvgClaimSize { get; set; } public decimal LargestClaim { get; set; } public int YearsSinceLoss { get; set; } }
     private sealed class RiskInsight    { public int EngagementScore { get; set; } public int PortalLogins { get; set; } public int EmailsOpened { get; set; } public int DaysSinceTouch { get; set; } public int? NpsScore { get; set; } }
     private sealed class FnolInput      { public string PolicyNumber { get; set; }=string.Empty; public string LineOfBusiness { get; set; }=string.Empty; public DateTime? LossDate { get; set; } public string? Adjuster { get; set; } public string? Description { get; set; } }
+    private sealed record AccountToast(Guid Id, string Content, string CssClass, string Icon);
+    private sealed record PriorityInsight(string Title, string Detail, string Icon, string Tone, int TabIndex);
     private sealed record AccountTab(int Index, string Label, string Icon);
     private sealed record LV(string Value, string Label);
 }
