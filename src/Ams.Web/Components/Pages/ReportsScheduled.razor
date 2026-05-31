@@ -1,9 +1,827 @@
 @page "/reports/scheduled"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Components.Web
+@using Microsoft.JSInterop
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+@inject ConfirmationDialogService Confirmations
+@inject IJSRuntime Js
 
-<PageTitle>Scheduled Reports — AMS</PageTitle>
+<PageTitle>Scheduled Reports — AMS Enterprise</PageTitle>
 
-<SharedReportExplorer Title="Scheduled Reports"
-                      Subtitle="Manage recurring report delivery from DB-backed report schedules"
-                      Icon="bi-calendar-check"
-                      Module="" />
+@if (_toastVisible)
+{
+    <div class="rs-toast rs-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="rs-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showSchedule)
+{
+    <div class="rs-modal-backdrop" role="presentation" @onclick="CloseSchedule">
+        <div class="rs-modal rs-schedule-modal" role="dialog" aria-modal="true" aria-labelledby="rs-schedule-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-calendar-plus" aria-hidden="true"></i>
+                <span id="rs-schedule-title">Schedule report delivery</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseSchedule" disabled="@_busy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm EditContext="_scheduleEditContext" OnValidSubmit="ScheduleAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="rs-form-banner">
+                        <i class="bi bi-shield-check" aria-hidden="true"></i>
+                        <div><strong>Governed recurring delivery</strong><span>Schedules are stored in the reporting workflow and delivered to authorized recipients.</span></div>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Report <span class="text-danger">*</span></label>
+                            <InputSelect @bind-Value="_scheduleForm.ReportDefinitionId" class="um-input">
+                                @foreach (var report in _reports.OrderBy(r => r.ModuleCode).ThenBy(r => r.ReportName))
+                                {
+                                    <option value="@report.ReportDefinitionId">@report.ModuleCode — @report.ReportName</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="um-field">
+                            <label>Frequency <span class="text-danger">*</span></label>
+                            <InputSelect @bind-Value="_scheduleForm.FrequencyCode" class="um-input">
+                                @foreach (var frequency in _frequencyOptions)
+                                {
+                                    <option value="@frequency">@frequency</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="um-field">
+                            <label>Format <span class="text-danger">*</span></label>
+                            <InputSelect @bind-Value="_scheduleForm.OutputFormat" class="um-input">
+                                @foreach (var format in _formatOptions)
+                                {
+                                    <option value="@format">@format</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Deliver to <span class="text-danger">*</span></label>
+                            <InputText type="email" @bind-Value="_scheduleForm.DeliveryEmail" class="um-input" placeholder="ops@agencybinder.local" autocomplete="email" />
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger um-field--full rs-alert" role="alert"><i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_formError</div>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseSchedule" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@(_busy || !_reports.Any())">
+                        @if (_busy)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        Schedule Delivery
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_previewOpen)
+{
+    <div class="rs-modal-backdrop" role="presentation" @onclick="ClosePreview">
+        <div class="rs-modal rs-preview-modal" role="dialog" aria-modal="true" aria-labelledby="rs-preview-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header rs-preview-header">
+                <i class="bi @(_previewReport is null ? "bi-file-earmark-bar-graph" : ModuleIcon(_previewReport.ModuleCode))" aria-hidden="true"></i>
+                <div>
+                    <span id="rs-preview-title">@(_preview?.ReportName ?? _previewReport?.ReportName ?? "Report preview")</span>
+                    <small>@(_preview?.Description ?? _previewReport?.Description)</small>
+                </div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="ClosePreview"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="um-modal-body rs-preview-body">
+                @if (_previewLoading)
+                {
+                    <div class="rs-loading-inline"><span class="rs-spinner" aria-hidden="true"></span><span>Generating report preview…</span></div>
+                }
+                else if (!string.IsNullOrWhiteSpace(_previewError))
+                {
+                    <div class="alert alert-danger rs-alert" role="alert"><i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_previewError</div>
+                }
+                else if (_preview is not null)
+                {
+                    <div class="rs-preview-summary">
+                        <div><span>Module</span><strong>@_preview.ModuleCode</strong></div>
+                        <div><span>Type</span><strong>@_preview.ReportTypeCode</strong></div>
+                        <div><span>Rows</span><strong>@_preview.RowCount.ToString("N0")</strong></div>
+                        <div><span>Generated</span><strong>@_preview.GeneratedDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</strong></div>
+                    </div>
+                    <div class="rs-preview-table-wrap">
+                        <table class="rs-preview-table" aria-label="Report preview data">
+                            <thead>
+                                <tr>
+                                    @foreach (var column in _preview.Columns)
+                                    {
+                                        <th class="@PreviewCellCss(column.DataType)">@column.Header</th>
+                                    }
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var row in _preview.Rows)
+                                {
+                                    <tr>
+                                        @foreach (var column in _preview.Columns)
+                                        {
+                                            <td class="@PreviewCellCss(column.DataType)">@row.GetValueOrDefault(column.Field)</td>
+                                        }
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="ClosePreview">Close</button>
+                @if (_previewReport is not null)
+                {
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => OpenSchedule(_previewReport)"><i class="bi bi-calendar-plus" aria-hidden="true"></i> Schedule</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => RunReportAsync(_previewReport)"><i class="bi bi-play-fill" aria-hidden="true"></i> Run</button>
+                    <button type="button" class="um-btn um-btn-primary" @onclick="() => ExportReportAsync(_previewReport)"><i class="bi bi-file-earmark-excel" aria-hidden="true"></i> Export</button>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@if (_confirmAction is not null)
+{
+    <div class="rs-modal-backdrop" role="presentation" @onclick="CloseConfirm">
+        <div class="rs-modal rs-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="rs-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @ConfirmIconClass"><i class="bi @ConfirmIcon" aria-hidden="true"></i></div>
+                <div class="um-confirm-message">
+                    <h6 id="rs-confirm-title">@ConfirmTitle</h6>
+                    <p>@ConfirmMessage</p>
+                </div>
+                <div class="um-modal-footer w-100">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseConfirm" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn @ConfirmButtonClass" @onclick="ExecuteConfirmAsync" disabled="@_busy">@ConfirmButtonText</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="rs-enterprise-page">
+    <section class="rs-hero">
+        <div class="rs-hero-main">
+            <div class="rs-hero-icon"><i class="bi bi-calendar-check" aria-hidden="true"></i></div>
+            <div>
+                <div class="rs-eyebrow">Reporting Automation</div>
+                <h1>Scheduled Reports</h1>
+                <p>Govern recurring executive, production, retention, claims, finance, and compliance reporting from one delivery command center.</p>
+                <div class="rs-hero-meta">
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> DB-backed schedules</span>
+                    <span><i class="bi bi-clock-history" aria-hidden="true"></i> @_executions.Count run(s) tracked</span>
+                    <span><i class="bi bi-envelope-check" aria-hidden="true"></i> @ActiveSchedules.Count active delivery</span>
+                </div>
+            </div>
+        </div>
+        <div class="rs-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "rs-spin" : string.Empty)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportVisibleAsync" disabled="@(!FilteredSchedules.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export View</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenSchedule" disabled="@(!_reports.Any())"><i class="bi bi-calendar-plus" aria-hidden="true"></i> New Schedule</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger rs-alert" role="alert"><i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError</div>
+    }
+
+    <section class="rs-kpi-strip" aria-label="Scheduled report KPI filters">
+        @KpiCard("all", "bi-calendar2-week", "Total schedules", _schedules.Count.ToString("N0"), "All recurring deliveries", "rs-kpi-blue")
+        @KpiCard("active", "bi-check-circle-fill", "Active", ActiveSchedules.Count.ToString("N0"), "Currently delivering", "rs-kpi-green")
+        @KpiCard("paused", "bi-pause-circle-fill", "Paused", PausedSchedules.Count.ToString("N0"), "Temporarily stopped", "rs-kpi-amber")
+        @KpiCard("due7", "bi-alarm-fill", "Due in 7 days", DueSoonSchedules.Count.ToString("N0"), "Upcoming workload", "rs-kpi-red")
+        @KpiCard("executed", "bi-play-circle-fill", "Run 30d", RecentExecutions.Count.ToString("N0"), "Completed exports", "rs-kpi-purple")
+        @KpiCard("coverage", "bi-stack", "Coverage", ModuleCoverage.ToString("N0"), "Modules automated", "rs-kpi-teal")
+    </section>
+
+    <section class="rs-command-bar" aria-label="Scheduled report filters">
+        <div class="rs-search-wrap">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="rs-search" placeholder="Search schedule, report, module, recipient, format…" @bind="_search" @bind:event="oninput" />
+        </div>
+        <select class="rs-select" @bind="_moduleFilter" aria-label="Filter by module">
+            <option value="">All modules</option>
+            @foreach (var module in ModuleOptions)
+            {
+                <option value="@module">@module</option>
+            }
+        </select>
+        <select class="rs-select" @bind="_frequencyFilter" aria-label="Filter by frequency">
+            <option value="">All frequencies</option>
+            @foreach (var frequency in FrequencyOptions)
+            {
+                <option value="@frequency">@frequency</option>
+            }
+        </select>
+        <select class="rs-select" @bind="_formatFilter" aria-label="Filter by format">
+            <option value="">All formats</option>
+            @foreach (var format in FormatOptions)
+            {
+                <option value="@format">@format</option>
+            }
+        </select>
+        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button>
+        <span class="rs-result-count"><strong>@FilteredSchedules.Count</strong> visible</span>
+    </section>
+
+    <section class="rs-tabs" role="tablist" aria-label="Scheduled report views">
+        @TabButton("priority", "Priority", "bi-stars", PrioritySchedules.Count)
+        @TabButton("all", "All schedules", "bi-stack", _schedules.Count)
+        @TabButton("active", "Active", "bi-check-circle", ActiveSchedules.Count)
+        @TabButton("paused", "Paused", "bi-pause-circle", PausedSchedules.Count)
+        @TabButton("due7", "Due soon", "bi-alarm", DueSoonSchedules.Count)
+        @TabButton("activity", "Run activity", "bi-clock-history", RecentExecutions.Count)
+    </section>
+
+    <section class="rs-insight-grid" aria-label="Scheduled reports insight summary">
+        <div class="rs-insight-card rs-insight-card--primary">
+            <span class="rs-insight-label">Most important next delivery</span>
+            <strong>@(NextImportantSchedule?.ReportName ?? "No active schedule")</strong>
+            <small>@(NextImportantSchedule is null ? "Create a schedule to start recurring reporting." : $"{NextImportantSchedule.ModuleCode} · {NextImportantSchedule.FrequencyCode} · {NextRunLabel(NextImportantSchedule)}")</small>
+        </div>
+        <div class="rs-insight-card">
+            <span class="rs-insight-label">Executive coverage</span>
+            <strong>@ModuleCoverage module(s)</strong>
+            <small>@CoverageSummary</small>
+        </div>
+        <div class="rs-insight-card">
+            <span class="rs-insight-label">Preferred delivery</span>
+            <strong>@PreferredFormat</strong>
+            <small>@PreferredFrequency cadence is most common.</small>
+        </div>
+    </section>
+
+    @if (_loading)
+    {
+        <div class="rs-loading"><span class="rs-spinner" aria-hidden="true"></span><span>Loading scheduled reports…</span></div>
+    }
+    else if (_activeTab == "activity")
+    {
+        <section class="rs-activity-panel" aria-label="Recent report execution activity">
+            @if (!RecentExecutions.Any())
+            {
+                @EmptyState("bi-clock-history", "No report activity", "Run a report or wait for scheduled delivery to create execution history.")
+            }
+            else
+            {
+                <div class="rs-activity-list">
+                    @foreach (var execution in RecentExecutions.Take(20))
+                    {
+                        <div class="rs-activity-row">
+                            <span class="rs-activity-icon @StatusTone(execution.StatusCode)"><i class="bi @StatusIcon(execution.StatusCode)" aria-hidden="true"></i></span>
+                            <div><strong>@execution.ReportName</strong><span>@execution.OutputFormat · @FormatBytes(execution.FileSizeBytes) · @((execution.CompletedDateUtc ?? execution.CreatedDateUtc).ToLocalTime().ToString("MMM d, yyyy h:mm tt"))</span></div>
+                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenPreviewAsync(execution.ReportDefinitionId)"><i class="bi bi-eye" aria-hidden="true"></i> View</button>
+                        </div>
+                    }
+                </div>
+            }
+        </section>
+    }
+    else if (!FilteredSchedules.Any())
+    {
+        @EmptyState("bi-calendar-x", "No scheduled reports match", "Create a new schedule or clear the current KPI, tab, and search filters.")
+    }
+    else
+    {
+        <section class="rs-board" aria-label="Scheduled report cards">
+            @foreach (var schedule in FilteredSchedules.Take(6))
+            {
+                <article class="rs-schedule-card @ScheduleStateClass(schedule)">
+                    <div class="rs-card-head">
+                        <span class="rs-module-icon @ModuleTone(schedule.ModuleCode)"><i class="bi @ModuleIcon(schedule.ModuleCode)" aria-hidden="true"></i></span>
+                        <div><strong>@schedule.ReportName</strong><small>@schedule.ModuleCode · @schedule.FrequencyCode · @schedule.OutputFormat</small></div>
+                        <span class="rs-state-pill @StatePillClass(schedule)">@(schedule.IsActive ? "Active" : "Paused")</span>
+                    </div>
+                    <p>@ReportDescription(schedule.ReportDefinitionId)</p>
+                    <div class="rs-card-meta">
+                        <span><i class="bi bi-envelope" aria-hidden="true"></i>@schedule.DeliveryEmail</span>
+                        <span><i class="bi bi-clock" aria-hidden="true"></i>@NextRunLabel(schedule)</span>
+                        <span><i class="bi bi-play" aria-hidden="true"></i>@LastRunLabel(schedule.ReportDefinitionId)</span>
+                    </div>
+                    <div class="rs-card-actions">
+                        <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenPreviewAsync(schedule.ReportDefinitionId)"><i class="bi bi-eye" aria-hidden="true"></i> Preview</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => RunScheduleAsync(schedule)"><i class="bi bi-play-fill" aria-hidden="true"></i> Run</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ToggleScheduleAsync(schedule)"><i class="bi @(schedule.IsActive ? "bi-pause-circle" : "bi-play-circle")" aria-hidden="true"></i> @(schedule.IsActive ? "Pause" : "Activate")</button>
+                        <button type="button" class="um-btn um-btn-danger um-btn-xs" @onclick="() => ConfirmDelete(schedule)"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                    </div>
+                </article>
+            }
+        </section>
+
+        <section class="rs-table-panel" aria-label="Scheduled reports register">
+            <div class="rs-table-head"><div><strong>Schedule register</strong><span>@FilteredSchedules.Count governed recurring report(s)</span></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ExportVisibleAsync"><i class="bi bi-download" aria-hidden="true"></i> Export</button></div>
+            <div class="rs-table-scroll">
+                <table class="rs-table">
+                    <thead>
+                        <tr><th>Report</th><th>Importance</th><th>Delivery</th><th>Cadence</th><th>Next run</th><th>Last run</th><th>Status</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var schedule in FilteredSchedules)
+                        {
+                            <tr @onclick="() => OpenPreviewAsync(schedule.ReportDefinitionId)">
+                                <td><div class="rs-report-cell"><span class="rs-module-icon @ModuleTone(schedule.ModuleCode)"><i class="bi @ModuleIcon(schedule.ModuleCode)" aria-hidden="true"></i></span><div><strong>@schedule.ReportName</strong><span>@schedule.ModuleCode · @schedule.OutputFormat</span></div></div></td>
+                                <td>@ImportanceChip(schedule)</td>
+                                <td><span class="rs-email">@schedule.DeliveryEmail</span></td>
+                                <td><span class="rs-cadence">@schedule.FrequencyCode</span></td>
+                                <td>@NextRunLabel(schedule)</td>
+                                <td>@LastRunLabel(schedule.ReportDefinitionId)</td>
+                                <td><span class="rs-state-pill @StatePillClass(schedule)">@(schedule.IsActive ? "Active" : "Paused")</span></td>
+                                <td class="rs-actions-cell">
+                                    <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenPreviewAsync(schedule.ReportDefinitionId)" title="Preview"><i class="bi bi-eye" aria-hidden="true"></i></button>
+                                    <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => RunScheduleAsync(schedule)" title="Run now"><i class="bi bi-play-fill" aria-hidden="true"></i></button>
+                                    <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => ToggleScheduleAsync(schedule)" title="@(schedule.IsActive ? "Pause" : "Activate")"><i class="bi @(schedule.IsActive ? "bi-pause-circle" : "bi-play-circle")" aria-hidden="true"></i></button>
+                                    <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(schedule)" title="Delete"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    }
+</div>
+
+@code {
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private bool _loading;
+    private bool _busy;
+    private bool _toastVisible;
+    private bool _showSchedule;
+    private bool _previewOpen;
+    private bool _previewLoading;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private string? _previewError;
+    private string _search = string.Empty;
+    private string _moduleFilter = string.Empty;
+    private string _frequencyFilter = string.Empty;
+    private string _formatFilter = string.Empty;
+    private string _activeKpi = "all";
+    private string _activeTab = "priority";
+    private string? _confirmAction;
+    private ReportScheduleDto? _confirmSchedule;
+    private ScheduleForm _scheduleForm = new();
+    private EditContext _scheduleEditContext = default!;
+    private ReportDefinitionDto? _previewReport;
+    private ReportPreviewDto? _preview;
+    private readonly string[] _frequencyOptions = ["Daily", "Weekly", "Monthly", "Quarterly"];
+    private readonly string[] _formatOptions = ["PDF", "Excel", "CSV"];
+    private List<ReportDefinitionDto> _reports = [];
+    private List<ReportScheduleDto> _schedules = [];
+    private List<ReportExecutionDto> _executions = [];
+
+    private string ToastIconClass => _toastKind == "danger" ? "bi-exclamation-triangle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-check-circle-fill";
+    private bool HasFilters => !string.IsNullOrWhiteSpace(_search) || !string.IsNullOrWhiteSpace(_moduleFilter) || !string.IsNullOrWhiteSpace(_frequencyFilter) || !string.IsNullOrWhiteSpace(_formatFilter) || _activeKpi != "all" || _activeTab != "priority";
+    private List<ReportScheduleDto> ActiveSchedules => _schedules.Where(s => s.IsActive).ToList();
+    private List<ReportScheduleDto> PausedSchedules => _schedules.Where(s => !s.IsActive).ToList();
+    private List<ReportScheduleDto> DueSoonSchedules => _schedules.Where(s => s.IsActive && s.NextRunDateUtc is not null && s.NextRunDateUtc.Value <= DateTime.UtcNow.AddDays(7)).ToList();
+    private List<ReportExecutionDto> RecentExecutions => _executions.Where(e => e.CreatedDateUtc >= DateTime.UtcNow.AddDays(-30)).OrderByDescending(e => e.CreatedDateUtc).ToList();
+    private int ModuleCoverage => _schedules.Where(s => s.IsActive).Select(s => s.ModuleCode).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    private ReportScheduleDto? NextImportantSchedule => PrioritySchedules.OrderBy(s => s.NextRunDateUtc ?? DateTime.MaxValue).FirstOrDefault();
+    private string PreferredFormat => _schedules.GroupBy(s => s.OutputFormat).OrderByDescending(g => g.Count()).FirstOrDefault()?.Key ?? "Excel";
+    private string PreferredFrequency => _schedules.GroupBy(s => s.FrequencyCode).OrderByDescending(g => g.Count()).FirstOrDefault()?.Key ?? "Weekly";
+    private string CoverageSummary => ModuleCoverage == 0 ? "No modules have active recurring delivery." : $"{ModuleCoverage} of {Math.Max(1, ModuleOptions.Count)} modules with active schedules.";
+    private List<string> ModuleOptions => _reports.Select(r => r.ModuleCode).Concat(_schedules.Select(s => s.ModuleCode)).Where(m => !string.IsNullOrWhiteSpace(m)).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToList();
+    private List<string> FrequencyOptions => _schedules.Select(s => s.FrequencyCode).Where(f => !string.IsNullOrWhiteSpace(f)).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToList();
+    private List<string> FormatOptions => _schedules.Select(s => s.OutputFormat).Where(f => !string.IsNullOrWhiteSpace(f)).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToList();
+
+    private List<ReportScheduleDto> PrioritySchedules => _schedules
+        .Where(s => s.IsActive)
+        .OrderByDescending(ImportanceScore)
+        .ThenBy(s => s.NextRunDateUtc ?? DateTime.MaxValue)
+        .ToList();
+
+    private List<ReportScheduleDto> FilteredSchedules
+    {
+        get
+        {
+            IEnumerable<ReportScheduleDto> query = _activeTab switch
+            {
+                "priority" => PrioritySchedules,
+                "active" => ActiveSchedules,
+                "paused" => PausedSchedules,
+                "due7" => DueSoonSchedules,
+                _ => _schedules
+            };
+
+            query = _activeKpi switch
+            {
+                "active" => query.Where(s => s.IsActive),
+                "paused" => query.Where(s => !s.IsActive),
+                "due7" => query.Where(s => s.IsActive && s.NextRunDateUtc is not null && s.NextRunDateUtc.Value <= DateTime.UtcNow.AddDays(7)),
+                _ => query
+            };
+
+            if (!string.IsNullOrWhiteSpace(_search))
+            {
+                var search = _search.Trim();
+                query = query.Where(s => Contains(s.ReportName, search) || Contains(s.ModuleCode, search) || Contains(s.FrequencyCode, search) || Contains(s.OutputFormat, search) || Contains(s.DeliveryEmail, search) || Contains(ReportDescription(s.ReportDefinitionId), search));
+            }
+
+            if (!string.IsNullOrWhiteSpace(_moduleFilter)) query = query.Where(s => s.ModuleCode.Equals(_moduleFilter, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(_frequencyFilter)) query = query.Where(s => s.FrequencyCode.Equals(_frequencyFilter, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(_formatFilter)) query = query.Where(s => s.OutputFormat.Equals(_formatFilter, StringComparison.OrdinalIgnoreCase));
+
+            return query.OrderByDescending(ImportanceScore).ThenBy(s => s.NextRunDateUtc ?? DateTime.MaxValue).ToList();
+        }
+    }
+
+    private string ConfirmTitle => _confirmAction == "delete" ? "Delete scheduled report?" : "Confirm schedule action";
+    private string ConfirmMessage => _confirmSchedule is null ? "Confirm this scheduled report action." : $"Delete recurring delivery for '{_confirmSchedule.ReportName}' to {_confirmSchedule.DeliveryEmail}?";
+    private string ConfirmButtonText => _confirmAction == "delete" ? "Delete" : "Confirm";
+    private string ConfirmButtonClass => _confirmAction == "delete" ? "um-btn-danger" : "um-btn-warning";
+    private string ConfirmIconClass => _confirmAction == "delete" ? "um-confirm-icon--danger" : "um-confirm-icon--warning";
+    private string ConfirmIcon => _confirmAction == "delete" ? "bi-trash3-fill" : "bi-exclamation-triangle-fill";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _scheduleEditContext = new(_scheduleForm);
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Reports", "/reports"), new("Scheduled", "/reports/scheduled"));
+        await LoadAsync();
+    }
+
+    private async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var definitionsTask = Api.SearchReportDefinitionsAsync(null);
+            var schedulesTask = Api.SearchReportSchedulesAsync(_tenantId, null);
+            var executionsTask = Api.SearchReportExecutionsAsync(_tenantId, null);
+            await Task.WhenAll(definitionsTask, schedulesTask, executionsTask);
+            _reports = (await definitionsTask)?.Items.OrderBy(r => r.ModuleCode).ThenBy(r => r.ReportName).ToList() ?? [];
+            _schedules = (await schedulesTask)?.Items.OrderBy(s => s.NextRunDateUtc ?? DateTime.MaxValue).ToList() ?? [];
+            _executions = (await executionsTask)?.Items.OrderByDescending(e => e.CreatedDateUtc).ToList() ?? [];
+            if (_scheduleForm.ReportDefinitionId == Guid.Empty) ResetScheduleForm(_reports.FirstOrDefault());
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load scheduled reports: {ex.Message}";
+            _reports = [];
+            _schedules = [];
+            _executions = [];
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void OpenSchedule()
+    {
+        ResetScheduleForm(_reports.FirstOrDefault());
+        _formError = null;
+        _showSchedule = true;
+    }
+
+    private void OpenSchedule(ReportDefinitionDto report)
+    {
+        ResetScheduleForm(report);
+        _formError = null;
+        _showSchedule = true;
+    }
+
+    private void ResetScheduleForm(ReportDefinitionDto? report)
+    {
+        _scheduleForm = new ScheduleForm
+        {
+            ReportDefinitionId = report?.ReportDefinitionId ?? Guid.Empty,
+            FrequencyCode = RecommendedFrequency(report?.ModuleCode),
+            OutputFormat = PreferredOutputFormat(report),
+            DeliveryEmail = "ops@agencybinder.local"
+        };
+        _scheduleEditContext = new(_scheduleForm);
+    }
+
+    private void CloseSchedule()
+    {
+        if (_busy) return;
+        _showSchedule = false;
+        _formError = null;
+    }
+
+    private async Task ScheduleAsync()
+    {
+        _formError = null;
+        if (_scheduleForm.ReportDefinitionId == Guid.Empty)
+        {
+            _formError = "Select a report to schedule.";
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            await Api.ScheduleReportAsync(new ScheduleReportRequest(_tenantId, _scheduleForm.ReportDefinitionId, _scheduleForm.FrequencyCode, _scheduleForm.OutputFormat, _scheduleForm.DeliveryEmail));
+            _showSchedule = false;
+            await LoadAsync();
+            ShowToast($"Report scheduled for {_scheduleForm.DeliveryEmail}.");
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Schedule failed: {ex.Message}";
+            ShowToast($"Schedule failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task NotifyValidationAsync()
+    {
+        ShowToast("Review required schedule fields before continuing.", "danger");
+        return Task.CompletedTask;
+    }
+
+    private async Task ToggleScheduleAsync(ReportScheduleDto schedule)
+    {
+        try
+        {
+            await Api.SetReportScheduleStatusAsync(schedule.ReportScheduleId, !schedule.IsActive);
+            ShowToast(schedule.IsActive ? "Schedule paused." : "Schedule activated.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Schedule update failed: {ex.Message}", "danger");
+        }
+    }
+
+    private async Task RunScheduleAsync(ReportScheduleDto schedule)
+    {
+        var report = _reports.FirstOrDefault(r => r.ReportDefinitionId == schedule.ReportDefinitionId);
+        if (report is null)
+        {
+            ShowToast("Report definition is not available for this schedule.", "danger");
+            return;
+        }
+
+        await RunReportAsync(report, schedule.OutputFormat);
+    }
+
+    private async Task RunReportAsync(ReportDefinitionDto report, string? format = null)
+    {
+        try
+        {
+            var outputFormat = string.IsNullOrWhiteSpace(format) ? PreferredOutputFormat(report) : format;
+            await Api.RunReportAsync(report.ReportDefinitionId, new RunReportRequest(_tenantId, outputFormat, _tenantAdminUserId));
+            ShowToast($"Report run completed: {report.ReportName}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Run failed: {ex.Message}", "danger");
+        }
+    }
+
+    private async Task ExportReportAsync(ReportDefinitionDto report)
+    {
+        try
+        {
+            var file = await Api.DownloadReportExcelAsync(report.ReportDefinitionId, _tenantId);
+            await DownloadFileAsync(file);
+            ShowToast($"Report exported: {report.ReportName}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Export failed: {ex.Message}", "danger");
+        }
+    }
+
+    private async Task ExportVisibleAsync()
+    {
+        try
+        {
+            var ids = FilteredSchedules.Select(s => s.ReportDefinitionId).Distinct().ToList();
+            if (!ids.Any()) return;
+            var file = await Api.DownloadReportsExcelAsync(new DownloadReportsRequest { TenantId = _tenantId, ReportDefinitionIds = ids, SearchTerm = _search, ModuleCode = _moduleFilter, Format = _formatFilter });
+            await DownloadFileAsync(file);
+            ShowToast($"Exported {ids.Count} scheduled report definition(s).");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Export view failed: {ex.Message}", "danger");
+        }
+    }
+
+    private async Task DownloadFileAsync(ReportDownloadFile file)
+    {
+        var fileName = file.FileName.Replace("'", string.Empty, StringComparison.Ordinal);
+        var base64 = Convert.ToBase64String(file.Content);
+        var script = $"(() => {{ const a = document.createElement(\"a\"); a.href = \"data:application/vnd.ms-excel;base64,{base64}\"; a.download = \"{fileName}\"; document.body.appendChild(a); a.click(); a.remove(); }})()";
+        await Js.InvokeVoidAsync("eval", script);
+    }
+
+    private async Task OpenPreviewAsync(Guid reportDefinitionId)
+    {
+        var report = _reports.FirstOrDefault(r => r.ReportDefinitionId == reportDefinitionId);
+        if (report is not null) await OpenPreviewAsync(report);
+    }
+
+    private async Task OpenPreviewAsync(ReportDefinitionDto report)
+    {
+        _previewReport = report;
+        _preview = null;
+        _previewError = null;
+        _previewLoading = true;
+        _previewOpen = true;
+        try
+        {
+            _preview = await Api.GetReportPreviewAsync(report.ReportDefinitionId, _tenantId);
+        }
+        catch (Exception ex)
+        {
+            _previewError = $"Preview failed: {ex.Message}";
+        }
+        finally
+        {
+            _previewLoading = false;
+        }
+    }
+
+    private void ClosePreview()
+    {
+        _previewOpen = false;
+        _previewLoading = false;
+        _previewError = null;
+    }
+
+    private void ConfirmDelete(ReportScheduleDto schedule)
+    {
+        _confirmSchedule = schedule;
+        _confirmAction = "delete";
+    }
+
+    private void CloseConfirm()
+    {
+        if (_busy) return;
+        _confirmSchedule = null;
+        _confirmAction = null;
+    }
+
+    private async Task ExecuteConfirmAsync()
+    {
+        if (_confirmAction == "delete" && _confirmSchedule is not null)
+        {
+            _busy = true;
+            try
+            {
+                await Api.DeleteReportScheduleAsync(_confirmSchedule.ReportScheduleId);
+                CloseConfirm();
+                ShowToast("Schedule deleted.");
+                await LoadAsync();
+            }
+            catch (Exception ex)
+            {
+                ShowToast($"Delete failed: {ex.Message}", "danger");
+            }
+            finally
+            {
+                _busy = false;
+            }
+        }
+    }
+
+    private void ClearFilters()
+    {
+        _search = string.Empty;
+        _moduleFilter = string.Empty;
+        _frequencyFilter = string.Empty;
+        _formatFilter = string.Empty;
+        _activeKpi = "all";
+        _activeTab = "priority";
+    }
+
+    private void SetKpi(string key)
+    {
+        _activeKpi = _activeKpi == key ? "all" : key;
+        _activeTab = key == "executed" ? "activity" : key == "all" ? "priority" : key;
+    }
+
+    private void SetTab(string key)
+    {
+        _activeTab = key;
+        if (key is "active" or "paused" or "due7") _activeKpi = key;
+        if (key is "all" or "priority" or "activity") _activeKpi = "all";
+    }
+
+    private RenderFragment KpiCard(string key, string icon, string label, string value, string caption, string tone) => @<button type="button" class="rs-kpi-card @tone @(_activeKpi == key ? "rs-kpi-card--active" : string.Empty)" title="Filter by @label" @onclick="() => SetKpi(key)">
+        <span class="rs-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span>
+        <span class="rs-kpi-copy"><span>@label</span><strong>@value</strong><small>@caption</small></span>
+    </button>;
+
+    private RenderFragment TabButton(string key, string label, string icon, int count) => @<button type="button" class="rs-tab @(_activeTab == key ? "rs-tab--active" : string.Empty)" role="tab" aria-selected="@(_activeTab == key)" @onclick="() => SetTab(key)"><i class="bi @icon" aria-hidden="true"></i><span>@label</span><strong>@count</strong></button>;
+
+    private RenderFragment EmptyState(string icon, string title, string message) => @<section class="rs-empty-state"><i class="bi @icon" aria-hidden="true"></i><strong>@title</strong><span>@message</span><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenSchedule"><i class="bi bi-calendar-plus" aria-hidden="true"></i> New Schedule</button></section>;
+
+    private RenderFragment ImportanceChip(ReportScheduleDto schedule) => @<span class="rs-importance @ImportanceClass(schedule)">@ImportanceLabel(schedule)</span>;
+
+    private string ReportDescription(Guid reportDefinitionId) => _reports.FirstOrDefault(r => r.ReportDefinitionId == reportDefinitionId)?.Description ?? "Recurring report delivery managed by the reporting workflow.";
+    private string LastRunLabel(Guid reportDefinitionId) => _executions.Where(e => e.ReportDefinitionId == reportDefinitionId).OrderByDescending(e => e.CreatedDateUtc).FirstOrDefault() is { } run ? $"Last {run.CreatedDateUtc.ToLocalTime():MMM d}" : "Never run";
+    private static string NextRunLabel(ReportScheduleDto schedule) => schedule.NextRunDateUtc is null ? "Not queued" : schedule.NextRunDateUtc.Value.ToLocalTime().ToString("MMM d, yyyy");
+    private static bool Contains(string? value, string search) => value?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
+    private static string PreviewCellCss(string dataType) => dataType is "Currency" or "Number" ? "rs-preview-num" : string.Empty;
+    private static string FormatBytes(long? bytes) => bytes is null ? "—" : bytes < 1024 * 1024 ? $"{bytes / 1024m:N1} KB" : $"{bytes / 1024m / 1024m:N1} MB";
+    private static string RecommendedFrequency(string? module) => module is "Retention" or "Claims" ? "Daily" : module is "Finance" or "Producer" ? "Weekly" : "Monthly";
+    private static string PreferredOutputFormat(ReportDefinitionDto? report) => report?.OutputFormats.Contains("Excel", StringComparison.OrdinalIgnoreCase) == true ? "Excel" : report?.OutputFormats.Contains("CSV", StringComparison.OrdinalIgnoreCase) == true ? "CSV" : "PDF";
+    private static string StatusIcon(string status) => status.Equals("Completed", StringComparison.OrdinalIgnoreCase) ? "bi-check-circle-fill" : status.Equals("Failed", StringComparison.OrdinalIgnoreCase) ? "bi-x-circle-fill" : "bi-hourglass-split";
+    private static string StatusTone(string status) => status.Equals("Completed", StringComparison.OrdinalIgnoreCase) ? "rs-tone-green" : status.Equals("Failed", StringComparison.OrdinalIgnoreCase) ? "rs-tone-red" : "rs-tone-amber";
+    private static string StatePillClass(ReportScheduleDto schedule) => schedule.IsActive ? "rs-state-active" : "rs-state-paused";
+    private static string ScheduleStateClass(ReportScheduleDto schedule) => schedule.IsActive ? "rs-schedule-card--active" : "rs-schedule-card--paused";
+    private static string ImportanceLabel(ReportScheduleDto schedule) => ImportanceScore(schedule) >= 90 ? "Critical" : ImportanceScore(schedule) >= 70 ? "High" : ImportanceScore(schedule) >= 50 ? "Standard" : "Routine";
+    private static string ImportanceClass(ReportScheduleDto schedule) => ImportanceScore(schedule) >= 90 ? "rs-importance-critical" : ImportanceScore(schedule) >= 70 ? "rs-importance-high" : ImportanceScore(schedule) >= 50 ? "rs-importance-standard" : "rs-importance-routine";
+
+    private static int ImportanceScore(ReportScheduleDto schedule)
+    {
+        var score = schedule.ModuleCode switch
+        {
+            "Finance" => 95,
+            "Retention" => 92,
+            "Claims" => 88,
+            "Producer" => 82,
+            "Sales" => 78,
+            "Compliance" => 76,
+            "Agency" => 72,
+            "Marketing" => 62,
+            _ => 50
+        };
+        if (schedule.FrequencyCode.Equals("Daily", StringComparison.OrdinalIgnoreCase)) score += 8;
+        if (schedule.IsActive) score += 5;
+        if (schedule.NextRunDateUtc is not null && schedule.NextRunDateUtc.Value <= DateTime.UtcNow.AddDays(3)) score += 10;
+        return score;
+    }
+
+    private static string ModuleIcon(string module) => module switch
+    {
+        "Sales" => "bi-graph-up-arrow",
+        "Policy" => "bi-shield-check",
+        "Retention" => "bi-arrow-clockwise",
+        "Claims" => "bi-exclamation-circle",
+        "Finance" => "bi-bank",
+        "Producer" => "bi-person-badge",
+        "Marketing" => "bi-megaphone",
+        "Compliance" => "bi-patch-check",
+        _ => "bi-file-earmark-bar-graph"
+    };
+
+    private static string ModuleTone(string module) => module switch
+    {
+        "Claims" => "rs-tone-red",
+        "Finance" or "Retention" => "rs-tone-green",
+        "Producer" => "rs-tone-purple",
+        "Marketing" => "rs-tone-amber",
+        "Compliance" => "rs-tone-teal",
+        _ => "rs-tone-blue"
+    };
+
+    private void ShowToast(string message, string kind = "success")
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
+    }
+
+    private void HideToast() => _toastVisible = false;
+
+    private sealed class ScheduleForm
+    {
+        [Required] public Guid ReportDefinitionId { get; set; }
+        [Required, StringLength(40)] public string FrequencyCode { get; set; } = "Weekly";
+        [Required, StringLength(20)] public string OutputFormat { get; set; } = "PDF";
+        [Required, EmailAddress, StringLength(254)] public string DeliveryEmail { get; set; } = "ops@agencybinder.local";
+    }
+}
