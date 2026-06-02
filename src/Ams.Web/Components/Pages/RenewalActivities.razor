@@ -1,358 +1,383 @@
 @page "/renewals/activities"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.RenewalRetention
+@using Microsoft.AspNetCore.Components.Forms
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Renewal Activities — AMS</PageTitle>
+<PageTitle>Renewal Activities - AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<SfContextMenu @ref="_ctx" TValue="CtxItem" Items="_ctxItems" ItemSelected="OnCtxSelected">
-    <MenuFieldSettings Text="Text" IconCss="IconCss" />
-</SfContextMenu>
-
-<AppPageHeader Title="Renewal Activities Administration"
-               Subtitle="Tenant admin activity oversight for renewal calls, emails, meetings, tasks, and overdue follow-ups"
-               Icon="bi-lightning">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise @(_loading ? "ra-spin" : "")" aria-hidden="true"></i>
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/renewals")'>
-            <i class="bi bi-grid" aria-hidden="true"></i> Dashboard
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="LogActivity">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> Log Activity
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<section class="ma-hero ren-hero">
-    <div>
-        <span class="ma-eyebrow">Tenant Administration · Renewal Activities</span>
-        <h2>Tenant Renewal Activity Center</h2>
-        <p>Administer renewal touchpoints, overdue tasks, completed follow-ups, producer activity, and account engagement across the tenant.</p>
-    </div>
-    <div class="ma-hero-actions">
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/renewals")'><i class="bi bi-grid"></i> Dashboard</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/renewals/pipeline")'><i class="bi bi-funnel"></i> Pipeline</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/policies")'><i class="bi bi-shield-check"></i> Policies</button>
-    </div>
-</section>
-
-@if (_loadError is not null)
-{
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError
-    </div>
-}
-
-<!-- KPI strip -->
-<div class="ra-kpi-strip">
-    @KpiCard("bi-lightning",        "Total",          _rows.Count.ToString(),                                           "ra-kpi-total",  null)
-    @KpiCard("bi-telephone",        "Calls",          _rows.Count(r => r.ActivityType == "Call").ToString(),           "ra-kpi-call",   "Call")
-    @KpiCard("bi-envelope",         "Emails",         _rows.Count(r => r.ActivityType == "Email").ToString(),          "ra-kpi-email",  "Email")
-    @KpiCard("bi-calendar-event",   "Meetings",       _rows.Count(r => r.ActivityType == "Meeting").ToString(),        "ra-kpi-meet",   "Meeting")
-    @KpiCard("bi-check2-square",    "Tasks",          _rows.Count(r => r.ActivityType == "Task").ToString(),           "ra-kpi-task",   "Task")
-    @KpiCard("bi-clock-history",    "Overdue Tasks",  _rows.Count(r => r.ActivityType == "Task" && !r.IsCompleted && r.ActivityDate < DateTime.Today).ToString(), "ra-kpi-overdue", "__overdue")
-    @KpiCard("bi-check-circle",     "Completed",      _rows.Count(r => r.IsCompleted).ToString(),                      "ra-kpi-done",   "__completed")
-</div>
-
-<!-- Filter bar -->
-<div class="ra-filter-bar">
-    <input class="e-input ra-search" @bind="_search" @bind:event="oninput"
-           placeholder="Search account, subject, notes…" />
-    <div class="ra-type-pills">
-        @foreach (var t in _typePills)
-        {
-            <button class="ra-pill @(_typeFilter == t ? "ra-pill-active" : "")"
-                    @onclick="() => _typeFilter = t">@t</button>
-        }
-    </div>
-    <select class="e-input ra-filter-sel" @bind="_producerFilter">
-        <option value="">All Producers</option>
-        @foreach (var p in _producers) { <option>@p</option> }
-    </select>
-    <select class="e-input ra-filter-sel" @bind="_dateFilter">
-        <option value="0">All dates</option>
-        <option value="7">Last 7 days</option>
-        <option value="14">Last 14 days</option>
-        <option value="30">Last 30 days</option>
-    </select>
-    <label class="ra-toggle">
-        <input type="checkbox" @bind="_showCompleted" /> Show completed
-    </label>
-    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters">
-        <i class="bi bi-x" aria-hidden="true"></i> Reset
-    </button>
-    <span class="ra-filter-count">@Filtered.Count() activities</span>
-</div>
-
-<!-- View tabs -->
-<div class="ra-view-tabs">
-    @foreach (var t in _tabs)
+<div class="ra-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
     {
-        <button class="ra-view-tab @(_activeTab == t.Key ? "ra-view-tab--active" : "")"
-                @onclick="() => _activeTab = t.Key">
-            <i class="bi @t.Icon" aria-hidden="true"></i> @t.Label
-            <span class="ra-tab-count">@TabCount(t.Key)</span>
-        </button>
+        <div class="ra-toast @toast.CssClass">
+            <i class="bi @toast.Icon" aria-hidden="true"></i>
+            <span>@toast.Content</span>
+            <button type="button" @onclick="() => DismissToast(toast.Id)" aria-label="Dismiss notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+        </div>
     }
 </div>
 
-<!-- Feed / Grid -->
-<div class="ra-content-wrap">
+<div class="ra-enterprise-page">
+    <section class="ra-hero">
+        <div class="ra-hero-main">
+            <span class="ra-eyebrow">Tenant Administration / Renewal Activities</span>
+            <h1>Renewal Activity Center</h1>
+            <p>Administer renewal touchpoints, overdue follow-ups, client outreach, producer activity, and account engagement from DB-backed retention workflow activity.</p>
+            <div class="ra-hero-meta">
+                <span><i class="bi bi-building" aria-hidden="true"></i>@(_userContext?.TenantName ?? "Tenant")</span>
+                <span><i class="bi bi-lightning" aria-hidden="true"></i>@_activities.Count activity record(s)</span>
+                <span><i class="bi bi-check2-square" aria-hidden="true"></i>@OpenTaskCount open task(s)</span>
+                <span><i class="bi bi-clock-history" aria-hidden="true"></i>@LastRefreshLabel</span>
+            </div>
+        </div>
+        <div class="ra-hero-actions">
+            <button type="button" class="ra-btn ra-btn-ghost" @onclick='() => Nav.NavigateTo("/renewals")'><i class="bi bi-grid" aria-hidden="true"></i> Dashboard</button>
+            <button type="button" class="ra-btn ra-btn-ghost" @onclick='() => Nav.NavigateTo("/renewals/retention-center")'><i class="bi bi-shield-check" aria-hidden="true"></i> Retention Center</button>
+            <button type="button" class="ra-btn ra-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="ra-btn ra-btn-primary" @onclick="OpenLogActivity"><i class="bi bi-plus-lg" aria-hidden="true"></i> Log Activity</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="ra-load-error" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>@_loadError
+        </div>
+    }
+
     @if (_loading)
     {
-        <div class="ra-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
-    }
-    else if (_activeTab == "feed")
-    {
-        <!-- Activity feed view -->
-        <div class="ra-feed">
-            @foreach (var grp in Filtered.GroupBy(r => r.ActivityDate.Date).OrderByDescending(g => g.Key))
-            {
-                <div class="ra-date-sep">
-                    <span>@FormatDateGroup(grp.Key)</span>
-                </div>
-                @foreach (var r in grp.OrderByDescending(x => x.ActivityDate))
-                {
-                    <div class="ra-feed-item @(r.IsCompleted ? "ra-item-done" : "")"
-                         @onclick="() => OpenRenewal(r)">
-                        <div class="ra-feed-icon ra-type-@r.ActivityType.ToLower()">
-                            <i class="bi @TypeIcon(r.ActivityType)" aria-hidden="true"></i>
-                        </div>
-                        <div class="ra-feed-body">
-                            <div class="ra-feed-header">
-                                <span class="ra-feed-acct">@r.AccountName</span>
-                                <span class="ra-type-chip ra-tc-@r.ActivityType.ToLower()">@r.ActivityType</span>
-                                @if (!r.IsCompleted && r.ActivityDate < DateTime.Today && r.ActivityType == "Task")
-                                {
-                                    <span class="ra-overdue-chip">Overdue</span>
-                                }
-                                @if (r.IsCompleted)
-                                {
-                                    <span class="ra-done-chip"><i class="bi bi-check-circle-fill" aria-hidden="true"></i> Done</span>
-                                }
-                            </div>
-                            <div class="ra-feed-subject">@r.Subject</div>
-                            @if (!string.IsNullOrEmpty(r.Notes))
-                            {
-                                <div class="ra-feed-notes">@r.Notes</div>
-                            }
-                            <div class="ra-feed-meta">
-                                <span><i class="bi bi-person" aria-hidden="true"></i> @r.Producer</span>
-                                <span><i class="bi bi-clock" aria-hidden="true"></i> @r.ActivityDate.ToString("h:mm tt")</span>
-                                @if (r.DurationMinutes > 0)
-                                {
-                                    <span><i class="bi bi-stopwatch" aria-hidden="true"></i> @r.DurationMinutes min</span>
-                                }
-                            </div>
-                        </div>
-                        <button class="um-btn um-btn-ghost um-btn-xs ra-ctx-btn"
-                                @onclick:stopPropagation="true"
-                                @onclick="(e) => { _selected = r; _ctx.Open(e.ClientX, e.ClientY); }">
-                            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
-                        </button>
-                    </div>
-                }
-            }
-            @if (!Filtered.Any())
-            {
-                <div class="ra-empty">
-                    <i class="bi bi-lightning ra-empty-icon" aria-hidden="true"></i>
-                    <span>No activities match the current filters.</span>
-                </div>
-            }
-        </div>
+        <div class="ra-loading"><span class="ra-spinner" aria-hidden="true"></span><span>Loading renewal activities…</span></div>
     }
     else
     {
-        <!-- Grid view -->
-        <div class="ra-grid-wrap">
-            <SfGrid DataSource="@Filtered.ToList()" AllowSorting="true" AllowPaging="true" AllowResizing="true"
-                    RowHeight="44" @ref="_grid">
-                <GridPageSettings PageSize="25" />
-                <GridEvents TValue="ActivityRow" RowSelected="OnRowSelected" />
-                <GridColumns>
-                    <GridColumn Field="AccountName"   HeaderText="Account"    MinWidth="180">
-                        <Template>
-                            @{ var r = (ActivityRow)context; }
-                            <button class="ra-acct-link" @onclick="() => OpenRenewal(r)">@r.AccountName</button>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="ActivityType"  HeaderText="Type"       Width="110">
-                        <Template>
-                            @{ var r = (ActivityRow)context; }
-                            <span class="ra-type-chip ra-tc-@r.ActivityType.ToLower()">
-                                <i class="bi @TypeIcon(r.ActivityType)" aria-hidden="true"></i> @r.ActivityType
-                            </span>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="Subject"       HeaderText="Subject"    MinWidth="200" />
-                    <GridColumn Field="ActivityDate"  HeaderText="Date"       Width="130">
-                        <Template>
-                            @{ var r = (ActivityRow)context; }
-                            <span class="@(r.ActivityType == "Task" && !r.IsCompleted && r.ActivityDate < DateTime.Today ? "ra-text-overdue" : "")">
-                                @r.ActivityDate.ToString("MM/dd/yyyy")
-                            </span>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="DurationMinutes" HeaderText="Duration" Width="100">
-                        <Template>
-                            @{ var r = (ActivityRow)context; }
-                            @(r.DurationMinutes > 0 ? $"{r.DurationMinutes} min" : "—")
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="Outcome"       HeaderText="Outcome"    Width="130">
-                        <Template>
-                            @{ var r = (ActivityRow)context; }
-                            @if (!string.IsNullOrEmpty(r.Outcome))
+        <section class="ra-kpi-strip" aria-label="Renewal activity KPIs">
+            @foreach (var kpi in Kpis)
+            {
+                <button type="button" class="@KpiClass(kpi)" title="@kpi.Title" @onclick="() => ApplyKpi(kpi)">
+                    <span class="ra-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                    <span class="ra-kpi-label">@kpi.Label</span>
+                    <strong>@kpi.Value</strong>
+                </button>
+            }
+        </section>
+
+        <section class="ra-priority-grid" aria-label="Activity priorities">
+            @foreach (var insight in PriorityInsights)
+            {
+                <button type="button" class="ra-priority-card @insight.Tone" @onclick="() => ApplyInsight(insight)">
+                    <span class="ra-priority-icon"><i class="bi @insight.Icon" aria-hidden="true"></i></span>
+                    <span><strong>@insight.Title</strong><small>@insight.Detail</small></span>
+                    <i class="bi bi-arrow-right-short" aria-hidden="true"></i>
+                </button>
+            }
+        </section>
+
+        <section class="ra-filter-panel" aria-label="Activity filters">
+            <div class="ra-search-wrap">
+                <i class="bi bi-search" aria-hidden="true"></i>
+                <input class="ra-input ra-search" @bind="_search" @bind:event="oninput" placeholder="Search account, policy, subject, outcome, producer, notes…" />
+            </div>
+            <select class="ra-input" @bind="_typeFilter">
+                <option value="All">All types</option>
+                @foreach (var type in TypeOptions)
+                {
+                    <option value="@type">@type</option>
+                }
+            </select>
+            <select class="ra-input" @bind="_producerFilter">
+                <option value="">All producers</option>
+                @foreach (var producer in ProducerOptions)
+                {
+                    <option value="@producer">@producer</option>
+                }
+            </select>
+            <select class="ra-input" @bind="_dateFilter">
+                <option value="0">All dates</option>
+                <option value="7">Last 7 days</option>
+                <option value="14">Last 14 days</option>
+                <option value="30">Last 30 days</option>
+                <option value="60">Last 60 days</option>
+            </select>
+            <label class="ra-toggle"><input type="checkbox" @bind="_showCompleted" /> Show completed</label>
+            <button type="button" class="ra-btn ra-btn-ghost ra-btn-sm" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+            <span class="ra-filter-count">@Filtered.Count activity(s)</span>
+        </section>
+
+        <section class="ra-tabs" role="tablist" aria-label="Renewal activity views">
+            @foreach (var tab in _tabs)
+            {
+                <button type="button" class="@TabClass(tab.Key)" role="tab" aria-selected="@(_activeTab == tab.Key)" @onclick="() => SelectTab(tab.Key)">
+                    <i class="bi @tab.Icon" aria-hidden="true"></i>
+                    <span>@tab.Label</span>
+                    <strong>@TabCount(tab.Key)</strong>
+                </button>
+            }
+        </section>
+
+        <div class="ra-workspace">
+            <main class="ra-main-panel">
+                @if (_activeTab == "feed")
+                {
+                    <section class="ra-card">
+                        <div class="ra-card-header"><div><h2>Activity Feed</h2><p>Newest renewal activity grouped by activity date.</p></div><span>@Filtered.Count record(s)</span></div>
+                        @if (Filtered.Count == 0)
+                        {
+                            @EmptyState("bi-lightning", "No activities", "No DB-backed renewal activities match the current filters.")
+                        }
+                        else
+                        {
+                            <div class="ra-feed">
+                                @foreach (var grp in Filtered.GroupBy(r => r.ActivityDateUtc.Date).OrderByDescending(g => g.Key))
+                                {
+                                    <div class="ra-date-sep"><span>@FormatDateGroup(grp.Key)</span></div>
+                                    @foreach (var row in grp.OrderByDescending(x => x.ActivityDateUtc))
+                                    {
+                                        <article class="@FeedItemClass(row)" @onclick="() => SelectActivity(row)">
+                                            <div class="@TypeIconClass(row.ActivityType)"><i class="bi @TypeIcon(row.ActivityType)" aria-hidden="true"></i></div>
+                                            <div class="ra-feed-body">
+                                                <div class="ra-feed-header">
+                                                    <span class="ra-feed-acct">@row.AccountName</span>
+                                                    <span class="@TypeChipClass(row.ActivityType)">@row.ActivityType</span>
+                                                    @if (row.IsOverdue) { <span class="ra-overdue-chip">Overdue</span> }
+                                                    @if (row.IsCompleted) { <span class="ra-done-chip"><i class="bi bi-check-circle-fill" aria-hidden="true"></i> Done</span> }
+                                                </div>
+                                                <div class="ra-feed-subject">@row.Subject</div>
+                                                @if (!string.IsNullOrWhiteSpace(row.Notes))
+                                                {
+                                                    <div class="ra-feed-notes">@row.Notes</div>
+                                                }
+                                                <div class="ra-feed-meta">
+                                                    <span><i class="bi bi-person" aria-hidden="true"></i>@row.Producer</span>
+                                                    <span><i class="bi bi-clock" aria-hidden="true"></i>@row.ActivityDateUtc.ToLocalTime().ToString("g")</span>
+                                                    <span><i class="bi bi-flag" aria-hidden="true"></i>@row.Outcome</span>
+                                                </div>
+                                            </div>
+                                            <div class="ra-row-actions" @onclick:stopPropagation="true">
+                                                <button type="button" class="ra-icon-btn" title="Select" @onclick="() => SelectActivity(row)"><i class="bi bi-layout-sidebar-inset" aria-hidden="true"></i></button>
+                                                <button type="button" class="ra-icon-btn" title="Log follow-up" @onclick="() => OpenFollowUp(row)"><i class="bi bi-plus-circle" aria-hidden="true"></i></button>
+                                                @if (row.AccountId.HasValue)
+                                                {
+                                                    <button type="button" class="ra-icon-btn" title="Account 360" @onclick="() => OpenAccount(row)"><i class="bi bi-building" aria-hidden="true"></i></button>
+                                                }
+                                            </div>
+                                        </article>
+                                    }
+                                }
+                            </div>
+                        }
+                    </section>
+                }
+                else if (_activeTab == "worklist")
+                {
+                    <section class="ra-card">
+                        <div class="ra-card-header"><div><h2>Activity Worklist</h2><p>Table view of renewal activity sorted by urgency and recency.</p></div><span>@TabRows.Count record(s)</span></div>
+                        @if (TabRows.Count == 0)
+                        {
+                            @EmptyState("bi-table", "No worklist items", "No activities match the current worklist filters.")
+                        }
+                        else
+                        {
+                            <div class="ra-table-wrap">
+                                <table class="ra-table">
+                                    <thead><tr><th>Account</th><th>Type</th><th>Subject</th><th>Date</th><th>Outcome</th><th>Producer</th><th class="text-end">Actions</th></tr></thead>
+                                    <tbody>
+                                        @foreach (var row in TabRows)
+                                        {
+                                            <tr class="@RowClass(row)">
+                                                <td data-label="Account"><button type="button" class="ra-link" @onclick="() => SelectActivity(row)">@row.AccountName</button><small>@row.PolicyNumber / @row.LineOfBusiness</small></td>
+                                                <td data-label="Type"><span class="@TypeChipClass(row.ActivityType)"><i class="bi @TypeIcon(row.ActivityType)" aria-hidden="true"></i> @row.ActivityType</span></td>
+                                                <td data-label="Subject"><span>@row.Subject</span><small>@row.Notes</small></td>
+                                                <td data-label="Date"><span class="@(row.IsOverdue ? "ra-text-overdue" : string.Empty)">@row.ActivityDateUtc.ToLocalTime().ToString("d")</span><small>@row.ActivityDateUtc.ToLocalTime().ToString("t")</small></td>
+                                                <td data-label="Outcome"><span class="@OutcomeClass(row.Outcome)">@row.Outcome</span></td>
+                                                <td data-label="Producer"><span>@row.Producer</span><small>@row.CreatedByName</small></td>
+                                                <td data-label="Actions" class="text-end"><div class="ra-row-actions"><button type="button" class="ra-icon-btn" title="Select" @onclick="() => SelectActivity(row)"><i class="bi bi-layout-sidebar-inset" aria-hidden="true"></i></button><button type="button" class="ra-icon-btn" title="Follow-up" @onclick="() => OpenFollowUp(row)"><i class="bi bi-plus-circle" aria-hidden="true"></i></button>@if (row.AccountId.HasValue) { <button type="button" class="ra-icon-btn" title="Account 360" @onclick="() => OpenAccount(row)"><i class="bi bi-building" aria-hidden="true"></i></button> }</div></td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+                    </section>
+                }
+                else if (_activeTab == "tasks")
+                {
+                    <section class="ra-card">
+                        <div class="ra-card-header"><div><h2>Open Tasks</h2><p>Incomplete task activities requiring follow-up.</p></div><span>@OpenTaskRows.Count task(s)</span></div>
+                        <div class="ra-task-grid">
+                            @foreach (var row in OpenTaskRows)
                             {
-                                <span class="ra-outcome-chip ra-oc-@r.Outcome.ToLower().Replace(" ","-")">@r.Outcome</span>
+                                <button type="button" class="@TaskCardClass(row)" @onclick="() => SelectActivity(row)">
+                                    <span class="@TypeChipClass(row.ActivityType)">@row.ActivityType</span>
+                                    <strong>@row.Subject</strong>
+                                    <small>@row.AccountName / @row.ActivityDateUtc.ToLocalTime().ToString("d")</small>
+                                    <span class="ra-task-foot"><b>@row.Producer</b><em>@row.Outcome</em></span>
+                                </button>
                             }
-                            else { <span class="ra-na">—</span> }
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="IsCompleted"   HeaderText="Done"       Width="75"  DisplayAsCheckBox="true" />
-                    <GridColumn Field="Producer"      HeaderText="Producer"   Width="145" />
-                    <GridColumn HeaderText=""         Width="52"  AllowSorting="false">
-                        <Template>
-                            @{ var r = (ActivityRow)context; }
-                            <button class="um-btn um-btn-ghost um-btn-xs ra-ctx-btn"
-                                    @onclick:stopPropagation="true"
-                                    @onclick="(e) => { _selected = r; _ctx.Open(e.ClientX, e.ClientY); }">
-                                <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
-                            </button>
-                        </Template>
-                    </GridColumn>
-                </GridColumns>
-            </SfGrid>
+                        </div>
+                        @if (OpenTaskRows.Count == 0)
+                        {
+                            @EmptyState("bi-check-circle", "No open tasks", "There are no incomplete renewal task activities in the current filters.")
+                        }
+                    </section>
+                }
+                else
+                {
+                    <section class="ra-card">
+                        <div class="ra-card-header"><div><h2>Activity Analytics</h2><p>Operational activity mix, completion rate, outreach volume, and tenant engagement.</p></div></div>
+                        <div class="ra-analytics-grid">
+                            @Metric("Total", _activities.Count.ToString("N0"), "bi-lightning")
+                            @Metric("Completed", CompletedCount.ToString("N0"), "bi-check-circle")
+                            @Metric("Open Tasks", OpenTaskCount.ToString("N0"), "bi-check2-square")
+                            @Metric("Overdue", OverdueTaskCount.ToString("N0"), "bi-clock-history")
+                            @Metric("Completion", CompletionRate, "bi-percent")
+                            @Metric("Cases Touched", TouchedCaseCount.ToString("N0"), "bi-shield-check")
+                        </div>
+                    </section>
+                }
+            </main>
+
+            <aside class="ra-detail-panel">
+                @if (_selected is null)
+                {
+                    @EmptyState("bi-layout-sidebar", "Select activity", "Choose an activity to see the case context, notes, and available DB-backed actions.")
+                }
+                else
+                {
+                    <div class="ra-detail-head">
+                        <div><span class="ra-eyebrow">Selected Activity</span><h2>@_selected.AccountName</h2><p>@_selected.PolicyNumber / @_selected.LineOfBusiness</p></div>
+                        <span class="@TypeChipClass(_selected.ActivityType)">@_selected.ActivityType</span>
+                    </div>
+                    <div class="ra-detail-metrics">
+                        @Metric("Date", _selected.ActivityDateUtc.ToLocalTime().ToString("d"), "bi-calendar")
+                        @Metric("Outcome", _selected.Outcome, "bi-flag")
+                        @Metric("Producer", _selected.Producer, "bi-person-badge")
+                        @Metric("Status", _selected.IsCompleted ? "Done" : _selected.IsOverdue ? "Overdue" : "Open", "bi-check2-square")
+                    </div>
+                    <div class="ra-note-box"><h3>Subject</h3><strong>@_selected.Subject</strong>@if (!string.IsNullOrWhiteSpace(_selected.Notes)) { <p>@_selected.Notes</p> }</div>
+                    <div class="ra-detail-actions">
+                        <button type="button" class="ra-btn ra-btn-primary" @onclick="() => OpenFollowUp(_selected)"><i class="bi bi-plus-circle" aria-hidden="true"></i> Log Follow-up</button>
+                        <button type="button" class="ra-btn ra-btn-ghost" @onclick='() => Nav.NavigateTo("/renewals/retention-center")'><i class="bi bi-shield-check" aria-hidden="true"></i> Retention Center</button>
+                        @if (_selected.AccountId.HasValue)
+                        {
+                            <button type="button" class="ra-btn ra-btn-ghost" @onclick="() => OpenAccount(_selected)"><i class="bi bi-building" aria-hidden="true"></i> Account 360</button>
+                        }
+                    </div>
+                    <section class="ra-panel-section">
+                        <h3>Related Case</h3>
+                        <p>@_selected.Stage / @_selected.Priority / retention @_selected.RetentionProbability%</p>
+                    </section>
+                }
+            </aside>
         </div>
     }
 </div>
 
+@if (_showActivityDialog)
+{
+    <div class="ra-modal-backdrop" role="presentation" @onclick="CloseActivityDialog">
+        <div class="ra-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+            <div class="ra-modal-header"><i class="bi bi-lightning" aria-hidden="true"></i><span>Log Renewal Activity</span><button type="button" class="ra-btn ra-btn-ghost ra-btn-sm ra-ms-auto" @onclick="CloseActivityDialog"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm Model="_activityForm" OnValidSubmit="SaveActivityAsync" OnInvalidSubmit="NotifyValidationAsync"><DataAnnotationsValidator />
+                <div class="ra-modal-body"><div class="ra-form-grid">
+                    <div class="ra-field ra-field--full"><label>Retention Case <span class="ra-text-danger">*</span></label><InputSelect class="ra-input" @bind-Value="_activityForm.RetentionCaseId"><option value="@Guid.Empty">Select case</option>@foreach (var c in _cases.OrderBy(c => c.AccountName)) { <option value="@c.RetentionCaseId">@c.AccountName - @c.PolicyNumber</option> }</InputSelect></div>
+                    <div class="ra-field"><label>Type <span class="ra-text-danger">*</span></label><InputSelect class="ra-input" @bind-Value="_activityForm.ActivityType">@foreach (var type in _activityTypes) { <option>@type</option> }</InputSelect></div>
+                    <div class="ra-field"><label>Outcome <span class="ra-text-danger">*</span></label><InputSelect class="ra-input" @bind-Value="_activityForm.Outcome">@foreach (var outcome in _outcomes) { <option>@outcome</option> }</InputSelect></div>
+                    <div class="ra-field"><label>Activity Date <span class="ra-text-danger">*</span></label><InputDate class="ra-input" @bind-Value="_activityForm.ActivityDateUtc" /></div>
+                    <div class="ra-field ra-field--full"><label>Subject <span class="ra-text-danger">*</span></label><InputText class="ra-input" @bind-Value="_activityForm.Subject" /></div>
+                    <div class="ra-field ra-field--full"><label>Notes</label><InputTextArea class="ra-input" rows="4" @bind-Value="_activityForm.Notes" /></div>
+                </div></div>
+                <div class="ra-modal-footer"><button type="button" class="ra-btn ra-btn-ghost" @onclick="CloseActivityDialog">Cancel</button><button type="submit" class="ra-btn ra-btn-primary" disabled="@_saving">Log Activity</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
 @code {
-    private Guid DefaultTenantId { get; set; }
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantId;
-    private Guid _tenantAdminUserId;
-    SfToast _toast = default!;
-    SfContextMenu<CtxItem> _ctx = default!;
-    SfGrid<ActivityRow>? _grid;
+    private CurrentUserContextModel? _userContext;
+    private bool _loading;
+    private bool _saving;
+    private string? _loadError;
+    private DateTime? _lastRefreshUtc;
+    private string _activeTab = "feed";
+    private string _search = string.Empty;
+    private string _kpiFilter = "All";
+    private string _typeFilter = "All";
+    private string _producerFilter = string.Empty;
+    private int _dateFilter;
+    private bool _showCompleted = true;
+    private bool _showActivityDialog;
+    private ActivityRow? _selected;
+    private ActivityForm _activityForm = new();
+    private List<RenewalRetentionCaseDto> _cases = [];
+    private List<RenewalRetentionActivityDto> _activities = [];
+    private List<RenewalRetentionOfferDto> _offers = [];
+    private readonly List<ActivityToast> _toasts = [];
 
-    bool        _loading        = false;
-    string      _activeTab      = "feed";
-    string      _search         = "";
-    string?     _kpiFilter      = null;
-    string      _typeFilter     = "All";
-    string      _producerFilter = "";
-    int         _dateFilter     = 0;
-    bool        _showCompleted  = true;
-    ActivityRow _selected       = new();
-    string?     _loadError;
+    private readonly TabDef[] _tabs = [new("feed", "Activity Feed", "bi-lightning"), new("worklist", "Worklist", "bi-table"), new("tasks", "Open Tasks", "bi-check2-square"), new("analytics", "Analytics", "bi-bar-chart")];
+    private readonly string[] _activityTypes = ["Call", "Email", "Meeting", "Task", "Note", "Remarket", "Escalation", "Offer", "Bind"];
+    private readonly string[] _outcomes = ["Completed", "Left Message", "Client Responded", "Needs Follow-Up", "Escalated", "Scheduled", "Sent", "No Response"];
 
-    sealed record CtxItem(string Text, string IconCss);
-    record TabDef(string Key, string Label, string Icon);
+    private List<ActivityRow> Rows => _activities.Select(MapActivity).ToList();
+    private List<ActivityRow> Filtered => Rows.Where(r =>
+        (string.IsNullOrWhiteSpace(_search) || r.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) || r.PolicyNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) || r.Subject.Contains(_search, StringComparison.OrdinalIgnoreCase) || r.Notes.Contains(_search, StringComparison.OrdinalIgnoreCase) || r.Producer.Contains(_search, StringComparison.OrdinalIgnoreCase) || r.Outcome.Contains(_search, StringComparison.OrdinalIgnoreCase)) &&
+        (_typeFilter == "All" || string.Equals(r.ActivityType, _typeFilter, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrWhiteSpace(_producerFilter) || string.Equals(r.Producer, _producerFilter, StringComparison.OrdinalIgnoreCase)) &&
+        (_dateFilter == 0 || r.ActivityDateUtc >= DateTime.UtcNow.AddDays(-_dateFilter)) &&
+        (_showCompleted || !r.IsCompleted) &&
+        (_kpiFilter == "All" ||
+         (_kpiFilter == "Call" && r.ActivityType == "Call") ||
+         (_kpiFilter == "Email" && r.ActivityType == "Email") ||
+         (_kpiFilter == "Meeting" && r.ActivityType == "Meeting") ||
+         (_kpiFilter == "Task" && r.ActivityType == "Task") ||
+         (_kpiFilter == "Overdue" && r.IsOverdue) ||
+         (_kpiFilter == "Completed" && r.IsCompleted)))
+        .OrderByDescending(r => r.IsOverdue)
+        .ThenByDescending(r => r.ActivityDateUtc)
+        .ToList();
 
-    sealed class ActivityRow
+    private List<ActivityRow> TabRows => _activeTab == "tasks" ? OpenTaskRows : Filtered;
+    private List<ActivityRow> OpenTaskRows => Filtered.Where(r => r.ActivityType == "Task" && !r.IsCompleted).ToList();
+    private IEnumerable<string> TypeOptions => Rows.Select(r => r.ActivityType).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    private IEnumerable<string> ProducerOptions => Rows.Select(r => r.Producer).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    private int CompletedCount => Rows.Count(r => r.IsCompleted);
+    private int OpenTaskCount => Rows.Count(r => r.ActivityType == "Task" && !r.IsCompleted);
+    private int OverdueTaskCount => Rows.Count(r => r.IsOverdue);
+    private int TouchedCaseCount => Rows.Select(r => r.RetentionCaseId).Distinct().Count();
+    private string CompletionRate => Rows.Count == 0 ? "0%" : $"{(CompletedCount * 100m / Rows.Count):0}%";
+    private string LastRefreshLabel => _lastRefreshUtc.HasValue ? $"Updated {_lastRefreshUtc.Value.ToLocalTime():g}" : "Not loaded";
+    private IReadOnlyList<KpiTile> Kpis => [new("Total", Rows.Count.ToString("N0"), "bi-lightning", "total", "All", "Show all activities"), new("Calls", Rows.Count(r => r.ActivityType == "Call").ToString("N0"), "bi-telephone", "call", "Call", "Show calls"), new("Emails", Rows.Count(r => r.ActivityType == "Email").ToString("N0"), "bi-envelope", "email", "Email", "Show emails"), new("Meetings", Rows.Count(r => r.ActivityType == "Meeting").ToString("N0"), "bi-calendar-event", "meet", "Meeting", "Show meetings"), new("Tasks", Rows.Count(r => r.ActivityType == "Task").ToString("N0"), "bi-check2-square", "task", "Task", "Show tasks"), new("Overdue", OverdueTaskCount.ToString("N0"), "bi-clock-history", "overdue", "Overdue", "Show overdue tasks"), new("Completed", CompletedCount.ToString("N0"), "bi-check-circle", "done", "Completed", "Show completed")];
+    private IReadOnlyList<PriorityInsight> PriorityInsights => BuildPriorityInsights();
+
+    protected override async Task OnInitializedAsync()
     {
-        public Guid     ActivityId     { get; set; } = Guid.NewGuid();
-        public Guid     RenewalId      { get; set; } = Guid.NewGuid();
-        public string   AccountName    { get; set; } = "";
-        public string   ActivityType   { get; set; } = "";
-        public string   Subject        { get; set; } = "";
-        public string   Notes          { get; set; } = "";
-        public DateTime ActivityDate   { get; set; }
-        public int      DurationMinutes{ get; set; }
-        public string   Outcome        { get; set; } = "";
-        public bool     IsCompleted    { get; set; }
-        public string   Producer       { get; set; } = "";
-    }
-
-    readonly TabDef[] _tabs =
-    [
-        new("feed",  "Activity Feed",  "bi-lightning"    ),
-        new("grid",  "Grid View",      "bi-table"        ),
-        new("tasks", "Open Tasks",     "bi-check2-square"),
-    ];
-
-    readonly string[] _typePills   = { "All", "Call", "Email", "Meeting", "Task", "Note" };
-    readonly string[] _producers   = { "Maria Santos","James Park","Kevin Obi","Sarah Kim","Lisa Chen" };
-    readonly string[] _accounts    = { "Sullivan Mfg. LLC","Bridgewater Hotels","Metro Freight Co.","PineCrest Builders","Omega Tech Corp.","BlueSky Aviation","Harbor Fresh Foods","Summit Properties LLC" };
-    readonly string[] _callOutcomes = { "Left Voicemail","Reached — Positive","Reached — Neutral","No Answer","Scheduled Follow-up" };
-    readonly string[] _emailOutcomes= { "Sent","Replied","No Response","Bounced" };
-    readonly string[] _taskOutcomes = { "Completed","Deferred","Escalated","" };
-
-    readonly List<ActivityRow> _rows = [];
-
-    IEnumerable<ActivityRow> Filtered => _rows
-        .Where(r =>
-            (string.IsNullOrEmpty(_search) ||
-             r.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             r.Subject.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             r.Notes.Contains(_search, StringComparison.OrdinalIgnoreCase))
-         && (_typeFilter == "All" || r.ActivityType == _typeFilter)
-         && (string.IsNullOrEmpty(_producerFilter) || r.Producer == _producerFilter)
-         && (_dateFilter == 0 || r.ActivityDate >= DateTime.Today.AddDays(-_dateFilter))
-         && (_showCompleted || !r.IsCompleted)
-         && (_kpiFilter is null
-             || _kpiFilter == "__overdue"   && r.ActivityType == "Task" && !r.IsCompleted && r.ActivityDate < DateTime.Today
-             || _kpiFilter == "__completed" && r.IsCompleted
-             || r.ActivityType == _kpiFilter));
-
-    string TabCount(string key) => key switch
-    {
-        "feed"  => _rows.Count.ToString(),
-        "grid"  => _rows.Count.ToString(),
-        "tasks" => _rows.Count(r => r.ActivityType == "Task" && !r.IsCompleted).ToString(),
-        _       => "",
-    };
-
-    IEnumerable<ActivityRow> TabFilteredRows => _activeTab == "tasks"
-        ? Filtered.Where(r => r.ActivityType == "Task" && !r.IsCompleted)
-        : Filtered;
-
-    IEnumerable<ActivityRow> TabRows => TabFilteredRows;
-
-    readonly List<CtxItem> _ctxItems =
-    [
-        new("Open Renewal",    "bi bi-box-arrow-up-right"),
-        new("Mark Complete",   "bi bi-check-circle"      ),
-        new("Edit",            "bi bi-pencil"            ),
-        new("Log Follow-up",   "bi bi-lightning"         ),
-        new("Schedule Meeting","bi bi-calendar-plus"     ),
-        new("Delete",          "bi bi-trash"             ),
-    ];
-
-    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Renewals","/renewals"), new("Activities","/renewals/activities"));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Renewals", "/renewals"), new("Activities", "/renewals/activities"));
         await LoadAsync();
     }
 
-    async Task LoadAsync()
+    private async Task LoadAsync()
     {
         _loading = true;
         _loadError = null;
         try
         {
-            var result = await Api.SearchSubmissionsAsync(DefaultTenantId, pageSize: 100);
-            _rows.Clear();
-            foreach (var item in result?.Items ?? [])
-                _rows.AddRange(MapSubmissionToActivities(item));
-            if (_rows.Count == 0) BuildStub();
+            _userContext ??= await CurrentUser.RequireAsync();
+            var data = await Api.GetRenewalRetentionCenterAsync(_userContext.TenantId) ?? new RenewalRetentionCenterDto();
+            _cases = data.Cases.ToList();
+            _activities = data.Activities.ToList();
+            _offers = data.Offers.ToList();
+            _selected = _selected is null ? Rows.FirstOrDefault() : Rows.FirstOrDefault(r => r.ActivityId == _selected.ActivityId) ?? Rows.FirstOrDefault();
+            _lastRefreshUtc = DateTime.UtcNow;
         }
         catch (Exception ex)
         {
             _loadError = $"Failed to load renewal activities: {ex.Message}";
-            if (_rows.Count == 0) BuildStub();
+            await ShowToast(_loadError, "ra-toast-danger");
         }
         finally
         {
@@ -360,146 +385,178 @@
         }
     }
 
-    IEnumerable<ActivityRow> MapSubmissionToActivities(SubmissionDto s)
+    private ActivityRow MapActivity(RenewalRetentionActivityDto activity)
     {
-        var producer = s.AssignedToUserName ?? "Unassigned";
-        yield return new ActivityRow
+        var c = _cases.FirstOrDefault(x => x.RetentionCaseId == activity.RetentionCaseId);
+        return new ActivityRow
         {
-            ActivityId = Guid.NewGuid(),
-            RenewalId = s.SubmissionId,
-            AccountName = s.AccountName,
-            ActivityType = "Task",
-            Subject = $"Review renewal for {s.SubmissionNumber}",
-            Notes = $"Policy renewal expires {s.ExpirationDate:MM/dd/yyyy}.",
-            ActivityDate = s.ExpirationDate.AddDays(-60),
-            Outcome = s.Status == "Bound" ? "Completed" : string.Empty,
-            IsCompleted = s.Status == "Bound",
-            Producer = producer
-        };
-        yield return new ActivityRow
-        {
-            ActivityId = Guid.NewGuid(),
-            RenewalId = s.SubmissionId,
-            AccountName = s.AccountName,
-            ActivityType = "Email",
-            Subject = "Renewal package follow-up",
-            Notes = "Confirm updated exposures and renewal appetite.",
-            ActivityDate = s.ExpirationDate.AddDays(-45),
-            DurationMinutes = 0,
-            Outcome = s.Status is "Quoted" or "Bound" ? "Replied" : "Sent",
-            IsCompleted = s.Status is "Quoted" or "Bound",
-            Producer = producer
+            ActivityId = activity.RetentionActivityId,
+            RetentionCaseId = activity.RetentionCaseId,
+            AccountId = c?.AccountId,
+            AccountName = c?.AccountName ?? "Retention case",
+            PolicyNumber = c?.PolicyNumber ?? "—",
+            LineOfBusiness = c?.LineOfBusiness ?? "—",
+            Stage = c?.Stage ?? "—",
+            Priority = c?.Priority ?? "Normal",
+            Producer = c?.Producer ?? "Unassigned",
+            RetentionProbability = c?.RetentionProbability ?? 0,
+            ActivityType = activity.ActivityType,
+            Subject = activity.Subject,
+            Notes = activity.Notes ?? string.Empty,
+            ActivityDateUtc = activity.ActivityDateUtc,
+            Outcome = activity.Outcome,
+            CreatedByName = activity.CreatedByName
         };
     }
 
-    void BuildStub()
+    private void ApplyKpi(KpiTile kpi) => _kpiFilter = _kpiFilter == kpi.Filter ? "All" : kpi.Filter;
+    private void ApplyInsight(PriorityInsight insight) { _kpiFilter = insight.Filter; _activeTab = insight.Tab; }
+    private void SelectTab(string key) => _activeTab = key;
+    private void SelectActivity(ActivityRow row) => _selected = row;
+    private void ResetFilters() { _search = string.Empty; _kpiFilter = "All"; _typeFilter = "All"; _producerFilter = string.Empty; _dateFilter = 0; _showCompleted = true; }
+    private void OpenAccount(ActivityRow row) { if (row.AccountId.HasValue) Nav.NavigateTo($"/accounts/{row.AccountId.Value}"); }
+
+    private void OpenLogActivity()
     {
-        var rng   = new Random(55);
-        var types = new[]{ "Call","Call","Email","Email","Meeting","Task","Task","Note" };
-
-        for (int i = 0; i < 80; i++)
+        if (_cases.Count == 0)
         {
-            var type    = types[rng.Next(types.Length)];
-            var daysAgo = rng.Next(-5, 45);
-            var date    = DateTime.Today.AddDays(-daysAgo).AddHours(rng.Next(8, 18));
-            var done    = rng.Next(3) != 0;
+            _ = ShowToast("Log activity unavailable: no retention cases exist for this tenant.", "ra-toast-danger");
+            return;
+        }
 
-            string outcome = type switch
-            {
-                "Call"  => _callOutcomes[rng.Next(_callOutcomes.Length)],
-                "Email" => _emailOutcomes[rng.Next(_emailOutcomes.Length)],
-                "Task"  => done ? _taskOutcomes[rng.Next(_taskOutcomes.Length - 1)] : "",
-                _       => "",
-            };
+        _activityForm = new ActivityForm { RetentionCaseId = _selected?.RetentionCaseId ?? _cases.OrderBy(c => c.ExpirationDate).First().RetentionCaseId, ActivityDateUtc = DateTime.UtcNow, ActivityType = "Call", Outcome = "Completed", Subject = string.Empty };
+        _showActivityDialog = true;
+    }
 
-            _rows.Add(new ActivityRow
-            {
-                AccountName     = _accounts[rng.Next(_accounts.Length)],
-                ActivityType    = type,
-                Subject         = SubjectFor(type, rng),
-                Notes           = rng.Next(3) == 0 ? NoteFor(type, rng) : "",
-                ActivityDate    = date,
-                DurationMinutes = type is "Call" or "Meeting" ? rng.Next(5, 65) : 0,
-                Outcome         = outcome,
-                IsCompleted     = done,
-                Producer        = _producers[rng.Next(_producers.Length)],
-            });
+    private void OpenFollowUp(ActivityRow row)
+    {
+        _selected = row;
+        _activityForm = new ActivityForm { RetentionCaseId = row.RetentionCaseId, ActivityType = row.ActivityType == "Task" ? "Call" : "Task", Outcome = "Needs Follow-Up", Subject = $"Follow-up: {row.Subject}", Notes = row.AccountName, ActivityDateUtc = DateTime.UtcNow };
+        _showActivityDialog = true;
+    }
+
+    private void CloseActivityDialog()
+    {
+        _showActivityDialog = false;
+        _activityForm = new();
+    }
+
+    private async Task SaveActivityAsync()
+    {
+        if (_activityForm.RetentionCaseId == Guid.Empty)
+        {
+            await ShowToast("Select a retention case before logging activity.", "ra-toast-danger");
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            await Api.AddRenewalRetentionActivityAsync(new CreateRenewalRetentionActivityRequest { RetentionCaseId = _activityForm.RetentionCaseId, ActivityType = _activityForm.ActivityType, Subject = Normalize(_activityForm.Subject) ?? string.Empty, Outcome = _activityForm.Outcome, Notes = Normalize(_activityForm.Notes), ActivityDateUtc = _activityForm.ActivityDateUtc, CreatedByName = _userContext?.TenantName ?? "Tenant user", CreatedByUserId = _userContext?.UserId });
+            CloseActivityDialog();
+            await LoadAsync();
+            await ShowToast("Renewal activity logged.");
+        }
+        catch (Exception ex)
+        {
+            await ShowToast($"Activity save failed: {ex.Message}", "ra-toast-danger");
+        }
+        finally
+        {
+            _saving = false;
         }
     }
 
-    static string SubjectFor(string type, Random rng) => type switch
+    private async Task NotifyValidationAsync() => await ShowToast("Please fix validation errors before continuing.", "ra-toast-danger");
+
+    private IReadOnlyList<PriorityInsight> BuildPriorityInsights()
     {
-        "Call"    => new[]{ "Renewal check-in", "Premium discussion", "Coverage review call", "Follow-up on outstanding items", "Retention risk discussion" }[rng.Next(5)],
-        "Email"   => new[]{ "Renewal package sent", "Quote comparison attached", "Request for updated exposure info", "Binding instructions follow-up", "30-day expiry reminder" }[rng.Next(5)],
-        "Meeting" => new[]{ "Annual renewal strategy meeting", "In-person coverage review", "Stewardship presentation", "Carrier introduction call", "Mid-term review" }[rng.Next(5)],
-        "Task"    => new[]{ "Obtain updated COPE data", "Order loss runs", "Complete application", "Follow up with underwriter", "Send binder to client" }[rng.Next(5)],
-        _         => new[]{ "Account note — premium concern", "Coverage gap noted", "Client inquiry recorded", "Internal memo" }[rng.Next(4)],
-    };
-
-    static string NoteFor(string type, Random rng) => type switch
-    {
-        "Call"  => new[]{ "Client open to reviewing other carriers.", "Expressed concern about premium increase.", "Agreed to 30-day extension.", "Requested additional coverage options." }[rng.Next(4)],
-        "Email" => new[]{ "No response received within 48 hrs.", "Client confirmed receipt.", "Requested revised quote." }[rng.Next(3)],
-        _       => new[]{ "Follow-up required before expiry.", "Escalated to senior producer." }[rng.Next(2)],
-    };
-
-    void ResetFilters() { _search = ""; _typeFilter = "All"; _producerFilter = ""; _dateFilter = 0; _kpiFilter = null; }
-
-    void OpenRenewal(ActivityRow r) => Nav.NavigateTo($"/renewals/{r.RenewalId}");
-
-    void OnRowSelected(RowSelectEventArgs<ActivityRow> args) => OpenRenewal(args.Data);
-
-    void OnCtxSelected(MenuEventArgs<CtxItem> args)
-    {
-        if (args.Item.Text == "Open Renewal") OpenRenewal(_selected);
-        if (args.Item.Text == "Mark Complete") _selected.IsCompleted = true;
+        var items = new List<PriorityInsight>();
+        if (OverdueTaskCount > 0) items.Add(new("Overdue follow-ups", $"{OverdueTaskCount:N0} task(s) are past due", "bi-clock-history", "ra-priority-danger", "Overdue", "tasks"));
+        if (OpenTaskCount > 0) items.Add(new("Open renewal tasks", $"{OpenTaskCount:N0} task(s) still need action", "bi-check2-square", "ra-priority-warning", "Task", "tasks"));
+        var callCount = Rows.Count(r => r.ActivityType == "Call");
+        if (callCount > 0) items.Add(new("Producer calls", $"{callCount:N0} call touchpoint(s) recorded", "bi-telephone", "ra-priority-info", "Call", "feed"));
+        if (CompletedCount > 0) items.Add(new("Completed touches", $"{CompletedCount:N0} completed activity record(s)", "bi-check-circle", "ra-priority-success", "Completed", "worklist"));
+        if (items.Count == 0) items.Add(new("No activity exceptions", "No overdue or open renewal activities detected", "bi-check-circle", "ra-priority-success", "All", "feed"));
+        return items.Take(4).ToList();
     }
 
-    async Task LogActivity()
+    private int TabCount(string key) => key switch { "feed" => Filtered.Count, "worklist" => Filtered.Count, "tasks" => OpenTaskRows.Count, "analytics" => Rows.Count, _ => 0 };
+    private string TabClass(string key) => _activeTab == key ? "ra-tab ra-tab--active" : "ra-tab";
+    private string KpiClass(KpiTile kpi) => _kpiFilter == kpi.Filter ? $"ra-kpi-card ra-kpi-{kpi.Tone} ra-kpi-card--active" : $"ra-kpi-card ra-kpi-{kpi.Tone}";
+    private static string TypeIcon(string type) => type switch { "Call" => "bi-telephone", "Email" => "bi-envelope", "Meeting" => "bi-calendar-event", "Task" => "bi-check2-square", "Remarket" => "bi-arrow-left-right", "Escalation" => "bi-exclamation-octagon", "Offer" => "bi-gift", "Bind" => "bi-check-circle", _ => "bi-chat-text" };
+    private static string TypeIconClass(string type) => $"ra-feed-icon ra-type-{CssToken(type)}";
+    private static string TypeChipClass(string type) => $"ra-type-chip ra-tc-{CssToken(type)}";
+    private static string OutcomeClass(string outcome) => $"ra-outcome-chip ra-oc-{CssToken(outcome)}";
+    private static string FeedItemClass(ActivityRow row) => row.IsCompleted ? "ra-feed-item ra-item-done" : row.IsOverdue ? "ra-feed-item ra-item-overdue" : "ra-feed-item";
+    private static string RowClass(ActivityRow row) => row.IsOverdue ? "ra-row-overdue" : row.IsCompleted ? "ra-row-done" : string.Empty;
+    private static string TaskCardClass(ActivityRow row) => row.IsOverdue ? "ra-task-card ra-task-card--overdue" : "ra-task-card";
+    private static string FormatDateGroup(DateTime d) => d.Date == DateTime.Today ? "Today" : d.Date == DateTime.Today.AddDays(-1) ? "Yesterday" : d.ToString("dddd, MMMM d");
+    private static string CssToken(string value) => string.IsNullOrWhiteSpace(value) ? "none" : value.ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
+    private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static RenderFragment Metric(string label, string value, string icon) => __builder =>
     {
-        await _toast.ShowAsync(new ToastModel
+        <div class="ra-metric"><i class="bi @icon" aria-hidden="true"></i><span>@label</span><strong>@value</strong></div>;
+    };
+
+    private static RenderFragment EmptyState(string icon, string title, string detail) => __builder =>
+    {
+        <div class="ra-empty"><i class="bi @icon" aria-hidden="true"></i><strong>@title</strong><span>@detail</span></div>;
+    };
+
+    private async Task ShowToast(string content, string css = "ra-toast-success")
+    {
+        var toast = new ActivityToast(Guid.NewGuid(), content, css, css == "ra-toast-danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill");
+        _toasts.Add(toast);
+        await InvokeAsync(StateHasChanged);
+        _ = Task.Run(async () =>
         {
-            Title    = "Log Activity",
-            Content  = "Activity logging dialog coming soon.",
-            CssClass = "e-toast-info"
+            await Task.Delay(4500);
+            await InvokeAsync(() => DismissToast(toast.Id));
         });
     }
 
-    static string TypeIcon(string t) => t switch
+    private void DismissToast(Guid id)
     {
-        "Call"    => "bi-telephone",
-        "Email"   => "bi-envelope",
-        "Meeting" => "bi-calendar-event",
-        "Task"    => "bi-check2-square",
-        _         => "bi-chat-text",
-    };
-
-    static string FormatDateGroup(DateTime d)
-    {
-        if (d.Date == DateTime.Today) return "Today";
-        if (d.Date == DateTime.Today.AddDays(-1)) return "Yesterday";
-        return d.ToString("dddd, MMMM d");
+        _toasts.RemoveAll(t => t.Id == id);
+        StateHasChanged();
     }
 
-    RenderFragment KpiCard(string icon, string label, string val, string css, string? filterKey)
+    private sealed class ActivityForm
     {
-        var isActive = _kpiFilter == filterKey && filterKey is not null;
-        return @<button class="ra-kpi-card @css @(isActive ? "ra-kpi-active" : "")"
-                        @onclick="() => _kpiFilter = isActive ? null : filterKey"
-                        title="@(filterKey is null ? "Show all" : (isActive ? "Clear filter" : $"Filter by {label}"))">
-            <div class="ra-kpi-val">@val</div>
-            <div class="ra-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
-        </button>;
+        [Required] public Guid RetentionCaseId { get; set; }
+        [Required, StringLength(40)] public string ActivityType { get; set; } = "Call";
+        [Required, StringLength(180)] public string Subject { get; set; } = string.Empty;
+        [Required, StringLength(80)] public string Outcome { get; set; } = "Completed";
+        [StringLength(2000)] public string? Notes { get; set; }
+        [Required] public DateTime ActivityDateUtc { get; set; } = DateTime.UtcNow;
     }
 
-    async Task ResolveCurrentUserContextAsync()
+    private sealed class ActivityRow
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        public Guid ActivityId { get; set; }
+        public Guid RetentionCaseId { get; set; }
+        public Guid? AccountId { get; set; }
+        public string AccountName { get; set; } = string.Empty;
+        public string PolicyNumber { get; set; } = string.Empty;
+        public string LineOfBusiness { get; set; } = string.Empty;
+        public string Stage { get; set; } = string.Empty;
+        public string Priority { get; set; } = string.Empty;
+        public int RetentionProbability { get; set; }
+        public string ActivityType { get; set; } = string.Empty;
+        public string Subject { get; set; } = string.Empty;
+        public string Notes { get; set; } = string.Empty;
+        public DateTime ActivityDateUtc { get; set; }
+        public string Outcome { get; set; } = string.Empty;
+        public string CreatedByName { get; set; } = string.Empty;
+        public string Producer { get; set; } = string.Empty;
+        public bool IsCompleted => Outcome.Contains("Completed", StringComparison.OrdinalIgnoreCase) || Outcome.Contains("Accepted", StringComparison.OrdinalIgnoreCase) || string.Equals(ActivityType, "Bind", StringComparison.OrdinalIgnoreCase);
+        public bool IsOverdue => string.Equals(ActivityType, "Task", StringComparison.OrdinalIgnoreCase) && !IsCompleted && ActivityDateUtc.Date < DateTime.UtcNow.Date;
     }
+
+    private sealed record TabDef(string Key, string Label, string Icon);
+    private sealed record KpiTile(string Label, string Value, string Icon, string Tone, string Filter, string Title);
+    private sealed record PriorityInsight(string Title, string Detail, string Icon, string Tone, string Filter, string Tab);
+    private sealed record ActivityToast(Guid Id, string Content, string CssClass, string Icon);
 }

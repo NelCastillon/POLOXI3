@@ -1,0 +1,430 @@
+@page "/tenant/documents/dashboard"
+@page "/documents/setup"
+@using Ams.Application.Common.Dtos
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Document Setup Dashboard</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="dsd-toast dsd-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="dsd-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+<div class="dsd-enterprise-page">
+    <section class="dsd-hero">
+        <div class="dsd-hero-left">
+            <span class="dsd-hero-icon"><i class="bi bi-folder-gear" aria-hidden="true"></i></span>
+            <div>
+                <div class="dsd-title-row">
+                    <h1>Document Setup Dashboard</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> DB synced</span>
+                    <span><i class="bi bi-shield-check" aria-hidden="true"></i> Tenant setup</span>
+                    <span><i class="bi bi-diagram-3" aria-hidden="true"></i> @_modules.Count modules</span>
+                </div>
+                <p>Enterprise command center for categories, templates, ACORD forms, e-sign, packets, retention, OCR, and storage setup readiness.</p>
+            </div>
+        </div>
+        <div class="dsd-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "dsd-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="RunAudit"><i class="bi bi-clipboard-check" aria-hidden="true"></i> Run Audit</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="ExportAsync" disabled="@(!_records.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export Brief</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="dsd-error-banner" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="dsd-kpi-strip" aria-label="Document setup KPIs">
+        <button type="button" class="@AllKpiClass" @onclick="ShowAll"><span class="dsd-kpi-icon"><i class="bi bi-collection" aria-hidden="true"></i></span><span><strong>@_records.Count</strong><em>Total Setup Records</em><small>Across all document modules</small></span></button>
+        <button type="button" class="@ActiveKpiClass" @onclick="ShowActive"><span class="dsd-kpi-icon"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span><span><strong>@ActiveCount</strong><em>Active Records</em><small>Available to workflows</small></span></button>
+        <button type="button" class="@ReadyKpiClass" @onclick="ShowReady"><span class="dsd-kpi-icon"><i class="bi bi-shield-check" aria-hidden="true"></i></span><span><strong>@ReadyCount</strong><em>Ready</em><small>Complete setup metadata</small></span></button>
+        <button type="button" class="@ReviewKpiClass" @onclick="ShowReview"><span class="dsd-kpi-icon"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></span><span><strong>@ReviewCount</strong><em>Needs Review</em><small>Incomplete or inactive setup</small></span></button>
+        <button type="button" class="@AutomationKpiClass" @onclick="ShowAutomation"><span class="dsd-kpi-icon"><i class="bi bi-lightning-charge-fill" aria-hidden="true"></i></span><span><strong>@AutomationCount</strong><em>Automation Signals</em><small>Workflow, metadata, or routing</small></span></button>
+        <button type="button" class="@ModulesKpiClass" @onclick="ShowModules"><span class="dsd-kpi-icon"><i class="bi bi-grid-3x3-gap" aria-hidden="true"></i></span><span><strong>@ConfiguredModuleCount/@_modules.Count</strong><em>Modules Configured</em><small>Setup coverage</small></span></button>
+    </section>
+
+    <section class="dsd-workflow-strip" aria-label="Document setup workflows">
+        <button type="button" class="dsd-workflow-card" @onclick="ShowOverview"><i class="bi bi-speedometer2" aria-hidden="true"></i><span><strong>Overview</strong><small>Setup health and gaps</small></span></button>
+        <button type="button" class="dsd-workflow-card" @onclick="ShowModules"><i class="bi bi-grid-3x3-gap" aria-hidden="true"></i><span><strong>Modules</strong><small>Navigate configuration areas</small></span></button>
+        <button type="button" class="dsd-workflow-card" @onclick="ShowGovernance"><i class="bi bi-shield-lock" aria-hidden="true"></i><span><strong>Governance</strong><small>Audit readiness</small></span></button>
+        <button type="button" class="dsd-workflow-card" @onclick="ShowAutomation"><i class="bi bi-diagram-3" aria-hidden="true"></i><span><strong>Automation</strong><small>Workflow and metadata</small></span></button>
+    </section>
+
+    <section class="dsd-search-panel">
+        <div class="dsd-search-wrap">
+            <span class="dsd-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="dsd-search-body">
+                <label for="dsd-search">Setup search</label>
+                <input id="dsd-search" class="dsd-search-input" @bind="_search" @bind:event="oninput" @bind:after="ApplyFilters" placeholder="Search module, code, name, category, description, or JSON..." />
+                <span class="dsd-search-hint">Filters module cards, register rows, governance queue, and detail summaries.</span>
+            </div>
+        </div>
+        <select class="dsd-filter-select" @bind="_moduleFilter" @bind:after="ApplyFilters" aria-label="Module filter">
+            <option value="all">All modules</option>
+            @foreach (var module in _modules)
+            {
+                <option value="@module.Kind">@module.Title</option>
+            }
+        </select>
+        <select class="dsd-filter-select" @bind="_statusFilter" @bind:after="ApplyFilters" aria-label="Status filter">
+            <option value="all">All readiness</option>
+            <option value="active">Active</option>
+            <option value="ready">Ready</option>
+            <option value="review">Needs review</option>
+            <option value="automation">Automation signals</option>
+        </select>
+        <div class="dsd-search-result"><strong>@_filtered.Count</strong><span>records</span></div>
+    </section>
+
+    <nav class="dsd-view-tabs" aria-label="Document setup views">
+        @foreach (var view in _views)
+        {
+            <button type="button" class="dsd-view-btn @(_activeView == view ? "dsd-view-btn-active" : null)" @onclick="() => SetView(view)">@view</button>
+        }
+    </nav>
+
+    <section class="dsd-content-layout">
+        <div class="dsd-main-card">
+            @if (_loading)
+            {
+                <div class="dsd-loading"><i class="bi bi-arrow-repeat dsd-spin" aria-hidden="true"></i><span>Loading document setup...</span></div>
+            }
+            else if (_activeView == "Modules")
+            {
+                <div class="dsd-module-grid">
+                    @foreach (var module in FilteredModules)
+                    {
+                        var summary = SummaryFor(module);
+                        <button type="button" class="@ModuleCardClass(summary)" @onclick="() => SelectModule(module)">
+                            <span class="dsd-module-icon"><i class="@module.Icon" aria-hidden="true"></i></span>
+                            <span class="dsd-module-body"><strong>@module.Title</strong><small>@module.Description</small></span>
+                            <span class="dsd-module-metrics"><em>@summary.Total records</em><em>@summary.Ready ready</em><em>@summary.Review review</em></span>
+                            <span class="dsd-module-actions"><span>@summary.ReadinessLabel</span><i class="bi bi-arrow-right" aria-hidden="true"></i></span>
+                        </button>
+                    }
+                </div>
+            }
+            else if (_activeView == "Governance")
+            {
+                <div class="dsd-governance-grid">
+                    <section class="dsd-panel">
+                        <header><div><i class="bi bi-shield-check" aria-hidden="true"></i><strong>Setup Readiness</strong></div><span>@ReadinessScore.ToString("F0")%</span></header>
+                        <div class="dsd-panel-body dsd-metric-list">
+                            <div class="dsd-metric-row"><span>Active records</span><div><i style="@WidthStyle(ActiveCount, SafeTotal)"></i></div><strong>@ActiveCount</strong></div>
+                            <div class="dsd-metric-row"><span>Ready records</span><div><i style="@WidthStyle(ReadyCount, SafeTotal)"></i></div><strong>@ReadyCount</strong></div>
+                            <div class="dsd-metric-row"><span>Automation signals</span><div><i style="@WidthStyle(AutomationCount, SafeTotal)"></i></div><strong>@AutomationCount</strong></div>
+                            <div class="dsd-metric-row"><span>Needs review</span><div><i style="@WidthStyle(ReviewCount, SafeTotal)"></i></div><strong>@ReviewCount</strong></div>
+                        </div>
+                    </section>
+                    <section class="dsd-panel">
+                        <header><div><i class="bi bi-pie-chart" aria-hidden="true"></i><strong>Module Coverage</strong></div><span>@ConfiguredModuleCount/@_modules.Count</span></header>
+                        <div class="dsd-panel-body dsd-group-list">
+                            @foreach (var summary in ModuleSummaries)
+                            {
+                                <button type="button" class="dsd-group-row" @onclick="() => FilterModule(summary.Kind)"><span>@summary.Title</span><div><i style="@WidthStyle(summary.Total, Math.Max(_records.Count, 1))"></i></div><strong>@summary.Total</strong></button>
+                            }
+                        </div>
+                    </section>
+                    <section class="dsd-panel dsd-panel-wide">
+                        <header><div><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><strong>Setup Review Queue</strong></div><span>@ReviewItems.Count</span></header>
+                        <div class="dsd-panel-body dsd-review-list">
+                            @foreach (var item in ReviewItems.Take(10))
+                            {
+                                <button type="button" class="dsd-review-row" @onclick="() => SelectRecord(item)"><strong>@item.Name</strong><span>@ModuleTitle(item.Kind)</span><em>@ReviewReason(item)</em></button>
+                            }
+                        </div>
+                    </section>
+                </div>
+            }
+            else if (_activeView == "Automation")
+            {
+                <div class="dsd-board">
+                    @foreach (var lane in AutomationLanes)
+                    {
+                        <section class="dsd-board-col">
+                            <header><strong>@lane.Title</strong><span>@lane.Items.Count</span></header>
+                            @foreach (var item in lane.Items)
+                            {
+                                <button type="button" class="dsd-board-card" @onclick="() => SelectRecord(item)">
+                                    <div><strong>@item.Name</strong><span>@ModuleTitle(item.Kind)</span></div>
+                                    <small>@(item.Description ?? "No description provided")</small>
+                                    <em>@ReadinessLabel(item)</em>
+                                </button>
+                            }
+                        </section>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="dsd-table-scroll">
+                    <table class="dsd-table">
+                        <thead><tr><th>Setup Record</th><th>Module</th><th>Code</th><th>Group</th><th>Readiness</th><th>Status</th><th>Order</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var item in _filtered)
+                            {
+                                <tr @onclick="() => SelectRecord(item)">
+                                    <td><div class="dsd-name-cell"><span class="dsd-avatar @AvatarClass(item)">@Initials(item.Name)</span><span><strong>@item.Name</strong><small>@(item.Description ?? "No description provided")</small></span></div></td>
+                                    <td>@ModuleTitle(item.Kind)</td>
+                                    <td><span class="dsd-code-pill">@item.Code</span></td>
+                                    <td>@GroupLabel(item)</td>
+                                    <td><span class="@ReadinessClass(item)">@ReadinessLabel(item)</span></td>
+                                    <td><span class="@StatusClass(item)">@StatusLabel(item)</span></td>
+                                    <td class="dsd-number">@item.SortOrder</td>
+                                    <td><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => NavigateToModule(item.Kind)"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <aside class="dsd-detail-card" aria-label="Document setup detail">
+            @if (_selectedRecord is not null)
+            {
+                <div class="dsd-detail-head"><div><span class="dsd-detail-eyebrow"><i class="bi bi-file-earmark-text" aria-hidden="true"></i> @ModuleTitle(_selectedRecord.Kind)</span><h2>@_selectedRecord.Name</h2><p>@_selectedRecord.Code</p></div><span class="@StatusClass(_selectedRecord)">@StatusLabel(_selectedRecord)</span></div>
+                <div class="dsd-detail-body">
+                    <div class="dsd-detail-summary">
+                        <div><span>Readiness</span><strong>@ReadinessLabel(_selectedRecord)</strong></div>
+                        <div><span>Group</span><strong>@GroupLabel(_selectedRecord)</strong></div>
+                        <div><span>Sort Order</span><strong>@_selectedRecord.SortOrder</strong></div>
+                        <div><span>Created</span><strong>@_selectedRecord.CreatedDateUtc.ToLocalTime().ToString("MMM d")</strong></div>
+                    </div>
+                    <div class="dsd-config-card"><span>Configuration JSON</span><code>@DisplayConfig(_selectedRecord)</code></div>
+                    <div class="dsd-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => NavigateToModule(_selectedRecord.Kind)"><i class="bi bi-pencil" aria-hidden="true"></i> Open Setup Area</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="RunAudit"><i class="bi bi-clipboard-check" aria-hidden="true"></i> Audit Setup</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync"><i class="bi bi-download" aria-hidden="true"></i> Export Brief</button>
+                    </div>
+                </div>
+            }
+            else if (_selectedModule is not null)
+            {
+                var summary = SummaryFor(_selectedModule);
+                <div class="dsd-detail-head"><div><span class="dsd-detail-eyebrow"><i class="@_selectedModule.Icon" aria-hidden="true"></i> Setup module</span><h2>@_selectedModule.Title</h2><p>@_selectedModule.Description</p></div></div>
+                <div class="dsd-detail-body">
+                    <div class="dsd-detail-summary">
+                        <div><span>Records</span><strong>@summary.Total</strong></div>
+                        <div><span>Ready</span><strong>@summary.Ready</strong></div>
+                        <div><span>Review</span><strong>@summary.Review</strong></div>
+                        <div><span>Status</span><strong>@summary.ReadinessLabel</strong></div>
+                    </div>
+                    <div class="dsd-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="() => NavigateToModule(_selectedModule.Kind)"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open @_selectedModule.Title</button></div>
+                </div>
+            }
+            else
+            {
+                <div class="dsd-detail-empty"><i class="bi bi-folder-gear" aria-hidden="true"></i><h2>Document setup command brief</h2><p>Select a module or setup record to review readiness, governance gaps, and launch actions.</p></div>
+            }
+        </aside>
+    </section>
+</div>
+
+@code {
+    private Guid _tenantId;
+    private bool _loading;
+    private bool _toastVisible;
+    private string _search = string.Empty;
+    private string _moduleFilter = "all";
+    private string _statusFilter = "all";
+    private string _activeView = "Overview";
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private DocumentConfigItemDto? _selectedRecord;
+    private DocumentModule? _selectedModule;
+    private readonly string[] _views = ["Overview", "Modules", "Governance", "Automation"];
+    private readonly List<DocumentModule> _modules =
+    [
+        new("DocumentCategory", "Document Categories", "Classifications, folders, and portal defaults", "bi bi-folder2", "/documents/categories"),
+        new("DocumentTemplate", "Document Templates", "Reusable document templates and merge settings", "bi bi-file-earmark-text", "/tenant/documents/templates"),
+        new("AcordForm", "ACORD Forms", "ACORD availability, mappings, and defaults", "bi bi-file-earmark-medical", "/tenant/documents/acord"),
+        new("ESignTemplate", "E-Sign Templates", "Signer roles, packets, and routing defaults", "bi bi-pen", "/tenant/documents/esign"),
+        new("PacketTemplate", "Packet Templates", "Bundles, delivery groups, and packet standards", "bi bi-collection", "/tenant/documents/packets"),
+        new("RetentionRule", "Retention Rules", "Retention, archive, and deletion policies", "bi bi-clock-history", "/tenant/documents/retention"),
+        new("OcrIndexingRule", "OCR / Indexing Rules", "Extraction, indexing, and exception handling", "bi bi-upc-scan", "/tenant/documents/ocr"),
+        new("StorageSetting", "Storage Settings", "Storage providers, encryption, region, and quota", "bi bi-hdd", "/tenant/documents/storage"),
+    ];
+    private List<DocumentConfigItemDto> _records = [];
+    private List<DocumentConfigItemDto> _filtered = [];
+
+    private int ActiveCount => _records.Count(x => x.IsActive);
+    private int ReadyCount => _records.Count(IsReady);
+    private int ReviewCount => _records.Count(NeedsReview);
+    private int AutomationCount => _records.Count(HasAutomationSignal);
+    private int SafeTotal => Math.Max(_records.Count, 1);
+    private int ConfiguredModuleCount => _modules.Count(m => _records.Any(x => x.Kind == m.Kind));
+    private double ReadinessScore => _records.Count == 0 ? 0 : ReadyCount * 100d / _records.Count;
+    private List<ModuleSummary> ModuleSummaries => _modules.Select(SummaryFor).ToList();
+    private List<DocumentConfigItemDto> ReviewItems => _filtered.Where(NeedsReview).OrderBy(x => x.Kind).ThenBy(x => x.SortOrder).ToList();
+    private IEnumerable<DocumentModule> FilteredModules => _modules.Where(m => _moduleFilter == "all" || m.Kind == _moduleFilter).Where(MatchesModuleSearch);
+    private List<AutomationLane> AutomationLanes =>
+    [
+        new("Workflow Ready", _filtered.Where(HasAutomationSignal).ToList()),
+        new("Governed", _filtered.Where(IsReady).ToList()),
+        new("Needs Setup", _filtered.Where(NeedsReview).ToList()),
+    ];
+    private string ToastIcon => _toastKind == "success" ? "bi-check-circle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-exclamation-triangle-fill";
+    private string AllKpiClass => KpiClass("all", "dsd-blue");
+    private string ActiveKpiClass => KpiClass("active", "dsd-green");
+    private string ReadyKpiClass => KpiClass("ready", "dsd-cyan");
+    private string ReviewKpiClass => KpiClass("review", "dsd-amber");
+    private string AutomationKpiClass => KpiClass("automation", "dsd-purple");
+    private string ModulesKpiClass => KpiClass("modules", "dsd-slate");
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Documents & Forms", null), new("Document Setup Dashboard", "/tenant/documents/dashboard"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var records = new List<DocumentConfigItemDto>();
+            foreach (var module in _modules)
+            {
+                var result = await Api.SearchDocumentConfigItemsAsync(_tenantId, module.Kind, null, pageSize: 500);
+                if (result?.Items is not null)
+                {
+                    records.AddRange(result.Items);
+                }
+            }
+            _records = records.OrderBy(x => ModuleTitle(x.Kind)).ThenBy(x => x.SortOrder).ThenBy(x => x.Name).ToList();
+            ApplyFilters();
+            _selectedRecord ??= _filtered.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilters()
+    {
+        IEnumerable<DocumentConfigItemDto> query = _records;
+        if (!string.IsNullOrWhiteSpace(_search)) query = query.Where(MatchesRecordSearch);
+        if (_moduleFilter != "all") query = query.Where(x => x.Kind == _moduleFilter);
+        if (_statusFilter == "active") query = query.Where(x => x.IsActive);
+        else if (_statusFilter == "ready") query = query.Where(IsReady);
+        else if (_statusFilter == "review") query = query.Where(NeedsReview);
+        else if (_statusFilter == "automation") query = query.Where(HasAutomationSignal);
+        _filtered = query.OrderBy(x => ModuleTitle(x.Kind)).ThenBy(x => x.SortOrder).ThenBy(x => x.Name).ToList();
+        if (_selectedRecord is not null && !_filtered.Any(x => x.DocumentConfigItemId == _selectedRecord.DocumentConfigItemId)) _selectedRecord = _filtered.FirstOrDefault();
+    }
+
+    private void SetView(string view) => _activeView = view;
+    private void ShowOverview() => SetView("Overview");
+    private void ShowModules() => SetView("Modules");
+    private void ShowGovernance() => SetView("Governance");
+    private void ShowAutomation() { _statusFilter = "automation"; ApplyFilters(); SetView("Automation"); }
+    private void ShowAll() { _statusFilter = "all"; _moduleFilter = "all"; ApplyFilters(); }
+    private void ShowActive() { _statusFilter = "active"; ApplyFilters(); }
+    private void ShowReady() { _statusFilter = "ready"; ApplyFilters(); }
+    private void ShowReview() { _statusFilter = "review"; ApplyFilters(); }
+    private void FilterModule(string kind) { _moduleFilter = kind; ApplyFilters(); }
+    private void SelectRecord(DocumentConfigItemDto item) { _selectedRecord = item; _selectedModule = null; }
+    private void SelectModule(DocumentModule module) { _selectedModule = module; _selectedRecord = null; }
+    private void NavigateToModule(string kind) => Nav.NavigateTo(_modules.FirstOrDefault(x => x.Kind == kind)?.Url ?? "/tenant/documents/dashboard");
+    private void RunAudit() => ShowToast($"Audit complete: {ReadyCount} ready, {ReviewCount} need review across {ConfiguredModuleCount} configured modules.", ReviewCount > 0 ? "warning" : "success");
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+
+    private Task ExportAsync()
+    {
+        var rows = new List<string> { "Module,Code,Name,Group,Status,Readiness,SortOrder,Created" };
+        rows.AddRange(_filtered.Select(x => string.Join(',', Csv(ModuleTitle(x.Kind)), Csv(x.Code), Csv(x.Name), Csv(GroupLabel(x)), Csv(StatusLabel(x)), Csv(ReadinessLabel(x)), x.SortOrder, Csv(x.CreatedDateUtc.ToString("O")))));
+        Nav.NavigateTo("data:text/csv;charset=utf-8," + Uri.EscapeDataString(string.Join(Environment.NewLine, rows)), forceLoad: true);
+        ShowToast("Document setup export generated.");
+        return Task.CompletedTask;
+    }
+
+    private ModuleSummary SummaryFor(DocumentModule module)
+    {
+        var records = _records.Where(x => x.Kind == module.Kind).ToList();
+        var ready = records.Count(IsReady);
+        var review = records.Count(NeedsReview);
+        var label = records.Count == 0 ? "Not configured" : review > 0 ? "Needs review" : "Ready";
+        return new(module.Kind, module.Title, records.Count, records.Count(x => x.IsActive), ready, review, label);
+    }
+
+    private string KpiClass(string key, string tone)
+    {
+        var active = false;
+        if (key == "all") active = _statusFilter == "all" && _moduleFilter == "all";
+        else if (key == "active") active = _statusFilter == "active";
+        else if (key == "ready") active = _statusFilter == "ready";
+        else if (key == "review") active = _statusFilter == "review";
+        else if (key == "automation") active = _statusFilter == "automation";
+        else if (key == "modules") active = _activeView == "Modules";
+        return $"dsd-kpi-card {tone}{(active ? " dsd-kpi-card-active" : string.Empty)}";
+    }
+
+    private static string ModuleCardClass(ModuleSummary summary) => summary.Total == 0 ? "dsd-module-card dsd-module-empty" : summary.Review > 0 ? "dsd-module-card dsd-module-review" : "dsd-module-card dsd-module-ready";
+    private string ModuleTitle(string kind) => _modules.FirstOrDefault(x => x.Kind == kind)?.Title ?? kind;
+    private bool MatchesRecordSearch(DocumentConfigItemDto item)
+    {
+        var q = _search.Trim();
+        return Contains(ModuleTitle(item.Kind), q) || Contains(item.Code, q) || Contains(item.Name, q) || Contains(item.Category, q) || Contains(item.Description, q) || Contains(item.ConfigurationJson, q);
+    }
+    private bool MatchesModuleSearch(DocumentModule module) => string.IsNullOrWhiteSpace(_search) || Contains(module.Title, _search) || Contains(module.Description, _search) || _records.Any(x => x.Kind == module.Kind && MatchesRecordSearch(x));
+    private static bool Contains(string? value, string search) => value?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
+    private static bool NeedsReview(DocumentConfigItemDto item) => !item.IsActive || string.IsNullOrWhiteSpace(item.Description) || string.IsNullOrWhiteSpace(item.Category) || string.IsNullOrWhiteSpace(item.ConfigurationJson) || item.ConfigurationJson == "{}";
+    private static bool HasAutomationSignal(DocumentConfigItemDto item) => Contains(item.ConfigurationJson, "workflow") || Contains(item.ConfigurationJson, "automation") || Contains(item.ConfigurationJson, "routing") || Contains(item.ConfigurationJson, "metadata") || Contains(item.ConfigurationJson, "retention") || Contains(item.Description, "workflow");
+    private static bool IsReady(DocumentConfigItemDto item) => item.IsActive && !NeedsReview(item);
+    private static string GroupLabel(DocumentConfigItemDto item) => string.IsNullOrWhiteSpace(item.Category) ? "Unassigned" : item.Category.Trim();
+    private static string StatusLabel(DocumentConfigItemDto item) => item.IsActive ? "Active" : "Inactive";
+    private static string StatusClass(DocumentConfigItemDto item) => item.IsActive ? "dsd-status dsd-status-active" : "dsd-status dsd-status-inactive";
+    private static string ReadinessLabel(DocumentConfigItemDto item) => NeedsReview(item) ? "Needs Review" : HasAutomationSignal(item) ? "Automation Ready" : "Ready";
+    private static string ReadinessClass(DocumentConfigItemDto item) => NeedsReview(item) ? "dsd-readiness dsd-readiness-review" : HasAutomationSignal(item) ? "dsd-readiness dsd-readiness-automation" : "dsd-readiness dsd-readiness-ready";
+    private static string ReviewReason(DocumentConfigItemDto item)
+    {
+        if (!item.IsActive) return "Inactive record";
+        if (string.IsNullOrWhiteSpace(item.Category)) return "Missing group";
+        if (string.IsNullOrWhiteSpace(item.Description)) return "Missing description";
+        if (string.IsNullOrWhiteSpace(item.ConfigurationJson) || item.ConfigurationJson == "{}") return "Missing metadata";
+        return "Review recommended";
+    }
+    private static string DisplayConfig(DocumentConfigItemDto item) => string.IsNullOrWhiteSpace(item.ConfigurationJson) ? "{}" : item.ConfigurationJson;
+    private static string WidthStyle(int value, int max) => $"width:{Math.Clamp((int)Math.Round(value * 100d / Math.Max(max, 1)), 0, 100)}%;";
+    private static string Initials(string name)
+    {
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant() : name.Length > 0 ? name[..1].ToUpperInvariant() : "?";
+    }
+    private static string AvatarClass(DocumentConfigItemDto item)
+    {
+        var index = Math.Abs(item.Kind.GetHashCode()) % 6;
+        if (index == 0) return "dsd-av1";
+        if (index == 1) return "dsd-av2";
+        if (index == 2) return "dsd-av3";
+        if (index == 3) return "dsd-av4";
+        if (index == 4) return "dsd-av5";
+        return "dsd-av6";
+    }
+    private static string Csv(string? value) => string.Concat("\"", (value ?? string.Empty).Replace("\"", "\"\""), "\"");
+
+    private sealed record DocumentModule(string Kind, string Title, string Description, string Icon, string Url);
+    private sealed record ModuleSummary(string Kind, string Title, int Total, int Active, int Ready, int Review, string ReadinessLabel);
+    private sealed record AutomationLane(string Title, List<DocumentConfigItemDto> Items);
+}

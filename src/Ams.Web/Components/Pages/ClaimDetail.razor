@@ -1,1337 +1,557 @@
 @page "/claims/{ClaimId:guid}"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Claims
+@using Microsoft.AspNetCore.Components.Forms
 @inject NavigationManager Nav
+@inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject ApiClient Api
 
-<PageTitle>@(_claim is null ? "Claim" : _claim.ClaimNumber) — Claim Detail</PageTitle>
+<PageTitle>@(_claim is null ? "Claim Detail" : $"{_claim.ClaimNumber} - Claim Detail")</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+<div class="cd-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="cd-toast @toast.CssClass">
+            <i class="bi @toast.Icon" aria-hidden="true"></i>
+            <span>@toast.Content</span>
+            <button type="button" @onclick="() => DismissToast(toast.Id)" aria-label="Dismiss notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+        </div>
+    }
+</div>
 
-<!-- ── ADD CLAIMANT DIALOG ───────────────────────────────────────── -->
-<SfDialog @bind-Visible="_showClaimantDlg" Width="500px" ShowCloseIcon="true" IsModal="true">
-    <DialogTemplates>
-        <Header><div class="pd-dlg-hdr"><i class="bi bi-person-plus" aria-hidden="true"></i> Add Claimant</div></Header>
-        <Content>
-            <div class="pd-dlg-body">
-                <div class="pd-dlg-grid">
-                    <div><label class="cd-dlg-lbl">Full Name *</label><SfTextBox @bind-Value="_claimantForm.Name" Placeholder="Claimant full name" /></div>
-                    <div><label class="cd-dlg-lbl">Role</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@_claimantRoles" @bind-Value="_claimantForm.Role" Placeholder="Select role" />
-                    </div>
-                    <div><label class="cd-dlg-lbl">Injury / Damage Type</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@_injuryTypes" @bind-Value="_claimantForm.InjuryType" Placeholder="Select type" />
-                    </div>
-                    <div><label class="cd-dlg-lbl">Phone</label><SfTextBox @bind-Value="_claimantForm.Phone" Placeholder="(555) 000-0000" /></div>
-                    <div><label class="cd-dlg-lbl">Email</label><SfTextBox @bind-Value="_claimantForm.Email" Placeholder="email@domain.com" /></div>
-                    <div><label class="cd-dlg-lbl">Attorney</label><SfTextBox @bind-Value="_claimantForm.Attorney" Placeholder="Attorney name / firm" /></div>
-                    <div><label class="cd-dlg-lbl">Attorney Phone</label><SfTextBox @bind-Value="_claimantForm.AttorneyPhone" Placeholder="(555) 000-0000" /></div>
-                    <div><label class="cd-dlg-lbl">Date of Birth</label><SfDatePicker TValue="DateTime?" @bind-Value="_claimantForm.Dob" Placeholder="MM/DD/YYYY" /></div>
-                </div>
-                <div class="pd-dlg-grid-1">
-                    <div><label class="cd-dlg-lbl">Notes</label><SfTextBox @bind-Value="_claimantForm.Notes" Placeholder="Claimant notes…" Multiline="true" /></div>
-                </div>
-            </div>
-        </Content>
-        <FooterTemplate>
-            <div class="pd-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showClaimantDlg = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="SaveClaimant"><i class="bi bi-check-lg" aria-hidden="true"></i> Save</button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
-
-<!-- ── ADD TASK DIALOG ───────────────────────────────────────────── -->
-<SfDialog @bind-Visible="_showTaskDlg" Width="480px" ShowCloseIcon="true" IsModal="true">
-    <DialogTemplates>
-        <Header><div class="pd-dlg-hdr"><i class="bi bi-list-check" aria-hidden="true"></i> @(_editTask?.TaskId == Guid.Empty ? "Add Task" : "Edit Task")</div></Header>
-        <Content>
-            <div class="pd-dlg-body">
-                <div class="pd-dlg-grid">
-                    <div style="grid-column:1/-1"><label class="cd-dlg-lbl">Task Title *</label><SfTextBox @bind-Value="_taskForm.Title" Placeholder="Task description" /></div>
-                    <div><label class="cd-dlg-lbl">Priority</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"High","Medium","Low"})" @bind-Value="_taskForm.Priority" Placeholder="Medium" />
-                    </div>
-                    <div><label class="cd-dlg-lbl">Assigned To</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@_handlers" @bind-Value="_taskForm.AssignedTo" Placeholder="Select person" />
-                    </div>
-                    <div><label class="cd-dlg-lbl">Due Date</label><SfDatePicker TValue="DateTime?" @bind-Value="_taskForm.DueDate" Placeholder="MM/DD/YYYY" /></div>
-                    <div><label class="cd-dlg-lbl">Status</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"Open","In Progress","Completed","Waived"})" @bind-Value="_taskForm.Status" Placeholder="Open" />
-                    </div>
-                    <div style="grid-column:1/-1"><label class="cd-dlg-lbl">Notes</label><SfTextBox @bind-Value="_taskForm.Notes" Placeholder="Task notes…" Multiline="true" /></div>
-                </div>
-            </div>
-        </Content>
-        <FooterTemplate>
-            <div class="pd-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showTaskDlg = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="SaveTask"><i class="bi bi-check-lg" aria-hidden="true"></i> Save</button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
-
-<!-- ── ADD RESERVE DIALOG ────────────────────────────────────────── -->
-<SfDialog @bind-Visible="_showReserveDlg" Width="460px" ShowCloseIcon="true" IsModal="true">
-    <DialogTemplates>
-        <Header><div class="pd-dlg-hdr"><i class="bi bi-safe" aria-hidden="true"></i> Update Reserve</div></Header>
-        <Content>
-            <div class="pd-dlg-body">
-                <div class="pd-dlg-grid">
-                    <div><label class="cd-dlg-lbl">Reserve Type *</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@_reserveTypes" @bind-Value="_reserveForm.ReserveType" Placeholder="Select type" />
-                    </div>
-                    <div><label class="cd-dlg-lbl">Amount *</label>
-                        <SfNumericTextBox TValue="decimal" @bind-Value="_reserveForm.Amount" Format="C2" Placeholder="0.00" />
-                    </div>
-                    <div style="grid-column:1/-1"><label class="cd-dlg-lbl">Reason</label>
-                        <SfTextBox @bind-Value="_reserveForm.Reason" Placeholder="Reason for reserve change…" Multiline="true" />
-                    </div>
-                </div>
-            </div>
-        </Content>
-        <FooterTemplate>
-            <div class="pd-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showReserveDlg = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="SaveReserve"><i class="bi bi-check-lg" aria-hidden="true"></i> Save</button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
-
-<!-- ── LOG PAYMENT DIALOG ────────────────────────────────────────── -->
-<SfDialog @bind-Visible="_showPaymentDlg" Width="460px" ShowCloseIcon="true" IsModal="true">
-    <DialogTemplates>
-        <Header><div class="pd-dlg-hdr"><i class="bi bi-cash-stack" aria-hidden="true"></i> Log Payment</div></Header>
-        <Content>
-            <div class="pd-dlg-body">
-                <div class="pd-dlg-grid">
-                    <div><label class="cd-dlg-lbl">Payment Type *</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@_reserveTypes" @bind-Value="_paymentForm.PaymentType" Placeholder="Select type" />
-                    </div>
-                    <div><label class="cd-dlg-lbl">Amount *</label>
-                        <SfNumericTextBox TValue="decimal" @bind-Value="_paymentForm.Amount" Format="C2" Placeholder="0.00" />
-                    </div>
-                    <div><label class="cd-dlg-lbl">Payee *</label><SfTextBox @bind-Value="_paymentForm.Payee" Placeholder="Payee name" /></div>
-                    <div><label class="cd-dlg-lbl">Payment Date</label><SfDatePicker TValue="DateTime?" @bind-Value="_paymentForm.PaymentDate" Placeholder="MM/DD/YYYY" /></div>
-                    <div><label class="cd-dlg-lbl">Check / Reference #</label><SfTextBox @bind-Value="_paymentForm.CheckNumber" Placeholder="Reference number" /></div>
-                    <div><label class="cd-dlg-lbl">Method</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"Check","ACH","Wire","EFT"})" @bind-Value="_paymentForm.Method" Placeholder="Check" />
-                    </div>
-                    <div style="grid-column:1/-1"><label class="cd-dlg-lbl">Notes</label><SfTextBox @bind-Value="_paymentForm.Notes" Placeholder="Payment notes…" Multiline="true" /></div>
-                </div>
-            </div>
-        </Content>
-        <FooterTemplate>
-            <div class="pd-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showPaymentDlg = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="SavePayment"><i class="bi bi-check-lg" aria-hidden="true"></i> Log Payment</button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
-
-<!-- ── LOG COMMUNICATION DIALOG ─────────────────────────────────── -->
-<SfDialog @bind-Visible="_showCommDlg" Width="500px" ShowCloseIcon="true" IsModal="true">
-    <DialogTemplates>
-        <Header><div class="pd-dlg-hdr"><i class="bi bi-envelope" aria-hidden="true"></i> Log Communication</div></Header>
-        <Content>
-            <div class="pd-dlg-body">
-                <div class="pd-dlg-grid">
-                    <div><label class="cd-dlg-lbl">Type</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"Email","Phone Call","Letter","Fax","Text/SMS","In Person"})" @bind-Value="_commForm.CommType" Placeholder="Email" />
-                    </div>
-                    <div><label class="cd-dlg-lbl">Direction</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"Inbound","Outbound"})" @bind-Value="_commForm.Direction" Placeholder="Outbound" />
-                    </div>
-                    <div><label class="cd-dlg-lbl">Contact Party</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"Claimant","Attorney","Adjuster","Carrier","Insured","Witness","Medical Provider","Other"})" @bind-Value="_commForm.Party" Placeholder="Select party" />
-                    </div>
-                    <div><label class="cd-dlg-lbl">Date / Time</label><SfDateTimePicker TValue="DateTime" @bind-Value="_commForm.CommDate" /></div>
-                    <div style="grid-column:1/-1"><label class="cd-dlg-lbl">Subject</label><SfTextBox @bind-Value="_commForm.Subject" Placeholder="Communication subject" /></div>
-                    <div style="grid-column:1/-1"><label class="cd-dlg-lbl">Notes / Summary</label><SfTextBox @bind-Value="_commForm.Notes" Placeholder="Communication notes…" Multiline="true" /></div>
-                </div>
-            </div>
-        </Content>
-        <FooterTemplate>
-            <div class="pd-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showCommDlg = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="SaveComm"><i class="bi bi-check-lg" aria-hidden="true"></i> Save</button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
-
-<!-- ── ADD NOTE DIALOG ───────────────────────────────────────────── -->
-<SfDialog @bind-Visible="_showNoteDlg" Width="480px" ShowCloseIcon="true" IsModal="true">
-    <DialogTemplates>
-        <Header><div class="pd-dlg-hdr"><i class="bi bi-sticky" aria-hidden="true"></i> Add Note</div></Header>
-        <Content>
-            <div class="pd-dlg-body">
-                <div class="pd-dlg-grid-1">
-                    <div><label class="cd-dlg-lbl">Category</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"General","Coverage","Legal","Subrogation","Reserves","Investigation","Medical","Settlement"})" @bind-Value="_noteForm.Category" Placeholder="General" />
-                    </div>
-                    <div><label class="cd-dlg-lbl">Note *</label><SfTextBox @bind-Value="_noteForm.Body" Placeholder="Enter note…" Multiline="true" /></div>
-                    <div style="display:flex; align-items:center; gap:.5rem;">
-                        <SfCheckBox @bind-Checked="_noteForm.IsPinned" Label="Pin this note" />
-                    </div>
-                </div>
-            </div>
-        </Content>
-        <FooterTemplate>
-            <div class="pd-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showNoteDlg = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="SaveNote"><i class="bi bi-check-lg" aria-hidden="true"></i> Save Note</button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
-
-@if (_loading)
+@if (_showActivityDialog && _claim is not null)
 {
-    <div class="cd-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading claim…</span></div>
-}
-else if (_claim is null)
-{
-    <div class="cd-not-found">
-        <i class="bi bi-exclamation-circle cd-nf-icon" aria-hidden="true"></i>
-        <h2>Claim not found</h2>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/claims")'>
-            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Claims
-        </button>
+    <div class="cd-modal-backdrop" role="presentation" @onclick="CloseActivityDialog">
+        <div class="cd-work-modal" role="dialog" aria-modal="true" aria-labelledby="activityTitle" @onclick:stopPropagation="true">
+            <div class="cd-modal-header">
+                <div class="cd-modal-title"><span class="cd-modal-icon"><i class="bi @ActivityIcon(_activity.ActivityType)" aria-hidden="true"></i></span><div><h2 id="activityTitle">@_activity.DialogTitle</h2><p>@_claim.ClaimNumber · @_claim.AccountName</p></div></div>
+                <button type="button" class="cd-btn cd-btn-light" @onclick="CloseActivityDialog" disabled="@_savingActivity" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_activity" OnValidSubmit="SaveActivityAsync" OnInvalidSubmit="NotifyInvalidActivityAsync">
+                <DataAnnotationsValidator />
+                <div class="cd-modal-body">
+                    <div class="cd-form-banner"><i class="bi bi-database-check" aria-hidden="true"></i><div><strong>DB-backed claim activity</strong><span>Entries are saved to the claim activity ledger and immediately refresh this dashboard.</span></div></div>
+                    <div class="cd-form-grid">
+                        <div class="cd-field"><label>Activity Type <span>*</span></label><InputSelect class="cd-input" @bind-Value="_activity.ActivityType">@foreach (var type in _activityTypes){<option value="@type">@type</option>}</InputSelect></div>
+                        <div class="cd-field"><label>Category</label><InputText class="cd-input" @bind-Value="_activity.Category" placeholder="Coverage, Legal, Payment, Reserve" /></div>
+                        <div class="cd-field cd-field-wide"><label>Title <span>*</span></label><InputText class="cd-input" @bind-Value="_activity.Title" placeholder="Summarize the activity" /></div>
+                        <div class="cd-field"><label>Party / Payee</label><InputText class="cd-input" @bind-Value="_activity.Party" placeholder="Claimant, carrier, adjuster, payee" /></div>
+                        <div class="cd-field"><label>Activity Date <span>*</span></label><InputDate class="cd-input" @bind-Value="_activity.ActivityDate" /></div>
+                        <div class="cd-field"><label>Amount</label><InputNumber class="cd-input" @bind-Value="_activity.Amount" /></div>
+                        <div class="cd-field"><label>Prior Amount</label><InputNumber class="cd-input" @bind-Value="_activity.PriorAmount" /></div>
+                        <div class="cd-field cd-field-wide"><label>Notes</label><InputTextArea class="cd-input cd-textarea" @bind-Value="_activity.Notes" placeholder="Activity details, claim instructions, carrier notes, or audit context" /></div>
+                        <label class="cd-check-row cd-field-wide"><InputCheckbox @bind-Value="_activity.IsPinned" /> <span>Pin as important note</span></label>
+                    </div>
+                </div>
+                <div class="cd-modal-footer"><button type="button" class="cd-btn cd-btn-light" @onclick="CloseActivityDialog" disabled="@_savingActivity">Cancel</button><button type="submit" class="cd-btn cd-btn-blue" disabled="@_savingActivity"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_savingActivity ? "Saving..." : "Save Activity")</button></div>
+            </EditForm>
+        </div>
     </div>
 }
-else
+
+@if (_showFollowUpDialog && _claim is not null)
 {
-    <section class="ma-hero clm-hero">
-        <div>
-            <span class="ma-eyebrow">Tenant Administration · Claim Detail</span>
-            <h2>Tenant Claim File Administration</h2>
-            <p>Administer this claim file, including coverage, claimants, reserves, payments, communications, documents, tasks, timeline, and audit-sensitive activity.</p>
+    <div class="cd-modal-backdrop" role="presentation" @onclick="CloseFollowUpDialog">
+        <div class="cd-work-modal cd-work-modal-sm" role="dialog" aria-modal="true" aria-labelledby="followUpTitle" @onclick:stopPropagation="true">
+            <div class="cd-modal-header">
+                <div class="cd-modal-title"><span class="cd-modal-icon"><i class="bi bi-bell" aria-hidden="true"></i></span><div><h2 id="followUpTitle">Update follow-up</h2><p>@_claim.ClaimNumber · @_claim.Priority priority</p></div></div>
+                <button type="button" class="cd-btn cd-btn-light" @onclick="CloseFollowUpDialog" disabled="@_savingFollowUp" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_followUp" OnValidSubmit="SaveFollowUpAsync" OnInvalidSubmit="NotifyInvalidFollowUpAsync">
+                <DataAnnotationsValidator />
+                <div class="cd-modal-body">
+                    <div class="cd-form-grid">
+                        <div class="cd-field"><label>Priority <span>*</span></label><InputSelect class="cd-input" @bind-Value="_followUp.Priority">@foreach (var priority in _priorities){<option value="@priority">@priority</option>}</InputSelect></div>
+                        <div class="cd-field"><label>Due Date</label><InputDate class="cd-input" @bind-Value="_followUp.FollowUpDueDate" /></div>
+                        <div class="cd-field cd-field-wide"><label>Reason</label><InputText class="cd-input" @bind-Value="_followUp.FollowUpReason" placeholder="Coverage review, claimant contact, reserve review" /></div>
+                        <label class="cd-check-row cd-field-wide"><InputCheckbox @bind-Value="_followUp.IsSnoozed" /> <span>Snooze this follow-up</span></label>
+                    </div>
+                </div>
+                <div class="cd-modal-footer"><button type="button" class="cd-btn cd-btn-light" @onclick="CloseFollowUpDialog" disabled="@_savingFollowUp">Cancel</button><button type="submit" class="cd-btn cd-btn-blue" disabled="@_savingFollowUp"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_savingFollowUp ? "Saving..." : "Save Follow-Up")</button></div>
+            </EditForm>
         </div>
-        <div class="ma-hero-actions">
-            <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/claims")'><i class="bi bi-list-ul"></i> Claims Register</button>
-            <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/claims/follow-up")'><i class="bi bi-list-check"></i> Follow-Up Queue</button>
-            <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/claims/catastrophe")'><i class="bi bi-cloud-lightning"></i> Catastrophe View</button>
+    </div>
+}
+
+@if (_showStatusDialog && _claim is not null)
+{
+    <div class="cd-modal-backdrop" role="presentation" @onclick="CloseStatusDialog">
+        <div class="cd-work-modal cd-work-modal-sm" role="dialog" aria-modal="true" aria-labelledby="statusTitle" @onclick:stopPropagation="true">
+            <div class="cd-modal-header">
+                <div class="cd-modal-title"><span class="cd-modal-icon"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></span><div><h2 id="statusTitle">Update claim status</h2><p>@_claim.ClaimNumber · current status @_claim.Status</p></div></div>
+                <button type="button" class="cd-btn cd-btn-light" @onclick="CloseStatusDialog" disabled="@_savingStatus" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_statusForm" OnValidSubmit="SaveStatusAsync" OnInvalidSubmit="NotifyInvalidStatusAsync">
+                <DataAnnotationsValidator />
+                <div class="cd-modal-body">
+                    <div class="cd-form-grid">
+                        <div class="cd-field cd-field-wide"><label>Status <span>*</span></label><InputSelect class="cd-input" @bind-Value="_statusForm.Status">@foreach (var status in _statuses){<option value="@status">@status</option>}</InputSelect></div>
+                        <div class="cd-field cd-field-wide"><label>Status Note</label><InputTextArea class="cd-input cd-textarea" @bind-Value="_statusForm.Note" placeholder="Why is the claim status changing?" /></div>
+                    </div>
+                </div>
+                <div class="cd-modal-footer"><button type="button" class="cd-btn cd-btn-light" @onclick="CloseStatusDialog" disabled="@_savingStatus">Cancel</button><button type="submit" class="cd-btn cd-btn-blue" disabled="@_savingStatus"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_savingStatus ? "Updating..." : "Update Status")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="cd-enterprise-page">
+    <section class="cd-hero">
+        <div class="cd-hero-left">
+            <div class="cd-hero-icon"><i class="bi bi-shield-check" aria-hidden="true"></i></div>
+            <div>
+                <div class="cd-title-row"><h1>Claim Command Center</h1><span><i class="bi bi-building-check" aria-hidden="true"></i> @DisplayValue(_userContext?.TenantName, "Tenant workspace")</span><span><i class="bi bi-database-check" aria-hidden="true"></i> DB-backed</span></div>
+                <p>Manage coverage, activity, reserves, payments, follow-up, claim status, and audit-sensitive workflow from one enterprise claim file.</p>
+            </div>
+        </div>
+        <div class="cd-hero-actions">
+            <button type="button" class="cd-btn cd-btn-ghost" @onclick="RefreshAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="cd-btn cd-btn-ghost" @onclick='() => Nav.NavigateTo("/claims")'><i class="bi bi-list-ul" aria-hidden="true"></i> Claims Register</button>
+            <button type="button" class="cd-btn cd-btn-ghost" @onclick='() => Nav.NavigateTo("/claims/follow-up")'><i class="bi bi-list-check" aria-hidden="true"></i> Follow-Up Queue</button>
+            <button type="button" class="cd-btn cd-btn-primary" @onclick="OpenCommunicationDialog" disabled="@(_claim is null)"><i class="bi bi-plus-lg" aria-hidden="true"></i> Log Activity</button>
         </div>
     </section>
 
-    <!-- ── HEADER ──────────────────────────────────────────────────── -->
-    <div class="cd-header">
-        <div class="cd-header-left">
-            <div class="cd-lob-icon cd-lob-@LobKey(_claim.Lob)">
-                <i class="bi @LobIcon(_claim.Lob)" aria-hidden="true"></i>
-            </div>
-            <div class="cd-header-info">
-                <div class="cd-title-row">
-                    <h1 class="cd-claim-num">@_claim.ClaimNumber</h1>
-                    <span class="cd-status cd-st-@StatusCss(_claim.Status)">@_claim.Status</span>
-                    <span class="cd-lob-badge">@_claim.Lob</span>
-                    @if (_claim.IsLitigation)   { <span class="cd-flag-chip cd-fc-lit"><i class="bi bi-gavel" aria-hidden="true"></i> Litigation</span> }
-                    @if (_claim.HasSubrogation) { <span class="cd-flag-chip cd-fc-sub"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Subrogation</span> }
-                    @if (_claim.IsCatastrophe)  { <span class="cd-flag-chip cd-fc-cat"><i class="bi bi-cloud-lightning" aria-hidden="true"></i> CAT</span> }
-                    @if (_claim.IsDisputed)     { <span class="cd-flag-chip cd-fc-dis"><i class="bi bi-shield-exclamation" aria-hidden="true"></i> Disputed</span> }
-                </div>
-                <div class="cd-sub-row">
-                    <button class="cd-pol-link" @onclick='() => Nav.NavigateTo($"/policies/{_claim.PolicyId}")'>
-                        <i class="bi bi-shield" aria-hidden="true"></i> @_claim.PolicyNumber
-                    </button>
-                    <button class="cd-acct-link" @onclick='() => Nav.NavigateTo($"/accounts/{_claim.AccountId}")'>
-                        <i class="bi bi-building" aria-hidden="true"></i> @_claim.AccountName
-                    </button>
-                    <span class="cd-sub-chip"><i class="bi bi-building-fill" aria-hidden="true"></i>@_claim.Carrier</span>
-                    <span class="cd-sub-chip"><i class="bi bi-calendar-event" aria-hidden="true"></i>Loss: @_claim.DateOfLoss.ToString("MM/dd/yyyy")</span>
-                    <span class="cd-sub-chip"><i class="bi bi-person-badge" aria-hidden="true"></i>@_claim.AssignedHandler</span>
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="cd-error-banner"><i class="bi bi-exclamation-octagon-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    @if (_loading)
+    {
+        <div class="cd-main-card"><div class="cd-loading"><i class="bi bi-arrow-repeat cd-spin" aria-hidden="true"></i><strong>Loading claim file</strong><span>Synchronizing claim identity, activities, financial ledger, follow-up, and workflow state.</span></div></div>
+    }
+    else if (_claim is null)
+    {
+        <div class="cd-main-card"><div class="cd-empty-state"><i class="bi bi-exclamation-circle" aria-hidden="true"></i><strong>Claim not found</strong><span>The requested claim file could not be loaded from the database.</span><button type="button" class="cd-btn cd-btn-blue" @onclick='() => Nav.NavigateTo("/claims")'><i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Claims</button></div></div>
+    }
+    else
+    {
+        <section class="cd-claim-header">
+            <div class="cd-claim-title">
+                <i class="bi @LobIcon(_claim.Lob) cd-claim-icon" aria-hidden="true"></i>
+                <div>
+                    <div class="cd-claim-row"><h2>@_claim.ClaimNumber</h2><span class="@StatusClass(_claim.Status)">@_claim.Status</span><span class="@PriorityClass(_claim.Priority)">@DisplayValue(_claim.Priority, "Standard")</span>@if (_claim.IsLitigation){<span class="cd-flag-chip cd-flag-lit"><i class="bi bi-gavel" aria-hidden="true"></i> Litigation</span>}@if (_claim.HasSubrogation){<span class="cd-flag-chip cd-flag-sub"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Subrogation</span>}@if (_claim.IsCatastrophe){<span class="cd-flag-chip cd-flag-cat"><i class="bi bi-cloud-lightning" aria-hidden="true"></i> CAT @DisplayValue(_claim.CatCode, string.Empty)</span>}@if (_claim.IsDisputed){<span class="cd-flag-chip cd-flag-dis"><i class="bi bi-shield-exclamation" aria-hidden="true"></i> Disputed</span>}</div>
+                    <div class="cd-claim-meta"><button type="button" @onclick='() => Nav.NavigateTo($"/accounts/{_claim.AccountId}")'><i class="bi bi-building" aria-hidden="true"></i>@_claim.AccountName</button><button type="button" @onclick='() => Nav.NavigateTo($"/policies/{_claim.PolicyId}")'><i class="bi bi-shield" aria-hidden="true"></i>@_claim.PolicyNumber</button><span><i class="bi bi-briefcase" aria-hidden="true"></i>@_claim.Lob</span><span><i class="bi bi-building-fill" aria-hidden="true"></i>@_claim.Carrier</span></div>
                 </div>
             </div>
-        </div>
-        <div class="cd-header-actions">
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showCommDlg = true">
-                <i class="bi bi-envelope" aria-hidden="true"></i> Log Comm.
-            </button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { _taskForm = new(); _showTaskDlg = true; }">
-                <i class="bi bi-list-check" aria-hidden="true"></i> Add Task
-            </button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showReserveDlg = true">
-                <i class="bi bi-safe" aria-hidden="true"></i> Reserve
-            </button>
-            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showPaymentDlg = true">
-                <i class="bi bi-cash-stack" aria-hidden="true"></i> Payment
-            </button>
-            @if (_claim.Status == "Open" || _claim.Status == "Reopened")
+            <div class="cd-claim-actions"><button type="button" class="cd-btn cd-btn-light" @onclick="OpenFollowUpDialog"><i class="bi bi-bell" aria-hidden="true"></i> Follow-Up</button><button type="button" class="cd-btn cd-btn-light" @onclick="OpenStatusDialog"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Status</button><button type="button" class="cd-btn cd-btn-light" @onclick="OpenReserveDialog"><i class="bi bi-safe" aria-hidden="true"></i> Reserve</button><button type="button" class="cd-btn cd-btn-light" @onclick="OpenPaymentDialog"><i class="bi bi-cash-stack" aria-hidden="true"></i> Payment</button></div>
+        </section>
+
+        <section class="cd-kpi-strip" aria-label="Claim KPI filters">
+            @foreach (var kpi in Kpis)
             {
-                <button class="um-btn um-btn-primary um-btn-sm" @onclick="CloseClaim">
-                    <i class="bi bi-check-circle" aria-hidden="true"></i> Close Claim
-                </button>
+                <button type="button" class="@KpiClass(kpi)" title="@kpi.Title" @onclick="() => ApplyKpi(kpi)"><span class="cd-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span><span><strong>@kpi.Value</strong><small>@kpi.Label</small><em>@kpi.Detail</em></span></button>
             }
-            @if (_claim.Status == "Closed")
+        </section>
+
+        @if (NeedsAttention)
+        {
+            <div class="cd-attention-alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><div><strong>Action needed:</strong> @AttentionMessage</div><button type="button" class="cd-btn cd-btn-danger" @onclick="OpenFollowUpDialog"><i class="bi bi-bell" aria-hidden="true"></i> Update Follow-Up</button></div>
+        }
+
+        <section class="cd-workflow-strip" aria-label="Claim workflow actions">
+            @foreach (var lane in WorkflowLanes)
             {
-                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ReopenClaim">
-                    <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reopen
-                </button>
+                <button type="button" class="@WorkflowClass(lane)" title="@lane.Title" @onclick="() => ApplyWorkflow(lane)"><i class="bi @lane.Icon" aria-hidden="true"></i><span><strong>@lane.Label</strong><small>@lane.Count item(s) · @lane.Detail</small></span></button>
             }
-        </div>
-    </div>
+        </section>
 
-    <!-- ── KPI BAR ─────────────────────────────────────────────────── -->
-    <div class="cd-kpi-bar">
-        @CdKpi("Total Incurred",   _claim.TotalIncurred.ToString("C0"),  "bi-currency-dollar", "cd-ki-red")
-        @CdKpi("Total Reserves",   _claim.TotalReserves.ToString("C0"),  "bi-safe",            "cd-ki-amber")
-        @CdKpi("Total Paid",       _claim.TotalPaid.ToString("C0"),      "bi-cash-stack",      "cd-ki-blue")
-        @CdKpi("Outstanding",      (_claim.TotalReserves - _claim.TotalPaid).ToString("C0"), "bi-receipt", "cd-ki-purple")
-        @CdKpi("Days Open",        (_claim.Status == "Closed" ? "Closed" : _claim.DaysOpen + "d"), "bi-clock-history", _claim.DaysOpen > 180 ? "cd-ki-red" : "cd-ki-gray")
-        @CdKpi("Claimants",        _claimants.Count.ToString(),           "bi-people",          "cd-ki-gray")
-        @CdKpi("Open Tasks",       _tasks.Count(t => t.Status is "Open" or "In Progress").ToString(), "bi-list-check", _tasks.Any(t => t.Status == "Open" && t.DueDate < DateTime.Today) ? "cd-ki-red" : "cd-ki-gray")
-        @CdKpi("Loss Type",        _claim.LossType,                       "bi-exclamation-circle","cd-ki-gray")
-    </div>
+        <section class="cd-search-panel">
+            <div class="cd-search-wrap"><span class="cd-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span><div class="cd-search-body"><label>Search claim activity</label><input class="cd-search-input" @bind="_activitySearch" @bind:event="oninput" placeholder="Title, category, party, notes, created by" /><span class="cd-search-hint">Filtered from @_activities.Count database activity record(s)</span></div></div>
+            <select class="cd-filter-select" @bind="_activityTypeFilter"><option value="">All activity</option>@foreach (var type in ActivityTypes){<option value="@type">@type</option>}</select>
+            <button type="button" class="cd-btn cd-btn-light" @onclick="ResetFilters"><i class="bi bi-x-circle" aria-hidden="true"></i> Reset</button>
+            <div class="cd-search-result"><strong>@FilteredActivities.Count</strong><span>Visible</span></div>
+        </section>
 
-    <!-- ── 9-TAB BODY ──────────────────────────────────────────────── -->
-    <AppDetailTabs SelectedTab="_tab" SelectedTabChanged="t => _tab = t">
-        <Tabs>
+        <div class="cd-view-tabs" role="tablist" aria-label="Claim detail views"><button type="button" class="@TabClass("overview")" @onclick='() => SelectTab("overview")'><i class="bi bi-clipboard-data" aria-hidden="true"></i> Overview</button><button type="button" class="@TabClass("activity")" @onclick='() => SelectTab("activity")'><i class="bi bi-clock-history" aria-hidden="true"></i> Activity <strong>@FilteredActivities.Count</strong></button><button type="button" class="@TabClass("financials")" @onclick='() => SelectTab("financials")'><i class="bi bi-currency-dollar" aria-hidden="true"></i> Financials</button><button type="button" class="@TabClass("followup")" @onclick='() => SelectTab("followup")'><i class="bi bi-list-check" aria-hidden="true"></i> Workflow</button><button type="button" class="@TabClass("notes")" @onclick='() => SelectTab("notes")'><i class="bi bi-sticky" aria-hidden="true"></i> Notes <strong>@Notes.Count</strong></button></div>
 
-            <!-- 0 ── OVERVIEW ────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Overview" IconCss="bi bi-clipboard-data" /></ChildContent>
-                <ContentTemplate>
-                    <div class="pd-tab-body">
-                        <div class="pd-summary-grid">
-
-                            <div class="pd-info-card">
-                                <h3 class="pd-card-hdr">Claim Identity</h3>
-                                <div class="pd-field-grid">
-                                    @F("Claim Number",    _claim.ClaimNumber)
-                                    @F("Carrier Claim #", _claim.CarrierClaimNumber ?? "—")
-                                    @F("Status",          _claim.Status)
-                                    @F("Loss Type",       _claim.LossType)
-                                    @F("Line of Business",_claim.Lob)
-                                    @F("CAT Code",        _claim.CatCode ?? "—")
-                                    @F("Cause of Loss",   _claim.CauseOfLoss)
-                                </div>
-                            </div>
-
-                            <div class="pd-info-card">
-                                <h3 class="pd-card-hdr">Loss Details</h3>
-                                <div class="pd-field-grid">
-                                    @F("Date of Loss",       _claim.DateOfLoss.ToString("MM/dd/yyyy"))
-                                    @F("Date Reported",      _claim.DateReported.ToString("MM/dd/yyyy"))
-                                    @F("Date Acknowledged",  _claim.DateAcknowledged?.ToString("MM/dd/yyyy") ?? "—")
-                                    @F("Date Closed",        _claim.ClosedDate?.ToString("MM/dd/yyyy") ?? "—")
-                                    @F("Reporting Lag (days)", (_claim.DateReported - _claim.DateOfLoss).Days.ToString())
-                                    @F("Days Open",          _claim.Status == "Closed" ? "Closed" : _claim.DaysOpen.ToString())
-                                    @F("Loss Location",      _claim.LossLocation)
-                                    @F("State of Loss",      _claim.StateOfLoss)
-                                </div>
-                            </div>
-
-                            <div class="pd-info-card">
-                                <h3 class="pd-card-hdr">Policy &amp; Insured</h3>
-                                <div class="pd-field-grid">
-                                    @F("Policy Number",    _claim.PolicyNumber)
-                                    @F("Named Insured",    _claim.AccountName)
-                                    @F("Carrier",          _claim.Carrier)
-                                    @F("Policy Effective", _claim.PolicyEffDate.ToString("MM/dd/yyyy"))
-                                    @F("Policy Expiry",    _claim.PolicyExpDate.ToString("MM/dd/yyyy"))
-                                    @F("Deductible",       _claim.PolicyDeductible.ToString("C0"))
-                                    @F("Coverage Limit",   _claim.CoverageLimit.ToString("C0"))
-                                </div>
-                            </div>
-
-                            <div class="pd-info-card">
-                                <h3 class="pd-card-hdr">Carrier Adjuster</h3>
-                                <div class="pd-field-grid">
-                                    @F("Adjuster Name",   _claim.AdjusterName ?? "—")
-                                    @F("Adjuster Phone",  _claim.AdjusterPhone ?? "—")
-                                    @F("Adjuster Email",  _claim.AdjusterEmail ?? "—")
-                                    @F("Adjuster Type",   _claim.AdjusterType ?? "—")
-                                    @F("TPA Name",        _claim.TpaName ?? "—")
-                                    @F("Supervisor",      _claim.AdjusterSupervisor ?? "—")
-                                </div>
-                            </div>
-
-                            <div class="pd-info-card">
-                                <h3 class="pd-card-hdr">Agency Assignment</h3>
-                                <div class="pd-field-grid">
-                                    @F("Handler",         _claim.AssignedHandler)
-                                    @F("Producer",        _claim.Producer)
-                                    @F("CSR",             _claim.Csr ?? "—")
-                                    @F("Branch",          _claim.Branch)
-                                    @F("Reported By",     _claim.ReportedBy ?? "—")
-                                </div>
-                            </div>
-
-                            <div class="pd-info-card">
-                                <h3 class="pd-card-hdr">Financials Summary</h3>
-                                <div class="pd-field-grid">
-                                    @F("Total Incurred",  _claim.TotalIncurred.ToString("C0"))
-                                    @F("Total Reserves",  _claim.TotalReserves.ToString("C0"))
-                                    @F("Total Paid",      _claim.TotalPaid.ToString("C0"))
-                                    @F("Outstanding",     (_claim.TotalReserves - _claim.TotalPaid).ToString("C0"))
-                                    @F("Salvage Recv'd",  _claim.SalvageReceived.ToString("C0"))
-                                    @F("Subrogation Recv'd", _claim.SubrogationReceived.ToString("C0"))
-                                </div>
-                            </div>
-
-                            @if (!string.IsNullOrEmpty(_claim.LossDescription))
-                            {
-                                <div class="pd-info-card" style="grid-column:1/-1">
-                                    <h3 class="pd-card-hdr">Loss Description</h3>
-                                    <p class="cd-loss-desc">@_claim.LossDescription</p>
-                                </div>
-                            }
-
-                        </div>
+        <section class="cd-content-layout">
+            <div class="cd-main-card">
+                <header class="cd-card-head"><div><h2>@ActiveViewTitle</h2><p>@ActiveViewSubtitle</p></div><span>@_activeFilter</span></header>
+                @if (_activeTab == "overview")
+                {
+                    <div class="cd-overview-grid">
+                        <section class="cd-info-card"><header><i class="bi bi-fingerprint" aria-hidden="true"></i><strong>Claim Identity</strong></header><div class="cd-field-grid">@Info("Claim Number", _claim.ClaimNumber)@Info("Carrier Claim #", _claim.CarrierClaimNumber)@Info("Status", _claim.Status)@Info("Priority", DisplayValue(_claim.Priority,"Standard"))@Info("Loss Type", _claim.LossType)@Info("Cause", _claim.CauseOfLoss)@Info("CAT Code", _claim.CatCode)</div></section>
+                        <section class="cd-info-card"><header><i class="bi bi-calendar-event" aria-hidden="true"></i><strong>Loss Details</strong></header><div class="cd-field-grid">@Info("Date of Loss", _claim.DateOfLoss.ToString("MM/dd/yyyy"))@Info("Date Reported", _claim.DateReported.ToString("MM/dd/yyyy"))@Info("Closed Date", _claim.ClosedDate?.ToString("MM/dd/yyyy"))@Info("Reporting Lag", $"{Math.Max((_claim.DateReported.Date - _claim.DateOfLoss.Date).Days, 0)} day(s)")@Info("Days Open", _claim.Status == "Closed" ? "Closed" : $"{_claim.DaysOpen} day(s)")@Info("State", _claim.StateOfLoss)@Info("Location", _claim.LossLocation)</div></section>
+                        <section class="cd-info-card"><header><i class="bi bi-shield" aria-hidden="true"></i><strong>Policy & Insured</strong></header><div class="cd-field-grid">@Info("Named Insured", _claim.AccountName)@Info("Policy Number", _claim.PolicyNumber)@Info("LOB", _claim.Lob)@Info("Carrier", _claim.Carrier)@Info("Primary Claimant", _claim.PrimaryClaimant)@Info("Reported By", _claim.ReportedBy)</div></section>
+                        <section class="cd-info-card"><header><i class="bi bi-person-badge" aria-hidden="true"></i><strong>Assignment</strong></header><div class="cd-field-grid">@Info("Handler", _claim.AssignedHandler)@Info("Follow-Up", _claim.FollowUpReason)@Info("Follow-Up Due", _claim.FollowUpDueDate?.ToString("MM/dd/yyyy"))@Info("Snoozed", _claim.IsSnoozed ? "Yes" : "No")@Info("Created", _claim.CreatedDateUtc.ToLocalTime().ToString("MM/dd/yyyy h:mm tt"))@Info("Modified", _claim.ModifiedDateUtc?.ToLocalTime().ToString("MM/dd/yyyy h:mm tt"))</div></section>
+                        <section class="cd-info-card cd-info-wide"><header><i class="bi bi-card-text" aria-hidden="true"></i><strong>Loss Description</strong></header><p class="cd-loss-desc">@DisplayValue(_claim.LossDescription, "No loss description captured.")</p></section>
                     </div>
-                </ContentTemplate>
-            </TabItem>
+                }
+                else if (_activeTab == "activity")
+                {
+                    <div class="cd-toolbar"><span>@FilteredActivities.Count activity record(s)</span><button type="button" class="cd-btn cd-btn-blue" @onclick="OpenCommunicationDialog"><i class="bi bi-plus-lg" aria-hidden="true"></i> Log Activity</button></div>
+                    @if (!FilteredActivities.Any())
+                    {
+                        <div class="cd-empty-state"><i class="bi bi-inboxes" aria-hidden="true"></i><strong>No activity matches filters</strong><span>Adjust filters or log a new claim activity.</span></div>
+                    }
+                    else
+                    {
+                        <div class="cd-timeline">@foreach (var activity in FilteredActivities.OrderByDescending(a => a.ActivityDate)){<section class="cd-timeline-item"><div class="@TimelineIconClass(activity.ActivityType)"><i class="bi @ActivityIcon(activity.ActivityType)" aria-hidden="true"></i></div><div class="cd-timeline-body"><header><strong>@activity.Title</strong><span class="@ActivityTypeClass(activity.ActivityType)">@activity.ActivityType</span><em>@activity.ActivityDate.ToLocalTime().ToString("MM/dd/yyyy h:mm tt")</em></header><div class="cd-timeline-meta"><span>@DisplayValue(activity.Category,"General")</span>@if (!string.IsNullOrWhiteSpace(activity.Party)){<span>@activity.Party</span>}<span>@DisplayValue(activity.CreatedBy,"Tenant Admin")</span>@if (activity.Amount.HasValue){<span>@activity.Amount.Value.ToString("C0")</span>}</div>@if (!string.IsNullOrWhiteSpace(activity.Notes)){<p>@activity.Notes</p>}</div></section>}</div>
+                    }
+                }
+                else if (_activeTab == "financials")
+                {
+                    <div class="cd-finance-grid">@FinanceMetric("Total Incurred", _claim.TotalIncurred, "bi-currency-dollar", "red")@FinanceMetric("Total Reserves", _claim.TotalReserves, "bi-safe", "amber")@FinanceMetric("Total Paid", _claim.TotalPaid, "bi-cash-stack", "green")@FinanceMetric("Outstanding", OutstandingAmount, "bi-receipt", OutstandingAmount > 0 ? "purple" : "green")</div>
+                    <div class="cd-ledger-grid"><section class="cd-ledger-card"><header><i class="bi bi-safe" aria-hidden="true"></i><strong>Reserve Ledger</strong><button type="button" class="cd-btn cd-btn-light" @onclick="OpenReserveDialog"><i class="bi bi-plus-lg" aria-hidden="true"></i> Update Reserve</button></header>@LedgerTable(Reserves, "Reserve")</section><section class="cd-ledger-card"><header><i class="bi bi-cash-stack" aria-hidden="true"></i><strong>Payment Ledger</strong><button type="button" class="cd-btn cd-btn-light" @onclick="OpenPaymentDialog"><i class="bi bi-plus-lg" aria-hidden="true"></i> Log Payment</button></header>@LedgerTable(Payments, "Payment")</section></div>
+                }
+                else if (_activeTab == "followup")
+                {
+                    <div class="cd-workflow-board"><section class="cd-workflow-panel"><header><i class="bi bi-bell" aria-hidden="true"></i><strong>Follow-Up Control</strong><button type="button" class="cd-btn cd-btn-light" @onclick="OpenFollowUpDialog"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></header><div class="cd-followup-summary"><div><span>Reason</span><strong>@DisplayValue(_claim.FollowUpReason,"No follow-up reason")</strong></div><div><span>Priority</span><strong>@DisplayValue(_claim.Priority,"Standard")</strong></div><div><span>Due</span><strong>@(_claim.FollowUpDueDate?.ToString("MM/dd/yyyy") ?? "Not set")</strong></div><div><span>Snoozed</span><strong>@(_claim.IsSnoozed ? "Yes" : "No")</strong></div></div></section><section class="cd-workflow-panel"><header><i class="bi bi-list-check" aria-hidden="true"></i><strong>Open Tasks</strong><button type="button" class="cd-btn cd-btn-light" @onclick="OpenTaskDialog"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Task</button></header>@TaskList</section><section class="cd-workflow-panel"><header><i class="bi bi-arrow-repeat" aria-hidden="true"></i><strong>Status Control</strong><button type="button" class="cd-btn cd-btn-light" @onclick="OpenStatusDialog"><i class="bi bi-pencil" aria-hidden="true"></i> Update</button></header><div class="cd-status-flow">@foreach (var status in _statuses){<span class="@(string.Equals(status, _claim.Status, StringComparison.OrdinalIgnoreCase) ? "cd-flow-step cd-flow-active" : "cd-flow-step")">@status</span>}</div></section></div>
+                }
+                else
+                {
+                    <div class="cd-toolbar"><span>@Notes.Count note(s)</span><button type="button" class="cd-btn cd-btn-blue" @onclick="OpenNoteDialog"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Note</button></div>
+                    @if (!Notes.Any())
+                    {
+                        <div class="cd-empty-state"><i class="bi bi-sticky" aria-hidden="true"></i><strong>No notes logged</strong><span>Add claim notes to capture coverage, legal, investigation, or settlement context.</span></div>
+                    }
+                    else
+                    {
+                        <div class="cd-note-list">@foreach (var note in Notes.OrderByDescending(n => n.IsPinned).ThenByDescending(n => n.ActivityDate)){<section class="@(note.IsPinned ? "cd-note-card cd-note-pinned" : "cd-note-card")"><header><span class="@NoteCategoryClass(note.Category)">@DisplayValue(note.Category,"General")</span>@if (note.IsPinned){<i class="bi bi-pin-angle-fill" aria-hidden="true"></i>}<em>@note.CreatedBy · @note.ActivityDate.ToLocalTime().ToString("MM/dd/yyyy h:mm tt")</em></header><p>@DisplayValue(note.Notes, note.Title)</p></section>}</div>
+                    }
+                }
+            </div>
 
-            <!-- 1 ── CLAIMANTS ───────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Claimants" IconCss="bi bi-people" /></ChildContent>
-                <ContentTemplate>
-                    <div class="pd-tab-body">
-                        <div class="pd-tab-toolbar">
-                            <span class="pd-tab-count">@_claimants.Count claimant(s)</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm"
-                                    @onclick="() => { _claimantForm = new(); _showClaimantDlg = true; }">
-                                <i class="bi bi-person-plus" aria-hidden="true"></i> Add Claimant
-                            </button>
-                        </div>
-                        <SfGrid TValue="ClaimantRow" DataSource="_claimants"
-                                AllowSorting="true" AllowResizing="true" EnableHover="true" RowHeight="54">
-                            <GridColumns>
-                                <GridColumn Field="@nameof(ClaimantRow.Name)"          HeaderText="Name"          MinWidth="170" />
-                                <GridColumn Field="@nameof(ClaimantRow.Role)"          HeaderText="Role"          Width="130">
-                                    <Template>@{ var r = (ClaimantRow)context; }<span class="cd-role-chip cd-role-@RoleCss(r.Role)">@r.Role</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(ClaimantRow.InjuryType)"    HeaderText="Injury / Damage" Width="170" />
-                                <GridColumn Field="@nameof(ClaimantRow.Status)"        HeaderText="Status"        Width="120">
-                                    <Template>@{ var r = (ClaimantRow)context; }<span class="cd-cl-status cd-cls-@ClaimantStatusCss(r.Status)">@r.Status</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(ClaimantRow.Phone)"         HeaderText="Phone"         Width="140" />
-                                <GridColumn Field="@nameof(ClaimantRow.Attorney)"      HeaderText="Attorney"      Width="175" />
-                                <GridColumn Field="@nameof(ClaimantRow.AttorneyPhone)" HeaderText="Atty. Phone"   Width="140" />
-                                <GridColumn Field="@nameof(ClaimantRow.DemandAmount)"  HeaderText="Demand Amt."   Width="130"
-                                            TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                    <Template>@{ var r = (ClaimantRow)context; }<span class="pd-mono">@(r.DemandAmount.HasValue ? r.DemandAmount.Value.ToString("C0") : "—")</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(ClaimantRow.SettlementAmt)" HeaderText="Settlement"    Width="130"
-                                            TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                    <Template>@{ var r = (ClaimantRow)context; }<span class="pd-mono @(r.SettlementAmt.HasValue ? "pd-prem-dn" : "")">@(r.SettlementAmt.HasValue ? r.SettlementAmt.Value.ToString("C0") : "—")</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(ClaimantRow.Notes)"         HeaderText="Notes"         MinWidth="160" />
-                            </GridColumns>
-                        </SfGrid>
-                    </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 2 ── POLICIES / COVERAGE ─────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Policy / Coverage" IconCss="bi bi-shield-half" /></ChildContent>
-                <ContentTemplate>
-                    <div class="pd-tab-body">
-                        <!-- Policy identity strip -->
-                        <div class="cd-pol-strip">
-                            <div class="cd-pol-strip-field">
-                                <span class="cd-pf-lbl">Policy #</span>
-                                <button class="cd-pf-val cd-pf-link"
-                                        @onclick='() => Nav.NavigateTo($"/policies/{_claim.PolicyId}")'>
-                                    @_claim.PolicyNumber
-                                </button>
-                            </div>
-                            <div class="cd-pol-strip-field">
-                                <span class="cd-pf-lbl">Carrier</span>
-                                <span class="cd-pf-val">@_claim.Carrier</span>
-                            </div>
-                            <div class="cd-pol-strip-field">
-                                <span class="cd-pf-lbl">Effective</span>
-                                <span class="cd-pf-val pd-mono">@_claim.PolicyEffDate.ToString("MM/dd/yyyy")</span>
-                            </div>
-                            <div class="cd-pol-strip-field">
-                                <span class="cd-pf-lbl">Expiry</span>
-                                <span class="cd-pf-val pd-mono">@_claim.PolicyExpDate.ToString("MM/dd/yyyy")</span>
-                            </div>
-                            <div class="cd-pol-strip-field">
-                                <span class="cd-pf-lbl">Deductible</span>
-                                <span class="cd-pf-val pd-mono">@_claim.PolicyDeductible.ToString("C0")</span>
-                            </div>
-                            <div class="cd-pol-strip-field">
-                                <span class="cd-pf-lbl">Policy Limit</span>
-                                <span class="cd-pf-val pd-mono">@_claim.CoverageLimit.ToString("C0")</span>
-                            </div>
-                        </div>
-
-                        <div class="pd-tab-toolbar" style="margin-top:.75rem;">
-                            <span class="pd-tab-count">@_coverages.Count applicable coverage(s)</span>
-                        </div>
-
-                        <SfGrid TValue="CovRow" DataSource="_coverages"
-                                AllowSorting="true" EnableHover="true" RowHeight="50">
-                            <GridColumns>
-                                <GridColumn Field="@nameof(CovRow.CovCode)"     HeaderText="Code"        Width="110" />
-                                <GridColumn Field="@nameof(CovRow.CovName)"     HeaderText="Coverage"    MinWidth="180" />
-                                <GridColumn Field="@nameof(CovRow.CovType)"     HeaderText="Type"        Width="130">
-                                    <Template>@{ var c = (CovRow)context; }<span class="pd-cov-type">@c.CovType</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(CovRow.Limit)"       HeaderText="Limit"       Width="140"
-                                            TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                    <Template>@{ var c = (CovRow)context; }<span class="pd-mono">@(c.Limit.HasValue ? c.Limit.Value.ToString("C0") : "Per Occurrence")</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(CovRow.Deductible)"  HeaderText="Deductible"  Width="130"
-                                            TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                    <Template>@{ var c = (CovRow)context; }<span class="pd-mono">@(c.Deductible.HasValue ? c.Deductible.Value.ToString("C0") : "—")</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(CovRow.IsApplicable)"HeaderText="Applicable"  Width="110">
-                                    <Template>@{ var c = (CovRow)context; }<i class="bi @(c.IsApplicable ? "bi-check-circle-fill pd-chk-yes" : "bi-dash-circle pd-chk-no")" aria-hidden="true"></i></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(CovRow.Notes)"       HeaderText="Notes"       MinWidth="160" />
-                            </GridColumns>
-                        </SfGrid>
-                    </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 3 ── DOCUMENTS ───────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Documents" IconCss="bi bi-folder2" /></ChildContent>
-                <ContentTemplate>
-                    <div class="pd-tab-body">
-                        <div class="pd-tab-toolbar">
-                            <span class="pd-tab-count">@_documents.Count document(s)</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm">
-                                <i class="bi bi-upload" aria-hidden="true"></i> Upload
-                            </button>
-                        </div>
-                        <!-- Category filter -->
-                        <div class="cd-doc-cats">
-                            <button class="cr-pill @(_docCatFilter=="" ? "cr-pill-active" : "")" @onclick='()=>_docCatFilter=""'>All</button>
-                            @foreach (var cat in _documents.Select(d => d.Category).Distinct().OrderBy(x => x))
-                            {
-                                <button class="cr-pill @(_docCatFilter==cat ? "cr-pill-active" : "")" @onclick="() => _docCatFilter = cat">@cat</button>
-                            }
-                        </div>
-                        <div class="pd-doc-grid" style="margin-top:.75rem;">
-                            @foreach (var doc in _documents.Where(d => string.IsNullOrEmpty(_docCatFilter) || d.Category == _docCatFilter))
-                            {
-                                <div class="pd-doc-card">
-                                    <div class="pd-doc-icon pd-doc-@doc.FileType.ToLower()">
-                                        <i class="bi @DocIcon(doc.FileType)" aria-hidden="true"></i>
-                                    </div>
-                                    <div class="pd-doc-info">
-                                        <div class="pd-doc-name">@doc.Name</div>
-                                        <div class="pd-doc-meta">@doc.Category · @doc.UploadedAt.ToString("MM/dd/yyyy") · @doc.FileSize</div>
-                                        <div class="pd-doc-uploader">@doc.UploadedBy</div>
-                                    </div>
-                                    <div class="pd-doc-actions">
-                                        <button class="um-btn um-btn-ghost um-btn-sm" title="Download"><i class="bi bi-download" aria-hidden="true"></i></button>
-                                        <button class="um-btn um-btn-ghost um-btn-sm" title="Preview"><i class="bi bi-eye" aria-hidden="true"></i></button>
-                                    </div>
-                                </div>
-                            }
-                        </div>
-                    </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 4 ── COMMUNICATIONS ──────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Communications" IconCss="bi bi-envelope" /></ChildContent>
-                <ContentTemplate>
-                    <div class="pd-tab-body">
-                        <div class="pd-tab-toolbar">
-                            <span class="pd-tab-count">@_comms.Count communication(s)</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { _commForm = new(); _showCommDlg = true; }">
-                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Log Communication
-                            </button>
-                        </div>
-                        <SfGrid TValue="CommRow" DataSource="@_comms.OrderByDescending(c => c.CommDate).ToList()"
-                                AllowSorting="true" AllowFiltering="true" AllowResizing="true" EnableHover="true" RowHeight="52">
-                            <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
-                            <GridColumns>
-                                <GridColumn Field="@nameof(CommRow.CommDate)" HeaderText="Date / Time" Width="150">
-                                    <Template>@{ var c = (CommRow)context; }<span class="pd-mono">@c.CommDate.ToString("MM/dd/yy h:mm tt")</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(CommRow.CommType)" HeaderText="Type" Width="115">
-                                    <Template>@{ var c = (CommRow)context; }<span class="pd-comm-chip pd-comm-@CommTypeCss(c.CommType)">@c.CommType</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(CommRow.Direction)" HeaderText="Dir." Width="100">
-                                    <Template>@{ var c = (CommRow)context; }<span class="pd-dir-chip @(c.Direction=="Inbound"?"pd-dir-in":"pd-dir-out")">@c.Direction</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(CommRow.Party)"    HeaderText="Contact Party" Width="155" />
-                                <GridColumn Field="@nameof(CommRow.Subject)"  HeaderText="Subject"       MinWidth="200" />
-                                <GridColumn Field="@nameof(CommRow.LoggedBy)" HeaderText="Logged By"     Width="140" />
-                                <GridColumn Field="@nameof(CommRow.Notes)"    HeaderText="Notes"         MinWidth="200" />
-                            </GridColumns>
-                        </SfGrid>
-                    </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 5 ── TIMELINE ────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Timeline" IconCss="bi bi-clock-history" /></ChildContent>
-                <ContentTemplate>
-                    <div class="pd-tab-body">
-                        <div class="pd-tab-toolbar">
-                            <span class="pd-tab-count">@_timeline.Count event(s)</span>
-                        </div>
-                        <div class="pd-timeline">
-                            @foreach (var ev in _timeline.OrderByDescending(e => e.EventDate))
-                            {
-                                <div class="pd-tl-item">
-                                    <div class="pd-tl-dot cd-tl-@TlTypeCss(ev.EventType)">
-                                        <i class="bi @TlIcon(ev.EventType)" aria-hidden="true"></i>
-                                    </div>
-                                    <div class="pd-tl-line"></div>
-                                    <div class="pd-tl-body">
-                                        <div class="pd-tl-header">
-                                            <span class="pd-tl-title">@ev.Title</span>
-                                            <span class="pd-tl-cat cd-tlcat-@TlTypeCss(ev.EventType)">@ev.EventType</span>
-                                            <span class="pd-tl-date">@ev.EventDate.ToString("MM/dd/yyyy h:mm tt")</span>
-                                        </div>
-                                        <div class="pd-tl-meta">
-                                            <span>@ev.PerformedBy</span>
-                                            @if (!string.IsNullOrEmpty(ev.Party)) { <span>@ev.Party</span> }
-                                        </div>
-                                        @if (!string.IsNullOrEmpty(ev.Notes))
-                                        {
-                                            <div class="pd-tl-notes">@ev.Notes</div>
-                                        }
-                                    </div>
-                                </div>
-                            }
-                        </div>
-                    </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 6 ── TASKS ───────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Tasks" IconCss="bi bi-list-check" /></ChildContent>
-                <ContentTemplate>
-                    <div class="pd-tab-body">
-                        <div class="pd-tab-toolbar">
-                            <span class="pd-tab-count">@_tasks.Count task(s) · @_tasks.Count(t => t.Status is "Open" or "In Progress") open</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { _taskForm = new(); _editTask = new(){TaskId=Guid.Empty}; _showTaskDlg = true; }">
-                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Task
-                            </button>
-                        </div>
-                        <SfGrid TValue="TaskRow" DataSource="@_tasks.OrderBy(t => t.DueDate).ToList()"
-                                AllowSorting="true" AllowFiltering="true" AllowResizing="true" EnableHover="true" RowHeight="54">
-                            <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
-                            <GridColumns>
-                                <GridColumn Field="@nameof(TaskRow.Priority)" HeaderText="Priority" Width="105">
-                                    <Template>@{ var t = (TaskRow)context; }<span class="cd-pri cd-pri-@t.Priority.ToLower()">@t.Priority</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(TaskRow.Title)" HeaderText="Task" MinWidth="200" />
-                                <GridColumn Field="@nameof(TaskRow.Status)" HeaderText="Status" Width="130">
-                                    <Template>@{ var t = (TaskRow)context; }<span class="cd-task-status cd-tsk-@TaskStatusCss(t.Status)">@t.Status</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(TaskRow.AssignedTo)" HeaderText="Assigned To" Width="150" />
-                                <GridColumn Field="@nameof(TaskRow.DueDate)" HeaderText="Due Date" Width="120">
-                                    <Template>
-                                        @{ var t = (TaskRow)context; }
-                                        <span class="pd-mono @(t.DueDate.HasValue && t.DueDate.Value < DateTime.Today && t.Status != "Completed" ? "pd-viol-warn" : "")">
-                                            @(t.DueDate.HasValue ? t.DueDate.Value.ToString("MM/dd/yyyy") : "—")
-                                        </span>
-                                    </Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(TaskRow.Notes)" HeaderText="Notes" MinWidth="180" />
-                                <GridColumn HeaderText="Actions" Width="130" AllowSorting="false" AllowFiltering="false">
-                                    <Template>
-                                        @{ var t = (TaskRow)context; }
-                                        <div class="rdb-row-actions">
-                                            @if (t.Status != "Completed")
-                                            {
-                                                <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => CompleteTask(t)">
-                                                    <i class="bi bi-check-lg" aria-hidden="true"></i> Done
-                                                </button>
-                                            }
-                                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => EditTask(t)">
-                                                <i class="bi bi-pencil" aria-hidden="true"></i>
-                                            </button>
-                                        </div>
-                                    </Template>
-                                </GridColumn>
-                            </GridColumns>
-                        </SfGrid>
-                    </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 7 ── RESERVES / PAYMENTS ─────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Reserves / Payments" IconCss="bi bi-safe" /></ChildContent>
-                <ContentTemplate>
-                    <div class="pd-tab-body">
-
-                        <!-- Reserve summary cards -->
-                        <div class="cd-reserve-summary">
-                            @foreach (var rt in _reserveTypes)
-                            {
-                                var res  = _reserves.Where(r => r.ReserveType == rt).OrderByDescending(r => r.EffectiveDate).FirstOrDefault();
-                                var paid = _payments.Where(p => p.PaymentType == rt).Sum(p => p.Amount);
-                                if (res == null && paid == 0) continue;
-                                <div class="cd-res-card">
-                                    <div class="cd-res-type">@rt</div>
-                                    <div class="cd-res-row">
-                                        <span class="cd-res-lbl">Reserve</span>
-                                        <span class="cd-res-val cd-res-open">@(res?.Amount.ToString("C0") ?? "$0")</span>
-                                    </div>
-                                    <div class="cd-res-row">
-                                        <span class="cd-res-lbl">Paid</span>
-                                        <span class="cd-res-val cd-res-paid">@paid.ToString("C0")</span>
-                                    </div>
-                                    <div class="cd-res-row">
-                                        <span class="cd-res-lbl">Outstanding</span>
-                                        <span class="cd-res-val">@(((res?.Amount ?? 0) - paid).ToString("C0"))</span>
-                                    </div>
-                                </div>
-                            }
-                        </div>
-
-                        <!-- Reserve history -->
-                        <div class="cd-section-hdr">
-                            <i class="bi bi-safe" aria-hidden="true"></i> Reserve History
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showReserveDlg = true" style="margin-left:auto;">
-                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Update Reserve
-                            </button>
-                        </div>
-                        <SfGrid TValue="ReserveEntry" DataSource="@_reserves.OrderByDescending(r => r.EffectiveDate).ToList()"
-                                AllowSorting="true" EnableHover="true" RowHeight="48">
-                            <GridColumns>
-                                <GridColumn Field="@nameof(ReserveEntry.EffectiveDate)" HeaderText="Date" Width="130">
-                                    <Template>@{ var r = (ReserveEntry)context; }<span class="pd-mono">@r.EffectiveDate.ToString("MM/dd/yyyy")</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(ReserveEntry.ReserveType)" HeaderText="Type" Width="180" />
-                                <GridColumn Field="@nameof(ReserveEntry.Amount)"      HeaderText="Amount" Width="130"
-                                            TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                    <Template>@{ var r = (ReserveEntry)context; }<span class="pd-mono">@r.Amount.ToString("C0")</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(ReserveEntry.PriorAmount)" HeaderText="Prior Amount" Width="130"
-                                            TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                    <Template>@{ var r = (ReserveEntry)context; }<span class="pd-mono">@(r.PriorAmount.HasValue ? r.PriorAmount.Value.ToString("C0") : "—")</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(ReserveEntry.Reason)"      HeaderText="Reason"  MinWidth="200" />
-                                <GridColumn Field="@nameof(ReserveEntry.SetBy)"        HeaderText="Set By"  Width="140" />
-                            </GridColumns>
-                        </SfGrid>
-
-                        <!-- Payment history -->
-                        <div class="cd-section-hdr" style="margin-top:1.25rem;">
-                            <i class="bi bi-cash-stack" aria-hidden="true"></i> Payment History
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showPaymentDlg = true" style="margin-left:auto;">
-                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Log Payment
-                            </button>
-                        </div>
-                        <SfGrid TValue="PaymentEntry" DataSource="@_payments.OrderByDescending(p => p.PaymentDate).ToList()"
-                                AllowSorting="true" AllowFiltering="true" EnableHover="true" RowHeight="48">
-                            <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
-                            <GridColumns>
-                                <GridColumn Field="@nameof(PaymentEntry.PaymentDate)" HeaderText="Date" Width="125">
-                                    <Template>@{ var p = (PaymentEntry)context; }<span class="pd-mono">@p.PaymentDate.ToString("MM/dd/yyyy")</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(PaymentEntry.PaymentType)"  HeaderText="Type"     Width="180" />
-                                <GridColumn Field="@nameof(PaymentEntry.Amount)"        HeaderText="Amount"   Width="130"
-                                            TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                    <Template>@{ var p = (PaymentEntry)context; }<span class="pd-mono cd-pmt-amt">@p.Amount.ToString("C0")</span></Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(PaymentEntry.Payee)"         HeaderText="Payee"    Width="185" />
-                                <GridColumn Field="@nameof(PaymentEntry.CheckNumber)"   HeaderText="Check #"  Width="130" />
-                                <GridColumn Field="@nameof(PaymentEntry.Method)"        HeaderText="Method"   Width="100" />
-                                <GridColumn Field="@nameof(PaymentEntry.Notes)"         HeaderText="Notes"    MinWidth="180" />
-                                <GridColumn Field="@nameof(PaymentEntry.LoggedBy)"      HeaderText="Logged By" Width="140" />
-                            </GridColumns>
-                        </SfGrid>
-
-                    </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 8 ── NOTES ───────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Notes" IconCss="bi bi-sticky" /></ChildContent>
-                <ContentTemplate>
-                    <div class="pd-tab-body">
-                        <div class="pd-tab-toolbar">
-                            <span class="pd-tab-count">@_notes.Count note(s)</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { _noteForm = new(); _showNoteDlg = true; }">
-                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Note
-                            </button>
-                        </div>
-
-                        <!-- Pinned notes -->
-                        @{ var pinned = _notes.Where(n => n.IsPinned).ToList(); }
-                        @if (pinned.Any())
-                        {
-                            <div class="cd-notes-section-hdr"><i class="bi bi-pin-angle-fill" aria-hidden="true"></i> Pinned</div>
-                            @foreach (var note in pinned.OrderByDescending(n => n.CreatedAt))
-                            {
-                                @NoteCard(note)
-                            }
-                        }
-
-                        <div class="cd-notes-section-hdr" style="margin-top:.75rem;">
-                            <i class="bi bi-sticky" aria-hidden="true"></i> All Notes
-                        </div>
-                        @foreach (var note in _notes.OrderByDescending(n => n.CreatedAt))
-                        {
-                            @NoteCard(note)
-                        }
-                    </div>
-                </ContentTemplate>
-            </TabItem>
-
-        </Tabs>
-    </AppDetailTabs>
-}
+            <aside class="cd-detail-card">
+                <div class="cd-detail-head"><span class="cd-detail-eyebrow"><i class="bi bi-shield-check" aria-hidden="true"></i> Claim file</span><h2>@_claim.ClaimNumber</h2><p>@_claim.AccountName</p></div>
+                <div class="cd-detail-body"><div class="cd-detail-summary"><div><span>Status</span><strong>@_claim.Status</strong></div><div><span>Priority</span><strong>@DisplayValue(_claim.Priority,"Standard")</strong></div><div><span>Incurred</span><strong>@_claim.TotalIncurred.ToString("C0")</strong></div><div><span>Open</span><strong>@(_claim.Status == "Closed" ? "Closed" : _claim.DaysOpen + "d")</strong></div></div><div class="cd-contact-card"><strong>@_claim.LossType</strong><span>@DisplayValue(_claim.LossLocation,"No loss location")</span><span>@DisplayValue(_claim.LossDescription,"No description captured.")</span></div><div class="cd-flag-grid">@FlagChip(_claim.IsLitigation,"Litigation","bi-gavel")@FlagChip(_claim.HasSubrogation,"Subrogation","bi-arrow-counterclockwise")@FlagChip(_claim.IsCatastrophe,"Catastrophe","bi-cloud-lightning")@FlagChip(_claim.IsDisputed,"Disputed","bi-shield-exclamation")</div><div class="cd-detail-actions"><button type="button" class="cd-btn cd-btn-blue" @onclick="OpenCommunicationDialog"><i class="bi bi-envelope" aria-hidden="true"></i> Log communication</button><button type="button" class="cd-btn cd-btn-light" @onclick="OpenNoteDialog"><i class="bi bi-sticky" aria-hidden="true"></i> Add note</button><button type="button" class="cd-btn cd-btn-light" @onclick="OpenFollowUpDialog"><i class="bi bi-bell" aria-hidden="true"></i> Update follow-up</button><button type="button" class="cd-btn cd-btn-light" @onclick='() => Nav.NavigateTo($"/accounts/{_claim.AccountId}")'><i class="bi bi-building" aria-hidden="true"></i> Open account</button><button type="button" class="cd-btn cd-btn-light" @onclick='() => Nav.NavigateTo($"/policies/{_claim.PolicyId}")'><i class="bi bi-shield" aria-hidden="true"></i> Open policy</button></div></div>
+            </aside>
+        </section>
+    }
+</div>
 
 @code {
     [Parameter] public Guid ClaimId { get; set; }
 
-    SfToast _toast = default!;
-    bool    _loading = true;
-    int     _tab     = 0;
+    private CurrentUserContextModel? _userContext;
+    private bool _loading;
+    private bool _savingActivity;
+    private bool _savingFollowUp;
+    private bool _savingStatus;
+    private bool _showActivityDialog;
+    private bool _showFollowUpDialog;
+    private bool _showStatusDialog;
+    private string? _loadError;
+    private string _activeTab = "overview";
+    private string _activeFilter = "All";
+    private string _activitySearch = string.Empty;
+    private string _activityTypeFilter = string.Empty;
+    private ClaimDto? _claim;
+    private ActivityForm _activity = new();
+    private FollowUpForm _followUp = new();
+    private StatusForm _statusForm = new();
+    private readonly List<ClaimActivityDto> _activities = [];
+    private readonly List<ClaimToast> _toasts = [];
+    private readonly string[] _activityTypes = ["Communication", "Task", "Reserve", "Payment", "Note", "Claimant", "Coverage", "Legal", "Investigation"];
+    private readonly string[] _priorities = ["Critical", "High", "Standard", "Medium", "Low"];
+    private readonly string[] _statuses = ["Open", "Acknowledged", "Under Review", "Pending Info", "In Litigation", "Subrogation", "Denied", "Closed", "Reopened"];
 
-    // ── Dialog state ─────────────────────────────────────────────
-    bool _showClaimantDlg = false;
-    bool _showTaskDlg     = false;
-    bool _showReserveDlg  = false;
-    bool _showPaymentDlg  = false;
-    bool _showCommDlg     = false;
-    bool _showNoteDlg     = false;
-    string _docCatFilter  = "";
+    private List<ClaimActivityDto> FilteredActivities => _activities.Where(MatchesActivityFilters).ToList();
+    private List<string> ActivityTypes => _activities.Select(a => a.ActivityType).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(v => v).DefaultIfEmpty("Communication").ToList();
+    private List<ClaimActivityDto> Communications => _activities.Where(a => a.ActivityType == "Communication").ToList();
+    private List<ClaimActivityDto> Tasks => _activities.Where(a => a.ActivityType == "Task").ToList();
+    private List<ClaimActivityDto> Reserves => _activities.Where(a => a.ActivityType == "Reserve").ToList();
+    private List<ClaimActivityDto> Payments => _activities.Where(a => a.ActivityType == "Payment").ToList();
+    private List<ClaimActivityDto> Notes => _activities.Where(a => a.ActivityType == "Note" || a.IsPinned).ToList();
+    private decimal OutstandingAmount => Math.Max((_claim?.TotalReserves ?? 0) - (_claim?.TotalPaid ?? 0), 0);
+    private bool FollowUpOverdue => _claim?.FollowUpDueDate is DateTime due && due.Date < DateTime.Today && _claim.Status != "Closed" && !_claim.IsSnoozed;
+    private bool NeedsAttention => _claim is not null && (FollowUpOverdue || _claim.IsLitigation || _claim.IsDisputed || OutstandingAmount > 0 && _claim.DaysOpen > 30);
+    private string AttentionMessage => FollowUpOverdue ? "Follow-up is overdue and should be updated or snoozed." : _claim?.IsLitigation == true ? "Litigation flag is active; review legal notes and next tasks." : _claim?.IsDisputed == true ? "Dispute flag is active; document claim position and next action." : "Outstanding exposure remains open; review reserves, payments, and next follow-up.";
+    private string ActiveViewTitle => _activeTab switch { "activity" => "Activity timeline", "financials" => "Financial command center", "followup" => "Workflow and follow-up", "notes" => "Pinned and claim notes", _ => "Claim overview" };
+    private string ActiveViewSubtitle => _activeTab switch { "activity" => "Search and review all DB-backed claim activity, communications, tasks, reserves, payments, and notes.", "financials" => "Monitor incurred, reserve, paid, and outstanding exposure with reserve and payment ledgers.", "followup" => "Control status, priority, due dates, snooze state, and open workflow tasks.", "notes" => "Review important notes and pinned audit context from the activity ledger.", _ => "Review claim identity, loss details, policy context, assignment, financials, and flags by importance." };
 
-    ClaimantForm  _claimantForm = new();
-    TaskForm      _taskForm     = new();
-    ReserveForm   _reserveForm  = new();
-    PaymentForm   _paymentForm  = new();
-    CommForm      _commForm     = new();
-    NoteForm      _noteForm     = new();
-    TaskRow?      _editTask     = null;
+    private IEnumerable<KpiTile> Kpis =>
+    [
+        new("Incurred", _claim?.TotalIncurred.ToString("C0") ?? "$0", "bi-currency-dollar", "red", "Financials", "Total exposure", "Open financial ledger"),
+        new("Outstanding", OutstandingAmount.ToString("C0"), "bi-receipt", OutstandingAmount > 0 ? "purple" : "green", "Financials", "Reserve less paid", "Open reserve and payment ledger"),
+        new("Days Open", _claim is null ? "0" : (_claim.Status == "Closed" ? "Closed" : _claim.DaysOpen + "d"), "bi-clock-history", _claim?.DaysOpen > 90 ? "red" : "blue", "All", "Claim age", "Show overview"),
+        new("Activities", _activities.Count.ToString("N0"), "bi-clock-history", "blue", "Activity", "Claim ledger", "Show all activities"),
+        new("Tasks", Tasks.Count.ToString("N0"), "bi-list-check", Tasks.Any() ? "amber" : "blue", "Tasks", "Workflow items", "Filter task activities"),
+        new("Notes", Notes.Count.ToString("N0"), "bi-sticky", "purple", "Notes", "Pinned context", "Show notes")
+    ];
 
-    // ── Lookups ──────────────────────────────────────────────────
-    readonly string[] _claimantRoles = { "Primary Claimant","Co-Claimant","Third Party","Witness","Subrogation Target","Passenger","Pedestrian" };
-    readonly string[] _injuryTypes   = { "Bodily Injury","Property Damage","Medical Expenses","Lost Wages","Pain & Suffering","Vehicle Damage","Building Damage","Equipment Loss","Death / Wrongful Death","Unknown" };
-    readonly string[] _reserveTypes  = { "Bodily Injury","Property Damage","Medical Payments","Uninsured Motorist","Legal / Defense","Subrogation","Other" };
-    readonly string[] _handlers      = { "Sarah Kim","James Park","Kevin Obi","Maria Santos","Lisa Chen" };
+    private IEnumerable<WorkflowLane> WorkflowLanes =>
+    [
+        new("Communicate", "Carrier / claimant", "bi-envelope", "Communication", "activity", Communications.Count, "Logged communications", "Filter communications"),
+        new("Tasks", "Next actions", "bi-list-check", "Task", "followup", Tasks.Count, "Task activities", "Review workflow tasks"),
+        new("Reserves", "Exposure", "bi-safe", "Reserve", "financials", Reserves.Count, "Reserve updates", "Review reserves"),
+        new("Payments", "Disbursement", "bi-cash-stack", "Payment", "financials", Payments.Count, "Payment entries", "Review payments"),
+        new("Notes", "Audit context", "bi-sticky", "Note", "notes", Notes.Count, "Claim notes", "Review notes")
+    ];
 
-    // ── Form classes ─────────────────────────────────────────────
-    sealed class ClaimantForm { public string Name=""; public string Role="Primary Claimant"; public string InjuryType=""; public string Phone=""; public string Email=""; public string Attorney=""; public string AttorneyPhone=""; public DateTime? Dob; public string Notes=""; }
-    sealed class TaskForm     { public string Title=""; public string Priority="Medium"; public string AssignedTo=""; public DateTime? DueDate; public string Status="Open"; public string Notes=""; }
-    sealed class ReserveForm  { public string ReserveType=""; public decimal Amount; public string Reason=""; }
-    sealed class PaymentForm  { public string PaymentType=""; public decimal Amount; public string Payee=""; public DateTime? PaymentDate=DateTime.Today; public string CheckNumber=""; public string Method="Check"; public string Notes=""; }
-    sealed class CommForm     { public string CommType="Email"; public string Direction="Outbound"; public string Party=""; public DateTime CommDate=DateTime.Now; public string Subject=""; public string Notes=""; }
-    sealed class NoteForm     { public string Category="General"; public string Body=""; public bool IsPinned; }
-
-    // ── Data models ──────────────────────────────────────────────
-    sealed class ClaimRecord
+    private RenderFragment TaskList => builder =>
     {
-        public Guid     ClaimId              { get; set; }
-        public Guid     PolicyId             { get; set; }
-        public Guid     AccountId            { get; set; }
-        public string   ClaimNumber          { get; set; } = "";
-        public string   CarrierClaimNumber   { get; set; } = "";
-        public string   PolicyNumber         { get; set; } = "";
-        public string   AccountName          { get; set; } = "";
-        public string   Lob                  { get; set; } = "";
-        public string   Carrier              { get; set; } = "";
-        public string   Status               { get; set; } = "";
-        public string   LossType             { get; set; } = "";
-        public string   CauseOfLoss          { get; set; } = "";
-        public string?  CatCode              { get; set; }
-        public DateTime DateOfLoss           { get; set; }
-        public DateTime DateReported         { get; set; }
-        public DateTime? DateAcknowledged    { get; set; }
-        public DateTime? ClosedDate          { get; set; }
-        public int      DaysOpen             { get; set; }
-        public string   LossLocation         { get; set; } = "";
-        public string   StateOfLoss          { get; set; } = "";
-        public string   LossDescription      { get; set; } = "";
-        public DateTime PolicyEffDate        { get; set; }
-        public DateTime PolicyExpDate        { get; set; }
-        public decimal  PolicyDeductible     { get; set; }
-        public decimal  CoverageLimit        { get; set; }
-        public decimal  TotalIncurred        { get; set; }
-        public decimal  TotalReserves        { get; set; }
-        public decimal  TotalPaid            { get; set; }
-        public decimal  SalvageReceived      { get; set; }
-        public decimal  SubrogationReceived  { get; set; }
-        public string   AdjusterName         { get; set; } = "";
-        public string?  AdjusterPhone        { get; set; }
-        public string?  AdjusterEmail        { get; set; }
-        public string?  AdjusterType         { get; set; }
-        public string?  AdjusterSupervisor   { get; set; }
-        public string?  TpaName              { get; set; }
-        public string   AssignedHandler      { get; set; } = "";
-        public string   Producer             { get; set; } = "";
-        public string?  Csr                  { get; set; }
-        public string   Branch               { get; set; } = "";
-        public string?  ReportedBy           { get; set; }
-        public bool     IsLitigation         { get; set; }
-        public bool     HasSubrogation       { get; set; }
-        public bool     IsCatastrophe        { get; set; }
-        public bool     IsDisputed           { get; set; }
-    }
-
-    sealed class ClaimantRow
-    {
-        public Guid    ClaimantId    { get; set; }
-        public string  Name          { get; set; } = "";
-        public string  Role          { get; set; } = "";
-        public string  InjuryType    { get; set; } = "";
-        public string  Status        { get; set; } = "";
-        public string  Phone         { get; set; } = "";
-        public string  Email         { get; set; } = "";
-        public string  Attorney      { get; set; } = "";
-        public string  AttorneyPhone { get; set; } = "";
-        public decimal? DemandAmount { get; set; }
-        public decimal? SettlementAmt{ get; set; }
-        public string  Notes         { get; set; } = "";
-    }
-
-    sealed class CovRow
-    {
-        public string   CovCode     { get; set; } = "";
-        public string   CovName     { get; set; } = "";
-        public string   CovType     { get; set; } = "";
-        public decimal? Limit       { get; set; }
-        public decimal? Deductible  { get; set; }
-        public bool     IsApplicable{ get; set; }
-        public string   Notes       { get; set; } = "";
-    }
-
-    sealed class DocRow
-    {
-        public string   Name       { get; set; } = "";
-        public string   Category   { get; set; } = "";
-        public string   FileType   { get; set; } = "";
-        public string   FileSize   { get; set; } = "";
-        public DateTime UploadedAt { get; set; }
-        public string   UploadedBy { get; set; } = "";
-    }
-
-    sealed class CommRow
-    {
-        public string   CommType  { get; set; } = "";
-        public string   Direction { get; set; } = "";
-        public string   Party     { get; set; } = "";
-        public DateTime CommDate  { get; set; }
-        public string   Subject   { get; set; } = "";
-        public string   Notes     { get; set; } = "";
-        public string   LoggedBy  { get; set; } = "";
-    }
-
-    sealed class TimelineEvent
-    {
-        public string   EventType   { get; set; } = "";
-        public string   Title       { get; set; } = "";
-        public DateTime EventDate   { get; set; }
-        public string   PerformedBy { get; set; } = "";
-        public string   Party       { get; set; } = "";
-        public string   Notes       { get; set; } = "";
-    }
-
-    sealed class TaskRow
-    {
-        public Guid     TaskId     { get; set; }
-        public string   Title      { get; set; } = "";
-        public string   Priority   { get; set; } = "";
-        public string   Status     { get; set; } = "";
-        public string   AssignedTo { get; set; } = "";
-        public DateTime? DueDate   { get; set; }
-        public string   Notes      { get; set; } = "";
-    }
-
-    sealed class ReserveEntry
-    {
-        public string   ReserveType   { get; set; } = "";
-        public decimal  Amount        { get; set; }
-        public decimal? PriorAmount   { get; set; }
-        public DateTime EffectiveDate { get; set; }
-        public string   Reason        { get; set; } = "";
-        public string   SetBy         { get; set; } = "";
-    }
-
-    sealed class PaymentEntry
-    {
-        public string   PaymentType { get; set; } = "";
-        public decimal  Amount      { get; set; }
-        public string   Payee       { get; set; } = "";
-        public DateTime PaymentDate { get; set; }
-        public string   CheckNumber { get; set; } = "";
-        public string   Method      { get; set; } = "";
-        public string   Notes       { get; set; } = "";
-        public string   LoggedBy    { get; set; } = "";
-    }
-
-    sealed class NoteRow
-    {
-        public Guid     NoteId    { get; set; }
-        public string   Category  { get; set; } = "";
-        public string   Body      { get; set; } = "";
-        public bool     IsPinned  { get; set; }
-        public string   CreatedBy { get; set; } = "";
-        public DateTime CreatedAt { get; set; }
-    }
-
-    ClaimRecord?         _claim     = null;
-    List<ClaimantRow>    _claimants = new();
-    List<CovRow>         _coverages = new();
-    List<DocRow>         _documents = new();
-    List<CommRow>        _comms     = new();
-    List<TimelineEvent>  _timeline  = new();
-    List<TaskRow>        _tasks     = new();
-    List<ReserveEntry>   _reserves  = new();
-    List<PaymentEntry>   _payments  = new();
-    List<NoteRow>        _notes     = new();
-
-    protected override async Task OnInitializedAsync()
-    {
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Claims","/claims"), new("Claim Detail",""));
-        await LoadAsync();
-    }
-
-    async Task LoadAsync()
-    {
-        _loading = true;
-        var detail = await Api.GetClaimDetailAsync(ClaimId);
-        if (detail is null)
+        if (!Tasks.Any())
         {
-            _claim = null;
-            _loading = false;
+            builder.OpenElement(0, "div"); builder.AddAttribute(1, "class", "cd-mini-empty"); builder.AddContent(2, "No task activities have been logged for this claim."); builder.CloseElement();
             return;
         }
 
-        MapClaim(detail.Claim);
-        MapActivities(detail.Activities);
-        _loading = false;
+        builder.OpenElement(3, "div"); builder.AddAttribute(4, "class", "cd-task-list");
+        var seq = 5;
+        foreach (var task in Tasks.OrderByDescending(t => t.ActivityDate))
+        {
+            builder.OpenElement(seq++, "section"); builder.AddAttribute(seq++, "class", "cd-task-card");
+            builder.OpenElement(seq++, "header"); builder.OpenElement(seq++, "strong"); builder.AddContent(seq++, task.Title); builder.CloseElement(); builder.OpenElement(seq++, "span"); builder.AddAttribute(seq++, "class", PriorityClass(task.Category)); builder.AddContent(seq++, DisplayValue(task.Category, "Standard")); builder.CloseElement(); builder.CloseElement();
+            builder.OpenElement(seq++, "p"); builder.AddContent(seq++, DisplayValue(task.Notes, "No task notes.")); builder.CloseElement();
+            builder.OpenElement(seq++, "small"); builder.AddContent(seq++, $"Due/activity date {task.ActivityDate:MM/dd/yyyy} · {DisplayValue(task.CreatedBy, "Tenant Admin")}"); builder.CloseElement();
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        _userContext = await CurrentUser.RequireAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Claims", "/claims"), new("Claim Detail", ""));
+        await LoadAsync();
     }
 
-    void MapClaim(ClaimDto claim)
+    private async Task LoadAsync()
     {
-        _claim = new ClaimRecord
+        _loading = true;
+        _loadError = null;
+        try
         {
-            ClaimId=claim.ClaimId, PolicyId=claim.PolicyId, AccountId=claim.AccountId,
-            ClaimNumber=claim.ClaimNumber, CarrierClaimNumber=claim.CarrierClaimNumber ?? "",
-            PolicyNumber=claim.PolicyNumber, AccountName=claim.AccountName,
-            Lob=claim.Lob, Carrier=claim.Carrier,
-            Status=claim.Status, LossType=claim.LossType, CauseOfLoss=claim.CauseOfLoss ?? "",
-            CatCode=claim.CatCode,
-            DateOfLoss=claim.DateOfLoss, DateReported=claim.DateReported,
-            DateAcknowledged=claim.CreatedDateUtc, ClosedDate=claim.ClosedDate, DaysOpen=claim.DaysOpen,
-            LossLocation=claim.LossLocation ?? "", StateOfLoss=claim.StateOfLoss ?? "",
-            LossDescription=claim.LossDescription ?? "",
-            PolicyEffDate=claim.DateOfLoss.AddYears(-1), PolicyExpDate=claim.DateOfLoss.AddDays(365),
-            PolicyDeductible=0, CoverageLimit=0,
-            TotalIncurred=claim.TotalIncurred, TotalReserves=claim.TotalReserves, TotalPaid=claim.TotalPaid,
-            SalvageReceived=0, SubrogationReceived=0,
-            AdjusterName=claim.AssignedHandler, AssignedHandler=claim.AssignedHandler,
-            Producer="Tenant Admin", Csr=claim.AssignedHandler, Branch="Tenant Administration",
-            ReportedBy=claim.ReportedBy,
-            IsLitigation=claim.IsLitigation, HasSubrogation=claim.HasSubrogation, IsCatastrophe=claim.IsCatastrophe, IsDisputed=claim.IsDisputed
-        };
-
-        _coverages = [new CovRow { CovCode=claim.Lob, CovName=$"{claim.Lob} claim coverage", CovType="Primary", Limit=null, Deductible=null, IsApplicable=true, Notes="Coverage data is sourced from the claim record." }];
-        _documents.Clear();
-    }
-
-    void MapActivities(List<ClaimActivityDto> activities)
-    {
-        _claimants = activities.Where(a => a.ActivityType == "Claimant").Select(a => new ClaimantRow { ClaimantId=a.ClaimActivityId, Name=a.Party, Role=a.Category, InjuryType=a.Title, Status="Logged", Notes=a.Notes }).ToList();
-        _comms = activities.Where(a => a.ActivityType == "Communication").Select(a => new CommRow { CommType=a.Category, Direction="Outbound", Party=a.Party, CommDate=a.ActivityDate, Subject=a.Title, Notes=a.Notes, LoggedBy=a.CreatedBy }).ToList();
-        _tasks = activities.Where(a => a.ActivityType == "Task").Select(a => new TaskRow { TaskId=a.ClaimActivityId, Title=a.Title, Priority=a.Category, Status=a.Party, AssignedTo=a.CreatedBy, DueDate=a.ActivityDate, Notes=a.Notes }).ToList();
-        _reserves = activities.Where(a => a.ActivityType == "Reserve").Select(a => new ReserveEntry { ReserveType=a.Category, Amount=a.Amount ?? 0, PriorAmount=a.PriorAmount, EffectiveDate=a.ActivityDate, Reason=a.Notes, SetBy=a.CreatedBy }).ToList();
-        _payments = activities.Where(a => a.ActivityType == "Payment").Select(a => new PaymentEntry { PaymentType=a.Category, Amount=a.Amount ?? 0, Payee=a.Party, PaymentDate=a.ActivityDate, CheckNumber="", Method="", Notes=a.Notes, LoggedBy=a.CreatedBy }).ToList();
-        _notes = activities.Where(a => a.ActivityType == "Note").Select(a => new NoteRow { NoteId=a.ClaimActivityId, Category=a.Category, Body=a.Notes, IsPinned=a.IsPinned, CreatedBy=a.CreatedBy, CreatedAt=a.ActivityDate }).ToList();
-        _timeline = activities.Select(a => new TimelineEvent { EventType=a.ActivityType, Title=a.Title, EventDate=a.ActivityDate, PerformedBy=a.CreatedBy, Party=a.Party, Notes=a.Notes }).ToList();
-
-        if (_claim is not null)
+            var detail = await Api.GetClaimDetailAsync(ClaimId);
+            _claim = detail?.Claim;
+            _activities.Clear();
+            _activities.AddRange(detail?.Activities ?? []);
+        }
+        catch (Exception ex)
         {
-            _timeline.Add(new TimelineEvent { EventType="Loss", Title="Loss Occurred", EventDate=_claim.DateOfLoss, PerformedBy="—", Party=_claim.AccountName, Notes=_claim.LossDescription });
-            _timeline.Add(new TimelineEvent { EventType="Reported", Title="Claim Reported", EventDate=_claim.DateReported, PerformedBy=_claim.ReportedBy ?? "Tenant Admin", Party=_claim.AccountName, Notes=_claim.LossType });
+            _loadError = ex.Message;
+            await ShowToast($"Load failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _loading = false;
         }
     }
 
-    void BuildStub()
+    private async Task RefreshAsync()
     {
-        _claim = new ClaimRecord
+        await LoadAsync();
+        if (string.IsNullOrWhiteSpace(_loadError)) await ShowToast("Claim file refreshed.");
+    }
+
+    private bool MatchesActivityFilters(ClaimActivityDto activity)
+    {
+        var searchMatch = string.IsNullOrWhiteSpace(_activitySearch) || Contains(activity.Title, _activitySearch) || Contains(activity.Category, _activitySearch) || Contains(activity.Party, _activitySearch) || Contains(activity.Notes, _activitySearch) || Contains(activity.CreatedBy, _activitySearch);
+        var typeMatch = string.IsNullOrWhiteSpace(_activityTypeFilter) || string.Equals(activity.ActivityType, _activityTypeFilter, StringComparison.OrdinalIgnoreCase);
+        var kpiMatch = _activeFilter switch
         {
-            ClaimId=ClaimId, PolicyId=Guid.NewGuid(), AccountId=Guid.NewGuid(),
-            ClaimNumber="CLM-2025-00142",  CarrierClaimNumber="TRV-CLM-88-004219",
-            PolicyNumber="TRV-GL-2024-00421", AccountName="Sullivan Mfg. LLC",
-            Lob="General Liability", Carrier="Travelers Indemnity",
-            Status="Open", LossType="Bodily Injury", CauseOfLoss="Slip & Fall on Premises",
-            DateOfLoss=DateTime.Today.AddDays(-42), DateReported=DateTime.Today.AddDays(-40),
-            DateAcknowledged=DateTime.Today.AddDays(-39), ClosedDate=null, DaysOpen=42,
-            LossLocation="4800 Main St, Houston, TX 77002", StateOfLoss="TX",
-            LossDescription="Claimant James Hartford alleges he slipped on a wet floor in the production area of the Sullivan Mfg. facility on 03/15/2025. He reports injuries to his lower back and right knee. An incident report was completed by facility management at the time of the event. Witness statements obtained from two employees. OSHA inspection not triggered. Medical treatment ongoing with orthopedic specialist.",
-            PolicyEffDate=new DateTime(2024,4,1), PolicyExpDate=new DateTime(2025,4,1),
-            PolicyDeductible=5_000m, CoverageLimit=1_000_000m,
-            TotalIncurred=85_500m, TotalReserves=120_000m, TotalPaid=35_000m,
-            SalvageReceived=0m, SubrogationReceived=0m,
-            AdjusterName="Thomas Brewer", AdjusterPhone="(713) 555-0822", AdjusterEmail="tbrewer@travelers.com",
-            AdjusterType="Staff Adjuster", AdjusterSupervisor="Diana Perez", TpaName=null,
-            AssignedHandler="Sarah Kim", Producer="Maria Santos", Csr="Kevin Obi", Branch="Houston South",
-            ReportedBy="Maria Santos", IsLitigation=true, HasSubrogation=false, IsCatastrophe=false, IsDisputed=true
+            "Activity" => true,
+            "Tasks" => activity.ActivityType == "Task",
+            "Notes" => activity.ActivityType == "Note" || activity.IsPinned,
+            "Communication" or "Task" or "Reserve" or "Payment" or "Note" => activity.ActivityType == _activeFilter,
+            _ => true
         };
-
-        _claimants.Clear();
-        _claimants.AddRange(new[]
-        {
-            new ClaimantRow { ClaimantId=Guid.NewGuid(), Name="James Hartford",    Role="Primary Claimant", InjuryType="Bodily Injury",    Status="Represented",  Phone="(713) 555-0181", Email="jhartford@email.com", Attorney="Garcia & Webb LLP", AttorneyPhone="(713) 555-9900", DemandAmount=250_000m, SettlementAmt=null, Notes="Orthopedic surgery scheduled for 05/10/2025." },
-            new ClaimantRow { ClaimantId=Guid.NewGuid(), Name="Martinez (Witness)", Role="Witness", InjuryType="N/A", Status="Unrepresented", Phone="(832) 555-0442", Email="", Attorney="", AttorneyPhone="", DemandAmount=null, SettlementAmt=null, Notes="Employee witness — statement obtained 03/17/2025." },
-        });
-
-        _coverages.Clear();
-        _coverages.AddRange(new[]
-        {
-            new CovRow { CovCode="GL-1000", CovName="Commercial General Liability — Occurrence", CovType="Primary",    Limit=1_000_000m, Deductible=5_000m, IsApplicable=true,  Notes="Per occurrence limit applies." },
-            new CovRow { CovCode="GL-1001", CovName="General Aggregate",                         CovType="Aggregate",  Limit=2_000_000m, Deductible=null,   IsApplicable=true,  Notes="Annual aggregate." },
-            new CovRow { CovCode="GL-1010", CovName="Products / Completed Ops",                  CovType="Sublimit",   Limit=1_000_000m, Deductible=null,   IsApplicable=false, Notes="Not implicated in this loss." },
-            new CovRow { CovCode="GL-1020", CovName="Personal &amp; Advertising Injury",         CovType="Included",   Limit=null,       Deductible=null,   IsApplicable=false, Notes="Not applicable." },
-            new CovRow { CovCode="MED-100", CovName="Medical Payments",                          CovType="Sublimit",   Limit=10_000m,    Deductible=null,   IsApplicable=true,  Notes="Applies regardless of fault." },
-        });
-
-        _documents.Clear();
-        _documents.AddRange(new[]
-        {
-            new DocRow { Name="Incident Report — 03/15/2025.pdf",       Category="Incident Reports", FileType="pdf", FileSize="1.2 MB",  UploadedAt=DateTime.Today.AddDays(-40), UploadedBy="Maria Santos" },
-            new DocRow { Name="Claimant Statement — Hartford.pdf",      Category="Statements",       FileType="pdf", FileSize="0.8 MB",  UploadedAt=DateTime.Today.AddDays(-38), UploadedBy="Sarah Kim"    },
-            new DocRow { Name="Witness Statement — Martinez.pdf",       Category="Statements",       FileType="pdf", FileSize="0.5 MB",  UploadedAt=DateTime.Today.AddDays(-37), UploadedBy="Sarah Kim"    },
-            new DocRow { Name="Medical Records — Initial ER.pdf",       Category="Medical Records",  FileType="pdf", FileSize="3.4 MB",  UploadedAt=DateTime.Today.AddDays(-35), UploadedBy="Thomas Brewer"},
-            new DocRow { Name="Demand Letter — Garcia Webb LLP.pdf",    Category="Legal",            FileType="pdf", FileSize="0.6 MB",  UploadedAt=DateTime.Today.AddDays(-20), UploadedBy="Sarah Kim"    },
-            new DocRow { Name="Coverage Analysis — GL-2025.docx",      Category="Coverage",         FileType="docx",FileSize="0.3 MB",  UploadedAt=DateTime.Today.AddDays(-18), UploadedBy="Kevin Obi"    },
-            new DocRow { Name="Photos — Loss Location.jpg",             Category="Photos",           FileType="jpg", FileSize="8.1 MB",  UploadedAt=DateTime.Today.AddDays(-39), UploadedBy="Thomas Brewer"},
-            new DocRow { Name="Reserve Worksheet Q1-2025.xlsx",         Category="Reserves",         FileType="xlsx",FileSize="0.2 MB",  UploadedAt=DateTime.Today.AddDays(-10), UploadedBy="Sarah Kim"    },
-        });
-
-        _comms.Clear();
-        _comms.AddRange(new[]
-        {
-            new CommRow { CommType="Phone Call", Direction="Outbound", Party="Claimant",  CommDate=DateTime.Today.AddDays(-40), Subject="Initial contact with James Hartford",            LoggedBy="Sarah Kim",    Notes="Left voicemail. Will follow up in 24 hrs." },
-            new CommRow { CommType="Phone Call", Direction="Inbound",  Party="Claimant",  CommDate=DateTime.Today.AddDays(-39), Subject="Claimant returned call — injuries confirmed",    LoggedBy="Sarah Kim",    Notes="Hartford confirms ER visit 03/15. Orthopedic referral pending." },
-            new CommRow { CommType="Email",      Direction="Outbound", Party="Adjuster",  CommDate=DateTime.Today.AddDays(-38), Subject="Claim acknowledgement to Travelers",              LoggedBy="Sarah Kim",    Notes="Forwarded incident report and initial contact summary." },
-            new CommRow { CommType="Letter",     Direction="Inbound",  Party="Attorney",  CommDate=DateTime.Today.AddDays(-20), Subject="Demand letter received from Garcia & Webb LLP",   LoggedBy="Kevin Obi",   Notes="Demand $250,000. Copy forwarded to Travelers adjuster." },
-            new CommRow { CommType="Phone Call", Direction="Outbound", Party="Adjuster",  CommDate=DateTime.Today.AddDays(-18), Subject="Call with Thomas Brewer — reserve discussion",    LoggedBy="Sarah Kim",   Notes="Agreed to set BI reserve at $120K pending medical review." },
-            new CommRow { CommType="Email",      Direction="Inbound",  Party="Adjuster",  CommDate=DateTime.Today.AddDays(-10), Subject="Updated reserve confirmation from Travelers",     LoggedBy="Sarah Kim",   Notes="Reserve set at $120,000. Next review in 30 days." },
-        });
-
-        _timeline.Clear();
-        _timeline.AddRange(new[]
-        {
-            new TimelineEvent { EventType="Loss",        Title="Loss Occurred",                     EventDate=_claim.DateOfLoss,                             PerformedBy="—",             Party="James Hartford", Notes="Slip & fall incident at production facility." },
-            new TimelineEvent { EventType="Reported",    Title="Claim Reported to Agency",           EventDate=_claim.DateReported,                           PerformedBy="Maria Santos",  Party="Insured",        Notes="Reported by insured via phone. Incident report received." },
-            new TimelineEvent { EventType="Acknowledged",Title="Claim Acknowledged by Carrier",      EventDate=_claim.DateAcknowledged!.Value,                PerformedBy="Thomas Brewer", Party="Travelers",      Notes="Travelers acknowledged receipt. Claim# TRV-CLM-88-004219 assigned." },
-            new TimelineEvent { EventType="Contact",     Title="Initial Claimant Contact",            EventDate=DateTime.Today.AddDays(-39),                   PerformedBy="Sarah Kim",     Party="James Hartford", Notes="Left voicemail; claimant returned call — injuries discussed." },
-            new TimelineEvent { EventType="Reserve",     Title="Initial Reserve Set — $120,000",      EventDate=DateTime.Today.AddDays(-18),                   PerformedBy="Sarah Kim",     Party="Travelers",      Notes="BI reserve established after demand letter review." },
-            new TimelineEvent { EventType="Legal",       Title="Demand Letter Received",              EventDate=DateTime.Today.AddDays(-20),                   PerformedBy="Kevin Obi",     Party="Garcia & Webb LLP", Notes="$250,000 demand. Forwarded to Travelers adjuster." },
-            new TimelineEvent { EventType="Payment",     Title="Medical Payment Issued — $5,000",     EventDate=DateTime.Today.AddDays(-30),                   PerformedBy="Thomas Brewer", Party="Memorial Hermann", Notes="Med pay coverage applied — ER and initial ortho." },
-            new TimelineEvent { EventType="Payment",     Title="Indemnity Payment — $30,000",         EventDate=DateTime.Today.AddDays(-5),                    PerformedBy="Thomas Brewer", Party="James Hartford",   Notes="Partial settlement payment — lost wages component." },
-        });
-
-        _tasks.Clear();
-        _tasks.AddRange(new[]
-        {
-            new TaskRow { TaskId=Guid.NewGuid(), Title="Obtain complete medical records from ortho specialist",  Priority="High",   Status="In Progress",AssignedTo="Sarah Kim",  DueDate=DateTime.Today.AddDays(7),  Notes="Records subpoena sent 04/01." },
-            new TaskRow { TaskId=Guid.NewGuid(), Title="Schedule IME (Independent Medical Exam)",                Priority="High",   Status="Open",       AssignedTo="Sarah Kim",  DueDate=DateTime.Today.AddDays(14), Notes="" },
-            new TaskRow { TaskId=Guid.NewGuid(), Title="Review demand letter with coverage counsel",             Priority="High",   Status="Open",       AssignedTo="Kevin Obi",  DueDate=DateTime.Today.AddDays(3),  Notes="Garcia & Webb demand — $250K." },
-            new TaskRow { TaskId=Guid.NewGuid(), Title="Conduct 30-day reserve review",                         Priority="Medium", Status="Open",       AssignedTo="Sarah Kim",  DueDate=DateTime.Today.AddDays(12), Notes="" },
-            new TaskRow { TaskId=Guid.NewGuid(), Title="Upload safety inspection report from facility",         Priority="Medium", Status="Open",       AssignedTo="Maria Santos",DueDate=DateTime.Today.AddDays(-2), Notes="Overdue — follow up with insured." },
-            new TaskRow { TaskId=Guid.NewGuid(), Title="Confirm subrogation potential with Travelers",          Priority="Low",    Status="Open",       AssignedTo="Kevin Obi",  DueDate=DateTime.Today.AddDays(30), Notes="" },
-            new TaskRow { TaskId=Guid.NewGuid(), Title="Initial contact claimant — documented",                 Priority="High",   Status="Completed",  AssignedTo="Sarah Kim",  DueDate=DateTime.Today.AddDays(-39),Notes="Completed 03/17/2025." },
-        });
-
-        _reserves.Clear();
-        _reserves.AddRange(new[]
-        {
-            new ReserveEntry { ReserveType="Bodily Injury",    Amount=120_000m, PriorAmount=null,     EffectiveDate=DateTime.Today.AddDays(-18), Reason="Initial BI reserve post-demand letter review.", SetBy="Sarah Kim" },
-            new ReserveEntry { ReserveType="Medical Payments", Amount=10_000m,  PriorAmount=null,     EffectiveDate=DateTime.Today.AddDays(-40), Reason="Med pay limit reserved in full.",               SetBy="Sarah Kim" },
-            new ReserveEntry { ReserveType="Legal / Defense",  Amount=25_000m,  PriorAmount=null,     EffectiveDate=DateTime.Today.AddDays(-20), Reason="Defense counsel fees anticipated.",              SetBy="Kevin Obi" },
-        });
-
-        _payments.Clear();
-        _payments.AddRange(new[]
-        {
-            new PaymentEntry { PaymentType="Medical Payments", Amount=5_000m,  Payee="Memorial Hermann Hospital",PaymentDate=DateTime.Today.AddDays(-30),CheckNumber="CHK-0048821",Method="Check", Notes="ER and initial ortho visit.", LoggedBy="Thomas Brewer" },
-            new PaymentEntry { PaymentType="Bodily Injury",    Amount=30_000m, Payee="James Hartford",           PaymentDate=DateTime.Today.AddDays(-5), CheckNumber="CHK-0049104",Method="ACH",   Notes="Partial settlement — lost wages.",LoggedBy="Thomas Brewer" },
-        });
-
-        _notes.Clear();
-        _notes.AddRange(new[]
-        {
-            new NoteRow { NoteId=Guid.NewGuid(), Category="Legal",       Body="Garcia & Webb has filed a lien notice. Confirm with Travelers whether to accept service on behalf of insured. Coverage counsel should be retained if we cannot resolve below $150K.", IsPinned=true,  CreatedBy="Kevin Obi",   CreatedAt=DateTime.Today.AddDays(-20) },
-            new NoteRow { NoteId=Guid.NewGuid(), Category="Medical",     Body="Orthopedic surgeon Dr. Alvarez reports likely L4-L5 herniation. Surgery scheduled for 05/10. Medical bills expected to reach $60K–$80K post-surgery.",                          IsPinned=true,  CreatedBy="Sarah Kim",   CreatedAt=DateTime.Today.AddDays(-15) },
-            new NoteRow { NoteId=Guid.NewGuid(), Category="Coverage",    Body="Coverage confirmed under GL occurrence form. Deductible of $5,000 applies. No exclusions triggered. MedPay sublimit of $10,000 available.",                                        IsPinned=false, CreatedBy="Kevin Obi",   CreatedAt=DateTime.Today.AddDays(-18) },
-            new NoteRow { NoteId=Guid.NewGuid(), Category="General",     Body="Travelers adjuster Thomas Brewer is responsive. Targets 30-day reserve review cycle. Next joint call scheduled for 04/25/2025.",                                                   IsPinned=false, CreatedBy="Sarah Kim",   CreatedAt=DateTime.Today.AddDays(-10) },
-            new NoteRow { NoteId=Guid.NewGuid(), Category="Subrogation", Body="No subrogation potential identified at this time. Incident was entirely on insured premises. Will reassess after investigation closes.",                                            IsPinned=false, CreatedBy="Kevin Obi",   CreatedAt=DateTime.Today.AddDays(-8)  },
-        });
+        return searchMatch && typeMatch && kpiMatch;
     }
 
-    // ── Save handlers ─────────────────────────────────────────────
-    async Task SaveClaimant()
+    private void ApplyKpi(KpiTile kpi)
     {
-        if (string.IsNullOrWhiteSpace(_claimantForm.Name)) return;
-        await AddActivityAsync("Claimant", _claimantForm.InjuryType, _claimantForm.Role, _claimantForm.Name, _claimantForm.Notes);
-        await LoadAsync();
-        _showClaimantDlg = false;
-        await _toast.ShowAsync(new ToastModel { Title="Claimant Added", Content=$"{_claimantForm.Name} added.", CssClass="e-toast-success" });
+        _activeFilter = _activeFilter == kpi.Filter ? "All" : kpi.Filter;
+        if (kpi.Filter == "Financials") _activeTab = "financials";
+        else if (kpi.Filter == "Activity") _activeTab = "activity";
+        else if (kpi.Filter == "Tasks") _activeTab = "followup";
+        else if (kpi.Filter == "Notes") _activeTab = "notes";
+        else _activeTab = "overview";
     }
 
-    async Task SaveTask()
+    private void ApplyWorkflow(WorkflowLane lane)
     {
-        if (string.IsNullOrWhiteSpace(_taskForm.Title)) return;
-        await AddActivityAsync("Task", _taskForm.Title, _taskForm.Priority, _taskForm.Status, _taskForm.Notes, activityDate: _taskForm.DueDate ?? DateTime.Today, createdBy: string.IsNullOrWhiteSpace(_taskForm.AssignedTo) ? "Tenant Admin" : _taskForm.AssignedTo);
-        await LoadAsync();
-        _showTaskDlg = false;
-        await _toast.ShowAsync(new ToastModel { Title="Task Saved", Content=$"\"{_taskForm.Title}\" saved.", CssClass="e-toast-success" });
+        _activeFilter = lane.Filter;
+        _activityTypeFilter = lane.Filter is "Communication" or "Task" or "Reserve" or "Payment" or "Note" ? lane.Filter : string.Empty;
+        _activeTab = lane.Tab;
     }
 
-    async Task SaveReserve()
+    private void SelectTab(string tab) => _activeTab = tab;
+    private void ResetFilters() { _activitySearch = string.Empty; _activityTypeFilter = string.Empty; _activeFilter = "All"; }
+
+    private void OpenActivityDialog(string activityType)
     {
-        if (string.IsNullOrWhiteSpace(_reserveForm.ReserveType)) return;
-        var prior = _reserves.Where(r => r.ReserveType == _reserveForm.ReserveType).OrderByDescending(r => r.EffectiveDate).FirstOrDefault()?.Amount;
-        await AddActivityAsync("Reserve", $"Reserve updated — {_reserveForm.ReserveType}", _reserveForm.ReserveType, "Carrier", _reserveForm.Reason, _reserveForm.Amount, prior);
-        await LoadAsync();
-        _showReserveDlg = false;
-        await _toast.ShowAsync(new ToastModel { Title="Reserve Updated", Content=$"{_reserveForm.ReserveType} reserve updated to {_reserveForm.Amount.ToString("C0")}.", CssClass="e-toast-success" });
+        _activity = new ActivityForm { ActivityType = activityType, ActivityDate = DateTime.Today, Category = DefaultCategory(activityType), Title = DefaultTitle(activityType), DialogTitle = DialogTitle(activityType) };
+        _showActivityDialog = true;
     }
 
-    async Task SavePayment()
-    {
-        if (string.IsNullOrWhiteSpace(_paymentForm.Payee) || _paymentForm.Amount <= 0) return;
-        await AddActivityAsync("Payment", $"Payment logged — {_paymentForm.Payee}", _paymentForm.PaymentType, _paymentForm.Payee, _paymentForm.Notes, _paymentForm.Amount, activityDate: _paymentForm.PaymentDate ?? DateTime.Today);
-        await LoadAsync();
-        _showPaymentDlg = false;
-        await _toast.ShowAsync(new ToastModel { Title="Payment Logged", Content=$"Payment of {_paymentForm.Amount.ToString("C0")} to {_paymentForm.Payee} logged.", CssClass="e-toast-success" });
-    }
+    private void OpenCommunicationDialog() => OpenActivityDialog("Communication");
+    private void OpenReserveDialog() => OpenActivityDialog("Reserve");
+    private void OpenPaymentDialog() => OpenActivityDialog("Payment");
+    private void OpenTaskDialog() => OpenActivityDialog("Task");
+    private void OpenNoteDialog() => OpenActivityDialog("Note");
 
-    async Task SaveComm()
-    {
-        await AddActivityAsync("Communication", _commForm.Subject, _commForm.CommType, _commForm.Party, _commForm.Notes, activityDate: _commForm.CommDate);
-        await LoadAsync();
-        _showCommDlg = false;
-        await _toast.ShowAsync(new ToastModel { Title="Communication Logged", Content="Communication entry saved.", CssClass="e-toast-success" });
-    }
+    private void CloseActivityDialog() => _showActivityDialog = false;
 
-    async Task SaveNote()
-    {
-        if (string.IsNullOrWhiteSpace(_noteForm.Body)) return;
-        await AddActivityAsync("Note", $"{_noteForm.Category} note", _noteForm.Category, "", _noteForm.Body, isPinned: _noteForm.IsPinned);
-        await LoadAsync();
-        _showNoteDlg = false;
-        await _toast.ShowAsync(new ToastModel { Title="Note Saved", Content="Note added to claim.", CssClass="e-toast-success" });
-    }
-
-    void EditTask(TaskRow t)
-    {
-        _editTask  = t;
-        _taskForm  = new TaskForm { Title=t.Title, Priority=t.Priority, Status=t.Status, AssignedTo=t.AssignedTo, DueDate=t.DueDate, Notes=t.Notes };
-        _showTaskDlg = true;
-    }
-
-    async Task CompleteTask(TaskRow t)
-    {
-        t.Status = "Completed";
-        await AddActivityAsync("Task", $"Task completed — {t.Title}", t.Priority, "Completed", t.Notes);
-        await LoadAsync();
-        await _toast.ShowAsync(new ToastModel { Title="Task Complete", Content=$"\"{t.Title}\" marked complete.", CssClass="e-toast-success" });
-    }
-
-    async Task CloseClaim()
+    private void OpenFollowUpDialog()
     {
         if (_claim is null) return;
-        await Api.UpdateClaimStatusAsync(_claim.ClaimId, new UpdateClaimStatusRequest { Status="Closed" });
-        await AddActivityAsync("Closed", "Claim Closed", "Status", "", "");
-        await LoadAsync();
-        await _toast.ShowAsync(new ToastModel { Title="Claim Closed", Content=$"{_claim.ClaimNumber} has been closed.", CssClass="e-toast-success" });
+        _followUp = new FollowUpForm { Priority = DisplayValue(_claim.Priority, "Standard"), FollowUpReason = _claim.FollowUpReason, FollowUpDueDate = _claim.FollowUpDueDate, IsSnoozed = _claim.IsSnoozed };
+        _showFollowUpDialog = true;
     }
 
-    async Task ReopenClaim()
+    private void CloseFollowUpDialog() => _showFollowUpDialog = false;
+
+    private void OpenStatusDialog()
     {
         if (_claim is null) return;
-        await Api.UpdateClaimStatusAsync(_claim.ClaimId, new UpdateClaimStatusRequest { Status="Reopened" });
-        await AddActivityAsync("Reopened", "Claim Reopened", "Status", "", "");
-        await LoadAsync();
-        await _toast.ShowAsync(new ToastModel { Title="Claim Reopened", Content=$"{_claim.ClaimNumber} has been reopened.", CssClass="e-toast-info" });
+        _statusForm = new StatusForm { Status = _claim.Status, Note = string.Empty };
+        _showStatusDialog = true;
     }
 
-    Task AddActivityAsync(string activityType, string title, string category, string party, string notes, decimal? amount = null, decimal? priorAmount = null, DateTime? activityDate = null, string createdBy = "Tenant Admin", bool isPinned = false)
-        => Api.AddClaimActivityAsync(new CreateClaimActivityRequest { ClaimId=ClaimId, ActivityType=activityType, Title=title, Category=category, Party=party, Notes=notes, Amount=amount, PriorAmount=priorAmount, ActivityDate=activityDate ?? DateTime.UtcNow, CreatedBy=createdBy, IsPinned=isPinned });
+    private void CloseStatusDialog() => _showStatusDialog = false;
 
-    // ── Render helpers ────────────────────────────────────────────
-    RenderFragment F(string label, string value) => __builder =>
+    private async Task SaveActivityAsync()
     {
-        <div class="pd-field-row">
-            <span class="pd-field-lbl">@label</span>
-            <span class="pd-field-val">@value</span>
-        </div>
+        if (_claim is null) return;
+        _savingActivity = true;
+        try
+        {
+            await Api.AddClaimActivityAsync(new CreateClaimActivityRequest { ClaimId = _claim.ClaimId, ActivityType = _activity.ActivityType, Title = _activity.Title, Category = _activity.Category, Party = _activity.Party, Notes = _activity.Notes, Amount = _activity.Amount, PriorAmount = _activity.PriorAmount, ActivityDate = _activity.ActivityDate.ToUniversalTime(), CreatedBy = "Tenant Admin", IsPinned = _activity.IsPinned });
+            await LoadAsync();
+            _showActivityDialog = false;
+            await ShowToast($"{_activity.ActivityType} activity saved.");
+        }
+        catch (Exception ex) { await ShowToast($"Activity save failed: {ex.Message}", true); }
+        finally { _savingActivity = false; }
+    }
+
+    private async Task SaveFollowUpAsync()
+    {
+        if (_claim is null) return;
+        _savingFollowUp = true;
+        try
+        {
+            await Api.UpdateClaimFollowUpAsync(_claim.ClaimId, new UpdateClaimFollowUpRequest { FollowUpReason = _followUp.FollowUpReason, Priority = _followUp.Priority, FollowUpDueDate = _followUp.FollowUpDueDate, IsSnoozed = _followUp.IsSnoozed, ModifiedByUserId = _userContext?.UserId });
+            await Api.AddClaimActivityAsync(new CreateClaimActivityRequest { ClaimId = _claim.ClaimId, ActivityType = "Task", Title = "Follow-up updated", Category = _followUp.Priority, Party = _followUp.IsSnoozed ? "Snoozed" : "Active", Notes = _followUp.FollowUpReason ?? string.Empty, ActivityDate = (_followUp.FollowUpDueDate ?? DateTime.Today).ToUniversalTime(), CreatedBy = "Tenant Admin" });
+            await LoadAsync();
+            _showFollowUpDialog = false;
+            await ShowToast("Follow-up updated.");
+        }
+        catch (Exception ex) { await ShowToast($"Follow-up update failed: {ex.Message}", true); }
+        finally { _savingFollowUp = false; }
+    }
+
+    private async Task SaveStatusAsync()
+    {
+        if (_claim is null) return;
+        _savingStatus = true;
+        try
+        {
+            await Api.UpdateClaimStatusAsync(_claim.ClaimId, new UpdateClaimStatusRequest { Status = _statusForm.Status, ModifiedByUserId = _userContext?.UserId });
+            await Api.AddClaimActivityAsync(new CreateClaimActivityRequest { ClaimId = _claim.ClaimId, ActivityType = _statusForm.Status is "Closed" ? "Closed" : _statusForm.Status is "Reopened" ? "Reopened" : "Status", Title = $"Status updated to {_statusForm.Status}", Category = "Status", Party = _claim.AccountName, Notes = _statusForm.Note, ActivityDate = DateTime.UtcNow, CreatedBy = "Tenant Admin" });
+            await LoadAsync();
+            _showStatusDialog = false;
+            await ShowToast($"Claim status updated to {_statusForm.Status}.");
+        }
+        catch (Exception ex) { await ShowToast($"Status update failed: {ex.Message}", true); }
+        finally { _savingStatus = false; }
+    }
+
+    private async Task NotifyInvalidActivityAsync() => await ShowToast("Please fix activity validation errors before saving.", true);
+    private async Task NotifyInvalidFollowUpAsync() => await ShowToast("Please fix follow-up validation errors before saving.", true);
+    private async Task NotifyInvalidStatusAsync() => await ShowToast("Please select a valid status before saving.", true);
+
+    private string TabClass(string key) => _activeTab == key ? "cd-view-btn cd-view-btn-active" : "cd-view-btn";
+    private string KpiClass(KpiTile kpi) => _activeFilter == kpi.Filter ? $"cd-kpi-card cd-{kpi.Tone} cd-kpi-card-active" : $"cd-kpi-card cd-{kpi.Tone}";
+    private string WorkflowClass(WorkflowLane lane) => _activeFilter == lane.Filter && _activeTab == lane.Tab ? "cd-workflow-card cd-active" : "cd-workflow-card";
+
+    private RenderFragment Info(string label, string? value) => builder =>
+    {
+        builder.OpenElement(0, "div"); builder.AddAttribute(1, "class", "cd-field-row"); builder.OpenElement(2, "span"); builder.AddContent(3, label); builder.CloseElement(); builder.OpenElement(4, "strong"); builder.AddContent(5, DisplayValue(value, "—")); builder.CloseElement(); builder.CloseElement();
     };
 
-    RenderFragment CdKpi(string label, string value, string icon, string color) => __builder =>
+    private RenderFragment FinanceMetric(string label, decimal value, string icon, string tone) => builder =>
     {
-        <div class="pd-kpi-card @color">
-            <i class="bi @icon pd-kpi-icon" aria-hidden="true"></i>
-            <div>
-                <div class="pd-kpi-val">@value</div>
-                <div class="pd-kpi-lbl">@label</div>
-            </div>
-        </div>
+        builder.OpenElement(0, "section"); builder.AddAttribute(1, "class", $"cd-finance-metric cd-{tone}"); builder.OpenElement(2, "i"); builder.AddAttribute(3, "class", $"bi {icon}"); builder.AddAttribute(4, "aria-hidden", "true"); builder.CloseElement(); builder.OpenElement(5, "span"); builder.AddContent(6, label); builder.CloseElement(); builder.OpenElement(7, "strong"); builder.AddContent(8, value.ToString("C0")); builder.CloseElement(); builder.CloseElement();
     };
 
-    RenderFragment NoteCard(NoteRow note) => __builder =>
+    private RenderFragment LedgerTable(List<ClaimActivityDto> rows, string emptyType) => builder =>
     {
-        <div class="cd-note-card @(note.IsPinned ? "cd-note-pinned" : "")">
-            <div class="cd-note-header">
-                <span class="cd-note-cat cd-ncat-@note.Category.ToLower().Replace(" ","").Replace("/","")">@note.Category</span>
-                @if (note.IsPinned) { <span class="cd-note-pin"><i class="bi bi-pin-angle-fill" aria-hidden="true"></i></span> }
-                <span class="cd-note-meta">@note.CreatedBy · @note.CreatedAt.ToString("MM/dd/yyyy h:mm tt")</span>
-                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => note.IsPinned = !note.IsPinned" title="Toggle pin">
-                    <i class="bi @(note.IsPinned ? "bi-pin-angle-fill" : "bi-pin-angle")" aria-hidden="true"></i>
-                </button>
-            </div>
-            <div class="cd-note-body">@note.Body</div>
-        </div>
+        if (!rows.Any())
+        {
+            builder.OpenElement(0, "div"); builder.AddAttribute(1, "class", "cd-mini-empty"); builder.AddContent(2, $"No {emptyType.ToLowerInvariant()} activity logged."); builder.CloseElement();
+            return;
+        }
+        builder.OpenElement(3, "div"); builder.AddAttribute(4, "class", "cd-table-scroll"); builder.OpenElement(5, "table"); builder.AddAttribute(6, "class", "cd-table"); builder.AddMarkupContent(7, "<thead><tr><th>Date</th><th>Category</th><th>Party</th><th class=\"text-end\">Amount</th><th>Notes</th></tr></thead>"); builder.OpenElement(8, "tbody");
+        var seq = 9;
+        foreach (var row in rows.OrderByDescending(r => r.ActivityDate))
+        {
+            builder.OpenElement(seq++, "tr");
+            builder.OpenElement(seq++, "td"); builder.AddAttribute(seq++, "data-label", "Date"); builder.AddContent(seq++, row.ActivityDate.ToLocalTime().ToString("MM/dd/yyyy")); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddAttribute(seq++, "data-label", "Category"); builder.AddContent(seq++, DisplayValue(row.Category, "General")); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddAttribute(seq++, "data-label", "Party"); builder.AddContent(seq++, DisplayValue(row.Party, "—")); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddAttribute(seq++, "data-label", "Amount"); builder.AddAttribute(seq++, "class", "text-end"); builder.OpenElement(seq++, "strong"); builder.AddContent(seq++, (row.Amount ?? 0).ToString("C0")); builder.CloseElement(); builder.CloseElement();
+            builder.OpenElement(seq++, "td"); builder.AddAttribute(seq++, "data-label", "Notes"); builder.AddContent(seq++, DisplayValue(row.Notes, row.Title)); builder.CloseElement();
+            builder.CloseElement();
+        }
+        builder.CloseElement(); builder.CloseElement(); builder.CloseElement();
     };
 
-    // ── Static helpers ────────────────────────────────────────────
-    static string LobKey(string lob)  => lob.ToLower().Replace(" ","").Replace("/","").Replace("&","").Replace(".","").Replace("-","");
-    static string LobIcon(string lob) => lob switch
+    private static RenderFragment FlagChip(bool active, string label, string icon) => builder =>
     {
-        "General Liability"   => "bi-shield-check",
-        "Commercial Auto"     => "bi-truck",
-        "Commercial Property" => "bi-building",
-        "Workers Comp"        => "bi-person-fill-gear",
-        "Umbrella"            => "bi-umbrella",
-        "Professional Liab."  => "bi-briefcase",
-        "Home/Dwelling"       => "bi-house",
-        "Personal Auto"       => "bi-car-front",
-        _                     => "bi-shield-half"
+        builder.OpenElement(0, "span"); builder.AddAttribute(1, "class", active ? "cd-flag-indicator cd-flag-indicator-active" : "cd-flag-indicator"); builder.OpenElement(2, "i"); builder.AddAttribute(3, "class", $"bi {icon}"); builder.AddAttribute(4, "aria-hidden", "true"); builder.CloseElement(); builder.AddContent(5, label); builder.CloseElement();
     };
-    static string StatusCss(string s)         => s.ToLower().Replace(" ","-").Replace("/","-");
-    static string RoleCss(string r)           => r.ToLower().Replace(" ","-").Replace("/","-").Replace("&","");
-    static string ClaimantStatusCss(string s) => s.ToLower().Replace(" ","-");
-    static string TaskStatusCss(string s)     => s.ToLower().Replace(" ","-");
-    static string CommTypeCss(string t)       => t switch { "Email"=>"email","Phone Call"=>"phone","Letter"=>"letter","Text/SMS"=>"sms","Fax"=>"letter",_=>"letter" };
-    static string TlTypeCss(string t)         => t.ToLower().Replace(" ","-").Replace("/","-");
-    static string TlIcon(string t)            => t switch
+
+    private static string DisplayValue(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private static bool Contains(string? value, string search) => !string.IsNullOrWhiteSpace(value) && value.Contains(search, StringComparison.OrdinalIgnoreCase);
+    private static string CssToken(string value) => string.IsNullOrWhiteSpace(value) ? "none" : value.ToLowerInvariant().Replace(" ", "-").Replace("/", "-").Replace("+", "plus");
+    private static string StatusClass(string status) => $"cd-status cd-status-{CssToken(status)}";
+    private static string PriorityClass(string priority) => $"cd-priority cd-priority-{CssToken(priority)}";
+    private static string ActivityTypeClass(string type) => $"cd-activity-type cd-activity-{CssToken(type)}";
+    private static string TimelineIconClass(string type) => $"cd-timeline-icon cd-timeline-{CssToken(type)}";
+    private static string NoteCategoryClass(string category) => $"cd-note-cat cd-note-{CssToken(category)}";
+    private static string LobIcon(string lob) => lob switch { "General Liability" => "bi-shield-check", "Commercial Auto" => "bi-truck", "Commercial Property" => "bi-building", "Workers Comp" => "bi-person-fill-gear", "Umbrella" => "bi-umbrella", "Professional Liab." => "bi-briefcase", "Home/Dwelling" => "bi-house", "Personal Auto" => "bi-car-front", _ => "bi-shield-half" };
+    private static string ActivityIcon(string type) => type switch { "Communication" => "bi-envelope", "Task" => "bi-list-check", "Reserve" => "bi-safe", "Payment" => "bi-cash-stack", "Note" => "bi-sticky", "Claimant" => "bi-people", "Coverage" => "bi-shield", "Legal" => "bi-gavel", "Investigation" => "bi-search", "Closed" => "bi-check-circle", "Reopened" => "bi-arrow-counterclockwise", "Status" => "bi-arrow-repeat", _ => "bi-circle" };
+    private static string DefaultCategory(string type) => type switch { "Reserve" => "Reserve", "Payment" => "Payment", "Task" => "High", "Note" => "General", "Communication" => "Email", _ => type };
+    private static string DefaultTitle(string type) => type switch { "Reserve" => "Update reserve", "Payment" => "Log payment", "Task" => "Add task", "Note" => "Add note", "Communication" => "Log communication", _ => $"{type} activity" };
+    private static string DialogTitle(string type) => type switch { "Reserve" => "Update reserve", "Payment" => "Log payment", "Task" => "Add task", "Note" => "Add note", "Communication" => "Log communication", _ => $"Log {type.ToLowerInvariant()}" };
+
+    private async Task ShowToast(string content, bool danger = false)
     {
-        "Loss"          => "bi-exclamation-triangle",
-        "Reported"      => "bi-megaphone",
-        "Acknowledged"  => "bi-check-circle",
-        "Contact"       => "bi-telephone",
-        "Reserve"       => "bi-safe",
-        "Legal"         => "bi-gavel",
-        "Payment"       => "bi-cash-stack",
-        "Communication" => "bi-envelope",
-        "Closed"        => "bi-x-circle",
-        "Reopened"      => "bi-arrow-counterclockwise",
-        _               => "bi-circle"
-    };
-    static string DocIcon(string ft) => ft switch { "pdf"=>"bi-file-earmark-pdf","docx"=>"bi-file-earmark-word","xlsx"=>"bi-file-earmark-excel","jpg" or "png"=>"bi-file-earmark-image",_=>"bi-file-earmark" };
+        var toast = new ClaimToast(Guid.NewGuid(), content, danger ? "cd-toast-danger" : "cd-toast-success", danger ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill");
+        _toasts.Add(toast);
+        await InvokeAsync(StateHasChanged);
+        _ = Task.Run(async () => { await Task.Delay(4500); await InvokeAsync(() => DismissToast(toast.Id)); });
+    }
+
+    private void DismissToast(Guid id) { _toasts.RemoveAll(t => t.Id == id); StateHasChanged(); }
+
+    private sealed class ActivityForm
+    {
+        [Required, StringLength(50)] public string ActivityType { get; set; } = "Communication";
+        [Required, StringLength(200)] public string Title { get; set; } = string.Empty;
+        [StringLength(80)] public string Category { get; set; } = string.Empty;
+        [StringLength(120)] public string Party { get; set; } = string.Empty;
+        [StringLength(2000)] public string Notes { get; set; } = string.Empty;
+        public decimal? Amount { get; set; }
+        public decimal? PriorAmount { get; set; }
+        [Required] public DateTime ActivityDate { get; set; } = DateTime.Today;
+        public bool IsPinned { get; set; }
+        public string DialogTitle { get; set; } = "Log activity";
+    }
+
+    private sealed class FollowUpForm
+    {
+        [StringLength(120)] public string? FollowUpReason { get; set; }
+        [Required, StringLength(40)] public string Priority { get; set; } = "Standard";
+        public DateTime? FollowUpDueDate { get; set; }
+        public bool IsSnoozed { get; set; }
+    }
+
+    private sealed class StatusForm
+    {
+        [Required, StringLength(50)] public string Status { get; set; } = "Open";
+        [StringLength(2000)] public string Note { get; set; } = string.Empty;
+    }
+
+    private sealed record KpiTile(string Label, string Value, string Icon, string Tone, string Filter, string Detail, string Title);
+    private sealed record WorkflowLane(string Label, string Detail, string Icon, string Filter, string Tab, int Count, string Subtitle, string Title);
+    private sealed record ClaimToast(Guid Id, string Content, string CssClass, string Icon);
 }

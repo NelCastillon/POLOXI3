@@ -1,862 +1,446 @@
 @page "/claims/new"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Features.Claims
+@using Microsoft.AspNetCore.Components.Forms
 @inject NavigationManager Nav
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
-@inject ConfirmationDialogService Confirmations
 @inject Ams.Web.Services.ApiClient Api
 
-<PageTitle>FNOL Intake — AMS</PageTitle>
+<PageTitle>FNOL Intake - AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="5000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<!-- ── SUBMISSION CONFIRMATION DIALOG ───────────────────────────── -->
-<SfDialog @bind-Visible="_showConfirm" Width="480px" ShowCloseIcon="false" IsModal="true">
-    <DialogTemplates>
-        <Content>
-            <div class="fnol-confirm-body">
-                <div class="fnol-confirm-icon"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></div>
-                <h2 class="fnol-confirm-title">FNOL Submitted</h2>
-                <p class="fnol-confirm-sub">Claim number <strong>@_assignedClaimNumber</strong> has been assigned.</p>
-                <div class="fnol-confirm-chips">
-                    <span class="fnol-chip"><i class="bi bi-shield" aria-hidden="true"></i> @_form.PolicyNumber</span>
-                    <span class="fnol-chip"><i class="bi bi-calendar-event" aria-hidden="true"></i> Loss: @_form.DateOfLoss?.ToString("MM/dd/yyyy")</span>
-                    <span class="fnol-chip"><i class="bi bi-person-badge" aria-hidden="true"></i> Handler: @_form.AssignedHandler</span>
-                </div>
-                <div class="fnol-confirm-actions">
-                    <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/claims")'>
-                        <i class="bi bi-list-ul" aria-hidden="true"></i> Claims Register
-                    </button>
-                    <button class="um-btn um-btn-primary" @onclick="StartAnother">
-                        <i class="bi bi-plus-lg" aria-hidden="true"></i> New FNOL
-                    </button>
-                </div>
-            </div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
-
-<AppPageHeader Title="FNOL Intake Administration"
-               Subtitle="Tenant admin guided First Notice of Loss intake, coverage validation, assignment, and carrier reporting"
-               Icon="bi-clipboard-plus">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/claims")'>
-            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Claims
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/claims/catastrophe")'>
-            <i class="bi bi-cloud-lightning" aria-hidden="true"></i> CAT Mode
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<section class="ma-hero clm-hero">
-    <div>
-        <span class="ma-eyebrow">Tenant Administration · FNOL Intake</span>
-        <h2>Tenant FNOL Intake Center</h2>
-        <p>Capture loss details, validate policy coverage, assign handlers, tag catastrophe events, and prepare carrier reporting from a tenant admin workflow.</p>
-    </div>
-    <div class="ma-hero-actions">
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/claims")'><i class="bi bi-list-ul"></i> Claims Register</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/claims/follow-up")'><i class="bi bi-list-check"></i> Follow-Up Queue</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/claims/catastrophe")'><i class="bi bi-cloud-lightning"></i> CAT Mode</button>
-    </div>
-</section>
-
-<!-- ── TODAY STATS STRIP ─────────────────────────────────────────── -->
-<div class="fnol-stat-strip">
-    @FnolStat("bi-clipboard-plus",    "Today's FNOLs",      _todayStats.Count.ToString(),              "fnol-st-blue")
-    @FnolStat("bi-clock-history",     "Avg Reporting Lag",  _todayStats.AvgLagDays + " days",          "fnol-st-amber")
-    @FnolStat("bi-hourglass-split",   "Pending Assignment", _todayStats.PendingAssignment.ToString(),  "fnol-st-red")
-    @FnolStat("bi-check-circle",      "Submitted Today",    _todayStats.SubmittedToday.ToString(),     "fnol-st-green")
-    @FnolStat("bi-cloud-lightning",   "CAT-Tagged",         _todayStats.CatTagged.ToString(),          "fnol-st-purple")
+<div class="fnol-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="fnol-toast @toast.CssClass">
+            <i class="bi @toast.Icon" aria-hidden="true"></i>
+            <span>@toast.Content</span>
+            <button type="button" @onclick="() => DismissToast(toast.Id)" aria-label="Dismiss notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+        </div>
+    }
 </div>
 
-<!-- ── STEP INDICATOR ────────────────────────────────────────────── -->
-<div class="fnol-steps">
-    @for (int i = 0; i < _stepLabels.Length; i++)
-    {
-        var idx = i;
-        var state = idx < _step ? "done" : idx == _step ? "active" : "pending";
-        <div class="fnol-step fnol-step-@state" @onclick="() => GoToStep(idx)">
-            <div class="fnol-step-circle">
-                @if (idx < _step) { <i class="bi bi-check-lg" aria-hidden="true"></i> }
-                else { <span>@(idx + 1)</span> }
+@if (_showConfirm)
+{
+    <div class="fnol-modal-backdrop" role="presentation" @onclick="CloseConfirm">
+        <div class="fnol-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="fnolConfirmTitle" @onclick:stopPropagation="true">
+            <div class="fnol-confirm-icon"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></div>
+            <h2 id="fnolConfirmTitle">FNOL submitted</h2>
+            <p>Claim <strong>@_assignedClaimNumber</strong> was created from the DB-backed claims workflow.</p>
+            <div class="fnol-confirm-chips">
+                <span><i class="bi bi-shield" aria-hidden="true"></i>@_form.PolicyNumber</span>
+                <span><i class="bi bi-calendar-event" aria-hidden="true"></i>@_form.DateOfLoss.ToString("MMM d, yyyy")</span>
+                <span><i class="bi bi-person-badge" aria-hidden="true"></i>@_form.AssignedHandler</span>
             </div>
-            <span class="fnol-step-lbl">@_stepLabels[idx]</span>
+            <div class="fnol-confirm-actions">
+                <button type="button" class="fnol-btn fnol-btn-ghost" @onclick='() => Nav.NavigateTo("/claims")'><i class="bi bi-list-ul" aria-hidden="true"></i> Claims Register</button>
+                <button type="button" class="fnol-btn fnol-btn-primary" @onclick="StartAnother"><i class="bi bi-plus-lg" aria-hidden="true"></i> New FNOL</button>
+            </div>
         </div>
-        @if (idx < _stepLabels.Length - 1)
+    </div>
+}
+
+<div class="fnol-enterprise-page">
+    <section class="fnol-hero">
+        <div class="fnol-hero-left">
+            <div class="fnol-hero-icon"><i class="bi bi-clipboard-plus" aria-hidden="true"></i></div>
+            <div>
+                <div class="fnol-title-row">
+                    <h1>FNOL Intake Center</h1>
+                    <span><i class="bi bi-building" aria-hidden="true"></i>@(_userContext?.TenantName ?? "Tenant")</span>
+                    <span><i class="bi bi-diagram-3" aria-hidden="true"></i>@StepTitle</span>
+                </div>
+                <p>Capture first notice of loss, policy identity, loss facts, claimant information, coverage review, assignment, and carrier reporting in a guided enterprise workflow.</p>
+            </div>
+        </div>
+        <div class="fnol-hero-actions">
+            <button type="button" class="fnol-btn fnol-btn-ghost" @onclick='() => Nav.NavigateTo("/claims")'><i class="bi bi-arrow-left" aria-hidden="true"></i> Claims Register</button>
+            <button type="button" class="fnol-btn fnol-btn-ghost" @onclick='() => Nav.NavigateTo("/claims/follow-up")'><i class="bi bi-list-check" aria-hidden="true"></i> Follow-Up</button>
+            <button type="button" class="fnol-btn fnol-btn-ghost" @onclick='() => Nav.NavigateTo("/claims/catastrophe")'><i class="bi bi-cloud-lightning" aria-hidden="true"></i> CAT Mode</button>
+            <button type="button" class="fnol-btn fnol-btn-primary" @onclick="SubmitFnolAsync" disabled="@(!CanSubmit || _submitting)"><i class="bi bi-check-lg" aria-hidden="true"></i> Submit FNOL</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="fnol-error-banner" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>@_loadError</div>
+    }
+
+    <section class="fnol-kpi-strip" aria-label="FNOL readiness KPIs">
+        @foreach (var kpi in Kpis)
         {
-            <div class="fnol-step-connector fnol-step-conn-@(idx < _step ? "done" : "pending")"></div>
+            <button type="button" class="@KpiClass(kpi)" title="@kpi.Title" @onclick="() => GoToStep(kpi.Step)">
+                <span class="fnol-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span><strong>@kpi.Value</strong><small>@kpi.Label</small><em>@kpi.Detail</em></span>
+            </button>
         }
-    }
-</div>
+    </section>
 
-<!-- ── STEP PANELS ───────────────────────────────────────────────── -->
-<div class="fnol-body">
+    <section class="fnol-workflow-strip" aria-label="FNOL steps">
+        @for (var i = 0; i < _steps.Length; i++)
+        {
+            var idx = i;
+            <button type="button" class="@StepClass(idx)" @onclick="() => GoToStep(idx)">
+                <i class="bi @_steps[idx].Icon" aria-hidden="true"></i>
+                <span><strong>@_steps[idx].Title</strong><small>@StepStatus(idx)</small></span>
+            </button>
+        }
+    </section>
 
-    <!-- STEP 0 — POLICY LOOKUP ─────────────────────────────────── -->
-    @if (_step == 0)
-    {
-        <div class="fnol-panel">
-            <div class="fnol-panel-hdr">
-                <i class="bi bi-search" aria-hidden="true"></i>
-                <h2>Policy Lookup</h2>
-                <span class="fnol-panel-sub">Search for the policy associated with this loss</span>
-            </div>
-            <div class="fnol-section">
-                <div class="fnol-row-3">
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Policy Number *</label>
-                        <SfTextBox @bind-Value="_form.PolicyNumber" Placeholder="e.g. TRV-GL-2024-00421" />
-                    </div>
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Insured Name</label>
-                        <SfTextBox @bind-Value="_policySearch.InsuredName" Placeholder="Search by insured name…" />
-                    </div>
-                    <div class="fnol-field fnol-field-btn">
-                        <button class="um-btn um-btn-primary" @onclick="LookupPolicy">
-                            <i class="bi bi-search" aria-hidden="true"></i> Find Policy
-                        </button>
-                    </div>
-                </div>
-
-                @if (_policyFound is not null)
-                {
-                    <div class="fnol-policy-card">
-                        <div class="fnol-pc-header">
-                            <i class="bi bi-shield-check fnol-pc-icon" aria-hidden="true"></i>
-                            <div>
-                                <div class="fnol-pc-num">@_policyFound.PolicyNumber</div>
-                                <div class="fnol-pc-name">@_policyFound.InsuredName</div>
-                            </div>
-                            <span class="fnol-pc-status fnol-pcs-@_policyFound.Status.ToLower()">@_policyFound.Status</span>
-                        </div>
-                        <div class="fnol-pc-grid">
-                            @FnolPf("Line of Business", _policyFound.Lob)
-                            @FnolPf("Carrier",          _policyFound.Carrier)
-                            @FnolPf("Effective",        _policyFound.EffDate.ToString("MM/dd/yyyy"))
-                            @FnolPf("Expiration",       _policyFound.ExpDate.ToString("MM/dd/yyyy"))
-                            @FnolPf("Coverage Limit",   _policyFound.CoverageLimit.ToString("C0"))
-                            @FnolPf("Deductible",       _policyFound.Deductible.ToString("C0"))
-                            @FnolPf("Producer",         _policyFound.Producer)
-                            @FnolPf("CSR",              _policyFound.Csr)
-                        </div>
-                        @if (_policyFound.Status != "Active")
-                        {
-                            <div class="fnol-warn">
-                                <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
-                                Policy is <strong>@_policyFound.Status</strong>. Verify coverage applicability before proceeding.
-                            </div>
-                        }
-                        <div class="fnol-pc-covs">
-                            <div class="fnol-pc-cov-hdr">Active Coverages</div>
-                            @foreach (var cov in _policyFound.Coverages)
-                            {
-                                <span class="fnol-cov-chip"><i class="bi bi-check2" aria-hidden="true"></i>@cov</span>
-                            }
-                        </div>
-                    </div>
-                }
-
-                @if (_policyNotFound)
-                {
-                    <div class="fnol-warn">
-                        <i class="bi bi-x-circle-fill" aria-hidden="true"></i>
-                        No active policy found matching "<strong>@_form.PolicyNumber</strong>". Verify the policy number and try again.
-                    </div>
-                }
-            </div>
-        </div>
-    }
-
-    <!-- STEP 1 — LOSS DETAILS ───────────────────────────────────── -->
-    @if (_step == 1)
-    {
-        <div class="fnol-panel">
-            <div class="fnol-panel-hdr">
-                <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
-                <h2>Loss Details</h2>
-                <span class="fnol-panel-sub">Describe the loss event — all asterisked fields are required</span>
-            </div>
-            <div class="fnol-section">
-                <div class="fnol-section-title">Loss Timing</div>
-                <div class="fnol-row-3">
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Date of Loss *</label>
-                        <SfDatePicker TValue="DateTime?" @bind-Value="_form.DateOfLoss" Placeholder="MM/DD/YYYY" Max="DateTime.Today" />
-                    </div>
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Time of Loss</label>
-                        <SfTimePicker TValue="DateTime?" @bind-Value="_form.TimeOfLoss" Placeholder="HH:MM AM/PM" />
-                    </div>
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Date Reported *</label>
-                        <SfDatePicker TValue="DateTime?" @bind-Value="_form.DateReported" Placeholder="MM/DD/YYYY" />
-                    </div>
-                </div>
+    <div class="fnol-content-layout">
+        <main class="fnol-main-card">
+            <div class="fnol-card-head">
+                <div><h2>@StepTitle</h2><p>@StepSubtitle</p></div>
+                <span>Step @(_step + 1) of @_steps.Length</span>
             </div>
 
-            <div class="fnol-section">
-                <div class="fnol-section-title">Loss Classification</div>
-                <div class="fnol-row-3">
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Loss Type *</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@_lossTypes" @bind-Value="_form.LossType" Placeholder="Select loss type" />
-                    </div>
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Cause of Loss *</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@_causesOfLoss" @bind-Value="_form.CauseOfLoss" Placeholder="Select cause" />
-                    </div>
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Estimated Loss Amount</label>
-                        <SfNumericTextBox TValue="decimal?" @bind-Value="_form.EstimatedAmount" Format="C0" Placeholder="$0" />
-                    </div>
-                </div>
-                <div class="fnol-row-3">
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Weather-Related?</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"No","Yes — Wind/Hail","Yes — Flood","Yes — Fire","Yes — Winter Storm","Yes — Other"})" @bind-Value="_form.WeatherRelated" Placeholder="Select…" />
-                    </div>
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">CAT Event Tag</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@_catEvents" @bind-Value="_form.CatEventTag" Placeholder="None (standard loss)" />
-                    </div>
-                    <div class="fnol-field fnol-field-check">
-                        <label class="fnol-lbl">Police Report Filed?</label>
-                        <div class="fnol-check-row">
-                            <SfCheckBox @bind-Checked="_form.PoliceReportFiled" />
-                            @if (_form.PoliceReportFiled)
-                            {
-                                <SfTextBox @bind-Value="_form.PoliceReportNumber" Placeholder="Report #" style="margin-left:.5rem;" />
-                            }
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="fnol-section">
-                <div class="fnol-section-title">Loss Location</div>
-                <div class="fnol-row-3">
-                    <div class="fnol-field" style="grid-column:span 2">
-                        <label class="fnol-lbl">Street Address *</label>
-                        <SfTextBox @bind-Value="_form.LossAddress" Placeholder="Street address of loss" />
-                    </div>
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">State of Loss *</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@_usStates" @bind-Value="_form.StateOfLoss" Placeholder="Select state" />
-                    </div>
-                </div>
-                <div class="fnol-row-3">
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">City</label>
-                        <SfTextBox @bind-Value="_form.LossCity" Placeholder="City" />
-                    </div>
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">ZIP Code</label>
-                        <SfTextBox @bind-Value="_form.LossZip" Placeholder="ZIP" />
-                    </div>
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">County</label>
-                        <SfTextBox @bind-Value="_form.LossCounty" Placeholder="County" />
-                    </div>
-                </div>
-            </div>
-
-            <div class="fnol-section">
-                <div class="fnol-section-title">Loss Description</div>
-                <div class="fnol-field-full">
-                    <label class="fnol-lbl">Loss Narrative *</label>
-                    <SfTextBox @bind-Value="_form.LossDescription" Multiline="true" Placeholder="Provide a detailed description of the loss event, circumstances, and any known witnesses or involved parties…"
-                               HtmlAttributes='@(new() {{"rows","5"}})' />
-                </div>
-                <div class="fnol-row-3" style="margin-top:.75rem;">
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Injuries Reported?</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"None","Possible","Confirmed — Minor","Confirmed — Serious","Fatality"})" @bind-Value="_form.InjuryLevel" Placeholder="Select…" />
-                    </div>
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Litigation Threatened?</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"No","Possible","Attorney Retained","Suit Filed"})" @bind-Value="_form.LitigationStatus" Placeholder="No" />
-                    </div>
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Third Party Involved?</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"No","Yes — Known","Yes — Unknown"})" @bind-Value="_form.ThirdParty" Placeholder="No" />
-                    </div>
-                </div>
-            </div>
-        </div>
-    }
-
-    <!-- STEP 2 — CLAIMANTS ──────────────────────────────────────── -->
-    @if (_step == 2)
-    {
-        <div class="fnol-panel">
-            <div class="fnol-panel-hdr">
-                <i class="bi bi-people" aria-hidden="true"></i>
-                <h2>Claimants</h2>
-                <span class="fnol-panel-sub">Add all parties claiming injury or damage under this loss</span>
-            </div>
-            <div class="fnol-section">
-                <div class="fnol-section-title">Primary Claimant</div>
-                <div class="fnol-row-3">
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Full Name *</label>
-                        <SfTextBox @bind-Value="_form.PrimaryClaimant" Placeholder="Claimant full name" />
-                    </div>
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Phone *</label>
-                        <SfTextBox @bind-Value="_form.PrimaryClaimantPhone" Placeholder="(555) 123-4567" Type="InputType.Tel" />
-                        <small class="text-muted">Use enterprise phone format: (555) 123-4567 or +1 555 123 4567 x123.</small>
-                    </div>
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Email</label>
-                        <SfTextBox @bind-Value="_form.PrimaryClaimantEmail" Placeholder="email@domain.com" />
-                    </div>
-                </div>
-                <div class="fnol-row-3">
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Injury / Damage Type</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@_injuryTypes" @bind-Value="_form.PrimaryInjuryType" Placeholder="Select type" />
-                    </div>
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Medical Treatment Received?</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"None","ER Visit","Urgent Care","Hospitalized","Outpatient","Unknown"})" @bind-Value="_form.MedicalTreatment" Placeholder="Select…" />
-                    </div>
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Attorney Represented?</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"No","Yes","Unknown"})" @bind-Value="_form.AttorneyRepresented" Placeholder="No" />
-                    </div>
-                </div>
-                @if (_form.AttorneyRepresented == "Yes")
-                {
-                    <div class="fnol-row-3">
-                        <div class="fnol-field">
-                            <label class="fnol-lbl">Attorney Name</label>
-                            <SfTextBox @bind-Value="_form.AttorneyName" Placeholder="Attorney full name" />
-                        </div>
-                        <div class="fnol-field">
-                            <label class="fnol-lbl">Attorney Firm</label>
-                            <SfTextBox @bind-Value="_form.AttorneyFirm" Placeholder="Law firm name" />
-                        </div>
-                        <div class="fnol-field">
-                            <label class="fnol-lbl">Attorney Phone</label>
-                            <SfTextBox @bind-Value="_form.AttorneyPhone" Placeholder="(555) 123-4567" Type="InputType.Tel" />
-                            <small class="text-muted">Use enterprise phone format: (555) 123-4567 or +1 555 123 4567 x123.</small>
-                        </div>
-                    </div>
-                }
-            </div>
-
-            <!-- Additional claimants -->
-            <div class="fnol-section">
-                <div class="fnol-section-title-row">
-                    <div class="fnol-section-title">Additional Claimants</div>
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="AddAdditionalClaimant">
-                        <i class="bi bi-person-plus" aria-hidden="true"></i> Add Claimant
-                    </button>
-                </div>
-                @if (_additionalClaimants.Count == 0)
-                {
-                    <div class="fnol-empty-hint">No additional claimants. Click "Add Claimant" if there are multiple parties.</div>
-                }
-                @for (int i = 0; i < _additionalClaimants.Count; i++)
-                {
-                    var idx = i;
-                    var ac  = _additionalClaimants[idx];
-                    <div class="fnol-addl-claimant">
-                        <div class="fnol-addl-hdr">
-                            <span>Claimant #@(idx + 2)</span>
-                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => RemoveAdditionalClaimantAsync(idx)">
-                                <i class="bi bi-x-lg" aria-hidden="true"></i>
-                            </button>
-                        </div>
-                        <div class="fnol-row-3">
-                            <div class="fnol-field"><label class="fnol-lbl">Name</label><SfTextBox @bind-Value="ac.Name" Placeholder="Full name" /></div>
-                            <div class="fnol-field"><label class="fnol-lbl">Role</label>
-                                <SfDropDownList TValue="string" TItem="string" DataSource="@_claimantRoles" @bind-Value="ac.Role" Placeholder="Role" />
-                            </div>
-                            <div class="fnol-field"><label class="fnol-lbl">Phone</label><SfTextBox @bind-Value="ac.Phone" Placeholder="(555) 123-4567" Type="InputType.Tel" /><small class="text-muted">Use enterprise phone format: (555) 123-4567 or +1 555 123 4567 x123.</small></div>
-                        </div>
-                        <div class="fnol-row-3">
-                            <div class="fnol-field"><label class="fnol-lbl">Injury Type</label>
-                                <SfDropDownList TValue="string" TItem="string" DataSource="@_injuryTypes" @bind-Value="ac.InjuryType" Placeholder="Select…" />
-                            </div>
-                            <div class="fnol-field"><label class="fnol-lbl">Notes</label><SfTextBox @bind-Value="ac.Notes" Placeholder="Additional notes" /></div>
-                            <div></div>
-                        </div>
-                    </div>
-                }
-            </div>
-
-            <!-- Witnesses -->
-            <div class="fnol-section">
-                <div class="fnol-section-title-row">
-                    <div class="fnol-section-title">Witnesses</div>
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="AddWitness">
-                        <i class="bi bi-person-plus" aria-hidden="true"></i> Add Witness
-                    </button>
-                </div>
-                @foreach (var w in _witnesses)
-                {
-                    <div class="fnol-addl-claimant">
-                        <div class="fnol-row-3">
-                            <div class="fnol-field"><label class="fnol-lbl">Name</label><SfTextBox @bind-Value="w.Name" Placeholder="Witness name" /></div>
-                            <div class="fnol-field"><label class="fnol-lbl">Phone</label><SfTextBox @bind-Value="w.Phone" Placeholder="(555) 123-4567" Type="InputType.Tel" /><small class="text-muted">Use enterprise phone format: (555) 123-4567 or +1 555 123 4567 x123.</small></div>
-                            <div class="fnol-field"><label class="fnol-lbl">Statement Obtained?</label>
-                                <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"Yes","No","Pending"})" @bind-Value="w.StatementStatus" Placeholder="Pending" />
-                            </div>
-                        </div>
-                    </div>
-                }
-            </div>
-        </div>
-    }
-
-    <!-- STEP 3 — COVERAGE CHECK ─────────────────────────────────── -->
-    @if (_step == 3)
-    {
-        <div class="fnol-panel">
-            <div class="fnol-panel-hdr">
-                <i class="bi bi-shield-half" aria-hidden="true"></i>
-                <h2>Coverage Check</h2>
-                <span class="fnol-panel-sub">Review applicable coverages and confirm loss falls within policy terms</span>
-            </div>
-            <div class="fnol-section">
-                <div class="fnol-cov-summary">
-                    <div class="fnol-cov-sum-item">
-                        <span class="fnol-cov-sum-lbl">Policy In Force at Date of Loss?</span>
-                        <span class="fnol-cov-sum-val @(_policyFound is not null && _form.DateOfLoss >= _policyFound.EffDate && _form.DateOfLoss <= _policyFound.ExpDate ? "fnol-cv-yes" : "fnol-cv-warn")">
-                            @(_policyFound is not null && _form.DateOfLoss >= _policyFound?.EffDate && _form.DateOfLoss <= _policyFound?.ExpDate ? "✓ Yes" : "⚠ Verify")
-                        </span>
-                    </div>
-                    <div class="fnol-cov-sum-item">
-                        <span class="fnol-cov-sum-lbl">Policy Deductible</span>
-                        <span class="fnol-cov-sum-val">@(_policyFound?.Deductible.ToString("C0") ?? "—")</span>
-                    </div>
-                    <div class="fnol-cov-sum-item">
-                        <span class="fnol-cov-sum-lbl">Estimated Loss vs. Deductible</span>
-                        <span class="fnol-cov-sum-val @(_form.EstimatedAmount > (_policyFound?.Deductible ?? 0) ? "fnol-cv-yes" : "fnol-cv-warn")">
-                            @(_form.EstimatedAmount > (_policyFound?.Deductible ?? 0) ? "Exceeds deductible" : "Below or equal to deductible")
-                        </span>
-                    </div>
-                    <div class="fnol-cov-sum-item">
-                        <span class="fnol-cov-sum-lbl">Coverage Limit</span>
-                        <span class="fnol-cov-sum-val">@(_policyFound?.CoverageLimit.ToString("C0") ?? "—")</span>
-                    </div>
-                </div>
-
-                <div class="fnol-cov-table">
-                    <div class="fnol-cov-row fnol-cov-thead">
-                        <span>Coverage</span><span>Type</span><span>Limit</span><span>Deductible</span><span>Applicable?</span>
-                    </div>
-                    @foreach (var cov in _coverageCheck)
+            <EditForm Model="_form" OnValidSubmit="SubmitFnolAsync" OnInvalidSubmit="NotifyInvalidAsync">
+                <DataAnnotationsValidator />
+                <div class="fnol-panel-body">
+                    @if (_step == 0)
                     {
-                        <div class="fnol-cov-row">
-                            <span>@cov.Name</span>
-                            <span><span class="pd-cov-type">@cov.Type</span></span>
-                            <span class="pd-mono">@(cov.Limit.HasValue ? cov.Limit.Value.ToString("C0") : "Per Occ.")</span>
-                            <span class="pd-mono">@(cov.Deductible.HasValue ? cov.Deductible.Value.ToString("C0") : "—")</span>
-                            <span>
-                                <SfDropDownList TValue="string" TItem="string"
-                                                DataSource="@(new[]{"Yes","No","Possible","Under Review"})"
-                                                @bind-Value="cov.IsApplicable" />
-                            </span>
-                        </div>
+                        <section class="fnol-form-section">
+                            <div class="fnol-form-banner"><i class="bi bi-shield-check" aria-hidden="true"></i><div><strong>Policy identity</strong><span>No policy lookup API is available, so enter verified policy details from the source policy record.</span></div></div>
+                            <div class="fnol-form-grid">
+                                <div class="fnol-field"><label>Policy Number <span>*</span></label><InputText class="fnol-input" @bind-Value="_form.PolicyNumber" placeholder="Policy number" /></div>
+                                <div class="fnol-field"><label>Insured / Account <span>*</span></label><InputText class="fnol-input" @bind-Value="_form.AccountName" placeholder="Named insured" /></div>
+                                <div class="fnol-field"><label>Line of Business <span>*</span></label><InputSelect class="fnol-input" @bind-Value="_form.Lob"><option value="">Select LOB</option>@foreach (var lob in _lobs) { <option value="@lob">@lob</option> }</InputSelect></div>
+                                <div class="fnol-field"><label>Carrier <span>*</span></label><InputText class="fnol-input" @bind-Value="_form.Carrier" placeholder="Carrier" /></div>
+                                <div class="fnol-field"><label>Policy Effective</label><InputDate class="fnol-input" @bind-Value="_form.PolicyEffectiveDate" /></div>
+                                <div class="fnol-field"><label>Policy Expiration</label><InputDate class="fnol-input" @bind-Value="_form.PolicyExpirationDate" /></div>
+                            </div>
+                        </section>
+                    }
+                    else if (_step == 1)
+                    {
+                        <section class="fnol-form-section">
+                            <div class="fnol-form-grid">
+                                <div class="fnol-field"><label>Date of Loss <span>*</span></label><InputDate class="fnol-input" @bind-Value="_form.DateOfLoss" /></div>
+                                <div class="fnol-field"><label>Date Reported <span>*</span></label><InputDate class="fnol-input" @bind-Value="_form.DateReported" /></div>
+                                <div class="fnol-field"><label>Estimated Loss</label><InputNumber class="fnol-input" @bind-Value="_form.EstimatedAmount" /></div>
+                                <div class="fnol-field"><label>Loss Type <span>*</span></label><InputSelect class="fnol-input" @bind-Value="_form.LossType"><option value="">Select loss type</option>@foreach (var type in _lossTypes) { <option value="@type">@type</option> }</InputSelect></div>
+                                <div class="fnol-field"><label>Cause of Loss</label><InputSelect class="fnol-input" @bind-Value="_form.CauseOfLoss"><option value="">Select cause</option>@foreach (var cause in _causesOfLoss) { <option value="@cause">@cause</option> }</InputSelect></div>
+                                <div class="fnol-field"><label>State of Loss</label><InputSelect class="fnol-input" @bind-Value="_form.StateOfLoss"><option value="">Select state</option>@foreach (var state in _usStates) { <option value="@state">@state</option> }</InputSelect></div>
+                                <div class="fnol-field fnol-field-wide"><label>Loss Location</label><InputText class="fnol-input" @bind-Value="_form.LossLocation" placeholder="Street, city, state, ZIP" /></div>
+                                <div class="fnol-field fnol-field-wide"><label>Loss Description <span>*</span></label><InputTextArea class="fnol-input" rows="5" @bind-Value="_form.LossDescription" placeholder="Describe the loss event, damages, parties, injuries, and immediate next action" /></div>
+                            </div>
+                        </section>
+                    }
+                    else if (_step == 2)
+                    {
+                        <section class="fnol-form-section">
+                            <div class="fnol-form-grid">
+                                <div class="fnol-field"><label>Primary Claimant <span>*</span></label><InputText class="fnol-input" @bind-Value="_form.PrimaryClaimant" placeholder="Full name" /></div>
+                                <div class="fnol-field"><label>Claimant Phone</label><InputText class="fnol-input" @bind-Value="_form.PrimaryClaimantPhone" placeholder="(555) 123-4567" /></div>
+                                <div class="fnol-field"><label>Claimant Email</label><InputText class="fnol-input" type="email" @bind-Value="_form.PrimaryClaimantEmail" placeholder="email@domain.com" /></div>
+                                <div class="fnol-field"><label>Injury / Damage Type</label><InputSelect class="fnol-input" @bind-Value="_form.PrimaryInjuryType"><option value="">Select type</option>@foreach (var injury in _injuryTypes) { <option value="@injury">@injury</option> }</InputSelect></div>
+                                <div class="fnol-field"><label>Litigation Status</label><InputSelect class="fnol-input" @bind-Value="_form.LitigationStatus">@foreach (var status in _litigationStatuses) { <option value="@status">@status</option> }</InputSelect></div>
+                                <div class="fnol-field"><label>Third Party</label><InputSelect class="fnol-input" @bind-Value="_form.ThirdParty">@foreach (var option in _thirdPartyOptions) { <option value="@option">@option</option> }</InputSelect></div>
+                            </div>
+                        </section>
+                    }
+                    else if (_step == 3)
+                    {
+                        <section class="fnol-form-section">
+                            <div class="fnol-coverage-grid">
+                                @CoverageCard("Policy in force", PolicyInForceText, PolicyInForce ? "fnol-good" : "fnol-warn-tone", "bi-shield-check")
+                                @CoverageCard("Loss vs deductible", DeductibleText, DeductibleExceeded ? "fnol-good" : "fnol-warn-tone", "bi-safe")
+                                @CoverageCard("CAT indicator", string.IsNullOrWhiteSpace(_form.CatCode) ? "Standard loss" : _form.CatCode, string.IsNullOrWhiteSpace(_form.CatCode) ? "fnol-neutral" : "fnol-warn-tone", "bi-cloud-lightning")
+                                @CoverageCard("Litigation", _form.LitigationStatus, _form.IsLitigation ? "fnol-warn-tone" : "fnol-good", "bi-gavel")
+                            </div>
+                            <div class="fnol-form-grid fnol-mt">
+                                <div class="fnol-field"><label>Coverage Limit</label><InputNumber class="fnol-input" @bind-Value="_form.CoverageLimit" /></div>
+                                <div class="fnol-field"><label>Deductible</label><InputNumber class="fnol-input" @bind-Value="_form.Deductible" /></div>
+                                <div class="fnol-field"><label>CAT Event Tag</label><InputText class="fnol-input" @bind-Value="_form.CatCode" placeholder="CAT code if applicable" /></div>
+                                <div class="fnol-field"><label>Priority</label><InputSelect class="fnol-input" @bind-Value="_form.Priority">@foreach (var priority in _priorities) { <option value="@priority">@priority</option> }</InputSelect></div>
+                                <div class="fnol-field fnol-field-wide"><label>Coverage Notes</label><InputTextArea class="fnol-input" rows="4" @bind-Value="_form.CoverageNotes" placeholder="Coverage reservation, exclusion questions, deductible notes, or underwriter review needs" /></div>
+                                <div class="fnol-check-row fnol-field-wide"><label><InputCheckbox @bind-Value="_form.IsDisputed" /> Coverage disputed</label><label><InputCheckbox @bind-Value="_form.HasSubrogation" /> Subrogation potential</label><label><InputCheckbox @bind-Value="_form.IsCatastrophe" /> Catastrophe claim</label></div>
+                            </div>
+                        </section>
+                    }
+                    else
+                    {
+                        <section class="fnol-form-section">
+                            <div class="fnol-form-grid">
+                                <div class="fnol-field"><label>Claims Handler <span>*</span></label><InputText class="fnol-input" @bind-Value="_form.AssignedHandler" placeholder="Assigned handler" /></div>
+                                <div class="fnol-field"><label>Reported By</label><InputText class="fnol-input" @bind-Value="_form.ReportedBy" placeholder="Reporter name" /></div>
+                                <div class="fnol-field"><label>Carrier Claim #</label><InputText class="fnol-input" @bind-Value="_form.CarrierClaimNumber" placeholder="Carrier reference" /></div>
+                                <div class="fnol-field"><label>Carrier Report Date</label><InputDate class="fnol-input" @bind-Value="_form.CarrierReportDate" /></div>
+                                <div class="fnol-field fnol-field-wide"><label>Internal Notes</label><InputTextArea class="fnol-input" rows="4" @bind-Value="_form.InternalNotes" placeholder="Internal handling notes, next actions, and carrier reporting context" /></div>
+                            </div>
+                            <div class="fnol-review-card">
+                                <div class="fnol-review-head"><i class="bi bi-clipboard-check" aria-hidden="true"></i> Submission Summary</div>
+                                <div class="fnol-review-grid">
+                                    @ReviewRow("Policy", _form.PolicyNumber)
+                                    @ReviewRow("Insured", _form.AccountName)
+                                    @ReviewRow("LOB / Carrier", $"{_form.Lob} / {_form.Carrier}")
+                                    @ReviewRow("Loss", $"{_form.LossType} on {_form.DateOfLoss:MM/dd/yyyy}")
+                                    @ReviewRow("Claimant", _form.PrimaryClaimant)
+                                    @ReviewRow("Priority", _form.Priority)
+                                    @ReviewRow("Handler", _form.AssignedHandler)
+                                    @ReviewRow("Flags", FlagSummary)
+                                </div>
+                            </div>
+                        </section>
                     }
                 </div>
-            </div>
 
-            <div class="fnol-section">
-                <div class="fnol-section-title">Coverage Notes</div>
-                <SfTextBox @bind-Value="_form.CoverageNotes" Multiline="true"
-                           Placeholder="Note any coverage reservations, exclusion questions, or issues requiring underwriter review…"
-                           HtmlAttributes='@(new() {{"rows","4"}})' />
-            </div>
-        </div>
-    }
-
-    <!-- STEP 4 — ASSIGNMENT & SUBMIT ────────────────────────────── -->
-    @if (_step == 4)
-    {
-        <div class="fnol-panel">
-            <div class="fnol-panel-hdr">
-                <i class="bi bi-person-gear" aria-hidden="true"></i>
-                <h2>Assignment &amp; Submission</h2>
-                <span class="fnol-panel-sub">Assign the claim and finalize before submission to the carrier</span>
-            </div>
-
-            <div class="fnol-section">
-                <div class="fnol-section-title">Agency Assignment</div>
-                <div class="fnol-row-3">
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Claims Handler *</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@_handlers" @bind-Value="_form.AssignedHandler" Placeholder="Select handler" />
+                <div class="fnol-nav">
+                    <div>
+                        @if (_step > 0)
+                        {
+                            <button type="button" class="fnol-btn fnol-btn-ghost fnol-btn-light" @onclick="PrevStep"><i class="bi bi-arrow-left" aria-hidden="true"></i> Back</button>
+                        }
                     </div>
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Supervisor</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@_supervisors" @bind-Value="_form.AssignedSupervisor" Placeholder="Select supervisor" />
-                    </div>
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Priority</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"Standard","High","Urgent"})" @bind-Value="_form.Priority" Placeholder="Standard" />
+                    <div class="fnol-nav-right">
+                        <button type="button" class="fnol-btn fnol-btn-ghost fnol-btn-light" @onclick="ResetForm"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset</button>
+                        @if (_step < _steps.Length - 1)
+                        {
+                            <button type="button" class="fnol-btn fnol-btn-primary fnol-btn-blue" @onclick="NextStep" disabled="@(!CanAdvance)">Next <i class="bi bi-arrow-right" aria-hidden="true"></i></button>
+                        }
+                        else
+                        {
+                            <button type="submit" class="fnol-btn fnol-btn-primary fnol-btn-blue" disabled="@(!CanSubmit || _submitting)">@(_submitting ? "Submitting..." : "Submit FNOL")</button>
+                        }
                     </div>
                 </div>
-            </div>
+            </EditForm>
+        </main>
 
-            <div class="fnol-section">
-                <div class="fnol-section-title">Carrier Reporting</div>
-                <div class="fnol-row-3">
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Carrier Claim Contact</label>
-                        <SfTextBox @bind-Value="_form.CarrierContact" Placeholder="Adjuster name" />
-                    </div>
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Carrier Contact Phone</label>
-                        <SfTextBox @bind-Value="_form.CarrierContactPhone" Placeholder="(555) 123-4567" Type="InputType.Tel" />
-                        <small class="text-muted">Use enterprise phone format: (555) 123-4567 or +1 555 123 4567 x123.</small>
-                    </div>
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Report Method</label>
-                        <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"Online Portal","Phone","Email","Fax","Mail"})" @bind-Value="_form.CarrierReportMethod" Placeholder="Online Portal" />
-                    </div>
+        <aside class="fnol-detail-card">
+            <div class="fnol-detail-head"><span class="fnol-detail-eyebrow"><i class="bi bi-activity" aria-hidden="true"></i> Intake Readiness</span><h2>@ReadinessLabel</h2><p>@ReadinessDetail</p></div>
+            <div class="fnol-detail-body">
+                <div class="fnol-detail-summary">
+                    <div><span>Required</span><strong>@RequiredComplete/@RequiredTotal</strong></div>
+                    <div><span>Severity</span><strong>@SeverityLabel</strong></div>
+                    <div><span>Lag</span><strong>@ReportingLagLabel</strong></div>
+                    <div><span>Persisted To</span><strong>Claims API</strong></div>
                 </div>
-                <div class="fnol-row-3">
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Carrier Claim # (if assigned)</label>
-                        <SfTextBox @bind-Value="_form.CarrierClaimNumber" Placeholder="Carrier-assigned reference" />
-                    </div>
-                    <div class="fnol-field">
-                        <label class="fnol-lbl">Reported to Carrier Date</label>
-                        <SfDatePicker TValue="DateTime?" @bind-Value="_form.CarrierReportDate" Placeholder="MM/DD/YYYY" />
-                    </div>
-                    <div class="fnol-field fnol-field-check">
-                        <label class="fnol-lbl">Notified Insured?</label>
-                        <SfCheckBox @bind-Checked="_form.InsuredNotified" Label="Insured acknowledged claim" />
-                    </div>
+                <div class="fnol-contact-card"><strong>@DisplayValue(_form.AccountName, "Insured not entered")</strong><span>@DisplayValue(_form.PolicyNumber, "Policy not entered")</span><span>@DisplayValue(_form.LossType, "Loss type not selected")</span></div>
+                <div class="fnol-flag-grid">
+                    @FlagChip(_form.IsLitigation, "Litigation", "bi-gavel")
+                    @FlagChip(_form.HasSubrogation, "Subrogation", "bi-arrow-counterclockwise")
+                    @FlagChip(_form.IsCatastrophe || !string.IsNullOrWhiteSpace(_form.CatCode), "CAT", "bi-cloud-lightning")
+                    @FlagChip(_form.IsDisputed, "Disputed", "bi-shield-exclamation")
                 </div>
             </div>
-
-            <div class="fnol-section">
-                <div class="fnol-section-title">Internal Notes</div>
-                <SfTextBox @bind-Value="_form.InternalNotes" Multiline="true"
-                           Placeholder="Internal notes for claims team — not shared with insured or carrier…"
-                           HtmlAttributes='@(new() {{"rows","4"}})' />
-            </div>
-
-            <!-- Summary review card -->
-            <div class="fnol-review-card">
-                <div class="fnol-review-hdr"><i class="bi bi-clipboard-check" aria-hidden="true"></i> Submission Summary</div>
-                <div class="fnol-review-grid">
-                    @FnolRv("Policy",           _form.PolicyNumber)
-                    @FnolRv("Insured",          _policyFound?.InsuredName ?? "—")
-                    @FnolRv("LOB",              _policyFound?.Lob ?? "—")
-                    @FnolRv("Carrier",          _policyFound?.Carrier ?? "—")
-                    @FnolRv("Date of Loss",     _form.DateOfLoss?.ToString("MM/dd/yyyy") ?? "—")
-                    @FnolRv("Date Reported",    _form.DateReported?.ToString("MM/dd/yyyy") ?? "—")
-                    @FnolRv("Loss Type",        _form.LossType)
-                    @FnolRv("Cause of Loss",    _form.CauseOfLoss)
-                    @FnolRv("Loss Location",    string.Join(", ", new[]{_form.LossAddress,_form.LossCity,_form.StateOfLoss}.Where(s => !string.IsNullOrEmpty(s))))
-                    @FnolRv("Est. Amount",      _form.EstimatedAmount?.ToString("C0") ?? "Not provided")
-                    @FnolRv("Primary Claimant", _form.PrimaryClaimant)
-                    @FnolRv("Injury Level",     _form.InjuryLevel)
-                    @FnolRv("Litigation",       _form.LitigationStatus)
-                    @FnolRv("Handler",          _form.AssignedHandler)
-                    @FnolRv("Priority",         _form.Priority)
-                    @FnolRv("CAT Tag",          string.IsNullOrEmpty(_form.CatEventTag) ? "None" : _form.CatEventTag)
-                </div>
-            </div>
-        </div>
-    }
-
-    <!-- NAV BUTTONS ──────────────────────────────────────────────── -->
-    <div class="fnol-nav">
-        <div class="fnol-nav-left">
-            @if (_step > 0)
-            {
-                <button class="um-btn um-btn-ghost" @onclick="PrevStep">
-                    <i class="bi bi-arrow-left" aria-hidden="true"></i> Back
-                </button>
-            }
-        </div>
-        <div class="fnol-nav-right">
-            @if (_step < _stepLabels.Length - 1)
-            {
-                <button class="um-btn um-btn-primary" @onclick="NextStep" disabled="@(!CanAdvance)">
-                    Next <i class="bi bi-arrow-right" aria-hidden="true"></i>
-                </button>
-            }
-            else
-            {
-                <button class="um-btn um-btn-primary" @onclick="SubmitFnol" disabled="@(!CanSubmit)">
-                    <i class="bi bi-check-lg" aria-hidden="true"></i> Submit FNOL
-                </button>
-            }
-        </div>
+        </aside>
     </div>
 </div>
 
 @code {
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
+    private CurrentUserContextModel? _userContext;
     private Guid _tenantId;
     private Guid _tenantAdminUserId;
-    SfToast _toast = default!;
-    Guid TenantId { get; set; }
-    int     _step  = 0;
-    bool    _showConfirm     = false;
-    bool    _policyNotFound  = false;
-    string  _assignedClaimNumber = "";
+    private int _step;
+    private bool _showConfirm;
+    private bool _submitting;
+    private string? _loadError;
+    private string _assignedClaimNumber = string.Empty;
+    private FnolForm _form = new();
+    private readonly List<FnolToast> _toasts = [];
 
-    readonly string[] _stepLabels = { "Policy Lookup", "Loss Details", "Claimants", "Coverage Check", "Assignment & Submit" };
+    private readonly StepDef[] _steps = [new("Policy", "Policy Identity", "bi-shield-check"), new("Loss", "Loss Details", "bi-exclamation-triangle"), new("Claimant", "Claimant", "bi-people"), new("Coverage", "Coverage Review", "bi-shield-half"), new("Submit", "Assignment & Submit", "bi-person-gear")];
+    private readonly string[] _lobs = ["General Liability", "Commercial Auto", "Commercial Property", "Workers Comp", "Umbrella", "Professional Liab.", "Home/Dwelling", "Personal Auto"];
+    private readonly string[] _lossTypes = ["Bodily Injury", "Property Damage", "Auto Collision", "Auto Comprehensive", "Workers Comp Injury", "Product Liability", "Professional Error", "Theft", "Fire", "Water/Flood", "Wind/Hail", "Slip & Fall", "Equipment Breakdown", "Other"];
+    private readonly string[] _causesOfLoss = ["Slip & Fall", "Vehicle Collision", "Fire", "Water Damage", "Theft", "Wind/Hail", "Employee Injury", "Product Defect", "Professional Negligence", "Other"];
+    private readonly string[] _injuryTypes = ["Bodily Injury", "Property Damage", "Medical Expenses", "Lost Wages", "Vehicle Damage", "Building Damage", "Equipment Loss", "Wrongful Death", "Unknown"];
+    private readonly string[] _litigationStatuses = ["No", "Possible", "Attorney Retained", "Suit Filed"];
+    private readonly string[] _thirdPartyOptions = ["No", "Yes - Known", "Yes - Unknown"];
+    private readonly string[] _priorities = ["Standard", "High", "Critical"];
+    private readonly string[] _usStates = ["", "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"];
 
-    // ── Lookups ──────────────────────────────────────────────────
-    readonly string[] _lossTypes   = { "Bodily Injury","Property Damage","Auto Collision","Auto Comprehensive","Workers Comp Injury","Product Liability","Professional Error","Theft","Fire","Water/Flood","Wind/Hail","Slip & Fall","Equipment Breakdown","Other" };
-    readonly string[] _causesOfLoss= { "Slip & Fall","Vehicle Collision","Fire — Electrical","Fire — Cooking","Fire — Other","Water Damage — Pipe","Water Damage — Flood","Theft — Burglary","Theft — Robbery","Wind/Hail — Storm","Employee Injury","Product Defect","Professional Negligence","Other" };
-    readonly string[] _injuryTypes = { "Bodily Injury","Property Damage","Medical Expenses","Lost Wages","Vehicle Damage","Building Damage","Equipment Loss","Wrongful Death","Unknown" };
-    readonly string[] _claimantRoles={"Co-Claimant","Third Party","Passenger","Pedestrian","Subrogation Target","Other"};
-    readonly string[] _handlers    = { "Sarah Kim","James Park","Kevin Obi","Maria Santos","Lisa Chen" };
-    readonly string[] _supervisors = { "Diana Perez","Robert Yamamoto" };
-    readonly string[] _catEvents   = { "CAT-2025-TX-Hail","CAT-2025-LA-Flood","CAT-2025-CA-Wildfire","CAT-2024-FL-Hurricane" };
-    readonly string[] _usStates    = { "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY" };
+    private string StepTitle => _steps[_step].Title;
+    private string StepSubtitle => _step switch { 0 => "Enter verified policy identity and insured details.", 1 => "Capture loss timing, classification, location, and narrative.", 2 => "Capture claimant and third-party severity signals.", 3 => "Review deductible, CAT, litigation, subrogation, and coverage indicators.", _ => "Assign the handler and submit the claim to the DB-backed workflow." };
+    private bool CanAdvance => _step switch { 0 => HasValue(_form.PolicyNumber) && HasValue(_form.AccountName) && HasValue(_form.Lob) && HasValue(_form.Carrier), 1 => HasValue(_form.LossType) && HasValue(_form.LossDescription), 2 => HasValue(_form.PrimaryClaimant), 3 => true, _ => CanSubmit };
+    private bool CanSubmit => RequiredComplete == RequiredTotal && HasValue(_form.AssignedHandler);
+    private int RequiredTotal => 10;
+    private int RequiredComplete => new[] { HasValue(_form.PolicyNumber), HasValue(_form.AccountName), HasValue(_form.Lob), HasValue(_form.Carrier), HasValue(_form.LossType), HasValue(_form.LossDescription), HasValue(_form.PrimaryClaimant), _form.DateOfLoss != default, _form.DateReported != default, HasValue(_form.AssignedHandler) }.Count(x => x);
+    private bool PolicyInForce => !_form.PolicyEffectiveDate.HasValue || !_form.PolicyExpirationDate.HasValue || (_form.DateOfLoss >= _form.PolicyEffectiveDate.Value && _form.DateOfLoss <= _form.PolicyExpirationDate.Value);
+    private bool DeductibleExceeded => _form.EstimatedAmount.HasValue && _form.Deductible.HasValue && _form.EstimatedAmount.Value > _form.Deductible.Value;
+    private string PolicyInForceText => PolicyInForce ? "In-force or not dated" : "Verify dates";
+    private string DeductibleText => !_form.EstimatedAmount.HasValue || !_form.Deductible.HasValue ? "Needs values" : DeductibleExceeded ? "Exceeds deductible" : "At/below deductible";
+    private string SeverityLabel => _form.IsLitigation || _form.IsDisputed || _form.EstimatedAmount >= 100000 ? "High" : _form.IsCatastrophe || _form.HasSubrogation ? "Watch" : "Standard";
+    private string ReportingLagLabel => (_form.DateReported.Date - _form.DateOfLoss.Date).Days <= 0 ? "Same day" : $"{(_form.DateReported.Date - _form.DateOfLoss.Date).Days:N0}d";
+    private string ReadinessLabel => CanSubmit ? "Ready to submit" : "Needs intake data";
+    private string ReadinessDetail => CanSubmit ? "All required claim creation fields are complete." : "Complete required policy, loss, claimant, and handler fields.";
+    private string FlagSummary => string.Join(" / ", new[] { _form.IsLitigation ? "Litigation" : null, _form.HasSubrogation ? "Subrogation" : null, (_form.IsCatastrophe || HasValue(_form.CatCode)) ? "CAT" : null, _form.IsDisputed ? "Disputed" : null }.Where(HasValue).DefaultIfEmpty("No flags"));
+    private IReadOnlyList<KpiTile> Kpis => [new("Required", $"{RequiredComplete}/{RequiredTotal}", "bi-check2-square", "blue", 0, "Completion", "Go to policy identity"), new("Severity", SeverityLabel, "bi-exclamation-triangle", SeverityLabel == "High" ? "red" : "amber", 3, "Risk signal", "Review severity"), new("Reporting Lag", ReportingLagLabel, "bi-clock-history", "cyan", 1, "Loss to report", "Review loss timing"), new("Claimant", HasValue(_form.PrimaryClaimant) ? "Ready" : "Needed", "bi-people", HasValue(_form.PrimaryClaimant) ? "green" : "red", 2, "Party details", "Review claimant"), new("Handler", HasValue(_form.AssignedHandler) ? "Assigned" : "Needed", "bi-person-badge", HasValue(_form.AssignedHandler) ? "green" : "red", 4, "Assignment", "Assign handler")];
 
-    // ── Form ──────────────────────────────────────────────────────
-    FnolForm _form = new();
-    PolicyLookupResult? _policyFound;
-    PolicySearchInput   _policySearch = new();
-    List<AdditionalClaimant> _additionalClaimants = new();
-    List<WitnessEntry>       _witnesses           = new();
-    List<CoverageCheckRow>   _coverageCheck       = new();
-
-    // ── Stats ─────────────────────────────────────────────────────
-    readonly TodayStats _todayStats = new() { Count=7, AvgLagDays=1.8m, PendingAssignment=2, SubmittedToday=5, CatTagged=1 };
-
-    sealed class TodayStats { public int Count; public decimal AvgLagDays; public int PendingAssignment; public int SubmittedToday; public int CatTagged; }
-
-    sealed class FnolForm
+    protected override async Task OnInitializedAsync()
     {
-        public string    PolicyNumber          { get; set; } = "";
-        public DateTime? DateOfLoss            { get; set; } = DateTime.Today;
-        public DateTime? TimeOfLoss            { get; set; }
-        public DateTime? DateReported          { get; set; } = DateTime.Today;
-        public string    LossType              { get; set; } = "";
-        public string    CauseOfLoss           { get; set; } = "";
-        public decimal?  EstimatedAmount       { get; set; }
-        public string    WeatherRelated        { get; set; } = "No";
-        public string    CatEventTag           { get; set; } = "";
-        public bool      PoliceReportFiled     { get; set; }
-        public string    PoliceReportNumber    { get; set; } = "";
-        public string    LossAddress           { get; set; } = "";
-        public string    LossCity              { get; set; } = "";
-        public string    StateOfLoss           { get; set; } = "";
-        public string    LossZip               { get; set; } = "";
-        public string    LossCounty            { get; set; } = "";
-        public string    LossDescription       { get; set; } = "";
-        public string    InjuryLevel           { get; set; } = "None";
-        public string    LitigationStatus      { get; set; } = "No";
-        public string    ThirdParty            { get; set; } = "No";
-        public string    PrimaryClaimant       { get; set; } = "";
-        [AmsPhone]
-        public string    PrimaryClaimantPhone  { get; set; } = "";
-        public string    PrimaryClaimantEmail  { get; set; } = "";
-        public string    PrimaryInjuryType     { get; set; } = "";
-        public string    MedicalTreatment      { get; set; } = "Unknown";
-        public string    AttorneyRepresented   { get; set; } = "No";
-        public string    AttorneyName          { get; set; } = "";
-        public string    AttorneyFirm          { get; set; } = "";
-        [AmsPhone]
-        public string    AttorneyPhone         { get; set; } = "";
-        public string    CoverageNotes         { get; set; } = "";
-        public string    AssignedHandler       { get; set; } = "";
-        public string    AssignedSupervisor    { get; set; } = "";
-        public string    Priority              { get; set; } = "Standard";
-        public string    CarrierContact        { get; set; } = "";
-        [AmsPhone]
-        public string    CarrierContactPhone   { get; set; } = "";
-        public string    CarrierReportMethod   { get; set; } = "Online Portal";
-        public string    CarrierClaimNumber    { get; set; } = "";
-        public DateTime? CarrierReportDate     { get; set; }
-        public bool      InsuredNotified       { get; set; }
-        public string    InternalNotes         { get; set; } = "";
-    }
-
-    sealed class PolicySearchInput { public string InsuredName { get; set; } = ""; }
-
-    sealed class PolicyLookupResult
-    {
-        public string   PolicyNumber  { get; set; } = "";
-        public string   InsuredName   { get; set; } = "";
-        public string   Lob           { get; set; } = "";
-        public string   Carrier       { get; set; } = "";
-        public string   Status        { get; set; } = "";
-        public DateTime EffDate       { get; set; }
-        public DateTime ExpDate       { get; set; }
-        public decimal  CoverageLimit { get; set; }
-        public decimal  Deductible    { get; set; }
-        public string   Producer      { get; set; } = "";
-        public string   Csr           { get; set; } = "";
-        public string[] Coverages     { get; set; } = [];
-    }
-
-    sealed class AdditionalClaimant { public string Name=""; public string Role="Co-Claimant"; [AmsPhone] public string Phone=""; public string InjuryType=""; public string Notes=""; }
-    sealed class WitnessEntry       { public string Name=""; [AmsPhone] public string Phone=""; public string StatementStatus="Pending"; }
-    sealed class CoverageCheckRow
-    {
-        public string   Name         { get; set; } = "";
-        public string   Type         { get; set; } = "";
-        public decimal? Limit        { get; set; }
-        public decimal? Deductible   { get; set; }
-        public string   IsApplicable { get; set; } = "Possible";
-    }
-
-    void LookupPolicy()
-    {
-        _policyNotFound = false;
-        _policyFound    = null;
-        if (string.IsNullOrWhiteSpace(_form.PolicyNumber) && string.IsNullOrWhiteSpace(_policySearch.InsuredName)) return;
-
-        // Stub lookup
-        if (_form.PolicyNumber.Contains("TRV", StringComparison.OrdinalIgnoreCase) || _policySearch.InsuredName.Length > 2)
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Claims", "/claims"), new("FNOL Intake", "/claims/new"));
+        try
         {
-            _policyFound = new PolicyLookupResult
+            _userContext = await CurrentUser.RequireAsync();
+            _tenantId = _userContext.TenantId;
+            _tenantAdminUserId = _userContext.UserId;
+            _form.AssignedHandler = _userContext.TenantName ?? "Tenant user";
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to initialize FNOL intake: {ex.Message}";
+        }
+    }
+
+    private void NextStep() { if (_step < _steps.Length - 1 && CanAdvance) _step++; }
+    private void PrevStep() { if (_step > 0) _step--; }
+    private void GoToStep(int index) { if (index >= 0 && index < _steps.Length) _step = index; }
+    private void ResetForm() { _form = new FnolForm { AssignedHandler = _userContext?.TenantName ?? "Tenant user" }; _step = 0; }
+    private void StartAnother() { _showConfirm = false; ResetForm(); }
+    private void CloseConfirm() => _showConfirm = false;
+
+    private async Task SubmitFnolAsync()
+    {
+        if (!CanSubmit || _submitting) return;
+        _submitting = true;
+        try
+        {
+            var id = await Api.CreateClaimAsync(new CreateClaimRequest
             {
-                PolicyNumber="TRV-GL-2024-00421", InsuredName="Sullivan Mfg. LLC", Lob="General Liability",
-                Carrier="Travelers Indemnity", Status="Active", EffDate=new DateTime(2024,4,1), ExpDate=new DateTime(2025,4,1),
-                CoverageLimit=1_000_000m, Deductible=5_000m, Producer="Maria Santos", Csr="Kevin Obi",
-                Coverages=new[]{"GL — Occurrence","GL — Aggregate","Products/Completed Ops","Medical Payments"}
-            };
-            _form.PolicyNumber = _policyFound.PolicyNumber;
-            BuildCoverageCheck();
+                TenantId = _tenantId,
+                PolicyNumber = Normalize(_form.PolicyNumber) ?? string.Empty,
+                AccountName = Normalize(_form.AccountName) ?? string.Empty,
+                Lob = _form.Lob,
+                Carrier = Normalize(_form.Carrier) ?? string.Empty,
+                LossType = _form.LossType,
+                PrimaryClaimant = Normalize(_form.PrimaryClaimant) ?? string.Empty,
+                DateOfLoss = _form.DateOfLoss,
+                DateReported = _form.DateReported,
+                LossDescription = Normalize(_form.LossDescription) ?? string.Empty,
+                LossLocation = Normalize(_form.LossLocation),
+                StateOfLoss = Normalize(_form.StateOfLoss),
+                CauseOfLoss = Normalize(_form.CauseOfLoss),
+                AssignedHandler = Normalize(_form.AssignedHandler) ?? "Unassigned",
+                Priority = _form.Priority,
+                CatCode = Normalize(_form.CatCode),
+                TotalIncurred = _form.EstimatedAmount ?? 0m,
+                TotalReserves = _form.EstimatedAmount ?? 0m,
+                IsCatastrophe = _form.IsCatastrophe || HasValue(_form.CatCode),
+                IsLitigation = _form.IsLitigation,
+                IsDisputed = _form.IsDisputed,
+                HasSubrogation = _form.HasSubrogation,
+                CreatedByUserId = _tenantAdminUserId
+            });
+            var created = await Api.GetClaimDetailAsync(id);
+            _assignedClaimNumber = created?.Claim.ClaimNumber ?? "Created";
+            _showConfirm = true;
+            await ShowToast($"Claim {_assignedClaimNumber} created.");
         }
-        else
+        catch (Exception ex)
         {
-            _policyNotFound = true;
+            await ShowToast($"FNOL submit failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _submitting = false;
         }
     }
 
-    void BuildCoverageCheck()
-    {
-        _coverageCheck = new List<CoverageCheckRow>
-        {
-            new(){ Name="Commercial General Liability — Occurrence", Type="Primary",   Limit=1_000_000m, Deductible=5_000m, IsApplicable="Yes" },
-            new(){ Name="General Aggregate",                          Type="Aggregate", Limit=2_000_000m, Deductible=null,  IsApplicable="Yes" },
-            new(){ Name="Products / Completed Ops",                   Type="Sublimit",  Limit=1_000_000m, Deductible=null,  IsApplicable="Possible" },
-            new(){ Name="Medical Payments",                           Type="Sublimit",  Limit=10_000m,    Deductible=null,  IsApplicable="Yes" },
-            new(){ Name="Personal &amp; Advertising Injury",          Type="Included",  Limit=null,       Deductible=null,  IsApplicable="No" },
-        };
-    }
+    private async Task NotifyInvalidAsync() => await ShowToast("Please fix validation errors before submitting FNOL.", true);
+    private string StepClass(int index) => index == _step ? "fnol-workflow-card fnol-active" : index < _step ? "fnol-workflow-card fnol-done" : "fnol-workflow-card";
+    private string StepStatus(int index) => index < _step ? "Completed" : index == _step ? "In progress" : "Pending";
+    private string KpiClass(KpiTile kpi) => $"fnol-kpi-card fnol-{kpi.Tone}";
+    private static bool HasValue(string? value) => !string.IsNullOrWhiteSpace(value);
+    private static string DisplayValue(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    bool CanAdvance => _step switch
+    private static RenderFragment CoverageCard(string title, string value, string tone, string icon) => builder =>
     {
-        0 => _policyFound is not null,
-        1 => _form.DateOfLoss.HasValue && _form.DateReported.HasValue &&
-             !string.IsNullOrEmpty(_form.LossType) && !string.IsNullOrEmpty(_form.LossAddress) &&
-             !string.IsNullOrEmpty(_form.LossDescription),
-        2 => !string.IsNullOrEmpty(_form.PrimaryClaimant) && !string.IsNullOrEmpty(_form.PrimaryClaimantPhone),
-        3 => true,
-        _ => true
+        builder.OpenElement(0, "section");
+        builder.AddAttribute(1, "class", $"fnol-coverage-card {tone}");
+        builder.OpenElement(2, "i");
+        builder.AddAttribute(3, "class", $"bi {icon}");
+        builder.AddAttribute(4, "aria-hidden", "true");
+        builder.CloseElement();
+        builder.OpenElement(5, "span");
+        builder.AddContent(6, title);
+        builder.CloseElement();
+        builder.OpenElement(7, "strong");
+        builder.AddContent(8, value);
+        builder.CloseElement();
+        builder.CloseElement();
     };
 
-    bool CanSubmit => !string.IsNullOrEmpty(_form.AssignedHandler);
-
-    void NextStep() { if (_step < _stepLabels.Length - 1 && CanAdvance) _step++; }
-    void PrevStep() { if (_step > 0) _step--; }
-    void GoToStep(int i) { if (i < _step) _step = i; }
-
-    void AddAdditionalClaimant() => _additionalClaimants.Add(new());
-    async Task RemoveAdditionalClaimantAsync(int idx)
+    private static RenderFragment ReviewRow(string label, string? value) => builder =>
     {
-        if (idx < 0 || idx >= _additionalClaimants.Count) return;
-        if (!await Confirmations.ConfirmAsync("Remove claimant", "Remove this additional claimant from the FNOL intake?", "Remove")) return;
-        _additionalClaimants.RemoveAt(idx);
-    }
-
-    void AddWitness()            => _witnesses.Add(new());
-
-    async Task SubmitFnol()
-    {
-        if (!CanSubmit) return;
-        var id = await Api.CreateClaimAsync(new Ams.Application.Features.Claims.CreateClaimRequest
-        {
-            TenantId = TenantId,
-            PolicyNumber = _form.PolicyNumber,
-            AccountName = _policyFound?.InsuredName ?? _form.PrimaryClaimant,
-            Lob = _policyFound?.Lob ?? "General Liability",
-            Carrier = _policyFound?.Carrier ?? "Tenant Carrier",
-            LossType = _form.LossType,
-            PrimaryClaimant = _form.PrimaryClaimant,
-            DateOfLoss = _form.DateOfLoss ?? DateTime.Today,
-            DateReported = _form.DateReported ?? DateTime.Today,
-            LossDescription = _form.LossDescription,
-            LossLocation = string.Join(", ", new[] { _form.LossAddress, _form.LossCity, _form.StateOfLoss, _form.LossZip }.Where(s => !string.IsNullOrWhiteSpace(s))),
-            StateOfLoss = _form.StateOfLoss,
-            CauseOfLoss = _form.CauseOfLoss,
-            AssignedHandler = _form.AssignedHandler,
-            Priority = _form.Priority,
-            CatCode = _form.CatEventTag,
-            IsCatastrophe = !string.IsNullOrWhiteSpace(_form.CatEventTag),
-            IsLitigation = _form.LitigationStatus is "Attorney Retained" or "Suit Filed",
-            IsDisputed = _form.CoverageNotes.Contains("reservation", StringComparison.OrdinalIgnoreCase)
-        });
-        var created = await Api.GetClaimDetailAsync(id);
-        _assignedClaimNumber = created?.Claim.ClaimNumber ?? "Created";
-        _showConfirm = true;
-        await _toast.ShowAsync(new ToastModel { Title="FNOL Submitted", Content=$"Claim {_assignedClaimNumber} created.", CssClass="e-toast-success" });
-    }
-
-    void StartAnother()
-    {
-        _form                = new();
-        _policyFound         = null;
-        _policyNotFound      = false;
-        _additionalClaimants = new();
-        _witnesses           = new();
-        _coverageCheck       = new();
-        _step                = 0;
-        _showConfirm         = false;
-    }
-
-    protected override void OnInitialized() =>
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Claims","/claims"), new("FNOL Intake",""));
-
-    // ── Render helpers ────────────────────────────────────────────
-    RenderFragment FnolStat(string icon, string label, string val, string color) => __builder =>
-    {
-        <div class="fnol-stat-card @color">
-            <i class="bi @icon fnol-sc-icon" aria-hidden="true"></i>
-            <div>
-                <div class="fnol-sc-val">@val</div>
-                <div class="fnol-sc-lbl">@label</div>
-            </div>
-        </div>
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "fnol-review-row");
+        builder.OpenElement(2, "span");
+        builder.AddContent(3, label);
+        builder.CloseElement();
+        builder.OpenElement(4, "strong");
+        builder.AddContent(5, string.IsNullOrWhiteSpace(value) ? "-" : value);
+        builder.CloseElement();
+        builder.CloseElement();
     };
 
-    RenderFragment FnolPf(string label, string value) => __builder =>
+    private static RenderFragment FlagChip(bool active, string label, string icon) => builder =>
     {
-        <div class="fnol-pc-field">
-            <span class="fnol-pcf-lbl">@label</span>
-            <span class="fnol-pcf-val">@value</span>
-        </div>
+        builder.OpenElement(0, "span");
+        builder.AddAttribute(1, "class", active ? "fnol-flag-chip fnol-flag-chip-active" : "fnol-flag-chip");
+        builder.OpenElement(2, "i");
+        builder.AddAttribute(3, "class", $"bi {icon}");
+        builder.AddAttribute(4, "aria-hidden", "true");
+        builder.CloseElement();
+        builder.AddContent(5, label);
+        builder.CloseElement();
     };
 
-    RenderFragment FnolRv(string label, string value) => __builder =>
+    private async Task ShowToast(string content, bool danger = false)
     {
-        <div class="fnol-rv-row">
-            <span class="fnol-rv-lbl">@label</span>
-            <span class="fnol-rv-val">@value</span>
-        </div>
-    };
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        var toast = new FnolToast(Guid.NewGuid(), content, danger ? "fnol-toast-danger" : "fnol-toast-success", danger ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill");
+        _toasts.Add(toast);
+        await InvokeAsync(StateHasChanged);
+        _ = Task.Run(async () => { await Task.Delay(4500); await InvokeAsync(() => DismissToast(toast.Id)); });
     }
+
+    private void DismissToast(Guid id)
+    {
+        _toasts.RemoveAll(t => t.Id == id);
+        StateHasChanged();
+    }
+
+    private sealed class FnolForm
+    {
+        [Required, StringLength(50)] public string PolicyNumber { get; set; } = string.Empty;
+        [Required, StringLength(160)] public string AccountName { get; set; } = string.Empty;
+        [Required, StringLength(80)] public string Lob { get; set; } = string.Empty;
+        [Required, StringLength(120)] public string Carrier { get; set; } = string.Empty;
+        public DateTime? PolicyEffectiveDate { get; set; }
+        public DateTime? PolicyExpirationDate { get; set; }
+        [Required] public DateTime DateOfLoss { get; set; } = DateTime.Today;
+        [Required] public DateTime DateReported { get; set; } = DateTime.Today;
+        [Required, StringLength(80)] public string LossType { get; set; } = string.Empty;
+        [StringLength(120)] public string? CauseOfLoss { get; set; }
+        public decimal? EstimatedAmount { get; set; }
+        [StringLength(400)] public string? LossLocation { get; set; }
+        [StringLength(20)] public string? StateOfLoss { get; set; }
+        [Required, StringLength(2000)] public string LossDescription { get; set; } = string.Empty;
+        [Required, StringLength(160)] public string PrimaryClaimant { get; set; } = string.Empty;
+        [StringLength(50)] public string? PrimaryClaimantPhone { get; set; }
+        [EmailAddress, StringLength(160)] public string? PrimaryClaimantEmail { get; set; }
+        [StringLength(80)] public string? PrimaryInjuryType { get; set; }
+        [StringLength(40)] public string LitigationStatus { get; set; } = "No";
+        [StringLength(40)] public string ThirdParty { get; set; } = "No";
+        public decimal? CoverageLimit { get; set; }
+        public decimal? Deductible { get; set; }
+        [StringLength(80)] public string? CatCode { get; set; }
+        [StringLength(2000)] public string? CoverageNotes { get; set; }
+        [Required, StringLength(120)] public string AssignedHandler { get; set; } = string.Empty;
+        [StringLength(120)] public string? ReportedBy { get; set; }
+        [StringLength(120)] public string? CarrierClaimNumber { get; set; }
+        public DateTime? CarrierReportDate { get; set; }
+        [StringLength(2000)] public string? InternalNotes { get; set; }
+        [StringLength(40)] public string Priority { get; set; } = "Standard";
+        public bool IsLitigation => LitigationStatus is "Attorney Retained" or "Suit Filed";
+        public bool IsDisputed { get; set; }
+        public bool HasSubrogation { get; set; }
+        public bool IsCatastrophe { get; set; }
+    }
+
+    private sealed record StepDef(string Key, string Title, string Icon);
+    private sealed record KpiTile(string Label, string Value, string Icon, string Tone, int Step, string Detail, string Title);
+    private sealed record FnolToast(Guid Id, string Content, string CssClass, string Icon);
 }

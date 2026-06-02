@@ -1,191 +1,320 @@
-﻿@page "/engagements"
+@page "/engagements"
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Engagements
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
-@using Ams.Application.Common.Dtos
-@using Ams.Application.Features.Engagements
 
-<PageTitle>Engagements — Operations</PageTitle>
-<AppPageHeader Title="Engagements Administration" Subtitle="Tenant admin oversight for customer engagements, delivery timelines, owners, and operational execution" Icon="bi-briefcase">
-    <Actions>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> New Engagement</button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
-    </Actions>
-</AppPageHeader>
+<PageTitle>Engagements</PageTitle>
 
-<section class="ma-hero twf-hero">
-    <div>
-        <span class="ma-eyebrow">Tenant Administration · Engagements</span>
-        <h2>Tenant Engagement Control Center</h2>
-        <p>Administer tenant-wide engagements, owners, delivery dates, milestones, activities, and service execution risk.</p>
-    </div>
-    <div class="ma-hero-actions">
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/agreements")'><i class="bi bi-file-earmark-check"></i> Agreements</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/ops/milestones")'><i class="bi bi-flag"></i> Milestones</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/ops/activities")'><i class="bi bi-clock-history"></i> Activity History</button>
-    </div>
-</section>
-<div class="pc-kpi-strip">
-    <div class="pc-kpi-card @(_filter == null ? "pc-kpi-card--active" : "")" @onclick="() => SetFilter(null)" title="Show all">
-        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-briefcase-fill"></i></span>
-        <div>
-            <div class="pc-kpi-value">@_items.Count</div>
-            <div class="pc-kpi-label">Total</div>
-        </div>
-    </div>
-    <div class="pc-kpi-card @(_filter == "Active" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Active")' title="Filter active">
-        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill"></i></span>
-        <div>
-            <div class="pc-kpi-value">@_items.Count(x => x.StatusCode == "Active")</div>
-            <div class="pc-kpi-label">Active</div>
-        </div>
-    </div>
-</div>
-<AppFilterPanel @bind-SearchValue="_searchTerm" OnSearch="OnSearchAsync" SearchPlaceholder="Search engagements…" />
-@if (_loadError is not null) {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+@if (_toastVisible)
+{
+    <div class="eng-toast eng-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="eng-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
-<div class="um-grid-card">
-    @if (_loading) {
-        <div class="um-loading-overlay">
-            <div class="um-spinner"></div><span>Loading…</span>
+
+<div class="eng-enterprise-page">
+    <section class="eng-hero">
+        <div class="eng-hero-left">
+            <span class="eng-hero-icon"><i class="bi bi-briefcase" aria-hidden="true"></i></span>
+            <div>
+                <div class="eng-title-row">
+                    <h1>Engagements</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> DB synced</span>
+                    <span><i class="bi bi-diagram-3" aria-hidden="true"></i> Workflow controlled</span>
+                </div>
+                <p>Enterprise engagement command center for customer delivery, status risk, service windows, account ownership, milestones, agreements, and operational execution.</p>
+            </div>
         </div>
+        <div class="eng-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "eng-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_items.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="OpenMilestones"><i class="bi bi-flag" aria-hidden="true"></i> Milestones</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Engagement</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="eng-error-banner" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
     }
-    <SfGrid TValue="EngagementDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-        <GridEvents TValue="EngagementDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="25" PageSizes="@(new[] { 25, 50, 100 })" />
-        <GridColumns>
-            <GridColumn Field="EngagementNumber" HeaderText="Eng #" Width="130" />
-            <GridColumn Field="EngagementName" HeaderText="Name" Width="250" />
-            <GridColumn Field="EngagementTypeCode" HeaderText="Type" Width="130" />
-            <GridColumn Field="StartDate" HeaderText="Start" Type="ColumnType.Date" Format="d" Width="120" />
-            <GridColumn Field="EndDate" HeaderText="End" Type="ColumnType.Date" Format="d" Width="120" />
-            <GridColumn Field="StatusCode" HeaderText="Status" Width="120" />
-            <GridColumn Field="CreatedDateUtc" HeaderText="Created" Type="ColumnType.DateTime" Format="d" Width="130" />
-            <GridColumn HeaderText="Actions" Width="120" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (EngagementDto)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true" title="Edit"><i class="bi bi-pencil"></i></button>
-                    <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true" title="Delete"><i class="bi bi-trash"></i></button>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
-<SfDialog @bind-Visible="_showForm" Width="560px" IsModal="true" ShowCloseIcon="false">
-    <DialogEvents Closed="ResetForm" />
-    <DialogContent>
-        <div class="um-modal-header">
-            <i class="bi bi-briefcase"></i><span>@(_editId.HasValue ? "Edit Engagement" : "New Engagement")</span>
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false">
-                <i class="bi bi-x-lg"></i>
-            </button>
+
+    <section class="eng-kpi-strip" aria-label="Engagement KPIs">
+        <button type="button" class="@AllKpiClass" @onclick="ShowAll"><span class="eng-kpi-icon"><i class="bi bi-briefcase-fill" aria-hidden="true"></i></span><span><strong>@_items.Count</strong><em>Total</em><small>Tenant engagements</small></span></button>
+        <button type="button" class="@ActiveKpiClass" @onclick="ShowActive"><span class="eng-kpi-icon"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span><span><strong>@ActiveCount</strong><em>Active</em><small>Currently in delivery</small></span></button>
+        <button type="button" class="@RiskKpiClass" @onclick="ShowAtRisk"><span class="eng-kpi-icon"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></span><span><strong>@AtRiskCount</strong><em>At Risk</em><small>Past due or on hold</small></span></button>
+        <button type="button" class="@DueKpiClass" @onclick="ShowDueSoon"><span class="eng-kpi-icon"><i class="bi bi-calendar2-week" aria-hidden="true"></i></span><span><strong>@DueSoonCount</strong><em>Due Soon</em><small>Ends within 30 days</small></span></button>
+        <button type="button" class="@CompletedKpiClass" @onclick="ShowCompleted"><span class="eng-kpi-icon"><i class="bi bi-trophy-fill" aria-hidden="true"></i></span><span><strong>@CompletedCount</strong><em>Completed</em><small>Closed delivery</small></span></button>
+        <button type="button" class="@UnscheduledKpiClass" @onclick="ShowUnscheduled"><span class="eng-kpi-icon"><i class="bi bi-calendar-x" aria-hidden="true"></i></span><span><strong>@UnscheduledCount</strong><em>Unscheduled</em><small>Missing dates</small></span></button>
+    </section>
+
+    <section class="eng-workflow-strip" aria-label="Engagement workflows">
+        <button type="button" class="eng-workflow-card" @onclick="ShowLibrary"><i class="bi bi-kanban" aria-hidden="true"></i><span><strong>Library</strong><small>Engagement register</small></span></button>
+        <button type="button" class="eng-workflow-card" @onclick="ShowTimelineView"><i class="bi bi-calendar-range" aria-hidden="true"></i><span><strong>Timeline</strong><small>Dates and risk</small></span></button>
+        <button type="button" class="eng-workflow-card" @onclick="ShowGovernance"><i class="bi bi-diagram-3" aria-hidden="true"></i><span><strong>Governance</strong><small>Status lanes</small></span></button>
+        <button type="button" class="eng-workflow-card" @onclick="OpenAgreements"><i class="bi bi-file-earmark-check" aria-hidden="true"></i><span><strong>Agreements</strong><small>Contract workflow</small></span></button>
+        <button type="button" class="eng-workflow-card" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i><span><strong>Create</strong><small>Add engagement</small></span></button>
+    </section>
+
+    <section class="eng-search-panel">
+        <div class="eng-search-wrap">
+            <span class="eng-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="eng-search-body">
+                <label for="eng-search">Engagement search</label>
+                <input id="eng-search" class="eng-search-input" @bind="_searchTerm" @bind:event="oninput" @bind:after="ApplyFilter" placeholder="Search number, name, type, status, account..." />
+                <span class="eng-search-hint">Filters real tenant engagement records and keeps KPIs, tabs, and detail selection in sync.</span>
+            </div>
         </div>
-        <EditForm @key="_form" Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="ShowValidation">
-            <DataAnnotationsValidator />
-            <div class="um-modal-body">
-                <div class="um-form-grid">
-                    <div class="um-field">
-                        <label>Engagement # <span class="text-danger">*</span></label>
-                        <InputText @bind-Value="_form.EngagementNumber" class="um-input" />
-                    </div>
-                    <div class="um-field">
-                        <label>Account Name <span class="text-danger">*</span></label>
-                        <SfDropDownList TValue="string" TItem="AccountOption" DataSource="_accounts" @bind-Value="_form.AccountIdText" AllowFiltering="true" FilterType="Syncfusion.Blazor.DropDowns.FilterType.Contains" Placeholder="Search account name" CssClass="um-input">
-                            <DropDownListFieldSettings Value="Value" Text="Label" />
-                        </SfDropDownList>
-                        @if (_showValidation)
-                        {
-                        }
-                    </div>
-                    <div class="um-field">
-                        <label>Name <span class="text-danger">*</span></label>
-                        <InputText @bind-Value="_form.EngagementName" class="um-input" />
-                    </div>
-                    <div class="um-field">
-                        <label>Type <span class="text-danger">*</span></label>
-                        <InputSelect @bind-Value="_form.EngagementTypeCode" class="um-input">
-                            @foreach (var type in _taskTypes.Where(x => x.IsActive))
+        <select class="eng-filter-select" @bind="_statusFilter" @bind:after="ApplyFilter" aria-label="Status filter">
+            <option value="all">All statuses</option>
+            @foreach (var status in StatusOptions)
+            {
+                <option value="@status">@status</option>
+            }
+        </select>
+        <select class="eng-filter-select" @bind="_priorityFilter" @bind:after="ApplyFilter" aria-label="Priority filter">
+            <option value="all">All priority</option>
+            <option value="risk">At risk</option>
+            <option value="due">Due soon</option>
+            <option value="completed">Completed</option>
+            <option value="unscheduled">Unscheduled</option>
+        </select>
+        <select class="eng-filter-select" @bind="_typeFilter" @bind:after="ApplyFilter" aria-label="Type filter">
+            <option value="all">All types</option>
+            @foreach (var type in TypeOptions)
+            {
+                <option value="@type">@type</option>
+            }
+        </select>
+        <div class="eng-search-result"><strong>@_filtered.Count</strong><span>records</span></div>
+    </section>
+
+    <nav class="eng-view-tabs" aria-label="Engagement views">
+        @foreach (var view in _views)
+        {
+            <button type="button" class="eng-view-btn @(_activeView == view ? "eng-view-btn-active" : null)" @onclick="() => SetView(view)">@view</button>
+        }
+    </nav>
+
+    <section class="eng-content-layout">
+        <div class="eng-main-card">
+            @if (_loading)
+            {
+                <div class="eng-loading"><i class="bi bi-arrow-repeat eng-spin" aria-hidden="true"></i><span>Loading engagements...</span></div>
+            }
+            else if (_filtered.Count == 0)
+            {
+                <div class="eng-empty-state"><i class="bi bi-briefcase" aria-hidden="true"></i><h2>No engagements found</h2><p>Adjust filters or create the first tenant engagement.</p><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Engagement</button></div>
+            }
+            else if (_activeView == "Timeline")
+            {
+                <div class="eng-governance-grid">
+                    <section class="eng-panel">
+                        <header><div><i class="bi bi-calendar-range" aria-hidden="true"></i><strong>Timeline Health</strong></div><span>@TimelineScore.ToString("F0")%</span></header>
+                        <div class="eng-panel-body eng-metric-list">
+                            <div class="eng-metric-row"><span>Active</span><div><i style="@WidthStyle(ActiveCount, SafeTotal)"></i></div><strong>@ActiveCount</strong></div>
+                            <div class="eng-metric-row"><span>Due soon</span><div><i style="@WidthStyle(DueSoonCount, SafeTotal)"></i></div><strong>@DueSoonCount</strong></div>
+                            <div class="eng-metric-row"><span>At risk</span><div><i style="@WidthStyle(AtRiskCount, SafeTotal)"></i></div><strong>@AtRiskCount</strong></div>
+                            <div class="eng-metric-row"><span>Unscheduled</span><div><i style="@WidthStyle(UnscheduledCount, SafeTotal)"></i></div><strong>@UnscheduledCount</strong></div>
+                        </div>
+                    </section>
+                    <section class="eng-panel">
+                        <header><div><i class="bi bi-tags" aria-hidden="true"></i><strong>Engagement Types</strong></div><span>@TypeOptions.Count</span></header>
+                        <div class="eng-panel-body eng-group-list">
+                            @foreach (var group in TypeSummaries)
                             {
-                                <option value="@type.TaskTypeCode">@type.TaskTypeName</option>
+                                <button type="button" class="eng-group-row" @onclick="() => FilterType(group.Name)"><span>@group.Name</span><div><i style="@WidthStyle(group.Count, SafeTotal)"></i></div><strong>@group.Count</strong></button>
                             }
-                        </InputSelect>
+                        </div>
+                    </section>
+                    <section class="eng-panel eng-panel-wide">
+                        <header><div><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><strong>Engagement Risk Queue</strong></div><span>@RiskQueue.Count</span></header>
+                        <div class="eng-panel-body eng-review-list">
+                            @foreach (var item in RiskQueue.Take(8))
+                            {
+                                <button type="button" class="eng-review-row" @onclick="() => SelectItem(item)"><strong>@item.EngagementName</strong><span>@RiskReason(item)</span><em>@PriorityLabel(item)</em></button>
+                            }
+                        </div>
+                    </section>
+                </div>
+            }
+            else if (_activeView == "Governance")
+            {
+                <div class="eng-board">
+                    @foreach (var lane in GovernanceLanes)
+                    {
+                        <section class="eng-board-col">
+                            <header><strong>@lane.Title</strong><span>@lane.Items.Count</span></header>
+                            @foreach (var item in lane.Items)
+                            {
+                                <button type="button" class="eng-board-card" @onclick="() => SelectItem(item)">
+                                    <div><strong>@item.EngagementName</strong><span>@item.EngagementNumber</span></div>
+                                    <small>@AccountName(item.AccountId) · @DateRange(item)</small>
+                                    <em>@PriorityLabel(item)</em>
+                                </button>
+                            }
+                        </section>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="eng-table-scroll">
+                    <table class="eng-table">
+                        <thead><tr><th>Engagement</th><th>Account</th><th>Type</th><th>Timeline</th><th>Priority</th><th>Status</th><th>Created</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var item in _filtered)
+                            {
+                                <tr @onclick="() => SelectItem(item)">
+                                    <td><div class="eng-name-cell"><span class="eng-avatar @AvatarClass(item)">@Initials(item.EngagementName)</span><span><strong>@item.EngagementName</strong><small>@item.EngagementNumber</small></span></div></td>
+                                    <td>@AccountName(item.AccountId)</td>
+                                    <td><span class="eng-code-pill">@item.EngagementTypeCode</span></td>
+                                    <td>@DateRange(item)</td>
+                                    <td><span class="@PriorityClass(item)">@PriorityLabel(item)</span></td>
+                                    <td><span class="@StatusClass(item)">@StatusLabel(item)</span></td>
+                                    <td>@item.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</td>
+                                    <td><div class="eng-row-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(item)" title="Delete"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <aside class="eng-detail-card" aria-label="Selected engagement">
+            @if (_selected is null)
+            {
+                <div class="eng-detail-empty"><i class="bi bi-briefcase" aria-hidden="true"></i><h2>Engagement command brief</h2><p>Select an engagement to review status, timeline, account, risk, and actions.</p></div>
+            }
+            else
+            {
+                <div class="eng-detail-head"><div><span class="eng-detail-eyebrow"><i class="bi bi-briefcase" aria-hidden="true"></i> @AccountName(_selected.AccountId)</span><h2>@_selected.EngagementName</h2><p>@_selected.EngagementNumber</p></div><span class="@StatusClass(_selected)">@StatusLabel(_selected)</span></div>
+                <div class="eng-detail-body">
+                    <div class="eng-detail-summary">
+                        <div><span>Priority</span><strong>@PriorityLabel(_selected)</strong></div>
+                        <div><span>Type</span><strong>@_selected.EngagementTypeCode</strong></div>
+                        <div><span>Start</span><strong>@FormatDate(_selected.StartDate)</strong></div>
+                        <div><span>End</span><strong>@FormatDate(_selected.EndDate)</strong></div>
                     </div>
-                    <div class="um-field">
-                        <label>Start</label>
-                        <InputDate @bind-Value="_form.StartDate" class="um-input" />
-                    </div>
-                    <div class="um-field">
-                        <label>End</label>
-                        <InputDate @bind-Value="_form.EndDate" class="um-input" />
-                    </div>
-                    <div class="um-field">
-                        <label>Status <span class="text-danger">*</span></label>
-                        <InputSelect @bind-Value="_form.StatusCode" class="um-input"><option>Active</option><option>On Hold</option><option>Completed</option><option>Cancelled</option></InputSelect>
+                    <div class="eng-config-card"><span>Risk brief</span><strong>@RiskReason(_selected)</strong><small>@DateRange(_selected)</small></div>
+                    <div class="eng-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit Engagement</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="DuplicateSelected"><i class="bi bi-files" aria-hidden="true"></i> Duplicate</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="ToggleSelectedStatus"><i class="bi bi-power" aria-hidden="true"></i> @(_selected.StatusCode == "Active" ? "Put On Hold" : "Activate")</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="OpenMilestones"><i class="bi bi-flag" aria-hidden="true"></i> Milestones</button>
+                        <button type="button" class="um-btn um-btn-ghost text-danger" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
                     </div>
                 </div>
-            </div>
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
-                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button>
-            </div>
-        </EditForm>
-    </DialogContent>
-</SfDialog>
-@if (_showDelete && _deleteTarget is not null)
+            }
+        </aside>
+    </section>
+</div>
+
+@if (_showForm)
 {
-    <div class="mt-modal-backdrop" @onclick="() => _showDelete = false">
-        <div class="um-confirm-dialog mt-confirm" @onclick:stopPropagation="true">
-            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div>
-            <div class="um-confirm-title">Delete engagement?</div>
-            <div class="um-confirm-text">This will remove <strong>@_deleteTarget.EngagementName</strong>.</div>
-            <div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div>
+    <div class="eng-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="eng-form-title">
+        <div class="eng-modal">
+            <div class="eng-modal-header"><div class="eng-modal-title"><span class="eng-modal-icon"><i class="bi bi-briefcase" aria-hidden="true"></i></span><div><h2 id="eng-form-title">@(_editId.HasValue ? "Edit Engagement" : "New Engagement")</h2><p>Configure account, engagement type, status, and delivery timeline.</p></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseForm" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm @key="_form" Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="ShowValidation">
+                <DataAnnotationsValidator />
+                <div class="eng-modal-body">
+                    <div class="eng-form-banner"><i class="bi bi-info-circle" aria-hidden="true"></i><span><strong>Engagement governance</strong> Use stable engagement numbers, account alignment, lifecycle dates, and status controls for delivery execution.</span></div>
+                    <div class="eng-form-grid">
+                        <div class="eng-field"><label>Engagement # <span>*</span></label><InputText @bind-Value="_form.EngagementNumber" class="eng-input" /><ValidationMessage For="() => _form.EngagementNumber" class="text-danger" /></div>
+                        <div class="eng-field"><label>Account <span>*</span></label><InputSelect @bind-Value="_form.AccountIdText" class="eng-input"><option value="">Select account</option>@foreach (var account in _accounts){<option value="@account.Value">@account.Label</option>}</InputSelect><ValidationMessage For="() => _form.AccountIdText" class="text-danger" /></div>
+                        <div class="eng-field eng-field-wide"><label>Name <span>*</span></label><InputText @bind-Value="_form.EngagementName" class="eng-input" /><ValidationMessage For="() => _form.EngagementName" class="text-danger" /></div>
+                        <div class="eng-field"><label>Type <span>*</span></label><InputSelect @bind-Value="_form.EngagementTypeCode" class="eng-input">@foreach (var type in ActiveTaskTypes){<option value="@type.TaskTypeCode">@type.TaskTypeName</option>}</InputSelect><ValidationMessage For="() => _form.EngagementTypeCode" class="text-danger" /></div>
+                        <div class="eng-field"><label>Status <span>*</span></label><InputSelect @bind-Value="_form.StatusCode" class="eng-input"><option>Active</option><option>On Hold</option><option>Completed</option><option>Cancelled</option></InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                        <div class="eng-field"><label>Start</label><InputDate @bind-Value="_form.StartDate" class="eng-input" /></div>
+                        <div class="eng-field"><label>End</label><InputDate @bind-Value="_form.EndDate" class="eng-input" /></div>
+                    </div>
+                </div>
+                <div class="eng-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check2" aria-hidden="true"></i> @(_editId.HasValue ? "Save Changes" : "Create Engagement")</button></div>
+            </EditForm>
         </div>
     </div>
 }
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
-<style>
-    @@keyframes um-shake {
-        0%,
-        100% {
-            transform: translateX(0)
-        }
-        25% {
-            transform: translateX(-4px)
-        }
-        75% {
-            transform: translateX(4px)
-        }
-    }
-</style>
+
+@if (_showDelete)
+{
+    <div class="eng-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="eng-delete-title">
+        <div class="eng-confirm-modal">
+            <div class="eng-confirm-icon"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
+            <h2 id="eng-delete-title">Delete Engagement</h2>
+            <p>Delete <strong>@_deleteTarget?.EngagementName</strong>? Engagement history may still be referenced by operational records.</p>
+            <div class="eng-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete">Cancel</button><button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div>
+        </div>
+    </div>
+}
+
 @code {
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
+    private Guid TenantId { get; set; }
+    private Guid TenantAdminUserId { get; set; }
     private Guid _tenantId;
     private Guid _tenantAdminUserId;
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    string? _searchTerm, _loadError, _filter;
-    bool _loading, _saving, _showForm, _showDelete, _showValidation;
-    Guid? _editId;
-    EngagementDto? _deleteTarget;
-    List<EngagementDto> _items = [], _filtered = [];
-    List<AccountOption> _accounts = [];
-    List<TaskTypeDto> _taskTypes = [];
-    SfToast _toast = default!;
-    EngagementForm _form = new();
+    private bool _loading;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private bool _toastVisible;
+    private string _searchTerm = string.Empty;
+    private string _statusFilter = "all";
+    private string _priorityFilter = "all";
+    private string _typeFilter = "all";
+    private string _activeView = "Library";
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private Guid? _editId;
+    private EngagementDto? _selected;
+    private EngagementDto? _deleteTarget;
+    private readonly string[] _views = ["Library", "Timeline", "Governance"];
+    private List<EngagementDto> _items = [];
+    private List<EngagementDto> _filtered = [];
+    private List<AccountOption> _accounts = [];
+    private List<TaskTypeDto> _taskTypes = [];
+    private EngagementForm _form = new();
+
+    private IEnumerable<TaskTypeDto> ActiveTaskTypes => _taskTypes.Where(x => x.IsActive);
+    private int ActiveCount => _items.Count(IsActive);
+    private int AtRiskCount => _items.Count(IsAtRisk);
+    private int DueSoonCount => _items.Count(IsDueSoon);
+    private int CompletedCount => _items.Count(IsCompleted);
+    private int UnscheduledCount => _items.Count(IsUnscheduled);
+    private int SafeTotal => Math.Max(_items.Count, 1);
+    private double TimelineScore => _items.Count == 0 ? 0 : (ActiveCount + DueSoonCount + CompletedCount - AtRiskCount - UnscheduledCount) * 100d / Math.Max(_items.Count * 3, 1);
+    private List<string> StatusOptions => _items.Select(x => StatusLabel(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+    private List<string> TypeOptions => _items.Select(x => TypeLabel(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+    private List<GroupSummary> TypeSummaries => _items.GroupBy(TypeLabel, StringComparer.OrdinalIgnoreCase).Select(g => new GroupSummary(g.Key, g.Count())).OrderByDescending(x => x.Count).ToList();
+    private List<EngagementDto> RiskQueue => _items.Where(x => IsAtRisk(x) || IsUnscheduled(x)).OrderBy(x => x.EndDate ?? DateOnly.MaxValue).ThenBy(x => x.EngagementName).ToList();
+    private List<GovernanceLane> GovernanceLanes =>
+    [
+        new("Active", _filtered.Where(IsActive).ToList()),
+        new("At Risk", _filtered.Where(IsAtRisk).ToList()),
+        new("Completed", _filtered.Where(IsCompleted).ToList()),
+    ];
+    private string ToastIcon => _toastKind == "success" ? "bi-check-circle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-exclamation-triangle-fill";
+    private string AllKpiClass => KpiClass("all", "eng-blue");
+    private string ActiveKpiClass => KpiClass("active", "eng-green");
+    private string RiskKpiClass => KpiClass("risk", "eng-amber");
+    private string DueKpiClass => KpiClass("due", "eng-cyan");
+    private string CompletedKpiClass => KpiClass("completed", "eng-purple");
+    private string UnscheduledKpiClass => KpiClass("unscheduled", "eng-slate");
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Tasks & Workflows", "/tasks"), new("Engagements", null));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Tasks & Workflows", "/tasks"), new("Engagements", "/engagements"));
         await LoadAsync();
     }
 
-    async Task LoadAsync()
+    private async Task LoadAsync()
     {
         _loading = true;
         _loadError = null;
@@ -194,12 +323,14 @@
             await LoadAccountsAsync();
             await LoadTaskTypesAsync();
             var result = await Api.SearchEngagementsAsync(TenantId, _searchTerm);
-            _items = result?.Items.ToList() ?? [];
+            _items = result?.Items.OrderByDescending(x => x.CreatedDateUtc).ThenBy(x => x.EngagementName).ToList() ?? [];
             ApplyFilter();
+            _selected ??= _filtered.FirstOrDefault();
         }
         catch (Exception ex)
         {
             _loadError = $"Failed to load engagements: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
         }
         finally
         {
@@ -207,30 +338,45 @@
         }
     }
 
-    Task OnSearchAsync() => LoadAsync();
-
-    void ApplyFilter() => _filtered = _filter is null ? [.. _items] : _items.Where(x => x.StatusCode == _filter).ToList();
-
-    void SetFilter(string? f)
+    private void ApplyFilter()
     {
-        _filter = f;
-        ApplyFilter();
+        IEnumerable<EngagementDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm)) query = query.Where(MatchesSearch);
+        if (_statusFilter != "all") query = query.Where(x => string.Equals(StatusLabel(x), _statusFilter, StringComparison.OrdinalIgnoreCase));
+        if (_priorityFilter == "risk") query = query.Where(IsAtRisk);
+        else if (_priorityFilter == "due") query = query.Where(IsDueSoon);
+        else if (_priorityFilter == "completed") query = query.Where(IsCompleted);
+        else if (_priorityFilter == "unscheduled") query = query.Where(IsUnscheduled);
+        if (_typeFilter != "all") query = query.Where(x => string.Equals(TypeLabel(x), _typeFilter, StringComparison.OrdinalIgnoreCase));
+        _filtered = query.OrderBy(x => IsAtRisk(x) ? 0 : IsDueSoon(x) ? 1 : 2).ThenBy(x => x.EndDate ?? DateOnly.MaxValue).ThenBy(x => x.EngagementName).ToList();
+        if (_selected is not null && !_filtered.Any(x => x.EngagementId == _selected.EngagementId)) _selected = _filtered.FirstOrDefault();
     }
 
-    void OnRowSelected(RowSelectEventArgs<EngagementDto> args) => OpenEdit(args.Data);
+    private void ShowAll() { _statusFilter = "all"; _priorityFilter = "all"; _typeFilter = "all"; ApplyFilter(); }
+    private void ShowActive() { _statusFilter = "Active"; _priorityFilter = "all"; ApplyFilter(); }
+    private void ShowAtRisk() { _statusFilter = "all"; _priorityFilter = "risk"; ApplyFilter(); }
+    private void ShowDueSoon() { _statusFilter = "all"; _priorityFilter = "due"; ApplyFilter(); }
+    private void ShowCompleted() { _statusFilter = "Completed"; _priorityFilter = "completed"; ApplyFilter(); }
+    private void ShowUnscheduled() { _statusFilter = "all"; _priorityFilter = "unscheduled"; ApplyFilter(); }
+    private void ShowLibrary() => SetView("Library");
+    private void ShowTimelineView() => SetView("Timeline");
+    private void ShowGovernance() => SetView("Governance");
+    private void SetView(string view) => _activeView = view;
+    private void FilterType(string type) { _typeFilter = type; ApplyFilter(); }
+    private void SelectItem(EngagementDto item) => _selected = item;
+    private void OpenMilestones() => Nav.NavigateTo("/ops/milestones");
+    private void OpenAgreements() => Nav.NavigateTo("/agreements");
 
-    void OpenCreate()
+    private void OpenCreate()
     {
         _editId = null;
-        _showValidation = false;
-        _form = new() { EngagementNumber = $"ENG-{DateTime.UtcNow:yyyyMMddHHmmss}", EngagementTypeCode = GetDefaultTaskTypeCode("Engagement") };
+        _form = new() { EngagementNumber = $"ENG-{DateTime.UtcNow:yyyyMMddHHmmss}", EngagementTypeCode = GetDefaultTaskTypeCode("Engagement"), StatusCode = "Active", StartDate = DateOnly.FromDateTime(DateTime.Today) };
         _showForm = true;
     }
 
-    void OpenEdit(EngagementDto item)
+    private void OpenEdit(EngagementDto item)
     {
         _editId = item.EngagementId;
-        _showValidation = false;
         _form = new()
         {
             EngagementNumber = item.EngagementNumber,
@@ -244,44 +390,50 @@
         _showForm = true;
     }
 
-    void ConfirmDelete(EngagementDto item) { _deleteTarget = item; _showDelete = true; }
-
-    async Task SaveAsync()
+    private async Task SaveAsync()
     {
-        _showValidation = true;
         _saving = true;
         try
         {
+            var accountId = Guid.Parse(_form.AccountIdText);
             if (_editId.HasValue)
+            {
                 await Api.UpdateEngagementAsync(_editId.Value, new()
                 {
-                    EngagementNumber = _form.EngagementNumber,
-                    AccountId = Guid.Parse(_form.AccountIdText),
-                    EngagementName = _form.EngagementName,
+                    EngagementNumber = _form.EngagementNumber.Trim(),
+                    AccountId = accountId,
+                    EngagementName = _form.EngagementName.Trim(),
                     EngagementTypeCode = _form.EngagementTypeCode,
                     StartDate = _form.StartDate,
                     EndDate = _form.EndDate,
                     StatusCode = _form.StatusCode,
                     ModifiedByUserId = TenantAdminUserId
                 });
+                ShowToast("Engagement updated.");
+            }
             else
-                await Api.CreateEngagementAsync(new()
+            {
+                var id = await Api.CreateEngagementAsync(new()
                 {
                     TenantId = TenantId,
-                    EngagementNumber = _form.EngagementNumber,
-                    AccountId = Guid.Parse(_form.AccountIdText),
-                    EngagementName = _form.EngagementName,
+                    EngagementNumber = _form.EngagementNumber.Trim(),
+                    AccountId = accountId,
+                    EngagementName = _form.EngagementName.Trim(),
                     EngagementTypeCode = _form.EngagementTypeCode,
                     StartDate = _form.StartDate,
-                    EndDate = _form.EndDate
+                    EndDate = _form.EndDate,
+                    CreatedByUserId = TenantAdminUserId
                 });
+                _editId = id;
+                ShowToast("Engagement created.");
+            }
             _showForm = false;
-            await _toast.ShowAsync(new() { Content = _editId.HasValue ? "Engagement updated" : "Engagement created", CssClass = "e-toast-success" });
             await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.EngagementId == _editId) ?? _selected;
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" });
+            ShowToast($"Save failed: {ex.Message}", "danger");
         }
         finally
         {
@@ -289,20 +441,22 @@
         }
     }
 
-    async Task ExecuteDeleteAsync()
+    private void ConfirmDelete(EngagementDto item) { _deleteTarget = item; _showDelete = true; }
+    private async Task ExecuteDeleteAsync()
     {
         if (_deleteTarget is null) return;
         _saving = true;
         try
         {
             await Api.DeleteEngagementAsync(_deleteTarget.EngagementId, TenantAdminUserId);
+            ShowToast("Engagement deleted.");
+            if (_selected?.EngagementId == _deleteTarget.EngagementId) _selected = null;
             _showDelete = false;
-            await _toast.ShowAsync(new() { Content = "Engagement deleted", CssClass = "e-toast-success" });
             await LoadAsync();
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" });
+            ShowToast($"Delete failed: {ex.Message}", "danger");
         }
         finally
         {
@@ -310,58 +464,168 @@
         }
     }
 
-    void ResetForm() { _form = new(); _editId = null; _showValidation = false; }
+    private void DuplicateSelected()
+    {
+        if (_selected is null) return;
+        _editId = null;
+        _form = new()
+        {
+            EngagementNumber = $"{_selected.EngagementNumber}-COPY",
+            AccountIdText = _selected.AccountId.ToString(),
+            EngagementName = $"{_selected.EngagementName} Copy",
+            EngagementTypeCode = _selected.EngagementTypeCode,
+            StartDate = _selected.StartDate,
+            EndDate = _selected.EndDate,
+            StatusCode = "Active"
+        };
+        _showForm = true;
+    }
 
-    void ShowValidation() => _showValidation = true;
+    private async Task ToggleSelectedStatus()
+    {
+        if (_selected is null) return;
+        _saving = true;
+        try
+        {
+            var nextStatus = _selected.StatusCode == "Active" ? "On Hold" : "Active";
+            await Api.UpdateEngagementAsync(_selected.EngagementId, new()
+            {
+                EngagementNumber = _selected.EngagementNumber,
+                AccountId = _selected.AccountId,
+                EngagementName = _selected.EngagementName,
+                EngagementTypeCode = _selected.EngagementTypeCode,
+                StartDate = _selected.StartDate,
+                EndDate = _selected.EndDate,
+                StatusCode = nextStatus,
+                ModifiedByUserId = TenantAdminUserId
+            });
+            ShowToast(nextStatus == "Active" ? "Engagement activated." : "Engagement put on hold.");
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.EngagementId == _selected.EngagementId) ?? _selected;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Status update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
 
-    async Task LoadAccountsAsync()
+    private Task ExportAsync()
+    {
+        var rows = new List<string> { "Number,Name,Account,Type,Status,Priority,Start,End,Created" };
+        rows.AddRange(_filtered.Select(x => string.Join(',', Csv(x.EngagementNumber), Csv(x.EngagementName), Csv(AccountName(x.AccountId)), Csv(x.EngagementTypeCode), Csv(StatusLabel(x)), Csv(PriorityLabel(x)), Csv(FormatDate(x.StartDate)), Csv(FormatDate(x.EndDate)), Csv(x.CreatedDateUtc.ToString("O")))));
+        Nav.NavigateTo("data:text/csv;charset=utf-8," + Uri.EscapeDataString(string.Join(Environment.NewLine, rows)), forceLoad: true);
+        ShowToast("Engagement export generated.");
+        return Task.CompletedTask;
+    }
+
+    private async Task LoadAccountsAsync()
     {
         if (_accounts.Count > 0) return;
         var result = await Api.SearchAccountsAsync(TenantId);
         _accounts = (result?.Items ?? []).OrderBy(x => x.AccountName).Select(x => new AccountOption(x.AccountId.ToString(), x.AccountName)).ToList();
     }
 
-    async Task LoadTaskTypesAsync()
+    private async Task LoadTaskTypesAsync()
     {
         if (_taskTypes.Count > 0) return;
         var result = await Api.SearchTaskTypesAsync(TenantId, pageSize: 250);
         _taskTypes = (result?.Items ?? []).OrderBy(x => x.SortOrder).ThenBy(x => x.TaskTypeName).ToList();
     }
 
-    string GetDefaultTaskTypeCode(string defaultCode) => _taskTypes.FirstOrDefault(x => x.TaskTypeCode == defaultCode)?.TaskTypeCode ?? defaultCode;
+    private void ShowValidation() => ShowToast("Please fix validation errors before saving.", "danger");
+    private void CloseForm() { _showForm = false; _form = new(); _editId = null; }
+    private void CancelDelete() { _showDelete = false; _deleteTarget = null; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
 
-    sealed record AccountOption(string Value, string Label);
-
-    sealed class EngagementForm
+    private string KpiClass(string key, string tone)
     {
-        [Required, StringLength(50)]
-        public string EngagementNumber { get; set; } = string.Empty;
-
-        [Required(ErrorMessage = "Select an account.")]
-        public string AccountIdText { get; set; } = string.Empty;
-
-        [Required, StringLength(200)]
-        public string EngagementName { get; set; } = string.Empty;
-
-        [Required, StringLength(50)]
-        public string EngagementTypeCode { get; set; } = "Engagement";
-
-        public DateOnly? StartDate { get; set; } = DateOnly.FromDateTime(DateTime.Today);
-
-        public DateOnly? EndDate { get; set; }
-
-        [Required, StringLength(50)]
-        public string StatusCode { get; set; } = "Active";
+        var active = false;
+        if (key == "all") active = _statusFilter == "all" && _priorityFilter == "all" && _typeFilter == "all";
+        else if (key == "active") active = _statusFilter == "Active";
+        else if (key == "risk") active = _priorityFilter == "risk";
+        else if (key == "due") active = _priorityFilter == "due";
+        else if (key == "completed") active = _priorityFilter == "completed";
+        else if (key == "unscheduled") active = _priorityFilter == "unscheduled";
+        return $"eng-kpi-card {tone}{(active ? " eng-kpi-card-active" : string.Empty)}";
     }
 
-    async Task ResolveCurrentUserContextAsync()
+    private bool MatchesSearch(EngagementDto item)
+    {
+        var q = _searchTerm.Trim();
+        return Contains(item.EngagementNumber, q) || Contains(item.EngagementName, q) || Contains(item.EngagementTypeCode, q) || Contains(item.StatusCode, q) || Contains(AccountName(item.AccountId), q);
+    }
+
+    private static bool Contains(string? value, string search) => value?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
+    private static bool IsActive(EngagementDto item) => string.Equals(item.StatusCode, "Active", StringComparison.OrdinalIgnoreCase);
+    private static bool IsCompleted(EngagementDto item) => string.Equals(item.StatusCode, "Completed", StringComparison.OrdinalIgnoreCase);
+    private static bool IsOnHold(EngagementDto item) => string.Equals(item.StatusCode, "On Hold", StringComparison.OrdinalIgnoreCase);
+    private static bool IsCancelled(EngagementDto item) => string.Equals(item.StatusCode, "Cancelled", StringComparison.OrdinalIgnoreCase);
+    private static bool IsPastDue(EngagementDto item) => item.EndDate.HasValue && item.EndDate.Value < DateOnly.FromDateTime(DateTime.Today) && !IsCompleted(item) && !IsCancelled(item);
+    private static bool IsDueSoon(EngagementDto item) => item.EndDate.HasValue && item.EndDate.Value >= DateOnly.FromDateTime(DateTime.Today) && item.EndDate.Value <= DateOnly.FromDateTime(DateTime.Today.AddDays(30)) && !IsCompleted(item) && !IsCancelled(item);
+    private static bool IsUnscheduled(EngagementDto item) => !item.StartDate.HasValue || !item.EndDate.HasValue;
+    private static bool IsAtRisk(EngagementDto item) => IsOnHold(item) || IsPastDue(item);
+    private static string StatusLabel(EngagementDto item) => string.IsNullOrWhiteSpace(item.StatusCode) ? "Unassigned" : item.StatusCode.Trim();
+    private static string TypeLabel(EngagementDto item) => string.IsNullOrWhiteSpace(item.EngagementTypeCode) ? "Unassigned" : item.EngagementTypeCode.Trim();
+    private static string StatusClass(EngagementDto item) => IsCompleted(item) ? "eng-status eng-status-completed" : IsActive(item) ? "eng-status eng-status-active" : IsAtRisk(item) ? "eng-status eng-status-risk" : "eng-status eng-status-inactive";
+    private static string PriorityLabel(EngagementDto item) => IsAtRisk(item) ? "At Risk" : IsDueSoon(item) ? "Due Soon" : IsUnscheduled(item) ? "Unscheduled" : IsCompleted(item) ? "Completed" : "On Track";
+    private static string PriorityClass(EngagementDto item) => IsAtRisk(item) ? "eng-priority eng-priority-risk" : IsDueSoon(item) ? "eng-priority eng-priority-due" : IsUnscheduled(item) ? "eng-priority eng-priority-unscheduled" : IsCompleted(item) ? "eng-priority eng-priority-completed" : "eng-priority eng-priority-track";
+    private static string RiskReason(EngagementDto item)
+    {
+        if (IsPastDue(item)) return "Engagement end date is past due and the engagement is not completed.";
+        if (IsOnHold(item)) return "Engagement is currently on hold and needs operational review.";
+        if (IsUnscheduled(item)) return "Engagement is missing a start or end date.";
+        if (IsDueSoon(item)) return "Engagement is due within the next 30 days.";
+        if (IsCompleted(item)) return "Engagement is completed.";
+        return "Engagement is on track.";
+    }
+
+    private string AccountName(Guid accountId) => _accounts.FirstOrDefault(x => string.Equals(x.Value, accountId.ToString(), StringComparison.OrdinalIgnoreCase))?.Label ?? "Unassigned account";
+    private string GetDefaultTaskTypeCode(string defaultCode) => _taskTypes.FirstOrDefault(x => x.TaskTypeCode == defaultCode)?.TaskTypeCode ?? ActiveTaskTypes.FirstOrDefault()?.TaskTypeCode ?? defaultCode;
+    private static string DateRange(EngagementDto item) => $"{FormatDate(item.StartDate)} → {FormatDate(item.EndDate)}";
+    private static string FormatDate(DateOnly? value) => value?.ToString("MMM d, yyyy") ?? "Not set";
+    private static string WidthStyle(int value, int max) => $"width:{Math.Clamp((int)Math.Round(value * 100d / Math.Max(max, 1)), 0, 100)}%;";
+    private static string AvatarClass(EngagementDto item)
+    {
+        var index = Math.Abs(item.EngagementNumber.GetHashCode()) % 6;
+        if (index == 0) return "eng-av1";
+        if (index == 1) return "eng-av2";
+        if (index == 2) return "eng-av3";
+        if (index == 3) return "eng-av4";
+        if (index == 4) return "eng-av5";
+        return "eng-av6";
+    }
+    private static string Initials(string name)
+    {
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant() : name.Length > 0 ? name[..1].ToUpperInvariant() : "?";
+    }
+    private static string Csv(string? value) => string.Concat("\"", (value ?? string.Empty).Replace("\"", "\"\""), "\"");
+
+    private async Task ResolveCurrentUserContextAsync()
     {
         var context = await CurrentUser.RequireAsync();
         TenantId = context.TenantId;
         TenantAdminUserId = context.UserId;
         _tenantId = context.TenantId;
         _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+    }
+
+    private sealed record AccountOption(string Value, string Label);
+    private sealed record GroupSummary(string Name, int Count);
+    private sealed record GovernanceLane(string Title, List<EngagementDto> Items);
+    private sealed class EngagementForm
+    {
+        [Required, StringLength(50)] public string EngagementNumber { get; set; } = string.Empty;
+        [Required(ErrorMessage = "Select an account.")] public string AccountIdText { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string EngagementName { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string EngagementTypeCode { get; set; } = "Engagement";
+        public DateOnly? StartDate { get; set; } = DateOnly.FromDateTime(DateTime.Today);
+        public DateOnly? EndDate { get; set; }
+        [Required, StringLength(50)] public string StatusCode { get; set; } = "Active";
     }
 }

@@ -1,0 +1,602 @@
+@page "/documents/forms"
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Documents
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Document Forms — AMS Enterprise</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="df-toast df-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="df-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showCreate)
+{
+    <div class="df-modal-backdrop" role="presentation" @onclick="CloseCreate">
+        <div class="df-modal" role="dialog" aria-modal="true" aria-labelledby="df-create-title" @onclick:stopPropagation="true">
+            <div class="df-modal-header">
+                <div class="df-modal-title">
+                    <span class="df-modal-icon"><i class="bi bi-file-earmark-plus" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 id="df-create-title">Create ACORD Form</h2>
+                        <p>Add a governed form record for servicing, policy, and client workflows.</p>
+                    </div>
+                </div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseCreate" disabled="@_busy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_createForm" OnValidSubmit="CreateAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="df-modal-body">
+                    <div class="df-form-banner">
+                        <i class="bi bi-shield-check" aria-hidden="true"></i>
+                        <div>
+                            <strong>Enterprise form governance</strong>
+                            <span>Use DB-backed ACORD form records with owner, policy, LOB, status, and AI prefill metadata.</span>
+                        </div>
+                    </div>
+                    <div class="df-form-grid">
+                        <div class="df-field">
+                            <label>Form Number <span>*</span></label>
+                            <InputText class="df-input" @bind-Value="_createForm.FormNumber" placeholder="ACORD 25" />
+                        </div>
+                        <div class="df-field">
+                            <label>Form Name <span>*</span></label>
+                            <InputText class="df-input" @bind-Value="_createForm.FormName" placeholder="Certificate of Liability Insurance" />
+                        </div>
+                        <div class="df-field">
+                            <label>Line of Business <span>*</span></label>
+                            <InputSelect class="df-input" @bind-Value="_createForm.LineOfBusiness">
+                                @foreach (var lob in _linesOfBusiness)
+                                {
+                                    <option value="@lob">@lob</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="df-field">
+                            <label>Edition <span>*</span></label>
+                            <InputText class="df-input" @bind-Value="_createForm.Edition" placeholder="2016/03" />
+                        </div>
+                        <div class="df-field">
+                            <label>Status <span>*</span></label>
+                            <InputSelect class="df-input" @bind-Value="_createForm.Status">
+                                @foreach (var status in _statuses)
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="df-field">
+                            <label>Policy Number</label>
+                            <InputText class="df-input" @bind-Value="_createForm.PolicyNumber" placeholder="Policy link" />
+                        </div>
+                        <div class="df-field">
+                            <label>Owner</label>
+                            <InputText class="df-input" @bind-Value="_createForm.OwnerName" placeholder="CSR, producer, or workflow owner" />
+                        </div>
+                        <div class="df-field">
+                            <label>AI Confidence</label>
+                            <InputNumber class="df-input" @bind-Value="_createForm.PrefillConfidence" />
+                        </div>
+                        <div class="df-field df-field-wide">
+                            <label>Description</label>
+                            <InputTextArea class="df-input" rows="3" @bind-Value="_createForm.Description" placeholder="Workflow purpose, submission context, or carrier requirement" />
+                        </div>
+                    </div>
+                </div>
+                <div class="df-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseCreate" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
+                        @if (_busy) { <i class="bi bi-arrow-repeat df-spin" aria-hidden="true"></i> }
+                        Create Form
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showStatus && _selected is not null)
+{
+    <div class="df-modal-backdrop" role="presentation" @onclick="CloseStatus">
+        <div class="df-action-modal" role="dialog" aria-modal="true" aria-labelledby="df-status-title" @onclick:stopPropagation="true">
+            <div class="df-modal-header">
+                <div class="df-modal-title">
+                    <span class="df-modal-icon"><i class="bi bi-arrow-left-right" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 id="df-status-title">Move Form Status</h2>
+                        <p>@_selected.FormNumber — @_selected.FormName</p>
+                    </div>
+                </div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseStatus" disabled="@_busy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="df-modal-body">
+                <div class="df-form-grid">
+                    <div class="df-field df-field-wide">
+                        <label>Target Status</label>
+                        <select class="df-input" @bind="_statusTarget">
+                            @foreach (var status in _statuses)
+                            {
+                                <option value="@status">@status</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="df-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseStatus" disabled="@_busy">Cancel</button>
+                <button type="button" class="um-btn um-btn-primary" @onclick="SaveStatusAsync" disabled="@_busy">Update Status</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showPrefill && _selected is not null)
+{
+    <div class="df-modal-backdrop" role="presentation" @onclick="ClosePrefill">
+        <div class="df-action-modal" role="dialog" aria-modal="true" aria-labelledby="df-prefill-title" @onclick:stopPropagation="true">
+            <div class="df-modal-header">
+                <div class="df-modal-title">
+                    <span class="df-modal-icon"><i class="bi bi-stars" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 id="df-prefill-title">AI Prefill Form</h2>
+                        <p>Sync policy context and confidence metrics into @_selected.FormNumber.</p>
+                    </div>
+                </div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClosePrefill" disabled="@_busy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_prefillForm" OnValidSubmit="RunPrefillAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="df-modal-body">
+                    <div class="df-form-grid">
+                        <div class="df-field">
+                            <label>Policy Number</label>
+                            <InputText class="df-input" @bind-Value="_prefillForm.PolicyNumber" />
+                        </div>
+                        <div class="df-field">
+                            <label>Fields Prefilled <span>*</span></label>
+                            <InputNumber class="df-input" @bind-Value="_prefillForm.PrefillFieldCount" />
+                        </div>
+                        <div class="df-field df-field-wide">
+                            <label>Confidence % <span>*</span></label>
+                            <InputNumber class="df-input" @bind-Value="_prefillForm.PrefillConfidence" />
+                        </div>
+                    </div>
+                </div>
+                <div class="df-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="ClosePrefill" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy"><i class="bi bi-stars" aria-hidden="true"></i> Run Prefill</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="df-enterprise-page">
+    <section class="df-hero">
+        <div class="df-hero-left">
+            <span class="df-hero-icon"><i class="bi bi-file-earmark-medical" aria-hidden="true"></i></span>
+            <div>
+                <div class="df-title-row">
+                    <h1>Document Forms</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> DB synced</span>
+                    <span><i class="bi bi-shield-lock" aria-hidden="true"></i> Governed workflow</span>
+                </div>
+                <p>Manage ACORD forms by service priority, policy linkage, AI prefill readiness, owner, and compliance status.</p>
+            </div>
+        </div>
+        <div class="df-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "df-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ShowNeedsReview"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Review Queue</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Form</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="df-error-banner"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    <section class="df-kpi-strip" aria-label="Document form KPIs">
+        @KpiCard(null, "bi-collection", _items.Count, "Total Forms", "All ACORD form records", "df-blue")
+        @KpiCard("In Progress", "bi-play-circle", CountStatus("In Progress"), "In Progress", "Actively being completed", "df-purple")
+        @KpiCard("Review", "bi-search", CountStatus("Review"), "Review Queue", "Need service validation", "df-amber")
+        @KpiCard("Ready", "bi-check2-circle", CountStatus("Ready"), "Ready", "Ready for issue or delivery", "df-green")
+        @KpiCard("AI", "bi-stars", _items.Count(x => x.AiPrefilled), "AI Prefilled", "Synced by prefill workflow", "df-cyan")
+        @KpiCard("LowConfidence", "bi-exclamation-octagon", LowConfidenceCount, "Low Confidence", "Requires manual QA", "df-red")
+    </section>
+
+    <section class="df-workflow-strip" aria-label="Workflow shortcuts">
+        <button type="button" class="df-workflow-card" @onclick="ShowLibrary"><i class="bi bi-table" aria-hidden="true"></i><span><strong>Library</strong><small>Search every form and policy link</small></span></button>
+        <button type="button" class="df-workflow-card" @onclick="ShowWorkbench"><i class="bi bi-kanban" aria-hidden="true"></i><span><strong>Workbench</strong><small>Move forms across statuses</small></span></button>
+        <button type="button" class="df-workflow-card" @onclick="ShowAnalytics"><i class="bi bi-bar-chart" aria-hidden="true"></i><span><strong>Analytics</strong><small>LOB, status, and AI readiness</small></span></button>
+        <button type="button" class="df-workflow-card" @onclick="ShowNeedsReview"><i class="bi bi-clipboard-check" aria-hidden="true"></i><span><strong>Quality Review</strong><small>@LowConfidenceCount low confidence forms</small></span></button>
+    </section>
+
+    <section class="df-search-panel">
+        <div class="df-search-wrap">
+            <span class="df-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="df-search-body">
+                <label for="df-search">Search forms</label>
+                <input id="df-search" class="df-search-input" @bind="_search" @bind:event="oninput" placeholder="Form number, name, LOB, policy, owner..." />
+                <span class="df-search-hint">Native search synced to the loaded database results.</span>
+            </div>
+        </div>
+        <select class="df-filter-select" @bind="_lobFilter">
+            <option value="">All LOB</option>
+            @foreach (var lob in LobOptions)
+            {
+                <option value="@lob">@lob</option>
+            }
+        </select>
+        <select class="df-filter-select" @bind="_statusFilter">
+            <option value="">All Statuses</option>
+            @foreach (var status in StatusOptions)
+            {
+                <option value="@status">@status</option>
+            }
+        </select>
+        <div class="df-search-result"><strong>@FilteredForms.Count</strong><span>visible</span></div>
+    </section>
+
+    <nav class="df-view-tabs" aria-label="Document form views">
+        @foreach (var view in _views)
+        {
+            <button type="button" class="df-view-btn @(_view == view ? "df-view-btn-active" : null)" @onclick="() => SetView(view)">@view</button>
+        }
+    </nav>
+
+    <section class="df-content-layout">
+        <div class="df-main-card">
+            @if (_loading)
+            {
+                <div class="df-loading"><i class="bi bi-arrow-repeat df-spin" aria-hidden="true"></i><span>Loading document forms...</span></div>
+            }
+            else if (_view == "Workbench")
+            {
+                <div class="df-board">
+                    @foreach (var status in StatusLanes)
+                    {
+                        var laneForms = FilteredForms.Where(x => string.Equals(x.Status, status, StringComparison.OrdinalIgnoreCase)).OrderByDescending(IsServicePriority).ThenByDescending(x => x.LastModifiedDateUtc).ToList();
+                        <section class="df-board-col">
+                            <header><div><strong>@status</strong><small>@LaneSubtitle(status)</small></div><span>@laneForms.Count</span></header>
+                            @if (laneForms.Count == 0)
+                            {
+                                <div class="df-empty-mini">No forms</div>
+                            }
+                            else
+                            {
+                                @foreach (var form in laneForms)
+                                {
+                                    <button type="button" class="df-board-card @(NeedsReview(form) ? "df-board-card-risk" : null)" @onclick="() => SelectForm(form)">
+                                        <div><strong>@form.FormNumber</strong><span>@form.LineOfBusiness</span></div>
+                                        <span>@form.FormName</span>
+                                        <small>@(form.PolicyNumber ?? "No policy linked") · @(form.OwnerName ?? "Unassigned")</small>
+                                    </button>
+                                }
+                            }
+                        </section>
+                    }
+                </div>
+            }
+            else if (_view == "Analytics")
+            {
+                <div class="df-analytics-grid">
+                    <section>
+                        <h3>Status distribution</h3>
+                        @foreach (var status in StatusOptions)
+                        {
+                            var count = _items.Count(x => string.Equals(x.Status, status, StringComparison.OrdinalIgnoreCase));
+                            <button type="button" class="df-stage-row" @onclick="() => FocusStatus(status)"><span>@status</span><div><i style="width:@Percent(count, Math.Max(_items.Count, 1))%"></i></div><strong>@count</strong></button>
+                        }
+                    </section>
+                    <section>
+                        <h3>Line of business mix</h3>
+                        @foreach (var lob in LobOptions)
+                        {
+                            var count = _items.Count(x => string.Equals(x.LineOfBusiness, lob, StringComparison.OrdinalIgnoreCase));
+                            <button type="button" class="df-stage-row" @onclick="() => FocusLob(lob)"><span>@lob</span><div><i style="width:@Percent(count, Math.Max(_items.Count, 1))%"></i></div><strong>@count</strong></button>
+                        }
+                    </section>
+                    <section>
+                        <h3>AI prefill readiness</h3>
+                        <div class="df-metric-stack">
+                            <div><span>Prefilled</span><strong>@_items.Count(x => x.AiPrefilled)</strong><small>@Percent(_items.Count(x => x.AiPrefilled), Math.Max(_items.Count, 1))% of library</small></div>
+                            <div><span>Average confidence</span><strong>@AverageConfidence%</strong><small>Across AI-prefilled forms</small></div>
+                            <div><span>Manual QA</span><strong>@LowConfidenceCount</strong><small>Confidence below 80%</small></div>
+                        </div>
+                    </section>
+                    <section>
+                        <h3>Priority work</h3>
+                        <div class="df-priority-list">
+                            @foreach (var form in FilteredForms.Where(IsServicePriority).Take(6))
+                            {
+                                <button type="button" @onclick="() => SelectForm(form)"><strong>@form.FormNumber</strong><span>@PriorityReason(form)</span></button>
+                            }
+                        </div>
+                    </section>
+                </div>
+            }
+            else
+            {
+                <div class="df-table-scroll">
+                    <table class="df-table">
+                        <thead>
+                            <tr><th>Form</th><th>LOB</th><th>Edition</th><th>Status</th><th>Policy</th><th>Owner</th><th>AI</th><th>Updated</th><th></th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var form in FilteredForms)
+                            {
+                                <tr class="@(_selected?.AcordFormId == form.AcordFormId ? "df-row-selected" : null)" @onclick="() => SelectForm(form)">
+                                    <td><div class="df-name-cell"><span class="df-avatar @StatusTone(form.Status)">@Initials(form.FormNumber)</span><span><strong>@form.FormNumber</strong><small>@form.FormName</small></span></div></td>
+                                    <td>@form.LineOfBusiness</td>
+                                    <td>@form.Edition</td>
+                                    <td><span class="df-status @StatusTone(form.Status)">@form.Status</span></td>
+                                    <td>@(form.PolicyNumber ?? "—")</td>
+                                    <td>@(form.OwnerName ?? "Unassigned")</td>
+                                    <td><span class="df-ai-pill @(NeedsReview(form) ? "df-ai-risk" : "")">@(form.AiPrefilled ? $"{form.PrefillConfidence ?? 0}%" : "Manual")</span></td>
+                                    <td>@form.LastModifiedDateUtc.ToLocalTime().ToString("MMM d")</td>
+                                    <td class="df-row-actions">
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenPrefill(form)"><i class="bi bi-stars" aria-hidden="true"></i></button>
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenStatus(form)"><i class="bi bi-arrow-left-right" aria-hidden="true"></i></button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <aside class="df-detail-card" aria-label="Selected form details">
+            @if (_selected is null)
+            {
+                <div class="df-detail-empty"><i class="bi bi-file-earmark-medical" aria-hidden="true"></i><strong>Select a form</strong><span>Open details, status actions, and AI prefill controls.</span></div>
+            }
+            else
+            {
+                <div class="df-detail-head">
+                    <div>
+                        <span class="df-detail-eyebrow"><i class="bi bi-file-earmark-text" aria-hidden="true"></i> @_selected.FormNumber</span>
+                        <h2>@_selected.FormName</h2>
+                        <p>@_selected.LineOfBusiness · @_selected.Edition</p>
+                    </div>
+                    <span class="df-status @StatusTone(_selected.Status)">@_selected.Status</span>
+                </div>
+                <div class="df-detail-body">
+                    <div class="df-detail-summary">
+                        <div><span>Policy</span><strong>@(_selected.PolicyNumber ?? "Not linked")</strong></div>
+                        <div><span>Owner</span><strong>@(_selected.OwnerName ?? "Unassigned")</strong></div>
+                        <div><span>AI Prefill</span><strong>@(_selected.AiPrefilled ? "Enabled" : "Manual")</strong></div>
+                        <div><span>Confidence</span><strong>@(_selected.PrefillConfidence?.ToString() ?? "—")%</strong></div>
+                    </div>
+                    <p class="df-detail-description">@(_selected.Description ?? "No description has been added for this form.")</p>
+                    <div class="df-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenPrefill(_selected)"><i class="bi bi-stars" aria-hidden="true"></i> Run AI Prefill</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => OpenStatus(_selected)"><i class="bi bi-arrow-left-right" aria-hidden="true"></i> Move Status</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Related Form</button>
+                    </div>
+                </div>
+            }
+        </aside>
+    </section>
+</div>
+
+@code {
+    Guid TenantId { get; set; }
+    Guid UserId { get; set; }
+    readonly string[] _views = ["Library", "Workbench", "Analytics"];
+    readonly string[] _statuses = ["Blank", "In Progress", "Review", "Ready", "Issued", "Archived"];
+    readonly string[] _linesOfBusiness = ["Commercial Lines", "Personal Lines", "Benefits", "Claims", "Surety", "General"];
+    List<AcordFormDto> _items = [];
+    AcordFormDto? _selected;
+    string _view = "Library";
+    string _search = string.Empty;
+    string _lobFilter = string.Empty;
+    string _statusFilter = string.Empty;
+    string? _activeKpi;
+    string? _loadError;
+    bool _loading, _busy, _showCreate, _showStatus, _showPrefill, _toastVisible;
+    string _statusTarget = "In Progress";
+    string _toastKind = "success";
+    string _toastMessage = string.Empty;
+    CreateFormModel _createForm = new();
+    PrefillFormModel _prefillForm = new();
+
+    IEnumerable<string> LobOptions => _items.Select(x => x.LineOfBusiness).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    IEnumerable<string> StatusOptions => _items.Select(x => x.Status).Where(x => !string.IsNullOrWhiteSpace(x)).Concat(_statuses).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => Array.IndexOf(_statuses, x) < 0 ? 999 : Array.IndexOf(_statuses, x));
+    IEnumerable<string> StatusLanes => _statuses.Where(x => !string.Equals(x, "Archived", StringComparison.OrdinalIgnoreCase));
+    List<AcordFormDto> FilteredForms => _items.Where(MatchesFilters).OrderByDescending(IsServicePriority).ThenByDescending(x => x.LastModifiedDateUtc).ThenBy(x => x.FormNumber).ToList();
+    int LowConfidenceCount => _items.Count(NeedsReview);
+    int AverageConfidence => _items.Where(x => x.AiPrefilled && x.PrefillConfidence.HasValue).Select(x => x.PrefillConfidence!.Value).DefaultIfEmpty(0).Cast<int>().Average() is var avg ? (int)Math.Round(avg) : 0;
+    string ToastIcon => _toastKind == "success" ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        TenantId = context.TenantId;
+        UserId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Documents", "/documents"), new("Forms", null));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _items = (await Api.GetAcordFormsAsync(TenantId))?.ToList() ?? [];
+            _selected = _selected is null ? _items.FirstOrDefault() : _items.FirstOrDefault(x => x.AcordFormId == _selected.AcordFormId) ?? _items.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    bool MatchesFilters(AcordFormDto form)
+    {
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var haystack = $"{form.FormNumber} {form.FormName} {form.LineOfBusiness} {form.Edition} {form.Status} {form.PolicyNumber} {form.OwnerName} {form.Description}";
+            if (!haystack.Contains(_search, StringComparison.OrdinalIgnoreCase)) return false;
+        }
+        if (!string.IsNullOrWhiteSpace(_lobFilter) && !string.Equals(form.LineOfBusiness, _lobFilter, StringComparison.OrdinalIgnoreCase)) return false;
+        if (!string.IsNullOrWhiteSpace(_statusFilter) && !string.Equals(form.Status, _statusFilter, StringComparison.OrdinalIgnoreCase)) return false;
+        return _activeKpi switch
+        {
+            "AI" => form.AiPrefilled,
+            "LowConfidence" => NeedsReview(form),
+            { Length: > 0 } status => string.Equals(form.Status, status, StringComparison.OrdinalIgnoreCase),
+            _ => true
+        };
+    }
+
+    void SetView(string view) => _view = view;
+    void ShowLibrary() => SetView("Library");
+    void ShowWorkbench() => SetView("Workbench");
+    void ShowAnalytics() => SetView("Analytics");
+    void SelectForm(AcordFormDto form) => _selected = form;
+    void FocusStatus(string status) { _statusFilter = status; _activeKpi = null; _view = "Library"; }
+    void FocusLob(string lob) { _lobFilter = lob; _activeKpi = null; _view = "Library"; }
+    void ShowNeedsReview() { _activeKpi = "LowConfidence"; _statusFilter = string.Empty; _view = "Library"; }
+    void SetKpi(string? key) { _activeKpi = key; _statusFilter = string.Empty; _lobFilter = string.Empty; }
+    int CountStatus(string status) => _items.Count(x => string.Equals(x.Status, status, StringComparison.OrdinalIgnoreCase));
+
+    void OpenCreate()
+    {
+        _createForm = new() { LineOfBusiness = _linesOfBusiness[0], Status = "Blank", Edition = DateTime.UtcNow.Year.ToString(), PrefillConfidence = 0 };
+        _showCreate = true;
+    }
+
+    void CloseCreate() => _showCreate = false;
+    void OpenStatus(AcordFormDto form) { _selected = form; _statusTarget = form.Status; _showStatus = true; }
+    void CloseStatus() => _showStatus = false;
+    void OpenPrefill(AcordFormDto form)
+    {
+        _selected = form;
+        _prefillForm = new() { PolicyNumber = form.PolicyNumber, PrefillFieldCount = form.PrefillFieldCount ?? 24, PrefillConfidence = form.PrefillConfidence ?? 92 };
+        _showPrefill = true;
+    }
+    void ClosePrefill() => _showPrefill = false;
+
+    async Task CreateAsync()
+    {
+        _busy = true;
+        try
+        {
+            var id = await Api.CreateAcordFormAsync(new(TenantId, _createForm.FormNumber, _createForm.FormName, _createForm.LineOfBusiness, _createForm.Edition, _createForm.Status, _createForm.PolicyNumber, _createForm.PrefillConfidence > 0, _createForm.PrefillConfidence > 0 ? 24 : null, _createForm.PrefillConfidence > 0 ? _createForm.PrefillConfidence : null, _createForm.OwnerName, _createForm.Description, UserId));
+            _showCreate = false;
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.AcordFormId == id) ?? _selected;
+            ShowToast("success", "Form created successfully.");
+        }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Create failed: {ex.Message}");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    async Task SaveStatusAsync()
+    {
+        if (_selected is null) return;
+        _busy = true;
+        try
+        {
+            await Api.UpdateAcordFormStatusAsync(new(_selected.AcordFormId, _statusTarget, UserId));
+            _showStatus = false;
+            ShowToast("success", "Status updated successfully.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Status update failed: {ex.Message}");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    async Task RunPrefillAsync()
+    {
+        if (_selected is null) return;
+        _busy = true;
+        try
+        {
+            await Api.PrefillAcordFormAsync(new(_selected.AcordFormId, _prefillForm.PolicyNumber, _prefillForm.PrefillFieldCount, _prefillForm.PrefillConfidence, UserId));
+            _showPrefill = false;
+            ShowToast("success", "AI prefill workflow completed.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Prefill failed: {ex.Message}");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    Task NotifyValidationAsync()
+    {
+        ShowToast("danger", "Complete the required fields before continuing.");
+        return Task.CompletedTask;
+    }
+
+    void ShowToast(string kind, string message)
+    {
+        _toastKind = kind;
+        _toastMessage = message;
+        _toastVisible = true;
+    }
+
+    void HideToast() => _toastVisible = false;
+
+    RenderFragment KpiCard(string? filter, string icon, int value, string label, string subtext, string tone) => @<button class="df-kpi-card @tone @(_activeKpi == filter ? "df-kpi-card-active" : null)" @onclick="() => SetKpi(filter)" title="@subtext"><span class="df-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span><span><strong>@value</strong><em>@label</em><small>@subtext</small></span></button>;
+
+    static bool NeedsReview(AcordFormDto form) => form.AiPrefilled && (form.PrefillConfidence ?? 0) < 80;
+    static bool IsServicePriority(AcordFormDto form) => NeedsReview(form) || string.Equals(form.Status, "Review", StringComparison.OrdinalIgnoreCase) || string.Equals(form.Status, "In Progress", StringComparison.OrdinalIgnoreCase);
+    static int Percent(int value, int total) => total <= 0 ? 0 : Math.Clamp((int)Math.Round(value * 100d / total), 0, 100);
+    static string Initials(string value) => string.Join(string.Empty, value.Where(char.IsLetterOrDigit).Take(2)).ToUpperInvariant();
+    static string StatusTone(string status) => status switch { "Ready" or "Issued" => "df-green", "Review" => "df-amber", "In Progress" => "df-purple", "Archived" => "df-slate", _ => "df-blue" };
+    static string LaneSubtitle(string status) => status switch { "Blank" => "Ready to begin", "In Progress" => "Being completed", "Review" => "Needs QA", "Ready" => "Ready to issue", "Issued" => "Delivered forms", _ => "Workflow stage" };
+    static string PriorityReason(AcordFormDto form) => NeedsReview(form) ? $"Low AI confidence ({form.PrefillConfidence ?? 0}%)" : string.Equals(form.Status, "Review", StringComparison.OrdinalIgnoreCase) ? "Awaiting QA review" : "Active completion workflow";
+
+    sealed class CreateFormModel
+    {
+        [Required, StringLength(30)] public string FormNumber { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string FormName { get; set; } = string.Empty;
+        [Required, StringLength(100)] public string LineOfBusiness { get; set; } = "Commercial Lines";
+        [Required, StringLength(50)] public string Edition { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string Status { get; set; } = "Blank";
+        [StringLength(100)] public string? PolicyNumber { get; set; }
+        [Range(0, 100)] public int? PrefillConfidence { get; set; }
+        [StringLength(160)] public string? OwnerName { get; set; }
+        [StringLength(1000)] public string? Description { get; set; }
+    }
+
+    sealed class PrefillFormModel
+    {
+        [StringLength(100)] public string? PolicyNumber { get; set; }
+        [Range(0, 500)] public int PrefillFieldCount { get; set; } = 24;
+        [Range(0, 100)] public int PrefillConfidence { get; set; } = 92;
+    }
+}

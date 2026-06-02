@@ -1,2 +1,574 @@
 @page "/tenant/documents/packets"
-<DocumentConfigPage Kind="PacketTemplate" Title="Packet Templates" Subtitle="Configure document packets, bundles, and delivery groups" Icon="bi bi-collection" />
+@using System.ComponentModel.DataAnnotations
+@using System.Text.Json
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.DocumentConfig
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Packet Templates</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="pt-toast pt-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="pt-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+<div class="pt-enterprise-page">
+    <section class="pt-hero">
+        <div class="pt-hero-left">
+            <span class="pt-hero-icon"><i class="bi bi-collection" aria-hidden="true"></i></span>
+            <div>
+                <div class="pt-title-row">
+                    <h1>Packet Templates</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> DB synced</span>
+                    <span><i class="bi bi-boxes" aria-hidden="true"></i> Bundle controlled</span>
+                </div>
+                <p>Enterprise packet setup workspace for document bundles, delivery groups, e-sign packets, required documents, and workflow-ready packet standards.</p>
+            </div>
+        </div>
+        <div class="pt-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "pt-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_items.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Packet</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="pt-error-banner" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="pt-kpi-strip" aria-label="Packet template KPIs">
+        <button type="button" class="@AllKpiClass" @onclick="ShowAll"><span class="pt-kpi-icon"><i class="bi bi-collection" aria-hidden="true"></i></span><span><strong>@_items.Count</strong><em>Total Packets</em><small>Configured packet standards</small></span></button>
+        <button type="button" class="@ActiveKpiClass" @onclick="ShowActive"><span class="pt-kpi-icon"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span><span><strong>@ActiveCount</strong><em>Active</em><small>Available to workflows</small></span></button>
+        <button type="button" class="@BundleKpiClass" @onclick="ShowBundle"><span class="pt-kpi-icon"><i class="bi bi-boxes" aria-hidden="true"></i></span><span><strong>@BundleReadyCount</strong><em>Bundle Ready</em><small>Document set configured</small></span></button>
+        <button type="button" class="@DeliveryKpiClass" @onclick="ShowDelivery"><span class="pt-kpi-icon"><i class="bi bi-send-check" aria-hidden="true"></i></span><span><strong>@DeliveryReadyCount</strong><em>Delivery Ready</em><small>Email, portal, or download</small></span></button>
+        <button type="button" class="@ESignKpiClass" @onclick="ShowESign"><span class="pt-kpi-icon"><i class="bi bi-pen" aria-hidden="true"></i></span><span><strong>@ESignReadyCount</strong><em>E-Sign Ready</em><small>Signature packet enabled</small></span></button>
+        <button type="button" class="@ReviewKpiClass" @onclick="ShowReview"><span class="pt-kpi-icon"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></span><span><strong>@NeedsReviewCount</strong><em>Needs Review</em><small>Missing packet metadata</small></span></button>
+    </section>
+
+    <section class="pt-workflow-strip" aria-label="Packet workflows">
+        <button type="button" class="pt-workflow-card" @onclick="ShowLibrary"><i class="bi bi-kanban" aria-hidden="true"></i><span><strong>Library</strong><small>Packet register</small></span></button>
+        <button type="button" class="pt-workflow-card" @onclick="ShowCompositionView"><i class="bi bi-boxes" aria-hidden="true"></i><span><strong>Composition</strong><small>Documents and rules</small></span></button>
+        <button type="button" class="pt-workflow-card" @onclick="ShowDistribution"><i class="bi bi-send-check" aria-hidden="true"></i><span><strong>Distribution</strong><small>Delivery and e-sign</small></span></button>
+        <button type="button" class="pt-workflow-card" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i><span><strong>Create</strong><small>Add packet standard</small></span></button>
+    </section>
+
+    <section class="pt-search-panel">
+        <div class="pt-search-wrap">
+            <span class="pt-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="pt-search-body">
+                <label for="pt-search">Packet search</label>
+                <input id="pt-search" class="pt-search-input" @bind="_search" @bind:event="oninput" @bind:after="ApplyFilter" placeholder="Search packet, documents, delivery, e-sign, rules, JSON..." />
+                <span class="pt-search-hint">Filters real tenant packet configuration records.</span>
+            </div>
+        </div>
+        <select class="pt-filter-select" @bind="_statusFilter" @bind:after="ApplyFilter" aria-label="Status filter">
+            <option value="all">All statuses</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+        </select>
+        <select class="pt-filter-select" @bind="_readinessFilter" @bind:after="ApplyFilter" aria-label="Readiness filter">
+            <option value="all">All readiness</option>
+            <option value="bundle">Bundle ready</option>
+            <option value="delivery">Delivery ready</option>
+            <option value="esign">E-sign ready</option>
+            <option value="review">Needs review</option>
+        </select>
+        <select class="pt-filter-select" @bind="_categoryFilter" @bind:after="ApplyFilter" aria-label="Group filter">
+            <option value="all">All groups</option>
+            @foreach (var category in CategoryGroups)
+            {
+                <option value="@category">@category</option>
+            }
+        </select>
+        <div class="pt-search-result"><strong>@_filtered.Count</strong><span>records</span></div>
+    </section>
+
+    <nav class="pt-view-tabs" aria-label="Packet views">
+        @foreach (var view in _views)
+        {
+            <button type="button" class="pt-view-btn @(_activeView == view ? "pt-view-btn-active" : null)" @onclick="() => SetView(view)">@view</button>
+        }
+    </nav>
+
+    <section class="pt-content-layout">
+        <div class="pt-main-card">
+            @if (_loading)
+            {
+                <div class="pt-loading"><i class="bi bi-arrow-repeat pt-spin" aria-hidden="true"></i><span>Loading packet templates...</span></div>
+            }
+            else if (_filtered.Count == 0)
+            {
+                <div class="pt-empty-state"><i class="bi bi-collection" aria-hidden="true"></i><h2>No packet templates found</h2><p>Adjust filters or create the first packet template setup record.</p><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Packet</button></div>
+            }
+            else if (_activeView == "Composition")
+            {
+                <div class="pt-governance-grid">
+                    <section class="pt-panel">
+                        <header><div><i class="bi bi-boxes" aria-hidden="true"></i><strong>Composition Readiness</strong></div><span>@PacketScore.ToString("F0")%</span></header>
+                        <div class="pt-panel-body pt-metric-list">
+                            <div class="pt-metric-row"><span>Bundle ready</span><div><i style="@WidthStyle(BundleReadyCount, SafeTotal)"></i></div><strong>@BundleReadyCount</strong></div>
+                            <div class="pt-metric-row"><span>Delivery ready</span><div><i style="@WidthStyle(DeliveryReadyCount, SafeTotal)"></i></div><strong>@DeliveryReadyCount</strong></div>
+                            <div class="pt-metric-row"><span>E-sign ready</span><div><i style="@WidthStyle(ESignReadyCount, SafeTotal)"></i></div><strong>@ESignReadyCount</strong></div>
+                            <div class="pt-metric-row"><span>Needs review</span><div><i style="@WidthStyle(NeedsReviewCount, SafeTotal)"></i></div><strong>@NeedsReviewCount</strong></div>
+                        </div>
+                    </section>
+                    <section class="pt-panel">
+                        <header><div><i class="bi bi-tags" aria-hidden="true"></i><strong>Packet Groups</strong></div><span>@CategoryGroups.Count</span></header>
+                        <div class="pt-panel-body pt-group-list">
+                            @foreach (var group in GroupSummaries)
+                            {
+                                <button type="button" class="pt-group-row" @onclick="() => FilterCategory(group.Name)"><span>@group.Name</span><div><i style="@WidthStyle(group.Count, SafeTotal)"></i></div><strong>@group.Count</strong></button>
+                            }
+                        </div>
+                    </section>
+                    <section class="pt-panel pt-panel-wide">
+                        <header><div><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><strong>Packet Review Queue</strong></div><span>@NeedsReviewItems.Count</span></header>
+                        <div class="pt-panel-body pt-review-list">
+                            @foreach (var item in NeedsReviewItems.Take(8))
+                            {
+                                <button type="button" class="pt-review-row" @onclick="() => SelectItem(item)"><strong>@item.Name</strong><span>@ReviewReason(item)</span><em>@ReadinessLabel(item)</em></button>
+                            }
+                        </div>
+                    </section>
+                </div>
+            }
+            else if (_activeView == "Distribution")
+            {
+                <div class="pt-board">
+                    @foreach (var lane in DistributionLanes)
+                    {
+                        <section class="pt-board-col">
+                            <header><strong>@lane.Title</strong><span>@lane.Items.Count</span></header>
+                            @foreach (var item in lane.Items)
+                            {
+                                <button type="button" class="pt-board-card" @onclick="() => SelectItem(item)">
+                                    <div><strong>@item.Name</strong><span>@item.Code</span></div>
+                                    <small>@(item.Description ?? "No description provided")</small>
+                                    <em>@ReadinessLabel(item)</em>
+                                </button>
+                            }
+                        </section>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="pt-table-scroll">
+                    <table class="pt-table">
+                        <thead><tr><th>Packet Template</th><th>Code</th><th>Group</th><th>Readiness</th><th>Order</th><th>Status</th><th>Created</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var item in _filtered)
+                            {
+                                <tr @onclick="() => SelectItem(item)">
+                                    <td><div class="pt-name-cell"><span class="pt-avatar @AvatarClass(item)">@Initials(item.Name)</span><span><strong>@item.Name</strong><small>@(item.Description ?? "No description provided")</small></span></div></td>
+                                    <td><span class="pt-code-pill">@item.Code</span></td>
+                                    <td>@GroupLabel(item)</td>
+                                    <td><span class="@ReadinessClass(item)">@ReadinessLabel(item)</span></td>
+                                    <td class="pt-number">@item.SortOrder</td>
+                                    <td><span class="@StatusClass(item)">@StatusLabel(item)</span></td>
+                                    <td>@item.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</td>
+                                    <td><div class="pt-row-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(item)" title="Delete"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <aside class="pt-detail-card" aria-label="Selected packet template">
+            @if (_selected is null)
+            {
+                <div class="pt-detail-empty"><i class="bi bi-collection" aria-hidden="true"></i><h2>Packet command brief</h2><p>Select a packet to review bundle composition, delivery readiness, signature workflow, and actions.</p></div>
+            }
+            else
+            {
+                <div class="pt-detail-head"><div><span class="pt-detail-eyebrow"><i class="bi bi-collection" aria-hidden="true"></i> @GroupLabel(_selected)</span><h2>@_selected.Name</h2><p>@_selected.Code</p></div><span class="@StatusClass(_selected)">@StatusLabel(_selected)</span></div>
+                <div class="pt-detail-body">
+                    <div class="pt-detail-summary">
+                        <div><span>Readiness</span><strong>@ReadinessLabel(_selected)</strong></div>
+                        <div><span>Bundle</span><strong>@(IsBundleReady(_selected) ? "Ready" : "Review")</strong></div>
+                        <div><span>Delivery</span><strong>@(IsDeliveryReady(_selected) ? "Ready" : "Manual")</strong></div>
+                        <div><span>E-Sign</span><strong>@(IsESignReady(_selected) ? "Ready" : "Optional")</strong></div>
+                    </div>
+                    <div class="pt-config-card"><span>Configuration JSON</span><code>@DisplayConfig(_selected)</code></div>
+                    <div class="pt-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit Packet</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="DuplicateSelected"><i class="bi bi-files" aria-hidden="true"></i> Duplicate</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="ToggleSelectedStatus"><i class="bi bi-power" aria-hidden="true"></i> @(_selected.IsActive ? "Deactivate" : "Activate")</button>
+                        <button type="button" class="um-btn um-btn-ghost text-danger" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
+                    </div>
+                </div>
+            }
+        </aside>
+    </section>
+</div>
+
+@if (_showForm)
+{
+    <div class="pt-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="pt-form-title">
+        <div class="pt-modal">
+            <div class="pt-modal-header"><div class="pt-modal-title"><span class="pt-modal-icon"><i class="bi bi-collection" aria-hidden="true"></i></span><div><h2 id="pt-form-title">@(_editId.HasValue ? "Edit Packet Template" : "Add Packet Template")</h2><p>Configure bundle composition, delivery rules, e-sign workflow, and metadata.</p></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseForm" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="pt-modal-body">
+                    <div class="pt-form-banner"><i class="bi bi-info-circle" aria-hidden="true"></i><span><strong>Packet governance</strong> Use stable codes and JSON metadata for required documents, delivery channels, e-sign, portal, and workflow routing.</span></div>
+                    <div class="pt-form-grid">
+                        <div class="pt-field"><label>Code <span>*</span></label><InputText @bind-Value="_form.Code" class="pt-input" placeholder="NEW_BUSINESS_PACKET" /></div>
+                        <div class="pt-field"><label>Name <span>*</span></label><InputText @bind-Value="_form.Name" class="pt-input" placeholder="New Business Submission Packet" /></div>
+                        <div class="pt-field"><label>Group</label><InputText @bind-Value="_form.Category" class="pt-input" placeholder="Submission, Renewal, Claims, Billing..." /></div>
+                        <div class="pt-field"><label>Sort Order</label><InputNumber @bind-Value="_form.SortOrder" class="pt-input" /></div>
+                        <div class="pt-field pt-field-wide"><label>Description</label><InputTextArea @bind-Value="_form.Description" class="pt-input" rows="3" /></div>
+                        <div class="pt-field pt-field-wide"><label>Configuration JSON</label><InputTextArea @bind-Value="_form.ConfigurationJson" class="pt-input pt-code-input" rows="6" placeholder='{"documents":["application"],"delivery":"portal","esign":true,"required":true}' /></div>
+                        <div class="pt-field pt-field-wide pt-check-row"><label><InputCheckbox @bind-Value="_form.IsActive" /> Active for packet workflows</label></div>
+                    </div>
+                </div>
+                <div class="pt-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check2" aria-hidden="true"></i> @(_editId.HasValue ? "Save Changes" : "Create Packet")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showDelete)
+{
+    <div class="pt-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="pt-delete-title">
+        <div class="pt-confirm-modal">
+            <div class="pt-confirm-icon"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
+            <h2 id="pt-delete-title">Delete Packet Template</h2>
+            <p>Delete <strong>@_deleteTarget?.Name</strong>? Existing generated packets may still reference this setup historically.</p>
+            <div class="pt-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete">Cancel</button><button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div>
+        </div>
+    </div>
+}
+
+@code {
+    private const string ConfigKind = "PacketTemplate";
+    private Guid _tenantId;
+    private bool _loading;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private bool _toastVisible;
+    private string _search = string.Empty;
+    private string _statusFilter = "all";
+    private string _readinessFilter = "all";
+    private string _categoryFilter = "all";
+    private string _activeView = "Library";
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private Guid? _editId;
+    private DocumentConfigItemDto? _selected;
+    private DocumentConfigItemDto? _deleteTarget;
+    private readonly string[] _views = ["Library", "Composition", "Distribution"];
+    private List<DocumentConfigItemDto> _items = [];
+    private List<DocumentConfigItemDto> _filtered = [];
+    private FormModel _form = new();
+
+    private int ActiveCount => _items.Count(x => x.IsActive);
+    private int BundleReadyCount => _items.Count(IsBundleReady);
+    private int DeliveryReadyCount => _items.Count(IsDeliveryReady);
+    private int ESignReadyCount => _items.Count(IsESignReady);
+    private int NeedsReviewCount => _items.Count(NeedsReview);
+    private int SafeTotal => Math.Max(_items.Count, 1);
+    private double PacketScore => _items.Count == 0 ? 0 : (BundleReadyCount + DeliveryReadyCount + ESignReadyCount - NeedsReviewCount) * 100d / Math.Max(_items.Count * 3, 1);
+    private List<string> CategoryGroups => _items.Select(GroupLabel).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+    private List<GroupSummary> GroupSummaries => _items.GroupBy(GroupLabel, StringComparer.OrdinalIgnoreCase).Select(g => new GroupSummary(g.Key, g.Count())).OrderByDescending(x => x.Count).ToList();
+    private List<DocumentConfigItemDto> NeedsReviewItems => _items.Where(NeedsReview).OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToList();
+    private List<DistributionLane> DistributionLanes =>
+    [
+        new("Bundle Ready", _filtered.Where(IsBundleReady).ToList()),
+        new("Delivery Ready", _filtered.Where(IsDeliveryReady).ToList()),
+        new("E-Sign Ready", _filtered.Where(IsESignReady).ToList()),
+    ];
+    private string ToastIcon => _toastKind == "success" ? "bi-check-circle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-exclamation-triangle-fill";
+    private string AllKpiClass => KpiClass("all", "pt-blue");
+    private string ActiveKpiClass => KpiClass("active", "pt-green");
+    private string BundleKpiClass => KpiClass("bundle", "pt-cyan");
+    private string DeliveryKpiClass => KpiClass("delivery", "pt-purple");
+    private string ESignKpiClass => KpiClass("esign", "pt-slate");
+    private string ReviewKpiClass => KpiClass("review", "pt-amber");
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Documents & Forms", null), new("Packet Templates", "/tenant/documents/packets"));
+        _search = GetQueryValue("searchTerm") ?? string.Empty;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchDocumentConfigItemsAsync(_tenantId, ConfigKind, _search, pageSize: 500);
+            _items = result?.Items.OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToList() ?? [];
+            ApplyFilter();
+            _selected ??= _filtered.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilter()
+    {
+        IEnumerable<DocumentConfigItemDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_search)) query = query.Where(MatchesSearch);
+        if (_statusFilter == "active") query = query.Where(x => x.IsActive);
+        else if (_statusFilter == "inactive") query = query.Where(x => !x.IsActive);
+        if (_readinessFilter == "bundle") query = query.Where(IsBundleReady);
+        else if (_readinessFilter == "delivery") query = query.Where(IsDeliveryReady);
+        else if (_readinessFilter == "esign") query = query.Where(IsESignReady);
+        else if (_readinessFilter == "review") query = query.Where(NeedsReview);
+        if (_categoryFilter != "all") query = query.Where(x => string.Equals(GroupLabel(x), _categoryFilter, StringComparison.OrdinalIgnoreCase));
+        _filtered = query.OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToList();
+        if (_selected is not null && !_filtered.Any(x => x.DocumentConfigItemId == _selected.DocumentConfigItemId)) _selected = _filtered.FirstOrDefault();
+    }
+
+    private void ShowAll() { _statusFilter = "all"; _readinessFilter = "all"; _categoryFilter = "all"; ApplyFilter(); }
+    private void ShowActive() { _statusFilter = "active"; _readinessFilter = "all"; ApplyFilter(); }
+    private void ShowBundle() { _statusFilter = "all"; _readinessFilter = "bundle"; ApplyFilter(); }
+    private void ShowDelivery() { _statusFilter = "all"; _readinessFilter = "delivery"; ApplyFilter(); }
+    private void ShowESign() { _statusFilter = "all"; _readinessFilter = "esign"; ApplyFilter(); }
+    private void ShowReview() { _statusFilter = "all"; _readinessFilter = "review"; ApplyFilter(); }
+    private void ShowLibrary() => SetView("Library");
+    private void ShowCompositionView() => SetView("Composition");
+    private void ShowDistribution() => SetView("Distribution");
+    private void SetView(string view) => _activeView = view;
+    private void FilterCategory(string category) { _categoryFilter = category; ApplyFilter(); }
+    private void SelectItem(DocumentConfigItemDto item) => _selected = item;
+
+    private void OpenCreate()
+    {
+        _editId = null;
+        _form = new() { ConfigurationJson = "{}", IsActive = true, SortOrder = NextSortOrder };
+        _showForm = true;
+    }
+
+    private void OpenEdit(DocumentConfigItemDto item)
+    {
+        _editId = item.DocumentConfigItemId;
+        _form = new()
+        {
+            Code = item.Code,
+            Name = item.Name,
+            Category = item.Category,
+            Description = item.Description,
+            ConfigurationJson = string.IsNullOrWhiteSpace(item.ConfigurationJson) ? "{}" : item.ConfigurationJson,
+            SortOrder = item.SortOrder,
+            IsActive = item.IsActive,
+        };
+        _showForm = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            var json = NormalizeJson(_form.ConfigurationJson);
+            if (_editId.HasValue)
+            {
+                await Api.UpdateDocumentConfigItemAsync(_editId.Value, new(_form.Code.Trim(), _form.Name.Trim(), Clean(_form.Category), Clean(_form.Description), json, _form.IsActive, _form.SortOrder));
+                ShowToast("Packet template updated.");
+            }
+            else
+            {
+                var id = await Api.CreateDocumentConfigItemAsync(new(_tenantId, ConfigKind, _form.Code.Trim(), _form.Name.Trim(), Clean(_form.Category), Clean(_form.Description), json, _form.SortOrder));
+                ShowToast("Packet template created.");
+                _editId = id;
+            }
+            _showForm = false;
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.DocumentConfigItemId == _editId) ?? _selected;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void ConfirmDelete(DocumentConfigItemDto item) { _deleteTarget = item; _showDelete = true; }
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteDocumentConfigItemAsync(_deleteTarget.DocumentConfigItemId);
+            ShowToast("Packet template deleted.");
+            if (_selected?.DocumentConfigItemId == _deleteTarget.DocumentConfigItemId) _selected = null;
+            _showDelete = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void DuplicateSelected()
+    {
+        if (_selected is null) return;
+        _editId = null;
+        _form = new()
+        {
+            Code = $"{_selected.Code}-COPY",
+            Name = $"{_selected.Name} Copy",
+            Category = _selected.Category,
+            Description = _selected.Description,
+            ConfigurationJson = string.IsNullOrWhiteSpace(_selected.ConfigurationJson) ? "{}" : _selected.ConfigurationJson,
+            SortOrder = NextSortOrder,
+            IsActive = false,
+        };
+        _showForm = true;
+    }
+
+    private async Task ToggleSelectedStatus()
+    {
+        if (_selected is null) return;
+        _saving = true;
+        try
+        {
+            await Api.UpdateDocumentConfigItemAsync(_selected.DocumentConfigItemId, new(_selected.Code, _selected.Name, _selected.Category, _selected.Description, _selected.ConfigurationJson, !_selected.IsActive, _selected.SortOrder));
+            ShowToast(_selected.IsActive ? "Packet template deactivated." : "Packet template activated.");
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.DocumentConfigItemId == _selected.DocumentConfigItemId) ?? _selected;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Status update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private Task ExportAsync()
+    {
+        var rows = new List<string> { "Code,Name,Group,Status,Readiness,SortOrder,Created" };
+        rows.AddRange(_filtered.Select(x => string.Join(',', Csv(x.Code), Csv(x.Name), Csv(GroupLabel(x)), Csv(StatusLabel(x)), Csv(ReadinessLabel(x)), x.SortOrder, Csv(x.CreatedDateUtc.ToString("O")))));
+        Nav.NavigateTo("data:text/csv;charset=utf-8," + Uri.EscapeDataString(string.Join(Environment.NewLine, rows)), forceLoad: true);
+        ShowToast("Packet templates export generated.");
+        return Task.CompletedTask;
+    }
+
+    private void CloseForm() { _showForm = false; _form = new(); _editId = null; }
+    private void CancelDelete() { _showDelete = false; _deleteTarget = null; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+
+    private int NextSortOrder => _items.Count == 0 ? 10 : _items.Max(x => x.SortOrder) + 10;
+    private string KpiClass(string key, string tone)
+    {
+        var active = false;
+        if (key == "all") active = _statusFilter == "all" && _readinessFilter == "all" && _categoryFilter == "all";
+        else if (key == "active") active = _statusFilter == "active";
+        else if (key == "bundle") active = _readinessFilter == "bundle";
+        else if (key == "delivery") active = _readinessFilter == "delivery";
+        else if (key == "esign") active = _readinessFilter == "esign";
+        else if (key == "review") active = _readinessFilter == "review";
+        return $"pt-kpi-card {tone}{(active ? " pt-kpi-card-active" : string.Empty)}";
+    }
+
+    private bool MatchesSearch(DocumentConfigItemDto item)
+    {
+        var q = _search.Trim();
+        return Contains(item.Code, q) || Contains(item.Name, q) || Contains(item.Category, q) || Contains(item.Description, q) || Contains(item.ConfigurationJson, q);
+    }
+
+    private static bool Contains(string? value, string search) => value?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
+    private static string GroupLabel(DocumentConfigItemDto item) => string.IsNullOrWhiteSpace(item.Category) ? "Unassigned" : item.Category.Trim();
+    private static string StatusLabel(DocumentConfigItemDto item) => item.IsActive ? "Active" : "Inactive";
+    private static string StatusClass(DocumentConfigItemDto item) => item.IsActive ? "pt-status pt-status-active" : "pt-status pt-status-inactive";
+    private static bool IsBundleReady(DocumentConfigItemDto item) => Contains(item.ConfigurationJson, "documents") || Contains(item.ConfigurationJson, "bundle") || Contains(item.ConfigurationJson, "required") || Contains(item.Description, "bundle");
+    private static bool IsDeliveryReady(DocumentConfigItemDto item) => Contains(item.ConfigurationJson, "delivery") || Contains(item.ConfigurationJson, "portal") || Contains(item.ConfigurationJson, "email") || Contains(item.ConfigurationJson, "download") || Contains(item.Description, "delivery");
+    private static bool IsESignReady(DocumentConfigItemDto item) => Contains(item.ConfigurationJson, "esign") || Contains(item.ConfigurationJson, "signature") || Contains(item.ConfigurationJson, "signer") || Contains(item.Description, "sign");
+    private static bool NeedsReview(DocumentConfigItemDto item) => !item.IsActive || string.IsNullOrWhiteSpace(item.Description) || string.IsNullOrWhiteSpace(item.Category) || string.IsNullOrWhiteSpace(item.ConfigurationJson) || item.ConfigurationJson == "{}";
+    private static string ReadinessLabel(DocumentConfigItemDto item) => NeedsReview(item) ? "Needs Review" : IsESignReady(item) ? "E-Sign Ready" : IsDeliveryReady(item) ? "Delivery Ready" : IsBundleReady(item) ? "Bundle Ready" : "Standard";
+    private static string ReadinessClass(DocumentConfigItemDto item) => NeedsReview(item) ? "pt-readiness pt-readiness-review" : IsESignReady(item) ? "pt-readiness pt-readiness-esign" : IsDeliveryReady(item) ? "pt-readiness pt-readiness-delivery" : IsBundleReady(item) ? "pt-readiness pt-readiness-bundle" : "pt-readiness pt-readiness-standard";
+    private static string ReviewReason(DocumentConfigItemDto item)
+    {
+        if (!item.IsActive) return "Inactive packet is not available to workflows.";
+        if (string.IsNullOrWhiteSpace(item.Category)) return "Missing packet group.";
+        if (string.IsNullOrWhiteSpace(item.Description)) return "Missing operational description.";
+        if (string.IsNullOrWhiteSpace(item.ConfigurationJson) || item.ConfigurationJson == "{}") return "Missing bundle, delivery, or signature metadata.";
+        return "Review recommended.";
+    }
+    private static string DisplayConfig(DocumentConfigItemDto item) => string.IsNullOrWhiteSpace(item.ConfigurationJson) ? "{}" : item.ConfigurationJson;
+    private static string WidthStyle(int value, int max) => $"width:{Math.Clamp((int)Math.Round(value * 100d / Math.Max(max, 1)), 0, 100)}%;";
+    private static string AvatarClass(DocumentConfigItemDto item)
+    {
+        var index = Math.Abs(item.Code.GetHashCode()) % 6;
+        if (index == 0) return "pt-av1";
+        if (index == 1) return "pt-av2";
+        if (index == 2) return "pt-av3";
+        if (index == 3) return "pt-av4";
+        if (index == 4) return "pt-av5";
+        return "pt-av6";
+    }
+    private static string Initials(string name)
+    {
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant() : name.Length > 0 ? name[..1].ToUpperInvariant() : "?";
+    }
+    private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string Csv(string? value) => string.Concat("\"", (value ?? string.Empty).Replace("\"", "\"\""), "\"");
+    private static string NormalizeJson(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "{}";
+        using var document = JsonDocument.Parse(value);
+        return JsonSerializer.Serialize(document.RootElement, new JsonSerializerOptions { WriteIndented = false });
+    }
+    private string? GetQueryValue(string key)
+    {
+        var query = Nav.ToAbsoluteUri(Nav.Uri).Query;
+        if (string.IsNullOrWhiteSpace(query)) return null;
+        foreach (var part in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var pair = part.Split('=', 2);
+            if (pair.Length == 2 && string.Equals(Uri.UnescapeDataString(pair[0]), key, StringComparison.OrdinalIgnoreCase)) return Uri.UnescapeDataString(pair[1].Replace('+', ' '));
+        }
+        return null;
+    }
+
+    private sealed record GroupSummary(string Name, int Count);
+    private sealed record DistributionLane(string Title, List<DocumentConfigItemDto> Items);
+    private sealed class FormModel
+    {
+        [Required, StringLength(80)] public string Code { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string Name { get; set; } = string.Empty;
+        [StringLength(120)] public string? Category { get; set; }
+        [StringLength(500)] public string? Description { get; set; }
+        [StringLength(4000)] public string? ConfigurationJson { get; set; } = "{}";
+        [Range(0, 9999)] public int SortOrder { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+}

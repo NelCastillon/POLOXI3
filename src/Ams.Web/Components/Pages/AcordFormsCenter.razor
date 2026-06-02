@@ -1,0 +1,398 @@
+@page "/client/segments2"
+@namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.AccountSegments
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Enterprise Account Segments</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="seg-toast seg-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="seg-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showConfirm && _confirmAction is not null)
+{
+    <div class="seg-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="seg-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="segmentConfirmTitle" @onclick:stopPropagation="true">
+            <span class="seg-confirm-icon seg-confirm-@_confirmAction.Kind"><i class="bi @_confirmAction.Icon" aria-hidden="true"></i></span>
+            <h2 id="segmentConfirmTitle">@_confirmAction.Title</h2>
+            <p>@_confirmAction.Message</p>
+            <div class="seg-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_saving">Cancel</button>
+                <button type="button" class="um-btn @_confirmAction.ButtonClass" @onclick="ExecuteConfirmedAsync" disabled="@_saving">
+                    @if (_saving)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    @_confirmAction.ButtonText
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="seg-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="seg-form-modal" role="dialog" aria-modal="true" aria-labelledby="segmentFormTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="seg-modal-header">
+                    <span class="seg-modal-icon"><i class="bi bi-pie-chart" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 id="segmentFormTitle">@(_editingId.HasValue ? "Edit Account Segment" : "Create Account Segment")</h2>
+                        <p>Manage account targeting segments used by account intelligence and distribution reporting.</p>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_saving" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="seg-modal-body">
+                    <div class="seg-form-banner"><i class="bi bi-shield-check" aria-hidden="true"></i><span><strong>Segment governance</strong><span>Codes should match account SegmentCode values for accurate account distribution.</span></span></div>
+                    <div class="seg-form-grid">
+                        <div class="seg-field">
+                            <label for="segmentCode">Segment Code <span>*</span></label>
+                            <InputText id="segmentCode" class="seg-input" @bind-Value="_form.SegmentCode" />
+                        </div>
+                        <div class="seg-field">
+                            <label for="segmentName">Segment Name <span>*</span></label>
+                            <InputText id="segmentName" class="seg-input" @bind-Value="_form.SegmentName" />
+                        </div>
+                        <div class="seg-field seg-field-wide">
+                            <label for="segmentDescription">Description</label>
+                            <InputTextArea id="segmentDescription" class="seg-input" rows="4" @bind-Value="_form.Description" />
+                        </div>
+                        <label class="seg-check-card seg-field-wide">
+                            <InputCheckbox @bind-Value="_form.IsActive" />
+                            <span><strong>Active segment</strong><small>Active segments appear in targeting, filters, analytics, and account distribution views.</small></span>
+                        </label>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(_formError))
+                    {
+                        <div class="seg-form-error"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_formError</div>
+                    }
+                </div>
+                <div class="seg-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_saving">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        Save Segment
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="seg-enterprise-page">
+    <section class="seg-hero">
+        <div class="seg-hero-left">
+            <span class="seg-hero-icon"><i class="bi bi-pie-chart" aria-hidden="true"></i></span>
+            <div>
+                <div class="seg-title-row">
+                    <h1>Account Segments Command Center</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> Live segment workflow</span>
+                    <span><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant account scope</span>
+                    <span><i class="bi bi-stars" aria-hidden="true"></i> Importance ranked</span>
+                </div>
+                <p>Manage segment definitions, monitor account distribution, identify underused targeting groups, and keep account intelligence aligned.</p>
+            </div>
+        </div>
+        <div class="seg-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat seg-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/accounts")'><i class="bi bi-building" aria-hidden="true"></i> Accounts</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Segment</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger seg-error-banner" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    @if (_loading)
+    {
+        <section class="seg-loading-state"><i class="bi bi-arrow-repeat seg-spin" aria-hidden="true"></i><strong>Loading enterprise account segments...</strong><span>Syncing segments, tenant accounts, distribution, and targeting insights.</span></section>
+    }
+    else
+    {
+        <section class="seg-kpi-strip" aria-label="Account segment KPI filters">
+            @foreach (var metric in Metrics)
+            {
+                <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="@(() => SetFilter(metric.Filter))">
+                    <span class="seg-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                    <span><span class="seg-kpi-val">@metric.Value</span><span class="seg-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
+                </button>
+            }
+        </section>
+
+        <section class="seg-workflow-strip" aria-label="Account segment workflow actions">
+            <button type="button" class="seg-workflow-card seg-workflow-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i><span><strong>Create segment</strong><span>Add a targeting group.</span></span></button>
+            <button type="button" class="seg-workflow-card" @onclick='() => SetFilter("withAccounts")'><i class="bi bi-diagram-3" aria-hidden="true"></i><span><strong>Distributed</strong><span>View segments with accounts.</span></span></button>
+            <button type="button" class="seg-workflow-card" @onclick='() => SetFilter("empty")'><i class="bi bi-exclamation-circle" aria-hidden="true"></i><span><strong>Coverage gaps</strong><span>Find empty active segments.</span></span></button>
+            <button type="button" class="seg-workflow-card" @onclick='() => SetView("analytics")'><i class="bi bi-graph-up-arrow" aria-hidden="true"></i><span><strong>Analytics</strong><span>Monitor distribution mix.</span></span></button>
+        </section>
+
+        <section class="seg-filter-panel">
+            <div class="seg-search-wrap">
+                <span class="seg-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+                <div class="seg-search-body">
+                    <label for="segmentSearch">Search segments</label>
+                    <input id="segmentSearch" class="seg-search-input" value="@_search" @oninput="OnSearchChanged" placeholder="Search code, name, description, status, or account count..." />
+                    <span>Search filters cards, table, analytics, detail context, and account distribution.</span>
+                </div>
+            </div>
+            <label class="seg-filter-field">Status<select class="seg-filter-select" value="@_statusFilter" @onchange="OnStatusChanged"><option value="">All statuses</option><option value="Active">Active</option><option value="Inactive">Inactive</option></select></label>
+            <label class="seg-filter-field">Coverage<select class="seg-filter-select" value="@_coverageFilter" @onchange="OnCoverageChanged"><option value="">All coverage</option><option value="withAccounts">With accounts</option><option value="empty">No accounts</option></select></label>
+            <label class="seg-filter-field">Sort by<select class="seg-filter-select" value="@_sort" @onchange="OnSortChanged"><option value="importance">Importance</option><option value="accounts">Accounts</option><option value="name">Name</option><option value="created">Created</option></select></label>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-cloud-arrow-down" aria-hidden="true"></i> Sync</button>
+            <div class="seg-filter-result"><strong>@SearchResultCount.ToString("N0", CultureInfo.CurrentCulture)</strong><span>shown</span></div>
+        </section>
+
+        <section class="seg-view-tabs" aria-label="Account segment views">
+            @foreach (var view in _views)
+            {
+                <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label <span>@ViewCount(view.Id)</span></button>
+            }
+        </section>
+
+        @if (_items.Count == 0)
+        {
+            <section class="seg-empty-state"><i class="bi bi-pie-chart" aria-hidden="true"></i><strong>No account segments available</strong><span>No segments matched the current data source. Create a segment to start organizing accounts.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">Create Segment</button></section>
+        }
+        else
+        {
+            <section class="seg-content-layout">
+                <main class="seg-main-card">
+                    @if (_view == "overview")
+                    {
+                        <div class="seg-section-head"><div><h2>Executive segment overview</h2><p>Most important segments by active state, account coverage, utilization, and targeting readiness.</p></div><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => SetView("segments")'><i class="bi bi-grid-3x3-gap" aria-hidden="true"></i> Segments</button></div>
+                        <div class="seg-overview-grid"><section class="seg-spotlight-card"><span><i class="bi bi-stars" aria-hidden="true"></i> Highest importance segment</span><strong>@(TopSegment?.SegmentName ?? "—")</strong><p>@(TopSegment is null ? "No matching segment requires attention." : $"{TopSegment.SegmentCode} has {AccountCount(TopSegment).ToString("N0", CultureInfo.CurrentCulture)} account(s) and is {StatusText(TopSegment).ToLowerInvariant()}.")</p><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="SelectTopSegment">Inspect segment</button></section><section class="seg-guidance-card"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Segmentation guidance</h3><p>@GuidanceText</p><div class="seg-guidance-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("active")'>Active</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("empty")'>Empty</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("withAccounts")'>Distributed</button></div></section></div>
+                        <section class="seg-panel"><h3><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Segment importance ranking</h3><div class="seg-rank-stack">@foreach (var segment in FilteredRows.Take(8)) { <button type="button" class="@(IsSelected(segment) ? "seg-rank-row seg-rank-active" : "seg-rank-row")" @onclick="@(() => SelectSegment(segment))"><span>@segment.SegmentName</span><div><i style="width:@WidthPct(ImportanceScore(segment), MaxImportance)"></i></div><strong>@AccountCount(segment)</strong><small>@StatusText(segment)</small></button> }</div></section>
+                    }
+                    else if (_view == "segments")
+                    {
+                        <div class="seg-section-head"><div><h2>Segment cards</h2><p>Manage segment definitions, account distribution, status, and targeting readiness.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenCreate">Create Segment</button></div>
+                        <div class="seg-card-grid">@foreach (var segment in FilteredRows) { <article class="@(IsSelected(segment) ? "seg-segment-card seg-segment-card-selected" : "seg-segment-card")" @onclick="@(() => SelectSegment(segment))"><div class="seg-card-top"><span class="seg-card-icon @StatusToneClass(segment)"><i class="bi bi-pie-chart" aria-hidden="true"></i></span><span class="seg-badge @StatusBadgeClass(segment)">@StatusText(segment)</span></div><h3>@segment.SegmentName</h3><p>@(segment.Description ?? "No description provided.")</p><div class="seg-card-stats"><div><span>Code</span><strong>@segment.SegmentCode</strong></div><div><span>Accounts</span><strong>@AccountCount(segment).ToString("N0", CultureInfo.CurrentCulture)</strong></div></div><div class="seg-card-actions" @onclick:stopPropagation="true"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenEdit(segment))"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => ConfirmToggleActive(segment))"><i class="bi @(segment.IsActive ? "bi-pause" : "bi-play")" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-danger um-btn-sm" @onclick="@(() => ConfirmDelete(segment))"><i class="bi bi-trash" aria-hidden="true"></i></button></div></article> }</div>
+                    }
+                    else if (_view == "distribution")
+                    {
+                        <div class="seg-section-head"><div><h2>Account distribution</h2><p>Segment account coverage ranked by account volume.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/accounts")'>Open Accounts</button></div>
+                        <div class="seg-account-grid">@foreach (var row in AccountRows) { <button type="button" class="@(row.SegmentCode == _selected?.SegmentCode ? "seg-account-row seg-active" : "seg-account-row")" @onclick="@(() => SelectByCode(row.SegmentCode))"><span>@row.SegmentName</span><div><i style="width:@row.Width"></i></div><strong>@row.Accounts</strong><small>@row.SegmentCode</small></button> }</div>
+                    }
+                    else if (_view == "analytics")
+                    {
+                        <div class="seg-section-head"><div><h2>Segment analytics</h2><p>Status, coverage, and account distribution across segment definitions.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Refresh</button></div>
+                        <div class="seg-analytics-grid"><section class="seg-analytics-panel seg-tone-blue"><h3><i class="bi bi-pie-chart" aria-hidden="true"></i> Status distribution</h3><div class="seg-analytics-list">@foreach (var row in StatusDistribution) { <button type="button" @onclick="@(() => ApplyStatusDistribution(row.Label))"><span>@row.Label</span><div><i style="width:@row.Width"></i></div><strong>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><small>@row.Percent.ToString("P0", CultureInfo.CurrentCulture)</small></button> }</div></section><section class="seg-analytics-panel seg-tone-green"><h3><i class="bi bi-diagram-3" aria-hidden="true"></i> Coverage distribution</h3><div class="seg-analytics-list">@foreach (var row in CoverageDistribution) { <button type="button" @onclick="@(() => ApplyCoverageDistribution(row.Label))"><span>@row.Label</span><div><i style="width:@row.Width"></i></div><strong>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><small>@row.Percent.ToString("P0", CultureInfo.CurrentCulture)</small></button> }</div></section><section class="seg-analytics-panel seg-tone-amber"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Executive insight</h3><div class="seg-insight-grid"><div><span>Segments</span><strong>@_items.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><small>defined</small></div><div><span>Active</span><strong>@ActiveCount.ToString("N0", CultureInfo.CurrentCulture)</strong><small>available</small></div><div><span>Accounts</span><strong>@_accounts.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><small>tenant scoped</small></div><div><span>Empty</span><strong>@EmptyCount.ToString("N0", CultureInfo.CurrentCulture)</strong><small>need review</small></div></div><p>@GuidanceText</p></section></div>
+                    }
+                    else
+                    {
+                        <div class="seg-section-head"><div><h2>Segments operating table</h2><p>Native table synchronized from the existing account segment API.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters">Reset</button></div>
+                        <div class="seg-table-wrap"><table class="seg-table"><thead><tr><th>Segment</th><th>Description</th><th>Accounts</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead><tbody>@foreach (var segment in FilteredRows) { <tr class="@(IsSelected(segment) ? "seg-row-selected" : string.Empty)" @onclick="@(() => SelectSegment(segment))"><td><strong>@segment.SegmentName</strong><small>@segment.SegmentCode</small></td><td>@(segment.Description ?? "—")</td><td><strong>@AccountCount(segment).ToString("N0", CultureInfo.CurrentCulture)</strong></td><td><span class="seg-badge @StatusBadgeClass(segment)">@StatusText(segment)</span></td><td>@FormatDate(segment.CreatedDateUtc)</td><td @onclick:stopPropagation="true"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenEdit(segment))"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-danger um-btn-sm" @onclick="@(() => ConfirmDelete(segment))"><i class="bi bi-trash" aria-hidden="true"></i></button></td></tr> }</tbody></table></div>
+                    }
+                </main>
+
+                <aside class="seg-detail-panel">
+                    @if (_selected is null)
+                    {
+                        <div class="seg-detail-empty"><i class="bi bi-pie-chart" aria-hidden="true"></i><strong>Select a segment</strong><span>Inspect segment definition, account distribution, status, importance, and available actions.</span></div>
+                    }
+                    else
+                    {
+                        <div class="seg-detail-head"><div><span><i class="bi bi-pie-chart" aria-hidden="true"></i> Segment</span><h2>@_selected.SegmentName</h2><p>@_selected.SegmentCode · @FormatDate(_selected.CreatedDateUtc)</p></div><span class="seg-badge @StatusBadgeClass(_selected)">@StatusText(_selected)</span></div>
+                        <div class="seg-detail-summary"><div><span>Importance</span><strong>@ImportanceScore(_selected).ToString("N0", CultureInfo.CurrentCulture)</strong></div><div><span>Accounts</span><strong>@AccountCount(_selected).ToString("N0", CultureInfo.CurrentCulture)</strong></div><div><span>Status</span><strong>@StatusText(_selected)</strong></div><div><span>Created</span><strong>@FormatDate(_selected.CreatedDateUtc)</strong></div></div>
+                        <div class="seg-note-card"><strong>Description</strong><p>@(_selected.Description ?? "No description provided.")</p></div>
+                        <div class="seg-rules-card"><header><strong>Recommended actions</strong><span>@CoverageLabel(_selected)</span></header>@foreach (var action in RecommendedActions(_selected)) { <p><em>@action</em><span>active</span></p> }</div>
+                        <div class="seg-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="@(() => OpenEdit(_selected))"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost" @onclick="@(() => OpenAccounts(_selected))"><i class="bi bi-building" aria-hidden="true"></i> Accounts</button><button type="button" class="um-btn um-btn-danger" @onclick="@(() => ConfirmDelete(_selected))"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button></div>
+                    }
+                </aside>
+            </section>
+        }
+    }
+</div>
+
+@code {
+    private Guid _tenantId;
+    private bool _loading = true;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showConfirm;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private string _search = string.Empty;
+    private string _activeFilter = "all";
+    private string _statusFilter = string.Empty;
+    private string _coverageFilter = string.Empty;
+    private string _sort = "importance";
+    private string _view = "overview";
+    private Guid? _editingId;
+    private ConfirmAction? _confirmAction;
+    private SegmentFormModel _form = new();
+    private AccountSegmentDto? _selected;
+    private List<AccountSegmentDto> _items = [];
+    private List<AccountDto> _accounts = [];
+    private readonly ViewOption[] _views = [new("overview", "Overview", "bi-speedometer2"), new("segments", "Segments", "bi-grid-3x3-gap"), new("distribution", "Distribution", "bi-diagram-3"), new("analytics", "Analytics", "bi-graph-up-arrow"), new("table", "Table", "bi-table")];
+
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
+    private int ActiveCount => _items.Count(s => s.IsActive);
+    private int InactiveCount => _items.Count(s => !s.IsActive);
+    private int EmptyCount => _items.Count(s => AccountCount(s) == 0);
+    private int DistributedCount => _items.Count(s => AccountCount(s) > 0);
+    private int SearchResultCount => FilteredRows.Count;
+    private decimal MaxImportance => Math.Max(1m, FilteredRows.Select(ImportanceScore).DefaultIfEmpty(1m).Max());
+    private AccountSegmentDto? TopSegment => FilteredRows.OrderByDescending(ImportanceScore).ThenByDescending(AccountCount).FirstOrDefault();
+    private string GuidanceText => EmptyCount > 0 ? $"{EmptyCount.ToString("N0", CultureInfo.CurrentCulture)} segment(s) have no accounts and should be reviewed for setup or targeting relevance." : InactiveCount > 0 ? $"{InactiveCount.ToString("N0", CultureInfo.CurrentCulture)} inactive segment(s) are available for cleanup or reactivation." : "Segment coverage is healthy. Continue aligning account SegmentCode values with active segment definitions.";
+    private IReadOnlyList<AccountSegmentDto> FilteredRows => ApplySegmentFilters(_items).ToList();
+    private IReadOnlyList<AccountRow> AccountRows => BuildAccountRows();
+    private IReadOnlyList<DistributionRow> StatusDistribution => BuildDistribution(_items, StatusText);
+    private IReadOnlyList<DistributionRow> CoverageDistribution => BuildDistribution(_items, CoverageLabel);
+    private IReadOnlyList<Metric> Metrics => [new("all", _items.Count.ToString("N0", CultureInfo.CurrentCulture), "Segments", "Defined account segments", "bi-pie-chart", "seg-kpi-blue"), new("active", ActiveCount.ToString("N0", CultureInfo.CurrentCulture), "Active", "Available for targeting", "bi-check2-circle", "seg-kpi-green"), new("inactive", InactiveCount.ToString("N0", CultureInfo.CurrentCulture), "Inactive", "Paused definitions", "bi-pause-circle", "seg-kpi-amber"), new("withAccounts", DistributedCount.ToString("N0", CultureInfo.CurrentCulture), "Distributed", "Segments with accounts", "bi-diagram-3", "seg-kpi-cyan"), new("empty", EmptyCount.ToString("N0", CultureInfo.CurrentCulture), "Empty", "Need account coverage", "bi-exclamation-circle", "seg-kpi-red"), new("accounts", _accounts.Count.ToString("N0", CultureInfo.CurrentCulture), "Accounts", "Tenant accounts loaded", "bi-building", "seg-kpi-purple")];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Accounts", "/accounts"), new("Segments", "/client/segments"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            if (_tenantId == Guid.Empty) await ResolveCurrentUserContextAsync();
+            _items = (await Api.SearchAccountSegmentsAsync(pageSize: 250))?.Items.ToList() ?? [];
+            _accounts = (await Api.SearchAccountsAsync(_tenantId, pageSize: 500))?.Items.ToList() ?? [];
+            _selected = _selected is null ? FilteredRows.FirstOrDefault() : _items.FirstOrDefault(s => s.SegmentId == _selected.SegmentId) ?? FilteredRows.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load segments: {ex.Message}";
+            _items = [];
+            _accounts = [];
+            _selected = null;
+            ShowToast($"Segments load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private IEnumerable<AccountSegmentDto> ApplySegmentFilters(IEnumerable<AccountSegmentDto> segments)
+    {
+        var query = segments;
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var term = _search.Trim();
+            query = query.Where(s => Contains(s.SegmentName, term) || Contains(s.SegmentCode, term) || Contains(s.Description, term) || Contains(StatusText(s), term) || AccountCount(s).ToString(CultureInfo.InvariantCulture).Contains(term, StringComparison.OrdinalIgnoreCase));
+        }
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(s => StatusText(s).Equals(_statusFilter, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(_coverageFilter)) query = ApplyCoverage(query, _coverageFilter);
+        query = _activeFilter switch { "active" => query.Where(s => s.IsActive), "inactive" => query.Where(s => !s.IsActive), "withAccounts" => query.Where(s => AccountCount(s) > 0), "empty" => query.Where(s => AccountCount(s) == 0), _ => query };
+        return _sort switch { "accounts" => query.OrderByDescending(AccountCount).ThenBy(s => s.SegmentName), "name" => query.OrderBy(s => s.SegmentName), "created" => query.OrderByDescending(s => s.CreatedDateUtc), _ => query.OrderByDescending(ImportanceScore).ThenBy(s => s.SegmentName) };
+    }
+
+    private IEnumerable<AccountSegmentDto> ApplyCoverage(IEnumerable<AccountSegmentDto> query, string coverage) => coverage switch { "withAccounts" => query.Where(s => AccountCount(s) > 0), "empty" => query.Where(s => AccountCount(s) == 0), _ => query };
+    private void SetFilter(string filter) { _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter; _view = filter switch { "withAccounts" or "empty" => "distribution", _ => _view }; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void SetView(string view) => _view = view;
+    private void SelectSegment(AccountSegmentDto segment) => _selected = segment;
+    private void SelectTopSegment() { if (TopSegment is not null) { _selected = TopSegment; _view = "table"; } }
+    private void SelectByCode(string code) { _selected = _items.FirstOrDefault(s => s.SegmentCode.Equals(code, StringComparison.OrdinalIgnoreCase)); _view = "segments"; }
+    private void ResetFilters() { _activeFilter = "all"; _statusFilter = string.Empty; _coverageFilter = string.Empty; _search = string.Empty; _sort = "importance"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnSearchChanged(BlazorChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnStatusChanged(BlazorChangeEventArgs e) { _statusFilter = e.Value?.ToString() ?? string.Empty; _activeFilter = "all"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnCoverageChanged(BlazorChangeEventArgs e) { _coverageFilter = e.Value?.ToString() ?? string.Empty; _activeFilter = "all"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OnSortChanged(BlazorChangeEventArgs e) { _sort = e.Value?.ToString() ?? "importance"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void ApplyStatusDistribution(string status) { _statusFilter = _statusFilter == status ? string.Empty : status; _activeFilter = "all"; _view = "table"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void ApplyCoverageDistribution(string label) { _coverageFilter = label == "With Accounts" ? "withAccounts" : label == "No Accounts" ? "empty" : string.Empty; _activeFilter = "all"; _view = "table"; _selected = FilteredRows.FirstOrDefault() ?? _items.FirstOrDefault(); }
+    private void OpenAccounts(AccountSegmentDto segment) => Nav.NavigateTo($"/accounts?segment={Uri.EscapeDataString(segment.SegmentCode)}");
+    private void OpenCreate() { _editingId = null; _form = new(); _formError = null; _showForm = true; }
+    private void OpenEdit(AccountSegmentDto segment) { _editingId = segment.SegmentId; _form = new() { SegmentCode = segment.SegmentCode, SegmentName = segment.SegmentName, Description = segment.Description, IsActive = segment.IsActive }; _formError = null; _showForm = true; _selected = segment; }
+    private void CloseForm() { if (_saving) return; _showForm = false; _editingId = null; _form = new(); _formError = null; }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        _formError = null;
+        try
+        {
+            if (_editingId.HasValue)
+            {
+                await Api.UpdateAccountSegmentAsync(_editingId.Value, new UpdateAccountSegmentRequest { SegmentId = _editingId.Value, TenantId = _tenantId, SegmentCode = _form.SegmentCode.Trim(), SegmentName = _form.SegmentName.Trim(), Description = string.IsNullOrWhiteSpace(_form.Description) ? null : _form.Description.Trim(), IsActive = _form.IsActive });
+                ShowToast("Account segment updated.", "success");
+            }
+            else
+            {
+                await Api.CreateAccountSegmentAsync(new CreateAccountSegmentRequest { TenantId = _tenantId, SegmentCode = _form.SegmentCode.Trim(), SegmentName = _form.SegmentName.Trim(), Description = string.IsNullOrWhiteSpace(_form.Description) ? null : _form.Description.Trim(), IsActive = _form.IsActive });
+                ShowToast("Account segment created.", "success");
+            }
+            _showForm = false;
+            _editingId = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void ConfirmToggleActive(AccountSegmentDto segment) => OpenConfirm(new(segment.IsActive ? "Deactivate segment" : "Activate segment", $"{(segment.IsActive ? "Deactivate" : "Activate")} {segment.SegmentName}?", segment.IsActive ? "Deactivate" : "Activate", segment.IsActive ? "um-btn-danger" : "um-btn-primary", segment.IsActive ? "bi-pause-circle" : "bi-play-circle", "warning", () => ToggleActiveAsync(segment)));
+    private void ConfirmDelete(AccountSegmentDto segment) => OpenConfirm(new("Delete segment", $"Delete {segment.SegmentName}? Account records are retained, but this segment definition will be removed.", "Delete", "um-btn-danger", "bi-trash", "danger", () => DeleteAsync(segment)));
+    private void OpenConfirm(ConfirmAction action) { _confirmAction = action; _showConfirm = true; }
+    private void CancelConfirm() { if (!_saving) { _showConfirm = false; _confirmAction = null; } }
+    private async Task ExecuteConfirmedAsync() { if (_confirmAction is null) return; _saving = true; try { var action = _confirmAction; await action.ExecuteAsync(); _showConfirm = false; _confirmAction = null; } catch (Exception ex) { ShowToast($"Action failed: {ex.Message}", "danger"); } finally { _saving = false; } }
+    private async Task ToggleActiveAsync(AccountSegmentDto segment) { await Api.UpdateAccountSegmentAsync(segment.SegmentId, new UpdateAccountSegmentRequest { SegmentId = segment.SegmentId, TenantId = segment.TenantId ?? _tenantId, SegmentCode = segment.SegmentCode, SegmentName = segment.SegmentName, Description = segment.Description, IsActive = !segment.IsActive }); await LoadAsync(); ShowToast($"{segment.SegmentName} {(segment.IsActive ? "deactivated" : "activated") }.", "success"); }
+    private async Task DeleteAsync(AccountSegmentDto segment) { await Api.DeleteAccountSegmentAsync(segment.SegmentId); await LoadAsync(); ShowToast("Account segment deleted.", "success"); }
+    private void ShowToast(string message, string kind) { _toastMessage = message.Length <= 140 ? message : $"{message[..137]}..."; _toastKind = ToastKind(kind); _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+
+    private string MetricCardClass(Metric metric) => $"seg-kpi-card {metric.Tone} {(_activeFilter == metric.Filter ? "seg-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewOption view) => $"seg-view-btn {(view.Id == _view ? "seg-view-btn-active" : string.Empty)}";
+    private int ViewCount(string view) => view switch { "distribution" => AccountRows.Count, "analytics" => _items.Count, _ => FilteredRows.Count };
+    private bool IsSelected(AccountSegmentDto segment) => _selected?.SegmentId == segment.SegmentId;
+    private int AccountCount(AccountSegmentDto segment) => _accounts.Count(a => !string.IsNullOrWhiteSpace(a.SegmentCode) && a.SegmentCode.Equals(segment.SegmentCode, StringComparison.OrdinalIgnoreCase));
+    private IReadOnlyList<AccountRow> BuildAccountRows() { var rows = _items.Select(s => new AccountRow(s.SegmentCode, s.SegmentName, AccountCount(s))).OrderByDescending(r => r.Accounts).ThenBy(r => r.SegmentName).ToList(); var max = Math.Max(1, rows.Select(r => r.Accounts).DefaultIfEmpty(1).Max()); return rows.Select(r => r with { Width = WidthPct(r.Accounts, max) }).ToList(); }
+    private static IReadOnlyList<DistributionRow> BuildDistribution(IEnumerable<AccountSegmentDto> items, Func<AccountSegmentDto, string> labelSelector) { var rows = items.GroupBy(labelSelector).Select(g => new DistributionRow(g.Key, g.Count(), 0, "0%")).OrderByDescending(r => r.Count).ThenBy(r => r.Label).ToList(); var total = Math.Max(1, rows.Sum(r => r.Count)); var max = Math.Max(1, rows.Select(r => r.Count).DefaultIfEmpty(1).Max()); return rows.Select(r => r with { Percent = (double)r.Count / total, Width = WidthPct(r.Count, max) }).ToList(); }
+    private decimal ImportanceScore(AccountSegmentDto segment) => (segment.IsActive ? 50m : 15m) + Math.Min(45m, AccountCount(segment) * 5m) + (AccountCount(segment) == 0 && segment.IsActive ? 20m : 0m);
+    private string CoverageLabel(AccountSegmentDto segment) => AccountCount(segment) > 0 ? "With Accounts" : "No Accounts";
+    private static string StatusText(AccountSegmentDto segment) => segment.IsActive ? "Active" : "Inactive";
+    private static string StatusBadgeClass(AccountSegmentDto segment) => segment.IsActive ? "seg-badge-success" : "seg-badge-muted";
+    private static string StatusToneClass(AccountSegmentDto segment) => segment.IsActive ? "seg-tone-green" : "seg-tone-muted";
+    private IEnumerable<string> RecommendedActions(AccountSegmentDto segment) { if (segment.IsActive && AccountCount(segment) == 0) yield return "Assign matching account SegmentCode values or deactivate this unused active segment."; if (!segment.IsActive) yield return "Review whether this inactive segment should be reactivated or removed."; if (AccountCount(segment) > 0) yield return "Open account distribution to validate membership and targeting quality."; yield return "Keep segment code, name, and account SegmentCode values synchronized."; }
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static string WidthPct(decimal value, decimal max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, (double)(value / max * 100)))).ToString("F1", CultureInfo.InvariantCulture) + "%";
+    private static string WidthPct(int value, int max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, (double)value / max * 100))).ToString("F1", CultureInfo.InvariantCulture) + "%";
+    private static string FormatDate(DateTime value) => value.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture);
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : "success";
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; }
+
+    private sealed record ViewOption(string Id, string Label, string Icon);
+    private sealed record Metric(string Filter, string Value, string Label, string Caption, string Icon, string Tone);
+    private sealed record ConfirmAction(string Title, string Message, string ButtonText, string ButtonClass, string Icon, string Kind, Func<Task> ExecuteAsync);
+    private sealed record DistributionRow(string Label, int Count, double Percent, string Width);
+    private sealed record AccountRow(string SegmentCode, string SegmentName, int Accounts) { public string Width { get; init; } = "0%"; }
+    private sealed class SegmentFormModel { [Required, StringLength(50)] public string SegmentCode { get; set; } = string.Empty; [Required, StringLength(150)] public string SegmentName { get; set; } = string.Empty; [StringLength(500)] public string? Description { get; set; } public bool IsActive { get; set; } = true; }
+}

@@ -1,2 +1,852 @@
-@page "/tenant/portal/features"
-<PortalConfigPage Kind="PortalFeature" Title="Portal Features" Subtitle="Configure enabled portal modules and self-service capabilities" Icon="bi bi-toggles" />
+@page "/portal/features"
+@using System.ComponentModel.DataAnnotations
+@using System.Text
+@using System.Text.Json
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.PortalConfig
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Portal Features — AMS</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="pf-toast pf-toast--@_toastKind" role="status" aria-live="polite">
+        <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="pf-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="pf-modal" role="dialog" aria-modal="true" aria-labelledby="pf-form-title" @onclick:stopPropagation="true">
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="HandleInvalidSubmit">
+                <DataAnnotationsValidator />
+                <div class="um-modal-header">
+                    <i class="bi @(_editing is null ? "bi-plus-circle" : "bi-toggles")" aria-hidden="true"></i>
+                    <span id="pf-form-title">@(_editing is null ? "Add Portal Feature" : $"Edit {_form.Name}")</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_actionBusy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="pf-modal-intro">
+                        <strong>Feature control profile</strong>
+                        <span>Configure client-facing module availability, approval workflow, MFA enforcement, audit logging, and rollout priority.</span>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Feature Code <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.Code" />
+                            <ValidationMessage For="() => _form.Code" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Feature Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.Name" />
+                            <ValidationMessage For="() => _form.Name" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Category <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.Category">
+                                @foreach (var category in Categories)
+                                {
+                                    <option value="@category">@category</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.Category" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Sort Order</label>
+                            <InputNumber class="form-control" @bind-Value="_form.SortOrder" />
+                            <ValidationMessage For="() => _form.SortOrder" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Description <span class="text-danger">*</span></label>
+                            <InputTextArea class="form-control" rows="3" @bind-Value="_form.Description" />
+                            <ValidationMessage For="() => _form.Description" class="text-danger" />
+                        </div>
+                        <div class="um-field pf-check-field">
+                            <label>Availability</label>
+                            <label class="pf-check"><InputCheckbox @bind-Value="_form.IsActive" /> <span>Enabled in portal</span></label>
+                        </div>
+                        <div class="um-field pf-check-field">
+                            <label>Workflow</label>
+                            <label class="pf-check"><InputCheckbox @bind-Value="_form.RequiresApproval" /> <span>Requires staff approval</span></label>
+                        </div>
+                        <div class="um-field pf-check-field">
+                            <label>Security</label>
+                            <label class="pf-check"><InputCheckbox @bind-Value="_form.MfaRequired" /> <span>Require MFA</span></label>
+                        </div>
+                        <div class="um-field pf-check-field">
+                            <label>Compliance</label>
+                            <label class="pf-check"><InputCheckbox @bind-Value="_form.AuditLog" /> <span>Audit every action</span></label>
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Configuration JSON</label>
+                            <InputTextArea class="form-control pf-json" rows="5" @bind-Value="_form.ConfigurationJson" />
+                            <ValidationMessage For="() => _form.ConfigurationJson" class="text-danger" />
+                        </div>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(_formError))
+                    {
+                        <div class="alert alert-danger pf-inline-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+                            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_formError
+                        </div>
+                    }
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_actionBusy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy">
+                        @if (_actionBusy)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        Save Feature
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showConfirm)
+{
+    <div class="pf-modal-backdrop" role="presentation" @onclick="CloseConfirm">
+        <div class="pf-confirm" role="dialog" aria-modal="true" aria-labelledby="pf-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingAction is "Delete" or "Disable" ? "um-confirm-icon--danger" : null)">
+                    <i class="bi @_confirmIcon" aria-hidden="true"></i>
+                </div>
+                <div>
+                    <h3 id="pf-confirm-title">@_confirmTitle</h3>
+                    <p>@_confirmMessage</p>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseConfirm" disabled="@_actionBusy">Cancel</button>
+                <button type="button" class="um-btn @(_pendingAction is "Delete" or "Disable" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteConfirmedAsync" disabled="@_actionBusy">
+                    @if (_actionBusy)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    Confirm
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showExport)
+{
+    <div class="pf-modal-backdrop" role="presentation" @onclick="CloseExport">
+        <div class="pf-export" role="dialog" aria-modal="true" aria-labelledby="pf-export-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-download" aria-hidden="true"></i>
+                <span id="pf-export-title">Portal Feature Export</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseExport"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="um-modal-body">
+                <p class="pf-export-help">Copy this CSV into an audit package, spreadsheet, or implementation checklist.</p>
+                <textarea class="form-control pf-export-text" readonly>@_exportText</textarea>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-primary" @onclick="CloseExport">Done</button>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="pf-page">
+    <section class="pf-hero">
+        <div class="pf-hero__content">
+            <div class="pf-hero-left">
+                <span class="pf-hero-icon"><i class="bi bi-toggles2" aria-hidden="true"></i></span>
+                <div class="pf-hero-title">
+                    <span class="pf-hero__eyebrow">Client portal feature command center</span>
+                    <div class="pf-title-row">
+                        <h1>Portal Features</h1>
+                        <div class="pf-hero__meta">
+                            <span><i class="bi bi-toggles" aria-hidden="true"></i>@_rows.Count features</span>
+                            <span><i class="bi bi-check-circle" aria-hidden="true"></i>@EnabledCount enabled</span>
+                            <span><i class="bi bi-shield-lock" aria-hidden="true"></i>@MfaCount MFA guarded</span>
+                            <span><i class="bi bi-clipboard-check" aria-hidden="true"></i>@ReadinessScore/100 readiness</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <p>Control client-facing modules by value, security, approval workflow, audit coverage, and rollout readiness.</p>
+        </div>
+        <div class="pf-hero__actions">
+            <button type="button" class="pf-btn pf-btn--light" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "pf-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="pf-btn pf-btn--primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add Feature</button>
+            <button type="button" class="pf-btn pf-btn--light" @onclick="ExportCsv"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="pf-btn pf-btn--light" @onclick='() => Nav.NavigateTo("/portal/requests")'><i class="bi bi-inbox" aria-hidden="true"></i> Requests</button>
+        </div>
+    </section>
+
+    <section class="pf-kpi-strip" aria-label="Portal feature KPIs">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="pf-kpi-card @kpi.Css @(_kpiFilter == kpi.Key ? "pf-kpi-card--active" : null)" title="@kpi.Hint" @onclick="() => SetKpiFilter(kpi.Key)">
+                <span class="pf-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span><strong>@kpi.Value</strong><small>@kpi.Label</small><em>@kpi.Hint</em></span>
+            </button>
+        }
+    </section>
+
+    <section class="pf-workflows" aria-label="Portal feature workflows">
+        <button type="button" class="pf-workflow" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i><span><strong>Launch feature</strong><small>Create a new portal module</small></span></button>
+        <button type="button" class="pf-workflow" @onclick='() => SetKpiFilter("security-gap")'><i class="bi bi-shield-lock" aria-hidden="true"></i><span><strong>Security review</strong><small>Filter MFA gaps</small></span></button>
+        <button type="button" class="pf-workflow" @onclick='() => SetKpiFilter("approval")'><i class="bi bi-person-check" aria-hidden="true"></i><span><strong>Approval workflow</strong><small>Review staff-gated modules</small></span></button>
+        <button type="button" class="pf-workflow" @onclick='() => Nav.NavigateTo("/portal/documents")'><i class="bi bi-folder2-open" aria-hidden="true"></i><span><strong>Document center</strong><small>Open shared documents</small></span></button>
+        <button type="button" class="pf-workflow" @onclick='() => Nav.NavigateTo("/portal/branding")'><i class="bi bi-palette" aria-hidden="true"></i><span><strong>Branding</strong><small>Tune portal experience</small></span></button>
+    </section>
+
+    <section class="pf-filter-panel">
+        <div class="pf-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input aria-label="Search portal features" placeholder="Search feature, category, code, status, approval, MFA, audit…" @bind="SearchText" @bind:event="oninput" />
+        </div>
+        <div class="pf-filter-actions">
+            <select class="pf-select" @bind="CategoryFilter">
+                <option value="">All categories</option>
+                @foreach (var category in AvailableCategories)
+                {
+                    <option value="@category">@category</option>
+                }
+            </select>
+            <select class="pf-select" @bind="StatusFilter">
+                <option value="">All statuses</option>
+                <option value="enabled">Enabled</option>
+                <option value="disabled">Disabled</option>
+            </select>
+            <span>@FilteredRows.Count() visible</span>
+            <button type="button" class="pf-btn pf-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger pf-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError
+        </div>
+    }
+
+    <section class="pf-tabs" aria-label="Portal feature views">
+        @foreach (var tab in Tabs)
+        {
+            <button type="button" class="pf-tab @(_activeTab == tab.Key ? "pf-tab--active" : null)" @onclick="() => SetTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </section>
+
+    <section class="pf-dashboard">
+        <div class="pf-main-card">
+            <div class="pf-card-header">
+                <div>
+                    <span class="pf-section-kicker"><i class="bi @ActiveTabIcon" aria-hidden="true"></i> @ActiveTabKicker</span>
+                    <h2>@ActiveTabTitle</h2>
+                    <p>@ActiveTabSubtitle</p>
+                </div>
+                <div class="pf-view-toggle" role="group" aria-label="Feature view mode">
+                    <button type="button" class="@(_view == "table" ? "is-active" : null)" @onclick='() => _view = "table"'><i class="bi bi-table" aria-hidden="true"></i> Table</button>
+                    <button type="button" class="@(_view == "cards" ? "is-active" : null)" @onclick='() => _view = "cards"'><i class="bi bi-kanban" aria-hidden="true"></i> Board</button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="pf-loading"><span class="pf-spinner" aria-hidden="true"></span> Loading portal features…</div>
+            }
+            else if (!VisibleRows.Any())
+            {
+                <div class="pf-empty">
+                    <i class="bi bi-toggles" aria-hidden="true"></i>
+                    <strong>No portal features found</strong>
+                    <span>Add a feature or reset filters to review existing portal configuration.</span>
+                    <button type="button" class="pf-btn pf-btn--primary" @onclick="OpenCreate">Add Feature</button>
+                </div>
+            }
+            else if (_view == "table")
+            {
+                <div class="pf-table-wrap">
+                    <table class="pf-table">
+                        <thead>
+                            <tr>
+                                <th>Feature</th>
+                                <th>Importance</th>
+                                <th>Category</th>
+                                <th>Workflow</th>
+                                <th>Security</th>
+                                <th>Status</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in VisibleRows)
+                            {
+                                <tr class="@(SelectedId == row.Id ? "is-selected" : null)" @onclick="() => SelectRow(row)">
+                                    <td>
+                                        <div class="pf-feature-cell">
+                                            <span class="pf-feature-icon @row.IconCss"><i class="bi @row.Icon" aria-hidden="true"></i></span>
+                                            <div><strong>@row.Name</strong><small>@row.Code</small><small>@row.Description</small></div>
+                                        </div>
+                                    </td>
+                                    <td><span class="pf-pill @ImportanceCss(row.Importance)">@row.Importance</span></td>
+                                    <td>@row.Category</td>
+                                    <td>
+                                        <div class="pf-mini-stack">
+                                            <span class="@(row.RequiresApproval ? "is-on" : null)"><i class="bi bi-person-check" aria-hidden="true"></i> Approval</span>
+                                            <span class="@(row.AuditLog ? "is-on" : null)"><i class="bi bi-journal-check" aria-hidden="true"></i> Audit</span>
+                                        </div>
+                                    </td>
+                                    <td><span class="pf-pill @(row.MfaRequired ? "pf-pill--purple" : "pf-pill--muted")">@(row.MfaRequired ? "MFA" : "Standard")</span></td>
+                                    <td><span class="pf-status @(row.IsActive ? "pf-status--active" : "pf-status--inactive")">@(row.IsActive ? "Enabled" : "Disabled")</span></td>
+                                    <td>
+                                        <div class="pf-row-actions">
+                                            <button type="button" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(row)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                            <button type="button" title="Duplicate" @onclick:stopPropagation="true" @onclick="() => DuplicateFeature(row)"><i class="bi bi-copy" aria-hidden="true"></i></button>
+                                            <button type="button" title="@(row.IsActive ? "Disable" : "Enable")" @onclick:stopPropagation="true" @onclick="() => ConfirmStatus(row)"><i class="bi @(row.IsActive ? "bi-pause-circle" : "bi-play-circle")" aria-hidden="true"></i></button>
+                                            <button type="button" title="Delete" class="text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(row)"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+            else
+            {
+                <div class="pf-card-grid">
+                    @foreach (var row in VisibleRows)
+                    {
+                        <article class="pf-feature-card @(SelectedId == row.Id ? "is-selected" : null)" @onclick="() => SelectRow(row)">
+                            <div class="pf-feature-card__top">
+                                <span class="pf-feature-icon @row.IconCss"><i class="bi @row.Icon" aria-hidden="true"></i></span>
+                                <span class="pf-status @(row.IsActive ? "pf-status--active" : "pf-status--inactive")">@(row.IsActive ? "Enabled" : "Disabled")</span>
+                            </div>
+                            <h3>@row.Name</h3>
+                            <p>@row.Description</p>
+                            <div class="pf-card-tags">
+                                <span>@row.Category</span>
+                                <span>@row.Importance</span>
+                                @if (row.RequiresApproval)
+                                {
+                                    <span>Approval</span>
+                                }
+                                @if (row.MfaRequired)
+                                {
+                                    <span>MFA</span>
+                                }
+                            </div>
+                            <div class="pf-row-actions">
+                                <button type="button" @onclick:stopPropagation="true" @onclick="() => OpenEdit(row)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                                <button type="button" @onclick:stopPropagation="true" @onclick="() => ConfirmStatus(row)"><i class="bi @(row.IsActive ? "bi-pause-circle" : "bi-play-circle")" aria-hidden="true"></i> @(row.IsActive ? "Disable" : "Enable")</button>
+                            </div>
+                        </article>
+                    }
+                </div>
+            }
+        </div>
+
+        <aside class="pf-side-panel">
+            <div class="pf-panel-card">
+                <span class="pf-section-kicker"><i class="bi bi-stars" aria-hidden="true"></i> Rollout readiness</span>
+                <div class="pf-score-card"><span>Feature governance score</span><strong>@ReadinessScore</strong><small>/100</small></div>
+                <div class="pf-readiness"><span style="width:@ReadinessScore%"></span></div>
+                <div class="pf-importance-list">
+                    @foreach (var item in ImportanceSignals)
+                    {
+                        <div><i class="bi @item.Icon" aria-hidden="true"></i><span>@item.Text</span></div>
+                    }
+                </div>
+            </div>
+
+            <div class="pf-panel-card">
+                <span class="pf-section-kicker"><i class="bi bi-info-circle" aria-hidden="true"></i> Selected feature</span>
+                @if (SelectedRow is null)
+                {
+                    <div class="pf-empty-small">Select a row to review feature workflow, security, and recommended next action.</div>
+                }
+                else if (SelectedRow is { } selected)
+                {
+                    <div class="pf-detail">
+                        <span class="pf-feature-icon @selected.IconCss"><i class="bi @selected.Icon" aria-hidden="true"></i></span>
+                        <h3>@selected.Name</h3>
+                        <p>@selected.Description</p>
+                        <dl>
+                            <div><dt>Code</dt><dd>@selected.Code</dd></div>
+                            <div><dt>Category</dt><dd>@selected.Category</dd></div>
+                            <div><dt>Importance</dt><dd>@selected.Importance</dd></div>
+                            <div><dt>Workflow</dt><dd>@(selected.RequiresApproval ? "Staff approval required" : "Client self-service")</dd></div>
+                            <div><dt>Security</dt><dd>@(selected.MfaRequired ? "MFA required" : "Standard portal session")</dd></div>
+                        </dl>
+                        <div class="pf-detail-actions">
+                            <button type="button" class="pf-btn pf-btn--primary" @onclick="() => OpenEdit(selected)">Edit</button>
+                            <button type="button" class="pf-btn pf-btn--ghost" @onclick="() => DuplicateFeature(selected)">Duplicate</button>
+                        </div>
+                    </div>
+                }
+            </div>
+        </aside>
+    </section>
+</div>
+
+@code {
+    private const string FeatureKind = "PortalFeature";
+    private static readonly string[] Categories = ["Documents", "Service", "Billing", "Claims", "Security", "Communication", "Mobile", "Administration"];
+    private static readonly string[] HighImportanceTerms = ["pay", "invoice", "claim", "fnol", "coi", "certificate", "policy-change", "document", "upload", "security", "mfa"];
+    private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private Guid _tenantId;
+    private List<FeatureRow> _rows = [];
+    private bool _loading;
+    private bool _actionBusy;
+    private bool _showForm;
+    private bool _showConfirm;
+    private bool _showExport;
+    private string? _loadError;
+    private string? _formError;
+    private string _searchText = string.Empty;
+    private string _categoryFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string _activeTab = "all";
+    private string _view = "table";
+    private string _pendingAction = string.Empty;
+    private string _confirmTitle = string.Empty;
+    private string _confirmMessage = string.Empty;
+    private string _confirmIcon = "bi-question-circle";
+    private string _exportText = string.Empty;
+    private bool _toastVisible;
+    private string _toastKind = "success";
+    private string _toastMessage = string.Empty;
+    private FeatureRow? _editing;
+    private FeatureRow? _pendingRow;
+    private FeatureForm _form = new();
+
+    private string SearchText { get => _searchText; set { _searchText = value; } }
+    private string CategoryFilter { get => _categoryFilter; set { _categoryFilter = value; } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; } }
+    private Guid? SelectedId { get; set; }
+    private FeatureRow? SelectedRow => _rows.FirstOrDefault(r => r.Id == SelectedId) ?? VisibleRows.FirstOrDefault();
+    private IEnumerable<string> AvailableCategories => _rows.Select(r => r.Category).Where(c => !string.IsNullOrWhiteSpace(c)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(c => c);
+    private IEnumerable<FeatureRow> FilteredRows => ApplySearchAndFilters(_rows);
+    private List<FeatureRow> VisibleRows => ApplyTab(FilteredRows).OrderBy(r => r.SortOrder).ThenBy(r => r.Name).ToList();
+    private bool HasFilters => !string.IsNullOrWhiteSpace(_searchText) || !string.IsNullOrWhiteSpace(_categoryFilter) || !string.IsNullOrWhiteSpace(_statusFilter) || _kpiFilter != "all" || _activeTab != "all";
+    private int EnabledCount => _rows.Count(r => r.IsActive);
+    private int ApprovalCount => _rows.Count(r => r.RequiresApproval);
+    private int MfaCount => _rows.Count(r => r.MfaRequired);
+    private int AuditCount => _rows.Count(r => r.AuditLog);
+    private int AttentionCount => _rows.Count(NeedsAttention);
+    private int ReadinessScore => _rows.Count == 0 ? 0 : Math.Clamp((EnabledCount * 30 / Math.Max(_rows.Count, 1)) + (AuditCount * 25 / Math.Max(_rows.Count, 1)) + (MfaCount * 20 / Math.Max(_rows.Count, 1)) + (ApprovalCount * 15 / Math.Max(_rows.Count, 1)) + Math.Max(0, 10 - AttentionCount * 3), 0, 100);
+    private KpiDefinition[] Kpis =>
+    [
+        new("all", "Total Features", _rows.Count.ToString(), "Configured modules", "bi-grid-3x3-gap", "pf-kpi--blue"),
+        new("enabled", "Enabled", EnabledCount.ToString(), "Live client capabilities", "bi-check-circle", "pf-kpi--green"),
+        new("approval", "Approval Flow", ApprovalCount.ToString(), "Requires staff review", "bi-person-check", "pf-kpi--amber"),
+        new("mfa", "MFA Required", MfaCount.ToString(), "Sensitive workflows", "bi-shield-lock", "pf-kpi--purple"),
+        new("audit", "Audited", AuditCount.ToString(), "Compliance trail on", "bi-journal-check", "pf-kpi--cyan"),
+        new("attention", "Needs Attention", AttentionCount.ToString(), "Gaps to review", "bi-exclamation-triangle", "pf-kpi--red")
+    ];
+    private List<Signal> ImportanceSignals => BuildImportanceSignals();
+    private string ActiveTabIcon => Tabs.FirstOrDefault(t => t.Key == _activeTab).Icon;
+    private string ActiveTabKicker => _activeTab == "all" ? "Feature portfolio" : $"{Tabs.FirstOrDefault(t => t.Key == _activeTab).Label} workflow";
+    private string ActiveTabTitle => _activeTab switch
+    {
+        "security" => "Security-sensitive portal capabilities",
+        "service" => "Client service and request workflows",
+        "documents" => "Document and certificate self-service",
+        "billing" => "Billing and payment experiences",
+        "claims" => "Claims intake and FNOL readiness",
+        "attention" => "Features needing administrator attention",
+        _ => "Portal feature portfolio"
+    };
+    private string ActiveTabSubtitle => _activeTab switch
+    {
+        "security" => "Review modules that should be guarded by MFA, approval, or audit logging before client rollout.",
+        "service" => "Prioritize the workflows that reduce inbound service volume and route staff follow-up.",
+        "documents" => "Manage document center, certificate, upload, and policy content capabilities.",
+        "billing" => "Control invoice, payment, and billing self-service features with appropriate security.",
+        "claims" => "Review claim intake readiness, escalation flow, and client-facing loss reporting.",
+        "attention" => "Resolve disabled high-value capabilities or compliance gaps before publishing.",
+        _ => "Manage every client portal module from a full-width enterprise workspace."
+    };
+    private TabDefinition[] Tabs =>
+    [
+        new("all", "All", "bi-grid-3x3-gap"),
+        new("service", "Service", "bi-headset"),
+        new("documents", "Documents", "bi-folder2-open"),
+        new("billing", "Billing", "bi-credit-card"),
+        new("claims", "Claims", "bi-exclamation-circle"),
+        new("security", "Security", "bi-shield-lock"),
+        new("attention", "Attention", "bi-exclamation-triangle")
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Client Portal", "/portal/users"), new("Portal Features", null));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchPortalConfigItemsAsync(_tenantId, FeatureKind, pageSize: 500);
+            _rows = (result?.Items ?? []).Select(ToFeatureRow).ToList();
+            if (SelectedId is null || !_rows.Any(r => r.Id == SelectedId))
+            {
+                SelectedId = _rows.OrderBy(r => r.SortOrder).ThenBy(r => r.Name).FirstOrDefault()?.Id;
+            }
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private IEnumerable<FeatureRow> ApplySearchAndFilters(IEnumerable<FeatureRow> rows)
+    {
+        var filtered = rows;
+        if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            var q = _searchText.Trim();
+            filtered = filtered.Where(r => Contains(r.Name, q) || Contains(r.Code, q) || Contains(r.Category, q) || Contains(r.Description, q) || Contains(r.Importance, q) || (r.IsActive ? "enabled" : "disabled").Contains(q, StringComparison.OrdinalIgnoreCase));
+        }
+        if (!string.IsNullOrWhiteSpace(_categoryFilter)) filtered = filtered.Where(r => r.Category.Equals(_categoryFilter, StringComparison.OrdinalIgnoreCase));
+        if (_statusFilter == "enabled") filtered = filtered.Where(r => r.IsActive);
+        if (_statusFilter == "disabled") filtered = filtered.Where(r => !r.IsActive);
+        filtered = _kpiFilter switch
+        {
+            "enabled" => filtered.Where(r => r.IsActive),
+            "approval" => filtered.Where(r => r.RequiresApproval),
+            "mfa" => filtered.Where(r => r.MfaRequired),
+            "audit" => filtered.Where(r => r.AuditLog),
+            "attention" => filtered.Where(NeedsAttention),
+            "security-gap" => filtered.Where(r => r.IsActive && !r.MfaRequired && IsSensitive(r)),
+            _ => filtered
+        };
+        return filtered;
+    }
+
+    private IEnumerable<FeatureRow> ApplyTab(IEnumerable<FeatureRow> rows) => _activeTab switch
+    {
+        "service" => rows.Where(r => IsCategory(r, "Service") || Contains(r.Name, "request")),
+        "documents" => rows.Where(r => IsCategory(r, "Documents") || Contains(r.Name, "document") || Contains(r.Name, "certificate") || Contains(r.Code, "coi")),
+        "billing" => rows.Where(r => IsCategory(r, "Billing") || Contains(r.Name, "pay") || Contains(r.Name, "invoice")),
+        "claims" => rows.Where(r => IsCategory(r, "Claims") || Contains(r.Name, "claim") || Contains(r.Code, "fnol")),
+        "security" => rows.Where(r => r.MfaRequired || r.AuditLog || IsCategory(r, "Security") || IsSensitive(r)),
+        "attention" => rows.Where(NeedsAttention),
+        _ => rows
+    };
+
+    private void SetKpiFilter(string filter)
+    {
+        _kpiFilter = _kpiFilter == filter ? "all" : filter;
+        if (filter == "attention" || filter == "security-gap") _activeTab = "attention";
+    }
+
+    private void SetTab(string tab)
+    {
+        _activeTab = tab;
+        if (tab != "attention" && _kpiFilter is "attention" or "security-gap") _kpiFilter = "all";
+    }
+
+    private void ClearFilters()
+    {
+        _searchText = string.Empty;
+        _categoryFilter = string.Empty;
+        _statusFilter = string.Empty;
+        _kpiFilter = "all";
+        _activeTab = "all";
+    }
+
+    private void SelectRow(FeatureRow row) => SelectedId = row.Id;
+
+    private void OpenCreate()
+    {
+        _editing = null;
+        _formError = null;
+        _form = new()
+        {
+            Code = BuildNextCode(),
+            Category = "Service",
+            Description = string.Empty,
+            ConfigurationJson = BuildConfigJson(true, true, true, "bi-toggles", "pf-feature-blue"),
+            IsActive = true,
+            RequiresApproval = true,
+            MfaRequired = false,
+            AuditLog = true,
+            SortOrder = NextSortOrder()
+        };
+        _showForm = true;
+    }
+
+    private void OpenEdit(FeatureRow row)
+    {
+        _editing = row;
+        _formError = null;
+        _form = new()
+        {
+            Code = row.Code,
+            Name = row.Name,
+            Category = row.Category,
+            Description = row.Description,
+            ConfigurationJson = NormalizeJson(row.ConfigurationJson),
+            IsActive = row.IsActive,
+            RequiresApproval = row.RequiresApproval,
+            MfaRequired = row.MfaRequired,
+            AuditLog = row.AuditLog,
+            SortOrder = row.SortOrder
+        };
+        _showForm = true;
+    }
+
+    private void DuplicateFeature(FeatureRow row)
+    {
+        _editing = null;
+        _formError = null;
+        _form = new()
+        {
+            Code = $"{row.Code}-copy",
+            Name = $"{row.Name} Copy",
+            Category = row.Category,
+            Description = row.Description,
+            ConfigurationJson = NormalizeJson(row.ConfigurationJson),
+            IsActive = false,
+            RequiresApproval = row.RequiresApproval,
+            MfaRequired = row.MfaRequired,
+            AuditLog = row.AuditLog,
+            SortOrder = NextSortOrder()
+        };
+        _showForm = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        _actionBusy = true;
+        _formError = null;
+        try
+        {
+            var configJson = MergeConfigJson(_form);
+            if (_editing is null)
+            {
+                var id = await Api.CreatePortalConfigItemAsync(new CreatePortalConfigItemRequest(_tenantId, FeatureKind, _form.Code.Trim(), _form.Name.Trim(), _form.Category, _form.Description, configJson, _form.SortOrder));
+                SelectedId = id;
+            }
+            else if (_editing is { } editing)
+            {
+                await Api.UpdatePortalConfigItemAsync(editing.Id, new UpdatePortalConfigItemRequest(_form.Code.Trim(), _form.Name.Trim(), _form.Category, _form.Description, configJson, _form.IsActive, _form.SortOrder));
+                SelectedId = editing.Id;
+            }
+            _showForm = false;
+            ShowToast("success", "Portal feature saved successfully.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast("danger", _formError);
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    private void ConfirmStatus(FeatureRow row)
+    {
+        _pendingRow = row;
+        _pendingAction = row.IsActive ? "Disable" : "Enable";
+        _confirmIcon = row.IsActive ? "bi-pause-circle" : "bi-play-circle";
+        _confirmTitle = row.IsActive ? "Disable portal feature?" : "Enable portal feature?";
+        _confirmMessage = row.IsActive ? $"Disable {row.Name} for client portal users?" : $"Enable {row.Name} for client portal users?";
+        _showConfirm = true;
+    }
+
+    private void ConfirmDelete(FeatureRow row)
+    {
+        _pendingRow = row;
+        _pendingAction = "Delete";
+        _confirmIcon = "bi-trash3-fill";
+        _confirmTitle = "Delete portal feature?";
+        _confirmMessage = $"Delete {row.Name}? This removes it from the portal feature configuration list.";
+        _showConfirm = true;
+    }
+
+    private async Task ExecuteConfirmedAsync()
+    {
+        if (_pendingRow is not { } pendingRow) return;
+        _actionBusy = true;
+        try
+        {
+            if (_pendingAction == "Delete")
+            {
+                await Api.DeletePortalConfigItemAsync(pendingRow.Id);
+                ShowToast("success", "Portal feature deleted successfully.");
+            }
+            else
+            {
+                var enabled = _pendingAction == "Enable";
+                await Api.UpdatePortalConfigItemAsync(pendingRow.Id, new UpdatePortalConfigItemRequest(pendingRow.Code, pendingRow.Name, pendingRow.Category, pendingRow.Description, pendingRow.ConfigurationJson, enabled, pendingRow.SortOrder));
+                ShowToast("success", enabled ? "Portal feature enabled." : "Portal feature disabled.");
+            }
+            _showConfirm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"{_pendingAction} failed: {ex.Message}");
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    private void ExportCsv()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Code,Name,Category,Status,Importance,RequiresApproval,MfaRequired,AuditLog,SortOrder");
+        foreach (var row in VisibleRows)
+        {
+            sb.AppendLine(string.Join(',', Csv(row.Code), Csv(row.Name), Csv(row.Category), Csv(row.IsActive ? "Enabled" : "Disabled"), Csv(row.Importance), row.RequiresApproval, row.MfaRequired, row.AuditLog, row.SortOrder));
+        }
+        _exportText = sb.ToString();
+        _showExport = true;
+        ShowToast("success", "Portal feature export generated.");
+    }
+
+    private void CloseForm() { if (!_actionBusy) _showForm = false; }
+    private void CloseConfirm() { if (!_actionBusy) _showConfirm = false; }
+    private void CloseExport() => _showExport = false;
+    private void HideToast() => _toastVisible = false;
+    private void HandleInvalidSubmit() { _formError = "Review the highlighted fields before saving."; ShowToast("danger", _formError); }
+    private void ShowToast(string kind, string message) { _toastKind = kind; _toastMessage = message; _toastVisible = true; }
+
+    private FeatureRow ToFeatureRow(PortalConfigItemDto dto)
+    {
+        var config = ParseConfig(dto.ConfigurationJson);
+        var category = FirstNonEmpty(dto.Category, GetString(config, "category"), "Service");
+        var name = FirstNonEmpty(dto.Name, GetString(config, "name"), "Portal Feature");
+        var description = FirstNonEmpty(dto.Description, GetString(config, "description"), "Client portal self-service capability.");
+        return new(dto.PortalConfigItemId, dto.Code, name, category, description, dto.ConfigurationJson ?? "{}", dto.IsActive, dto.SortOrder, GetBool(config, "requiresApproval", IsSensitive(dto.Code, name, category)), GetBool(config, "mfaRequired", IsSensitive(dto.Code, name, category) && !Contains(name, "certificate")), GetBool(config, "auditLog", true), GetString(config, "icon") ?? PickIcon(dto.Code, name, category), GetString(config, "iconCss") ?? PickIconCss(category), GetImportance(dto.Code, name, category, dto.IsActive));
+    }
+
+    private string MergeConfigJson(FeatureForm form)
+    {
+        var values = ParseConfig(form.ConfigurationJson);
+        values["category"] = form.Category;
+        values["description"] = form.Description;
+        values["requiresApproval"] = form.RequiresApproval;
+        values["mfaRequired"] = form.MfaRequired;
+        values["auditLog"] = form.AuditLog;
+        values.TryAdd("icon", PickIcon(form.Code, form.Name, form.Category));
+        values.TryAdd("iconCss", PickIconCss(form.Category));
+        return JsonSerializer.Serialize(values, _jsonOptions);
+    }
+
+    private Dictionary<string, object?> ParseConfig(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return [];
+            var values = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                values[prop.Name] = prop.Value.ValueKind switch
+                {
+                    JsonValueKind.True => true,
+                    JsonValueKind.False => false,
+                    JsonValueKind.Number when prop.Value.TryGetInt32(out var i) => i,
+                    JsonValueKind.String => prop.Value.GetString(),
+                    _ => prop.Value.GetRawText()
+                };
+            }
+            return values;
+        }
+        catch
+        {
+            throw new InvalidOperationException("Configuration JSON must be a valid JSON object.");
+        }
+    }
+
+    private string NormalizeJson(string? json)
+    {
+        try { return JsonSerializer.Serialize(ParseConfig(json), _jsonOptions); }
+        catch { return json ?? "{}"; }
+    }
+
+    private static string BuildConfigJson(bool requiresApproval, bool auditLog, bool enabled, string icon, string iconCss) => JsonSerializer.Serialize(new { requiresApproval, auditLog, enabled, icon, iconCss }, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true });
+    private int NextSortOrder() => _rows.Count == 0 ? 10 : _rows.Max(r => r.SortOrder) + 10;
+    private string BuildNextCode() => $"feature-{_rows.Count + 1:00}";
+    private int TabCount(string tab) => ApplyTabForCount(tab).Count();
+    private IEnumerable<FeatureRow> ApplyTabForCount(string tab) => tab switch
+    {
+        "service" => FilteredRows.Where(r => IsCategory(r, "Service") || Contains(r.Name, "request")),
+        "documents" => FilteredRows.Where(r => IsCategory(r, "Documents") || Contains(r.Name, "document") || Contains(r.Name, "certificate") || Contains(r.Code, "coi")),
+        "billing" => FilteredRows.Where(r => IsCategory(r, "Billing") || Contains(r.Name, "pay") || Contains(r.Name, "invoice")),
+        "claims" => FilteredRows.Where(r => IsCategory(r, "Claims") || Contains(r.Name, "claim") || Contains(r.Code, "fnol")),
+        "security" => FilteredRows.Where(r => r.MfaRequired || r.AuditLog || IsCategory(r, "Security") || IsSensitive(r)),
+        "attention" => FilteredRows.Where(NeedsAttention),
+        _ => FilteredRows
+    };
+    private List<Signal> BuildImportanceSignals() =>
+    [
+        new("bi-check-circle", $"{EnabledCount} enabled client capabilities are live."),
+        new("bi-shield-lock", $"{MfaCount} sensitive features require MFA."),
+        new("bi-person-check", $"{ApprovalCount} workflows route to staff approval."),
+        new("bi-exclamation-triangle", AttentionCount == 0 ? "No high-priority feature gaps detected." : $"{AttentionCount} features need administrator attention.")
+    ];
+    private static bool NeedsAttention(FeatureRow row) => !row.IsActive && row.Importance == "High" || row.IsActive && IsSensitive(row) && (!row.MfaRequired || !row.AuditLog);
+    private static bool IsSensitive(FeatureRow row) => IsSensitive(row.Code, row.Name, row.Category);
+    private static bool IsSensitive(string code, string name, string category) => HighImportanceTerms.Any(t => Contains(code, t) || Contains(name, t) || Contains(category, t));
+    private static string GetImportance(string code, string name, string category, bool active) => IsSensitive(code, name, category) ? "High" : active ? "Standard" : "Draft";
+    private static bool IsCategory(FeatureRow row, string category) => row.Category.Equals(category, StringComparison.OrdinalIgnoreCase);
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static string FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))?.Trim() ?? string.Empty;
+    private static string? GetString(Dictionary<string, object?> values, string key) => values.TryGetValue(key, out var value) ? value?.ToString() : null;
+    private static bool GetBool(Dictionary<string, object?> values, string key, bool fallback) => values.TryGetValue(key, out var value) && value is bool b ? b : fallback;
+    private static string PickIcon(string code, string name, string category) => Contains(code, "coi") || Contains(name, "certificate") ? "bi-file-earmark-text" : Contains(name, "pay") || Contains(name, "invoice") || IsText(category, "Billing") ? "bi-credit-card" : Contains(name, "claim") || IsText(category, "Claims") ? "bi-exclamation-circle" : Contains(name, "document") || IsText(category, "Documents") ? "bi-folder2-open" : Contains(name, "policy") ? "bi-pencil-square" : "bi-toggles";
+    private static string PickIconCss(string category) => IsText(category, "Billing") ? "pf-feature-amber" : IsText(category, "Claims") ? "pf-feature-red" : IsText(category, "Documents") ? "pf-feature-blue" : IsText(category, "Security") ? "pf-feature-purple" : "pf-feature-green";
+    private static bool IsText(string? value, string expected) => string.Equals(value, expected, StringComparison.OrdinalIgnoreCase);
+    private static string ImportanceCss(string importance) => importance switch { "High" => "pf-pill--red", "Draft" => "pf-pill--muted", _ => "pf-pill--blue" };
+    private static string Csv(object? value)
+    {
+        const string quote = "\"";
+        var text = value?.ToString() ?? string.Empty;
+        return quote + text.Replace(quote, quote + quote) + quote;
+    }
+
+    private sealed record KpiDefinition(string Key, string Label, string Value, string Hint, string Icon, string Css);
+    private sealed record FeatureRow(Guid Id, string Code, string Name, string Category, string Description, string ConfigurationJson, bool IsActive, int SortOrder, bool RequiresApproval, bool MfaRequired, bool AuditLog, string Icon, string IconCss, string Importance);
+    private sealed record TabDefinition(string Key, string Label, string Icon);
+    private sealed record Signal(string Icon, string Text);
+    private sealed class FeatureForm
+    {
+        [Required, StringLength(80)] public string Code { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string Name { get; set; } = string.Empty;
+        [Required, StringLength(120)] public string Category { get; set; } = "Service";
+        [Required, StringLength(500)] public string Description { get; set; } = string.Empty;
+        [StringLength(4000)] public string? ConfigurationJson { get; set; } = "{}";
+        [Range(0, 9999)] public int SortOrder { get; set; }
+        public bool IsActive { get; set; } = true;
+        public bool RequiresApproval { get; set; }
+        public bool MfaRequired { get; set; }
+        public bool AuditLog { get; set; } = true;
+    }
+}

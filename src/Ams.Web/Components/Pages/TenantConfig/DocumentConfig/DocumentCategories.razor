@@ -1,2 +1,619 @@
+@page "/documents/categories"
 @page "/tenant/documents/categories"
-<DocumentConfigPage Kind="DocumentCategory" Title="Document Categories" Subtitle="Configure document categories, folders, and classification defaults" Icon="bi bi-folder2" />
+@using System.ComponentModel.DataAnnotations
+@using System.Text.Json
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.DocumentConfig
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Document Categories</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="dc-toast dc-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="dc-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+<div class="dc-enterprise-page">
+    <section class="dc-hero">
+        <div class="dc-hero-left">
+            <span class="dc-hero-icon"><i class="bi bi-folder2" aria-hidden="true"></i></span>
+            <div>
+                <div class="dc-title-row">
+                    <h1>Document Categories</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> DB synced</span>
+                    <span><i class="bi bi-shield-check" aria-hidden="true"></i> Tenant controlled</span>
+                </div>
+                <p>Enterprise classification workspace for document libraries, portal visibility, retention alignment, automation readiness, and audit-safe category governance.</p>
+            </div>
+        </div>
+        <div class="dc-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "dc-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_items.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Category</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="dc-error-banner" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="dc-kpi-strip" aria-label="Document category KPIs">
+        <button type="button" class="@AllKpiClass" @onclick="ShowAll"><span class="dc-kpi-icon"><i class="bi bi-folder2" aria-hidden="true"></i></span><span><strong>@_items.Count</strong><em>Total Categories</em><small>Configured classifications</small></span></button>
+        <button type="button" class="@ActiveKpiClass" @onclick="ShowActive"><span class="dc-kpi-icon"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span><span><strong>@ActiveCount</strong><em>Active</em><small>Available to workflows</small></span></button>
+        <button type="button" class="@InactiveKpiClass" @onclick="ShowInactive"><span class="dc-kpi-icon"><i class="bi bi-pause-circle" aria-hidden="true"></i></span><span><strong>@InactiveCount</strong><em>Inactive</em><small>Hidden from new use</small></span></button>
+        <button type="button" class="@PortalKpiClass" @onclick="ShowPortal"><span class="dc-kpi-icon"><i class="bi bi-person-lines-fill" aria-hidden="true"></i></span><span><strong>@PortalReadyCount</strong><em>Portal Ready</em><small>Client-facing categories</small></span></button>
+        <button type="button" class="@AutomationKpiClass" @onclick="ShowAutomation"><span class="dc-kpi-icon"><i class="bi bi-lightning-charge-fill" aria-hidden="true"></i></span><span><strong>@AutomationReadyCount</strong><em>Automation Ready</em><small>Rules or metadata configured</small></span></button>
+        <button type="button" class="@NeedsReviewKpiClass" @onclick="ShowNeedsReview"><span class="dc-kpi-icon"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></span><span><strong>@NeedsReviewCount</strong><em>Needs Review</em><small>Missing governance details</small></span></button>
+    </section>
+
+    <section class="dc-workflow-strip" aria-label="Document category workflows">
+        <button type="button" class="dc-workflow-card" @onclick="ShowLibrary"><i class="bi bi-kanban" aria-hidden="true"></i><span><strong>Library</strong><small>Govern category inventory</small></span></button>
+        <button type="button" class="dc-workflow-card" @onclick="ShowGovernance"><i class="bi bi-shield-lock" aria-hidden="true"></i><span><strong>Governance</strong><small>Audit readiness and controls</small></span></button>
+        <button type="button" class="dc-workflow-card" @onclick="ShowAutomationView"><i class="bi bi-diagram-3" aria-hidden="true"></i><span><strong>Automation</strong><small>Routing and metadata readiness</small></span></button>
+        <button type="button" class="dc-workflow-card" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i><span><strong>Create</strong><small>Add a category standard</small></span></button>
+    </section>
+
+    <section class="dc-search-panel">
+        <div class="dc-search-wrap">
+            <span class="dc-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="dc-search-body">
+                <label for="dc-search">Category search</label>
+                <input id="dc-search" class="dc-search-input" @bind="_search" @bind:event="oninput" @bind:after="ApplyFilter" placeholder="Search code, name, category, description, JSON configuration..." />
+                <span class="dc-search-hint">Filters the real tenant document category configuration records.</span>
+            </div>
+        </div>
+        <select class="dc-filter-select" @bind="_statusFilter" @bind:after="ApplyFilter" aria-label="Status filter">
+            <option value="all">All statuses</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+        </select>
+        <select class="dc-filter-select" @bind="_readinessFilter" @bind:after="ApplyFilter" aria-label="Readiness filter">
+            <option value="all">All readiness</option>
+            <option value="portal">Portal ready</option>
+            <option value="automation">Automation ready</option>
+            <option value="review">Needs review</option>
+        </select>
+        <select class="dc-filter-select" @bind="_categoryFilter" @bind:after="ApplyFilter" aria-label="Category group filter">
+            <option value="all">All groups</option>
+            @foreach (var category in CategoryGroups)
+            {
+                <option value="@category">@category</option>
+            }
+        </select>
+        <div class="dc-search-result"><strong>@_filtered.Count</strong><span>records</span></div>
+    </section>
+
+    <nav class="dc-view-tabs" aria-label="Document category views">
+        @foreach (var view in _views)
+        {
+            <button type="button" class="dc-view-btn @(_activeView == view ? "dc-view-btn-active" : null)" @onclick="() => SetView(view)">@view</button>
+        }
+    </nav>
+
+    <section class="dc-content-layout">
+        <div class="dc-main-card">
+            @if (_loading)
+            {
+                <div class="dc-loading"><i class="bi bi-arrow-repeat dc-spin" aria-hidden="true"></i><span>Loading document categories...</span></div>
+            }
+            else if (_filtered.Count == 0)
+            {
+                <div class="dc-empty-state"><i class="bi bi-folder-x" aria-hidden="true"></i><h2>No categories found</h2><p>Adjust filters or create the first document category for this tenant.</p><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Category</button></div>
+            }
+            else if (_activeView == "Governance")
+            {
+                <div class="dc-governance-grid">
+                    <section class="dc-panel">
+                        <header><div><i class="bi bi-shield-check" aria-hidden="true"></i><strong>Governance Readiness</strong></div><span>@GovernanceScore.ToString("F0")%</span></header>
+                        <div class="dc-panel-body dc-metric-list">
+                            <div class="dc-metric-row"><span>Active standards</span><div><i style="@WidthStyle(ActiveCount, SafeTotal)"></i></div><strong>@ActiveCount</strong></div>
+                            <div class="dc-metric-row"><span>Portal ready</span><div><i style="@WidthStyle(PortalReadyCount, SafeTotal)"></i></div><strong>@PortalReadyCount</strong></div>
+                            <div class="dc-metric-row"><span>Automation ready</span><div><i style="@WidthStyle(AutomationReadyCount, SafeTotal)"></i></div><strong>@AutomationReadyCount</strong></div>
+                            <div class="dc-metric-row"><span>Needs review</span><div><i style="@WidthStyle(NeedsReviewCount, SafeTotal)"></i></div><strong>@NeedsReviewCount</strong></div>
+                        </div>
+                    </section>
+                    <section class="dc-panel">
+                        <header><div><i class="bi bi-tags" aria-hidden="true"></i><strong>Category Groups</strong></div><span>@CategoryGroups.Count</span></header>
+                        <div class="dc-panel-body dc-group-list">
+                            @foreach (var group in GroupSummaries)
+                            {
+                                <button type="button" class="dc-group-row" @onclick="() => FilterCategory(group.Name)"><span>@group.Name</span><div><i style="@WidthStyle(group.Count, SafeTotal)"></i></div><strong>@group.Count</strong></button>
+                            }
+                        </div>
+                    </section>
+                    <section class="dc-panel dc-panel-wide">
+                        <header><div><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><strong>Review Queue</strong></div><span>@NeedsReviewItems.Count</span></header>
+                        <div class="dc-panel-body dc-review-list">
+                            @foreach (var item in NeedsReviewItems.Take(8))
+                            {
+                                <button type="button" class="dc-review-row" @onclick="() => SelectItem(item)"><strong>@item.Name</strong><span>@ReviewReason(item)</span><em>@StatusLabel(item)</em></button>
+                            }
+                        </div>
+                    </section>
+                </div>
+            }
+            else if (_activeView == "Automation")
+            {
+                <div class="dc-board">
+                    @foreach (var lane in AutomationLanes)
+                    {
+                        <section class="dc-board-col">
+                            <header><strong>@lane.Title</strong><span>@lane.Items.Count</span></header>
+                            @foreach (var item in lane.Items)
+                            {
+                                <button type="button" class="dc-board-card" @onclick="() => SelectItem(item)">
+                                    <div><strong>@item.Name</strong><span>@item.Code</span></div>
+                                    <small>@(item.Description ?? "No description provided")</small>
+                                    <em>@ReadinessLabel(item)</em>
+                                </button>
+                            }
+                        </section>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="dc-table-scroll">
+                    <table class="dc-table">
+                        <thead>
+                            <tr><th>Category</th><th>Code</th><th>Group</th><th>Readiness</th><th>Order</th><th>Status</th><th>Created</th><th></th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in _filtered)
+                            {
+                                <tr class="@SelectedRowClass(item)" @onclick="() => SelectItem(item)">
+                                    <td><div class="dc-name-cell"><span class="dc-avatar @AvatarClass(item)">@Initials(item.Name)</span><span><strong>@item.Name</strong><small>@(item.Description ?? "No description provided")</small></span></div></td>
+                                    <td><span class="dc-code-pill">@item.Code</span></td>
+                                    <td>@GroupLabel(item)</td>
+                                    <td><span class="@ReadinessClass(item)">@ReadinessLabel(item)</span></td>
+                                    <td class="dc-number">@item.SortOrder</td>
+                                    <td><span class="@StatusClass(item)">@StatusLabel(item)</span></td>
+                                    <td>@item.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</td>
+                                    <td><div class="dc-row-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(item)" title="Delete"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <aside class="dc-detail-card" aria-label="Selected document category">
+            @if (_selected is null)
+            {
+                <div class="dc-detail-empty"><i class="bi bi-folder2-open" aria-hidden="true"></i><h2>Category command brief</h2><p>Select a category to review governance, portal readiness, automation signals, and actions.</p></div>
+            }
+            else
+            {
+                <div class="dc-detail-head">
+                    <div><span class="dc-detail-eyebrow"><i class="bi bi-folder2" aria-hidden="true"></i> @GroupLabel(_selected)</span><h2>@_selected.Name</h2><p>@_selected.Code</p></div>
+                    <span class="@StatusClass(_selected)">@StatusLabel(_selected)</span>
+                </div>
+                <div class="dc-detail-body">
+                    <div class="dc-detail-summary">
+                        <div><span>Readiness</span><strong>@ReadinessLabel(_selected)</strong></div>
+                        <div><span>Sort Order</span><strong>@_selected.SortOrder</strong></div>
+                        <div><span>Portal</span><strong>@(IsPortalReady(_selected) ? "Ready" : "Internal")</strong></div>
+                        <div><span>Automation</span><strong>@(IsAutomationReady(_selected) ? "Ready" : "Review")</strong></div>
+                    </div>
+                    <div class="dc-config-card">
+                        <span>Configuration JSON</span>
+                        <code>@DisplayConfig(_selected)</code>
+                    </div>
+                    <div class="dc-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit Category</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="DuplicateSelected"><i class="bi bi-files" aria-hidden="true"></i> Duplicate</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="ToggleSelectedStatus"><i class="bi bi-power" aria-hidden="true"></i> @( _selected.IsActive ? "Deactivate" : "Activate")</button>
+                        <button type="button" class="um-btn um-btn-ghost text-danger" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
+                    </div>
+                </div>
+            }
+        </aside>
+    </section>
+</div>
+
+@if (_showForm)
+{
+    <div class="dc-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="dc-form-title">
+        <div class="dc-modal">
+            <div class="dc-modal-header"><div class="dc-modal-title"><span class="dc-modal-icon"><i class="bi bi-folder-plus" aria-hidden="true"></i></span><div><h2 id="dc-form-title">@(_editId.HasValue ? "Edit Document Category" : "Add Document Category")</h2><p>Configure classification, governance, and workflow metadata.</p></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseForm" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="dc-modal-body">
+                    <div class="dc-form-banner"><i class="bi bi-info-circle" aria-hidden="true"></i><span><strong>Enterprise standard</strong> Use stable codes for automation, uploads, portal folders, retention, and audit reporting.</span></div>
+                    <div class="dc-form-grid">
+                        <div class="dc-field"><label>Code <span>*</span></label><InputText @bind-Value="_form.Code" class="dc-input" /></div>
+                        <div class="dc-field"><label>Name <span>*</span></label><InputText @bind-Value="_form.Name" class="dc-input" /></div>
+                        <div class="dc-field"><label>Group</label><InputText @bind-Value="_form.Category" class="dc-input" placeholder="Policy, Claims, Billing, Client Portal..." /></div>
+                        <div class="dc-field"><label>Sort Order</label><InputNumber @bind-Value="_form.SortOrder" class="dc-input" /></div>
+                        <div class="dc-field dc-field-wide"><label>Description</label><InputTextArea @bind-Value="_form.Description" class="dc-input" rows="3" /></div>
+                        <div class="dc-field dc-field-wide"><label>Configuration JSON</label><InputTextArea @bind-Value="_form.ConfigurationJson" class="dc-input dc-code-input" rows="6" placeholder='{"portalVisible":true,"automationReady":true,"retention":"7 years"}' /></div>
+                        <div class="dc-field dc-field-wide dc-check-row"><label><InputCheckbox @bind-Value="_form.IsActive" /> Active for new document workflows</label></div>
+                    </div>
+                </div>
+                <div class="dc-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check2" aria-hidden="true"></i> @(_editId.HasValue ? "Save Changes" : "Create Category")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showDelete)
+{
+    <div class="dc-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="dc-delete-title">
+        <div class="dc-confirm-modal">
+            <div class="dc-confirm-icon"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
+            <h2 id="dc-delete-title">Delete Category</h2>
+            <p>Delete <strong>@_deleteTarget?.Name</strong>? Existing documents may still reference this category historically.</p>
+            <div class="dc-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete">Cancel</button><button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div>
+        </div>
+    </div>
+}
+
+@code {
+    private const string ConfigKind = "DocumentCategory";
+    private Guid _tenantId;
+    private bool _loading;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private bool _toastVisible;
+    private string _search = string.Empty;
+    private string _statusFilter = "all";
+    private string _readinessFilter = "all";
+    private string _categoryFilter = "all";
+    private string _activeView = "Library";
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private Guid? _editId;
+    private DocumentConfigItemDto? _selected;
+    private DocumentConfigItemDto? _deleteTarget;
+    private readonly string[] _views = ["Library", "Governance", "Automation"];
+    private List<DocumentConfigItemDto> _items = [];
+    private List<DocumentConfigItemDto> _filtered = [];
+    private FormModel _form = new();
+
+    private int ActiveCount => _items.Count(x => x.IsActive);
+    private int InactiveCount => _items.Count(x => !x.IsActive);
+    private int PortalReadyCount => _items.Count(IsPortalReady);
+    private int AutomationReadyCount => _items.Count(IsAutomationReady);
+    private int NeedsReviewCount => _items.Count(NeedsReview);
+    private int SafeTotal => Math.Max(_items.Count, 1);
+    private double GovernanceScore => _items.Count == 0 ? 0 : (ActiveCount + PortalReadyCount + AutomationReadyCount - NeedsReviewCount) * 100d / Math.Max(_items.Count * 3, 1);
+    private List<string> CategoryGroups => _items.Select(GroupLabel).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+    private List<GroupSummary> GroupSummaries => _items.GroupBy(GroupLabel, StringComparer.OrdinalIgnoreCase).Select(g => new GroupSummary(g.Key, g.Count())).OrderByDescending(x => x.Count).ToList();
+    private List<DocumentConfigItemDto> NeedsReviewItems => _items.Where(NeedsReview).OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToList();
+    private List<AutomationLane> AutomationLanes =>
+    [
+        new("Portal Ready", _filtered.Where(IsPortalReady).ToList()),
+        new("Automation Ready", _filtered.Where(IsAutomationReady).ToList()),
+        new("Needs Governance", _filtered.Where(NeedsReview).ToList()),
+    ];
+    private string ToastIcon => _toastKind == "success" ? "bi-check-circle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-exclamation-triangle-fill";
+    private string AllKpiClass => KpiClass("all", "dc-blue");
+    private string ActiveKpiClass => KpiClass("active", "dc-green");
+    private string InactiveKpiClass => KpiClass("inactive", "dc-slate");
+    private string PortalKpiClass => KpiClass("portal", "dc-cyan");
+    private string AutomationKpiClass => KpiClass("automation", "dc-purple");
+    private string NeedsReviewKpiClass => KpiClass("review", "dc-amber");
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Documents & Forms", null), new("Document Categories", "/documents/categories"));
+        _search = GetQueryValue("searchTerm") ?? string.Empty;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchDocumentConfigItemsAsync(_tenantId, ConfigKind, _search, pageSize: 500);
+            _items = result?.Items.OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToList() ?? [];
+            ApplyFilter();
+            _selected ??= _filtered.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilter()
+    {
+        IEnumerable<DocumentConfigItemDto> query = _items;
+
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            query = query.Where(MatchesSearch);
+        }
+
+        query = _statusFilter switch
+        {
+            "active" => query.Where(x => x.IsActive),
+            "inactive" => query.Where(x => !x.IsActive),
+            _ => query,
+        };
+
+        query = _readinessFilter switch
+        {
+            "portal" => query.Where(IsPortalReady),
+            "automation" => query.Where(IsAutomationReady),
+            "review" => query.Where(NeedsReview),
+            _ => query,
+        };
+
+        if (_categoryFilter != "all")
+        {
+            query = query.Where(x => string.Equals(GroupLabel(x), _categoryFilter, StringComparison.OrdinalIgnoreCase));
+        }
+
+        _filtered = query.OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToList();
+        if (_selected is not null && !_filtered.Any(x => x.DocumentConfigItemId == _selected.DocumentConfigItemId))
+        {
+            _selected = _filtered.FirstOrDefault();
+        }
+    }
+
+    private void ShowAll() { _statusFilter = "all"; _readinessFilter = "all"; _categoryFilter = "all"; ApplyFilter(); }
+    private void ShowActive() { _statusFilter = "active"; _readinessFilter = "all"; ApplyFilter(); }
+    private void ShowInactive() { _statusFilter = "inactive"; _readinessFilter = "all"; ApplyFilter(); }
+    private void ShowPortal() { _statusFilter = "all"; _readinessFilter = "portal"; ApplyFilter(); }
+    private void ShowAutomation() { _statusFilter = "all"; _readinessFilter = "automation"; ApplyFilter(); }
+    private void ShowNeedsReview() { _statusFilter = "all"; _readinessFilter = "review"; ApplyFilter(); }
+    private void ShowLibrary() => SetView("Library");
+    private void ShowGovernance() => SetView("Governance");
+    private void ShowAutomationView() => SetView("Automation");
+    private void SetView(string view) => _activeView = view;
+    private void FilterCategory(string category) { _categoryFilter = category; ApplyFilter(); }
+    private void SelectItem(DocumentConfigItemDto item) => _selected = item;
+
+    private void OpenCreate()
+    {
+        _editId = null;
+        _form = new() { ConfigurationJson = "{}", IsActive = true, SortOrder = NextSortOrder };
+        _showForm = true;
+    }
+
+    private void OpenEdit(DocumentConfigItemDto item)
+    {
+        _editId = item.DocumentConfigItemId;
+        _form = new()
+        {
+            Code = item.Code,
+            Name = item.Name,
+            Category = item.Category,
+            Description = item.Description,
+            ConfigurationJson = string.IsNullOrWhiteSpace(item.ConfigurationJson) ? "{}" : item.ConfigurationJson,
+            SortOrder = item.SortOrder,
+            IsActive = item.IsActive,
+        };
+        _showForm = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            var json = NormalizeJson(_form.ConfigurationJson);
+            if (_editId.HasValue)
+            {
+                await Api.UpdateDocumentConfigItemAsync(_editId.Value, new(_form.Code.Trim(), _form.Name.Trim(), Clean(_form.Category), Clean(_form.Description), json, _form.IsActive, _form.SortOrder));
+                ShowToast("Document category updated.");
+            }
+            else
+            {
+                var id = await Api.CreateDocumentConfigItemAsync(new(_tenantId, ConfigKind, _form.Code.Trim(), _form.Name.Trim(), Clean(_form.Category), Clean(_form.Description), json, _form.SortOrder));
+                ShowToast("Document category created.");
+                _editId = id;
+            }
+
+            _showForm = false;
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.DocumentConfigItemId == _editId) ?? _selected;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void ConfirmDelete(DocumentConfigItemDto item)
+    {
+        _deleteTarget = item;
+        _showDelete = true;
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteDocumentConfigItemAsync(_deleteTarget.DocumentConfigItemId);
+            ShowToast("Document category deleted.");
+            if (_selected?.DocumentConfigItemId == _deleteTarget.DocumentConfigItemId)
+            {
+                _selected = null;
+            }
+            _showDelete = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void DuplicateSelected()
+    {
+        if (_selected is null) return;
+        _editId = null;
+        _form = new()
+        {
+            Code = $"{_selected.Code}-COPY",
+            Name = $"{_selected.Name} Copy",
+            Category = _selected.Category,
+            Description = _selected.Description,
+            ConfigurationJson = string.IsNullOrWhiteSpace(_selected.ConfigurationJson) ? "{}" : _selected.ConfigurationJson,
+            SortOrder = NextSortOrder,
+            IsActive = false,
+        };
+        _showForm = true;
+    }
+
+    private async Task ToggleSelectedStatus()
+    {
+        if (_selected is null) return;
+        _saving = true;
+        try
+        {
+            await Api.UpdateDocumentConfigItemAsync(_selected.DocumentConfigItemId, new(_selected.Code, _selected.Name, _selected.Category, _selected.Description, _selected.ConfigurationJson, !_selected.IsActive, _selected.SortOrder));
+            ShowToast(_selected.IsActive ? "Category deactivated." : "Category activated.");
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.DocumentConfigItemId == _selected.DocumentConfigItemId) ?? _selected;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Status update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private Task ExportAsync()
+    {
+        var rows = new List<string> { "Code,Name,Group,Status,Readiness,SortOrder,Created" };
+        rows.AddRange(_filtered.Select(x => string.Join(',', Csv(x.Code), Csv(x.Name), Csv(GroupLabel(x)), Csv(StatusLabel(x)), Csv(ReadinessLabel(x)), x.SortOrder, Csv(x.CreatedDateUtc.ToString("O")))));
+        Nav.NavigateTo("data:text/csv;charset=utf-8," + Uri.EscapeDataString(string.Join(Environment.NewLine, rows)), forceLoad: true);
+        ShowToast("Document category export generated.");
+        return Task.CompletedTask;
+    }
+
+    private void CloseForm() { _showForm = false; _form = new(); _editId = null; }
+    private void CancelDelete() { _showDelete = false; _deleteTarget = null; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+
+    private int NextSortOrder => _items.Count == 0 ? 10 : _items.Max(x => x.SortOrder) + 10;
+    private string KpiClass(string key, string tone)
+    {
+        var active = false;
+        if (key == "all") active = _statusFilter == "all" && _readinessFilter == "all" && _categoryFilter == "all";
+        else if (key == "active") active = _statusFilter == "active";
+        else if (key == "inactive") active = _statusFilter == "inactive";
+        else if (key == "portal") active = _readinessFilter == "portal";
+        else if (key == "automation") active = _readinessFilter == "automation";
+        else if (key == "review") active = _readinessFilter == "review";
+        return $"dc-kpi-card {tone}{(active ? " dc-kpi-card-active" : string.Empty)}";
+    }
+
+    private bool MatchesSearch(DocumentConfigItemDto item)
+    {
+        var q = _search.Trim();
+        return Contains(item.Code, q) || Contains(item.Name, q) || Contains(item.Category, q) || Contains(item.Description, q) || Contains(item.ConfigurationJson, q);
+    }
+
+    private static bool Contains(string? value, string search) => value?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
+    private static string GroupLabel(DocumentConfigItemDto item) => string.IsNullOrWhiteSpace(item.Category) ? "Unassigned" : item.Category.Trim();
+    private static string StatusLabel(DocumentConfigItemDto item) => item.IsActive ? "Active" : "Inactive";
+    private static string StatusClass(DocumentConfigItemDto item) => item.IsActive ? "dc-status dc-status-active" : "dc-status dc-status-inactive";
+    private static string SelectedRowClass(DocumentConfigItemDto item) => string.Empty;
+    private static string AvatarClass(DocumentConfigItemDto item)
+    {
+        var index = Math.Abs(item.Code.GetHashCode()) % 6;
+        if (index == 0) return "dc-av1";
+        if (index == 1) return "dc-av2";
+        if (index == 2) return "dc-av3";
+        if (index == 3) return "dc-av4";
+        if (index == 4) return "dc-av5";
+        return "dc-av6";
+    }
+    private static string Initials(string name)
+    {
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant() : name.Length > 0 ? name[..1].ToUpperInvariant() : "?";
+    }
+
+    private static bool IsPortalReady(DocumentConfigItemDto item) => Contains(item.ConfigurationJson, "portal") || Contains(item.Name, "portal") || Contains(item.Category, "portal") || Contains(item.Description, "client");
+    private static bool IsAutomationReady(DocumentConfigItemDto item) => Contains(item.ConfigurationJson, "automation") || Contains(item.ConfigurationJson, "workflow") || Contains(item.ConfigurationJson, "metadata") || Contains(item.ConfigurationJson, "retention") || Contains(item.Description, "workflow");
+    private static bool NeedsReview(DocumentConfigItemDto item) => !item.IsActive || string.IsNullOrWhiteSpace(item.Description) || string.IsNullOrWhiteSpace(item.Category) || string.IsNullOrWhiteSpace(item.ConfigurationJson) || item.ConfigurationJson == "{}";
+    private static string ReadinessLabel(DocumentConfigItemDto item) => NeedsReview(item) ? "Needs Review" : IsAutomationReady(item) ? "Automation Ready" : IsPortalReady(item) ? "Portal Ready" : "Standard";
+    private static string ReadinessClass(DocumentConfigItemDto item) => NeedsReview(item) ? "dc-readiness dc-readiness-review" : IsAutomationReady(item) ? "dc-readiness dc-readiness-automation" : IsPortalReady(item) ? "dc-readiness dc-readiness-portal" : "dc-readiness dc-readiness-standard";
+    private static string ReviewReason(DocumentConfigItemDto item)
+    {
+        if (!item.IsActive) return "Inactive category is not available to new workflows.";
+        if (string.IsNullOrWhiteSpace(item.Category)) return "Missing group assignment.";
+        if (string.IsNullOrWhiteSpace(item.Description)) return "Missing operational description.";
+        if (string.IsNullOrWhiteSpace(item.ConfigurationJson) || item.ConfigurationJson == "{}") return "Missing configuration metadata.";
+        return "Review recommended.";
+    }
+
+    private static string DisplayConfig(DocumentConfigItemDto item) => string.IsNullOrWhiteSpace(item.ConfigurationJson) ? "{}" : item.ConfigurationJson;
+    private static string WidthStyle(int value, int max) => $"width:{Math.Clamp((int)Math.Round(value * 100d / Math.Max(max, 1)), 0, 100)}%;";
+    private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string Csv(string? value) => string.Concat("\"", (value ?? string.Empty).Replace("\"", "\"\""), "\"");
+    private static string NormalizeJson(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "{}";
+        using var document = JsonDocument.Parse(value);
+        return JsonSerializer.Serialize(document.RootElement, new JsonSerializerOptions { WriteIndented = false });
+    }
+
+    private string? GetQueryValue(string key)
+    {
+        var query = Nav.ToAbsoluteUri(Nav.Uri).Query;
+        if (string.IsNullOrWhiteSpace(query)) return null;
+        foreach (var part in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var pair = part.Split('=', 2);
+            if (pair.Length == 2 && string.Equals(Uri.UnescapeDataString(pair[0]), key, StringComparison.OrdinalIgnoreCase))
+            {
+                return Uri.UnescapeDataString(pair[1].Replace('+', ' '));
+            }
+        }
+        return null;
+    }
+
+    private sealed record GroupSummary(string Name, int Count);
+    private sealed record AutomationLane(string Title, List<DocumentConfigItemDto> Items);
+
+    private sealed class FormModel
+    {
+        [Required, StringLength(80)] public string Code { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string Name { get; set; } = string.Empty;
+        [StringLength(120)] public string? Category { get; set; }
+        [StringLength(500)] public string? Description { get; set; }
+        [StringLength(4000)] public string? ConfigurationJson { get; set; } = "{}";
+        [Range(0, 9999)] public int SortOrder { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+}

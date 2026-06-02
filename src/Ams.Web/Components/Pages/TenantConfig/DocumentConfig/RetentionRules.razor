@@ -1,2 +1,575 @@
 @page "/tenant/documents/retention"
-<DocumentConfigPage Kind="RetentionRule" Title="Retention Rules" Subtitle="Configure document retention, archival, and deletion policies" Icon="bi bi-clock-history" />
+@page "/documents/retention"
+@using System.ComponentModel.DataAnnotations
+@using System.Text.Json
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.DocumentConfig
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Retention Rules</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="rr-toast rr-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="rr-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+<div class="rr-enterprise-page">
+    <section class="rr-hero">
+        <div class="rr-hero-left">
+            <span class="rr-hero-icon"><i class="bi bi-clock-history" aria-hidden="true"></i></span>
+            <div>
+                <div class="rr-title-row">
+                    <h1>Retention Rules</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> DB synced</span>
+                    <span><i class="bi bi-shield-lock" aria-hidden="true"></i> Governance controlled</span>
+                </div>
+                <p>Enterprise retention setup workspace for document lifecycle policy, archival, legal holds, disposition controls, deletion governance, and audit-ready recordkeeping.</p>
+            </div>
+        </div>
+        <div class="rr-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "rr-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_items.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Retention Rule</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="rr-error-banner" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="rr-kpi-strip" aria-label="Retention rule KPIs">
+        <button type="button" class="@AllKpiClass" @onclick="ShowAll"><span class="rr-kpi-icon"><i class="bi bi-clock-history" aria-hidden="true"></i></span><span><strong>@_items.Count</strong><em>Total Rules</em><small>Configured lifecycle standards</small></span></button>
+        <button type="button" class="@ActiveKpiClass" @onclick="ShowActive"><span class="rr-kpi-icon"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span><span><strong>@ActiveCount</strong><em>Active</em><small>Applied to workflows</small></span></button>
+        <button type="button" class="@RetentionKpiClass" @onclick="ShowRetention"><span class="rr-kpi-icon"><i class="bi bi-hourglass-split" aria-hidden="true"></i></span><span><strong>@RetentionReadyCount</strong><em>Retention Set</em><small>Period configured</small></span></button>
+        <button type="button" class="@ArchiveKpiClass" @onclick="ShowArchive"><span class="rr-kpi-icon"><i class="bi bi-archive" aria-hidden="true"></i></span><span><strong>@ArchiveReadyCount</strong><em>Archive Ready</em><small>Archive tier or trigger</small></span></button>
+        <button type="button" class="@HoldKpiClass" @onclick="ShowHold"><span class="rr-kpi-icon"><i class="bi bi-shield-lock" aria-hidden="true"></i></span><span><strong>@HoldReadyCount</strong><em>Hold Ready</em><small>Legal hold controls</small></span></button>
+        <button type="button" class="@ReviewKpiClass" @onclick="ShowReview"><span class="rr-kpi-icon"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></span><span><strong>@NeedsReviewCount</strong><em>Needs Review</em><small>Missing lifecycle metadata</small></span></button>
+    </section>
+
+    <section class="rr-workflow-strip" aria-label="Retention workflows">
+        <button type="button" class="rr-workflow-card" @onclick="ShowLibrary"><i class="bi bi-kanban" aria-hidden="true"></i><span><strong>Library</strong><small>Retention register</small></span></button>
+        <button type="button" class="rr-workflow-card" @onclick="ShowLifecycleView"><i class="bi bi-hourglass-split" aria-hidden="true"></i><span><strong>Lifecycle</strong><small>Retention and archive</small></span></button>
+        <button type="button" class="rr-workflow-card" @onclick="ShowGovernance"><i class="bi bi-shield-lock" aria-hidden="true"></i><span><strong>Governance</strong><small>Hold and deletion</small></span></button>
+        <button type="button" class="rr-workflow-card" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i><span><strong>Create</strong><small>Add lifecycle rule</small></span></button>
+    </section>
+
+    <section class="rr-search-panel">
+        <div class="rr-search-wrap">
+            <span class="rr-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="rr-search-body">
+                <label for="rr-search">Retention search</label>
+                <input id="rr-search" class="rr-search-input" @bind="_search" @bind:event="oninput" @bind:after="ApplyFilter" placeholder="Search rule, retention, archive, hold, disposition, JSON..." />
+                <span class="rr-search-hint">Filters real tenant retention configuration records.</span>
+            </div>
+        </div>
+        <select class="rr-filter-select" @bind="_statusFilter" @bind:after="ApplyFilter" aria-label="Status filter">
+            <option value="all">All statuses</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+        </select>
+        <select class="rr-filter-select" @bind="_readinessFilter" @bind:after="ApplyFilter" aria-label="Readiness filter">
+            <option value="all">All readiness</option>
+            <option value="retention">Retention set</option>
+            <option value="archive">Archive ready</option>
+            <option value="hold">Hold ready</option>
+            <option value="review">Needs review</option>
+        </select>
+        <select class="rr-filter-select" @bind="_categoryFilter" @bind:after="ApplyFilter" aria-label="Group filter">
+            <option value="all">All groups</option>
+            @foreach (var category in CategoryGroups)
+            {
+                <option value="@category">@category</option>
+            }
+        </select>
+        <div class="rr-search-result"><strong>@_filtered.Count</strong><span>records</span></div>
+    </section>
+
+    <nav class="rr-view-tabs" aria-label="Retention views">
+        @foreach (var view in _views)
+        {
+            <button type="button" class="rr-view-btn @(_activeView == view ? "rr-view-btn-active" : null)" @onclick="() => SetView(view)">@view</button>
+        }
+    </nav>
+
+    <section class="rr-content-layout">
+        <div class="rr-main-card">
+            @if (_loading)
+            {
+                <div class="rr-loading"><i class="bi bi-arrow-repeat rr-spin" aria-hidden="true"></i><span>Loading retention rules...</span></div>
+            }
+            else if (_filtered.Count == 0)
+            {
+                <div class="rr-empty-state"><i class="bi bi-clock-history" aria-hidden="true"></i><h2>No retention rules found</h2><p>Adjust filters or create the first retention lifecycle rule.</p><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Retention Rule</button></div>
+            }
+            else if (_activeView == "Lifecycle")
+            {
+                <div class="rr-governance-grid">
+                    <section class="rr-panel">
+                        <header><div><i class="bi bi-hourglass-split" aria-hidden="true"></i><strong>Lifecycle Readiness</strong></div><span>@LifecycleScore.ToString("F0")%</span></header>
+                        <div class="rr-panel-body rr-metric-list">
+                            <div class="rr-metric-row"><span>Retention set</span><div><i style="@WidthStyle(RetentionReadyCount, SafeTotal)"></i></div><strong>@RetentionReadyCount</strong></div>
+                            <div class="rr-metric-row"><span>Archive ready</span><div><i style="@WidthStyle(ArchiveReadyCount, SafeTotal)"></i></div><strong>@ArchiveReadyCount</strong></div>
+                            <div class="rr-metric-row"><span>Hold ready</span><div><i style="@WidthStyle(HoldReadyCount, SafeTotal)"></i></div><strong>@HoldReadyCount</strong></div>
+                            <div class="rr-metric-row"><span>Needs review</span><div><i style="@WidthStyle(NeedsReviewCount, SafeTotal)"></i></div><strong>@NeedsReviewCount</strong></div>
+                        </div>
+                    </section>
+                    <section class="rr-panel">
+                        <header><div><i class="bi bi-tags" aria-hidden="true"></i><strong>Retention Groups</strong></div><span>@CategoryGroups.Count</span></header>
+                        <div class="rr-panel-body rr-group-list">
+                            @foreach (var group in GroupSummaries)
+                            {
+                                <button type="button" class="rr-group-row" @onclick="() => FilterCategory(group.Name)"><span>@group.Name</span><div><i style="@WidthStyle(group.Count, SafeTotal)"></i></div><strong>@group.Count</strong></button>
+                            }
+                        </div>
+                    </section>
+                    <section class="rr-panel rr-panel-wide">
+                        <header><div><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><strong>Retention Review Queue</strong></div><span>@NeedsReviewItems.Count</span></header>
+                        <div class="rr-panel-body rr-review-list">
+                            @foreach (var item in NeedsReviewItems.Take(8))
+                            {
+                                <button type="button" class="rr-review-row" @onclick="() => SelectItem(item)"><strong>@item.Name</strong><span>@ReviewReason(item)</span><em>@ReadinessLabel(item)</em></button>
+                            }
+                        </div>
+                    </section>
+                </div>
+            }
+            else if (_activeView == "Governance")
+            {
+                <div class="rr-board">
+                    @foreach (var lane in GovernanceLanes)
+                    {
+                        <section class="rr-board-col">
+                            <header><strong>@lane.Title</strong><span>@lane.Items.Count</span></header>
+                            @foreach (var item in lane.Items)
+                            {
+                                <button type="button" class="rr-board-card" @onclick="() => SelectItem(item)">
+                                    <div><strong>@item.Name</strong><span>@item.Code</span></div>
+                                    <small>@(item.Description ?? "No description provided")</small>
+                                    <em>@ReadinessLabel(item)</em>
+                                </button>
+                            }
+                        </section>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="rr-table-scroll">
+                    <table class="rr-table">
+                        <thead><tr><th>Retention Rule</th><th>Code</th><th>Group</th><th>Readiness</th><th>Order</th><th>Status</th><th>Created</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var item in _filtered)
+                            {
+                                <tr @onclick="() => SelectItem(item)">
+                                    <td><div class="rr-name-cell"><span class="rr-avatar @AvatarClass(item)">@Initials(item.Name)</span><span><strong>@item.Name</strong><small>@(item.Description ?? "No description provided")</small></span></div></td>
+                                    <td><span class="rr-code-pill">@item.Code</span></td>
+                                    <td>@GroupLabel(item)</td>
+                                    <td><span class="@ReadinessClass(item)">@ReadinessLabel(item)</span></td>
+                                    <td class="rr-number">@item.SortOrder</td>
+                                    <td><span class="@StatusClass(item)">@StatusLabel(item)</span></td>
+                                    <td>@item.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</td>
+                                    <td><div class="rr-row-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(item)" title="Delete"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <aside class="rr-detail-card" aria-label="Selected retention rule">
+            @if (_selected is null)
+            {
+                <div class="rr-detail-empty"><i class="bi bi-clock-history" aria-hidden="true"></i><h2>Retention command brief</h2><p>Select a rule to review lifecycle readiness, archive policy, hold controls, and actions.</p></div>
+            }
+            else
+            {
+                <div class="rr-detail-head"><div><span class="rr-detail-eyebrow"><i class="bi bi-clock-history" aria-hidden="true"></i> @GroupLabel(_selected)</span><h2>@_selected.Name</h2><p>@_selected.Code</p></div><span class="@StatusClass(_selected)">@StatusLabel(_selected)</span></div>
+                <div class="rr-detail-body">
+                    <div class="rr-detail-summary">
+                        <div><span>Readiness</span><strong>@ReadinessLabel(_selected)</strong></div>
+                        <div><span>Retention</span><strong>@(IsRetentionReady(_selected) ? "Set" : "Review")</strong></div>
+                        <div><span>Archive</span><strong>@(IsArchiveReady(_selected) ? "Ready" : "Manual")</strong></div>
+                        <div><span>Legal Hold</span><strong>@(IsHoldReady(_selected) ? "Ready" : "Optional")</strong></div>
+                    </div>
+                    <div class="rr-config-card"><span>Configuration JSON</span><code>@DisplayConfig(_selected)</code></div>
+                    <div class="rr-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit Rule</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="DuplicateSelected"><i class="bi bi-files" aria-hidden="true"></i> Duplicate</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="ToggleSelectedStatus"><i class="bi bi-power" aria-hidden="true"></i> @(_selected.IsActive ? "Deactivate" : "Activate")</button>
+                        <button type="button" class="um-btn um-btn-ghost text-danger" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
+                    </div>
+                </div>
+            }
+        </aside>
+    </section>
+</div>
+
+@if (_showForm)
+{
+    <div class="rr-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="rr-form-title">
+        <div class="rr-modal">
+            <div class="rr-modal-header"><div class="rr-modal-title"><span class="rr-modal-icon"><i class="bi bi-clock-history" aria-hidden="true"></i></span><div><h2 id="rr-form-title">@(_editId.HasValue ? "Edit Retention Rule" : "Add Retention Rule")</h2><p>Configure retention period, archival trigger, hold policy, and disposition controls.</p></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseForm" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="rr-modal-body">
+                    <div class="rr-form-banner"><i class="bi bi-info-circle" aria-hidden="true"></i><span><strong>Retention governance</strong> Use stable codes and JSON metadata for period, archive tier, legal hold, disposition approval, deletion, and audit evidence.</span></div>
+                    <div class="rr-form-grid">
+                        <div class="rr-field"><label>Code <span>*</span></label><InputText @bind-Value="_form.Code" class="rr-input" placeholder="POLICY_7YR" /></div>
+                        <div class="rr-field"><label>Name <span>*</span></label><InputText @bind-Value="_form.Name" class="rr-input" placeholder="Policy Documents - 7 Year Retention" /></div>
+                        <div class="rr-field"><label>Group</label><InputText @bind-Value="_form.Category" class="rr-input" placeholder="Policy, Claims, Billing, Audit..." /></div>
+                        <div class="rr-field"><label>Sort Order</label><InputNumber @bind-Value="_form.SortOrder" class="rr-input" /></div>
+                        <div class="rr-field rr-field-wide"><label>Description</label><InputTextArea @bind-Value="_form.Description" class="rr-input" rows="3" /></div>
+                        <div class="rr-field rr-field-wide"><label>Configuration JSON</label><InputTextArea @bind-Value="_form.ConfigurationJson" class="rr-input rr-code-input" rows="6" placeholder='{"retentionYears":7,"archive":true,"legalHold":true,"disposition":"approvalRequired"}' /></div>
+                        <div class="rr-field rr-field-wide rr-check-row"><label><InputCheckbox @bind-Value="_form.IsActive" /> Active for document lifecycle workflows</label></div>
+                    </div>
+                </div>
+                <div class="rr-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check2" aria-hidden="true"></i> @(_editId.HasValue ? "Save Changes" : "Create Rule")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showDelete)
+{
+    <div class="rr-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="rr-delete-title">
+        <div class="rr-confirm-modal">
+            <div class="rr-confirm-icon"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
+            <h2 id="rr-delete-title">Delete Retention Rule</h2>
+            <p>Delete <strong>@_deleteTarget?.Name</strong>? Existing archived documents may still reference this rule historically.</p>
+            <div class="rr-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete">Cancel</button><button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div>
+        </div>
+    </div>
+}
+
+@code {
+    private const string ConfigKind = "RetentionRule";
+    private Guid _tenantId;
+    private bool _loading;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private bool _toastVisible;
+    private string _search = string.Empty;
+    private string _statusFilter = "all";
+    private string _readinessFilter = "all";
+    private string _categoryFilter = "all";
+    private string _activeView = "Library";
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private Guid? _editId;
+    private DocumentConfigItemDto? _selected;
+    private DocumentConfigItemDto? _deleteTarget;
+    private readonly string[] _views = ["Library", "Lifecycle", "Governance"];
+    private List<DocumentConfigItemDto> _items = [];
+    private List<DocumentConfigItemDto> _filtered = [];
+    private FormModel _form = new();
+
+    private int ActiveCount => _items.Count(x => x.IsActive);
+    private int RetentionReadyCount => _items.Count(IsRetentionReady);
+    private int ArchiveReadyCount => _items.Count(IsArchiveReady);
+    private int HoldReadyCount => _items.Count(IsHoldReady);
+    private int NeedsReviewCount => _items.Count(NeedsReview);
+    private int SafeTotal => Math.Max(_items.Count, 1);
+    private double LifecycleScore => _items.Count == 0 ? 0 : (RetentionReadyCount + ArchiveReadyCount + HoldReadyCount - NeedsReviewCount) * 100d / Math.Max(_items.Count * 3, 1);
+    private List<string> CategoryGroups => _items.Select(GroupLabel).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+    private List<GroupSummary> GroupSummaries => _items.GroupBy(GroupLabel, StringComparer.OrdinalIgnoreCase).Select(g => new GroupSummary(g.Key, g.Count())).OrderByDescending(x => x.Count).ToList();
+    private List<DocumentConfigItemDto> NeedsReviewItems => _items.Where(NeedsReview).OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToList();
+    private List<GovernanceLane> GovernanceLanes =>
+    [
+        new("Retention Set", _filtered.Where(IsRetentionReady).ToList()),
+        new("Archive Ready", _filtered.Where(IsArchiveReady).ToList()),
+        new("Hold Ready", _filtered.Where(IsHoldReady).ToList()),
+    ];
+    private string ToastIcon => _toastKind == "success" ? "bi-check-circle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-exclamation-triangle-fill";
+    private string AllKpiClass => KpiClass("all", "rr-blue");
+    private string ActiveKpiClass => KpiClass("active", "rr-green");
+    private string RetentionKpiClass => KpiClass("retention", "rr-cyan");
+    private string ArchiveKpiClass => KpiClass("archive", "rr-purple");
+    private string HoldKpiClass => KpiClass("hold", "rr-slate");
+    private string ReviewKpiClass => KpiClass("review", "rr-amber");
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Documents & Forms", null), new("Retention Rules", "/tenant/documents/retention"));
+        _search = GetQueryValue("searchTerm") ?? string.Empty;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchDocumentConfigItemsAsync(_tenantId, ConfigKind, _search, pageSize: 500);
+            _items = result?.Items.OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToList() ?? [];
+            ApplyFilter();
+            _selected ??= _filtered.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilter()
+    {
+        IEnumerable<DocumentConfigItemDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_search)) query = query.Where(MatchesSearch);
+        if (_statusFilter == "active") query = query.Where(x => x.IsActive);
+        else if (_statusFilter == "inactive") query = query.Where(x => !x.IsActive);
+        if (_readinessFilter == "retention") query = query.Where(IsRetentionReady);
+        else if (_readinessFilter == "archive") query = query.Where(IsArchiveReady);
+        else if (_readinessFilter == "hold") query = query.Where(IsHoldReady);
+        else if (_readinessFilter == "review") query = query.Where(NeedsReview);
+        if (_categoryFilter != "all") query = query.Where(x => string.Equals(GroupLabel(x), _categoryFilter, StringComparison.OrdinalIgnoreCase));
+        _filtered = query.OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToList();
+        if (_selected is not null && !_filtered.Any(x => x.DocumentConfigItemId == _selected.DocumentConfigItemId)) _selected = _filtered.FirstOrDefault();
+    }
+
+    private void ShowAll() { _statusFilter = "all"; _readinessFilter = "all"; _categoryFilter = "all"; ApplyFilter(); }
+    private void ShowActive() { _statusFilter = "active"; _readinessFilter = "all"; ApplyFilter(); }
+    private void ShowRetention() { _statusFilter = "all"; _readinessFilter = "retention"; ApplyFilter(); }
+    private void ShowArchive() { _statusFilter = "all"; _readinessFilter = "archive"; ApplyFilter(); }
+    private void ShowHold() { _statusFilter = "all"; _readinessFilter = "hold"; ApplyFilter(); }
+    private void ShowReview() { _statusFilter = "all"; _readinessFilter = "review"; ApplyFilter(); }
+    private void ShowLibrary() => SetView("Library");
+    private void ShowLifecycleView() => SetView("Lifecycle");
+    private void ShowGovernance() => SetView("Governance");
+    private void SetView(string view) => _activeView = view;
+    private void FilterCategory(string category) { _categoryFilter = category; ApplyFilter(); }
+    private void SelectItem(DocumentConfigItemDto item) => _selected = item;
+
+    private void OpenCreate()
+    {
+        _editId = null;
+        _form = new() { ConfigurationJson = "{}", IsActive = true, SortOrder = NextSortOrder };
+        _showForm = true;
+    }
+
+    private void OpenEdit(DocumentConfigItemDto item)
+    {
+        _editId = item.DocumentConfigItemId;
+        _form = new()
+        {
+            Code = item.Code,
+            Name = item.Name,
+            Category = item.Category,
+            Description = item.Description,
+            ConfigurationJson = string.IsNullOrWhiteSpace(item.ConfigurationJson) ? "{}" : item.ConfigurationJson,
+            SortOrder = item.SortOrder,
+            IsActive = item.IsActive,
+        };
+        _showForm = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            var json = NormalizeJson(_form.ConfigurationJson);
+            if (_editId.HasValue)
+            {
+                await Api.UpdateDocumentConfigItemAsync(_editId.Value, new(_form.Code.Trim(), _form.Name.Trim(), Clean(_form.Category), Clean(_form.Description), json, _form.IsActive, _form.SortOrder));
+                ShowToast("Retention rule updated.");
+            }
+            else
+            {
+                var id = await Api.CreateDocumentConfigItemAsync(new(_tenantId, ConfigKind, _form.Code.Trim(), _form.Name.Trim(), Clean(_form.Category), Clean(_form.Description), json, _form.SortOrder));
+                ShowToast("Retention rule created.");
+                _editId = id;
+            }
+            _showForm = false;
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.DocumentConfigItemId == _editId) ?? _selected;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void ConfirmDelete(DocumentConfigItemDto item) { _deleteTarget = item; _showDelete = true; }
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteDocumentConfigItemAsync(_deleteTarget.DocumentConfigItemId);
+            ShowToast("Retention rule deleted.");
+            if (_selected?.DocumentConfigItemId == _deleteTarget.DocumentConfigItemId) _selected = null;
+            _showDelete = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void DuplicateSelected()
+    {
+        if (_selected is null) return;
+        _editId = null;
+        _form = new()
+        {
+            Code = $"{_selected.Code}-COPY",
+            Name = $"{_selected.Name} Copy",
+            Category = _selected.Category,
+            Description = _selected.Description,
+            ConfigurationJson = string.IsNullOrWhiteSpace(_selected.ConfigurationJson) ? "{}" : _selected.ConfigurationJson,
+            SortOrder = NextSortOrder,
+            IsActive = false,
+        };
+        _showForm = true;
+    }
+
+    private async Task ToggleSelectedStatus()
+    {
+        if (_selected is null) return;
+        _saving = true;
+        try
+        {
+            await Api.UpdateDocumentConfigItemAsync(_selected.DocumentConfigItemId, new(_selected.Code, _selected.Name, _selected.Category, _selected.Description, _selected.ConfigurationJson, !_selected.IsActive, _selected.SortOrder));
+            ShowToast(_selected.IsActive ? "Retention rule deactivated." : "Retention rule activated.");
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.DocumentConfigItemId == _selected.DocumentConfigItemId) ?? _selected;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Status update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private Task ExportAsync()
+    {
+        var rows = new List<string> { "Code,Name,Group,Status,Readiness,SortOrder,Created" };
+        rows.AddRange(_filtered.Select(x => string.Join(',', Csv(x.Code), Csv(x.Name), Csv(GroupLabel(x)), Csv(StatusLabel(x)), Csv(ReadinessLabel(x)), x.SortOrder, Csv(x.CreatedDateUtc.ToString("O")))));
+        Nav.NavigateTo("data:text/csv;charset=utf-8," + Uri.EscapeDataString(string.Join(Environment.NewLine, rows)), forceLoad: true);
+        ShowToast("Retention rules export generated.");
+        return Task.CompletedTask;
+    }
+
+    private void CloseForm() { _showForm = false; _form = new(); _editId = null; }
+    private void CancelDelete() { _showDelete = false; _deleteTarget = null; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+
+    private int NextSortOrder => _items.Count == 0 ? 10 : _items.Max(x => x.SortOrder) + 10;
+    private string KpiClass(string key, string tone)
+    {
+        var active = false;
+        if (key == "all") active = _statusFilter == "all" && _readinessFilter == "all" && _categoryFilter == "all";
+        else if (key == "active") active = _statusFilter == "active";
+        else if (key == "retention") active = _readinessFilter == "retention";
+        else if (key == "archive") active = _readinessFilter == "archive";
+        else if (key == "hold") active = _readinessFilter == "hold";
+        else if (key == "review") active = _readinessFilter == "review";
+        return $"rr-kpi-card {tone}{(active ? " rr-kpi-card-active" : string.Empty)}";
+    }
+
+    private bool MatchesSearch(DocumentConfigItemDto item)
+    {
+        var q = _search.Trim();
+        return Contains(item.Code, q) || Contains(item.Name, q) || Contains(item.Category, q) || Contains(item.Description, q) || Contains(item.ConfigurationJson, q);
+    }
+
+    private static bool Contains(string? value, string search) => value?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
+    private static string GroupLabel(DocumentConfigItemDto item) => string.IsNullOrWhiteSpace(item.Category) ? "Unassigned" : item.Category.Trim();
+    private static string StatusLabel(DocumentConfigItemDto item) => item.IsActive ? "Active" : "Inactive";
+    private static string StatusClass(DocumentConfigItemDto item) => item.IsActive ? "rr-status rr-status-active" : "rr-status rr-status-inactive";
+    private static bool IsRetentionReady(DocumentConfigItemDto item) => Contains(item.ConfigurationJson, "retention") || Contains(item.ConfigurationJson, "years") || Contains(item.ConfigurationJson, "period") || Contains(item.ConfigurationJson, "days") || Contains(item.Description, "retention");
+    private static bool IsArchiveReady(DocumentConfigItemDto item) => Contains(item.ConfigurationJson, "archive") || Contains(item.ConfigurationJson, "tier") || Contains(item.ConfigurationJson, "cold") || Contains(item.ConfigurationJson, "storage") || Contains(item.Description, "archive");
+    private static bool IsHoldReady(DocumentConfigItemDto item) => Contains(item.ConfigurationJson, "hold") || Contains(item.ConfigurationJson, "legal") || Contains(item.ConfigurationJson, "disposition") || Contains(item.ConfigurationJson, "deletion") || Contains(item.Description, "hold");
+    private static bool NeedsReview(DocumentConfigItemDto item) => !item.IsActive || string.IsNullOrWhiteSpace(item.Description) || string.IsNullOrWhiteSpace(item.Category) || string.IsNullOrWhiteSpace(item.ConfigurationJson) || item.ConfigurationJson == "{}";
+    private static string ReadinessLabel(DocumentConfigItemDto item) => NeedsReview(item) ? "Needs Review" : IsHoldReady(item) ? "Hold Ready" : IsArchiveReady(item) ? "Archive Ready" : IsRetentionReady(item) ? "Retention Set" : "Standard";
+    private static string ReadinessClass(DocumentConfigItemDto item) => NeedsReview(item) ? "rr-readiness rr-readiness-review" : IsHoldReady(item) ? "rr-readiness rr-readiness-hold" : IsArchiveReady(item) ? "rr-readiness rr-readiness-archive" : IsRetentionReady(item) ? "rr-readiness rr-readiness-retention" : "rr-readiness rr-readiness-standard";
+    private static string ReviewReason(DocumentConfigItemDto item)
+    {
+        if (!item.IsActive) return "Inactive rule is not applied to workflows.";
+        if (string.IsNullOrWhiteSpace(item.Category)) return "Missing lifecycle group.";
+        if (string.IsNullOrWhiteSpace(item.Description)) return "Missing operational description.";
+        if (string.IsNullOrWhiteSpace(item.ConfigurationJson) || item.ConfigurationJson == "{}") return "Missing retention, archive, or hold metadata.";
+        return "Review recommended.";
+    }
+    private static string DisplayConfig(DocumentConfigItemDto item) => string.IsNullOrWhiteSpace(item.ConfigurationJson) ? "{}" : item.ConfigurationJson;
+    private static string WidthStyle(int value, int max) => $"width:{Math.Clamp((int)Math.Round(value * 100d / Math.Max(max, 1)), 0, 100)}%;";
+    private static string AvatarClass(DocumentConfigItemDto item)
+    {
+        var index = Math.Abs(item.Code.GetHashCode()) % 6;
+        if (index == 0) return "rr-av1";
+        if (index == 1) return "rr-av2";
+        if (index == 2) return "rr-av3";
+        if (index == 3) return "rr-av4";
+        if (index == 4) return "rr-av5";
+        return "rr-av6";
+    }
+    private static string Initials(string name)
+    {
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant() : name.Length > 0 ? name[..1].ToUpperInvariant() : "?";
+    }
+    private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string Csv(string? value) => string.Concat("\"", (value ?? string.Empty).Replace("\"", "\"\""), "\"");
+    private static string NormalizeJson(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "{}";
+        using var document = JsonDocument.Parse(value);
+        return JsonSerializer.Serialize(document.RootElement, new JsonSerializerOptions { WriteIndented = false });
+    }
+    private string? GetQueryValue(string key)
+    {
+        var query = Nav.ToAbsoluteUri(Nav.Uri).Query;
+        if (string.IsNullOrWhiteSpace(query)) return null;
+        foreach (var part in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var pair = part.Split('=', 2);
+            if (pair.Length == 2 && string.Equals(Uri.UnescapeDataString(pair[0]), key, StringComparison.OrdinalIgnoreCase)) return Uri.UnescapeDataString(pair[1].Replace('+', ' '));
+        }
+        return null;
+    }
+
+    private sealed record GroupSummary(string Name, int Count);
+    private sealed record GovernanceLane(string Title, List<DocumentConfigItemDto> Items);
+    private sealed class FormModel
+    {
+        [Required, StringLength(80)] public string Code { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string Name { get; set; } = string.Empty;
+        [StringLength(120)] public string? Category { get; set; }
+        [StringLength(500)] public string? Description { get; set; }
+        [StringLength(4000)] public string? ConfigurationJson { get; set; } = "{}";
+        [Range(0, 9999)] public int SortOrder { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+}

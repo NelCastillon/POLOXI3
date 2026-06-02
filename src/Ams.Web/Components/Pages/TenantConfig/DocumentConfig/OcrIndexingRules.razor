@@ -1,2 +1,575 @@
 @page "/tenant/documents/ocr"
-<DocumentConfigPage Kind="OcrIndexingRule" Title="OCR / Indexing Rules" Subtitle="Configure OCR extraction, indexing, and exception handling rules" Icon="bi bi-upc-scan" />
+@page "/documents/ocr"
+@using System.ComponentModel.DataAnnotations
+@using System.Text.Json
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.DocumentConfig
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>OCR / Indexing Rules</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="ocr-toast ocr-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ocr-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+<div class="ocr-enterprise-page">
+    <section class="ocr-hero">
+        <div class="ocr-hero-left">
+            <span class="ocr-hero-icon"><i class="bi bi-upc-scan" aria-hidden="true"></i></span>
+            <div>
+                <div class="ocr-title-row">
+                    <h1>OCR / Indexing Rules</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> DB synced</span>
+                    <span><i class="bi bi-robot" aria-hidden="true"></i> Extraction controlled</span>
+                </div>
+                <p>Enterprise OCR setup workspace for document recognition, field extraction, confidence thresholds, indexing rules, exception routing, and automation-ready ingestion standards.</p>
+            </div>
+        </div>
+        <div class="ocr-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "ocr-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_items.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add OCR Rule</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="ocr-error-banner" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="ocr-kpi-strip" aria-label="OCR rule KPIs">
+        <button type="button" class="@AllKpiClass" @onclick="ShowAll"><span class="ocr-kpi-icon"><i class="bi bi-upc-scan" aria-hidden="true"></i></span><span><strong>@_items.Count</strong><em>Total Rules</em><small>Configured OCR standards</small></span></button>
+        <button type="button" class="@ActiveKpiClass" @onclick="ShowActive"><span class="ocr-kpi-icon"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span><span><strong>@ActiveCount</strong><em>Active</em><small>Applied to ingestion</small></span></button>
+        <button type="button" class="@ExtractionKpiClass" @onclick="ShowExtraction"><span class="ocr-kpi-icon"><i class="bi bi-braces" aria-hidden="true"></i></span><span><strong>@ExtractionReadyCount</strong><em>Extraction Ready</em><small>Fields and zones mapped</small></span></button>
+        <button type="button" class="@IndexKpiClass" @onclick="ShowIndexing"><span class="ocr-kpi-icon"><i class="bi bi-tags" aria-hidden="true"></i></span><span><strong>@IndexReadyCount</strong><em>Index Ready</em><small>Metadata routing set</small></span></button>
+        <button type="button" class="@ExceptionKpiClass" @onclick="ShowExceptions"><span class="ocr-kpi-icon"><i class="bi bi-exclamation-octagon" aria-hidden="true"></i></span><span><strong>@ExceptionReadyCount</strong><em>Exception Ready</em><small>Review queue configured</small></span></button>
+        <button type="button" class="@ReviewKpiClass" @onclick="ShowReview"><span class="ocr-kpi-icon"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></span><span><strong>@NeedsReviewCount</strong><em>Needs Review</em><small>Missing OCR metadata</small></span></button>
+    </section>
+
+    <section class="ocr-workflow-strip" aria-label="OCR workflows">
+        <button type="button" class="ocr-workflow-card" @onclick="ShowLibrary"><i class="bi bi-kanban" aria-hidden="true"></i><span><strong>Library</strong><small>OCR rule register</small></span></button>
+        <button type="button" class="ocr-workflow-card" @onclick="ShowExtractionView"><i class="bi bi-braces" aria-hidden="true"></i><span><strong>Extraction</strong><small>Fields and confidence</small></span></button>
+        <button type="button" class="ocr-workflow-card" @onclick="ShowAutomation"><i class="bi bi-diagram-3" aria-hidden="true"></i><span><strong>Automation</strong><small>Indexing and exceptions</small></span></button>
+        <button type="button" class="ocr-workflow-card" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i><span><strong>Create</strong><small>Add OCR standard</small></span></button>
+    </section>
+
+    <section class="ocr-search-panel">
+        <div class="ocr-search-wrap">
+            <span class="ocr-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="ocr-search-body">
+                <label for="ocr-search">OCR search</label>
+                <input id="ocr-search" class="ocr-search-input" @bind="_search" @bind:event="oninput" @bind:after="ApplyFilter" placeholder="Search OCR, extraction, indexing, confidence, exception, JSON..." />
+                <span class="ocr-search-hint">Filters real tenant OCR and indexing configuration records.</span>
+            </div>
+        </div>
+        <select class="ocr-filter-select" @bind="_statusFilter" @bind:after="ApplyFilter" aria-label="Status filter">
+            <option value="all">All statuses</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+        </select>
+        <select class="ocr-filter-select" @bind="_readinessFilter" @bind:after="ApplyFilter" aria-label="Readiness filter">
+            <option value="all">All readiness</option>
+            <option value="extraction">Extraction ready</option>
+            <option value="indexing">Index ready</option>
+            <option value="exceptions">Exception ready</option>
+            <option value="review">Needs review</option>
+        </select>
+        <select class="ocr-filter-select" @bind="_categoryFilter" @bind:after="ApplyFilter" aria-label="Group filter">
+            <option value="all">All groups</option>
+            @foreach (var category in CategoryGroups)
+            {
+                <option value="@category">@category</option>
+            }
+        </select>
+        <div class="ocr-search-result"><strong>@_filtered.Count</strong><span>records</span></div>
+    </section>
+
+    <nav class="ocr-view-tabs" aria-label="OCR views">
+        @foreach (var view in _views)
+        {
+            <button type="button" class="ocr-view-btn @(_activeView == view ? "ocr-view-btn-active" : null)" @onclick="() => SetView(view)">@view</button>
+        }
+    </nav>
+
+    <section class="ocr-content-layout">
+        <div class="ocr-main-card">
+            @if (_loading)
+            {
+                <div class="ocr-loading"><i class="bi bi-arrow-repeat ocr-spin" aria-hidden="true"></i><span>Loading OCR rules...</span></div>
+            }
+            else if (_filtered.Count == 0)
+            {
+                <div class="ocr-empty-state"><i class="bi bi-upc-scan" aria-hidden="true"></i><h2>No OCR rules found</h2><p>Adjust filters or create the first OCR indexing rule.</p><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add OCR Rule</button></div>
+            }
+            else if (_activeView == "Extraction")
+            {
+                <div class="ocr-governance-grid">
+                    <section class="ocr-panel">
+                        <header><div><i class="bi bi-braces" aria-hidden="true"></i><strong>OCR Readiness</strong></div><span>@OcrScore.ToString("F0")%</span></header>
+                        <div class="ocr-panel-body ocr-metric-list">
+                            <div class="ocr-metric-row"><span>Extraction ready</span><div><i style="@WidthStyle(ExtractionReadyCount, SafeTotal)"></i></div><strong>@ExtractionReadyCount</strong></div>
+                            <div class="ocr-metric-row"><span>Index ready</span><div><i style="@WidthStyle(IndexReadyCount, SafeTotal)"></i></div><strong>@IndexReadyCount</strong></div>
+                            <div class="ocr-metric-row"><span>Exception ready</span><div><i style="@WidthStyle(ExceptionReadyCount, SafeTotal)"></i></div><strong>@ExceptionReadyCount</strong></div>
+                            <div class="ocr-metric-row"><span>Needs review</span><div><i style="@WidthStyle(NeedsReviewCount, SafeTotal)"></i></div><strong>@NeedsReviewCount</strong></div>
+                        </div>
+                    </section>
+                    <section class="ocr-panel">
+                        <header><div><i class="bi bi-tags" aria-hidden="true"></i><strong>OCR Groups</strong></div><span>@CategoryGroups.Count</span></header>
+                        <div class="ocr-panel-body ocr-group-list">
+                            @foreach (var group in GroupSummaries)
+                            {
+                                <button type="button" class="ocr-group-row" @onclick="() => FilterCategory(group.Name)"><span>@group.Name</span><div><i style="@WidthStyle(group.Count, SafeTotal)"></i></div><strong>@group.Count</strong></button>
+                            }
+                        </div>
+                    </section>
+                    <section class="ocr-panel ocr-panel-wide">
+                        <header><div><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><strong>OCR Review Queue</strong></div><span>@NeedsReviewItems.Count</span></header>
+                        <div class="ocr-panel-body ocr-review-list">
+                            @foreach (var item in NeedsReviewItems.Take(8))
+                            {
+                                <button type="button" class="ocr-review-row" @onclick="() => SelectItem(item)"><strong>@item.Name</strong><span>@ReviewReason(item)</span><em>@ReadinessLabel(item)</em></button>
+                            }
+                        </div>
+                    </section>
+                </div>
+            }
+            else if (_activeView == "Automation")
+            {
+                <div class="ocr-board">
+                    @foreach (var lane in AutomationLanes)
+                    {
+                        <section class="ocr-board-col">
+                            <header><strong>@lane.Title</strong><span>@lane.Items.Count</span></header>
+                            @foreach (var item in lane.Items)
+                            {
+                                <button type="button" class="ocr-board-card" @onclick="() => SelectItem(item)">
+                                    <div><strong>@item.Name</strong><span>@item.Code</span></div>
+                                    <small>@(item.Description ?? "No description provided")</small>
+                                    <em>@ReadinessLabel(item)</em>
+                                </button>
+                            }
+                        </section>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="ocr-table-scroll">
+                    <table class="ocr-table">
+                        <thead><tr><th>OCR Rule</th><th>Code</th><th>Group</th><th>Readiness</th><th>Order</th><th>Status</th><th>Created</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var item in _filtered)
+                            {
+                                <tr @onclick="() => SelectItem(item)">
+                                    <td><div class="ocr-name-cell"><span class="ocr-avatar @AvatarClass(item)">@Initials(item.Name)</span><span><strong>@item.Name</strong><small>@(item.Description ?? "No description provided")</small></span></div></td>
+                                    <td><span class="ocr-code-pill">@item.Code</span></td>
+                                    <td>@GroupLabel(item)</td>
+                                    <td><span class="@ReadinessClass(item)">@ReadinessLabel(item)</span></td>
+                                    <td class="ocr-number">@item.SortOrder</td>
+                                    <td><span class="@StatusClass(item)">@StatusLabel(item)</span></td>
+                                    <td>@item.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</td>
+                                    <td><div class="ocr-row-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(item)" title="Delete"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <aside class="ocr-detail-card" aria-label="Selected OCR rule">
+            @if (_selected is null)
+            {
+                <div class="ocr-detail-empty"><i class="bi bi-upc-scan" aria-hidden="true"></i><h2>OCR command brief</h2><p>Select a rule to review extraction fields, confidence thresholds, indexing workflow, and exception routing.</p></div>
+            }
+            else
+            {
+                <div class="ocr-detail-head"><div><span class="ocr-detail-eyebrow"><i class="bi bi-upc-scan" aria-hidden="true"></i> @GroupLabel(_selected)</span><h2>@_selected.Name</h2><p>@_selected.Code</p></div><span class="@StatusClass(_selected)">@StatusLabel(_selected)</span></div>
+                <div class="ocr-detail-body">
+                    <div class="ocr-detail-summary">
+                        <div><span>Readiness</span><strong>@ReadinessLabel(_selected)</strong></div>
+                        <div><span>Extraction</span><strong>@(IsExtractionReady(_selected) ? "Ready" : "Review")</strong></div>
+                        <div><span>Indexing</span><strong>@(IsIndexReady(_selected) ? "Ready" : "Manual")</strong></div>
+                        <div><span>Exceptions</span><strong>@(IsExceptionReady(_selected) ? "Routed" : "Optional")</strong></div>
+                    </div>
+                    <div class="ocr-config-card"><span>Configuration JSON</span><code>@DisplayConfig(_selected)</code></div>
+                    <div class="ocr-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit Rule</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="DuplicateSelected"><i class="bi bi-files" aria-hidden="true"></i> Duplicate</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="ToggleSelectedStatus"><i class="bi bi-power" aria-hidden="true"></i> @(_selected.IsActive ? "Deactivate" : "Activate")</button>
+                        <button type="button" class="um-btn um-btn-ghost text-danger" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
+                    </div>
+                </div>
+            }
+        </aside>
+    </section>
+</div>
+
+@if (_showForm)
+{
+    <div class="ocr-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="ocr-form-title">
+        <div class="ocr-modal">
+            <div class="ocr-modal-header"><div class="ocr-modal-title"><span class="ocr-modal-icon"><i class="bi bi-upc-scan" aria-hidden="true"></i></span><div><h2 id="ocr-form-title">@(_editId.HasValue ? "Edit OCR Rule" : "Add OCR Rule")</h2><p>Configure document recognition, extraction fields, confidence thresholds, indexing, and exception routing.</p></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseForm" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="ocr-modal-body">
+                    <div class="ocr-form-banner"><i class="bi bi-info-circle" aria-hidden="true"></i><span><strong>OCR governance</strong> Use stable codes and JSON metadata for document class, extraction fields, confidence thresholds, index keys, exception queues, and automation rules.</span></div>
+                    <div class="ocr-form-grid">
+                        <div class="ocr-field"><label>Code <span>*</span></label><InputText @bind-Value="_form.Code" class="ocr-input" placeholder="POLICY_OCR_INDEX" /></div>
+                        <div class="ocr-field"><label>Name <span>*</span></label><InputText @bind-Value="_form.Name" class="ocr-input" placeholder="Policy Document OCR Indexing" /></div>
+                        <div class="ocr-field"><label>Group</label><InputText @bind-Value="_form.Category" class="ocr-input" placeholder="Policy, Claims, Billing, Intake..." /></div>
+                        <div class="ocr-field"><label>Sort Order</label><InputNumber @bind-Value="_form.SortOrder" class="ocr-input" /></div>
+                        <div class="ocr-field ocr-field-wide"><label>Description</label><InputTextArea @bind-Value="_form.Description" class="ocr-input" rows="3" /></div>
+                        <div class="ocr-field ocr-field-wide"><label>Configuration JSON</label><InputTextArea @bind-Value="_form.ConfigurationJson" class="ocr-input ocr-code-input" rows="6" placeholder='{"documentClass":"policy","fields":["policyNumber","insuredName"],"confidence":0.85,"indexKeys":["accountId"],"exceptionQueue":"ocr-review"}' /></div>
+                        <div class="ocr-field ocr-field-wide ocr-check-row"><label><InputCheckbox @bind-Value="_form.IsActive" /> Active for OCR ingestion workflows</label></div>
+                    </div>
+                </div>
+                <div class="ocr-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check2" aria-hidden="true"></i> @(_editId.HasValue ? "Save Changes" : "Create Rule")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showDelete)
+{
+    <div class="ocr-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="ocr-delete-title">
+        <div class="ocr-confirm-modal">
+            <div class="ocr-confirm-icon"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
+            <h2 id="ocr-delete-title">Delete OCR Rule</h2>
+            <p>Delete <strong>@_deleteTarget?.Name</strong>? Existing indexed documents may still reference this setup historically.</p>
+            <div class="ocr-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete">Cancel</button><button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div>
+        </div>
+    </div>
+}
+
+@code {
+    private const string ConfigKind = "OcrIndexingRule";
+    private Guid _tenantId;
+    private bool _loading;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private bool _toastVisible;
+    private string _search = string.Empty;
+    private string _statusFilter = "all";
+    private string _readinessFilter = "all";
+    private string _categoryFilter = "all";
+    private string _activeView = "Library";
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private Guid? _editId;
+    private DocumentConfigItemDto? _selected;
+    private DocumentConfigItemDto? _deleteTarget;
+    private readonly string[] _views = ["Library", "Extraction", "Automation"];
+    private List<DocumentConfigItemDto> _items = [];
+    private List<DocumentConfigItemDto> _filtered = [];
+    private FormModel _form = new();
+
+    private int ActiveCount => _items.Count(x => x.IsActive);
+    private int ExtractionReadyCount => _items.Count(IsExtractionReady);
+    private int IndexReadyCount => _items.Count(IsIndexReady);
+    private int ExceptionReadyCount => _items.Count(IsExceptionReady);
+    private int NeedsReviewCount => _items.Count(NeedsReview);
+    private int SafeTotal => Math.Max(_items.Count, 1);
+    private double OcrScore => _items.Count == 0 ? 0 : (ExtractionReadyCount + IndexReadyCount + ExceptionReadyCount - NeedsReviewCount) * 100d / Math.Max(_items.Count * 3, 1);
+    private List<string> CategoryGroups => _items.Select(GroupLabel).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+    private List<GroupSummary> GroupSummaries => _items.GroupBy(GroupLabel, StringComparer.OrdinalIgnoreCase).Select(g => new GroupSummary(g.Key, g.Count())).OrderByDescending(x => x.Count).ToList();
+    private List<DocumentConfigItemDto> NeedsReviewItems => _items.Where(NeedsReview).OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToList();
+    private List<AutomationLane> AutomationLanes =>
+    [
+        new("Extraction Ready", _filtered.Where(IsExtractionReady).ToList()),
+        new("Index Ready", _filtered.Where(IsIndexReady).ToList()),
+        new("Exception Ready", _filtered.Where(IsExceptionReady).ToList()),
+    ];
+    private string ToastIcon => _toastKind == "success" ? "bi-check-circle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-exclamation-triangle-fill";
+    private string AllKpiClass => KpiClass("all", "ocr-blue");
+    private string ActiveKpiClass => KpiClass("active", "ocr-green");
+    private string ExtractionKpiClass => KpiClass("extraction", "ocr-cyan");
+    private string IndexKpiClass => KpiClass("indexing", "ocr-purple");
+    private string ExceptionKpiClass => KpiClass("exceptions", "ocr-slate");
+    private string ReviewKpiClass => KpiClass("review", "ocr-amber");
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Documents & Forms", null), new("OCR / Indexing Rules", "/tenant/documents/ocr"));
+        _search = GetQueryValue("searchTerm") ?? string.Empty;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchDocumentConfigItemsAsync(_tenantId, ConfigKind, _search, pageSize: 500);
+            _items = result?.Items.OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToList() ?? [];
+            ApplyFilter();
+            _selected ??= _filtered.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilter()
+    {
+        IEnumerable<DocumentConfigItemDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_search)) query = query.Where(MatchesSearch);
+        if (_statusFilter == "active") query = query.Where(x => x.IsActive);
+        else if (_statusFilter == "inactive") query = query.Where(x => !x.IsActive);
+        if (_readinessFilter == "extraction") query = query.Where(IsExtractionReady);
+        else if (_readinessFilter == "indexing") query = query.Where(IsIndexReady);
+        else if (_readinessFilter == "exceptions") query = query.Where(IsExceptionReady);
+        else if (_readinessFilter == "review") query = query.Where(NeedsReview);
+        if (_categoryFilter != "all") query = query.Where(x => string.Equals(GroupLabel(x), _categoryFilter, StringComparison.OrdinalIgnoreCase));
+        _filtered = query.OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToList();
+        if (_selected is not null && !_filtered.Any(x => x.DocumentConfigItemId == _selected.DocumentConfigItemId)) _selected = _filtered.FirstOrDefault();
+    }
+
+    private void ShowAll() { _statusFilter = "all"; _readinessFilter = "all"; _categoryFilter = "all"; ApplyFilter(); }
+    private void ShowActive() { _statusFilter = "active"; _readinessFilter = "all"; ApplyFilter(); }
+    private void ShowExtraction() { _statusFilter = "all"; _readinessFilter = "extraction"; ApplyFilter(); }
+    private void ShowIndexing() { _statusFilter = "all"; _readinessFilter = "indexing"; ApplyFilter(); }
+    private void ShowExceptions() { _statusFilter = "all"; _readinessFilter = "exceptions"; ApplyFilter(); }
+    private void ShowReview() { _statusFilter = "all"; _readinessFilter = "review"; ApplyFilter(); }
+    private void ShowLibrary() => SetView("Library");
+    private void ShowExtractionView() => SetView("Extraction");
+    private void ShowAutomation() => SetView("Automation");
+    private void SetView(string view) => _activeView = view;
+    private void FilterCategory(string category) { _categoryFilter = category; ApplyFilter(); }
+    private void SelectItem(DocumentConfigItemDto item) => _selected = item;
+
+    private void OpenCreate()
+    {
+        _editId = null;
+        _form = new() { ConfigurationJson = "{}", IsActive = true, SortOrder = NextSortOrder };
+        _showForm = true;
+    }
+
+    private void OpenEdit(DocumentConfigItemDto item)
+    {
+        _editId = item.DocumentConfigItemId;
+        _form = new()
+        {
+            Code = item.Code,
+            Name = item.Name,
+            Category = item.Category,
+            Description = item.Description,
+            ConfigurationJson = string.IsNullOrWhiteSpace(item.ConfigurationJson) ? "{}" : item.ConfigurationJson,
+            SortOrder = item.SortOrder,
+            IsActive = item.IsActive,
+        };
+        _showForm = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            var json = NormalizeJson(_form.ConfigurationJson);
+            if (_editId.HasValue)
+            {
+                await Api.UpdateDocumentConfigItemAsync(_editId.Value, new(_form.Code.Trim(), _form.Name.Trim(), Clean(_form.Category), Clean(_form.Description), json, _form.IsActive, _form.SortOrder));
+                ShowToast("OCR rule updated.");
+            }
+            else
+            {
+                var id = await Api.CreateDocumentConfigItemAsync(new(_tenantId, ConfigKind, _form.Code.Trim(), _form.Name.Trim(), Clean(_form.Category), Clean(_form.Description), json, _form.SortOrder));
+                ShowToast("OCR rule created.");
+                _editId = id;
+            }
+            _showForm = false;
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.DocumentConfigItemId == _editId) ?? _selected;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void ConfirmDelete(DocumentConfigItemDto item) { _deleteTarget = item; _showDelete = true; }
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteDocumentConfigItemAsync(_deleteTarget.DocumentConfigItemId);
+            ShowToast("OCR rule deleted.");
+            if (_selected?.DocumentConfigItemId == _deleteTarget.DocumentConfigItemId) _selected = null;
+            _showDelete = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void DuplicateSelected()
+    {
+        if (_selected is null) return;
+        _editId = null;
+        _form = new()
+        {
+            Code = $"{_selected.Code}-COPY",
+            Name = $"{_selected.Name} Copy",
+            Category = _selected.Category,
+            Description = _selected.Description,
+            ConfigurationJson = string.IsNullOrWhiteSpace(_selected.ConfigurationJson) ? "{}" : _selected.ConfigurationJson,
+            SortOrder = NextSortOrder,
+            IsActive = false,
+        };
+        _showForm = true;
+    }
+
+    private async Task ToggleSelectedStatus()
+    {
+        if (_selected is null) return;
+        _saving = true;
+        try
+        {
+            await Api.UpdateDocumentConfigItemAsync(_selected.DocumentConfigItemId, new(_selected.Code, _selected.Name, _selected.Category, _selected.Description, _selected.ConfigurationJson, !_selected.IsActive, _selected.SortOrder));
+            ShowToast(_selected.IsActive ? "OCR rule deactivated." : "OCR rule activated.");
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.DocumentConfigItemId == _selected.DocumentConfigItemId) ?? _selected;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Status update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private Task ExportAsync()
+    {
+        var rows = new List<string> { "Code,Name,Group,Status,Readiness,SortOrder,Created" };
+        rows.AddRange(_filtered.Select(x => string.Join(',', Csv(x.Code), Csv(x.Name), Csv(GroupLabel(x)), Csv(StatusLabel(x)), Csv(ReadinessLabel(x)), x.SortOrder, Csv(x.CreatedDateUtc.ToString("O")))));
+        Nav.NavigateTo("data:text/csv;charset=utf-8," + Uri.EscapeDataString(string.Join(Environment.NewLine, rows)), forceLoad: true);
+        ShowToast("OCR rules export generated.");
+        return Task.CompletedTask;
+    }
+
+    private void CloseForm() { _showForm = false; _form = new(); _editId = null; }
+    private void CancelDelete() { _showDelete = false; _deleteTarget = null; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+
+    private int NextSortOrder => _items.Count == 0 ? 10 : _items.Max(x => x.SortOrder) + 10;
+    private string KpiClass(string key, string tone)
+    {
+        var active = false;
+        if (key == "all") active = _statusFilter == "all" && _readinessFilter == "all" && _categoryFilter == "all";
+        else if (key == "active") active = _statusFilter == "active";
+        else if (key == "extraction") active = _readinessFilter == "extraction";
+        else if (key == "indexing") active = _readinessFilter == "indexing";
+        else if (key == "exceptions") active = _readinessFilter == "exceptions";
+        else if (key == "review") active = _readinessFilter == "review";
+        return $"ocr-kpi-card {tone}{(active ? " ocr-kpi-card-active" : string.Empty)}";
+    }
+
+    private bool MatchesSearch(DocumentConfigItemDto item)
+    {
+        var q = _search.Trim();
+        return Contains(item.Code, q) || Contains(item.Name, q) || Contains(item.Category, q) || Contains(item.Description, q) || Contains(item.ConfigurationJson, q);
+    }
+
+    private static bool Contains(string? value, string search) => value?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
+    private static string GroupLabel(DocumentConfigItemDto item) => string.IsNullOrWhiteSpace(item.Category) ? "Unassigned" : item.Category.Trim();
+    private static string StatusLabel(DocumentConfigItemDto item) => item.IsActive ? "Active" : "Inactive";
+    private static string StatusClass(DocumentConfigItemDto item) => item.IsActive ? "ocr-status ocr-status-active" : "ocr-status ocr-status-inactive";
+    private static bool IsExtractionReady(DocumentConfigItemDto item) => Contains(item.ConfigurationJson, "field") || Contains(item.ConfigurationJson, "extract") || Contains(item.ConfigurationJson, "zone") || Contains(item.ConfigurationJson, "confidence") || Contains(item.Description, "extract");
+    private static bool IsIndexReady(DocumentConfigItemDto item) => Contains(item.ConfigurationJson, "index") || Contains(item.ConfigurationJson, "metadata") || Contains(item.ConfigurationJson, "key") || Contains(item.ConfigurationJson, "route") || Contains(item.Description, "index");
+    private static bool IsExceptionReady(DocumentConfigItemDto item) => Contains(item.ConfigurationJson, "exception") || Contains(item.ConfigurationJson, "queue") || Contains(item.ConfigurationJson, "review") || Contains(item.ConfigurationJson, "threshold") || Contains(item.Description, "exception");
+    private static bool NeedsReview(DocumentConfigItemDto item) => !item.IsActive || string.IsNullOrWhiteSpace(item.Description) || string.IsNullOrWhiteSpace(item.Category) || string.IsNullOrWhiteSpace(item.ConfigurationJson) || item.ConfigurationJson == "{}";
+    private static string ReadinessLabel(DocumentConfigItemDto item) => NeedsReview(item) ? "Needs Review" : IsExceptionReady(item) ? "Exception Ready" : IsIndexReady(item) ? "Index Ready" : IsExtractionReady(item) ? "Extraction Ready" : "Standard";
+    private static string ReadinessClass(DocumentConfigItemDto item) => NeedsReview(item) ? "ocr-readiness ocr-readiness-review" : IsExceptionReady(item) ? "ocr-readiness ocr-readiness-exception" : IsIndexReady(item) ? "ocr-readiness ocr-readiness-index" : IsExtractionReady(item) ? "ocr-readiness ocr-readiness-extraction" : "ocr-readiness ocr-readiness-standard";
+    private static string ReviewReason(DocumentConfigItemDto item)
+    {
+        if (!item.IsActive) return "Inactive OCR rule is not applied to ingestion workflows.";
+        if (string.IsNullOrWhiteSpace(item.Category)) return "Missing OCR rule group.";
+        if (string.IsNullOrWhiteSpace(item.Description)) return "Missing operational description.";
+        if (string.IsNullOrWhiteSpace(item.ConfigurationJson) || item.ConfigurationJson == "{}") return "Missing extraction, indexing, or exception metadata.";
+        return "Review recommended.";
+    }
+    private static string DisplayConfig(DocumentConfigItemDto item) => string.IsNullOrWhiteSpace(item.ConfigurationJson) ? "{}" : item.ConfigurationJson;
+    private static string WidthStyle(int value, int max) => $"width:{Math.Clamp((int)Math.Round(value * 100d / Math.Max(max, 1)), 0, 100)}%;";
+    private static string AvatarClass(DocumentConfigItemDto item)
+    {
+        var index = Math.Abs(item.Code.GetHashCode()) % 6;
+        if (index == 0) return "ocr-av1";
+        if (index == 1) return "ocr-av2";
+        if (index == 2) return "ocr-av3";
+        if (index == 3) return "ocr-av4";
+        if (index == 4) return "ocr-av5";
+        return "ocr-av6";
+    }
+    private static string Initials(string name)
+    {
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant() : name.Length > 0 ? name[..1].ToUpperInvariant() : "?";
+    }
+    private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string Csv(string? value) => string.Concat("\"", (value ?? string.Empty).Replace("\"", "\"\""), "\"");
+    private static string NormalizeJson(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "{}";
+        using var document = JsonDocument.Parse(value);
+        return JsonSerializer.Serialize(document.RootElement, new JsonSerializerOptions { WriteIndented = false });
+    }
+    private string? GetQueryValue(string key)
+    {
+        var query = Nav.ToAbsoluteUri(Nav.Uri).Query;
+        if (string.IsNullOrWhiteSpace(query)) return null;
+        foreach (var part in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var pair = part.Split('=', 2);
+            if (pair.Length == 2 && string.Equals(Uri.UnescapeDataString(pair[0]), key, StringComparison.OrdinalIgnoreCase)) return Uri.UnescapeDataString(pair[1].Replace('+', ' '));
+        }
+        return null;
+    }
+
+    private sealed record GroupSummary(string Name, int Count);
+    private sealed record AutomationLane(string Title, List<DocumentConfigItemDto> Items);
+    private sealed class FormModel
+    {
+        [Required, StringLength(80)] public string Code { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string Name { get; set; } = string.Empty;
+        [StringLength(120)] public string? Category { get; set; }
+        [StringLength(500)] public string? Description { get; set; }
+        [StringLength(4000)] public string? ConfigurationJson { get; set; } = "{}";
+        [Range(0, 9999)] public int SortOrder { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+}

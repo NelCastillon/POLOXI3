@@ -8,96 +8,119 @@
 @using Ams.Application.Features.Operations
 @using Microsoft.AspNetCore.Components.Web
 
-<PageTitle>Task Board â€” AMS</PageTitle>
+<PageTitle>Enterprise Tasks</PageTitle>
 
 @if (_toastMessage is not null)
 {
-    <div class="mt-toast @(_toastIsError ? "mt-toast--danger" : "mt-toast--success")" role="status">
+    <div class="td-toast @(_toastIsError ? "td-toast-danger" : "td-toast-success")" role="status" aria-live="polite">
         <i class="bi @(_toastIsError ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
         <span>@_toastMessage</span>
-        <button type="button" @onclick="ClearToast" aria-label="Close notification"><i class="bi bi-x-lg"></i></button>
+        <button type="button" class="td-toast-close" @onclick="ClearToast" aria-label="Close notification"><i class="bi bi-x-lg"></i></button>
     </div>
 }
 
-<AppPageHeader Title="Task Board"
-               Subtitle="Enterprise command center for agency tasks, workflow routing, service follow-through, and operational execution"
-               Icon="bi-kanban">
-    <Actions>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Task
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<section class="ops-hero">
-    <div>
-        <span class="ops-eyebrow">Tenant Admin Operations</span>
-        <h2>Tasks & Workflow Command Center</h2>
-        <p>Prioritize work, rebalance assignments, review overdue items, and keep agency execution moving across intake, active work, review, approval, and completed lanes.</p>
+<div class="td-enterprise-page">
+<section class="td-hero">
+    <div class="td-hero-left">
+        <span class="td-hero-icon"><i class="bi bi-kanban" aria-hidden="true"></i></span>
+        <div>
+            <div class="td-title-row">
+                <h1>Tasks & Workflow Command Center</h1>
+                <span><i class="bi bi-database-check" aria-hidden="true"></i> Live task data</span>
+                <span><i class="bi bi-diagram-3" aria-hidden="true"></i> Workflow routed</span>
+                <span><i class="bi bi-shield-check" aria-hidden="true"></i> Tenant scoped</span>
+            </div>
+            <p>Prioritize work, rebalance assignments, resolve overdue items, and keep agency execution moving across intake, active work, review, approval, and completed lanes.</p>
+        </div>
     </div>
-    <div class="ops-hero-actions">
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Create Task</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/workbench/tasks")'><i class="bi bi-check2-square"></i> My Tasks</button>
+    <div class="td-hero-actions">
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat td-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/workbench/tasks")'><i class="bi bi-check2-square" aria-hidden="true"></i> My Tasks</button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Task</button>
     </div>
 </section>
 
-<div class="ops-kpi-grid">
-    @KpiCard(null, "bi-kanban-fill", _items.Count, "Total Tasks", "All visible tenant work", "ops-tone-blue")
-    @KpiCard("Open", "bi-play-circle-fill", _items.Count(x => x.StatusCode == "Open"), "Open", "Work still in motion", "ops-tone-green")
-    @KpiCard("Overdue", "bi-alarm-fill", _items.Count(IsOverdue), "Overdue", "Past due and not completed", "ops-tone-red")
-    @KpiCard("Completed", "bi-check-circle-fill", _items.Count(x => x.StatusCode == "Completed"), "Completed", "Closed operational work", "ops-tone-violet")
+<div class="td-kpi-strip">
+    @KpiCard(null, "bi-kanban-fill", _items.Count, "Total Tasks", "All visible tenant work", "td-blue")
+    @KpiCard("Open", "bi-play-circle-fill", _items.Count(x => x.StatusCode == "Open"), "Open", "Work still in motion", "td-green")
+    @KpiCard("Overdue", "bi-alarm-fill", _items.Count(IsOverdue), "Overdue", "Past due and not completed", "td-red")
+    @KpiCard("High", "bi-fire", _items.Count(x => x.PriorityCode == "High" && x.StatusCode != "Completed"), "High Priority", "Active urgent work", "td-amber")
+    @KpiCard("Blocked", "bi-slash-circle", _items.Count(x => x.StatusCode == "Blocked"), "Blocked", "Needs escalation", "td-purple")
+    @KpiCard("Completed", "bi-check-circle-fill", _items.Count(x => x.StatusCode == "Completed"), "Completed", "Closed operational work", "td-cyan")
 </div>
 
-<div class="ops-command-bar">
-    <div class="ops-search-wrap">
-        <i class="bi bi-search" aria-hidden="true"></i>
-        <input @bind="_search" @bind:event="oninput" @onkeyup="OnSearchKeyUp" placeholder="Search tasks, number, type, account, assignee, descriptionâ€¦" />
+<section class="td-workflow-strip" aria-label="Task workflow shortcuts">
+    @foreach (var lane in _lanes)
+    {
+        <button type="button" class="td-workflow-card" @onclick="() => SetStageFocus(lane.Key)">
+            <i class="bi @LaneIcon(lane.Key)" aria-hidden="true"></i>
+            <span><strong>@lane.Label</strong><small>@_filtered.Count(x => x.StageCode == lane.Key) tasks · @lane.Description</small></span>
+        </button>
+    }
+</section>
+
+<div class="td-search-panel">
+    <div class="td-search-wrap">
+        <span class="td-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+        <div class="td-search-body">
+            <label for="taskSearch">Enterprise search</label>
+            <input id="taskSearch" class="td-search-input" @bind="_search" @bind:event="oninput" @onkeyup="OnSearchKeyUp" placeholder="Search tasks, number, type, account, assignee, description…" />
+            <small class="td-search-hint">Press Enter to refresh from the task API.</small>
+        </div>
     </div>
-    <div class="ops-pill-group">
-        <button class="ops-pill @(_activeFilter is null ? "ops-pill--active" : null)" @onclick="() => SetFilter(null)">All <span>@_items.Count</span></button>
-        <button class="ops-pill @(_activeFilter == "Open" ? "ops-pill--active" : null)" @onclick='() => SetFilter("Open")'>Open <span>@_items.Count(x => x.StatusCode == "Open")</span></button>
-        <button class="ops-pill @(_activeFilter == "Overdue" ? "ops-pill--active" : null)" @onclick='() => SetFilter("Overdue")'>Overdue <span>@_items.Count(IsOverdue)</span></button>
-        <button class="ops-pill @(_activeFilter == "Completed" ? "ops-pill--active" : null)" @onclick='() => SetFilter("Completed")'>Completed <span>@_items.Count(x => x.StatusCode == "Completed")</span></button>
-    </div>
-    <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+    <select class="td-filter-select" @bind="_activeFilter" @bind:after="ApplyFilter">
+        <option value="">All tasks</option>
+        <option value="Open">Open</option>
+        <option value="Overdue">Overdue</option>
+        <option value="High">High priority</option>
+        <option value="Blocked">Blocked</option>
+        <option value="Completed">Completed</option>
+    </select>
+    <div class="td-search-result"><strong>@_filtered.Count</strong><span>Visible</span></div>
 </div>
 
 @if (_loadError is not null)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+    <div class="td-error-banner" role="alert">
         <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
     </div>
 }
 
-<section class="ops-layout">
-    <div class="ops-board" aria-label="Task kanban board">
+<div class="td-view-tabs" role="tablist" aria-label="Task workspace views">
+    <button type="button" class="td-view-btn @(_view == "Board" ? "td-view-btn-active" : null)" @onclick='() => SetView("Board")'><i class="bi bi-kanban" aria-hidden="true"></i> Board</button>
+    <button type="button" class="td-view-btn @(_view == "List" ? "td-view-btn-active" : null)" @onclick='() => SetView("List")'><i class="bi bi-list-task" aria-hidden="true"></i> List</button>
+    <button type="button" class="td-view-btn @(_view == "Analytics" ? "td-view-btn-active" : null)" @onclick='() => SetView("Analytics")'><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Analytics</button>
+</div>
+
+<section class="td-content-layout">
+    <div class="td-main-card">
+    @if (_view == "Board")
+    {
+    <div class="td-board" aria-label="Task kanban board">
         @foreach (var lane in _lanes)
         {
             var laneItems = _filtered.Where(x => x.StageCode == lane.Key).ToList();
-            <article class="ops-lane">
-                <header class="ops-lane-header"><div><span class="ops-lane-title">@lane.Label</span><span class="ops-lane-subtitle">@lane.Description</span></div><span class="ops-lane-count">@laneItems.Count</span></header>
-                <div class="ops-lane-list">
+            <article class="td-board-col">
+                <header><div><strong>@lane.Label</strong><small>@lane.Description</small></div><span>@laneItems.Count</span></header>
+                <div class="td-board-list">
                     @if (_loading)
                     {
-                        <div class="ops-empty-mini">Loadingâ€¦</div>
+                        <div class="td-empty-mini">Loading…</div>
                     }
                     else if (laneItems.Count == 0)
                     {
-                        <div class="ops-empty-mini">No visible tasks.</div>
+                        <div class="td-empty-mini">No visible tasks.</div>
                     }
                     else
                     {
                         @foreach (var item in laneItems)
                         {
-                            <button class="ops-work-card @(IsOverdue(item) ? "ops-work-card--risk" : "") @(_selected?.TaskItemId == item.TaskItemId ? "ops-work-card--selected" : null)" @onclick="() => SelectItem(item)">
-                                <div class="ops-work-topline"><span class="ops-work-type @TaskTypeTone(item.TaskTypeCode)">@item.TaskTypeCode</span><span class="ops-priority @PriorityCss(item.PriorityCode)">@item.PriorityCode</span></div>
+                            <button class="td-board-card @(IsOverdue(item) ? "td-board-card-risk" : "") @(_selected?.TaskItemId == item.TaskItemId ? "td-row-selected" : null)" @onclick="() => SelectItem(item)">
+                                <div><span class="td-type @TaskTypeTone(item.TaskTypeCode)">@item.TaskTypeCode</span><span class="td-priority @PriorityCss(item.PriorityCode)">@item.PriorityCode</span></div>
                                 <strong>@item.Title</strong>
-                                <p>@item.TaskNumber</p>
-                                <div class="ops-work-meta"><span><i class="bi bi-building"></i> @(item.RelatedEntityName ?? "No account")</span><span><i class="bi bi-person-check"></i> @AssignedToName(item.AssignedToUserId)</span></div>
-                                <div class="ops-work-meta"><span><i class="bi bi-kanban"></i> @item.StatusCode</span><span class="@(IsOverdue(item) ? "ops-danger-text" : "")"><i class="bi bi-calendar3"></i> @(item.DueDate?.ToString("MMM d") ?? "No due date")</span></div>
+                                <small>@item.TaskNumber</small>
+                                <div><span><i class="bi bi-building" aria-hidden="true"></i> @(item.RelatedEntityName ?? "No account")</span><span><i class="bi bi-person-check" aria-hidden="true"></i> @AssignedToName(item.AssignedToUserId)</span></div>
+                                <div><span><i class="bi bi-kanban" aria-hidden="true"></i> @item.StatusCode</span><span class="@(IsOverdue(item) ? "td-danger-text" : "")"><i class="bi bi-calendar3" aria-hidden="true"></i> @(item.DueDate?.ToString("MMM d") ?? "No due date")</span></div>
                             </button>
                         }
                     }
@@ -105,27 +128,58 @@
             </article>
         }
     </div>
+    }
+    else if (_view == "List")
+    {
+        <div class="td-table-scroll">
+            <table class="td-table">
+                <thead><tr><th>Task</th><th>Type</th><th>Stage</th><th>Priority</th><th>Assigned</th><th>Due</th><th>Status</th></tr></thead>
+                <tbody>
+                    @foreach (var item in _filtered)
+                    {
+                        <tr class="@(_selected?.TaskItemId == item.TaskItemId ? "td-row-selected" : null)" @onclick="() => SelectItem(item)">
+                            <td><div class="td-name-cell"><span class="td-avatar @TaskTypeTone(item.TaskTypeCode)"><i class="bi bi-check2-square" aria-hidden="true"></i></span><span><strong>@item.Title</strong><small>@item.TaskNumber · @(item.RelatedEntityName ?? "No account")</small></span></div></td>
+                            <td><span class="td-type @TaskTypeTone(item.TaskTypeCode)">@item.TaskTypeCode</span></td>
+                            <td>@item.StageCode</td>
+                            <td><span class="td-priority @PriorityCss(item.PriorityCode)">@item.PriorityCode</span></td>
+                            <td>@AssignedToName(item.AssignedToUserId)</td>
+                            <td class="@(IsOverdue(item) ? "td-danger-text" : null)">@(item.DueDate?.ToString("MMM d") ?? "No due")</td>
+                            <td>@item.StatusCode</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else
+    {
+        <div class="td-analytics-grid">
+            <section><h3>Stage distribution</h3>@foreach (var lane in _lanes) { var count = _filtered.Count(x => x.StageCode == lane.Key); <button type="button" class="td-stage-row" @onclick="() => SetStageFocus(lane.Key)"><span>@lane.Label</span><div><i style="width:@Percent(count, Math.Max(_filtered.Count, 1))%"></i></div><strong>@count</strong></button> }</section>
+            <section><h3>Priority risk</h3>@foreach (var priority in _priorities) { var count = _filtered.Count(x => x.PriorityCode == priority); <button type="button" class="td-stage-row" @onclick="() => SetPriorityFocus(priority)"><span>@priority</span><div><i style="width:@Percent(count, Math.Max(_filtered.Count, 1))%"></i></div><strong>@count</strong></button> }</section>
+        </div>
+    }
+    </div>
 
-    <aside class="ops-side-panel" aria-label="Selected task details">
+    <aside class="td-detail-card" aria-label="Selected task details">
         @if (_selected is null)
         {
-            <div class="ops-side-empty"><i class="bi bi-kanban"></i><h3>Select a task</h3><p>Open a task card to review ownership, due date, status, and related workflow context.</p></div>
+            <div class="td-detail-empty"><i class="bi bi-kanban"></i><h3>Select a task</h3><p>Open a task card to review ownership, due date, status, and related workflow context.</p></div>
         }
         else
         {
-            <div class="ops-detail-header"><span class="ops-work-type @TaskTypeTone(_selected.TaskTypeCode)">@_selected.TaskTypeCode</span><button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _selected = null"><i class="bi bi-x-lg"></i></button></div>
+            <div class="td-detail-head"><span class="td-type @TaskTypeTone(_selected.TaskTypeCode)">@_selected.TaskTypeCode</span><button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _selected = null"><i class="bi bi-x-lg"></i></button></div>
             <h3>@_selected.Title</h3>
             <p>@_selected.Description</p>
-            <dl class="ops-detail-list">
+            <dl class="td-detail-list">
                 <div><dt>Task #</dt><dd>@_selected.TaskNumber</dd></div>
                 <div><dt>Assigned</dt><dd>@AssignedToName(_selected.AssignedToUserId)</dd></div>
-                <div><dt>Account</dt><dd>@(_selected.RelatedEntityName ?? "â€”")</dd></div>
+                <div><dt>Account</dt><dd>@(_selected.RelatedEntityName ?? "—")</dd></div>
                 <div><dt>Stage</dt><dd>@_selected.StageCode</dd></div>
                 <div><dt>Status</dt><dd>@_selected.StatusCode</dd></div>
                 <div><dt>Priority</dt><dd>@_selected.PriorityCode</dd></div>
-                <div><dt>Due</dt><dd class="@(IsOverdue(_selected) ? "ops-danger-text" : "")">@(_selected.DueDate?.ToString("MMM d, yyyy") ?? "Not set")</dd></div>
+                <div><dt>Due</dt><dd class="@(IsOverdue(_selected) ? "td-danger-text" : "")">@(_selected.DueDate?.ToString("MMM d, yyyy") ?? "Not set")</dd></div>
             </dl>
-            <div class="ops-detail-actions">
+            <div class="td-detail-actions">
                 <button class="um-btn um-btn-primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil"></i> Edit</button>
                 <button class="um-btn um-btn-ghost" @onclick="() => ToggleCompleteAsync(_selected)"><i class="bi bi-check2-circle"></i> @(_selected.StatusCode == "Completed" ? "Reopen" : "Complete")</button>
                 <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo($"/workbench/tasks/{_selected.TaskItemId}")'><i class="bi bi-arrow-up-right-square"></i> Detail</button>
@@ -135,34 +189,35 @@
     </aside>
 </section>
 
-<section class="ops-module-grid" aria-label="Tasks and workflows modules">
+<section class="td-module-grid" aria-label="Tasks and workflows modules">
     @foreach (var module in _modules)
     {
-        <button class="ops-module-card" @onclick="() => Nav.NavigateTo(module.Url)">
-            <span class="ops-module-icon"><i class="bi @module.Icon"></i></span><span class="ops-module-content"><strong>@module.Title</strong><small>@module.Description</small></span><i class="bi bi-chevron-right ops-module-arrow"></i>
+        <button class="td-module-card" @onclick="() => Nav.NavigateTo(module.Url)">
+            <span class="td-module-icon"><i class="bi @module.Icon"></i></span><span class="td-module-content"><strong>@module.Title</strong><small>@module.Description</small></span><i class="bi bi-chevron-right td-module-arrow"></i>
         </button>
     }
 </section>
+</div>
 
 @if (_showForm)
 {
-    <div class="mt-modal-backdrop" @onclick="CloseForm">
-        <div class="mt-modal" @onclick:stopPropagation="true">
-            <div class="um-modal-header"><i class="bi bi-kanban"></i><span>@(_editId.HasValue ? "Edit Task" : "New Task")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
+    <div class="td-modal-backdrop" @onclick="CloseForm">
+        <div class="td-modal" @onclick:stopPropagation="true">
+            <div class="td-modal-header"><div class="td-modal-title"><span class="td-modal-icon"><i class="bi bi-kanban"></i></span><div><h2>@(_editId.HasValue ? "Edit enterprise task" : "Create enterprise task")</h2><p>Capture ownership, priority, due date, workflow stage, and service context.</p></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
             <EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator />
-                <div class="um-modal-body"><div class="um-form-grid">
-                    <div class="um-field"><label>Task # <span class="text-danger">*</span></label><InputText @bind-Value="_form.TaskNumber" class="um-input" disabled="@_editId.HasValue" /></div>
-                    <div class="um-field"><label>Title <span class="text-danger">*</span></label><InputText @bind-Value="_form.Title" class="um-input" /></div>
-                    <div class="um-field"><label>Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.TaskTypeCode" class="um-input">@foreach (var type in _taskTypes.Where(x => x.IsActive)) { <option value="@type.TaskTypeCode">@type.TaskTypeName</option> }</InputSelect></div>
-                    <div class="um-field"><label>Assigned To</label><InputSelect @bind-Value="_form.AssignedToUserId" class="um-input"><option value="">Unassigned</option>@foreach (var user in _assignees) { <option value="@user.UserId">@user.Name</option> }</InputSelect></div>
-                    <div class="um-field"><label>Stage <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StageCode" class="um-input"><option>Intake</option><option>In Progress</option><option>Review</option><option>Approval</option><option>Done</option></InputSelect></div>
-                    <div class="um-field"><label>Priority <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.PriorityCode" class="um-input"><option>Low</option><option>Medium</option><option>High</option></InputSelect></div>
-                    <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input"><option>Open</option><option>Completed</option><option>Blocked</option></InputSelect></div>
-                    <div class="um-field"><label>Due Date</label><InputDate @bind-Value="_form.DueDate" class="um-input" /></div>
-                    <div class="um-field"><label>Related Entity</label><InputText @bind-Value="_form.RelatedEntityName" class="um-input" /></div>
-                    <div class="um-field um-field--full"><label>Description</label><InputTextArea @bind-Value="_form.Description" class="um-input" rows="4" /></div>
+                <div class="td-modal-body"><div class="td-form-banner"><i class="bi bi-shield-check" aria-hidden="true"></i><span><strong>Workflow-safe update</strong><span>Changes are saved through the existing task item API and stay tenant scoped.</span></span></div><div class="td-form-grid">
+                    <div class="td-field"><label>Task # <span>*</span></label><InputText @bind-Value="_form.TaskNumber" class="td-input" disabled="@_editId.HasValue" /></div>
+                    <div class="td-field"><label>Title <span>*</span></label><InputText @bind-Value="_form.Title" class="td-input" /></div>
+                    <div class="td-field"><label>Type <span>*</span></label><InputSelect @bind-Value="_form.TaskTypeCode" class="td-input">@foreach (var type in _taskTypes.Where(x => x.IsActive)) { <option value="@type.TaskTypeCode">@type.TaskTypeName</option> }</InputSelect></div>
+                    <div class="td-field"><label>Assigned To</label><InputSelect @bind-Value="_form.AssignedToUserId" class="td-input"><option value="">Unassigned</option>@foreach (var user in _assignees) { <option value="@user.UserId">@user.Name</option> }</InputSelect></div>
+                    <div class="td-field"><label>Stage <span>*</span></label><InputSelect @bind-Value="_form.StageCode" class="td-input"><option>Intake</option><option>In Progress</option><option>Review</option><option>Approval</option><option>Done</option></InputSelect></div>
+                    <div class="td-field"><label>Priority <span>*</span></label><InputSelect @bind-Value="_form.PriorityCode" class="td-input"><option>Low</option><option>Medium</option><option>High</option></InputSelect></div>
+                    <div class="td-field"><label>Status <span>*</span></label><InputSelect @bind-Value="_form.StatusCode" class="td-input"><option>Open</option><option>Completed</option><option>Blocked</option></InputSelect></div>
+                    <div class="td-field"><label>Due Date</label><InputDate @bind-Value="_form.DueDate" class="td-input" /></div>
+                    <div class="td-field"><label>Related Entity</label><InputText @bind-Value="_form.RelatedEntityName" class="td-input" /></div>
+                    <div class="td-field td-field-wide"><label>Description</label><InputTextArea @bind-Value="_form.Description" class="td-input" rows="4" /></div>
                 </div></div>
-                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save</button></div>
+                <div class="td-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_saving ? "Saving…" : "Save Task")</button></div>
             </EditForm>
         </div>
     </div>
@@ -170,12 +225,12 @@
 
 @if (_showDelete && _selected is not null)
 {
-    <div class="mt-modal-backdrop" @onclick="() => _showDelete = false">
-        <div class="um-confirm-dialog mt-confirm" @onclick:stopPropagation="true">
-            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div>
-            <div class="um-confirm-title">Delete task?</div>
-            <div class="um-confirm-text">This will remove <strong>@_selected.Title</strong> from the task board.</div>
-            <div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div>
+    <div class="td-modal-backdrop" @onclick="() => _showDelete = false">
+        <div class="td-confirm-modal" @onclick:stopPropagation="true">
+            <div class="td-confirm-icon"><i class="bi bi-trash"></i></div>
+            <h2>Delete task?</h2>
+            <p>This will remove <strong>@_selected.Title</strong> from the task board.</p>
+            <div class="td-modal-footer"><button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div>
         </div>
     </div>
 }
@@ -192,6 +247,7 @@
     List<TaskTypeDto> _taskTypes = [];
     readonly List<UserOption> _assignees = [];
     string _search = string.Empty;
+    string _view = "Board";
     string? _activeFilter, _loadError;
     string? _toastMessage;
     bool _loading, _saving, _showForm, _showDelete, _toastIsError;
@@ -200,6 +256,7 @@
     TaskFormModel _form = new();
 
     readonly Lane[] _lanes = [new("Intake", "Intake", "New work and triage"), new("In Progress", "In Progress", "Active execution"), new("Review", "Review", "Quality and service checks"), new("Approval", "Approval", "Workflow decisions"), new("Done", "Done", "Completed work")];
+    readonly string[] _priorities = ["High", "Medium", "Low"];
     readonly ModuleLink[] _modules = [new("Agreements", "Manage agreement lifecycle and customer commitments.", "/agreements", "bi-file-earmark-check"), new("Engagements", "Track active customer engagements and delivery status.", "/engagements", "bi-briefcase"), new("Milestones", "Monitor operational milestones and due dates.", "/ops/milestones", "bi-flag"), new("Amendments", "Review agreement amendments and changes.", "/ops/amendments", "bi-pencil-square"), new("Issue Tracker", "Resolve service issues by severity and SLA risk.", "/ops/issues", "bi-bug"), new("Service Requests", "Route and resolve client service requests.", "/ops/service-requests", "bi-tools"), new("Activity History", "Audit operational activity and timeline events.", "/ops/activities", "bi-clock-history"), new("Workflow Canvas", "Approve, reject, return, and track workflow instances.", "/workflow", "bi-diagram-3")];
 
     protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Tasks & Workflows", "/tasks")); await LoadAsync(); }
@@ -221,10 +278,13 @@
                 AssignedToName(x.AssignedToUserId).Contains(search, StringComparison.OrdinalIgnoreCase));
         }
 
-        query = _activeFilter switch { "Open" => query.Where(x => x.StatusCode == "Open"), "Overdue" => query.Where(IsOverdue), "Completed" => query.Where(x => x.StatusCode == "Completed"), _ => query };
-        _filtered = query.OrderBy(IsOverdue).ThenBy(x => x.DueDate).ToList();
+        query = _activeFilter switch { "Open" => query.Where(x => x.StatusCode == "Open"), "Overdue" => query.Where(IsOverdue), "High" => query.Where(x => x.PriorityCode == "High" && x.StatusCode != "Completed"), "Blocked" => query.Where(x => x.StatusCode == "Blocked"), "Completed" => query.Where(x => x.StatusCode == "Completed"), var key when _lanes.Any(l => l.Key == key) => query.Where(x => x.StageCode == key), var key when _priorities.Contains(key) => query.Where(x => x.PriorityCode == key), _ => query };
+        _filtered = query.OrderByDescending(IsOverdue).ThenBy(x => x.DueDate ?? DateOnly.MaxValue).ThenByDescending(x => x.PriorityCode == "High").ToList();
     }
     void SetFilter(string? key) { _activeFilter = key; ApplyFilter(); }
+    void SetView(string view) => _view = view;
+    void SetStageFocus(string stage) { _activeFilter = _activeFilter == stage ? null : stage; _view = "Board"; ApplyFilter(); }
+    void SetPriorityFocus(string priority) { _activeFilter = _activeFilter == priority ? null : priority; _view = "List"; ApplyFilter(); }
     void SelectItem(TaskItemDto item) => _selected = item;
     void OpenCreate() { _editId = null; _form = new() { TaskNumber = $"TASK-{DateTime.UtcNow:yyyyMMddHHmmss}", TaskTypeCode = _taskTypes.FirstOrDefault(x => x.TaskTypeCode == "Admin")?.TaskTypeCode ?? _taskTypes.FirstOrDefault(x => x.IsActive)?.TaskTypeCode ?? "Task", AssignedToUserId = TenantAdminUserId, DueDate = DateOnly.FromDateTime(DateTime.Today) }; _showForm = true; }
     void OpenEdit(TaskItemDto item) { _editId = item.TaskItemId; _form = new() { TaskNumber = item.TaskNumber, Title = item.Title, Description = item.Description, TaskTypeCode = item.TaskTypeCode, StageCode = item.StageCode, PriorityCode = item.PriorityCode, StatusCode = item.StatusCode, RelatedEntityName = item.RelatedEntityName, AssignedToUserId = item.AssignedToUserId, DueDate = item.DueDate }; _showForm = true; }
@@ -300,11 +360,13 @@
         }
     }
     static bool IsOverdue(TaskItemDto item) => item.StatusCode != "Completed" && item.DueDate.HasValue && item.DueDate.Value < DateOnly.FromDateTime(DateTime.Today);
-    static string PriorityCss(string priority) => priority == "High" ? "ops-priority-high" : priority == "Low" ? "ops-priority-low" : "ops-priority-medium";
-    static string TaskTypeTone(string type) => type switch { "Approval" or "Workflow" => "ops-tone-violet", "Billing" => "ops-tone-amber", "Claim" or "Issue" => "ops-tone-red", "Certificate" or "Document" => "ops-tone-cyan", "Renewal" => "ops-tone-green", _ => "ops-tone-blue" };
+    static string PriorityCss(string priority) => priority == "High" ? "td-priority-high" : priority == "Low" ? "td-priority-low" : "td-priority-medium";
+    static string TaskTypeTone(string type) => type switch { "Approval" or "Workflow" => "td-purple", "Billing" => "td-amber", "Claim" or "Issue" => "td-red", "Certificate" or "Document" => "td-cyan", "Renewal" => "td-green", _ => "td-blue" };
+    static string LaneIcon(string lane) => lane switch { "Intake" => "bi-inbox", "In Progress" => "bi-play-circle", "Review" => "bi-search", "Approval" => "bi-shield-check", "Done" => "bi-check2-circle", _ => "bi-kanban" };
+    static int Percent(int value, int total) => total <= 0 ? 0 : Math.Clamp((int)Math.Round(value * 100d / total), 0, 100);
     string AssignedToName(Guid? userId) => userId is null ? "Unassigned" : _assignees.FirstOrDefault(a => a.UserId == userId)?.Name ?? "Assigned user";
     static string DisplayName(UserDto user) => !string.IsNullOrWhiteSpace(user.DisplayName) ? user.DisplayName! : !string.IsNullOrWhiteSpace(user.FullName) ? user.FullName : !string.IsNullOrWhiteSpace(user.Email) ? user.Email : user.UserName;
-    RenderFragment KpiCard(string? filter, string icon, int value, string label, string subtext, string tone) => @<button class="ops-kpi-card @(_activeFilter == filter ? "ops-kpi-card--active" : null)" @onclick="() => SetFilter(filter)" title="@subtext"><span class="ops-kpi-icon @tone"><i class="bi @icon"></i></span><div><strong>@value</strong><span>@label</span><small>@subtext</small></div></button>;
+    RenderFragment KpiCard(string? filter, string icon, int value, string label, string subtext, string tone) => @<button class="td-kpi-card @tone @(_activeFilter == filter ? "td-kpi-card-active" : null)" @onclick="() => SetFilter(filter)" title="@subtext"><span class="td-kpi-icon"><i class="bi @icon"></i></span><span><strong>@value</strong><em>@label</em><small>@subtext</small></span></button>;
     sealed record UserOption(Guid UserId, string Name);
     sealed record Lane(string Key, string Label, string Description);
     sealed record ModuleLink(string Title, string Description, string Url, string Icon);

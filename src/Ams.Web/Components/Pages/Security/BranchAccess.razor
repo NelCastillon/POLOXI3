@@ -1,0 +1,340 @@
+@page "/tenant/security/branches"
+@namespace Ams.Web.Components.Pages.SecurityAdmin
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Features.Agency
+@implements IDisposable
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Branch Access Command Center — AMS</PageTitle>
+
+<div class="sba-page">
+    <section class="sba-hero">
+        <div class="sba-hero__content">
+            <div class="sba-hero-left">
+                <span class="sba-hero-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span>
+                <div class="sba-hero-title">
+                    <div class="sba-hero__eyebrow">Enterprise branch access command center</div>
+                    <div class="sba-title-row">
+                        <h1>Branch Access Command Center</h1>
+                        <div class="sba-hero__meta">
+                            <span><i class="bi bi-building" aria-hidden="true"></i>@_branches.Count branches</span>
+                            <span><i class="bi bi-people" aria-hidden="true"></i>@AssignedUsers.Count assigned</span>
+                            <span><i class="bi bi-exclamation-octagon" aria-hidden="true"></i>@_branches.Count(IsHighRisk) high risk</span>
+                            <span><i class="bi bi-person-dash" aria-hidden="true"></i>@UnassignedUsers.Count unassigned</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <p>Govern branch-scoped access, inspect operating coverage, and assign users to the right office network for service, reporting, and security workflows.</p>
+        </div>
+        <div class="sba-hero__actions">
+            <button type="button" class="sba-btn sba-btn--light" @onclick="RefreshAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "sba-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="sba-btn sba-btn--light" @onclick="() => OpenAssignUser(_selected)"><i class="bi bi-person-plus" aria-hidden="true"></i> Assign User</button>
+            <button type="button" class="sba-btn sba-btn--primary" @onclick="OpenCreateBranch"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Branch</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger sba-alert" style="border-left:4px solid #dc3545;animation:sba-shake .3s ease" role="alert"><i class="bi bi-exclamation-triangle-fill"></i><span>@_loadError</span></div>
+    }
+
+    <section class="sba-kpi-strip" aria-label="Branch access KPIs">
+        @KpiCard("all", "Total Branches", _branches.Count.ToString(), "Every branch in the tenant network", "bi-building", "blue")
+        @KpiCard("risk", "High Risk", _branches.Count(IsHighRisk).ToString(), "Inactive, uncovered, or incomplete records", "bi-exclamation-octagon", "red")
+        @KpiCard("active", "Active", _branches.Count(b => b.IsActive).ToString(), "Operating locations", "bi-check-circle", "green")
+        @KpiCard("users", "Assigned Users", AssignedUsers.Count.ToString(), "Mapped to branch context", "bi-people", "purple")
+        @KpiCard("unassigned", "Unassigned Users", UnassignedUsers.Count.ToString(), "Missing branch routing", "bi-person-dash", "amber")
+        @KpiCard("coverage", "Coverage", CoverageGroups.Count.ToString(), "States or territories covered", "bi-map", "cyan")
+    </section>
+
+    <section class="sba-workflows" aria-label="Branch workflows">
+        @WorkflowButton("Access review", "Prioritize risky branch assignments", "bi-shield-exclamation", () => SetDashboardFocus("risk", "risk"))
+        @WorkflowButton("Assign users", "Map unassigned identities", "bi-person-plus", () => SetDashboardFocus("unassigned", "users"))
+        @WorkflowButton("Coverage map", "Group by state or territory", "bi-map", () => SetDashboardFocus("coverage", "coverage"))
+        @WorkflowButton("Inactive cleanup", "Review closed branches", "bi-trash3", () => SetDashboardFocus("inactive", "risk"))
+        @WorkflowButton("Data quality", "Find incomplete locations", "bi-clipboard-check", () => SetDashboardFocus("incomplete", "risk"))
+    </section>
+
+    <section class="sba-filter-panel" aria-label="Branch filters">
+        <div class="sba-search"><i class="bi bi-search"></i><input type="search" placeholder="Search branch name, code, city, state, country, or assigned user…" value="@_searchTerm" @oninput="OnSearchInput" /></div>
+        <div class="sba-filter-grid">
+            <label><span>Status</span><select class="form-select" @bind="_statusFilter" @bind:after="ApplyFilters"><option value="">All statuses</option><option value="Active">Active</option><option value="Inactive">Inactive</option></select></label>
+            <label><span>Coverage</span><select class="form-select" @bind="_coverageFilter" @bind:after="ApplyFilters"><option value="">All coverage</option>@foreach (var c in CoverageOptions) { <option value="@c">@c</option> }</select></label>
+            <label><span>Risk</span><select class="form-select" @bind="_riskFilter" @bind:after="ApplyFilters"><option value="">All risk levels</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select></label>
+            <label><span>Sort</span><select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters"><option value="risk">Risk / importance</option><option value="name">Name</option><option value="users">Assigned users</option><option value="coverage">Coverage</option><option value="created">Newest</option></select></label>
+        </div>
+        <button type="button" class="sba-btn sba-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg"></i> Reset</button>
+    </section>
+
+    <nav class="sba-tabs" aria-label="Branch views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="sba-tab @(_activeTab == tab.Key ? "sba-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)"><i class="bi @tab.Icon"></i><span>@tab.Label</span><strong>@TabCount(tab.Key)</strong></button>
+        }
+    </nav>
+
+    <main class="sba-dashboard">
+        <section class="sba-main-card">
+            <div class="sba-card-header">
+                <div><span class="sba-section-kicker">@ActiveViewTitle</span><h2>@(_activeTab == "unassigned" ? UnassignedUsers.Count : FilteredBranches.Count()) records</h2><p>Ranked by inactive status, unassigned access, missing location data, locked users, MFA gaps, and branch coverage.</p></div>
+                <div class="sba-card-actions">
+                    @if (_selectedBranches.Count > 0)
+                    {
+                        <span class="sba-sel-count">@_selectedBranches.Count selected</span>
+                        <button type="button" class="sba-btn sba-btn--ghost" @onclick="OpenBulkAssign"><i class="bi bi-person-plus"></i> Assign</button>
+                        <button type="button" class="sba-btn sba-btn--danger-ghost" @onclick="ConfirmBulkDelete"><i class="bi bi-trash3"></i> Remove</button>
+                    }
+                    <button type="button" class="sba-btn sba-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left"></i> Prev</button><span class="sba-page-indicator">Page @_page of @TotalPages</span><button type="button" class="sba-btn sba-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="sba-loading"><span class="sba-spinner"></span> Loading branch access…</div>
+            }
+            else if (_activeTab == "coverage")
+            {
+                <div class="sba-resource-grid">@foreach (var group in CoverageGroups) { <article class="sba-resource-card"><div class="sba-resource-icon"><i class="bi bi-map"></i></div><div class="sba-resource-meta"><h3>@group.Name</h3><p>@group.Count branches • @group.Active active • @group.Users users</p><div class="sba-mini-bar"><span style="width:@group.Percent%"></span></div></div><button type="button" class="sba-btn sba-btn--ghost" @onclick="() => FilterByCoverage(group.Name)">Open</button></article> }</div>
+            }
+            else if (_activeTab == "unassigned")
+            {
+                @if (!UnassignedUsers.Any()) { <div class="sba-empty"><i class="bi bi-person-check"></i><strong>All users assigned</strong><span>No users are missing branch routing context.</span></div> }
+                else { <div class="sba-table-wrap"><table class="sba-table"><thead><tr><th>User</th><th>Type</th><th>Status</th><th>MFA</th><th>Last Login</th><th class="sba-actions-col">Actions</th></tr></thead><tbody>@foreach (var user in PagedUnassignedUsers) { <tr class="sba-row"><td><div class="sba-user-cell"><div class="sba-avatar" style="@AvatarStyle(user.FullName)">@Initials(user.FullName)</div><div class="sba-user-meta"><strong>@user.FullName</strong><small>@user.Email</small></div></div></td><td><span class="sba-pill sba-pill--blue">@Safe(user.UserTypeCode, "Unknown")</span></td><td>@UserStatusBadge(user)</td><td><i class="bi @(user.MfaEnabled ? "bi-shield-fill-check sba-good" : "bi-shield-x sba-bad")"></i></td><td><span class="sba-date">@FormatRelative(user.LastLoginDateUtc)</span></td><td class="sba-actions-col"><button type="button" class="sba-btn sba-btn--ghost" @onclick="() => OpenAssignUserForUser(user)"><i class="bi bi-person-plus"></i> Assign</button></td></tr> }</tbody></table></div> }
+            }
+            else if (!FilteredBranches.Any())
+            {
+                <div class="sba-empty"><i class="bi bi-diagram-3"></i><strong>No branches found</strong><span>Adjust the active tab, KPI, search, or filters.</span></div>
+            }
+            else
+            {
+                <div class="sba-table-wrap"><table class="sba-table"><thead><tr><th class="sba-check-col"><input type="checkbox" checked="@AllPageSelected" @onchange="ToggleSelectAllPage" /></th><th>Risk</th><th>Branch</th><th>Coverage</th><th>Status</th><th>Users</th><th>Signals</th><th>Created</th><th class="sba-actions-col">Actions</th></tr></thead><tbody>@foreach (var branch in PagedBranches) { <tr class="@(_selected?.BranchId == branch.BranchId ? "sba-row sba-row--selected" : "sba-row")" @onclick="() => SelectRow(branch)"><td class="sba-check-col" @onclick:stopPropagation="true"><input type="checkbox" checked="@IsSelected(branch)" @onchange="() => ToggleSelect(branch)" /></td><td>@RiskBadge(branch)</td><td><div class="sba-branch-cell"><div class="sba-branch-icon" style="@AvatarStyle(branch.BranchName)">@Initials(branch.BranchName)</div><div class="sba-branch-meta"><button type="button" class="sba-link-button" @onclick:stopPropagation="true" @onclick="() => OpenEditBranch(branch)">@branch.BranchName</button><small>@branch.BranchCode</small></div></div></td><td><span class="sba-code-pill">@LocationText(branch)</span></td><td>@BranchStatusBadge(branch)</td><td><span class="sba-count-pill">@AssignedUsersFor(branch).Count</span></td><td><div class="sba-direct-stack">@if (LockedUsersFor(branch).Count > 0) { <span class="sba-pill sba-pill--amber">@LockedUsersFor(branch).Count locked</span> } @if (MfaGapUsersFor(branch).Count > 0) { <span class="sba-pill sba-pill--red">@MfaGapUsersFor(branch).Count MFA gaps</span> } @if (IsIncomplete(branch)) { <span class="sba-pill sba-pill--cyan">Incomplete</span> } @if (!LockedUsersFor(branch).Any() && !MfaGapUsersFor(branch).Any() && !IsIncomplete(branch)) { <span class="sba-muted">Healthy</span> }</div></td><td><span class="sba-date">@branch.CreatedDateUtc.ToString("MMM d, yyyy")</span></td><td class="sba-actions-col"><button type="button" class="sba-icon-btn" @onclick:stopPropagation="true" @onclick="() => ToggleActionMenu(branch)"><i class="bi bi-three-dots-vertical"></i></button>@if (_openActionMenuFor == branch.BranchId) { <div class="sba-menu" role="menu" @onclick:stopPropagation="true"><div class="sba-menu__summary"><strong>@branch.BranchName</strong><span>@branch.BranchCode</span></div><button type="button" class="sba-menu-item" @onclick="() => OpenEditBranch(branch)"><i class="bi bi-pencil"></i><span>Edit branch</span></button><button type="button" class="sba-menu-item" @onclick="() => OpenAssignUser(branch)"><i class="bi bi-person-plus"></i><span>Assign user</span></button><button type="button" class="sba-menu-item" @onclick="() => ReviewUsers(branch)"><i class="bi bi-people"></i><span>Review users</span></button><button type="button" class="sba-menu-item" @onclick="() => CopyBranchCode(branch)"><i class="bi bi-clipboard"></i><span>Copy code</span></button><button type="button" class="sba-menu-item sba-menu-item--danger" @onclick="() => ConfirmDelete(branch)"><i class="bi bi-trash3"></i><span>Remove branch</span></button></div> }</td></tr> }</tbody></table></div>
+            }
+        </section>
+
+        <aside class="sba-side-panel">
+            <section class="sba-panel-card"><span class="sba-section-kicker">Selected branch</span>@if (_selected is null) { <div class="sba-empty sba-empty--compact"><i class="bi bi-cursor"></i><strong>Select a row</strong><span>Choose a branch to inspect access and coverage.</span></div> } else { <div class="sba-selected"><div class="sba-selected__title"><div class="sba-branch-icon sba-branch-icon--lg" style="@AvatarStyle(_selected.BranchName)">@Initials(_selected.BranchName)</div><div><h3>@_selected.BranchName</h3><span>@_selected.BranchCode</span></div></div><div class="sba-score-card sba-score-card--@RiskTone(_selected)"><span>Branch risk score</span><strong>@RiskScore(_selected)</strong><small>@RiskLevel(_selected)</small></div><dl class="sba-detail-list"><div><dt>Location</dt><dd>@LocationText(_selected)</dd></div><div><dt>Status</dt><dd>@(_selected.IsActive ? "Active" : "Inactive")</dd></div><div><dt>Assigned users</dt><dd>@AssignedUsersFor(_selected).Count</dd></div><div><dt>Locked users</dt><dd>@LockedUsersFor(_selected).Count</dd></div><div><dt>MFA gaps</dt><dd>@MfaGapUsersFor(_selected).Count</dd></div><div><dt>Created</dt><dd>@_selected.CreatedDateUtc.ToString("MMM d, yyyy")</dd></div></dl><div class="sba-selected-actions"><button type="button" class="sba-btn sba-btn--primary" @onclick="() => OpenEditBranch(_selected)"><i class="bi bi-pencil"></i> Edit</button><button type="button" class="sba-btn sba-btn--ghost" @onclick="() => OpenAssignUser(_selected)"><i class="bi bi-person-plus"></i> Assign</button><button type="button" class="sba-btn sba-btn--danger-ghost" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash3"></i> Remove</button></div></div> }</section>
+            <section class="sba-panel-card"><span class="sba-section-kicker">Branch users</span>@if (_selected is null || AssignedUsersFor(_selected).Count == 0) { <div class="sba-empty sba-empty--compact"><i class="bi bi-people"></i><strong>No users assigned</strong><span>Assign users to enable branch-specific routing.</span></div> } else { <div class="sba-user-list">@foreach (var user in AssignedUsersFor(_selected).Take(6)) { <div class="sba-user-item"><div class="sba-avatar" style="@AvatarStyle(user.FullName)">@Initials(user.FullName)</div><div><strong>@user.FullName</strong><span>@user.Email</span></div><button type="button" class="sba-icon-btn" @onclick="() => ConfirmUnassignUser(user)"><i class="bi bi-person-dash"></i></button></div> }</div> }</section>
+            <section class="sba-panel-card"><span class="sba-section-kicker">Security intelligence</span><div class="sba-insight-list">@foreach (var insight in Insights) { <div class="sba-insight"><i class="bi @insight.Icon"></i><div><strong>@insight.Title</strong><span>@insight.Description</span></div></div> }</div></section>
+        </aside>
+    </main>
+</div>
+
+@if (_showBranchForm)
+{
+    <div class="sba-modal-backdrop" role="presentation" @onclick="CloseBranchForm"><div class="sba-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true"><div class="sba-modal__header"><i class="bi @(_branchForm.BranchId == Guid.Empty ? "bi-plus-lg" : "bi-pencil-square")"></i><span>@(_branchForm.BranchId == Guid.Empty ? "Create Branch" : "Edit Branch")</span><button type="button" class="sba-icon-btn sba-icon-btn--light ms-auto" @onclick="CloseBranchForm"><i class="bi bi-x-lg"></i></button></div><EditForm EditContext="@_branchEditContext" OnValidSubmit="SaveBranchAsync"><DataAnnotationsValidator /><div class="sba-modal__body"><div class="sba-validation-note"><i class="bi bi-shield-check"></i><div><strong>Enterprise branch validation</strong><span>Branch identity and location data support routing, reporting, and access governance.</span></div></div><div class="sba-form-grid"><label class="sba-field"><span>Branch Code <em>*</em></span><InputText @bind-Value="_branchForm.BranchCode" class="form-control" /></label><label class="sba-field"><span>Branch Name <em>*</em></span><InputText @bind-Value="_branchForm.BranchName" class="form-control" /></label><label class="sba-field"><span>City</span><InputText @bind-Value="_branchForm.City" class="form-control" /></label><label class="sba-field"><span>State / Province</span><InputText @bind-Value="_branchForm.StateProvince" class="form-control" /></label><label class="sba-field"><span>Country Code</span><InputText @bind-Value="_branchForm.CountryCode" class="form-control" /></label><label class="sba-check-field"><InputCheckbox @bind-Value="_branchForm.IsActive" /> <span>Active operating branch</span></label></div>@if (!string.IsNullOrEmpty(_formError)) { <div class="alert alert-danger sba-form-alert"><i class="bi bi-exclamation-circle"></i> @_formError</div> }</div><div class="sba-modal__footer"><button type="button" class="sba-btn sba-btn--ghost" @onclick="CloseBranchForm">Cancel</button><button type="submit" class="sba-btn sba-btn--primary" disabled="@_saving">@if (_saving) { <span class="sba-spin-sm"></span> } Save Branch</button></div></EditForm></div></div>
+}
+
+@if (_showAssignForm)
+{
+    <div class="sba-modal-backdrop" role="presentation" @onclick="CloseAssignForm"><div class="sba-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true"><div class="sba-modal__header"><i class="bi bi-person-plus"></i><span>Assign User to Branch</span><button type="button" class="sba-icon-btn sba-icon-btn--light ms-auto" @onclick="CloseAssignForm"><i class="bi bi-x-lg"></i></button></div><EditForm EditContext="@_assignEditContext" OnValidSubmit="SaveAssignmentAsync"><DataAnnotationsValidator /><div class="sba-modal__body"><div class="sba-validation-note"><i class="bi bi-shield-lock"></i><div><strong>Branch access workflow</strong><span>Assignments update the user's branch context for scoped workflows and reporting.</span></div></div><div class="sba-form-grid"><label class="sba-field"><span>User <em>*</em></span><InputSelect @bind-Value="_assignForm.UserId" class="form-select"><option value="@Guid.Empty">Select user…</option>@foreach (var user in _users.OrderBy(u => u.FullName)) { <option value="@user.UserId">@user.FullName (@user.Email)</option> }</InputSelect></label><label class="sba-field"><span>Branch <em>*</em></span><InputSelect @bind-Value="_assignForm.BranchId" class="form-select"><option value="@Guid.Empty">Select branch…</option>@foreach (var branch in _branches.OrderBy(b => b.BranchName)) { <option value="@branch.BranchId">@branch.BranchName (@branch.BranchCode)</option> }</InputSelect></label></div>@if (!string.IsNullOrEmpty(_formError)) { <div class="alert alert-danger sba-form-alert"><i class="bi bi-exclamation-circle"></i> @_formError</div> }</div><div class="sba-modal__footer"><button type="button" class="sba-btn sba-btn--ghost" @onclick="CloseAssignForm">Cancel</button><button type="submit" class="sba-btn sba-btn--primary" disabled="@_saving">@if (_saving) { <span class="sba-spin-sm"></span> } Save Assignment</button></div></EditForm></div></div>
+}
+
+@if (_showConfirm)
+{
+    <div class="sba-modal-backdrop" role="presentation" @onclick="CloseConfirm"><div class="sba-confirm" role="dialog" aria-modal="true" @onclick:stopPropagation="true"><div class="sba-modal__header"><i class="bi @_confirmIcon"></i><span>Confirm action</span><button type="button" class="sba-icon-btn sba-icon-btn--light ms-auto" @onclick="CloseConfirm" disabled="@_saving"><i class="bi bi-x-lg"></i></button></div><div class="sba-confirm__body"><div class="@(_confirmDanger ? "sba-confirm-icon sba-confirm-icon--danger" : "sba-confirm-icon")"><i class="bi @_confirmIcon"></i></div><div><h3>@_confirmTitle</h3><p>@_confirmMessage</p></div></div><div class="sba-modal__footer"><button type="button" class="sba-btn sba-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button><button type="button" class="@(_confirmDanger ? "sba-btn sba-btn--danger" : "sba-btn sba-btn--primary")" @onclick="ExecuteConfirmedActionAsync" disabled="@_saving">@if (_saving) { <span class="sba-spin-sm"></span> } Confirm</button></div></div></div>
+}
+
+<div class="sba-toast-stack" aria-live="polite" aria-atomic="true">@foreach (var toast in _toasts) { <div class="sba-toast @toast.CssClass"><i class="bi @(toast.CssClass.Contains("danger") ? "bi-exclamation-triangle" : "bi-check-circle")"></i><span>@toast.Message</span><button type="button" @onclick="() => DismissToast(toast.Id)"><i class="bi bi-x"></i></button></div> }</div>
+
+@code {
+    private Guid _tenantId;
+    private Guid _currentUserId;
+    private readonly TabDef[] _tabs = [new("all", "All", "bi-building"), new("risk", "High Risk", "bi-exclamation-octagon"), new("active", "Active", "bi-check-circle"), new("inactive", "Inactive", "bi-dash-circle"), new("unassigned", "Unassigned Users", "bi-person-dash"), new("incomplete", "Incomplete", "bi-clipboard-x"), new("coverage", "Coverage", "bi-map")];
+    private readonly InsightDef[] _baselineInsights = [new("Branch-first routing", "Keep every active user mapped to a branch for servicing and reporting.", "bi-diagram-3"), new("Location completeness", "City, state/province, and country improve territory governance.", "bi-geo-alt"), new("Access lifecycle", "Remove inactive branches only after reassignment and reporting review.", "bi-arrow-left-right")];
+    private List<BranchEntry> _branches = [];
+    private List<UserDto> _users = [];
+    private readonly List<BranchEntry> _selectedBranches = [];
+    private BranchEntry? _selected;
+    private bool _loading = true;
+    private bool _saving;
+    private string? _loadError;
+    private CancellationTokenSource _cts = new();
+    private string _activeTab = "all";
+    private string _activeKpi = "all";
+    private string _searchTerm = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _coverageFilter = string.Empty;
+    private string _riskFilter = string.Empty;
+    private string _sortMode = "risk";
+    private int _page = 1;
+    private const int PageSize = 12;
+    private Guid? _openActionMenuFor;
+    private bool _showBranchForm;
+    private bool _showAssignForm;
+    private string _formError = string.Empty;
+    private BranchFormModel _branchForm = new();
+    private AssignFormModel _assignForm = new();
+    private EditContext _branchEditContext = default!;
+    private EditContext _assignEditContext = default!;
+    private bool _showConfirm;
+    private bool _confirmDanger;
+    private string _confirmTitle = string.Empty;
+    private string _confirmMessage = string.Empty;
+    private string _confirmIcon = "bi-question-circle";
+    private Func<Task>? _confirmedAction;
+    private readonly List<ToastMessage> _toasts = [];
+    private System.Timers.Timer? _debounce;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _currentUserId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Security", "/tenant/security/users"), new("Branch Access", null));
+        _branchEditContext = new(_branchForm);
+        _assignEditContext = new(_assignForm);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        StateHasChanged();
+        try
+        {
+            await _cts.CancelAsync();
+            _cts = new CancellationTokenSource();
+            var token = _cts.Token;
+            var branchesTask = Api.SearchBranchesAsync(_tenantId, _searchTerm.Trim(), pageSize: 1000, cancellationToken: token);
+            var usersTask = Api.SearchUsersAsync(_tenantId, _searchTerm.Trim(), pageSize: 2000, cancellationToken: token);
+            await Task.WhenAll(branchesTask, usersTask);
+            _branches = branchesTask.Result?.Items.Select(BranchEntry.FromDto).ToList() ?? [];
+            _users = usersTask.Result?.Items.ToList() ?? [];
+            _selected = _selected is null ? _branches.FirstOrDefault() : _branches.FirstOrDefault(b => b.BranchId == _selected.BranchId) ?? _branches.FirstOrDefault();
+            _selectedBranches.RemoveAll(selected => _branches.All(b => b.BranchId != selected.BranchId));
+            _page = 1;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { _loadError = $"Failed to load branch access: {ex.Message}"; }
+        finally { _loading = false; StateHasChanged(); }
+    }
+
+    private Task RefreshAsync() => LoadAsync();
+    private async Task OnSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _searchTerm = e.Value?.ToString() ?? string.Empty; _debounce?.Dispose(); _debounce = new System.Timers.Timer(360) { AutoReset = false }; _debounce.Elapsed += async (_, _) => { _debounce?.Dispose(); _debounce = null; await InvokeAsync(LoadAsync); }; _debounce.Start(); await Task.CompletedTask; }
+    private void SetActiveKpi(string key) { _activeKpi = _activeKpi == key ? "all" : key; _activeTab = _activeKpi switch { "risk" => "risk", "active" => "active", "unassigned" => "unassigned", "coverage" => "coverage", _ => "all" }; _page = 1; }
+    private void SetActiveTab(string key) { _activeTab = key; _activeKpi = key is "risk" or "active" or "unassigned" or "coverage" ? key : "all"; _page = 1; }
+    private void SetDashboardFocus(string tab, string sortMode) { _activeTab = tab; _activeKpi = tab is "risk" or "active" or "unassigned" or "coverage" ? tab : "all"; _sortMode = sortMode; _page = 1; }
+    private void ApplyFilters() => _page = 1;
+    private void ClearFilters() { _statusFilter = string.Empty; _coverageFilter = string.Empty; _riskFilter = string.Empty; _sortMode = "risk"; _activeTab = "all"; _activeKpi = "all"; _page = 1; }
+    private bool HasFilters => !string.IsNullOrEmpty(_statusFilter) || !string.IsNullOrEmpty(_coverageFilter) || !string.IsNullOrEmpty(_riskFilter) || _sortMode != "risk" || _activeTab != "all";
+    private List<UserDto> AssignedUsers => _users.Where(u => u.BranchId.HasValue).ToList();
+    private List<UserDto> UnassignedUsers => _users.Where(u => !u.BranchId.HasValue).OrderByDescending(UserRiskScore).ThenBy(u => u.FullName).ToList();
+    private IEnumerable<BranchEntry> TabFiltered => _activeTab switch { "risk" => _branches.Where(IsHighRisk), "active" => _branches.Where(b => b.IsActive), "inactive" => _branches.Where(b => !b.IsActive), "incomplete" => _branches.Where(IsIncomplete), _ => _branches };
+
+    private IEnumerable<BranchEntry> FilteredBranches
+    {
+        get
+        {
+            var query = TabFiltered;
+            if (!string.IsNullOrEmpty(_statusFilter)) query = query.Where(b => _statusFilter == "Active" ? b.IsActive : !b.IsActive);
+            if (!string.IsNullOrEmpty(_coverageFilter)) query = query.Where(b => string.Equals(CoverageName(b), _coverageFilter, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrEmpty(_riskFilter)) query = query.Where(b => RiskLevel(b) == _riskFilter);
+            if (!string.IsNullOrWhiteSpace(_searchTerm)) { var search = _searchTerm.Trim(); query = query.Where(b => b.BranchName.Contains(search, StringComparison.OrdinalIgnoreCase) || b.BranchCode.Contains(search, StringComparison.OrdinalIgnoreCase) || (b.City?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false) || (b.StateProvince?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false) || (b.CountryCode?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false) || AssignedUsersFor(b).Any(u => u.FullName.Contains(search, StringComparison.OrdinalIgnoreCase) || u.Email.Contains(search, StringComparison.OrdinalIgnoreCase))); }
+            return _sortMode switch { "name" => query.OrderBy(b => b.BranchName), "users" => query.OrderByDescending(b => AssignedUsersFor(b).Count).ThenBy(b => b.BranchName), "coverage" => query.OrderBy(b => CoverageName(b)).ThenBy(b => b.BranchName), "created" => query.OrderByDescending(b => b.CreatedDateUtc), _ => query.OrderByDescending(RiskScore).ThenBy(b => b.BranchName) };
+        }
+    }
+
+    private IEnumerable<BranchEntry> PagedBranches => FilteredBranches.Skip((_page - 1) * PageSize).Take(PageSize);
+    private IEnumerable<UserDto> PagedUnassignedUsers => UnassignedUsers.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling((_activeTab == "unassigned" ? UnassignedUsers.Count : FilteredBranches.Count()) / (double)PageSize));
+    private void PreviousPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private string ActiveViewTitle => _tabs.FirstOrDefault(t => t.Key == _activeTab)?.Label ?? "Branches";
+    private int TabCount(string key) => key switch { "risk" => _branches.Count(IsHighRisk), "active" => _branches.Count(b => b.IsActive), "inactive" => _branches.Count(b => !b.IsActive), "unassigned" => UnassignedUsers.Count, "incomplete" => _branches.Count(IsIncomplete), "coverage" => CoverageGroups.Count, _ => _branches.Count };
+    private IEnumerable<string> CoverageOptions => _branches.Select(CoverageName).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    private List<CoverageGroup> CoverageGroups { get { var groups = _branches.GroupBy(CoverageName).ToList(); var max = Math.Max(1, groups.Count == 0 ? 1 : groups.Max(g => g.Count())); return groups.Select(g => new CoverageGroup(g.Key, g.Count(), g.Count(b => b.IsActive), g.Sum(b => AssignedUsersFor(b).Count), (int)Math.Round(g.Count() * 100.0 / max))).OrderByDescending(g => g.Count).ThenBy(g => g.Name).ToList(); } }
+    private void FilterByCoverage(string coverage) { _coverageFilter = coverage; _activeTab = "all"; _activeKpi = "all"; _page = 1; }
+    private void SelectRow(BranchEntry branch) { _selected = branch; _openActionMenuFor = null; }
+    private bool IsSelected(BranchEntry branch) => _selectedBranches.Any(x => x.BranchId == branch.BranchId);
+    private void ToggleSelect(BranchEntry branch) { if (IsSelected(branch)) _selectedBranches.RemoveAll(x => x.BranchId == branch.BranchId); else _selectedBranches.Add(branch); }
+    private bool AllPageSelected => PagedBranches.Any() && PagedBranches.All(IsSelected);
+    private void ToggleSelectAllPage() { var page = PagedBranches.ToList(); if (page.All(IsSelected)) foreach (var branch in page) _selectedBranches.RemoveAll(x => x.BranchId == branch.BranchId); else foreach (var branch in page.Where(b => !IsSelected(b))) _selectedBranches.Add(branch); }
+    private void ToggleActionMenu(BranchEntry branch) => _openActionMenuFor = _openActionMenuFor == branch.BranchId ? null : branch.BranchId;
+    private void ReviewUsers(BranchEntry branch) { _selected = branch; _openActionMenuFor = null; ShowToast($"Reviewing {AssignedUsersFor(branch).Count} user(s) assigned to {branch.BranchName}.", "sba-toast--success"); }
+    private void CopyBranchCode(BranchEntry branch) { _openActionMenuFor = null; ShowToast($"Branch code ready: {branch.BranchCode}", "sba-toast--success"); }
+    private void OpenCreateBranch() { _branchForm = new BranchFormModel { CountryCode = "US", IsActive = true }; _branchEditContext = new(_branchForm); _formError = string.Empty; _showBranchForm = true; _openActionMenuFor = null; }
+    private void OpenEditBranch(BranchEntry branch) { _branchForm = BranchFormModel.FromEntry(branch); _branchEditContext = new(_branchForm); _formError = string.Empty; _showBranchForm = true; _openActionMenuFor = null; }
+    private void CloseBranchForm() { _showBranchForm = false; _formError = string.Empty; }
+
+    private async Task SaveBranchAsync()
+    {
+        if (_saving) return;
+        _saving = true;
+        _formError = string.Empty;
+        try
+        {
+            if (_branchForm.BranchId == Guid.Empty) { await Api.CreateBranchAsync(new Ams.Application.Features.Agency.CreateBranchRequest(_tenantId, _branchForm.BranchCode.Trim().ToUpperInvariant(), _branchForm.BranchName.Trim(), TrimOrNull(_branchForm.City), TrimOrNull(_branchForm.StateProvince), TrimOrNull(_branchForm.CountryCode)?.ToUpperInvariant())); ShowToast($"Branch '{_branchForm.BranchName}' created.", "sba-toast--success"); }
+            else { await Api.UpdateBranchAsync(_branchForm.BranchId, new Ams.Application.Features.Agency.UpdateBranchRequest(_branchForm.BranchCode.Trim().ToUpperInvariant(), _branchForm.BranchName.Trim(), TrimOrNull(_branchForm.City), TrimOrNull(_branchForm.StateProvince), TrimOrNull(_branchForm.CountryCode)?.ToUpperInvariant(), _branchForm.IsActive)); ShowToast($"Branch '{_branchForm.BranchName}' saved.", "sba-toast--success"); }
+            CloseBranchForm();
+            await LoadAsync();
+        }
+        catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private void OpenBulkAssign() => OpenAssignUser(_selectedBranches.FirstOrDefault());
+    private void OpenAssignUser(BranchEntry? branch) { _assignForm = new AssignFormModel { BranchId = branch?.BranchId ?? Guid.Empty }; _assignEditContext = new(_assignForm); _formError = string.Empty; _showAssignForm = true; _openActionMenuFor = null; }
+    private void OpenAssignUserForUser(UserDto user) { _assignForm = new AssignFormModel { UserId = user.UserId, BranchId = _selected?.BranchId ?? Guid.Empty }; _assignEditContext = new(_assignForm); _formError = string.Empty; _showAssignForm = true; }
+    private void CloseAssignForm() { _showAssignForm = false; _formError = string.Empty; }
+
+    private async Task SaveAssignmentAsync()
+    {
+        if (_saving) return;
+        _formError = ValidateAssignment();
+        if (!string.IsNullOrWhiteSpace(_formError)) return;
+        _saving = true;
+        try { await Api.AssignUserBranchAsync(_assignForm.UserId, _assignForm.BranchId, _currentUserId); CloseAssignForm(); ShowToast("Branch assignment saved.", "sba-toast--success"); await LoadAsync(); }
+        catch (Exception ex) { _formError = $"Assignment failed: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private string ValidateAssignment() { if (_assignForm.UserId == Guid.Empty) return "User is required."; if (_assignForm.BranchId == Guid.Empty) return "Branch is required."; return string.Empty; }
+    private void ConfirmUnassignUser(UserDto user) => OpenConfirm("Unassign user?", $"Remove {user.FullName}'s branch assignment?", "bi-person-dash", true, () => UnassignUserAsync(user));
+    private async Task UnassignUserAsync(UserDto user) { try { await Api.AssignUserBranchAsync(user.UserId, null, _currentUserId); CloseConfirm(); ShowToast($"{user.FullName} unassigned from branch.", "sba-toast--success"); await LoadAsync(); } catch (Exception ex) { CloseConfirm(); ShowToast($"Unassign failed: {ex.Message}", "sba-toast--danger"); } }
+    private void ConfirmDelete(BranchEntry branch) => OpenConfirm("Remove branch?", $"Remove '{branch.BranchName}' from branch access workflows? Reassign users before removal when possible.", "bi-trash3", true, () => DeleteBranchAsync(branch));
+    private async Task DeleteBranchAsync(BranchEntry branch) { try { await Api.DeleteBranchAsync(branch.BranchId); CloseConfirm(); ShowToast($"Branch '{branch.BranchName}' removed.", "sba-toast--success"); await LoadAsync(); } catch (Exception ex) { CloseConfirm(); ShowToast($"Remove failed: {ex.Message}", "sba-toast--danger"); } }
+    private void ConfirmBulkDelete() => OpenConfirm("Remove selected branches?", $"Remove {_selectedBranches.Count} selected branch(es)?", "bi-trash3", true, BulkDeleteAsync);
+    private async Task BulkDeleteAsync() { var targets = _selectedBranches.ToList(); var failures = 0; foreach (var branch in targets) try { await Api.DeleteBranchAsync(branch.BranchId); } catch { failures++; } _selectedBranches.Clear(); CloseConfirm(); ShowToast($"Removed {targets.Count - failures} branch(es)." + (failures > 0 ? $" {failures} failed." : string.Empty), failures > 0 ? "sba-toast--danger" : "sba-toast--success"); await LoadAsync(); }
+    private void OpenConfirm(string title, string message, string icon, bool danger, Func<Task> action) { _confirmTitle = title; _confirmMessage = message; _confirmIcon = icon; _confirmDanger = danger; _confirmedAction = action; _showConfirm = true; _openActionMenuFor = null; }
+    private void CloseConfirm() { _showConfirm = false; _confirmedAction = null; }
+    private async Task ExecuteConfirmedActionAsync() { if (_confirmedAction is null) return; _saving = true; try { await _confirmedAction.Invoke(); } finally { _saving = false; } }
+    private void ShowToast(string message, string cssClass) { var toast = new ToastMessage(Guid.NewGuid(), message, cssClass); _toasts.Add(toast); _ = Task.Run(async () => { await Task.Delay(5000); await InvokeAsync(() => DismissToast(toast.Id)); }); }
+    private void DismissToast(Guid id) { _toasts.RemoveAll(t => t.Id == id); StateHasChanged(); }
+    private List<UserDto> AssignedUsersFor(BranchEntry branch) => _users.Where(u => u.BranchId == branch.BranchId).OrderByDescending(UserRiskScore).ThenBy(u => u.FullName).ToList();
+    private List<UserDto> LockedUsersFor(BranchEntry branch) => AssignedUsersFor(branch).Where(u => u.IsLockedOut).ToList();
+    private List<UserDto> MfaGapUsersFor(BranchEntry branch) => AssignedUsersFor(branch).Where(u => !u.MfaEnabled).ToList();
+    private static bool IsIncomplete(BranchEntry branch) => string.IsNullOrWhiteSpace(branch.City) || string.IsNullOrWhiteSpace(branch.StateProvince) || string.IsNullOrWhiteSpace(branch.CountryCode);
+    private static string CoverageName(BranchEntry branch) => string.IsNullOrWhiteSpace(branch.StateProvince) ? "Unassigned" : branch.StateProvince.Trim();
+    private static int UserRiskScore(UserDto user) { var score = 0; if (user.IsLockedOut) score += 30; if (!user.MfaEnabled) score += 20; if (user.LastLoginDateUtc is null) score += 12; else if ((DateTime.UtcNow - user.LastLoginDateUtc.Value).TotalDays >= 30) score += 10; return score; }
+    private int RiskScore(BranchEntry branch) { var score = 0; if (!branch.IsActive) score += 30; if (AssignedUsersFor(branch).Count == 0 && branch.IsActive) score += 20; if (IsIncomplete(branch)) score += 18; score += Math.Min(20, LockedUsersFor(branch).Count * 10); score += Math.Min(20, MfaGapUsersFor(branch).Count * 6); return Math.Min(100, score); }
+    private string RiskLevel(BranchEntry branch) => RiskScore(branch) switch { >= 70 => "Critical", >= 40 => "High", >= 20 => "Medium", _ => "Low" };
+    private string RiskTone(BranchEntry branch) => RiskLevel(branch) switch { "Critical" => "red", "High" => "amber", "Medium" => "cyan", _ => "green" };
+    private bool IsHighRisk(BranchEntry branch) => RiskScore(branch) >= 40;
+    private IEnumerable<InsightDef> Insights { get { var list = new List<InsightDef>(); if (UnassignedUsers.Count > 0) list.Add(new("Unassigned users", $"{UnassignedUsers.Count} user(s) need branch routing context.", "bi-person-dash")); var risky = _branches.Count(IsHighRisk); if (risky > 0) list.Add(new("Branch risk", $"{risky} branch(es) need access or data-quality review.", "bi-exclamation-octagon")); var incomplete = _branches.Count(IsIncomplete); if (incomplete > 0) list.Add(new("Incomplete locations", $"{incomplete} branch(es) are missing city, state, or country data.", "bi-geo-alt")); var inactive = _branches.Count(b => !b.IsActive); if (inactive > 0) list.Add(new("Inactive branches", $"{inactive} branch(es) should be reviewed before removal.", "bi-dash-circle")); list.AddRange(_baselineInsights); return list.Take(5); } }
+    private RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string tone) => @<button type="button" class="sba-kpi-card sba-kpi-card--@tone @(_activeKpi == key ? "sba-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveKpi(key)"><div class="sba-kpi-icon"><i class="bi @icon"></i></div><div class="sba-kpi-body"><span class="sba-kpi-label">@label</span><strong class="sba-kpi-value">@value</strong><span class="sba-kpi-sub">@subtitle</span></div></button>;
+    private RenderFragment WorkflowButton(string title, string description, string icon, System.Action onClick) => @<button type="button" class="sba-workflow" @onclick="onClick"><div class="sba-workflow-icon"><i class="bi @icon"></i></div><div class="sba-workflow-meta"><strong>@title</strong><span>@description</span></div></button>;
+    private RenderFragment RiskBadge(BranchEntry branch) => @<span class="sba-risk-badge sba-risk-badge--@RiskTone(branch)" title="Branch risk score: @RiskScore(branch)/100"><i class="bi bi-shield-fill"></i> @RiskLevel(branch)</span>;
+    private RenderFragment BranchStatusBadge(BranchEntry branch) => branch.IsActive ? @<span class="sba-pill sba-pill--green"><i class="bi bi-check-circle"></i> Active</span> : @<span class="sba-pill sba-pill--amber"><i class="bi bi-dash-circle"></i> Inactive</span>;
+    private RenderFragment UserStatusBadge(UserDto user) => user.IsLockedOut ? @<span class="sba-pill sba-pill--amber"><i class="bi bi-lock"></i> Locked</span> : @<span class="sba-pill @(user.StatusCode.Equals("Active", StringComparison.OrdinalIgnoreCase) ? "sba-pill--green" : "sba-pill--neutral")">@Safe(user.StatusCode, "Unknown")</span>;
+    private static string LocationText(BranchEntry branch) => string.Join(", ", new[] { branch.City, branch.StateProvince, branch.CountryCode }.Where(v => !string.IsNullOrWhiteSpace(v))).Trim() is { Length: > 0 } text ? text : "Location incomplete";
+    private static string FormatRelative(DateTime? dt) => dt is null ? "Never" : (DateTime.UtcNow - dt.Value) switch { var d when d.TotalMinutes < 1 => "Just now", var d when d.TotalHours < 1 => $"{(int)d.TotalMinutes}m ago", var d when d.TotalDays < 1 => $"{(int)d.TotalHours}h ago", var d when d.TotalDays < 7 => $"{(int)d.TotalDays}d ago", var d when d.TotalDays < 30 => $"{(int)(d.TotalDays / 7)}w ago", _ => dt.Value.ToString("MMM d, yyyy") };
+    private static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private static string? TrimOrNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string Initials(string? name) => string.IsNullOrWhiteSpace(name) ? "?" : string.Concat(name.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(w => char.ToUpperInvariant(w[0])));
+    private static readonly string[] _avatarColors = ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#06b6d4", "#6366f1", "#ec4899"];
+    private static string AvatarStyle(string? value) => $"background:{_avatarColors[Math.Abs((value ?? string.Empty).GetHashCode()) % _avatarColors.Length]}";
+    public void Dispose() { _debounce?.Dispose(); _cts.Cancel(); _cts.Dispose(); }
+
+    private sealed class BranchEntry { public Guid BranchId { get; set; } public string BranchCode { get; set; } = string.Empty; public string BranchName { get; set; } = string.Empty; public string? City { get; set; } public string? StateProvince { get; set; } public string? CountryCode { get; set; } public bool IsActive { get; set; } public DateTime CreatedDateUtc { get; set; } public static BranchEntry FromDto(BranchDto dto) => new() { BranchId = dto.BranchId, BranchCode = dto.BranchCode, BranchName = dto.BranchName, City = dto.City, StateProvince = dto.StateProvince, CountryCode = dto.CountryCode, IsActive = dto.IsActive, CreatedDateUtc = dto.CreatedDateUtc }; }
+    private sealed class BranchFormModel { public Guid BranchId { get; set; } [Required(ErrorMessage = "Branch code is required.")] [StringLength(50)] public string BranchCode { get; set; } = string.Empty; [Required(ErrorMessage = "Branch name is required.")] [StringLength(200)] public string BranchName { get; set; } = string.Empty; [StringLength(100)] public string? City { get; set; } [StringLength(100)] public string? StateProvince { get; set; } [StringLength(10)] public string? CountryCode { get; set; } public bool IsActive { get; set; } = true; public static BranchFormModel FromEntry(BranchEntry entry) => new() { BranchId = entry.BranchId, BranchCode = entry.BranchCode, BranchName = entry.BranchName, City = entry.City, StateProvince = entry.StateProvince, CountryCode = entry.CountryCode, IsActive = entry.IsActive }; }
+    private sealed class AssignFormModel { [RequiredGuid(ErrorMessage = "User is required.")] public Guid UserId { get; set; } [RequiredGuid(ErrorMessage = "Branch is required.")] public Guid BranchId { get; set; } }
+    private sealed class RequiredGuidAttribute : ValidationAttribute { public override bool IsValid(object? value) => value is Guid guid && guid != Guid.Empty; }
+    private sealed record TabDef(string Key, string Label, string Icon);
+    private sealed record InsightDef(string Title, string Description, string Icon);
+    private sealed record ToastMessage(Guid Id, string Message, string CssClass);
+    private sealed record CoverageGroup(string Name, int Count, int Active, int Users, int Percent);
+}

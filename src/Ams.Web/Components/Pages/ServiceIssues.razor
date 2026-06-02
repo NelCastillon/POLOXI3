@@ -1,182 +1,320 @@
-﻿@page "/ops/issues"
+@page "/ops/issues"
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Operations
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
-@using Ams.Application.Features.Operations
 
-<PageTitle>Issue Tracker — Operations</PageTitle>
-<AppPageHeader Title="Issue Tracker Administration" Subtitle="Tenant admin oversight for service issues by severity, owner, status, SLA risk, and resolution accountability" Icon="bi-bug">
-    <Actions>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> New Issue</button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
-    </Actions>
-</AppPageHeader>
-<section class="ma-hero twf-hero">
-    <div>
-        <span class="ma-eyebrow">Tenant Administration · Issue Tracker</span>
-        <h2>Tenant Issue Control Center</h2>
-        <p>Administer tenant-wide service issues, severity, ownership, escalation, status, resolution dates, and SLA exposure.</p>
+<PageTitle>Issues</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="isi-toast isi-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="isi-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
-    <div class="ma-hero-actions">
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/ops/service-requests")'><i class="bi bi-tools"></i> Service Requests</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/ops/activities")'><i class="bi bi-clock-history"></i> Activities</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/workflow")'><i class="bi bi-diagram-3"></i> Workflows</button>
-    </div>
-</section>
-<div class="pc-kpi-strip">
-    <div class="pc-kpi-card @(_filter == null ? "pc-kpi-card--active" : "")" @onclick="() => SetFilter(null)" title="All">
-        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-bug-fill"></i></span>
-        <div>
-            <div class="pc-kpi-value">@_items.Count</div>
-            <div class="pc-kpi-label">Total</div>
+}
+
+<div class="isi-enterprise-page">
+    <section class="isi-hero">
+        <div class="isi-hero-left">
+            <span class="isi-hero-icon"><i class="bi bi-bug" aria-hidden="true"></i></span>
+            <div>
+                <div class="isi-title-row">
+                    <h1>Issue Tracker</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> OPS.IssueTracker</span>
+                    <span><i class="bi bi-shield-exclamation" aria-hidden="true"></i> SLA risk command</span>
+                </div>
+                <p>Enterprise operations control center for tenant service issues, severity triage, account impact, resolution accountability, governance queues, and executive risk visibility.</p>
+            </div>
         </div>
-    </div>
-    <div class="pc-kpi-card @(_filter == "High" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("High")' title="High severity">
-        <span class="pc-kpi-icon pc-kpi-icon--danger"><i class="bi bi-exclamation-octagon-fill"></i></span>
-        <div>
-            <div class="pc-kpi-value">@_items.Count(x => x.SeverityCode == "High")</div>
-            <div class="pc-kpi-label">High</div>
+        <div class="isi-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "isi-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_items.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="OpenServiceRequests"><i class="bi bi-tools" aria-hidden="true"></i> Requests</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Issue</button>
         </div>
-    </div>
-    <div class="pc-kpi-card @(_filter == "Open" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Open")' title="Open">
-        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-play-circle-fill"></i></span>
-        <div>
-            <div class="pc-kpi-value">@_items.Count(x => x.StatusCode == "Open")</div>
-            <div class="pc-kpi-label">Open</div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="isi-error-banner" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="isi-kpi-strip" aria-label="Issue KPIs">
+        <button type="button" class="@AllKpiClass" @onclick="ShowAll"><span class="isi-kpi-icon"><i class="bi bi-bug-fill" aria-hidden="true"></i></span><span><strong>@_items.Count</strong><em>Total Issues</em><small>Tenant issue inventory</small></span></button>
+        <button type="button" class="@CriticalKpiClass" @onclick="ShowCritical"><span class="isi-kpi-icon"><i class="bi bi-exclamation-octagon-fill" aria-hidden="true"></i></span><span><strong>@CriticalCount</strong><em>Critical/High</em><small>Immediate triage</small></span></button>
+        <button type="button" class="@OpenKpiClass" @onclick="ShowOpen"><span class="isi-kpi-icon"><i class="bi bi-play-circle-fill" aria-hidden="true"></i></span><span><strong>@OpenCount</strong><em>Open</em><small>Unresolved work</small></span></button>
+        <button type="button" class="@ProgressKpiClass" @onclick="ShowInProgress"><span class="isi-kpi-icon"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></span><span><strong>@InProgressCount</strong><em>In Progress</em><small>Active remediation</small></span></button>
+        <button type="button" class="@StaleKpiClass" @onclick="ShowStale"><span class="isi-kpi-icon"><i class="bi bi-clock-history" aria-hidden="true"></i></span><span><strong>@StaleCount</strong><em>Stale</em><small>Older than 14 days</small></span></button>
+        <button type="button" class="@ResolvedKpiClass" @onclick="ShowResolved"><span class="isi-kpi-icon"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span><span><strong>@ResolvedCount</strong><em>Resolved</em><small>Closed loop</small></span></button>
+    </section>
+
+    <section class="isi-workflow-strip" aria-label="Issue workflows">
+        <button type="button" class="isi-workflow-card" @onclick="ShowCommand"><i class="bi bi-kanban" aria-hidden="true"></i><span><strong>Command Center</strong><small>Issue register</small></span></button>
+        <button type="button" class="isi-workflow-card" @onclick="ShowResolution"><i class="bi bi-activity" aria-hidden="true"></i><span><strong>Resolution</strong><small>SLA and closure</small></span></button>
+        <button type="button" class="isi-workflow-card" @onclick="ShowGovernance"><i class="bi bi-shield-check" aria-hidden="true"></i><span><strong>Governance</strong><small>Severity lanes</small></span></button>
+        <button type="button" class="isi-workflow-card" @onclick="OpenActivities"><i class="bi bi-clock-history" aria-hidden="true"></i><span><strong>Activities</strong><small>Operational history</small></span></button>
+        <button type="button" class="isi-workflow-card" @onclick="EscalateSelected"><i class="bi bi-arrow-up-circle" aria-hidden="true"></i><span><strong>Escalate</strong><small>Raise severity</small></span></button>
+    </section>
+
+    <section class="isi-search-panel">
+        <div class="isi-search-wrap">
+            <span class="isi-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="isi-search-body">
+                <label for="isi-search">Issue search</label>
+                <input id="isi-search" class="isi-search-input" @bind="_searchTerm" @bind:event="oninput" @bind:after="ApplyFilter" placeholder="Search issue number, title, severity, status, account, description..." />
+                <span class="isi-search-hint">Search and filters run against loaded tenant issue records and keep KPIs, tabs, and details synchronized.</span>
+            </div>
         </div>
-    </div>
-</div>
-<AppFilterPanel @bind-SearchValue="_searchTerm" OnSearch="OnSearchAsync" SearchPlaceholder="Search issues…" />
-@if (_loadError is not null) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError</div> }
-<div class="um-grid-card">
-    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading…</span></div> }
-    <SfGrid TValue="ServiceIssueDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-        <GridEvents TValue="ServiceIssueDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="25" PageSizes="@(new[] { 25, 50, 100 })" />
-        <GridColumns>
-            <GridColumn Field="IssueNumber" HeaderText="Issue #" Width="130" />
-            <GridColumn Field="Title" HeaderText="Title" Width="280" />
-            <GridColumn Field="SeverityCode" HeaderText="Severity" Width="110" />
-            <GridColumn Field="StatusCode" HeaderText="Status" Width="120" />
-            <GridColumn Field="ResolvedDate" HeaderText="Resolved" Type="ColumnType.Date" Format="d" Width="130" />
-            <GridColumn Field="CreatedDateUtc" HeaderText="Created" Type="ColumnType.DateTime" Format="d" Width="130" />
-            <GridColumn HeaderText="Actions" Width="120" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (ServiceIssueDto)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true" title="Edit"><i class="bi bi-pencil"></i></button>
-                    <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true" title="Delete"><i class="bi bi-trash"></i></button>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
-<SfDialog @bind-Visible="_showForm" Width="560px" IsModal="true" ShowCloseIcon="false">
-    <DialogEvents Closed="ResetForm" />
-    <DialogContent>
-        <div class="um-modal-header">
-            <i class="bi bi-bug"></i>
-            <span>@(_editId.HasValue ? "Edit Issue" : "New Issue")</span>
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false">
-                <i class="bi bi-x-lg"></i>
-            </button>
+        <select class="isi-filter-select" @bind="_severityFilter" @bind:after="ApplyFilter" aria-label="Severity filter">
+            <option value="all">All severity</option>
+            <option value="critical-high">Critical / High</option>
+            <option value="Critical">Critical</option>
+            <option value="High">High</option>
+            <option value="Medium">Medium</option>
+            <option value="Low">Low</option>
+        </select>
+        <select class="isi-filter-select" @bind="_statusFilter" @bind:after="ApplyFilter" aria-label="Status filter">
+            <option value="all">All statuses</option>
+            @foreach (var status in StatusOptions)
+            {
+                <option value="@status">@status</option>
+            }
+        </select>
+        <select class="isi-filter-select" @bind="_accountFilter" @bind:after="ApplyFilter" aria-label="Account filter">
+            <option value="all">All accounts</option>
+            @foreach (var account in _accounts)
+            {
+                <option value="@account.Value">@account.Label</option>
+            }
+        </select>
+        <div class="isi-search-result"><strong>@_filtered.Count</strong><span>records</span></div>
+    </section>
+
+    <nav class="isi-view-tabs" aria-label="Issue views">
+        @foreach (var view in _views)
+        {
+            <button type="button" class="isi-view-btn @(_activeView == view ? "isi-view-btn-active" : null)" @onclick="() => SetView(view)">@view</button>
+        }
+    </nav>
+
+    <section class="isi-content-layout">
+        <div class="isi-main-card">
+            @if (_loading)
+            {
+                <div class="isi-loading"><i class="bi bi-arrow-repeat isi-spin" aria-hidden="true"></i><span>Loading issues...</span></div>
+            }
+            else if (_filtered.Count == 0)
+            {
+                <div class="isi-empty-state"><i class="bi bi-bug" aria-hidden="true"></i><h2>No issues found</h2><p>Adjust filters or create a new service issue for operational tracking.</p><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Issue</button></div>
+            }
+            else if (_activeView == "Resolution")
+            {
+                <div class="isi-analytics-grid">
+                    <section class="isi-panel">
+                        <header><div><i class="bi bi-activity" aria-hidden="true"></i><strong>Resolution Health</strong></div><span>@ResolutionScore.ToString("F0")%</span></header>
+                        <div class="isi-panel-body isi-metric-list">
+                            <div class="isi-metric-row"><span>Open</span><div><i style="@WidthStyle(OpenCount, SafeTotal)"></i></div><strong>@OpenCount</strong></div>
+                            <div class="isi-metric-row"><span>In Progress</span><div><i style="@WidthStyle(InProgressCount, SafeTotal)"></i></div><strong>@InProgressCount</strong></div>
+                            <div class="isi-metric-row"><span>Resolved/Closed</span><div><i style="@WidthStyle(ResolvedCount, SafeTotal)"></i></div><strong>@ResolvedCount</strong></div>
+                            <div class="isi-metric-row"><span>Stale</span><div><i style="@WidthStyle(StaleCount, SafeTotal)"></i></div><strong>@StaleCount</strong></div>
+                        </div>
+                    </section>
+                    <section class="isi-panel">
+                        <header><div><i class="bi bi-buildings" aria-hidden="true"></i><strong>Account Impact</strong></div><span>@AccountSummaries.Count</span></header>
+                        <div class="isi-panel-body isi-group-list">
+                            @foreach (var group in AccountSummaries.Take(8))
+                            {
+                                <button type="button" class="isi-group-row" @onclick="() => FilterAccount(group.Id)"><span>@group.Name</span><div><i style="@WidthStyle(group.Count, SafeTotal)"></i></div><strong>@group.Count</strong></button>
+                            }
+                        </div>
+                    </section>
+                    <section class="isi-panel isi-panel-wide">
+                        <header><div><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><strong>Risk Queue</strong></div><span>@RiskQueue.Count</span></header>
+                        <div class="isi-panel-body isi-review-list">
+                            @foreach (var item in RiskQueue.Take(10))
+                            {
+                                <button type="button" class="isi-review-row" @onclick="() => SelectItem(item)"><strong>@item.IssueNumber</strong><span>@RiskReason(item)</span><em>@ImportanceLabel(item)</em></button>
+                            }
+                        </div>
+                    </section>
+                </div>
+            }
+            else if (_activeView == "Governance")
+            {
+                <div class="isi-board">
+                    @foreach (var lane in GovernanceLanes)
+                    {
+                        <section class="isi-board-col">
+                            <header><strong>@lane.Title</strong><span>@lane.Items.Count</span></header>
+                            @foreach (var item in lane.Items)
+                            {
+                                <button type="button" class="isi-board-card" @onclick="() => SelectItem(item)">
+                                    <div><strong>@item.IssueNumber</strong><span>@item.SeverityCode</span></div>
+                                    <small>@item.Title</small>
+                                    <em>@StatusLabel(item) · @AgeLabel(item)</em>
+                                </button>
+                            }
+                        </section>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="isi-table-scroll">
+                    <table class="isi-table">
+                        <thead><tr><th>Issue</th><th>Account</th><th>Severity</th><th>Status</th><th>Age</th><th>Resolution</th><th>Importance</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var item in _filtered)
+                            {
+                                <tr @onclick="() => SelectItem(item)">
+                                    <td><div class="isi-name-cell"><span class="isi-avatar @AvatarClass(item)">@Initials(item.IssueNumber)</span><span><strong>@item.IssueNumber</strong><small>@item.Title</small></span></div></td>
+                                    <td>@AccountName(item.AccountId)</td>
+                                    <td><span class="@SeverityClass(item)">@SeverityLabel(item)</span></td>
+                                    <td><span class="@StatusClass(item)">@StatusLabel(item)</span></td>
+                                    <td>@AgeLabel(item)</td>
+                                    <td>@ResolutionLabel(item)</td>
+                                    <td><span class="@ImportanceClass(item)">@ImportanceLabel(item)</span></td>
+                                    <td><div class="isi-row-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ToggleResolvedAsync(item)" title="Resolve/Reopen"><i class="bi bi-check2-circle" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(item)" title="Delete"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
         </div>
-        <EditForm Model="_form" OnValidSubmit="SaveAsync">
-            <DataAnnotationsValidator />
-            <div class="um-modal-body">
-                <div class="um-form-grid">
-                    <div class="um-field">
-                        <label>Issue # <span class="text-danger">*</span></label>
-                        <InputText @bind-Value="_form.IssueNumber" class="um-input" />
+
+        <aside class="isi-detail-card" aria-label="Selected issue">
+            @if (_selected is null)
+            {
+                <div class="isi-detail-empty"><i class="bi bi-bug" aria-hidden="true"></i><h2>Issue command brief</h2><p>Select an issue to review severity, account impact, resolution status, risk rationale, and operational actions.</p></div>
+            }
+            else
+            {
+                <div class="isi-detail-head"><div><span class="isi-detail-eyebrow"><i class="bi bi-buildings" aria-hidden="true"></i> @AccountName(_selected.AccountId)</span><h2>@_selected.IssueNumber</h2><p>@_selected.Title</p></div><span class="@SeverityClass(_selected)">@SeverityLabel(_selected)</span></div>
+                <div class="isi-detail-body">
+                    <div class="isi-detail-summary">
+                        <div><span>Status</span><strong>@StatusLabel(_selected)</strong></div>
+                        <div><span>Age</span><strong>@AgeLabel(_selected)</strong></div>
+                        <div><span>Importance</span><strong>@ImportanceLabel(_selected)</strong></div>
+                        <div><span>Resolved</span><strong>@ResolutionLabel(_selected)</strong></div>
                     </div>
-                    <div class="um-field">
-                        <label>Title <span class="text-danger">*</span></label>
-                        <InputText @bind-Value="_form.Title" class="um-input" />
-                    </div>
-                    <div class="um-field">
-                        <label>Severity <span class="text-danger">*</span></label>
-                        <InputSelect @bind-Value="_form.SeverityCode" class="um-input">
-                            <option>Low</option>
-                            <option>Medium</option>
-                            <option>High</option>
-                        </InputSelect>
-                    </div>
-                    <div class="um-field">
-                        <label>Status <span class="text-danger">*</span></label>
-                        <InputSelect @bind-Value="_form.StatusCode" class="um-input">
-                            <option>Open</option>
-                            <option>In Progress</option>
-                            <option>Resolved</option>
-                            <option>Closed</option>
-                        </InputSelect>
-                    </div>
-                    <div class="um-field">
-                        <label>Resolved Date</label>
-                        <InputDate @bind-Value="_form.ResolvedDate" class="um-input" />
-                    </div>
-                    <div class="um-field">
-                        <label>Account Name</label>
-                        <SfDropDownList TValue="string" TItem="AccountOption" DataSource="_accounts" @bind-Value="_form.AccountIdText" AllowFiltering="true" FilterType="Syncfusion.Blazor.DropDowns.FilterType.Contains" ShowClearButton="true" Placeholder="Search account name" CssClass="um-input">
-                            <DropDownListFieldSettings Value="Value" Text="Label" />
-                        </SfDropDownList>
-                    </div>
-                    <div class="um-field um-field--full">
-                        <label>Description</label>
-                        <InputTextArea @bind-Value="_form.Description" class="um-input" rows="3" />
+                    <div class="isi-config-card"><span>Risk brief</span><strong>@RiskReason(_selected)</strong><small>@(_selected.Description ?? "No issue description provided.")</small></div>
+                    <div class="isi-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit Issue</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="DuplicateSelected"><i class="bi bi-files" aria-hidden="true"></i> Duplicate</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="EscalateSelected"><i class="bi bi-arrow-up-circle" aria-hidden="true"></i> Escalate</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => ToggleResolvedAsync(_selected)"><i class="bi bi-check2-circle" aria-hidden="true"></i> @(IsResolved(_selected) ? "Reopen" : "Resolve")</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="OpenActivities"><i class="bi bi-clock-history" aria-hidden="true"></i> Activities</button>
+                        <button type="button" class="um-btn um-btn-ghost text-danger" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
                     </div>
                 </div>
-            </div>
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
-                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button>
-            </div>
-        </EditForm>
-    </DialogContent>
-</SfDialog>
-@if (_showDelete && _deleteTarget is not null)
+            }
+        </aside>
+    </section>
+</div>
+
+@if (_showForm)
 {
-    <div class="mt-modal-backdrop" @onclick="() => _showDelete = false">
-        <div class="um-confirm-dialog mt-confirm" @onclick:stopPropagation="true">
-            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div>
-            <div class="um-confirm-title">Delete issue?</div>
-            <div class="um-confirm-text">This will remove <strong>@_deleteTarget.Title</strong>.</div>
-            <div class="um-modal-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
-                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
-            </div>
+    <div class="isi-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="isi-form-title">
+        <div class="isi-modal">
+            <div class="isi-modal-header"><div class="isi-modal-title"><span class="isi-modal-icon"><i class="bi bi-bug" aria-hidden="true"></i></span><div><h2 id="isi-form-title">@(_editId.HasValue ? "Edit Issue" : "New Issue")</h2><p>Capture severity, status, account impact, resolution date, and operational context.</p></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseForm" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm @key="_form" Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="ShowValidation">
+                <DataAnnotationsValidator />
+                <div class="isi-modal-body">
+                    <div class="isi-form-banner"><i class="bi bi-info-circle" aria-hidden="true"></i><span><strong>Issue workflow</strong> New records are created as Open by the backend; this page immediately syncs selected status and resolution details after create.</span></div>
+                    <div class="isi-form-grid">
+                        <div class="isi-field"><label>Issue # <span>*</span></label><InputText @bind-Value="_form.IssueNumber" class="isi-input" /><ValidationMessage For="() => _form.IssueNumber" class="text-danger" /></div>
+                        <div class="isi-field"><label>Title <span>*</span></label><InputText @bind-Value="_form.Title" class="isi-input" /><ValidationMessage For="() => _form.Title" class="text-danger" /></div>
+                        <div class="isi-field"><label>Severity <span>*</span></label><InputSelect @bind-Value="_form.SeverityCode" class="isi-input"><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></InputSelect><ValidationMessage For="() => _form.SeverityCode" class="text-danger" /></div>
+                        <div class="isi-field"><label>Status <span>*</span></label><InputSelect @bind-Value="_form.StatusCode" class="isi-input"><option>Open</option><option>In Progress</option><option>Resolved</option><option>Closed</option><option>Cancelled</option></InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                        <div class="isi-field"><label>Resolved Date</label><InputDate @bind-Value="_form.ResolvedDate" class="isi-input" /><ValidationMessage For="() => _form.ResolvedDate" class="text-danger" /></div>
+                        <div class="isi-field"><label>Account</label><InputSelect @bind-Value="_form.AccountIdText" class="isi-input"><option value="">Unassigned account</option>@foreach (var account in _accounts){<option value="@account.Value">@account.Label</option>}</InputSelect><ValidationMessage For="() => _form.AccountIdText" class="text-danger" /></div>
+                        <div class="isi-field isi-field-wide"><label>Description</label><InputTextArea @bind-Value="_form.Description" class="isi-input" rows="3" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
+                    </div>
+                </div>
+                <div class="isi-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check2" aria-hidden="true"></i> @(_editId.HasValue ? "Save Changes" : "Create Issue")</button></div>
+            </EditForm>
         </div>
     </div>
 }
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
-<style>
-    @@keyframes um-shake {
-        0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)}
-    }
-</style>
+
+@if (_showDelete)
+{
+    <div class="isi-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="isi-delete-title">
+        <div class="isi-confirm-modal">
+            <div class="isi-confirm-icon"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
+            <h2 id="isi-delete-title">Delete Issue</h2>
+            <p>Delete <strong>@_deleteTarget?.Title</strong>? This removes it from the operational issue tracker.</p>
+            <div class="isi-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete">Cancel</button><button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div>
+        </div>
+    </div>
+}
+
 @code {
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
+    private Guid TenantId { get; set; }
+    private Guid TenantAdminUserId { get; set; }
     private Guid _tenantId;
     private Guid _tenantAdminUserId;
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    string? _searchTerm, _loadError, _filter;
-    bool _loading, _saving, _showForm, _showDelete;
-    Guid? _editId;
-    ServiceIssueDto? _deleteTarget;
-    List<ServiceIssueDto> _items = [], _filtered = [];
-    List<AccountOption> _accounts = [];
-    SfToast _toast = default!;
-    IssueForm _form = new();
+    private bool _loading;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private bool _toastVisible;
+    private string _searchTerm = string.Empty;
+    private string _severityFilter = "all";
+    private string _statusFilter = "all";
+    private string _accountFilter = "all";
+    private string _activeView = "Command Center";
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private Guid? _editId;
+    private ServiceIssueDto? _selected;
+    private ServiceIssueDto? _deleteTarget;
+    private readonly string[] _views = ["Command Center", "Resolution", "Governance"];
+    private List<ServiceIssueDto> _items = [];
+    private List<ServiceIssueDto> _filtered = [];
+    private List<AccountOption> _accounts = [];
+    private IssueForm _form = new();
+
+    private int CriticalCount => _items.Count(IsCriticalOrHigh);
+    private int OpenCount => _items.Count(IsOpen);
+    private int InProgressCount => _items.Count(IsInProgress);
+    private int ResolvedCount => _items.Count(IsResolved);
+    private int StaleCount => _items.Count(IsStale);
+    private int NeedsReviewCount => _items.Count(NeedsReview);
+    private int SafeTotal => Math.Max(_items.Count, 1);
+    private double ResolutionScore => _items.Count == 0 ? 0 : Math.Clamp((ResolvedCount * 100d + InProgressCount * 35d - StaleCount * 15d) / _items.Count, 0, 100);
+    private List<string> StatusOptions => _items.Select(StatusLabel).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+    private List<AccountSummary> AccountSummaries => _items.GroupBy(x => x.AccountId).Select(g => new AccountSummary(g.Key?.ToString() ?? "unassigned", AccountName(g.Key), g.Count())).OrderByDescending(x => x.Count).ThenBy(x => x.Name).ToList();
+    private List<ServiceIssueDto> RiskQueue => _items.Where(x => NeedsReview(x) || IsCriticalOrHigh(x) || IsStale(x)).OrderByDescending(SeverityRank).ThenBy(x => x.CreatedDateUtc).ToList();
+    private List<GovernanceLane> GovernanceLanes =>
+    [
+        new("Critical / High", _filtered.Where(IsCriticalOrHigh).ToList()),
+        new("Active Work", _filtered.Where(x => IsOpen(x) || IsInProgress(x)).ToList()),
+        new("Resolved", _filtered.Where(IsResolved).ToList()),
+    ];
+    private string ToastIcon => _toastKind == "success" ? "bi-check-circle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-exclamation-triangle-fill";
+    private string AllKpiClass => KpiClass("all", "isi-blue");
+    private string CriticalKpiClass => KpiClass("critical", "isi-red");
+    private string OpenKpiClass => KpiClass("open", "isi-cyan");
+    private string ProgressKpiClass => KpiClass("progress", "isi-purple");
+    private string StaleKpiClass => KpiClass("stale", "isi-amber");
+    private string ResolvedKpiClass => KpiClass("resolved", "isi-green");
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Tasks & Workflows", "/tasks"), new("Issue Tracker", null));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Tasks & Workflows", "/tasks"), new("Issue Tracker", "/ops/issues"));
         await LoadAsync();
     }
 
-    async Task LoadAsync()
+    private async Task LoadAsync()
     {
         _loading = true;
         _loadError = null;
@@ -184,12 +322,14 @@
         {
             await LoadAccountsAsync();
             var result = await Api.SearchServiceIssuesAsync(TenantId, searchTerm: _searchTerm);
-            _items = result?.Items.ToList() ?? [];
+            _items = result?.Items.OrderByDescending(SeverityRank).ThenBy(x => IsResolved(x) ? 1 : 0).ThenBy(x => x.CreatedDateUtc).ToList() ?? [];
             ApplyFilter();
+            _selected ??= _filtered.FirstOrDefault();
         }
         catch (Exception ex)
         {
             _loadError = $"Failed to load issues: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
         }
         finally
         {
@@ -197,17 +337,41 @@
         }
     }
 
-    Task OnSearchAsync() => LoadAsync();
-    void ApplyFilter() => _filtered = _filter switch { "High" => _items.Where(x => x.SeverityCode == "High").ToList(), "Open" => _items.Where(x => x.StatusCode == "Open").ToList(), _ => [.. _items] };
-    void SetFilter(string? f) { _filter = f; ApplyFilter(); }
-    void OnRowSelected(RowSelectEventArgs<ServiceIssueDto> args) => OpenEdit(args.Data);
-    void OpenCreate()
+    private void ApplyFilter()
+    {
+        IEnumerable<ServiceIssueDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm)) query = query.Where(MatchesSearch);
+        if (_severityFilter == "critical-high") query = query.Where(IsCriticalOrHigh);
+        else if (_severityFilter != "all") query = query.Where(x => string.Equals(SeverityLabel(x), _severityFilter, StringComparison.OrdinalIgnoreCase));
+        if (_statusFilter != "all") query = query.Where(x => string.Equals(StatusLabel(x), _statusFilter, StringComparison.OrdinalIgnoreCase));
+        if (_accountFilter != "all") query = _accountFilter == "unassigned" ? query.Where(x => x.AccountId is null) : query.Where(x => x.AccountId?.ToString() == _accountFilter);
+        _filtered = query.OrderByDescending(SeverityRank).ThenBy(x => IsResolved(x) ? 1 : 0).ThenBy(x => x.CreatedDateUtc).ToList();
+        if (_selected is not null && !_filtered.Any(x => x.IssueId == _selected.IssueId)) _selected = _filtered.FirstOrDefault();
+    }
+
+    private void ShowAll() { _severityFilter = "all"; _statusFilter = "all"; _accountFilter = "all"; ApplyFilter(); }
+    private void ShowCritical() { _severityFilter = "critical-high"; _statusFilter = "all"; ApplyFilter(); }
+    private void ShowOpen() { _statusFilter = "Open"; _severityFilter = "all"; ApplyFilter(); }
+    private void ShowInProgress() { _statusFilter = "In Progress"; _severityFilter = "all"; ApplyFilter(); }
+    private void ShowStale() { _statusFilter = "all"; _severityFilter = "all"; _filtered = _items.Where(IsStale).OrderBy(x => x.CreatedDateUtc).ToList(); _selected = _filtered.FirstOrDefault(); }
+    private void ShowResolved() { _statusFilter = "Resolved"; _severityFilter = "all"; ApplyFilter(); }
+    private void ShowCommand() => SetView("Command Center");
+    private void ShowResolution() => SetView("Resolution");
+    private void ShowGovernance() => SetView("Governance");
+    private void SetView(string view) => _activeView = view;
+    private void FilterAccount(string accountId) { _accountFilter = accountId; ApplyFilter(); }
+    private void SelectItem(ServiceIssueDto item) => _selected = item;
+    private void OpenServiceRequests() => Nav.NavigateTo("/ops/service-requests");
+    private void OpenActivities() => Nav.NavigateTo("/ops/activities");
+
+    private void OpenCreate()
     {
         _editId = null;
-        _form = new() { IssueNumber = $"ISS-{DateTime.UtcNow:yyyyMMddHHmmss}" };
+        _form = new() { IssueNumber = $"ISS-{DateTime.UtcNow:yyyyMMddHHmmss}", SeverityCode = "Medium", StatusCode = "Open" };
         _showForm = true;
     }
-    void OpenEdit(ServiceIssueDto item)
+
+    private void OpenEdit(ServiceIssueDto item)
     {
         _editId = item.IssueId;
         _form = new()
@@ -215,115 +379,296 @@
             IssueNumber = item.IssueNumber,
             Title = item.Title,
             Description = item.Description,
-            SeverityCode = item.SeverityCode,
-            StatusCode = item.StatusCode,
+            SeverityCode = SeverityLabel(item),
+            StatusCode = StatusLabel(item),
             ResolvedDate = item.ResolvedDate,
-            AccountIdText = item.AccountId?.ToString()
+            AccountIdText = item.AccountId?.ToString() ?? string.Empty
         };
         _showForm = true;
     }
-    void ConfirmDelete(ServiceIssueDto item) { _deleteTarget = item; _showDelete = true; }
-    async Task SaveAsync()
+
+    private async Task SaveAsync()
     {
         _saving = true;
         try
         {
+            Guid? accountId = null;
+            if (!string.IsNullOrWhiteSpace(_form.AccountIdText))
+            {
+                accountId = Guid.Parse(_form.AccountIdText);
+            }
             if (_editId.HasValue)
-                await Api.UpdateServiceIssueAsync(_editId.Value, new()
-                {
-                    IssueNumber = _form.IssueNumber,
-                    Title = _form.Title,
-                    Description = _form.Description,
-                    SeverityCode = _form.SeverityCode,
-                    StatusCode = _form.StatusCode,
-                    ResolvedDate = _form.ResolvedDate,
-                    AccountId = string.IsNullOrWhiteSpace(_form.AccountIdText) ? null : Guid.Parse(_form.AccountIdText),
-                    ModifiedByUserId = TenantAdminUserId
-                });
+            {
+                await UpdateIssueAsync(_editId.Value, accountId);
+                ShowToast("Issue updated.");
+            }
             else
-                await Api.CreateServiceIssueAsync(new()
+            {
+                var id = await Api.CreateServiceIssueAsync(new()
                 {
                     TenantId = TenantId,
-                    IssueNumber = _form.IssueNumber,
-                    Title = _form.Title,
-                    Description = _form.Description,
+                    AccountId = accountId,
+                    IssueNumber = _form.IssueNumber.Trim(),
+                    Title = _form.Title.Trim(),
+                    Description = Clean(_form.Description),
                     SeverityCode = _form.SeverityCode,
-                    AccountId = string.IsNullOrWhiteSpace(_form.AccountIdText) ? null : Guid.Parse(_form.AccountIdText)
+                    CreatedByUserId = TenantAdminUserId
                 });
+                _editId = id;
+                if (!string.Equals(_form.StatusCode, "Open", StringComparison.OrdinalIgnoreCase) || _form.ResolvedDate.HasValue)
+                {
+                    await UpdateIssueAsync(id, accountId);
+                }
+                ShowToast("Issue created.");
+            }
             _showForm = false;
-            await _toast.ShowAsync(new() { Content = _editId.HasValue ? "Issue updated" : "Issue created", CssClass = "e-toast-success" });
             await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.IssueId == _editId) ?? _selected;
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" });
+            ShowToast($"Save failed: {ex.Message}", "danger");
         }
         finally
         {
             _saving = false;
         }
     }
-    async Task ExecuteDeleteAsync()
+
+    private Task UpdateIssueAsync(Guid id, Guid? accountId)
+        => Api.UpdateServiceIssueAsync(id, new()
+        {
+            AccountId = accountId,
+            IssueNumber = _form.IssueNumber.Trim(),
+            Title = _form.Title.Trim(),
+            Description = Clean(_form.Description),
+            SeverityCode = _form.SeverityCode,
+            StatusCode = _form.StatusCode,
+            ResolvedDate = _form.ResolvedDate,
+            ModifiedByUserId = TenantAdminUserId
+        });
+
+    private void ConfirmDelete(ServiceIssueDto item) { _deleteTarget = item; _showDelete = true; }
+    private async Task ExecuteDeleteAsync()
     {
         if (_deleteTarget is null) return;
         _saving = true;
         try
         {
             await Api.DeleteServiceIssueAsync(_deleteTarget.IssueId, TenantAdminUserId);
+            ShowToast("Issue deleted.");
+            if (_selected?.IssueId == _deleteTarget.IssueId) _selected = null;
             _showDelete = false;
-            await _toast.ShowAsync(new() { Content = "Issue deleted", CssClass = "e-toast-success" });
             await LoadAsync();
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" });
+            ShowToast($"Delete failed: {ex.Message}", "danger");
         }
         finally
         {
             _saving = false;
         }
     }
-    void ResetForm() { _form = new(); _editId = null; }
 
-    async Task LoadAccountsAsync()
+    private void DuplicateSelected()
+    {
+        if (_selected is null) return;
+        _editId = null;
+        _form = new()
+        {
+            IssueNumber = $"{_selected.IssueNumber}-COPY",
+            Title = $"Copy of {_selected.Title}",
+            Description = _selected.Description,
+            SeverityCode = SeverityLabel(_selected),
+            StatusCode = "Open",
+            AccountIdText = _selected.AccountId?.ToString() ?? string.Empty
+        };
+        _showForm = true;
+    }
+
+    private async Task ToggleResolvedAsync(ServiceIssueDto item)
+    {
+        _saving = true;
+        try
+        {
+            var resolve = !IsResolved(item);
+            await Api.UpdateServiceIssueAsync(item.IssueId, new()
+            {
+                AccountId = item.AccountId,
+                EngagementId = item.EngagementId,
+                IssueNumber = item.IssueNumber,
+                Title = item.Title,
+                Description = item.Description,
+                SeverityCode = item.SeverityCode,
+                StatusCode = resolve ? "Resolved" : "Open",
+                AssignedToUserId = item.AssignedToUserId,
+                ResolvedDate = resolve ? DateOnly.FromDateTime(DateTime.Today) : null,
+                ModifiedByUserId = TenantAdminUserId
+            });
+            ShowToast(resolve ? "Issue resolved." : "Issue reopened.");
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.IssueId == item.IssueId) ?? _selected;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Resolution update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task EscalateSelected()
+    {
+        if (_selected is null)
+        {
+            ShowToast("Select an issue to escalate.", "warning");
+            return;
+        }
+        var nextSeverity = SeverityLabel(_selected) switch { "Low" => "Medium", "Medium" => "High", "High" => "Critical", _ => "Critical" };
+        _saving = true;
+        try
+        {
+            await Api.UpdateServiceIssueAsync(_selected.IssueId, new()
+            {
+                AccountId = _selected.AccountId,
+                EngagementId = _selected.EngagementId,
+                IssueNumber = _selected.IssueNumber,
+                Title = _selected.Title,
+                Description = _selected.Description,
+                SeverityCode = nextSeverity,
+                StatusCode = IsResolved(_selected) ? "In Progress" : StatusLabel(_selected),
+                AssignedToUserId = _selected.AssignedToUserId,
+                ResolvedDate = IsResolved(_selected) ? null : _selected.ResolvedDate,
+                ModifiedByUserId = TenantAdminUserId
+            });
+            ShowToast($"Issue escalated to {nextSeverity}.");
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.IssueId == _selected.IssueId) ?? _selected;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Escalation failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private Task ExportAsync()
+    {
+        var rows = new List<string> { "Issue,Title,Account,Severity,Status,Age,ResolvedDate,Importance,Description,Created" };
+        rows.AddRange(_filtered.Select(x => string.Join(',', Csv(x.IssueNumber), Csv(x.Title), Csv(AccountName(x.AccountId)), Csv(SeverityLabel(x)), Csv(StatusLabel(x)), Csv(AgeLabel(x)), Csv(ResolutionLabel(x)), Csv(ImportanceLabel(x)), Csv(x.Description), Csv(x.CreatedDateUtc.ToString("O")))));
+        Nav.NavigateTo("data:text/csv;charset=utf-8," + Uri.EscapeDataString(string.Join(Environment.NewLine, rows)), forceLoad: true);
+        ShowToast("Issue export generated.");
+        return Task.CompletedTask;
+    }
+
+    private async Task LoadAccountsAsync()
     {
         if (_accounts.Count > 0) return;
         var result = await Api.SearchAccountsAsync(TenantId);
         _accounts = (result?.Items ?? []).OrderBy(x => x.AccountName).Select(x => new AccountOption(x.AccountId.ToString(), x.AccountName)).ToList();
     }
 
-    sealed record AccountOption(string Value, string Label);
+    private void ShowValidation() => ShowToast("Please fix validation errors before saving.", "danger");
+    private void CloseForm() { _showForm = false; _form = new(); _editId = null; }
+    private void CancelDelete() { _showDelete = false; _deleteTarget = null; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
 
-    sealed class IssueForm
+    private string KpiClass(string key, string tone)
     {
-        [Required, StringLength(50)]
-        public string IssueNumber { get; set; } = string.Empty;
-
-        [Required, StringLength(200)]
-        public string Title { get; set; } = string.Empty;
-
-        [Required, StringLength(50)]
-        public string SeverityCode { get; set; } = "Medium";
-
-        [Required, StringLength(50)]
-        public string StatusCode { get; set; } = "Open";
-
-        public DateOnly? ResolvedDate { get; set; }
-
-        public string? AccountIdText { get; set; }
-
-        [StringLength(2000)]
-        public string? Description { get; set; }
+        var active = key switch
+        {
+            "all" => _severityFilter == "all" && _statusFilter == "all" && _accountFilter == "all",
+            "critical" => _severityFilter == "critical-high" || _severityFilter is "High" or "Critical",
+            "open" => _statusFilter == "Open",
+            "progress" => _statusFilter == "In Progress",
+            "stale" => _filtered.Count > 0 && _filtered.All(IsStale),
+            "resolved" => _statusFilter == "Resolved" || _statusFilter == "Closed",
+            _ => false
+        };
+        return $"isi-kpi-card {tone}{(active ? " isi-kpi-card-active" : string.Empty)}";
     }
 
-    async Task ResolveCurrentUserContextAsync()
+    private bool MatchesSearch(ServiceIssueDto item)
+    {
+        var q = _searchTerm.Trim();
+        return Contains(item.IssueNumber, q) || Contains(item.Title, q) || Contains(item.Description, q) || Contains(item.SeverityCode, q) || Contains(item.StatusCode, q) || Contains(AccountName(item.AccountId), q);
+    }
+
+    private string AccountName(Guid? accountId) => accountId is null ? "Unassigned account" : _accounts.FirstOrDefault(x => string.Equals(x.Value, accountId.Value.ToString(), StringComparison.OrdinalIgnoreCase))?.Label ?? "Account not loaded";
+    private static bool Contains(string? value, string search) => value?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
+    private static string SeverityLabel(ServiceIssueDto item) => string.IsNullOrWhiteSpace(item.SeverityCode) ? "Medium" : item.SeverityCode.Trim();
+    private static string StatusLabel(ServiceIssueDto item) => string.IsNullOrWhiteSpace(item.StatusCode) ? "Open" : item.StatusCode.Trim();
+    private static int SeverityRank(ServiceIssueDto item) => SeverityLabel(item) switch { "Critical" => 4, "High" => 3, "Medium" => 2, "Low" => 1, _ => 2 };
+    private static bool IsCriticalOrHigh(ServiceIssueDto item) => SeverityRank(item) >= 3;
+    private static bool IsOpen(ServiceIssueDto item) => string.Equals(StatusLabel(item), "Open", StringComparison.OrdinalIgnoreCase);
+    private static bool IsInProgress(ServiceIssueDto item) => string.Equals(StatusLabel(item), "In Progress", StringComparison.OrdinalIgnoreCase) || string.Equals(StatusLabel(item), "InProgress", StringComparison.OrdinalIgnoreCase);
+    private static bool IsResolved(ServiceIssueDto item) => string.Equals(StatusLabel(item), "Resolved", StringComparison.OrdinalIgnoreCase) || string.Equals(StatusLabel(item), "Closed", StringComparison.OrdinalIgnoreCase);
+    private static int AgeDays(ServiceIssueDto item) => Math.Max(0, (DateTime.UtcNow.Date - item.CreatedDateUtc.Date).Days);
+    private static bool IsStale(ServiceIssueDto item) => !IsResolved(item) && AgeDays(item) >= 14;
+    private static bool NeedsReview(ServiceIssueDto item) => IsStale(item) || (IsCriticalOrHigh(item) && IsOpen(item)) || item.AccountId is null || string.IsNullOrWhiteSpace(item.Description);
+    private static string AgeLabel(ServiceIssueDto item) => $"{AgeDays(item)}d";
+    private static string ResolutionLabel(ServiceIssueDto item) => item.ResolvedDate.HasValue ? item.ResolvedDate.Value.ToString("MMM d, yyyy") : IsResolved(item) ? "Resolved" : "Unresolved";
+    private static string ImportanceLabel(ServiceIssueDto item) => NeedsReview(item) ? "Needs Review" : IsCriticalOrHigh(item) ? "High Impact" : IsInProgress(item) ? "Active" : IsResolved(item) ? "Resolved" : "Standard";
+    private static string RiskReason(ServiceIssueDto item)
+    {
+        if (item.AccountId is null) return "Issue is not linked to an account for impact ownership.";
+        if (string.IsNullOrWhiteSpace(item.Description)) return "Issue description is missing operational context.";
+        if (IsStale(item)) return "Issue is unresolved for 14 or more days.";
+        if (IsCriticalOrHigh(item) && IsOpen(item)) return "High-impact issue is still open and needs triage.";
+        if (IsInProgress(item)) return "Issue is actively being remediated.";
+        if (IsResolved(item)) return "Issue has been resolved or closed.";
+        return "Issue is available for standard triage.";
+    }
+
+    private static string SeverityClass(ServiceIssueDto item) => SeverityLabel(item) switch { "Critical" => "isi-severity isi-severity-critical", "High" => "isi-severity isi-severity-high", "Medium" => "isi-severity isi-severity-medium", "Low" => "isi-severity isi-severity-low", _ => "isi-severity isi-severity-medium" };
+    private static string StatusClass(ServiceIssueDto item) => IsResolved(item) ? "isi-status isi-status-resolved" : IsInProgress(item) ? "isi-status isi-status-progress" : IsOpen(item) ? "isi-status isi-status-open" : "isi-status isi-status-muted";
+    private static string ImportanceClass(ServiceIssueDto item) => NeedsReview(item) ? "isi-priority isi-priority-risk" : IsCriticalOrHigh(item) ? "isi-priority isi-priority-high" : IsInProgress(item) ? "isi-priority isi-priority-active" : IsResolved(item) ? "isi-priority isi-priority-resolved" : "isi-priority isi-priority-standard";
+    private static string WidthStyle(int value, int max) => $"width:{Math.Clamp((int)Math.Round(value * 100d / Math.Max(max, 1)), 0, 100)}%;";
+    private static string AvatarClass(ServiceIssueDto item)
+    {
+        var index = Math.Abs(item.IssueNumber.GetHashCode()) % 6;
+        if (index == 0) return "isi-av1";
+        if (index == 1) return "isi-av2";
+        if (index == 2) return "isi-av3";
+        if (index == 3) return "isi-av4";
+        if (index == 4) return "isi-av5";
+        return "isi-av6";
+    }
+    private static string Initials(string name)
+    {
+        var parts = name.Split(' ', '-', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant() : name.Length > 0 ? name[..1].ToUpperInvariant() : "?";
+    }
+    private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string Csv(string? value) => string.Concat("\"", (value ?? string.Empty).Replace("\"", "\"\""), "\"");
+
+    private async Task ResolveCurrentUserContextAsync()
     {
         var context = await CurrentUser.RequireAsync();
         TenantId = context.TenantId;
         TenantAdminUserId = context.UserId;
         _tenantId = context.TenantId;
         _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+    }
+
+    private sealed record AccountOption(string Value, string Label);
+    private sealed record AccountSummary(string Id, string Name, int Count);
+    private sealed record GovernanceLane(string Title, List<ServiceIssueDto> Items);
+    private sealed class IssueForm
+    {
+        [Required, StringLength(50)] public string IssueNumber { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string Title { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string SeverityCode { get; set; } = "Medium";
+        [Required, StringLength(50)] public string StatusCode { get; set; } = "Open";
+        public DateOnly? ResolvedDate { get; set; }
+        public string? AccountIdText { get; set; }
+        [StringLength(2000)] public string? Description { get; set; }
     }
 }

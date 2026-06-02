@@ -1,565 +1,395 @@
 @page "/tenant/security/perms"
 @namespace Ams.Web.Components.Pages.SecurityAdmin
+@using System.ComponentModel.DataAnnotations
+@implements IDisposable
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
 
-<PageTitle>Permissions â€” Users &amp; Security</PageTitle>
+<PageTitle>Permission Security Command Center — AMS</PageTitle>
 
-<AppPageHeader Title="Permissions"
-               Subtitle="Define and manage granular permission grants and overrides for users"
-               Icon="bi-key">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> Grant Permission
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<!-- KPI strip -->
-<div class="sp-kpi-strip">
-    <div class="@KpiClass1" @onclick="() => SetKpiFilter(1)" role="button" tabindex="0">
-        <span class="sp-kpi-icon sp-kpi-icon--total"><i class="bi bi-key" aria-hidden="true"></i></span>
-        <div><div class="sp-kpi-value">@_totalCount</div><div class="sp-kpi-label">Total Permissions</div></div>
-        @if (_kpiActive == 1) { <span class="sp-kpi-active-dot" aria-hidden="true"></span> }
-    </div>
-    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0">
-        <span class="sp-kpi-icon sp-kpi-icon--granted"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
-        <div><div class="sp-kpi-value">@_activeCount</div><div class="sp-kpi-label">Active</div></div>
-        @if (_kpiActive == 2) { <span class="sp-kpi-active-dot" aria-hidden="true"></span> }
-    </div>
-    <div class="@KpiClass3" @onclick="() => SetKpiFilter(3)" role="button" tabindex="0">
-        <span class="sp-kpi-icon sp-kpi-icon--denied"><i class="bi bi-x-circle-fill" aria-hidden="true"></i></span>
-        <div><div class="sp-kpi-value">@_inactiveCount</div><div class="sp-kpi-label">Inactive</div></div>
-        @if (_kpiActive == 3) { <span class="sp-kpi-active-dot" aria-hidden="true"></span> }
-    </div>
-    <div class="@KpiClass4" @onclick="() => SetKpiFilter(4)" role="button" tabindex="0">
-        <span class="sp-kpi-icon sp-kpi-icon--expiring"><i class="bi bi-clock" aria-hidden="true"></i></span>
-        <div><div class="sp-kpi-value">@_builtInCount</div><div class="sp-kpi-label">Built-in</div></div>
-        @if (_kpiActive == 4) { <span class="sp-kpi-active-dot" aria-hidden="true"></span> }
-    </div>
-</div>
-
-<!-- Filter toolbar -->
-<AppFilterPanel @bind-SearchValue="_search"
-                OnSearch="OnSearchAsync"
-                SearchPlaceholder="Search permission code, name, or resourceâ€¦">
-    <Filters>
-        <SfDropDownList TValue="string" TItem="LabelValue"
-                        DataSource="_typeOptions"
-                        Placeholder="All Types"
-                        ShowClearButton="true"
-                        Width="160px"
-                        Value="_filterType"
-                        ValueChanged="@((string v) => { _filterType = v; ApplyFilters(); })">
-            <DropDownListFieldSettings Value="Value" Text="Label" />
-        </SfDropDownList>
-        <SfDropDownList TValue="string" TItem="LabelValue"
-                        DataSource="_statusOptions"
-                        Placeholder="All Status"
-                        ShowClearButton="true"
-                        Width="140px"
-                        Value="_filterStatus"
-                        ValueChanged="@((string v) => { _filterStatus = v; ApplyFilters(); })">
-            <DropDownListFieldSettings Value="Value" Text="Label" />
-        </SfDropDownList>
-    </Filters>
-</AppFilterPanel>
-
-<!-- Grid -->
-<div class="um-grid-card app-datagrid">
-    @if (_loading)
-    {
-        <div class="um-loading-overlay" aria-live="polite">
-            <div class="um-spinner" aria-hidden="true"></div>
-            <span>Loadingâ€¦</span>
-        </div>
-    }
-    <SfGrid TValue="PermEntry"
-            DataSource="_entries"
-            AllowPaging="true"
-            AllowSorting="true"
-            EnableHover="true"
-            RowHeight="52">
-        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
-        <GridColumns>
-            <GridColumn Field="@nameof(PermEntry.PermissionName)" HeaderText="Permission" Width="240">
-                <Template>
-                    @{ var e = (PermEntry)context; }
-                    <div class="sp-user-cell">
-                        <span class="sp-avatar" style="@AvatarStyle(e)" aria-hidden="true">@Initials(e.PermissionName)</span>
-                        <div>
-                            <div class="sp-user-name">@e.PermissionName</div>
-                            <div class="sp-user-email">@e.Description</div>
+<div class="per-page">
+    <section class="per-hero">
+        <div class="per-hero__content">
+            <div class="per-hero-left">
+                <span class="per-hero-icon"><i class="bi bi-key" aria-hidden="true"></i></span>
+                <div class="per-hero-title">
+                    <div class="per-hero__eyebrow">Enterprise permission command center</div>
+                    <div class="per-title-row">
+                        <h1>Permission Security Command Center</h1>
+                        <div class="per-hero__meta">
+                            <span><i class="bi bi-key" aria-hidden="true"></i>@_permissions.Count permissions</span>
+                            <span><i class="bi bi-exclamation-octagon" aria-hidden="true"></i>@_permissions.Count(IsHighImpact) high impact</span>
+                            <span><i class="bi bi-person-check" aria-hidden="true"></i>@_overrides.Count(o => o.IsGranted) direct grants</span>
+                            <span><i class="bi bi-diagram-3" aria-hidden="true"></i>@_permissions.Count(p => p.RoleCount > 0) role-backed</span>
                         </div>
                     </div>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(PermEntry.PermissionCode)" HeaderText="Code" Width="200">
-                <Template>
-                    @{ var e = (PermEntry)context; }
-                    <span class="sp-perm-code">@e.PermissionCode</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(PermEntry.ResourceCode)" HeaderText="Resource" Width="170">
-                <Template>
-                    @{ var e = (PermEntry)context; }
-                    <span class="sp-perm-code">@e.ResourceCode</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(PermEntry.ActionCode)" HeaderText="Action" Width="110">
-                <Template>
-                    @{ var e = (PermEntry)context; }
-                    <span class="@TypeBadgeClass(e.ActionCode)">@e.ActionCode</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(PermEntry.IsActive)" HeaderText="Status" Width="110">
-                <Template>
-                    @{ var e = (PermEntry)context; }
-                    <AppStatusBadge Status="@(e.IsActive ? "Active" : "Inactive")" />
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(PermEntry.IsBuiltIn)" HeaderText="Built-in" Width="110">
-                <Template>
-                    @{ var e = (PermEntry)context; }
-                    <span class="@(e.IsBuiltIn ? "um-badge um-badge-warning" : "um-badge um-badge-neutral")">@(e.IsBuiltIn ? "Yes" : "No")</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(PermEntry.RoleNames)" HeaderText="Roles" Width="190" AllowSorting="false">
-                <Template>
-                    @{ var e = (PermEntry)context; }
-                    <div class="um-role-list" title="@RoleTitle(e)">
-                        @foreach (var roleName in RoleNames(e).Take(2))
-                        {
-                            <span class="badge badge-blue">@roleName</span>
-                        }
-                        @if (RoleNames(e).Count > 2)
-                        {
-                            <span class="um-count-pill">+@(RoleNames(e).Count - 2)</span>
-                        }
-                        @if (RoleNames(e).Count == 0)
-                        {
-                            <span class="text-muted">None</span>
-                        }
-                    </div>
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="" Width="90" TextAlign="TextAlign.Right">
-                <Template>
-                    @{ var e = (PermEntry)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenDetail(e)" title="View">
-                        <i class="bi bi-eye" aria-hidden="true"></i>
-                    </button>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
+                </div>
+            </div>
+            <p>Control least-privilege access, inspect role coverage, and manage direct permission overrides across the tenant.</p>
+        </div>
+        <div class="per-hero__actions">
+            <button type="button" class="per-btn per-btn--light" @onclick="RefreshAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "per-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="per-btn per-btn--light" @onclick="() => OpenGrant(_selected)"><i class="bi bi-person-plus" aria-hidden="true"></i> Grant Override</button>
+            <button type="button" class="per-btn per-btn--primary" @onclick="OpenCreatePermission"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Permission</button>
+        </div>
+    </section>
 
-<!-- Add/Edit Drawer -->
-<AppCrudDrawer @bind-Visible="_showDrawer"
-               Title="@(_editModel.PermissionId == Guid.Empty ? "Grant Permission" : "Edit Permission")"
-               OnConfirm="SaveAsync"
-               OnClose="CloseDrawer">
-    <Content>
-        @if (_editContext is not null)
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger per-alert" style="border-left: 4px solid #dc3545; animation: per-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="per-kpi-strip" aria-label="Permission security KPIs">
+        @KpiCard("all", "Total Permissions", _permissions.Count.ToString(), "All permission catalog entries", "bi-key", "blue")
+        @KpiCard("critical", "High Impact", _permissions.Count(IsHighImpact).ToString(), "Manage, delete, admin, or broad direct exposure", "bi-exclamation-octagon", "red")
+        @KpiCard("direct", "Direct Overrides", _permissions.Count(p => p.DirectGrantCount + p.DirectDenyCount > 0).ToString(), "Permissions assigned outside roles", "bi-person-check", "amber")
+        @KpiCard("role", "Role Backed", _permissions.Count(p => p.RoleCount > 0).ToString(), "Permissions inherited through roles", "bi-diagram-3", "green")
+        @KpiCard("builtin", "Built-in", _permissions.Count(p => p.IsBuiltIn).ToString(), "System-defined permission controls", "bi-shield-check", "purple")
+        @KpiCard("unassigned", "Unassigned", _permissions.Count(IsUnassigned).ToString(), "No role or direct coverage", "bi-slash-circle", "cyan")
+    </section>
+
+    <section class="per-workflows" aria-label="Permission workflows">
+        @WorkflowButton("Least privilege", "Review high-impact direct overrides", "bi-shield-exclamation", () => SetDashboardFocus("critical", "risk"))
+        @WorkflowButton("Direct access", "Audit grants outside role design", "bi-person-check", () => SetDashboardFocus("direct", "exposure"))
+        @WorkflowButton("Role coverage", "Validate role-backed permissions", "bi-diagram-3", () => SetDashboardFocus("role", "roles"))
+        @WorkflowButton("Inactive cleanup", "Remove disabled catalog entries", "bi-trash3", () => SetDashboardFocus("inactive", "risk"))
+        @WorkflowButton("Resource map", "Group controls by secured object", "bi-boxes", () => SetDashboardFocus("resources", "resource"))
+    </section>
+
+    <section class="per-filter-panel" aria-label="Permission filters">
+        <div class="per-search"><i class="bi bi-search" aria-hidden="true"></i><input type="search" placeholder="Search permission name, code, resource, action, role, or direct user…" aria-label="Search permissions" value="@_searchTerm" @oninput="OnSearchInput" /></div>
+        <div class="per-filter-grid">
+            <label><span>Resource</span><select class="form-select" @bind="_resourceFilter" @bind:after="ApplyFilters"><option value="">All resources</option>@foreach (var resource in ResourceOptions) { <option value="@resource">@resource</option> }</select></label>
+            <label><span>Action</span><select class="form-select" @bind="_actionFilter" @bind:after="ApplyFilters"><option value="">All actions</option>@foreach (var action in ActionOptions) { <option value="@action">@action</option> }</select></label>
+            <label><span>Source</span><select class="form-select" @bind="_sourceFilter" @bind:after="ApplyFilters"><option value="">All sources</option><option value="Built-in">Built-in</option><option value="Tenant">Tenant</option><option value="Inactive">Inactive</option></select></label>
+            <label><span>Sort</span><select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters"><option value="risk">Risk / importance</option><option value="name">Name</option><option value="resource">Resource</option><option value="roles">Role coverage</option><option value="exposure">Direct exposure</option><option value="created">Newest</option></select></label>
+        </div>
+        <button type="button" class="per-btn per-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+    </section>
+
+    <nav class="per-tabs" aria-label="Permission views">
+        @foreach (var tab in _tabs)
         {
-            <EditForm EditContext="@_editContext">
-                <DataAnnotationsValidator />
-                <div class="um-modal-body"><div class="um-form-grid">
-            @if (!string.IsNullOrWhiteSpace(_formError))
+            <button type="button" class="per-tab @(_activeTab == tab.Key ? "per-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)"><i class="bi @tab.Icon" aria-hidden="true"></i><span>@tab.Label</span><strong>@TabCount(tab.Key)</strong></button>
+        }
+    </nav>
+
+    <main class="per-dashboard">
+        <section class="per-main-card">
+            <div class="per-card-header">
+                <div><span class="per-section-kicker">@ActiveViewTitle</span><h2>@FilteredPermissions.Count() permissions</h2><p>Ranked by enterprise importance: admin/delete/manage actions, direct overrides, role coverage, built-in source, inactive state, and resource breadth.</p></div>
+                <div class="per-card-actions">
+                    @if (_selectedPermissions.Count > 0)
+                    {
+                        <span class="per-sel-count">@_selectedPermissions.Count selected</span>
+                        <button type="button" class="per-btn per-btn--ghost" @onclick="OpenBulkGrant"><i class="bi bi-person-plus" aria-hidden="true"></i> Grant</button>
+                        <button type="button" class="per-btn per-btn--danger-ghost" @onclick="ConfirmBulkDeactivate"><i class="bi bi-slash-circle" aria-hidden="true"></i> Deactivate</button>
+                    }
+                    <button type="button" class="per-btn per-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Prev</button><span class="per-page-indicator">Page @_page of @TotalPages</span><button type="button" class="per-btn per-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
             {
-                <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_formError
+                <div class="per-loading"><span class="per-spinner"></span> Loading permissions…</div>
+            }
+            else if (!FilteredPermissions.Any())
+            {
+                <div class="per-empty"><i class="bi bi-key" aria-hidden="true"></i><strong>No permissions found</strong><span>Adjust the active tab, KPI, search, or filters.</span></div>
+            }
+            else if (_activeTab == "resources")
+            {
+                <div class="per-resource-grid">
+                    @foreach (var group in ResourceGroups)
+                    {
+                        <article class="per-resource-card"><div class="per-resource-icon"><i class="bi bi-box" aria-hidden="true"></i></div><div class="per-resource-meta"><h3>@group.Name</h3><p>@group.Count permissions • @group.HighImpact high impact • @group.Direct direct override(s)</p><div class="per-mini-bar"><span style="width:@group.Percent%"></span></div></div><button type="button" class="per-btn per-btn--ghost" @onclick="() => FilterByResource(group.Name)">Open</button></article>
+                    }
                 </div>
             }
+            else
+            {
+                <div class="per-table-wrap">
+                    <table class="per-table">
+                        <thead><tr><th class="per-check-col"><input type="checkbox" checked="@AllPageSelected" @onchange="ToggleSelectAllPage" aria-label="Select all permissions on page" /></th><th>Impact</th><th>Permission</th><th>Resource</th><th>Action</th><th>Status</th><th>Roles</th><th>Direct</th><th>Created</th><th class="per-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var permission in PagedPermissions)
+                            {
+                                <tr class="@(_selected?.PermissionId == permission.PermissionId ? "per-row per-row--selected" : "per-row")" @onclick="() => SelectRow(permission)">
+                                    <td class="per-check-col" @onclick:stopPropagation="true"><input type="checkbox" checked="@IsSelected(permission)" @onchange="() => ToggleSelect(permission)" aria-label="Select permission" /></td>
+                                    <td>@ImpactBadge(permission)</td>
+                                    <td><div class="per-perm-cell"><div class="per-perm-icon" style="@AvatarStyle(permission.PermissionCode)" aria-hidden="true">@Initials(permission.PermissionName)</div><div class="per-perm-meta"><button type="button" class="per-link-button" @onclick:stopPropagation="true" @onclick="() => ViewPermission(permission)">@permission.PermissionName</button><small>@permission.PermissionCode</small></div></div></td>
+                                    <td><span class="per-code-pill">@Safe(permission.ResourceCode, "Resource")</span></td>
+                                    <td><span class="per-pill @ActionTone(permission.ActionCode)">@Safe(permission.ActionCode, "Action")</span></td>
+                                    <td>@StatusBadge(permission)</td>
+                                    <td><div class="per-role-list" title="@RoleTitle(permission)">@foreach (var roleName in RoleNames(permission).Take(2)) { <span class="per-pill per-pill--blue">@roleName</span> } @if (RoleNames(permission).Count > 2) { <span class="per-count-pill">+@(RoleNames(permission).Count - 2)</span> } @if (RoleNames(permission).Count == 0) { <span class="per-muted">None</span> }</div></td>
+                                    <td><div class="per-direct-stack">@if (permission.DirectGrantCount > 0) { <span class="per-pill per-pill--green">@permission.DirectGrantCount grant</span> } @if (permission.DirectDenyCount > 0) { <span class="per-pill per-pill--red">@permission.DirectDenyCount deny</span> } @if (permission.DirectGrantCount + permission.DirectDenyCount == 0) { <span class="per-muted">None</span> }</div></td>
+                                    <td><span class="per-date">@permission.CreatedDateUtc.ToString("MMM d, yyyy")</span></td>
+                                    <td class="per-actions-col">
+                                        <button type="button" class="per-icon-btn" title="Open action menu" @onclick:stopPropagation="true" @onclick="() => ToggleActionMenu(permission)"><i class="bi bi-three-dots-vertical" aria-hidden="true"></i></button>
+                                        @if (_openActionMenuFor == permission.PermissionId)
+                                        {
+                                            <div class="per-menu" role="menu" @onclick:stopPropagation="true"><div class="per-menu__summary"><strong>@permission.PermissionName</strong><span>@permission.PermissionCode</span></div><button type="button" class="per-menu-item" role="menuitem" @onclick="() => ViewPermission(permission)"><i class="bi bi-eye" aria-hidden="true"></i><span>View details</span></button><button type="button" class="per-menu-item" role="menuitem" @onclick="() => OpenGrant(permission)"><i class="bi bi-person-plus" aria-hidden="true"></i><span>Grant to user</span></button><button type="button" class="per-menu-item" role="menuitem" @onclick="() => FocusDirectGrants(permission)"><i class="bi bi-person-lines-fill" aria-hidden="true"></i><span>Review direct grants</span></button><button type="button" class="per-menu-item" role="menuitem" @onclick="() => CopyPermissionCode(permission)"><i class="bi bi-clipboard" aria-hidden="true"></i><span>Copy code</span></button><button type="button" class="per-menu-item per-menu-item--danger" role="menuitem" disabled="@(!permission.IsActive)" @onclick="() => ConfirmDeactivate(permission)"><i class="bi bi-slash-circle" aria-hidden="true"></i><span>Deactivate</span></button></div>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
 
-            <div class="um-field">
-            <label>User <span class="text-danger">*</span></label>
-            <SfDropDownList TValue="Guid" TItem="UserDto"
-                            DataSource="_users"
-                            @bind-Value="_editModel.UserId"
-                            Placeholder="Select user"
-                            AllowFiltering="true"
-                            Width="100%">
-                <DropDownListFieldSettings Value="UserId" Text="FullName" />
-            </SfDropDownList>
-            </div>
+        <aside class="per-side-panel">
+            <section class="per-panel-card">
+                <span class="per-section-kicker">Selected permission</span>
+                @if (_selected is null)
+                {
+                    <div class="per-empty per-empty--compact"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a row</strong><span>Choose a permission to inspect coverage and actions.</span></div>
+                }
+                else
+                {
+                    <div class="per-selected"><div class="per-selected__title"><div class="per-perm-icon per-perm-icon--lg" style="@AvatarStyle(_selected.PermissionCode)">@Initials(_selected.PermissionName)</div><div><h3>@_selected.PermissionName</h3><span>@_selected.PermissionCode</span></div></div><div class="per-score-card per-score-card--@ImpactTone(_selected)"><span>Permission impact score</span><strong>@ImpactScore(_selected)</strong><small>@ImpactLevel(_selected)</small></div><dl class="per-detail-list"><div><dt>Resource</dt><dd>@Safe(_selected.ResourceCode, "—")</dd></div><div><dt>Action</dt><dd>@Safe(_selected.ActionCode, "—")</dd></div><div><dt>Status</dt><dd>@(_selected.IsActive ? "Active" : "Inactive")</dd></div><div><dt>Source</dt><dd>@(_selected.IsBuiltIn ? "Built-in" : "Tenant")</dd></div><div><dt>Roles</dt><dd>@_selected.RoleCount role(s)</dd></div><div><dt>Direct grants</dt><dd>@_selected.DirectGrantCount granted / @_selected.DirectDenyCount denied</dd></div><div><dt>Created</dt><dd>@_selected.CreatedDateUtc.ToString("MMM d, yyyy")</dd></div><div><dt>Updated</dt><dd>@FormatDate(_selected.ModifiedDateUtc)</dd></div></dl>@if (!string.IsNullOrWhiteSpace(_selected.Description)) { <p class="per-selected-desc">@_selected.Description</p> }<div class="per-selected-actions"><button type="button" class="per-btn per-btn--primary" @onclick="() => ViewPermission(_selected)"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open</button><button type="button" class="per-btn per-btn--ghost" @onclick="() => OpenGrant(_selected)"><i class="bi bi-person-plus" aria-hidden="true"></i> Grant</button><button type="button" class="per-btn per-btn--danger-ghost" disabled="@(!_selected.IsActive)" @onclick="() => ConfirmDeactivate(_selected)"><i class="bi bi-slash-circle" aria-hidden="true"></i> Deactivate</button></div></div>
+                }
+            </section>
 
-            <div class="um-field">
-            <label>Permission <span class="text-danger">*</span></label>
-            <SfDropDownList TValue="Guid" TItem="PermEntry"
-                            DataSource="_allEntries"
-                            @bind-Value="_editModel.PermissionId"
-                            Placeholder="Select permission"
-                            AllowFiltering="true"
-                            Width="100%">
-                <DropDownListFieldSettings Value="PermissionId" Text="PermissionDisplayText" />
-            </SfDropDownList>
-            </div>
+            <section class="per-panel-card"><span class="per-section-kicker">Direct override users</span>@if (_selected is null || DirectOverridesForSelected.Count == 0) { <div class="per-empty per-empty--compact"><i class="bi bi-person-check" aria-hidden="true"></i><strong>No direct overrides</strong><span>Use roles first; grant direct overrides only for exception workflows.</span></div> } else { <div class="per-override-list">@foreach (var grant in DirectOverridesForSelected.Take(6)) { <div class="per-override-item"><div><strong>@Safe(grant.UserFullName, "Unknown user")</strong><span>@(grant.IsGranted ? "Granted" : "Denied") • @FormatDate(grant.ExpiresDateUtc)</span></div><button type="button" class="per-icon-btn" title="Revoke override" @onclick="() => ConfirmRevokeOverride(grant)"><i class="bi bi-trash3" aria-hidden="true"></i></button></div> }</div> }</section>
+            <section class="per-panel-card"><span class="per-section-kicker">Security intelligence</span><div class="per-insight-list">@foreach (var insight in Insights) { <div class="per-insight"><i class="bi @insight.Icon" aria-hidden="true"></i><div><strong>@insight.Title</strong><span>@insight.Description</span></div></div> }</div></section>
+        </aside>
+    </main>
+</div>
 
-            <div class="um-field">
-            <label>Type</label>
-            <SfDropDownList TValue="string" TItem="LabelValue"
-                            DataSource="_typeOptions"
-                            @bind-Value="_editModel.PermissionType"
-                            Width="100%">
-                <DropDownListFieldSettings Value="Value" Text="Label" />
-            </SfDropDownList>
-            </div>
+@if (_showPermissionForm)
+{
+    <div class="per-modal-backdrop" role="presentation" @onclick="ClosePermissionForm"><div class="per-modal" role="dialog" aria-modal="true" aria-labelledby="per-permission-form-title" @onclick:stopPropagation="true"><div class="per-modal__header"><i class="bi bi-plus-lg" aria-hidden="true"></i><span id="per-permission-form-title">Create Permission</span><button type="button" class="per-icon-btn per-icon-btn--light ms-auto" @onclick="ClosePermissionForm"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div><EditForm EditContext="@_permissionEditContext" OnValidSubmit="SavePermissionAsync"><DataAnnotationsValidator /><div class="per-modal__body"><div class="per-validation-note"><i class="bi bi-shield-check" aria-hidden="true"></i><div><strong>Enterprise catalog validation</strong><span>Permission code, name, resource, and action are required before this control can be introduced.</span></div></div><div class="per-form-grid"><label class="per-field"><span>Permission Code <em>*</em></span><InputText @bind-Value="_permissionForm.PermissionCode" class="form-control" placeholder="POLICY.BIND.MANAGE" /></label><label class="per-field"><span>Permission Name <em>*</em></span><InputText @bind-Value="_permissionForm.PermissionName" class="form-control" placeholder="Manage policy bind" /></label><label class="per-field"><span>Resource <em>*</em></span><InputText @bind-Value="_permissionForm.ResourceCode" class="form-control" placeholder="POLICY" /></label><label class="per-field"><span>Action <em>*</em></span><InputSelect @bind-Value="_permissionForm.ActionCode" class="form-select">@foreach (var action in _actionCatalog) { <option value="@action">@action</option> }</InputSelect></label><label class="per-field per-field--full"><span>Description</span><InputTextArea @bind-Value="_permissionForm.Description" class="form-control" rows="3" placeholder="Describe when this permission should be used." /></label><label class="per-check-field per-field--full"><InputCheckbox @bind-Value="_permissionForm.IsBuiltIn" /> <span>Mark as built-in platform permission</span></label></div>@if (!string.IsNullOrEmpty(_formError)) { <div class="alert alert-danger per-form-alert" style="border-left: 4px solid #dc3545; animation: per-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_formError</div> }</div><div class="per-modal__footer"><button type="button" class="per-btn per-btn--ghost" @onclick="ClosePermissionForm">Cancel</button><button type="submit" class="per-btn per-btn--primary" disabled="@_saving">@if (_saving) { <span class="per-spin-sm" aria-hidden="true"></span> } Create Permission</button></div></EditForm></div></div>
+}
 
-            <div class="um-field">
-            <label>Action</label>
-            <SfDropDownList TValue="bool" TItem="LabelValue<bool>"
-                            DataSource="_actionOptions"
-                            @bind-Value="_editModel.IsGranted"
-                            Width="100%">
-                <DropDownListFieldSettings Value="Value" Text="Label" />
-            </SfDropDownList>
-            </div>
+@if (_showGrantForm)
+{
+    <div class="per-modal-backdrop" role="presentation" @onclick="CloseGrantForm"><div class="per-modal" role="dialog" aria-modal="true" aria-labelledby="per-grant-form-title" @onclick:stopPropagation="true"><div class="per-modal__header"><i class="bi bi-person-plus" aria-hidden="true"></i><span id="per-grant-form-title">Grant Permission Override</span><button type="button" class="per-icon-btn per-icon-btn--light ms-auto" @onclick="CloseGrantForm"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div><EditForm EditContext="@_grantEditContext" OnValidSubmit="SaveGrantAsync"><DataAnnotationsValidator /><div class="per-modal__body"><div class="per-validation-note"><i class="bi bi-shield-lock" aria-hidden="true"></i><div><strong>Exception workflow</strong><span>Direct overrides should be time-bound and justified; role assignment remains the preferred access path.</span></div></div><div class="per-form-grid"><label class="per-field"><span>User <em>*</em></span><InputSelect @bind-Value="_grantForm.UserId" class="form-select"><option value="@Guid.Empty">Select user…</option>@foreach (var user in _users) { <option value="@user.UserId">@user.FullName</option> }</InputSelect></label><label class="per-field"><span>Permission <em>*</em></span><InputSelect @bind-Value="_grantForm.PermissionId" class="form-select"><option value="@Guid.Empty">Select permission…</option>@foreach (var permission in _permissions.OrderBy(p => p.PermissionName)) { <option value="@permission.PermissionId">@permission.PermissionName (@permission.PermissionCode)</option> }</InputSelect></label><label class="per-field"><span>Decision</span><InputSelect @bind-Value="_grantForm.IsGranted" class="form-select"><option value="true">Grant</option><option value="false">Deny</option></InputSelect></label><label class="per-field"><span>Expires</span><InputDate @bind-Value="_grantForm.ExpiresDate" class="form-control" /></label><label class="per-field per-field--full"><span>Reason</span><InputTextArea @bind-Value="_grantForm.Reason" class="form-control" rows="3" placeholder="Business justification, approval, or incident reference." /></label></div>@if (!string.IsNullOrEmpty(_formError)) { <div class="alert alert-danger per-form-alert" style="border-left: 4px solid #dc3545; animation: per-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_formError</div> }</div><div class="per-modal__footer"><button type="button" class="per-btn per-btn--ghost" @onclick="CloseGrantForm">Cancel</button><button type="submit" class="per-btn per-btn--primary" disabled="@_saving">@if (_saving) { <span class="per-spin-sm" aria-hidden="true"></span> } Save Override</button></div></EditForm></div></div>
+}
 
-            <div class="um-field">
-            <label>Expires</label>
-            <InputDate class="um-input" @bind-Value="_editModel.ExpiresDate" />
-            </div>
-                </div></div>
-            </EditForm>
-        }
-    </Content>
-</AppCrudDrawer>
+@if (_showConfirm)
+{
+    <div class="per-modal-backdrop" role="presentation" @onclick="CloseConfirm"><div class="per-confirm" role="dialog" aria-modal="true" aria-labelledby="per-confirm-title" @onclick:stopPropagation="true"><div class="per-modal__header"><i class="bi @_confirmIcon" aria-hidden="true"></i><span>Confirm action</span><button type="button" class="per-icon-btn per-icon-btn--light ms-auto" @onclick="CloseConfirm" disabled="@_saving"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div><div class="per-confirm__body"><div class="@(_confirmDanger ? "per-confirm-icon per-confirm-icon--danger" : "per-confirm-icon")"><i class="bi @_confirmIcon" aria-hidden="true"></i></div><div><h3 id="per-confirm-title">@_confirmTitle</h3><p>@_confirmMessage</p></div></div><div class="per-modal__footer"><button type="button" class="per-btn per-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button><button type="button" class="@(_confirmDanger ? "per-btn per-btn--danger" : "per-btn per-btn--primary")" @onclick="ExecuteConfirmedActionAsync" disabled="@_saving">@if (_saving) { <span class="per-spin-sm" aria-hidden="true"></span> } Confirm</button></div></div></div>
+}
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+<div class="per-toast-stack" aria-live="polite" aria-atomic="true">@foreach (var toast in _toasts) { <div class="per-toast @toast.CssClass"><i class="bi @(toast.CssClass.Contains("danger") ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i><span>@toast.Message</span><button type="button" @onclick="() => DismissToast(toast.Id)"><i class="bi bi-x" aria-hidden="true"></i></button></div> }</div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private SfToast? _toast;
+    private Guid _currentUserId;
+    private readonly string[] _actionCatalog = ["READ", "VIEW", "CREATE", "UPDATE", "DELETE", "MANAGE", "APPROVE", "EXPORT", "ADMIN"];
+    private readonly TabDef[] _tabs = [new("all", "All", "bi-key"), new("critical", "High Impact", "bi-exclamation-octagon"), new("direct", "Direct", "bi-person-check"), new("role", "Role Backed", "bi-diagram-3"), new("builtin", "Built-in", "bi-shield-check"), new("inactive", "Inactive", "bi-slash-circle"), new("unassigned", "Unassigned", "bi-inbox"), new("resources", "Resources", "bi-boxes")];
+    private readonly InsightDef[] _baselineInsights = [new("Role-first access", "Prefer role assignment over direct overrides for repeatable least-privilege governance.", "bi-diagram-3"), new("Time-bound exceptions", "Every direct grant should have a reason and an expiry date when possible.", "bi-clock-history"), new("Catalog hygiene", "Deactivate unused tenant permissions after validating no active workflow depends on them.", "bi-shield-lock")];
 
-    private List<PermEntry> _allEntries = [];
-    private List<PermEntry> _entries    = [];
-    private List<UserDto>   _users      = [];
-
-    private bool _loading    = false;
-    private bool _showDrawer = false;
-    private bool _saving     = false;
+    private List<PermissionEntry> _permissions = [];
+    private List<UserPermissionDto> _overrides = [];
+    private List<UserDto> _users = [];
+    private readonly List<PermissionEntry> _selectedPermissions = [];
+    private PermissionEntry? _selected;
+    private bool _loading = true;
+    private string? _loadError;
+    private CancellationTokenSource _cts = new();
+    private string _activeTab = "all";
+    private string _activeKpi = "all";
+    private string _searchTerm = string.Empty;
+    private string _resourceFilter = string.Empty;
+    private string _actionFilter = string.Empty;
+    private string _sourceFilter = string.Empty;
+    private string _sortMode = "risk";
+    private int _page = 1;
+    private const int PageSize = 12;
+    private Guid? _openActionMenuFor;
+    private bool _showPermissionForm;
+    private bool _showGrantForm;
+    private bool _saving;
     private string _formError = string.Empty;
-    private EditContext? _editContext;
-
-    private string _search       = string.Empty;
-    private string _filterType   = string.Empty;
-    private string _filterStatus = string.Empty;
-    private int    _kpiActive    = 0;
-
-    private int _totalCount   = 0;
-    private int _activeCount = 0;
-    private int _inactiveCount  = 0;
-    private int _builtInCount = 0;
-
-    private string KpiClass1 => "sp-kpi-card" + (_kpiActive == 1 ? " sp-kpi-card--active" : "");
-    private string KpiClass2 => "sp-kpi-card" + (_kpiActive == 2 ? " sp-kpi-card--active" : "");
-    private string KpiClass3 => "sp-kpi-card" + (_kpiActive == 3 ? " sp-kpi-card--active" : "");
-    private string KpiClass4 => "sp-kpi-card" + (_kpiActive == 4 ? " sp-kpi-card--active" : "");
-
-    private static readonly List<LabelValue> _typeOptions =
-    [
-        new("Feature",  "Feature"),
-        new("Resource", "Resource"),
-        new("Action",   "Action"),
-    ];
-
-    private static readonly List<LabelValue> _statusOptions =
-    [
-        new("Granted", "Granted"),
-        new("Denied",  "Denied"),
-    ];
-
-    private static readonly List<LabelValue<bool>> _actionOptions =
-    [
-        new(true,  "Grant"),
-        new(false, "Deny"),
-    ];
-
-    private PermEntry _editModel = new();
+    private PermissionFormModel _permissionForm = new();
+    private GrantFormModel _grantForm = new();
+    private EditContext _permissionEditContext = default!;
+    private EditContext _grantEditContext = default!;
+    private bool _showConfirm;
+    private bool _confirmDanger;
+    private string _confirmTitle = string.Empty;
+    private string _confirmMessage = string.Empty;
+    private string _confirmIcon = "bi-question-circle";
+    private Func<Task>? _confirmedAction;
+    private readonly List<ToastMessage> _toasts = [];
+    private System.Timers.Timer? _debounce;
 
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(
-            new("Home",              "/"),
-            new("Users & Security",  "/tenant/security/users"),
-            new("Permissions",       "/tenant/security/perms"));
-
-        await Task.WhenAll(LoadUsersAsync(), LoadAsync());
-    }
-
-    private async Task LoadUsersAsync()
-    {
-        try
-        {
-            var result = await Api.SearchUsersAsync(_tenantId, pageSize: 2000);
-            _users = result?.Items.OrderBy(u => u.FullName).ToList() ?? [];
-        }
-        catch (Exception ex)
-        {
-            await ShowToastAsync($"Users failed to load: {ex.Message}", "e-toast-danger");
-        }
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _currentUserId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Security", "/tenant/security/users"), new("Permissions", null));
+        _permissionEditContext = new(_permissionForm);
+        _grantEditContext = new(_grantForm);
+        await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
         _loading = true;
+        _loadError = null;
         StateHasChanged();
         try
         {
-            var result = await Api.SearchPermissionsAsync(_tenantId, _search, pageSize: 2000);
-            _allEntries = result?.Items.Select(MapPermission).ToList() ?? [];
-            await LoadRoleNamesAsync();
-            ComputeKpi();
-            ApplyFilters();
+            await _cts.CancelAsync();
+            _cts = new CancellationTokenSource();
+            var token = _cts.Token;
+            var permissionsTask = Api.SearchPermissionsAsync(_tenantId, _searchTerm.Trim(), pageSize: 2000, cancellationToken: token);
+            var overridesTask = Api.SearchPermissionOverridesAsync(_tenantId, searchTerm: _searchTerm.Trim(), pageSize: 2000, cancellationToken: token);
+            var usersTask = Api.SearchUsersAsync(_tenantId, pageSize: 2000, cancellationToken: token);
+            await Task.WhenAll(permissionsTask, overridesTask, usersTask);
+            _overrides = overridesTask.Result?.Items.ToList() ?? [];
+            _users = usersTask.Result?.Items.OrderBy(u => u.FullName).ToList() ?? [];
+            _permissions = permissionsTask.Result?.Items.Select(MapPermission).ToList() ?? [];
+            AddOverrideOnlyPermissions();
+            EnrichPermissionsFromOverrides();
+            await LoadRoleNamesAsync(token);
+            _selected = _selected is null ? _permissions.FirstOrDefault() : _permissions.FirstOrDefault(p => p.PermissionId == _selected.PermissionId) ?? _permissions.FirstOrDefault();
+            _selectedPermissions.RemoveAll(selected => _permissions.All(p => p.PermissionId != selected.PermissionId));
+            _page = 1;
         }
-        catch (Exception ex)
-        {
-            await ShowToastAsync($"Load failed: {ex.Message}", "e-toast-danger");
-        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { _loadError = $"Failed to load permissions: {ex.Message}"; }
         finally { _loading = false; StateHasChanged(); }
     }
 
-    private async Task LoadRoleNamesAsync()
-    {
-        var entriesWithRoles = _allEntries.Where(e => e.RoleCount > 0).ToList();
-        if (entriesWithRoles.Count == 0) return;
+    private Task RefreshAsync() => LoadAsync();
+    private void AddOverrideOnlyPermissions() { foreach (var grant in _overrides.Where(o => o.PermissionId != Guid.Empty && _permissions.All(p => p.PermissionId != o.PermissionId))) _permissions.Add(new PermissionEntry { PermissionId = grant.PermissionId, PermissionName = Safe(grant.PermissionName, grant.PermissionCode ?? "Permission"), PermissionCode = Safe(grant.PermissionCode, "PERMISSION"), ResourceCode = grant.ResourceCode ?? string.Empty, ActionCode = grant.ActionCode ?? string.Empty, Description = "Permission discovered through direct override history.", IsActive = true, CreatedDateUtc = grant.CreatedDateUtc }); }
+    private void EnrichPermissionsFromOverrides() { var lookup = _overrides.GroupBy(o => o.PermissionId).ToDictionary(g => g.Key, g => g.ToList()); foreach (var permission in _permissions) { if (!lookup.TryGetValue(permission.PermissionId, out var grants)) continue; permission.DirectGrantCount = grants.Count(g => g.IsGranted); permission.DirectDenyCount = grants.Count(g => !g.IsGranted); permission.DirectUserNames = string.Join(", ", grants.Select(g => g.UserFullName).Where(name => !string.IsNullOrWhiteSpace(name)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(name => name)); } }
+    private async Task LoadRoleNamesAsync(CancellationToken token) { var entriesWithRoles = _permissions.Where(e => e.RoleCount > 0).Take(250).ToList(); await Task.WhenAll(entriesWithRoles.Select(async entry => { try { var roles = await Api.GetPermissionRolesAsync(entry.PermissionId, token); entry.RoleNames = roles is null ? string.Empty : string.Join(", ", roles.Select(r => r.RoleName).Where(roleName => !string.IsNullOrWhiteSpace(roleName)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(roleName => roleName)); } catch (OperationCanceledException) { } catch { entry.RoleNames = string.Empty; } })); }
+    private async Task OnSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _searchTerm = e.Value?.ToString() ?? string.Empty; _debounce?.Dispose(); _debounce = new System.Timers.Timer(360) { AutoReset = false }; _debounce.Elapsed += async (_, _) => { _debounce?.Dispose(); _debounce = null; await InvokeAsync(LoadAsync); }; _debounce.Start(); await Task.CompletedTask; }
+    private void SetActiveKpi(string key) { _activeKpi = _activeKpi == key ? "all" : key; _activeTab = _activeKpi switch { "critical" => "critical", "direct" => "direct", "role" => "role", "builtin" => "builtin", "unassigned" => "unassigned", _ => "all" }; _page = 1; }
+    private void SetActiveTab(string key) { _activeTab = key; _activeKpi = key is "critical" or "direct" or "role" or "builtin" or "unassigned" ? key : "all"; _page = 1; }
+    private void SetDashboardFocus(string tab, string sortMode) { _activeTab = tab; _activeKpi = tab is "critical" or "direct" or "role" or "builtin" or "unassigned" ? tab : "all"; _sortMode = sortMode; _page = 1; }
+    private void ApplyFilters() => _page = 1;
+    private void ClearFilters() { _resourceFilter = string.Empty; _actionFilter = string.Empty; _sourceFilter = string.Empty; _sortMode = "risk"; _activeTab = "all"; _activeKpi = "all"; _page = 1; }
+    private bool HasFilters => !string.IsNullOrEmpty(_resourceFilter) || !string.IsNullOrEmpty(_actionFilter) || !string.IsNullOrEmpty(_sourceFilter) || _sortMode != "risk" || _activeTab != "all";
+    private IEnumerable<PermissionEntry> TabFiltered => _activeTab switch { "critical" => _permissions.Where(IsHighImpact), "direct" => _permissions.Where(p => p.DirectGrantCount + p.DirectDenyCount > 0), "role" => _permissions.Where(p => p.RoleCount > 0), "builtin" => _permissions.Where(p => p.IsBuiltIn), "inactive" => _permissions.Where(p => !p.IsActive), "unassigned" => _permissions.Where(IsUnassigned), _ => _permissions };
 
-        await Task.WhenAll(entriesWithRoles.Select(async entry =>
+    private IEnumerable<PermissionEntry> FilteredPermissions
+    {
+        get
         {
-            try
-            {
-                var roles = await Api.GetPermissionRolesAsync(entry.PermissionId);
-                entry.RoleNames = roles is null
-                    ? string.Empty
-                    : string.Join(", ", roles
-                    .Select(r => r.RoleName)
-                    .Where(roleName => !string.IsNullOrWhiteSpace(roleName))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .OrderBy(roleName => roleName));
-            }
-            catch
-            {
-                entry.RoleNames = string.Empty;
-            }
-        }));
-    }
-
-    private async Task OnSearchAsync(string _) => await LoadAsync();
-
-    private void ApplyFilters()
-    {
-        _entries = _allEntries.Where(e =>
-            (string.IsNullOrEmpty(_filterType)   || e.PermissionType == _filterType) &&
-            (string.IsNullOrEmpty(_filterStatus) ||
-             (_filterStatus == "Granted" && e.IsActive) ||
-             (_filterStatus == "Denied"  && !e.IsActive)) &&
-            (string.IsNullOrEmpty(_search) ||
-             e.PermissionName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             e.PermissionCode.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             e.ResourceCode.Contains(_search, StringComparison.OrdinalIgnoreCase))
-        ).ToList();
-
-        if (_kpiActive == 2) _entries = _entries.Where(e => e.IsActive).ToList();
-        if (_kpiActive == 3) _entries = _entries.Where(e => !e.IsActive).ToList();
-        if (_kpiActive == 4) _entries = _entries.Where(e => e.IsBuiltIn).ToList();
-
-        StateHasChanged();
-    }
-
-    private void SetKpiFilter(int n)
-    {
-        _kpiActive    = _kpiActive == n ? 0 : n;
-        _filterStatus = string.Empty;
-        ApplyFilters();
-    }
-
-    private void ComputeKpi()
-    {
-        _totalCount    = _allEntries.Count;
-        _activeCount  = _allEntries.Count(e => e.IsActive);
-        _inactiveCount   = _allEntries.Count(e => !e.IsActive);
-        _builtInCount = _allEntries.Count(e => e.IsBuiltIn);
-    }
-
-    private void OpenAddDrawer()  { _editModel = new(); _editContext = new(_editModel); _formError = string.Empty; _showDrawer = true; }
-    private void OpenEditDrawer(PermEntry e) { _editModel = new PermEntry { PermissionId = e.PermissionId, UserId = e.UserId, UserFullName = e.UserFullName, UserEmail = e.UserEmail, PermissionCode = e.PermissionCode, PermissionType = e.PermissionType, IsGranted = e.IsGranted, ExpiresDate = e.ExpiresDate, GrantedByName = e.GrantedByName }; _editContext = new(_editModel); _showDrawer = true; }
-    private void CloseDrawer() { _showDrawer = false; _formError = string.Empty; }
-    private void OpenDetail(PermEntry e) => Nav.NavigateTo($"/iam/permissions/{e.PermissionId}");
-
-    private static PermEntry MapPermission(PermissionDto p) => new()
-    {
-        PermissionId = p.PermissionId,
-        PermissionName = string.IsNullOrWhiteSpace(p.PermissionName) ? p.PermissionCode : p.PermissionName,
-        PermissionCode = p.PermissionCode,
-        ResourceCode = p.ResourceCode,
-        ActionCode = p.ActionCode,
-        Description = p.Description ?? string.Empty,
-        PermissionType = p.ActionCode.ToUpperInvariant() switch
-        {
-            "READ" or "VIEW" => "Feature",
-            "MANAGE" or "DELETE" or "ADMIN" => "Action",
-            _ => "Resource",
-        },
-        IsGranted = p.IsActive,
-        IsActive = p.IsActive,
-        IsBuiltIn = p.IsBuiltIn,
-        RoleCount = p.RoleCount,
-        GrantedByName = p.IsBuiltIn ? "System" : "Tenant",
-    };
-
-    private async Task SaveAsync()
-    {
-        _formError = ValidateGrant();
-        if (!string.IsNullOrWhiteSpace(_formError))
-        {
-            await ShowToastAsync(_formError, "e-toast-danger");
-            return;
+            var query = TabFiltered;
+            if (!string.IsNullOrEmpty(_resourceFilter)) query = query.Where(p => string.Equals(p.ResourceCode, _resourceFilter, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrEmpty(_actionFilter)) query = query.Where(p => string.Equals(p.ActionCode, _actionFilter, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrEmpty(_sourceFilter)) query = _sourceFilter switch { "Built-in" => query.Where(p => p.IsBuiltIn), "Tenant" => query.Where(p => !p.IsBuiltIn), "Inactive" => query.Where(p => !p.IsActive), _ => query };
+            if (!string.IsNullOrWhiteSpace(_searchTerm)) { var search = _searchTerm.Trim(); query = query.Where(p => p.PermissionName.Contains(search, StringComparison.OrdinalIgnoreCase) || p.PermissionCode.Contains(search, StringComparison.OrdinalIgnoreCase) || p.ResourceCode.Contains(search, StringComparison.OrdinalIgnoreCase) || p.ActionCode.Contains(search, StringComparison.OrdinalIgnoreCase) || p.RoleNames.Contains(search, StringComparison.OrdinalIgnoreCase) || p.DirectUserNames.Contains(search, StringComparison.OrdinalIgnoreCase)); }
+            return _sortMode switch { "name" => query.OrderBy(p => p.PermissionName), "resource" => query.OrderBy(p => p.ResourceCode).ThenBy(p => p.PermissionName), "roles" => query.OrderByDescending(p => p.RoleCount).ThenByDescending(p => RoleNames(p).Count).ThenBy(p => p.PermissionName), "exposure" => query.OrderByDescending(p => p.DirectGrantCount + p.DirectDenyCount).ThenByDescending(ImpactScore), "created" => query.OrderByDescending(p => p.CreatedDateUtc), _ => query.OrderByDescending(ImpactScore).ThenBy(p => p.PermissionName) };
         }
+    }
 
-        if (_editContext?.Validate() != true) return;
+    private IEnumerable<PermissionEntry> PagedPermissions => FilteredPermissions.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredPermissions.Count() / (double)PageSize));
+    private void PreviousPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private string ActiveViewTitle => _tabs.FirstOrDefault(t => t.Key == _activeTab)?.Label ?? "Permissions";
+    private int TabCount(string key) => key switch { "critical" => _permissions.Count(IsHighImpact), "direct" => _permissions.Count(p => p.DirectGrantCount + p.DirectDenyCount > 0), "role" => _permissions.Count(p => p.RoleCount > 0), "builtin" => _permissions.Count(p => p.IsBuiltIn), "inactive" => _permissions.Count(p => !p.IsActive), "unassigned" => _permissions.Count(IsUnassigned), "resources" => ResourceGroups.Count, _ => _permissions.Count };
+    private IEnumerable<string> ResourceOptions => _permissions.Select(p => p.ResourceCode).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    private IEnumerable<string> ActionOptions => _permissions.Select(p => p.ActionCode).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    private List<ResourceGroup> ResourceGroups { get { var groups = _permissions.GroupBy(p => string.IsNullOrWhiteSpace(p.ResourceCode) ? "Unmapped" : p.ResourceCode).ToList(); var max = Math.Max(1, groups.Count == 0 ? 1 : groups.Max(g => g.Count())); return groups.Select(g => new ResourceGroup(g.Key, g.Count(), g.Count(IsHighImpact), g.Sum(p => p.DirectGrantCount + p.DirectDenyCount), (int)Math.Round(g.Count() * 100.0 / max))).OrderByDescending(g => g.HighImpact).ThenByDescending(g => g.Direct).ThenBy(g => g.Name).ToList(); } }
+    private List<UserPermissionDto> DirectOverridesForSelected => _selected is null ? [] : _overrides.Where(o => o.PermissionId == _selected.PermissionId).OrderByDescending(o => o.GrantedDateUtc).ToList();
+    private void FilterByResource(string resource) { _resourceFilter = resource == "Unmapped" ? string.Empty : resource; _activeTab = "all"; _activeKpi = "all"; _page = 1; }
+    private void SelectRow(PermissionEntry permission) { _selected = permission; _openActionMenuFor = null; }
+    private bool IsSelected(PermissionEntry permission) => _selectedPermissions.Any(x => x.PermissionId == permission.PermissionId);
+    private void ToggleSelect(PermissionEntry permission) { if (IsSelected(permission)) _selectedPermissions.RemoveAll(x => x.PermissionId == permission.PermissionId); else _selectedPermissions.Add(permission); }
+    private bool AllPageSelected => PagedPermissions.Any() && PagedPermissions.All(IsSelected);
+    private void ToggleSelectAllPage() { var page = PagedPermissions.ToList(); if (page.All(IsSelected)) foreach (var permission in page) _selectedPermissions.RemoveAll(x => x.PermissionId == permission.PermissionId); else foreach (var permission in page.Where(p => !IsSelected(p))) _selectedPermissions.Add(permission); }
+    private void ToggleActionMenu(PermissionEntry permission) => _openActionMenuFor = _openActionMenuFor == permission.PermissionId ? null : permission.PermissionId;
+    private void ViewPermission(PermissionEntry permission) => Nav.NavigateTo($"/iam/permissions/{permission.PermissionId}");
+    private void FocusDirectGrants(PermissionEntry permission) { _selected = permission; _activeTab = "direct"; _activeKpi = "direct"; _openActionMenuFor = null; _page = 1; }
+    private void CopyPermissionCode(PermissionEntry permission) { _openActionMenuFor = null; ShowToast($"Permission code ready: {permission.PermissionCode}", "per-toast--success"); }
+    private void OpenCreatePermission() { _permissionForm = new PermissionFormModel(); _permissionEditContext = new(_permissionForm); _formError = string.Empty; _showPermissionForm = true; _openActionMenuFor = null; }
+    private void ClosePermissionForm() { _showPermissionForm = false; _formError = string.Empty; }
 
+    private async Task SavePermissionAsync()
+    {
+        if (_saving) return;
+        _formError = string.Empty;
         _saving = true;
         try
         {
-            await Api.GrantPermissionOverrideAsync(new GrantUserPermissionRequest
-            {
-                TenantId       = _tenantId,
-                UserId         = _editModel.UserId,
-                PermissionId   = _editModel.PermissionId,
-                IsGranted      = _editModel.IsGranted,
-                ExpiresDateUtc = _editModel.ExpiresDate?.Date,
-            });
-
-            _showDrawer = false;
-            await ShowToastAsync($"Permission {(_editModel.IsGranted ? "granted" : "denied")} successfully.", "e-toast-success");
+            var request = new CreatePermissionRequest { TenantId = _tenantId, PermissionCode = _permissionForm.PermissionCode.Trim().ToUpperInvariant(), PermissionName = _permissionForm.PermissionName.Trim(), ResourceCode = _permissionForm.ResourceCode.Trim().ToUpperInvariant(), ActionCode = _permissionForm.ActionCode.Trim().ToUpperInvariant(), Description = _permissionForm.Description?.Trim(), IsBuiltIn = _permissionForm.IsBuiltIn, CreatedByUserId = _currentUserId };
+            await Api.CreatePermissionAsync(request);
+            ClosePermissionForm();
+            ShowToast($"Permission '{request.PermissionName}' created.", "per-toast--success");
+            await LoadAsync();
         }
-        catch (Exception ex)
+        catch (Exception ex) { _formError = $"Create failed: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private void OpenBulkGrant() { var first = _selectedPermissions.FirstOrDefault(); OpenGrant(first); }
+    private void OpenGrant(PermissionEntry? permission) { _grantForm = new GrantFormModel { PermissionId = permission?.PermissionId ?? Guid.Empty, IsGranted = true, ExpiresDate = DateTime.Today.AddDays(90) }; _grantEditContext = new(_grantForm); _formError = string.Empty; _showGrantForm = true; _openActionMenuFor = null; }
+    private void CloseGrantForm() { _showGrantForm = false; _formError = string.Empty; }
+
+    private async Task SaveGrantAsync()
+    {
+        if (_saving) return;
+        _formError = ValidateGrant();
+        if (!string.IsNullOrWhiteSpace(_formError)) return;
+        _saving = true;
+        try
         {
-            _formError = $"Save failed: {ex.Message}";
-            await ShowToastAsync(_formError, "e-toast-danger");
+            var permissionIds = _selectedPermissions.Count > 1 && _selectedPermissions.Any(p => p.PermissionId == _grantForm.PermissionId) ? _selectedPermissions.Select(p => p.PermissionId).Distinct().ToList() : [_grantForm.PermissionId];
+            foreach (var permissionId in permissionIds)
+                await Api.GrantPermissionOverrideAsync(new GrantUserPermissionRequest { TenantId = _tenantId, UserId = _grantForm.UserId, PermissionId = permissionId, IsGranted = _grantForm.IsGranted, ExpiresDateUtc = _grantForm.ExpiresDate?.Date, GrantedByUserId = _currentUserId, Reason = _grantForm.Reason?.Trim(), ApprovedByUserId = _currentUserId });
+            CloseGrantForm();
+            _selectedPermissions.Clear();
+            ShowToast($"Permission override saved for {permissionIds.Count} permission(s).", "per-toast--success");
+            await LoadAsync();
         }
-        finally
-        {
-            _saving = false;
-        }
+        catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; }
+        finally { _saving = false; }
     }
 
-    private string ValidateGrant()
-    {
-        if (_saving)
-            return "Save is already in progress.";
-        if (_editModel.UserId == Guid.Empty)
-            return "User is required.";
-        if (_editModel.PermissionId == Guid.Empty)
-            return "Permission is required.";
-        if (_editModel.ExpiresDate.HasValue && _editModel.ExpiresDate.Value.Date <= DateTime.Today)
-            return "Expires must be a future date.";
-        return string.Empty;
-    }
+    private string ValidateGrant() { if (_grantForm.UserId == Guid.Empty) return "User is required."; if (_grantForm.PermissionId == Guid.Empty) return "Permission is required."; if (_grantForm.ExpiresDate.HasValue && _grantForm.ExpiresDate.Value.Date <= DateTime.Today) return "Expires must be a future date."; return string.Empty; }
+    private void ConfirmDeactivate(PermissionEntry permission) => OpenConfirm("Deactivate permission?", $"Deactivate '{permission.PermissionName}' and prevent future use in new grants? Existing audit history remains available.", "bi-slash-circle", true, () => DeactivateAsync(permission));
+    private async Task DeactivateAsync(PermissionEntry permission) { try { await Api.DeactivatePermissionAsync(permission.PermissionId, _currentUserId); CloseConfirm(); ShowToast($"Permission '{permission.PermissionName}' deactivated.", "per-toast--success"); await LoadAsync(); } catch (Exception ex) { CloseConfirm(); ShowToast($"Deactivate failed: {ex.Message}", "per-toast--danger"); } }
+    private void ConfirmBulkDeactivate() => OpenConfirm("Deactivate selected permissions?", $"Deactivate {_selectedPermissions.Count} selected permission(s)?", "bi-slash-circle", true, BulkDeactivateAsync);
+    private async Task BulkDeactivateAsync() { var targets = _selectedPermissions.Where(p => p.IsActive).ToList(); var failures = 0; foreach (var permission in targets) try { await Api.DeactivatePermissionAsync(permission.PermissionId, _currentUserId); } catch { failures++; } _selectedPermissions.Clear(); CloseConfirm(); ShowToast($"Deactivated {targets.Count - failures} permission(s)." + (failures > 0 ? $" {failures} failed." : string.Empty), failures > 0 ? "per-toast--danger" : "per-toast--success"); await LoadAsync(); }
+    private void ConfirmRevokeOverride(UserPermissionDto grant) => OpenConfirm("Revoke direct override?", $"Remove the direct {(grant.IsGranted ? "grant" : "deny")} for {Safe(grant.UserFullName, "this user")}?", "bi-trash3", true, () => RevokeOverrideAsync(grant));
+    private async Task RevokeOverrideAsync(UserPermissionDto grant) { try { await Api.RevokePermissionOverrideAsync(grant.UserPermissionId, _currentUserId); CloseConfirm(); ShowToast("Direct override revoked.", "per-toast--success"); await LoadAsync(); } catch (Exception ex) { CloseConfirm(); ShowToast($"Revoke failed: {ex.Message}", "per-toast--danger"); } }
+    private void OpenConfirm(string title, string message, string icon, bool danger, Func<Task> action) { _confirmTitle = title; _confirmMessage = message; _confirmIcon = icon; _confirmDanger = danger; _confirmedAction = action; _showConfirm = true; _openActionMenuFor = null; }
+    private void CloseConfirm() { _showConfirm = false; _confirmedAction = null; }
+    private async Task ExecuteConfirmedActionAsync() { if (_confirmedAction is null) return; _saving = true; try { await _confirmedAction.Invoke(); } finally { _saving = false; } }
+    private void ShowToast(string message, string cssClass) { var toast = new ToastMessage(Guid.NewGuid(), message, cssClass); _toasts.Add(toast); _ = Task.Run(async () => { await Task.Delay(5000); await InvokeAsync(() => DismissToast(toast.Id)); }); }
+    private void DismissToast(Guid id) { _toasts.RemoveAll(t => t.Id == id); StateHasChanged(); }
+    private static PermissionEntry MapPermission(PermissionDto permission) => new() { PermissionId = permission.PermissionId, PermissionName = string.IsNullOrWhiteSpace(permission.PermissionName) ? permission.PermissionCode : permission.PermissionName, PermissionCode = permission.PermissionCode, ResourceCode = permission.ResourceCode, ActionCode = permission.ActionCode, Description = permission.Description ?? string.Empty, IsBuiltIn = permission.IsBuiltIn, IsActive = permission.IsActive, RoleCount = permission.RoleCount, CreatedDateUtc = permission.CreatedDateUtc, ModifiedDateUtc = permission.ModifiedDateUtc };
+    private static bool IsUnassigned(PermissionEntry permission) => permission.RoleCount == 0 && permission.DirectGrantCount == 0 && permission.DirectDenyCount == 0;
+    private static bool IsPrivilegedAction(PermissionEntry permission) => permission.ActionCode.Equals("MANAGE", StringComparison.OrdinalIgnoreCase) || permission.ActionCode.Equals("DELETE", StringComparison.OrdinalIgnoreCase) || permission.ActionCode.Equals("ADMIN", StringComparison.OrdinalIgnoreCase) || permission.PermissionCode.Contains("ADMIN", StringComparison.OrdinalIgnoreCase) || permission.PermissionCode.Contains("SECURITY", StringComparison.OrdinalIgnoreCase);
+    private static bool IsHighImpact(PermissionEntry permission) => ImpactScore(permission) >= 40;
+    private static int ImpactScore(PermissionEntry permission) { var score = 0; if (!permission.IsActive) score += 35; if (IsPrivilegedAction(permission)) score += 30; if (permission.DirectGrantCount > 0) score += Math.Min(25, permission.DirectGrantCount * 8); if (permission.DirectDenyCount > 0) score += 10; if (permission.RoleCount >= 5) score += 15; else if (permission.RoleCount > 0) score += 8; if (permission.IsBuiltIn) score += 5; if (IsUnassigned(permission)) score += 6; return Math.Min(100, score); }
+    private static string ImpactLevel(PermissionEntry permission) => ImpactScore(permission) switch { >= 70 => "Critical", >= 40 => "High", >= 20 => "Medium", _ => "Low" };
+    private static string ImpactTone(PermissionEntry permission) => ImpactLevel(permission) switch { "Critical" => "red", "High" => "amber", "Medium" => "cyan", _ => "green" };
+    private IEnumerable<InsightDef> Insights { get { var list = new List<InsightDef>(); var direct = _overrides.Count; if (direct > 0) list.Add(new("Direct overrides", $"{direct} direct permission override(s) require periodic review.", "bi-person-check")); var critical = _permissions.Count(IsHighImpact); if (critical > 0) list.Add(new("High-impact controls", $"{critical} permission(s) affect privileged or broad access.", "bi-exclamation-octagon")); var unassigned = _permissions.Count(IsUnassigned); if (unassigned > 0) list.Add(new("Unassigned permissions", $"{unassigned} catalog item(s) have no role or direct coverage.", "bi-inbox")); var inactive = _permissions.Count(p => !p.IsActive); if (inactive > 0) list.Add(new("Inactive catalog", $"{inactive} disabled permission(s) should be validated for cleanup.", "bi-slash-circle")); list.AddRange(_baselineInsights); return list.Take(5); } }
+    private static IReadOnlyList<string> RoleNames(PermissionEntry permission) => string.IsNullOrWhiteSpace(permission.RoleNames) ? [] : permission.RoleNames.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(roleName => !string.IsNullOrWhiteSpace(roleName)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    private static string RoleTitle(PermissionEntry permission) => RoleNames(permission).Count == 0 ? "No assigned roles" : string.Join(", ", RoleNames(permission));
+    private static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private static string FormatDate(DateTime? date) => date is null ? "—" : date.Value.ToString("MMM d, yyyy");
+    private static string Initials(string? name) => string.IsNullOrWhiteSpace(name) ? "?" : string.Concat(name.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(w => char.ToUpperInvariant(w[0])));
+    private static readonly string[] _avatarColors = ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#06b6d4", "#6366f1", "#ec4899"];
+    private static string AvatarStyle(string? value) => $"background:{_avatarColors[Math.Abs((value ?? string.Empty).GetHashCode()) % _avatarColors.Length]}";
+    private static string ActionTone(string? action) => (action ?? string.Empty).ToUpperInvariant() switch { "READ" or "VIEW" => "per-pill--blue", "CREATE" or "UPDATE" or "APPROVE" => "per-pill--green", "DELETE" or "ADMIN" or "MANAGE" => "per-pill--red", "EXPORT" => "per-pill--amber", _ => "per-pill--neutral" };
+    private RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string tone) => @<button type="button" class="per-kpi-card per-kpi-card--@tone @(_activeKpi == key ? "per-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveKpi(key)"><div class="per-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></div><div class="per-kpi-body"><span class="per-kpi-label">@label</span><strong class="per-kpi-value">@value</strong><span class="per-kpi-sub">@subtitle</span></div></button>;
+    private RenderFragment WorkflowButton(string title, string description, string icon, System.Action onClick) => @<button type="button" class="per-workflow" @onclick="onClick"><div class="per-workflow-icon"><i class="bi @icon" aria-hidden="true"></i></div><div class="per-workflow-meta"><strong>@title</strong><span>@description</span></div></button>;
+    private RenderFragment ImpactBadge(PermissionEntry permission) => @<span class="per-risk-badge per-risk-badge--@ImpactTone(permission)" title="Permission impact score: @ImpactScore(permission)/100"><i class="bi bi-shield-fill" aria-hidden="true"></i> @ImpactLevel(permission)</span>;
+    private RenderFragment StatusBadge(PermissionEntry permission) => permission.IsActive ? @<span class="per-pill per-pill--green"><i class="bi bi-check-circle" aria-hidden="true"></i> Active</span> : @<span class="per-pill per-pill--amber"><i class="bi bi-slash-circle" aria-hidden="true"></i> Inactive</span>;
 
-    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
-    {
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
-    }
+    public void Dispose() { _debounce?.Dispose(); _cts.Cancel(); _cts.Dispose(); }
 
-    private static string Initials(string fullName)
-    {
-        var parts = fullName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : fullName.Length >= 1 ? fullName[..1] : "?";
-    }
-
-    private static string AvatarStyle(PermEntry e)
-    {
-        var hue = Math.Abs(e.PermissionCode.GetHashCode()) % 360;
-        return $"background:hsl({hue},50%,42%);color:#fff;";
-    }
-
-    private static string TypeBadgeClass(string type) => type switch
-    {
-        "Feature"  => "sp-type-badge sp-type-badge--feature",
-        "Resource" => "sp-type-badge sp-type-badge--resource",
-        "Action"   => "sp-type-badge sp-type-badge--action",
-        _          => "sp-type-badge",
-    };
-
-    private static string ExpiryClass(PermEntry e)
-    {
-        if (!e.ExpiresDate.HasValue) return "";
-        if (e.ExpiresDate.Value < DateTime.Today)           return "sp-expiry sp-expiry--expired";
-        if (e.ExpiresDate.Value < DateTime.Today.AddDays(30)) return "sp-expiry sp-expiry--expiring";
-        return "sp-expiry";
-    }
-
-    private static IReadOnlyList<string> RoleNames(PermEntry entry)
-        => string.IsNullOrWhiteSpace(entry.RoleNames)
-            ? []
-            : entry.RoleNames
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Where(roleName => !string.IsNullOrWhiteSpace(roleName))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-    private static string RoleTitle(PermEntry entry)
-        => RoleNames(entry).Count == 0 ? "No assigned roles" : string.Join(", ", RoleNames(entry));
-
-    private sealed record LabelValue(string Value, string Label);
-    private sealed record LabelValue<T>(T Value, string Label);
-
-    private sealed class PermEntry
-    {
-        public Guid      PermissionId    { get; set; } = Guid.Empty;
-        [RequiredGuid(ErrorMessage = "Permission is required.")]
-        public Guid      PermissionValidationId { get => PermissionId; set => PermissionId = value; }
-        [RequiredGuid(ErrorMessage = "User is required.")]
-        public Guid      UserId          { get; set; } = Guid.Empty;
-        public string    UserFullName    { get; set; } = string.Empty;
-        public string    UserEmail       { get; set; } = string.Empty;
-        public string    PermissionName  { get; set; } = string.Empty;
-        public string    PermissionCode  { get; set; } = string.Empty;
-        public string    ResourceCode    { get; set; } = string.Empty;
-        public string    ActionCode      { get; set; } = string.Empty;
-        public string    Description     { get; set; } = string.Empty;
-        [Required]
-        public string    PermissionType  { get; set; } = "Feature";
-        public bool      IsGranted       { get; set; } = true;
-        public bool      IsActive        { get; set; } = true;
-        public bool      IsBuiltIn       { get; set; }
-        public int       RoleCount       { get; set; }
-        public string    RoleNames       { get; set; } = string.Empty;
-        public DateTime? ExpiresDate     { get; set; }
-        public string    GrantedByName   { get; set; } = string.Empty;
-        public string    PermissionDisplayText => $"{PermissionName} ({PermissionCode})";
-    }
-
-    private sealed class RequiredGuidAttribute : ValidationAttribute
-    {
-        public override bool IsValid(object? value) => value is Guid guid && guid != Guid.Empty;
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
-    }
+    private sealed class PermissionEntry { public Guid PermissionId { get; set; } public string PermissionName { get; set; } = string.Empty; public string PermissionCode { get; set; } = string.Empty; public string ResourceCode { get; set; } = string.Empty; public string ActionCode { get; set; } = string.Empty; public string Description { get; set; } = string.Empty; public bool IsBuiltIn { get; set; } public bool IsActive { get; set; } public int RoleCount { get; set; } public string RoleNames { get; set; } = string.Empty; public int DirectGrantCount { get; set; } public int DirectDenyCount { get; set; } public string DirectUserNames { get; set; } = string.Empty; public DateTime CreatedDateUtc { get; set; } public DateTime? ModifiedDateUtc { get; set; } }
+    private sealed class PermissionFormModel { [Required(ErrorMessage = "Permission code is required.")] [StringLength(120)] public string PermissionCode { get; set; } = string.Empty; [Required(ErrorMessage = "Permission name is required.")] [StringLength(200)] public string PermissionName { get; set; } = string.Empty; [Required(ErrorMessage = "Resource is required.")] [StringLength(100)] public string ResourceCode { get; set; } = string.Empty; [Required(ErrorMessage = "Action is required.")] [StringLength(50)] public string ActionCode { get; set; } = "READ"; [StringLength(1000)] public string? Description { get; set; } public bool IsBuiltIn { get; set; } }
+    private sealed class GrantFormModel { [RequiredGuid(ErrorMessage = "User is required.")] public Guid UserId { get; set; } [RequiredGuid(ErrorMessage = "Permission is required.")] public Guid PermissionId { get; set; } public bool IsGranted { get; set; } = true; public DateTime? ExpiresDate { get; set; } [StringLength(1000)] public string? Reason { get; set; } }
+    private sealed class RequiredGuidAttribute : ValidationAttribute { public override bool IsValid(object? value) => value is Guid guid && guid != Guid.Empty; }
+    private sealed record TabDef(string Key, string Label, string Icon);
+    private sealed record InsightDef(string Title, string Description, string Icon);
+    private sealed record ToastMessage(Guid Id, string Message, string CssClass);
+    private sealed record ResourceGroup(string Name, int Count, int HighImpact, int Direct, int Percent);
 }

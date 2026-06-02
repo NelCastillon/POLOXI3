@@ -1,55 +1,576 @@
-﻿@page "/ops/renewals"
+@page "/agreements"
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Operations
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
 
-<PageTitle>Agreement Renewals</PageTitle>
-<AppPageHeader Title="Agreement Renewals" Icon="bi-arrow-repeat" />
+<PageTitle>Agreements</PageTitle>
 
-<div class="toolbar">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+@if (_toastVisible)
+{
+    <div class="agr-toast agr-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="agr-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+<div class="agr-enterprise-page">
+    <section class="agr-hero">
+        <div class="agr-hero-left">
+            <span class="agr-hero-icon"><i class="bi bi-file-earmark-check" aria-hidden="true"></i></span>
+            <div>
+                <div class="agr-title-row">
+                    <h1>Agreements</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> DB synced</span>
+                    <span><i class="bi bi-shield-check" aria-hidden="true"></i> Contract controlled</span>
+                </div>
+                <p>Enterprise agreement command center for customer contracts, lifecycle dates, renewal exposure, account alignment, amendments, compliance status, and operational governance.</p>
+            </div>
+        </div>
+        <div class="agr-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "agr-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_items.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="OpenRenewals"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Renewals</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Agreement</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="agr-error-banner" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="agr-kpi-strip" aria-label="Agreement KPIs">
+        <button type="button" class="@AllKpiClass" @onclick="ShowAll"><span class="agr-kpi-icon"><i class="bi bi-file-earmark-check-fill" aria-hidden="true"></i></span><span><strong>@_items.Count</strong><em>Total</em><small>Tenant agreements</small></span></button>
+        <button type="button" class="@ActiveKpiClass" @onclick="ShowActive"><span class="agr-kpi-icon"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span><span><strong>@ActiveCount</strong><em>Active</em><small>In force contracts</small></span></button>
+        <button type="button" class="@DraftKpiClass" @onclick="ShowDraft"><span class="agr-kpi-icon"><i class="bi bi-pencil-square" aria-hidden="true"></i></span><span><strong>@DraftCount</strong><em>Draft</em><small>Pending activation</small></span></button>
+        <button type="button" class="@RenewalKpiClass" @onclick="ShowRenewal"><span class="agr-kpi-icon"><i class="bi bi-calendar2-week" aria-hidden="true"></i></span><span><strong>@RenewalCount</strong><em>Renewal Window</em><small>Ends within 90 days</small></span></button>
+        <button type="button" class="@ExpiredKpiClass" @onclick="ShowExpired"><span class="agr-kpi-icon"><i class="bi bi-hourglass-bottom" aria-hidden="true"></i></span><span><strong>@ExpiredCount</strong><em>Expired</em><small>Past end or expired</small></span></button>
+        <button type="button" class="@ReviewKpiClass" @onclick="ShowReview"><span class="agr-kpi-icon"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></span><span><strong>@NeedsReviewCount</strong><em>Needs Review</em><small>Missing lifecycle data</small></span></button>
+    </section>
+
+    <section class="agr-workflow-strip" aria-label="Agreement workflows">
+        <button type="button" class="agr-workflow-card" @onclick="ShowLibrary"><i class="bi bi-kanban" aria-hidden="true"></i><span><strong>Library</strong><small>Agreement register</small></span></button>
+        <button type="button" class="agr-workflow-card" @onclick="ShowLifecycleView"><i class="bi bi-calendar-range" aria-hidden="true"></i><span><strong>Lifecycle</strong><small>Dates and renewals</small></span></button>
+        <button type="button" class="agr-workflow-card" @onclick="ShowGovernance"><i class="bi bi-shield-check" aria-hidden="true"></i><span><strong>Governance</strong><small>Status lanes</small></span></button>
+        <button type="button" class="agr-workflow-card" @onclick="OpenAmendments"><i class="bi bi-file-diff" aria-hidden="true"></i><span><strong>Amendments</strong><small>Change workflow</small></span></button>
+        <button type="button" class="agr-workflow-card" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i><span><strong>Create</strong><small>Add agreement</small></span></button>
+    </section>
+
+    <section class="agr-search-panel">
+        <div class="agr-search-wrap">
+            <span class="agr-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="agr-search-body">
+                <label for="agr-search">Agreement search</label>
+                <input id="agr-search" class="agr-search-input" @bind="_searchTerm" @bind:event="oninput" @bind:after="ApplyFilter" placeholder="Search agreement number, type, status, account, description..." />
+                <span class="agr-search-hint">Filters real tenant agreement records and keeps KPIs, tabs, and detail selection in sync.</span>
+            </div>
+        </div>
+        <select class="agr-filter-select" @bind="_statusFilter" @bind:after="ApplyFilter" aria-label="Status filter">
+            <option value="all">All statuses</option>
+            @foreach (var status in StatusOptions)
+            {
+                <option value="@status">@status</option>
+            }
+        </select>
+        <select class="agr-filter-select" @bind="_priorityFilter" @bind:after="ApplyFilter" aria-label="Lifecycle filter">
+            <option value="all">All lifecycle</option>
+            <option value="renewal">Renewal window</option>
+            <option value="expired">Expired</option>
+            <option value="review">Needs review</option>
+            <option value="active">Active</option>
+        </select>
+        <select class="agr-filter-select" @bind="_typeFilter" @bind:after="ApplyFilter" aria-label="Type filter">
+            <option value="all">All types</option>
+            @foreach (var type in TypeOptions)
+            {
+                <option value="@type">@type</option>
+            }
+        </select>
+        <div class="agr-search-result"><strong>@_filtered.Count</strong><span>records</span></div>
+    </section>
+
+    <nav class="agr-view-tabs" aria-label="Agreement views">
+        @foreach (var view in _views)
+        {
+            <button type="button" class="agr-view-btn @(_activeView == view ? "agr-view-btn-active" : null)" @onclick="() => SetView(view)">@view</button>
+        }
+    </nav>
+
+    <section class="agr-content-layout">
+        <div class="agr-main-card">
+            @if (_loading)
+            {
+                <div class="agr-loading"><i class="bi bi-arrow-repeat agr-spin" aria-hidden="true"></i><span>Loading agreements...</span></div>
+            }
+            else if (_filtered.Count == 0)
+            {
+                <div class="agr-empty-state"><i class="bi bi-file-earmark-check" aria-hidden="true"></i><h2>No agreements found</h2><p>Adjust filters or create the first agreement.</p><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Agreement</button></div>
+            }
+            else if (_activeView == "Lifecycle")
+            {
+                <div class="agr-governance-grid">
+                    <section class="agr-panel">
+                        <header><div><i class="bi bi-calendar-range" aria-hidden="true"></i><strong>Lifecycle Health</strong></div><span>@LifecycleScore.ToString("F0")%</span></header>
+                        <div class="agr-panel-body agr-metric-list">
+                            <div class="agr-metric-row"><span>Active</span><div><i style="@WidthStyle(ActiveCount, SafeTotal)"></i></div><strong>@ActiveCount</strong></div>
+                            <div class="agr-metric-row"><span>Renewal window</span><div><i style="@WidthStyle(RenewalCount, SafeTotal)"></i></div><strong>@RenewalCount</strong></div>
+                            <div class="agr-metric-row"><span>Expired</span><div><i style="@WidthStyle(ExpiredCount, SafeTotal)"></i></div><strong>@ExpiredCount</strong></div>
+                            <div class="agr-metric-row"><span>Needs review</span><div><i style="@WidthStyle(NeedsReviewCount, SafeTotal)"></i></div><strong>@NeedsReviewCount</strong></div>
+                        </div>
+                    </section>
+                    <section class="agr-panel">
+                        <header><div><i class="bi bi-tags" aria-hidden="true"></i><strong>Agreement Types</strong></div><span>@TypeOptions.Count</span></header>
+                        <div class="agr-panel-body agr-group-list">
+                            @foreach (var group in TypeSummaries)
+                            {
+                                <button type="button" class="agr-group-row" @onclick="() => FilterType(group.Name)"><span>@group.Name</span><div><i style="@WidthStyle(group.Count, SafeTotal)"></i></div><strong>@group.Count</strong></button>
+                            }
+                        </div>
+                    </section>
+                    <section class="agr-panel agr-panel-wide">
+                        <header><div><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><strong>Agreement Review Queue</strong></div><span>@ReviewQueue.Count</span></header>
+                        <div class="agr-panel-body agr-review-list">
+                            @foreach (var item in ReviewQueue.Take(8))
+                            {
+                                <button type="button" class="agr-review-row" @onclick="() => SelectItem(item)"><strong>@item.AgreementNumber</strong><span>@ReviewReason(item)</span><em>@LifecycleLabel(item)</em></button>
+                            }
+                        </div>
+                    </section>
+                </div>
+            }
+            else if (_activeView == "Governance")
+            {
+                <div class="agr-board">
+                    @foreach (var lane in GovernanceLanes)
+                    {
+                        <section class="agr-board-col">
+                            <header><strong>@lane.Title</strong><span>@lane.Items.Count</span></header>
+                            @foreach (var item in lane.Items)
+                            {
+                                <button type="button" class="agr-board-card" @onclick="() => SelectItem(item)">
+                                    <div><strong>@item.AgreementNumber</strong><span>@StatusLabel(item)</span></div>
+                                    <small>@AccountName(item.AccountId) · @DateRange(item)</small>
+                                    <em>@LifecycleLabel(item)</em>
+                                </button>
+                            }
+                        </section>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="agr-table-scroll">
+                    <table class="agr-table">
+                        <thead><tr><th>Agreement</th><th>Account</th><th>Type</th><th>Lifecycle</th><th>Status</th><th>Created</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var item in _filtered)
+                            {
+                                <tr @onclick="() => SelectItem(item)">
+                                    <td><div class="agr-name-cell"><span class="agr-avatar @AvatarClass(item)">@Initials(item.AgreementNumber)</span><span><strong>@item.AgreementNumber</strong><small>@(item.Description ?? "No description provided")</small></span></div></td>
+                                    <td>@AccountName(item.AccountId)</td>
+                                    <td><span class="agr-code-pill">@TypeLabel(item)</span></td>
+                                    <td><span class="@LifecycleClass(item)">@LifecycleLabel(item)</span></td>
+                                    <td><span class="@StatusClass(item)">@StatusLabel(item)</span></td>
+                                    <td>@item.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</td>
+                                    <td><div class="agr-row-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(item)" title="Delete"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <aside class="agr-detail-card" aria-label="Selected agreement">
+            @if (_selected is null)
+            {
+                <div class="agr-detail-empty"><i class="bi bi-file-earmark-check" aria-hidden="true"></i><h2>Agreement command brief</h2><p>Select an agreement to review account alignment, lifecycle dates, status, renewal exposure, and actions.</p></div>
+            }
+            else
+            {
+                <div class="agr-detail-head"><div><span class="agr-detail-eyebrow"><i class="bi bi-file-earmark-check" aria-hidden="true"></i> @AccountName(_selected.AccountId)</span><h2>@_selected.AgreementNumber</h2><p>@TypeLabel(_selected)</p></div><span class="@StatusClass(_selected)">@StatusLabel(_selected)</span></div>
+                <div class="agr-detail-body">
+                    <div class="agr-detail-summary">
+                        <div><span>Lifecycle</span><strong>@LifecycleLabel(_selected)</strong></div>
+                        <div><span>Start</span><strong>@FormatDate(_selected.StartDate)</strong></div>
+                        <div><span>End</span><strong>@FormatDate(_selected.EndDate)</strong></div>
+                        <div><span>Status</span><strong>@StatusLabel(_selected)</strong></div>
+                    </div>
+                    <div class="agr-config-card"><span>Governance brief</span><strong>@ReviewReason(_selected)</strong><small>@(_selected.Description ?? "No description configured.")</small></div>
+                    <div class="agr-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit Agreement</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="DuplicateSelected"><i class="bi bi-files" aria-hidden="true"></i> Duplicate</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="OpenRenewals"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Renewals</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="OpenAmendments"><i class="bi bi-file-diff" aria-hidden="true"></i> Amendments</button>
+                        <button type="button" class="um-btn um-btn-ghost text-danger" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
+                    </div>
+                </div>
+            }
+        </aside>
+    </section>
 </div>
 
-@if (_items is null) { <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div> }
-else {
-<SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-    <GridPageSettings PageSize="10"></GridPageSettings>
-    <GridColumns>
-        <GridColumn Field="@nameof(AgreementRenewalDto.RenewalNumber)"      HeaderText="Renewal #"    Width="150"></GridColumn>
-        <GridColumn Field="@nameof(AgreementRenewalDto.NewStartDate)"       HeaderText="New Start"    Type="ColumnType.Date" Format="d" Width="130"></GridColumn>
-        <GridColumn Field="@nameof(AgreementRenewalDto.NewEndDate)"         HeaderText="New End"      Type="ColumnType.Date" Format="d" Width="130"></GridColumn>
-        <GridColumn Field="@nameof(AgreementRenewalDto.TotalContractValue)" HeaderText="Contract Value" Format="C2" Width="150"></GridColumn>
-        <GridColumn Field="@nameof(AgreementRenewalDto.StatusCode)"         HeaderText="Status"       Width="120"></GridColumn>
-        <GridColumn Field="@nameof(AgreementRenewalDto.ProcessedDateUtc)"   HeaderText="Processed"    Type="ColumnType.DateTime" Format="d" Width="130"></GridColumn>
-        <GridColumn Field="@nameof(AgreementRenewalDto.CreatedDateUtc)"     HeaderText="Created"      Type="ColumnType.DateTime" Format="d" Width="130"></GridColumn>
-    </GridColumns>
-</SfGrid>
+@if (_showForm)
+{
+    <div class="agr-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="agr-form-title">
+        <div class="agr-modal">
+            <div class="agr-modal-header"><div class="agr-modal-title"><span class="agr-modal-icon"><i class="bi bi-file-earmark-check" aria-hidden="true"></i></span><div><h2 id="agr-form-title">@(_editId.HasValue ? "Edit Agreement" : "New Agreement")</h2><p>Configure account alignment, agreement type, lifecycle dates, and contract description.</p></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseForm" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm @key="_form" Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="ShowValidation">
+                <DataAnnotationsValidator />
+                <div class="agr-modal-body">
+                    <div class="agr-form-banner"><i class="bi bi-info-circle" aria-hidden="true"></i><span><strong>Agreement governance</strong> Existing backend support persists agreement number and creates account-linked draft agreements; lifecycle fields are submitted through the API contract.</span></div>
+                    <div class="agr-form-grid">
+                        <div class="agr-field"><label>Agreement # <span>*</span></label><InputText @bind-Value="_form.AgreementNumber" class="agr-input" /><ValidationMessage For="() => _form.AgreementNumber" class="text-danger" /></div>
+                        <div class="agr-field"><label>Account <span>*</span></label><InputSelect @bind-Value="_form.AccountIdText" class="agr-input" disabled="@_editId.HasValue"><option value="">Select account</option>@foreach (var account in _accounts){<option value="@account.Value">@account.Label</option>}</InputSelect><ValidationMessage For="() => _form.AccountIdText" class="text-danger" /></div>
+                        <div class="agr-field"><label>Type <span>*</span></label><InputSelect @bind-Value="_form.AgreementTypeCode" class="agr-input">@foreach (var type in _agreementTypes){<option value="@type">@type</option>}</InputSelect><ValidationMessage For="() => _form.AgreementTypeCode" class="text-danger" /></div>
+                        <div class="agr-field"><label>Status</label><input class="agr-input" value="@(_editId.HasValue && _selected is not null ? StatusLabel(_selected) : "Draft")" disabled /></div>
+                        <div class="agr-field"><label>Start <span>*</span></label><InputDate @bind-Value="_form.StartDate" class="agr-input" /><ValidationMessage For="() => _form.StartDate" class="text-danger" /></div>
+                        <div class="agr-field"><label>End</label><InputDate @bind-Value="_form.EndDate" class="agr-input" /></div>
+                        <div class="agr-field agr-field-wide"><label>Description</label><InputTextArea @bind-Value="_form.Description" class="agr-input" rows="3" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
+                    </div>
+                </div>
+                <div class="agr-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check2" aria-hidden="true"></i> @(_editId.HasValue ? "Save Changes" : "Create Agreement")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showDelete)
+{
+    <div class="agr-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="agr-delete-title">
+        <div class="agr-confirm-modal">
+            <div class="agr-confirm-icon"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
+            <h2 id="agr-delete-title">Delete Agreement</h2>
+            <p>Delete <strong>@_deleteTarget?.AgreementNumber</strong>? Agreement history may still be referenced by downstream operational records.</p>
+            <div class="agr-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete">Cancel</button><button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div>
+        </div>
+    </div>
 }
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
-    private Guid _tenantId;
-    private string? _searchTerm;
-    private List<AgreementRenewalDto>? _items;
-    protected override async Task OnInitializedAsync() => await LoadAsync();
-    private async Task LoadAsync()
-    {
-        var result = await Api.SearchAgreementRenewalsAsync(_tenantId, searchTerm: _searchTerm);
-        _items = result?.Items.ToList() ?? [];
-    }
+    private Guid TenantId { get; set; }
+    private Guid TenantAdminUserId { get; set; }
+    private bool _loading;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private bool _toastVisible;
+    private string _searchTerm = string.Empty;
+    private string _statusFilter = "all";
+    private string _priorityFilter = "all";
+    private string _typeFilter = "all";
+    private string _activeView = "Library";
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private Guid? _editId;
+    private AgreementDto? _selected;
+    private AgreementDto? _deleteTarget;
+    private readonly string[] _views = ["Library", "Lifecycle", "Governance"];
+    private readonly string[] _agreementTypes = ["Master Service Agreement", "Client Agreement", "Producer Agreement", "Carrier Agreement", "Statement of Work", "Service Agreement"];
+    private List<AgreementDto> _items = [];
+    private List<AgreementDto> _filtered = [];
+    private List<AccountOption> _accounts = [];
+    private AgreementForm _form = new();
 
-    async Task ResolveCurrentUserContextAsync()
+    private int ActiveCount => _items.Count(IsActive);
+    private int DraftCount => _items.Count(IsDraft);
+    private int RenewalCount => _items.Count(IsRenewalWindow);
+    private int ExpiredCount => _items.Count(IsExpired);
+    private int NeedsReviewCount => _items.Count(NeedsReview);
+    private int SafeTotal => Math.Max(_items.Count, 1);
+    private double LifecycleScore => _items.Count == 0 ? 0 : (ActiveCount + RenewalCount - ExpiredCount - NeedsReviewCount) * 100d / Math.Max(_items.Count * 2, 1);
+    private List<string> StatusOptions => _items.Select(StatusLabel).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+    private List<string> TypeOptions => _items.Select(TypeLabel).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+    private List<GroupSummary> TypeSummaries => _items.GroupBy(TypeLabel, StringComparer.OrdinalIgnoreCase).Select(g => new GroupSummary(g.Key, g.Count())).OrderByDescending(x => x.Count).ToList();
+    private List<AgreementDto> ReviewQueue => _items.Where(x => NeedsReview(x) || IsRenewalWindow(x) || IsExpired(x)).OrderBy(x => x.EndDate ?? DateOnly.MaxValue).ThenBy(x => x.AgreementNumber).ToList();
+    private List<GovernanceLane> GovernanceLanes =>
+    [
+        new("Draft", _filtered.Where(IsDraft).ToList()),
+        new("Active", _filtered.Where(IsActive).ToList()),
+        new("Renewal / Review", _filtered.Where(x => IsRenewalWindow(x) || NeedsReview(x)).ToList()),
+    ];
+    private string ToastIcon => _toastKind == "success" ? "bi-check-circle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-exclamation-triangle-fill";
+    private string AllKpiClass => KpiClass("all", "agr-blue");
+    private string ActiveKpiClass => KpiClass("active", "agr-green");
+    private string DraftKpiClass => KpiClass("draft", "agr-slate");
+    private string RenewalKpiClass => KpiClass("renewal", "agr-cyan");
+    private string ExpiredKpiClass => KpiClass("expired", "agr-amber");
+    private string ReviewKpiClass => KpiClass("review", "agr-purple");
+
+    protected override async Task OnInitializedAsync()
     {
         var context = await CurrentUser.RequireAsync();
         TenantId = context.TenantId;
         TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Tasks & Workflows", "/tasks"), new("Agreements", "/agreements"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            await LoadAccountsAsync();
+            var result = await Api.SearchAgreementsAsync(TenantId, _searchTerm);
+            _items = result?.Items.OrderByDescending(x => x.CreatedDateUtc).ThenBy(x => x.AgreementNumber).ToList() ?? [];
+            ApplyFilter();
+            _selected ??= _filtered.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load agreements: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilter()
+    {
+        IEnumerable<AgreementDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm)) query = query.Where(MatchesSearch);
+        if (_statusFilter != "all") query = query.Where(x => string.Equals(StatusLabel(x), _statusFilter, StringComparison.OrdinalIgnoreCase));
+        if (_priorityFilter == "renewal") query = query.Where(IsRenewalWindow);
+        else if (_priorityFilter == "expired") query = query.Where(IsExpired);
+        else if (_priorityFilter == "review") query = query.Where(NeedsReview);
+        else if (_priorityFilter == "active") query = query.Where(IsActive);
+        if (_typeFilter != "all") query = query.Where(x => string.Equals(TypeLabel(x), _typeFilter, StringComparison.OrdinalIgnoreCase));
+        _filtered = query.OrderBy(x => NeedsReview(x) ? 0 : IsRenewalWindow(x) ? 1 : 2).ThenBy(x => x.EndDate ?? DateOnly.MaxValue).ThenBy(x => x.AgreementNumber).ToList();
+        if (_selected is not null && !_filtered.Any(x => x.AgreementId == _selected.AgreementId)) _selected = _filtered.FirstOrDefault();
+    }
+
+    private void ShowAll() { _statusFilter = "all"; _priorityFilter = "all"; _typeFilter = "all"; ApplyFilter(); }
+    private void ShowActive() { _statusFilter = "Active"; _priorityFilter = "active"; ApplyFilter(); }
+    private void ShowDraft() { _statusFilter = "Draft"; _priorityFilter = "all"; ApplyFilter(); }
+    private void ShowRenewal() { _statusFilter = "all"; _priorityFilter = "renewal"; ApplyFilter(); }
+    private void ShowExpired() { _statusFilter = "all"; _priorityFilter = "expired"; ApplyFilter(); }
+    private void ShowReview() { _statusFilter = "all"; _priorityFilter = "review"; ApplyFilter(); }
+    private void ShowLibrary() => SetView("Library");
+    private void ShowLifecycleView() => SetView("Lifecycle");
+    private void ShowGovernance() => SetView("Governance");
+    private void SetView(string view) => _activeView = view;
+    private void FilterType(string type) { _typeFilter = type; ApplyFilter(); }
+    private void SelectItem(AgreementDto item) => _selected = item;
+    private void OpenRenewals() => Nav.NavigateTo("/ops/renewals2");
+    private void OpenAmendments() => Nav.NavigateTo("/ops/amendments");
+
+    private void OpenCreate()
+    {
+        _editId = null;
+        _form = new() { AgreementNumber = $"AGR-{DateTime.UtcNow:yyyyMMddHHmmss}", AgreementTypeCode = _agreementTypes[0], StartDate = DateOnly.FromDateTime(DateTime.Today) };
+        _showForm = true;
+    }
+
+    private void OpenEdit(AgreementDto item)
+    {
+        _editId = item.AgreementId;
+        _selected = item;
+        _form = new()
+        {
+            AgreementNumber = item.AgreementNumber,
+            AccountIdText = item.AccountId.ToString(),
+            AgreementTypeCode = string.IsNullOrWhiteSpace(item.AgreementTypeCode) ? _agreementTypes[0] : item.AgreementTypeCode,
+            StartDate = item.StartDate,
+            EndDate = item.EndDate,
+            Description = item.Description
+        };
+        _showForm = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (_editId.HasValue)
+            {
+                await Api.UpdateAgreementAsync(_editId.Value, new()
+                {
+                    AgreementNumber = _form.AgreementNumber.Trim(),
+                    AgreementTypeCode = _form.AgreementTypeCode,
+                    StartDate = _form.StartDate,
+                    EndDate = _form.EndDate,
+                    Description = Clean(_form.Description),
+                    ModifiedByUserId = TenantAdminUserId
+                });
+                ShowToast("Agreement updated.");
+            }
+            else
+            {
+                var id = await Api.CreateAgreementAsync(new()
+                {
+                    TenantId = TenantId,
+                    AccountId = Guid.Parse(_form.AccountIdText),
+                    AgreementNumber = _form.AgreementNumber.Trim(),
+                    AgreementTypeCode = _form.AgreementTypeCode,
+                    StartDate = _form.StartDate,
+                    EndDate = _form.EndDate,
+                    Description = Clean(_form.Description),
+                    CreatedByUserId = TenantAdminUserId
+                });
+                _editId = id;
+                ShowToast("Agreement created.");
+            }
+            _showForm = false;
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.AgreementId == _editId) ?? _selected;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void ConfirmDelete(AgreementDto item) { _deleteTarget = item; _showDelete = true; }
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteAgreementAsync(_deleteTarget.AgreementId, TenantAdminUserId);
+            ShowToast("Agreement deleted.");
+            if (_selected?.AgreementId == _deleteTarget.AgreementId) _selected = null;
+            _showDelete = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void DuplicateSelected()
+    {
+        if (_selected is null) return;
+        _editId = null;
+        _form = new()
+        {
+            AgreementNumber = $"{_selected.AgreementNumber}-COPY",
+            AccountIdText = _selected.AccountId.ToString(),
+            AgreementTypeCode = string.IsNullOrWhiteSpace(_selected.AgreementTypeCode) ? _agreementTypes[0] : _selected.AgreementTypeCode,
+            StartDate = _selected.StartDate,
+            EndDate = _selected.EndDate,
+            Description = _selected.Description
+        };
+        _showForm = true;
+    }
+
+    private Task ExportAsync()
+    {
+        var rows = new List<string> { "Number,Account,Type,Status,Lifecycle,Start,End,Created" };
+        rows.AddRange(_filtered.Select(x => string.Join(',', Csv(x.AgreementNumber), Csv(AccountName(x.AccountId)), Csv(TypeLabel(x)), Csv(StatusLabel(x)), Csv(LifecycleLabel(x)), Csv(FormatDate(x.StartDate)), Csv(FormatDate(x.EndDate)), Csv(x.CreatedDateUtc.ToString("O")))));
+        Nav.NavigateTo("data:text/csv;charset=utf-8," + Uri.EscapeDataString(string.Join(Environment.NewLine, rows)), forceLoad: true);
+        ShowToast("Agreement export generated.");
+        return Task.CompletedTask;
+    }
+
+    private async Task LoadAccountsAsync()
+    {
+        if (_accounts.Count > 0) return;
+        var result = await Api.SearchAccountsAsync(TenantId);
+        _accounts = (result?.Items ?? []).OrderBy(x => x.AccountName).Select(x => new AccountOption(x.AccountId.ToString(), x.AccountName)).ToList();
+    }
+
+    private void ShowValidation() => ShowToast("Please fix validation errors before saving.", "danger");
+    private void CloseForm() { _showForm = false; _form = new(); _editId = null; }
+    private void CancelDelete() { _showDelete = false; _deleteTarget = null; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+
+    private string KpiClass(string key, string tone)
+    {
+        var active = false;
+        if (key == "all") active = _statusFilter == "all" && _priorityFilter == "all" && _typeFilter == "all";
+        else if (key == "active") active = _priorityFilter == "active";
+        else if (key == "draft") active = _statusFilter == "Draft";
+        else if (key == "renewal") active = _priorityFilter == "renewal";
+        else if (key == "expired") active = _priorityFilter == "expired";
+        else if (key == "review") active = _priorityFilter == "review";
+        return $"agr-kpi-card {tone}{(active ? " agr-kpi-card-active" : string.Empty)}";
+    }
+
+    private bool MatchesSearch(AgreementDto item)
+    {
+        var q = _searchTerm.Trim();
+        return Contains(item.AgreementNumber, q) || Contains(item.AgreementTypeCode, q) || Contains(item.Description, q) || Contains(StatusLabel(item), q) || Contains(AccountName(item.AccountId), q);
+    }
+
+    private static bool Contains(string? value, string search) => value?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
+    private static bool IsDraft(AgreementDto item) => item.StatusCode == 1;
+    private static bool IsActive(AgreementDto item) => item.StatusCode == 2;
+    private static bool IsExpiredStatus(AgreementDto item) => item.StatusCode == 3;
+    private static bool IsCancelled(AgreementDto item) => item.StatusCode == 4;
+    private static bool IsExpired(AgreementDto item) => IsExpiredStatus(item) || (item.EndDate.HasValue && item.EndDate.Value < DateOnly.FromDateTime(DateTime.Today) && !IsCancelled(item));
+    private static bool IsRenewalWindow(AgreementDto item) => item.EndDate.HasValue && item.EndDate.Value >= DateOnly.FromDateTime(DateTime.Today) && item.EndDate.Value <= DateOnly.FromDateTime(DateTime.Today.AddDays(90)) && !IsCancelled(item);
+    private static bool NeedsReview(AgreementDto item) => string.IsNullOrWhiteSpace(item.AgreementNumber) || item.AccountId == Guid.Empty || string.IsNullOrWhiteSpace(item.AgreementTypeCode) || IsExpired(item);
+    private static string StatusLabel(AgreementDto item) => item.StatusCode switch { 1 => "Draft", 2 => "Active", 3 => "Expired", 4 => "Cancelled", _ => "Unknown" };
+    private static string TypeLabel(AgreementDto item) => string.IsNullOrWhiteSpace(item.AgreementTypeCode) ? "Unassigned" : item.AgreementTypeCode.Trim();
+    private static string StatusClass(AgreementDto item) => IsActive(item) ? "agr-status agr-status-active" : IsDraft(item) ? "agr-status agr-status-draft" : IsExpired(item) ? "agr-status agr-status-risk" : "agr-status agr-status-inactive";
+    private static string LifecycleLabel(AgreementDto item) => NeedsReview(item) ? "Needs Review" : IsRenewalWindow(item) ? "Renewal Window" : IsActive(item) ? "Active" : IsDraft(item) ? "Draft" : StatusLabel(item);
+    private static string LifecycleClass(AgreementDto item) => NeedsReview(item) ? "agr-lifecycle agr-lifecycle-review" : IsRenewalWindow(item) ? "agr-lifecycle agr-lifecycle-renewal" : IsActive(item) ? "agr-lifecycle agr-lifecycle-active" : IsDraft(item) ? "agr-lifecycle agr-lifecycle-draft" : "agr-lifecycle agr-lifecycle-standard";
+    private static string ReviewReason(AgreementDto item)
+    {
+        if (item.AccountId == Guid.Empty) return "Agreement is not linked to an account.";
+        if (string.IsNullOrWhiteSpace(item.AgreementNumber)) return "Agreement number is missing.";
+        if (string.IsNullOrWhiteSpace(item.AgreementTypeCode)) return "Agreement type is missing.";
+        if (IsExpired(item)) return "Agreement is expired or past its configured end date.";
+        if (IsRenewalWindow(item)) return "Agreement end date is within the next 90 days.";
+        if (IsDraft(item)) return "Agreement is still in draft status.";
+        return "Agreement is in good standing.";
+    }
+
+    private string AccountName(Guid accountId) => _accounts.FirstOrDefault(x => string.Equals(x.Value, accountId.ToString(), StringComparison.OrdinalIgnoreCase))?.Label ?? "Unassigned account";
+    private static string DateRange(AgreementDto item) => $"{FormatDate(item.StartDate)} → {FormatDate(item.EndDate)}";
+    private static string FormatDate(DateOnly value) => value.ToString("MMM d, yyyy");
+    private static string FormatDate(DateOnly? value) => value?.ToString("MMM d, yyyy") ?? "Not set";
+    private static string WidthStyle(int value, int max) => $"width:{Math.Clamp((int)Math.Round(value * 100d / Math.Max(max, 1)), 0, 100)}%;";
+    private static string AvatarClass(AgreementDto item)
+    {
+        var index = Math.Abs(item.AgreementNumber.GetHashCode()) % 6;
+        if (index == 0) return "agr-av1";
+        if (index == 1) return "agr-av2";
+        if (index == 2) return "agr-av3";
+        if (index == 3) return "agr-av4";
+        if (index == 4) return "agr-av5";
+        return "agr-av6";
+    }
+    private static string Initials(string name)
+    {
+        var parts = name.Split(' ', '-', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant() : name.Length > 0 ? name[..1].ToUpperInvariant() : "?";
+    }
+    private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string Csv(string? value) => string.Concat("\"", (value ?? string.Empty).Replace("\"", "\"\""), "\"");
+
+    private sealed record AccountOption(string Value, string Label);
+    private sealed record GroupSummary(string Name, int Count);
+    private sealed record GovernanceLane(string Title, List<AgreementDto> Items);
+    private sealed class AgreementForm
+    {
+        [Required, StringLength(50)] public string AgreementNumber { get; set; } = string.Empty;
+        [Required(ErrorMessage = "Select an account.")] public string AccountIdText { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string AgreementTypeCode { get; set; } = string.Empty;
+        [Required] public DateOnly StartDate { get; set; } = DateOnly.FromDateTime(DateTime.Today);
+        public DateOnly? EndDate { get; set; }
+        [StringLength(1000)] public string? Description { get; set; }
     }
 }

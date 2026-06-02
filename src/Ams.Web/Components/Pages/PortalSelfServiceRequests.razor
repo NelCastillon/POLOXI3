@@ -1,5 +1,6 @@
 @page "/portal/requests"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
 @using System.Text.Json
 @using Ams.Application.Common.Dtos
 @inject ApiClient Api
@@ -15,6 +16,96 @@
         <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
         <span>@_toastMessage</span>
         <button type="button" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="pr-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="pr-form-modal" role="dialog" aria-modal="true" aria-labelledby="pr-form-title" @onclick:stopPropagation="true">
+            <EditForm Model="_form" OnValidSubmit="SaveRequestAsync" OnInvalidSubmit="HandleInvalidSubmit">
+                <DataAnnotationsValidator />
+                <div class="um-modal-header">
+                    <i class="bi @(_editingRequest is null ? "bi-inbox-fill" : "bi-pencil-square")" aria-hidden="true"></i>
+                    <span id="pr-form-title">@(_editingRequest is null ? "Create Portal Request" : $"Edit {_form.RequestType}")</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="pr-form-intro">
+                        <strong>Self-service request intake</strong>
+                        <span>Create or update the client-facing request record, assignment, priority, and service status.</span>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Client Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.ClientName" />
+                            <ValidationMessage For="() => _form.ClientName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Account Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.AccountName" />
+                            <ValidationMessage For="() => _form.AccountName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Request Type <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.RequestType">
+                                @foreach (var type in FormRequestTypes)
+                                {
+                                    <option value="@type">@type</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.RequestType" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Priority <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.Priority">
+                                @foreach (var priority in FormPriorities)
+                                {
+                                    <option value="@priority">@priority</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.Priority" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Status <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.Status">
+                                @foreach (var status in FormStatuses)
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.Status" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Assigned To</label>
+                            <InputText class="form-control" @bind-Value="_form.AssignedTo" />
+                            <ValidationMessage For="() => _form.AssignedTo" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Summary <span class="text-danger">*</span></label>
+                            <InputTextArea class="form-control" rows="4" @bind-Value="_form.Summary" />
+                            <ValidationMessage For="() => _form.Summary" class="text-danger" />
+                        </div>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(_formError))
+                    {
+                        <div class="alert alert-danger pr-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+                            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_formError
+                        </div>
+                    }
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
+                        @if (_busy)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        Save Request
+                    </button>
+                </div>
+            </EditForm>
+        </div>
     </div>
 }
 
@@ -48,21 +139,29 @@
 <div class="pr-page" @onclick="CloseActionMenu">
     <section class="pr-hero">
         <div class="pr-hero__content">
-            <span class="pr-hero__eyebrow"><i class="bi bi-inbox-fill" aria-hidden="true"></i> Client self-service command center</span>
-            <h1>Portal Requests</h1>
-            <p>Review, prioritize, assign, fulfill, and audit client self-service requests submitted through the insured portal.</p>
-            <div class="pr-hero__meta">
-                <span><i class="bi bi-inbox" aria-hidden="true"></i>@_requests.Count requests</span>
-                <span><i class="bi bi-clock" aria-hidden="true"></i>@_requests.Count(r => r.Status == "Open") open</span>
-                <span><i class="bi bi-exclamation-circle" aria-hidden="true"></i>@UrgentOpenCount urgent</span>
-                <span><i class="bi bi-stopwatch" aria-hidden="true"></i>@AverageAgeHours.ToString("0.0")h avg age</span>
+            <div class="pr-hero-left">
+                <span class="pr-hero-icon"><i class="bi bi-inbox-fill" aria-hidden="true"></i></span>
+                <div class="pr-hero-title">
+                    <span class="pr-hero__eyebrow">Client self-service command center</span>
+                    <div class="pr-title-row">
+                        <h1>Portal Requests</h1>
+                        <div class="pr-hero__meta">
+                            <span><i class="bi bi-inbox" aria-hidden="true"></i>@_requests.Count requests</span>
+                            <span><i class="bi bi-clock" aria-hidden="true"></i>@_requests.Count(r => r.Status == "Open") open</span>
+                            <span><i class="bi bi-exclamation-circle" aria-hidden="true"></i>@UrgentOpenCount urgent</span>
+                            <span><i class="bi bi-stopwatch" aria-hidden="true"></i>@AverageAgeHours.ToString("0.0")h avg age</span>
+                        </div>
+                    </div>
+                </div>
             </div>
+            <p>Review, prioritize, assign, fulfill, and audit client self-service requests from the insured portal.</p>
         </div>
         <div class="pr-hero__actions">
             <button type="button" class="pr-btn pr-btn--light" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "pr-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="pr-btn pr-btn--primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Request</button>
             <button type="button" class="pr-btn pr-btn--light" @onclick="AssignOpenToMe"><i class="bi bi-person-check" aria-hidden="true"></i> Claim Open</button>
             <button type="button" class="pr-btn pr-btn--light" @onclick="EscalateUrgent"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Escalate Urgent</button>
-            <button type="button" class="pr-btn pr-btn--primary" @onclick="ExportAsync" disabled="@(!FilteredRequests.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="pr-btn pr-btn--light" @onclick="ExportAsync" disabled="@(!FilteredRequests.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
         </div>
     </section>
 
@@ -76,11 +175,11 @@
     </section>
 
     <section class="pr-workflows" aria-label="Portal request workflows">
+        <button type="button" class="pr-workflow" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i><span><strong>New request</strong><small>Create service intake</small></span></button>
         <button type="button" class="pr-workflow" @onclick="AssignOpenToMe"><i class="bi bi-person-check" aria-hidden="true"></i><span><strong>Claim open</strong><small>Assign open requests to me</small></span></button>
         <button type="button" class="pr-workflow" @onclick="EscalateUrgent"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span><strong>Escalate urgent</strong><small>Push urgent items forward</small></span></button>
         <button type="button" class="pr-workflow" @onclick="OpenCoiQueue"><i class="bi bi-file-earmark-text" aria-hidden="true"></i><span><strong>COI queue</strong><small>Filter certificate requests</small></span></button>
         <button type="button" class="pr-workflow" @onclick="OpenPortalDocuments"><i class="bi bi-folder2-open" aria-hidden="true"></i><span><strong>Documents</strong><small>Open portal documents</small></span></button>
-        <button type="button" class="pr-workflow" @onclick="OpenPortalActivity"><i class="bi bi-clock-history" aria-hidden="true"></i><span><strong>Activity</strong><small>Open audit activity</small></span></button>
     </section>
 
     <section class="pr-filter-panel">
@@ -133,6 +232,7 @@
                     <p>Prioritized by urgency, age, unassigned ownership, status, and operational service impact.</p>
                 </div>
                 <div class="pr-card-actions">
+                    <button type="button" class="pr-btn pr-btn--primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New</button>
                     <button type="button" class="pr-btn pr-btn--ghost" @onclick="ToggleView"><i class="bi @(_cardView ? "bi-table" : "bi-grid-3x3-gap")" aria-hidden="true"></i> @(_cardView ? "Table" : "Cards")</button>
                     <button type="button" class="pr-btn pr-btn--primary" @onclick="ExportAsync" disabled="@(!FilteredRequests.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
                 </div>
@@ -220,6 +320,7 @@
                     </div>
                     <div class="pr-selected-actions">
                         <button type="button" class="pr-btn pr-btn--primary" @onclick="() => ClaimRequest(selected)" disabled="@(selected.Status == "Fulfilled")"><i class="bi bi-person-check" aria-hidden="true"></i> Claim</button>
+                        <button type="button" class="pr-btn pr-btn--ghost" @onclick="() => OpenEdit(selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
                         <button type="button" class="pr-btn pr-btn--ghost" @onclick="() => OpenFulfillmentConfirm(selected)"><i class="bi bi-check-circle" aria-hidden="true"></i> @FulfillmentActionLabel(selected)</button>
                     </div>
                 }
@@ -245,6 +346,7 @@
     private bool _loading;
     private bool _busy;
     private bool _toastVisible;
+    private bool _showForm;
     private bool _showConfirm;
     private bool _cardView;
     private string _currentAssignee = "Tenant Admin";
@@ -256,10 +358,12 @@
     private string? _typeFilter;
     private string? _priorityFilter;
     private string? _loadError;
+    private string? _formError;
     private Guid? _openActionMenuFor;
     private int _page = 1;
     private const int PageSize = 12;
     private PortalRequest? _selected;
+    private PortalRequest? _editingRequest;
     private PortalRequest? _pendingRequest;
     private string _pendingAction = string.Empty;
     private string _confirmTitle = "Confirm action";
@@ -272,12 +376,16 @@
     private bool HasFilters => !string.IsNullOrWhiteSpace(_searchText) || !string.IsNullOrWhiteSpace(_typeFilter) || !string.IsNullOrWhiteSpace(_priorityFilter) || _kpiFilter is not null || _activeTab != "all";
     private IEnumerable<string> RequestTypes => _requests.Select(r => r.RequestType).Where(t => !string.IsNullOrWhiteSpace(t)).Distinct().OrderBy(t => t);
     private IEnumerable<string> Priorities => _requests.Select(r => r.Priority).Where(p => !string.IsNullOrWhiteSpace(p)).Distinct().OrderByDescending(PriorityWeight);
+    private IEnumerable<string> FormRequestTypes => RequestTypes.Concat(["COI Request", "Policy Change", "Document Upload", "Payment", "Claim Intake", "Renewal Questionnaire", "Secure Message"]).Distinct().OrderBy(t => t);
+    private static readonly string[] FormPriorities = ["Urgent", "Normal", "Low"];
+    private static readonly string[] FormStatuses = ["Open", "In Progress", "Fulfilled"];
     private TabDef[] Tabs => [new("all", "All", "bi-stack"), new("open", "Open", "bi-clock"), new("progress", "In Progress", "bi-hourglass-split"), new("urgent", "Urgent", "bi-exclamation-circle"), new("fulfilled", "Fulfilled", "bi-check-circle")];
     private int UrgentOpenCount => _requests.Count(r => r.Priority == "Urgent" && r.Status != "Fulfilled");
     private double AverageAgeHours => _requests.Count == 0 ? 0 : _requests.Where(r => r.Status != "Fulfilled").DefaultIfEmpty().Average(r => r is null ? 0 : Math.Max(0, (DateTime.UtcNow - r.SubmittedAt).TotalHours));
     private int ReadinessScore => _requests.Count == 0 ? 100 : Math.Clamp(100 - (UrgentOpenCount * 18) - (_requests.Count(r => r.Status == "Open") * 8) - (_requests.Count(r => IsUnassigned(r) && r.Status != "Fulfilled") * 10), 0, 100);
     private string ActiveViewTitle => _activeTab switch { "open" => "Open intake queue", "progress" => "In-progress service work", "urgent" => "Urgent escalations", "fulfilled" => "Fulfilled requests", _ => "All portal requests" };
     private IEnumerable<Signal> ImportanceSignals => BuildImportanceSignals();
+    private RequestForm _form = new();
 
     private IEnumerable<PortalRequest> TabRequests => _activeTab switch
     {
@@ -354,6 +462,99 @@
         var dto = request.ToDto();
         var json = JsonSerializer.Serialize(dto, JsonOptions);
         await Api.UpdatePortalAdminRecordAsync(request.Id, new UpsertPortalAdminRecordRequest(_tenantId, "SelfServiceRequest", Slug($"{request.RequestType}-{request.AccountName}-{request.ClientName}"), request.Name, request.Status, json));
+    }
+
+    private void OpenCreate()
+    {
+        _editingRequest = null;
+        _formError = null;
+        _form = new()
+        {
+            RequestType = "COI Request",
+            Priority = "Normal",
+            Status = "Open",
+            AssignedTo = "—"
+        };
+        _showForm = true;
+    }
+
+    private void OpenEdit(PortalRequest request)
+    {
+        _editingRequest = request;
+        _selected = request;
+        _formError = null;
+        _form = new()
+        {
+            ClientName = request.ClientName,
+            AccountName = request.AccountName,
+            RequestType = request.RequestType,
+            Priority = request.Priority,
+            Status = request.Status,
+            AssignedTo = request.AssignedTo,
+            Summary = request.Summary
+        };
+        _showForm = true;
+    }
+
+    private async Task SaveRequestAsync()
+    {
+        _busy = true;
+        _formError = null;
+        try
+        {
+            var request = new PortalRequest
+            {
+                Id = _editingRequest?.Id ?? Guid.NewGuid(),
+                SubmittedAt = _editingRequest?.SubmittedAt ?? DateTime.UtcNow,
+                ClientName = _form.ClientName.Trim(),
+                AccountName = _form.AccountName.Trim(),
+                RequestType = _form.RequestType.Trim(),
+                Summary = _form.Summary.Trim(),
+                Priority = _form.Priority.Trim(),
+                AssignedTo = string.IsNullOrWhiteSpace(_form.AssignedTo) ? "—" : _form.AssignedTo.Trim(),
+                Status = _form.Status.Trim()
+            };
+
+            var json = JsonSerializer.Serialize(request.ToDto(), JsonOptions);
+            var payload = new UpsertPortalAdminRecordRequest(_tenantId, "SelfServiceRequest", Slug($"{request.RequestType}-{request.AccountName}-{request.ClientName}"), request.Name, request.Status, json);
+            if (_editingRequest is null)
+            {
+                request.Id = await Api.CreatePortalAdminRecordAsync(payload);
+                ShowToast("Portal request created.");
+            }
+            else
+            {
+                await Api.UpdatePortalAdminRecordAsync(_editingRequest.Id, payload);
+                request.Id = _editingRequest.Id;
+                ShowToast("Portal request updated.");
+            }
+
+            _selected = request;
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast(_formError, "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void CloseForm()
+    {
+        if (_busy) return;
+        _showForm = false;
+        _formError = null;
+    }
+
+    private void HandleInvalidSubmit()
+    {
+        _formError = "Review the highlighted fields before saving.";
+        ShowToast(_formError, "danger");
     }
 
     private async Task ClaimRequest(PortalRequest request)
@@ -522,6 +723,7 @@
         <div class="pr-request-card__summary"><strong>@request.RequestType</strong><span>@request.Summary</span></div>
         <div class="pr-request-card__meta"><span><i class="bi bi-clock"></i>@AgeText(request)</span><span><i class="bi bi-person"></i>@request.AssignedTo</span><span class="pr-status pr-status--@CssSafe(request.Status)">@request.Status</span></div>
         <div class="pr-request-card__actions" @onclick:stopPropagation="true">
+            <button type="button" class="pr-btn pr-btn--ghost" @onclick="@(() => OpenEdit(request))"><i class="bi bi-pencil"></i> Edit</button>
             <button type="button" class="pr-btn pr-btn--ghost" @onclick="@(() => ClaimRequest(request))" disabled="@(request.Status == "Fulfilled")"><i class="bi bi-person-check"></i> Claim</button>
             <button type="button" class="pr-btn pr-btn--ghost" @onclick="@(() => OpenConfirm(request, request.Status == "Fulfilled" ? "Reopen" : "Fulfill"))"><i class="bi bi-check-circle"></i> @(request.Status == "Fulfilled" ? "Reopen" : "Fulfill")</button>
         </div>
@@ -533,6 +735,7 @@
         {
             <div class="pr-action-menu" role="menu">
                 <div class="pr-action-menu__summary"><strong>@request.RequestType</strong><span>@request.ClientName · @request.Status</span></div>
+                <button type="button" class="pr-action-menu__item" @onclick="@(() => OpenEdit(request))"><i class="bi bi-pencil"></i>Edit</button>
                 <button type="button" class="pr-action-menu__item" @onclick="@(() => ClaimRequest(request))" disabled="@(request.Status == "Fulfilled")"><i class="bi bi-person-check"></i>Claim</button>
                 <button type="button" class="pr-action-menu__item" @onclick="@(() => OpenConfirm(request, request.Status == "Fulfilled" ? "Reopen" : "Fulfill"))"><i class="bi bi-check-circle"></i>@(request.Status == "Fulfilled" ? "Reopen" : "Fulfill")</button>
                 <button type="button" class="pr-action-menu__item" @onclick="@(() => Nav.NavigateTo("/portal/activity"))"><i class="bi bi-clock-history"></i>Activity</button>
@@ -557,6 +760,17 @@
 
     private sealed record TabDef(string Key, string Label, string Icon);
     private sealed record Signal(string Icon, string Text);
+
+    private sealed class RequestForm
+    {
+        [Required, StringLength(200)] public string ClientName { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string AccountName { get; set; } = string.Empty;
+        [Required, StringLength(120)] public string RequestType { get; set; } = "COI Request";
+        [Required, StringLength(40)] public string Priority { get; set; } = "Normal";
+        [Required, StringLength(80)] public string Status { get; set; } = "Open";
+        [StringLength(160)] public string AssignedTo { get; set; } = "—";
+        [Required, StringLength(500)] public string Summary { get; set; } = string.Empty;
+    }
 
     private sealed class PortalRequest
     {

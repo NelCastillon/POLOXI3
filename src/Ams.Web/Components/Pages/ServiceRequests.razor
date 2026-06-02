@@ -1,34 +1,691 @@
-﻿@page "/ops/service-requests"
+@page "/ops/service-requests"
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Operations
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
-@using Ams.Application.Common.Dtos
-@using Ams.Application.Features.Operations
 
-<PageTitle>Service Requests — Operations</PageTitle>
-<AppPageHeader Title="Service Requests Administration" Subtitle="Tenant admin routing and resolution for client service requests by priority, type, status, and queue ownership" Icon="bi-tools"><Actions><button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> New Request</button><button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button></Actions></AppPageHeader>
-<section class="ma-hero twf-hero"><div><span class="ma-eyebrow">Tenant Administration · Service Requests</span><h2>Tenant Service Request Control Center</h2><p>Administer service intake, request type, priority, queue ownership, resolution status, and operational follow-through.</p></div><div class="ma-hero-actions"><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/ops/issues")'><i class="bi bi-bug"></i> Issue Tracker</button><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/ops/activities")'><i class="bi bi-clock-history"></i> Activities</button><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/workflow")'><i class="bi bi-diagram-3"></i> Workflows</button></div></section>
-<div class="pc-kpi-strip"><div class="pc-kpi-card @(_filter == null ? "pc-kpi-card--active" : "")" @onclick="() => SetFilter(null)" title="All"><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-tools"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total</div></div></div><div class="pc-kpi-card @(_filter == "High" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("High")' title="High priority"><span class="pc-kpi-icon pc-kpi-icon--danger"><i class="bi bi-exclamation-circle-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.PriorityCode == "High")</div><div class="pc-kpi-label">High</div></div></div><div class="pc-kpi-card @(_filter == "Open" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Open")' title="Open"><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-play-circle-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.StatusCode == "Open")</div><div class="pc-kpi-label">Open</div></div></div></div>
-<AppFilterPanel @bind-SearchValue="_searchTerm" OnSearch="OnSearchAsync" SearchPlaceholder="Search service requests…" />
-@if (_loadError is not null) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError</div> }
-<div class="um-grid-card">@if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading…</span></div> }<SfGrid TValue="ServiceRequestDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52"><GridEvents TValue="ServiceRequestDto" RowSelected="OnRowSelected" /><GridPageSettings PageSize="25" PageSizes="@(new[] { 25, 50, 100 })" /><GridColumns><GridColumn Field="RequestNumber" HeaderText="Request #" Width="140" /><GridColumn Field="RequestTypeCode" HeaderText="Type" Width="130" /><GridColumn Field="Subject" HeaderText="Subject" Width="280" /><GridColumn Field="PriorityCode" HeaderText="Priority" Width="110" /><GridColumn Field="StatusCode" HeaderText="Status" Width="120" /><GridColumn Field="ResolvedDate" HeaderText="Resolved" Type="ColumnType.Date" Format="d" Width="130" /><GridColumn HeaderText="Actions" Width="120" TextAlign="TextAlign.Center"><Template>@{ var r = (ServiceRequestDto)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true" title="Edit"><i class="bi bi-pencil"></i></button><button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true" title="Delete"><i class="bi bi-trash"></i></button></Template></GridColumn></GridColumns></SfGrid></div>
-<SfDialog @bind-Visible="_showForm" Width="560px" IsModal="true" ShowCloseIcon="false"><DialogEvents Closed="ResetForm" /><DialogContent><div class="um-modal-header"><i class="bi bi-tools"></i><span>@(_editId.HasValue ? "Edit Service Request" : "New Service Request")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button></div><EditForm @key="_form" Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="ShowValidation"><DataAnnotationsValidator /><div class="um-modal-body"><div class="um-form-grid"><div class="um-field"><label>Request # <span class="text-danger">*</span></label><InputText @bind-Value="_form.RequestNumber" class="um-input" /></div><div class="um-field"><label>Account Name <span class="text-danger">*</span></label><SfDropDownList TValue="string" TItem="AccountOption" DataSource="_accounts" @bind-Value="_form.AccountIdText" AllowFiltering="true" FilterType="Syncfusion.Blazor.DropDowns.FilterType.Contains" Placeholder="Search account name" CssClass="um-input"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>@if (_showValidation) { }</div><div class="um-field"><label>Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.RequestTypeCode" class="um-input">@foreach (var type in _taskTypes.Where(x => x.IsActive)) { <option value="@type.TaskTypeCode">@type.TaskTypeName</option> }</InputSelect></div><div class="um-field"><label>Priority <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.PriorityCode" class="um-input"><option>Low</option><option>Medium</option><option>High</option></InputSelect></div><div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input"><option>Open</option><option>In Progress</option><option>Resolved</option><option>Closed</option></InputSelect></div><div class="um-field"><label>Resolved Date</label><InputDate @bind-Value="_form.ResolvedDate" class="um-input" /></div><div class="um-field um-field--full"><label>Subject <span class="text-danger">*</span></label><InputText @bind-Value="_form.Subject" class="um-input" /></div><div class="um-field um-field--full"><label>Description</label><InputTextArea @bind-Value="_form.Description" class="um-input" rows="3" /></div></div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button></div></EditForm></DialogContent></SfDialog>
-@if (_showDelete && _deleteTarget is not null) { <div class="mt-modal-backdrop" @onclick="() => _showDelete = false"><div class="um-confirm-dialog mt-confirm" @onclick:stopPropagation="true"><div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div><div class="um-confirm-title">Delete service request?</div><div class="um-confirm-text">This will remove <strong>@_deleteTarget.Subject</strong>.</div><div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div></div></div> }
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" /><style>@@keyframes um-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }</style>
+<PageTitle>Service Requests</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="srq-toast srq-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="srq-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+<div class="srq-enterprise-page">
+    <section class="srq-hero">
+        <div class="srq-hero-left">
+            <span class="srq-hero-icon"><i class="bi bi-tools" aria-hidden="true"></i></span>
+            <div>
+                <div class="srq-title-row">
+                    <h1>Service Requests</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> OPS.ServiceRequest</span>
+                    <span><i class="bi bi-router" aria-hidden="true"></i> Intake routing</span>
+                </div>
+                <p>Enterprise service request command center for client intake, account impact, priority triage, resolution accountability, SLA exposure, and operational follow-through.</p>
+            </div>
+        </div>
+        <div class="srq-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "srq-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_items.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="OpenIssues"><i class="bi bi-bug" aria-hidden="true"></i> Issues</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Request</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="srq-error-banner" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="srq-kpi-strip" aria-label="Service request KPIs">
+        <button type="button" class="@AllKpiClass" @onclick="ShowAll"><span class="srq-kpi-icon"><i class="bi bi-tools" aria-hidden="true"></i></span><span><strong>@_items.Count</strong><em>Total</em><small>Tenant intake volume</small></span></button>
+        <button type="button" class="@HighKpiClass" @onclick="ShowHigh"><span class="srq-kpi-icon"><i class="bi bi-exclamation-circle-fill" aria-hidden="true"></i></span><span><strong>@HighCount</strong><em>High Priority</em><small>Immediate attention</small></span></button>
+        <button type="button" class="@OpenKpiClass" @onclick="ShowOpen"><span class="srq-kpi-icon"><i class="bi bi-play-circle-fill" aria-hidden="true"></i></span><span><strong>@OpenCount</strong><em>Open</em><small>Awaiting action</small></span></button>
+        <button type="button" class="@ProgressKpiClass" @onclick="ShowInProgress"><span class="srq-kpi-icon"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></span><span><strong>@InProgressCount</strong><em>In Progress</em><small>Active servicing</small></span></button>
+        <button type="button" class="@StaleKpiClass" @onclick="ShowStale"><span class="srq-kpi-icon"><i class="bi bi-clock-history" aria-hidden="true"></i></span><span><strong>@StaleCount</strong><em>Stale</em><small>Older than 7 days</small></span></button>
+        <button type="button" class="@ResolvedKpiClass" @onclick="ShowResolved"><span class="srq-kpi-icon"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span><span><strong>@ResolvedCount</strong><em>Resolved</em><small>Closed loop</small></span></button>
+    </section>
+
+    <section class="srq-workflow-strip" aria-label="Service request workflows">
+        <button type="button" class="srq-workflow-card" @onclick="ShowIntake"><i class="bi bi-inboxes" aria-hidden="true"></i><span><strong>Intake</strong><small>Request register</small></span></button>
+        <button type="button" class="srq-workflow-card" @onclick="ShowResolution"><i class="bi bi-activity" aria-hidden="true"></i><span><strong>Resolution</strong><small>Closure health</small></span></button>
+        <button type="button" class="srq-workflow-card" @onclick="ShowGovernance"><i class="bi bi-shield-check" aria-hidden="true"></i><span><strong>Governance</strong><small>Priority lanes</small></span></button>
+        <button type="button" class="srq-workflow-card" @onclick="OpenActivities"><i class="bi bi-clock-history" aria-hidden="true"></i><span><strong>Activities</strong><small>Operational history</small></span></button>
+        <button type="button" class="srq-workflow-card" @onclick="EscalateSelected"><i class="bi bi-arrow-up-circle" aria-hidden="true"></i><span><strong>Escalate</strong><small>Raise priority</small></span></button>
+    </section>
+
+    <section class="srq-search-panel">
+        <div class="srq-search-wrap">
+            <span class="srq-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="srq-search-body">
+                <label for="srq-search">Service request search</label>
+                <input id="srq-search" class="srq-search-input" @bind="_searchTerm" @bind:event="oninput" @bind:after="ApplyFilter" placeholder="Search request, subject, type, priority, status, account, description..." />
+                <span class="srq-search-hint">Filters loaded tenant service requests and keeps KPIs, tabs, queue boards, and details synchronized.</span>
+            </div>
+        </div>
+        <select class="srq-filter-select" @bind="_priorityFilter" @bind:after="ApplyFilter" aria-label="Priority filter">
+            <option value="all">All priorities</option>
+            <option value="High">High</option>
+            <option value="Medium">Medium</option>
+            <option value="Low">Low</option>
+        </select>
+        <select class="srq-filter-select" @bind="_statusFilter" @bind:after="ApplyFilter" aria-label="Status filter">
+            <option value="all">All statuses</option>
+            @foreach (var status in StatusOptions)
+            {
+                <option value="@status">@status</option>
+            }
+        </select>
+        <select class="srq-filter-select" @bind="_accountFilter" @bind:after="ApplyFilter" aria-label="Account filter">
+            <option value="all">All accounts</option>
+            @foreach (var account in _accounts)
+            {
+                <option value="@account.Value">@account.Label</option>
+            }
+        </select>
+        <div class="srq-search-result"><strong>@_filtered.Count</strong><span>records</span></div>
+    </section>
+
+    <nav class="srq-view-tabs" aria-label="Service request views">
+        @foreach (var view in _views)
+        {
+            <button type="button" class="srq-view-btn @(_activeView == view ? "srq-view-btn-active" : null)" @onclick="() => SetView(view)">@view</button>
+        }
+    </nav>
+
+    <section class="srq-content-layout">
+        <div class="srq-main-card">
+            @if (_loading)
+            {
+                <div class="srq-loading"><i class="bi bi-arrow-repeat srq-spin" aria-hidden="true"></i><span>Loading service requests...</span></div>
+            }
+            else if (_filtered.Count == 0)
+            {
+                <div class="srq-empty-state"><i class="bi bi-tools" aria-hidden="true"></i><h2>No service requests found</h2><p>Adjust filters or create a new client service request.</p><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Request</button></div>
+            }
+            else if (_activeView == "Resolution")
+            {
+                <div class="srq-analytics-grid">
+                    <section class="srq-panel">
+                        <header><div><i class="bi bi-activity" aria-hidden="true"></i><strong>Resolution Health</strong></div><span>@ResolutionScore.ToString("F0")%</span></header>
+                        <div class="srq-panel-body srq-metric-list">
+                            <div class="srq-metric-row"><span>Open</span><div><i style="@WidthStyle(OpenCount, SafeTotal)"></i></div><strong>@OpenCount</strong></div>
+                            <div class="srq-metric-row"><span>In Progress</span><div><i style="@WidthStyle(InProgressCount, SafeTotal)"></i></div><strong>@InProgressCount</strong></div>
+                            <div class="srq-metric-row"><span>Resolved/Closed</span><div><i style="@WidthStyle(ResolvedCount, SafeTotal)"></i></div><strong>@ResolvedCount</strong></div>
+                            <div class="srq-metric-row"><span>Stale</span><div><i style="@WidthStyle(StaleCount, SafeTotal)"></i></div><strong>@StaleCount</strong></div>
+                        </div>
+                    </section>
+                    <section class="srq-panel">
+                        <header><div><i class="bi bi-tags" aria-hidden="true"></i><strong>Request Type Mix</strong></div><span>@TypeSummaries.Count</span></header>
+                        <div class="srq-panel-body srq-group-list">
+                            @foreach (var group in TypeSummaries.Take(8))
+                            {
+                                <button type="button" class="srq-group-row" @onclick="() => FilterType(group.Name)"><span>@group.Name</span><div><i style="@WidthStyle(group.Count, SafeTotal)"></i></div><strong>@group.Count</strong></button>
+                            }
+                        </div>
+                    </section>
+                    <section class="srq-panel srq-panel-wide">
+                        <header><div><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><strong>Service Risk Queue</strong></div><span>@RiskQueue.Count</span></header>
+                        <div class="srq-panel-body srq-review-list">
+                            @foreach (var item in RiskQueue.Take(10))
+                            {
+                                <button type="button" class="srq-review-row" @onclick="() => SelectItem(item)"><strong>@item.RequestNumber</strong><span>@RiskReason(item)</span><em>@ImportanceLabel(item)</em></button>
+                            }
+                        </div>
+                    </section>
+                </div>
+            }
+            else if (_activeView == "Governance")
+            {
+                <div class="srq-board">
+                    @foreach (var lane in GovernanceLanes)
+                    {
+                        <section class="srq-board-col">
+                            <header><strong>@lane.Title</strong><span>@lane.Items.Count</span></header>
+                            @foreach (var item in lane.Items)
+                            {
+                                <button type="button" class="srq-board-card" @onclick="() => SelectItem(item)">
+                                    <div><strong>@item.RequestNumber</strong><span>@item.PriorityCode</span></div>
+                                    <small>@item.Subject</small>
+                                    <em>@StatusLabel(item) · @AgeLabel(item)</em>
+                                </button>
+                            }
+                        </section>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="srq-table-scroll">
+                    <table class="srq-table">
+                        <thead><tr><th>Request</th><th>Account</th><th>Type</th><th>Priority</th><th>Status</th><th>Age</th><th>Resolution</th><th>Importance</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var item in _filtered)
+                            {
+                                <tr @onclick="() => SelectItem(item)">
+                                    <td><div class="srq-name-cell"><span class="srq-avatar @AvatarClass(item)">@Initials(item.RequestNumber)</span><span><strong>@item.RequestNumber</strong><small>@item.Subject</small></span></div></td>
+                                    <td>@AccountName(item.AccountId)</td>
+                                    <td><span class="srq-code-pill">@item.RequestTypeCode</span></td>
+                                    <td><span class="@PriorityClass(item)">@PriorityLabel(item)</span></td>
+                                    <td><span class="@StatusClass(item)">@StatusLabel(item)</span></td>
+                                    <td>@AgeLabel(item)</td>
+                                    <td>@ResolutionLabel(item)</td>
+                                    <td><span class="@ImportanceClass(item)">@ImportanceLabel(item)</span></td>
+                                    <td><div class="srq-row-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ToggleResolvedAsync(item)" title="Resolve/Reopen"><i class="bi bi-check2-circle" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(item)" title="Delete"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <aside class="srq-detail-card" aria-label="Selected service request">
+            @if (_selected is null)
+            {
+                <div class="srq-detail-empty"><i class="bi bi-tools" aria-hidden="true"></i><h2>Request command brief</h2><p>Select a service request to review account impact, priority, status, resolution health, and operational actions.</p></div>
+            }
+            else
+            {
+                <div class="srq-detail-head"><div><span class="srq-detail-eyebrow"><i class="bi bi-buildings" aria-hidden="true"></i> @AccountName(_selected.AccountId)</span><h2>@_selected.RequestNumber</h2><p>@_selected.Subject</p></div><span class="@PriorityClass(_selected)">@PriorityLabel(_selected)</span></div>
+                <div class="srq-detail-body">
+                    <div class="srq-detail-summary">
+                        <div><span>Status</span><strong>@StatusLabel(_selected)</strong></div>
+                        <div><span>Age</span><strong>@AgeLabel(_selected)</strong></div>
+                        <div><span>Importance</span><strong>@ImportanceLabel(_selected)</strong></div>
+                        <div><span>Resolved</span><strong>@ResolutionLabel(_selected)</strong></div>
+                    </div>
+                    <div class="srq-config-card"><span>Service brief</span><strong>@RiskReason(_selected)</strong><small>@(_selected.Description ?? "No request description provided.")</small></div>
+                    <div class="srq-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit Request</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="DuplicateSelected"><i class="bi bi-files" aria-hidden="true"></i> Duplicate</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="EscalateSelected"><i class="bi bi-arrow-up-circle" aria-hidden="true"></i> Escalate</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => ToggleResolvedAsync(_selected)"><i class="bi bi-check2-circle" aria-hidden="true"></i> @(IsResolved(_selected) ? "Reopen" : "Resolve")</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="OpenActivities"><i class="bi bi-clock-history" aria-hidden="true"></i> Activities</button>
+                        <button type="button" class="um-btn um-btn-ghost text-danger" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
+                    </div>
+                </div>
+            }
+        </aside>
+    </section>
+</div>
+
+@if (_showForm)
+{
+    <div class="srq-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="srq-form-title">
+        <div class="srq-modal">
+            <div class="srq-modal-header"><div class="srq-modal-title"><span class="srq-modal-icon"><i class="bi bi-tools" aria-hidden="true"></i></span><div><h2 id="srq-form-title">@(_editId.HasValue ? "Edit Service Request" : "New Service Request")</h2><p>Capture client intake, request type, priority, status, account impact, resolution date, and service context.</p></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseForm" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm @key="_form" Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="ShowValidation">
+                <DataAnnotationsValidator />
+                <div class="srq-modal-body">
+                    <div class="srq-form-banner"><i class="bi bi-info-circle" aria-hidden="true"></i><span><strong>Service workflow</strong> New requests are created as Open by the backend; this page syncs selected status and resolution details immediately after create.</span></div>
+                    <div class="srq-form-grid">
+                        <div class="srq-field"><label>Request # <span>*</span></label><InputText @bind-Value="_form.RequestNumber" class="srq-input" /><ValidationMessage For="() => _form.RequestNumber" class="text-danger" /></div>
+                        <div class="srq-field"><label>Account <span>*</span></label><InputSelect @bind-Value="_form.AccountIdText" class="srq-input"><option value="">Select account</option>@foreach (var account in _accounts){<option value="@account.Value">@account.Label</option>}</InputSelect><ValidationMessage For="() => _form.AccountIdText" class="text-danger" /></div>
+                        <div class="srq-field"><label>Type <span>*</span></label><InputSelect @bind-Value="_form.RequestTypeCode" class="srq-input">@foreach (var type in ActiveTaskTypes){<option value="@type.TaskTypeCode">@type.TaskTypeName</option>}</InputSelect><ValidationMessage For="() => _form.RequestTypeCode" class="text-danger" /></div>
+                        <div class="srq-field"><label>Priority <span>*</span></label><InputSelect @bind-Value="_form.PriorityCode" class="srq-input"><option>High</option><option>Medium</option><option>Low</option></InputSelect><ValidationMessage For="() => _form.PriorityCode" class="text-danger" /></div>
+                        <div class="srq-field"><label>Status <span>*</span></label><InputSelect @bind-Value="_form.StatusCode" class="srq-input"><option>Open</option><option>In Progress</option><option>Resolved</option><option>Closed</option></InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                        <div class="srq-field"><label>Resolved Date</label><InputDate @bind-Value="_form.ResolvedDate" class="srq-input" /><ValidationMessage For="() => _form.ResolvedDate" class="text-danger" /></div>
+                        <div class="srq-field srq-field-wide"><label>Subject <span>*</span></label><InputText @bind-Value="_form.Subject" class="srq-input" /><ValidationMessage For="() => _form.Subject" class="text-danger" /></div>
+                        <div class="srq-field srq-field-wide"><label>Description</label><InputTextArea @bind-Value="_form.Description" class="srq-input" rows="3" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
+                    </div>
+                </div>
+                <div class="srq-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check2" aria-hidden="true"></i> @(_editId.HasValue ? "Save Changes" : "Create Request")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showDelete)
+{
+    <div class="srq-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="srq-delete-title">
+        <div class="srq-confirm-modal">
+            <div class="srq-confirm-icon"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
+            <h2 id="srq-delete-title">Delete Service Request</h2>
+            <p>Delete <strong>@_deleteTarget?.Subject</strong>? This removes it from the service request queue.</p>
+            <div class="srq-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete">Cancel</button><button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div>
+        </div>
+    </div>
+}
+
 @code {
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
+    [SupplyParameterFromQuery(Name = "new")] public bool OpenNew { get; set; }
+    private Guid TenantId { get; set; }
+    private Guid TenantAdminUserId { get; set; }
     private Guid _tenantId;
-    private Guid _tenantAdminUserId; Guid TenantId { get; set; } Guid TenantAdminUserId { get; set; } string? _searchTerm, _loadError, _filter; bool _loading, _saving, _showForm, _showDelete, _showValidation; Guid? _editId; ServiceRequestDto? _deleteTarget; List<ServiceRequestDto> _items = [], _filtered = []; List<AccountOption> _accounts = []; List<TaskTypeDto> _taskTypes = []; SfToast _toast = default!; RequestForm _form = new(); [SupplyParameterFromQuery(Name = "new")] public bool OpenNew { get; set; } protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Tasks & Workflows", "/tasks"), new("Service Requests", null)); await LoadAsync(); if (OpenNew) OpenCreate(); } async Task LoadAsync() { _loading = true; _loadError = null; try { await LoadAccountsAsync(); await LoadTaskTypesAsync(); var result = await Api.SearchServiceRequestsAsync(TenantId, searchTerm: _searchTerm); _items = result?.Items.ToList() ?? []; ApplyFilter(); } catch (Exception ex) { _loadError = $"Failed to load service requests: {ex.Message}"; } finally { _loading = false; } } Task OnSearchAsync() => LoadAsync(); void ApplyFilter() => _filtered = _filter switch { "High" => _items.Where(x => x.PriorityCode == "High").ToList(), "Open" => _items.Where(x => x.StatusCode == "Open").ToList(), _ => [.. _items] }; void SetFilter(string? f) { _filter = f; ApplyFilter(); } void OnRowSelected(RowSelectEventArgs<ServiceRequestDto> args) => OpenEdit(args.Data); void OpenCreate() { _editId = null; _showValidation = false; _form = new() { RequestNumber = $"SR-{DateTime.UtcNow:yyyyMMddHHmmss}", RequestTypeCode = GetDefaultTaskTypeCode("Service Request") }; _showForm = true; } void OpenEdit(ServiceRequestDto item) { _editId = item.ServiceRequestId; _showValidation = false; _form = new() { RequestNumber = item.RequestNumber, AccountIdText = item.AccountId.ToString(), RequestTypeCode = item.RequestTypeCode, PriorityCode = item.PriorityCode, StatusCode = item.StatusCode, ResolvedDate = item.ResolvedDate, Subject = item.Subject, Description = item.Description }; _showForm = true; } void ConfirmDelete(ServiceRequestDto item) { _deleteTarget = item; _showDelete = true; } async Task SaveAsync() { _showValidation = true; _saving = true; try { if (_editId.HasValue) await Api.UpdateServiceRequestAsync(_editId.Value, new() { AccountId = Guid.Parse(_form.AccountIdText), RequestNumber = _form.RequestNumber, RequestTypeCode = _form.RequestTypeCode, Subject = _form.Subject, Description = _form.Description, PriorityCode = _form.PriorityCode, StatusCode = _form.StatusCode, ResolvedDate = _form.ResolvedDate, ModifiedByUserId = TenantAdminUserId }); else await Api.CreateServiceRequestAsync(new() { TenantId = TenantId, AccountId = Guid.Parse(_form.AccountIdText), RequestNumber = _form.RequestNumber, RequestTypeCode = _form.RequestTypeCode, Subject = _form.Subject, Description = _form.Description, PriorityCode = _form.PriorityCode }); _showForm = false; await _toast.ShowAsync(new() { Content = _editId.HasValue ? "Service request updated" : "Service request created", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } } async Task ExecuteDeleteAsync() { if (_deleteTarget is null) return; _saving = true; try { await Api.DeleteServiceRequestAsync(_deleteTarget.ServiceRequestId, TenantAdminUserId); _showDelete = false; await _toast.ShowAsync(new() { Content = "Service request deleted", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } } void ResetForm() { _form = new(); _editId = null; _showValidation = false; } void ShowValidation() => _showValidation = true; async Task LoadAccountsAsync() { if (_accounts.Count > 0) return; var result = await Api.SearchAccountsAsync(TenantId); _accounts = (result?.Items ?? []).OrderBy(x => x.AccountName).Select(x => new AccountOption(x.AccountId.ToString(), x.AccountName)).ToList(); } async Task LoadTaskTypesAsync() { if (_taskTypes.Count > 0) return; var result = await Api.SearchTaskTypesAsync(TenantId, pageSize: 250); _taskTypes = (result?.Items ?? []).OrderBy(x => x.SortOrder).ThenBy(x => x.TaskTypeName).ToList(); } string GetDefaultTaskTypeCode(string defaultCode) => _taskTypes.FirstOrDefault(x => x.TaskTypeCode == defaultCode)?.TaskTypeCode ?? defaultCode; sealed record AccountOption(string Value, string Label); sealed class RequestForm { [Required, StringLength(50)] public string RequestNumber { get; set; } = string.Empty; [Required(ErrorMessage = "Select an account.")] public string AccountIdText { get; set; } = string.Empty; [Required, StringLength(50)] public string RequestTypeCode { get; set; } = "Service Request"; [Required, StringLength(50)] public string PriorityCode { get; set; } = "Medium"; [Required, StringLength(50)] public string StatusCode { get; set; } = "Open"; public DateOnly? ResolvedDate { get; set; } [Required, StringLength(200)] public string Subject { get; set; } = string.Empty; [StringLength(2000)] public string? Description { get; set; } } 
-    async Task ResolveCurrentUserContextAsync()
+    private Guid _tenantAdminUserId;
+    private bool _loading;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private bool _toastVisible;
+    private string _searchTerm = string.Empty;
+    private string _priorityFilter = "all";
+    private string _statusFilter = "all";
+    private string _accountFilter = "all";
+    private string _typeFilter = "all";
+    private string _activeView = "Intake";
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private Guid? _editId;
+    private ServiceRequestDto? _selected;
+    private ServiceRequestDto? _deleteTarget;
+    private readonly string[] _views = ["Intake", "Resolution", "Governance"];
+    private List<ServiceRequestDto> _items = [];
+    private List<ServiceRequestDto> _filtered = [];
+    private List<AccountOption> _accounts = [];
+    private List<TaskTypeDto> _taskTypes = [];
+    private RequestForm _form = new();
+
+    private IEnumerable<TaskTypeDto> ActiveTaskTypes => _taskTypes.Where(x => x.IsActive).DefaultIfEmpty(new TaskTypeDto { TaskTypeCode = "Servicing", TaskTypeName = "Servicing", IsActive = true });
+    private int HighCount => _items.Count(IsHigh);
+    private int OpenCount => _items.Count(IsOpen);
+    private int InProgressCount => _items.Count(IsInProgress);
+    private int ResolvedCount => _items.Count(IsResolved);
+    private int StaleCount => _items.Count(IsStale);
+    private int SafeTotal => Math.Max(_items.Count, 1);
+    private double ResolutionScore => _items.Count == 0 ? 0 : Math.Clamp((ResolvedCount * 100d + InProgressCount * 35d - StaleCount * 15d) / _items.Count, 0, 100);
+    private List<string> StatusOptions => _items.Select(StatusLabel).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+    private List<GroupSummary> TypeSummaries => _items.GroupBy(x => x.RequestTypeCode).Select(g => new GroupSummary(g.Key, g.Count())).OrderByDescending(x => x.Count).ThenBy(x => x.Name).ToList();
+    private List<ServiceRequestDto> RiskQueue => _items.Where(x => NeedsReview(x) || IsHigh(x) || IsStale(x)).OrderByDescending(ImportanceRank).ThenBy(x => x.CreatedDateUtc).ToList();
+    private List<GovernanceLane> GovernanceLanes =>
+    [
+        new("High Priority", _filtered.Where(IsHigh).ToList()),
+        new("Active Work", _filtered.Where(x => IsOpen(x) || IsInProgress(x)).ToList()),
+        new("Resolved", _filtered.Where(IsResolved).ToList()),
+    ];
+    private string ToastIcon => _toastKind == "success" ? "bi-check-circle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-exclamation-triangle-fill";
+    private string AllKpiClass => KpiClass("all", "srq-blue");
+    private string HighKpiClass => KpiClass("high", "srq-red");
+    private string OpenKpiClass => KpiClass("open", "srq-cyan");
+    private string ProgressKpiClass => KpiClass("progress", "srq-purple");
+    private string StaleKpiClass => KpiClass("stale", "srq-amber");
+    private string ResolvedKpiClass => KpiClass("resolved", "srq-green");
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Tasks & Workflows", "/tasks"), new("Service Requests", "/ops/service-requests"));
+        await LoadAsync();
+        if (OpenNew) OpenCreate();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            await LoadAccountsAsync();
+            await LoadTaskTypesAsync();
+            var result = await Api.SearchServiceRequestsAsync(TenantId, searchTerm: _searchTerm);
+            _items = result?.Items.OrderByDescending(ImportanceRank).ThenBy(x => IsResolved(x) ? 1 : 0).ThenBy(x => x.CreatedDateUtc).ToList() ?? [];
+            ApplyFilter();
+            _selected ??= _filtered.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load service requests: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilter()
+    {
+        IEnumerable<ServiceRequestDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm)) query = query.Where(MatchesSearch);
+        if (_priorityFilter != "all") query = query.Where(x => string.Equals(PriorityLabel(x), _priorityFilter, StringComparison.OrdinalIgnoreCase));
+        if (_statusFilter != "all") query = query.Where(x => string.Equals(StatusLabel(x), _statusFilter, StringComparison.OrdinalIgnoreCase));
+        if (_accountFilter != "all" && Guid.TryParse(_accountFilter, out var accountId)) query = query.Where(x => x.AccountId == accountId);
+        if (_typeFilter != "all") query = query.Where(x => string.Equals(x.RequestTypeCode, _typeFilter, StringComparison.OrdinalIgnoreCase));
+        _filtered = query.OrderByDescending(ImportanceRank).ThenBy(x => IsResolved(x) ? 1 : 0).ThenBy(x => x.CreatedDateUtc).ToList();
+        if (_selected is not null && !_filtered.Any(x => x.ServiceRequestId == _selected.ServiceRequestId)) _selected = _filtered.FirstOrDefault();
+    }
+
+    private void ShowAll() { _priorityFilter = "all"; _statusFilter = "all"; _accountFilter = "all"; _typeFilter = "all"; ApplyFilter(); }
+    private void ShowHigh() { _priorityFilter = "High"; _statusFilter = "all"; ApplyFilter(); }
+    private void ShowOpen() { _statusFilter = "Open"; _priorityFilter = "all"; ApplyFilter(); }
+    private void ShowInProgress() { _statusFilter = "In Progress"; _priorityFilter = "all"; ApplyFilter(); }
+    private void ShowStale() { _statusFilter = "all"; _priorityFilter = "all"; _filtered = _items.Where(IsStale).OrderBy(x => x.CreatedDateUtc).ToList(); _selected = _filtered.FirstOrDefault(); }
+    private void ShowResolved() { _statusFilter = "Resolved"; _priorityFilter = "all"; ApplyFilter(); }
+    private void ShowIntake() => SetView("Intake");
+    private void ShowResolution() => SetView("Resolution");
+    private void ShowGovernance() => SetView("Governance");
+    private void SetView(string view) => _activeView = view;
+    private void FilterType(string type) { _typeFilter = type; ApplyFilter(); }
+    private void SelectItem(ServiceRequestDto item) => _selected = item;
+    private void OpenIssues() => Nav.NavigateTo("/ops/issues");
+    private void OpenActivities() => Nav.NavigateTo("/ops/activities");
+
+    private void OpenCreate()
+    {
+        _editId = null;
+        _form = new() { RequestNumber = $"SR-{DateTime.UtcNow:yyyyMMddHHmmss}", RequestTypeCode = GetDefaultTaskTypeCode("Servicing"), PriorityCode = "Medium", StatusCode = "Open" };
+        _showForm = true;
+    }
+
+    private void OpenEdit(ServiceRequestDto item)
+    {
+        _editId = item.ServiceRequestId;
+        _form = new()
+        {
+            RequestNumber = item.RequestNumber,
+            AccountIdText = item.AccountId.ToString(),
+            RequestTypeCode = item.RequestTypeCode,
+            PriorityCode = PriorityLabel(item),
+            StatusCode = StatusLabel(item),
+            ResolvedDate = item.ResolvedDate,
+            Subject = item.Subject,
+            Description = item.Description
+        };
+        _showForm = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            var accountId = Guid.Parse(_form.AccountIdText);
+            if (_editId.HasValue)
+            {
+                await UpdateRequestAsync(_editId.Value, accountId);
+                ShowToast("Service request updated.");
+            }
+            else
+            {
+                var id = await Api.CreateServiceRequestAsync(new()
+                {
+                    TenantId = TenantId,
+                    AccountId = accountId,
+                    RequestNumber = _form.RequestNumber.Trim(),
+                    RequestTypeCode = _form.RequestTypeCode,
+                    Subject = _form.Subject.Trim(),
+                    Description = Clean(_form.Description),
+                    PriorityCode = _form.PriorityCode,
+                    CreatedByUserId = TenantAdminUserId
+                });
+                _editId = id;
+                if (!string.Equals(_form.StatusCode, "Open", StringComparison.OrdinalIgnoreCase) || _form.ResolvedDate.HasValue)
+                {
+                    await UpdateRequestAsync(id, accountId);
+                }
+                ShowToast("Service request created.");
+            }
+            _showForm = false;
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.ServiceRequestId == _editId) ?? _selected;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private Task UpdateRequestAsync(Guid id, Guid accountId)
+        => Api.UpdateServiceRequestAsync(id, new()
+        {
+            AccountId = accountId,
+            RequestNumber = _form.RequestNumber.Trim(),
+            RequestTypeCode = _form.RequestTypeCode,
+            Subject = _form.Subject.Trim(),
+            Description = Clean(_form.Description),
+            PriorityCode = _form.PriorityCode,
+            StatusCode = _form.StatusCode,
+            ResolvedDate = _form.ResolvedDate,
+            ModifiedByUserId = TenantAdminUserId
+        });
+
+    private void ConfirmDelete(ServiceRequestDto item) { _deleteTarget = item; _showDelete = true; }
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteServiceRequestAsync(_deleteTarget.ServiceRequestId, TenantAdminUserId);
+            ShowToast("Service request deleted.");
+            if (_selected?.ServiceRequestId == _deleteTarget.ServiceRequestId) _selected = null;
+            _showDelete = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void DuplicateSelected()
+    {
+        if (_selected is null) return;
+        _editId = null;
+        _form = new()
+        {
+            RequestNumber = $"{_selected.RequestNumber}-COPY",
+            AccountIdText = _selected.AccountId.ToString(),
+            RequestTypeCode = _selected.RequestTypeCode,
+            PriorityCode = PriorityLabel(_selected),
+            StatusCode = "Open",
+            Subject = $"Copy of {_selected.Subject}",
+            Description = _selected.Description
+        };
+        _showForm = true;
+    }
+
+    private async Task ToggleResolvedAsync(ServiceRequestDto item)
+    {
+        _saving = true;
+        try
+        {
+            var resolve = !IsResolved(item);
+            await Api.UpdateServiceRequestAsync(item.ServiceRequestId, new()
+            {
+                AccountId = item.AccountId,
+                AgreementId = item.AgreementId,
+                EngagementId = item.EngagementId,
+                RequestNumber = item.RequestNumber,
+                RequestTypeCode = item.RequestTypeCode,
+                Subject = item.Subject,
+                Description = item.Description,
+                PriorityCode = item.PriorityCode,
+                StatusCode = resolve ? "Resolved" : "Open",
+                AssignedToUserId = item.AssignedToUserId,
+                ResolvedDate = resolve ? DateOnly.FromDateTime(DateTime.Today) : null,
+                ModifiedByUserId = TenantAdminUserId
+            });
+            ShowToast(resolve ? "Service request resolved." : "Service request reopened.");
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.ServiceRequestId == item.ServiceRequestId) ?? _selected;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Resolution update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task EscalateSelected()
+    {
+        if (_selected is null)
+        {
+            ShowToast("Select a service request to escalate.", "warning");
+            return;
+        }
+        var nextPriority = PriorityLabel(_selected) switch { "Low" => "Medium", "Medium" => "High", _ => "High" };
+        _saving = true;
+        try
+        {
+            await Api.UpdateServiceRequestAsync(_selected.ServiceRequestId, new()
+            {
+                AccountId = _selected.AccountId,
+                AgreementId = _selected.AgreementId,
+                EngagementId = _selected.EngagementId,
+                RequestNumber = _selected.RequestNumber,
+                RequestTypeCode = _selected.RequestTypeCode,
+                Subject = _selected.Subject,
+                Description = _selected.Description,
+                PriorityCode = nextPriority,
+                StatusCode = IsResolved(_selected) ? "In Progress" : StatusLabel(_selected),
+                AssignedToUserId = _selected.AssignedToUserId,
+                ResolvedDate = IsResolved(_selected) ? null : _selected.ResolvedDate,
+                ModifiedByUserId = TenantAdminUserId
+            });
+            ShowToast($"Service request escalated to {nextPriority}.");
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.ServiceRequestId == _selected.ServiceRequestId) ?? _selected;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Escalation failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private Task ExportAsync()
+    {
+        var rows = new List<string> { "Request,Subject,Account,Type,Priority,Status,Age,ResolvedDate,Importance,Description,Created" };
+        rows.AddRange(_filtered.Select(x => string.Join(',', Csv(x.RequestNumber), Csv(x.Subject), Csv(AccountName(x.AccountId)), Csv(x.RequestTypeCode), Csv(PriorityLabel(x)), Csv(StatusLabel(x)), Csv(AgeLabel(x)), Csv(ResolutionLabel(x)), Csv(ImportanceLabel(x)), Csv(x.Description), Csv(x.CreatedDateUtc.ToString("O")))));
+        Nav.NavigateTo("data:text/csv;charset=utf-8," + Uri.EscapeDataString(string.Join(Environment.NewLine, rows)), forceLoad: true);
+        ShowToast("Service request export generated.");
+        return Task.CompletedTask;
+    }
+
+    private async Task LoadAccountsAsync()
+    {
+        if (_accounts.Count > 0) return;
+        var result = await Api.SearchAccountsAsync(TenantId);
+        _accounts = (result?.Items ?? []).OrderBy(x => x.AccountName).Select(x => new AccountOption(x.AccountId.ToString(), x.AccountName)).ToList();
+    }
+
+    private async Task LoadTaskTypesAsync()
+    {
+        if (_taskTypes.Count > 0) return;
+        var result = await Api.SearchTaskTypesAsync(TenantId, pageSize: 250);
+        _taskTypes = (result?.Items ?? []).OrderBy(x => x.SortOrder).ThenBy(x => x.TaskTypeName).ToList();
+    }
+
+    private void ShowValidation() => ShowToast("Please fix validation errors before saving.", "danger");
+    private void CloseForm() { _showForm = false; _form = new(); _editId = null; }
+    private void CancelDelete() { _showDelete = false; _deleteTarget = null; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+
+    private string KpiClass(string key, string tone)
+    {
+        var active = key switch
+        {
+            "all" => _priorityFilter == "all" && _statusFilter == "all" && _accountFilter == "all" && _typeFilter == "all",
+            "high" => _priorityFilter == "High",
+            "open" => _statusFilter == "Open",
+            "progress" => _statusFilter == "In Progress",
+            "stale" => _filtered.Count > 0 && _filtered.All(IsStale),
+            "resolved" => _statusFilter == "Resolved" || _statusFilter == "Closed",
+            _ => false
+        };
+        return $"srq-kpi-card {tone}{(active ? " srq-kpi-card-active" : string.Empty)}";
+    }
+
+    private bool MatchesSearch(ServiceRequestDto item)
+    {
+        var q = _searchTerm.Trim();
+        return Contains(item.RequestNumber, q) || Contains(item.Subject, q) || Contains(item.Description, q) || Contains(item.RequestTypeCode, q) || Contains(item.PriorityCode, q) || Contains(item.StatusCode, q) || Contains(AccountName(item.AccountId), q);
+    }
+
+    private string AccountName(Guid accountId) => _accounts.FirstOrDefault(x => string.Equals(x.Value, accountId.ToString(), StringComparison.OrdinalIgnoreCase))?.Label ?? "Account not loaded";
+    private static bool Contains(string? value, string search) => value?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
+    private static string PriorityLabel(ServiceRequestDto item) => string.IsNullOrWhiteSpace(item.PriorityCode) ? "Medium" : item.PriorityCode.Trim();
+    private static string StatusLabel(ServiceRequestDto item) => string.IsNullOrWhiteSpace(item.StatusCode) ? "Open" : item.StatusCode.Trim();
+    private static bool IsHigh(ServiceRequestDto item) => string.Equals(PriorityLabel(item), "High", StringComparison.OrdinalIgnoreCase);
+    private static bool IsOpen(ServiceRequestDto item) => string.Equals(StatusLabel(item), "Open", StringComparison.OrdinalIgnoreCase);
+    private static bool IsInProgress(ServiceRequestDto item) => string.Equals(StatusLabel(item), "In Progress", StringComparison.OrdinalIgnoreCase) || string.Equals(StatusLabel(item), "InProgress", StringComparison.OrdinalIgnoreCase);
+    private static bool IsResolved(ServiceRequestDto item) => string.Equals(StatusLabel(item), "Resolved", StringComparison.OrdinalIgnoreCase) || string.Equals(StatusLabel(item), "Closed", StringComparison.OrdinalIgnoreCase);
+    private static int AgeDays(ServiceRequestDto item) => Math.Max(0, (DateTime.UtcNow.Date - item.CreatedDateUtc.Date).Days);
+    private static bool IsStale(ServiceRequestDto item) => !IsResolved(item) && AgeDays(item) >= 7;
+    private static bool NeedsReview(ServiceRequestDto item) => IsStale(item) || (IsHigh(item) && IsOpen(item)) || string.IsNullOrWhiteSpace(item.Description);
+    private static int ImportanceRank(ServiceRequestDto item) => NeedsReview(item) ? 5 : IsHigh(item) ? 4 : IsInProgress(item) ? 3 : IsOpen(item) ? 2 : IsResolved(item) ? 1 : 0;
+    private static string AgeLabel(ServiceRequestDto item) => $"{AgeDays(item)}d";
+    private static string ResolutionLabel(ServiceRequestDto item) => item.ResolvedDate.HasValue ? item.ResolvedDate.Value.ToString("MMM d, yyyy") : IsResolved(item) ? "Resolved" : "Unresolved";
+    private static string ImportanceLabel(ServiceRequestDto item) => NeedsReview(item) ? "Needs Review" : IsHigh(item) ? "High Impact" : IsInProgress(item) ? "Active" : IsResolved(item) ? "Resolved" : "Standard";
+    private static string RiskReason(ServiceRequestDto item)
+    {
+        if (string.IsNullOrWhiteSpace(item.Description)) return "Request description is missing service context.";
+        if (IsStale(item)) return "Request has been unresolved for 7 or more days.";
+        if (IsHigh(item) && IsOpen(item)) return "High-priority request is still open and needs routing.";
+        if (IsInProgress(item)) return "Request is actively being serviced.";
+        if (IsResolved(item)) return "Request has been resolved or closed.";
+        return "Request is ready for standard intake triage.";
+    }
+
+    private static string PriorityClass(ServiceRequestDto item) => PriorityLabel(item) switch { "High" => "srq-priority srq-priority-high", "Medium" => "srq-priority srq-priority-medium", "Low" => "srq-priority srq-priority-low", _ => "srq-priority srq-priority-medium" };
+    private static string StatusClass(ServiceRequestDto item) => IsResolved(item) ? "srq-status srq-status-resolved" : IsInProgress(item) ? "srq-status srq-status-progress" : IsOpen(item) ? "srq-status srq-status-open" : "srq-status srq-status-muted";
+    private static string ImportanceClass(ServiceRequestDto item) => NeedsReview(item) ? "srq-importance srq-importance-risk" : IsHigh(item) ? "srq-importance srq-importance-high" : IsInProgress(item) ? "srq-importance srq-importance-active" : IsResolved(item) ? "srq-importance srq-importance-resolved" : "srq-importance srq-importance-standard";
+    private static string WidthStyle(int value, int max) => $"width:{Math.Clamp((int)Math.Round(value * 100d / Math.Max(max, 1)), 0, 100)}%;";
+    private static string AvatarClass(ServiceRequestDto item)
+    {
+        var index = Math.Abs(item.RequestNumber.GetHashCode()) % 6;
+        if (index == 0) return "srq-av1";
+        if (index == 1) return "srq-av2";
+        if (index == 2) return "srq-av3";
+        if (index == 3) return "srq-av4";
+        if (index == 4) return "srq-av5";
+        return "srq-av6";
+    }
+    private static string Initials(string name)
+    {
+        var parts = name.Split(' ', '-', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant() : name.Length > 0 ? name[..1].ToUpperInvariant() : "?";
+    }
+    private string GetDefaultTaskTypeCode(string defaultCode) => _taskTypes.FirstOrDefault(x => x.TaskTypeCode == defaultCode)?.TaskTypeCode ?? _taskTypes.FirstOrDefault(x => x.IsActive)?.TaskTypeCode ?? defaultCode;
+    private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string Csv(string? value) => string.Concat("\"", (value ?? string.Empty).Replace("\"", "\"\""), "\"");
+
+    private async Task ResolveCurrentUserContextAsync()
     {
         var context = await CurrentUser.RequireAsync();
         TenantId = context.TenantId;
         TenantAdminUserId = context.UserId;
         _tenantId = context.TenantId;
         _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+    }
+
+    private sealed record AccountOption(string Value, string Label);
+    private sealed record GroupSummary(string Name, int Count);
+    private sealed record GovernanceLane(string Title, List<ServiceRequestDto> Items);
+    private sealed class RequestForm
+    {
+        [Required, StringLength(50)] public string RequestNumber { get; set; } = string.Empty;
+        [Required(ErrorMessage = "Select an account.")] public string AccountIdText { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string RequestTypeCode { get; set; } = "Servicing";
+        [Required, StringLength(50)] public string PriorityCode { get; set; } = "Medium";
+        [Required, StringLength(50)] public string StatusCode { get; set; } = "Open";
+        public DateOnly? ResolvedDate { get; set; }
+        [Required, StringLength(200)] public string Subject { get; set; } = string.Empty;
+        [StringLength(2000)] public string? Description { get; set; }
     }
 }

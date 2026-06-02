@@ -1,323 +1,521 @@
 @page "/renewals"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.RenewalRetention
+@using Microsoft.AspNetCore.Components.Forms
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Renewals Dashboard — AMS</PageTitle>
+<PageTitle>Renewals Command Center - AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<AppPageHeader Title="Renewals Administration"
-               Subtitle="Tenant admin oversight for renewal pipeline, retention risk, premium at stake, and producer follow-up"
-               Icon="bi-arrow-repeat">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="Refresh">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
-            <i class="bi bi-download" aria-hidden="true"></i> Export
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<section class="ma-hero ren-hero">
-    <div>
-        <span class="ma-eyebrow">Tenant Administration · Renewals</span>
-        <h2>Tenant Renewal Administration</h2>
-        <p>Administer upcoming renewals, stage progression, retention risk, premium at stake, assignments, and activity completion for the tenant.</p>
-    </div>
-    <div class="ma-hero-actions">
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/renewals/pipeline")'><i class="bi bi-funnel"></i> Pipeline</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/renewals/activities")'><i class="bi bi-lightning"></i> Activities</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/policies")'><i class="bi bi-shield-check"></i> Policies</button>
-    </div>
-</section>
-
-@if (_loadError is not null)
-{
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError
-    </div>
-}
-
-<!-- ── PIPELINE KPI STRIP ─────────────────────────────────────────── -->
-<div class="rdb-kpi-strip">
-    @KpiCard("bi-hourglass",        "Not Started",  _renewals.Count(r => r.Stage == "Not Started").ToString(),  "rdb-kpi-ns",      (System.Action)(() => SetStageFilter("Not Started")))
-    @KpiCard("bi-arrow-clockwise",  "In Progress",  _renewals.Count(r => r.Stage == "In Progress").ToString(),  "rdb-kpi-ip",      (System.Action)(() => SetStageFilter("In Progress")))
-    @KpiCard("bi-quote",            "Quoted",        _renewals.Count(r => r.Stage == "Quoted").ToString(),        "rdb-kpi-qt",      (System.Action)(() => SetStageFilter("Quoted")))
-    @KpiCard("bi-check-circle",     "Renewed",       _renewals.Count(r => r.Stage == "Renewed").ToString(),       "rdb-kpi-rn",      (System.Action)(() => SetStageFilter("Renewed")))
-    @KpiCard("bi-x-circle",         "Lost",          _renewals.Count(r => r.Stage == "Lost").ToString(),          "rdb-kpi-lo",      (System.Action)(() => SetStageFilter("Lost")))
-    @KpiCard("bi-slash-circle",     "Non-Renewed",   _renewals.Count(r => r.Stage == "Non-Renewed").ToString(),   "rdb-kpi-nr",      (System.Action)(() => SetStageFilter("Non-Renewed")))
-    @KpiCard("bi-currency-dollar",  "Total at Stake", _renewals.Where(r => r.Stage != "Renewed" && r.Stage != "Lost" && r.Stage != "Non-Renewed").Sum(r => r.CurrentPremium).ToString("C0"), "rdb-kpi-prem", null)
-    @KpiCard("bi-graph-up",         "Retention Rate", RetentionRate, "rdb-kpi-ret", null)
-</div>
-
-<!-- ── URGENCY BANDS ─────────────────────────────────────────────── -->
-<div class="rdb-urgency-strip">
-    @foreach (var band in new[]{ ("bi-alarm-fill","Expires &lt; 30 days","rdb-urg-red",30), ("bi-alarm","Expires 31–60 days","rdb-urg-amber",60), ("bi-clock","Expires 61–90 days","rdb-urg-blue",90) })
+<div class="ren-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
     {
-        var count = band.Item4 == 30
-            ? _renewals.Count(r => r.DaysToExpiry is > 0 and <= 30 && r.Stage is not "Renewed" and not "Lost" and not "Non-Renewed")
-            : band.Item4 == 60
-            ? _renewals.Count(r => r.DaysToExpiry is > 30 and <= 60 && r.Stage is not "Renewed" and not "Lost" and not "Non-Renewed")
-            : _renewals.Count(r => r.DaysToExpiry is > 60 and <= 90 && r.Stage is not "Renewed" and not "Lost" and not "Non-Renewed");
-        <div class="rdb-urg-band @band.Item3">
-            <i class="bi @band.Item1" aria-hidden="true"></i>
-            <span class="rdb-urg-count">@count</span>
-            <span class="rdb-urg-lbl">@((MarkupString)band.Item2)</span>
+        <div class="ren-toast @toast.CssClass">
+            <i class="bi @toast.Icon" aria-hidden="true"></i>
+            <span>@toast.Content</span>
+            <button type="button" @onclick="() => DismissToast(toast.Id)" aria-label="Dismiss notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
         </div>
     }
-    <div class="rdb-urg-band rdb-urg-gray">
-        <i class="bi bi-calendar-range" aria-hidden="true"></i>
-        <span class="rdb-urg-count">@_renewals.Count(r => r.DaysToExpiry > 90 && r.Stage is not "Renewed" and not "Lost" and not "Non-Renewed")</span>
-        <span class="rdb-urg-lbl">Expires &gt; 90 days</span>
-    </div>
 </div>
 
-<!-- ── FILTER BAR ────────────────────────────────────────────────── -->
-<div class="rdb-filter-bar">
-    <input class="e-input rdb-search" @bind="_search" @bind:event="oninput"
-           placeholder="Search accounts, policy #, carrier, producer…" />
-    <div class="rdb-stage-pills">
-        @foreach (var s in _stagePills)
+<div class="ren-enterprise-page">
+    <section class="ren-hero">
+        <div class="ren-hero-main">
+            <span class="ren-eyebrow">Tenant Administration / Renewal Retention</span>
+            <h1>Renewals Command Center</h1>
+            <p>Prioritize renewal risk, outreach, premium at stake, offers, and saved-business workflow from DB-backed retention records.</p>
+            <div class="ren-hero-meta">
+                <span><i class="bi bi-building" aria-hidden="true"></i>@(_userContext?.TenantName ?? "Tenant")</span>
+                <span><i class="bi bi-shield-check" aria-hidden="true"></i>@(_cases.Count) active case(s)</span>
+                <span><i class="bi bi-clock-history" aria-hidden="true"></i>@LastRefreshLabel</span>
+            </div>
+        </div>
+        <div class="ren-hero-actions">
+            <button type="button" class="ren-btn ren-btn-ghost" @onclick="RefreshAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="ren-btn ren-btn-ghost" @onclick="ExportAsync"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="ren-btn ren-btn-primary" @onclick="OpenCreateCase"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Case</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger ren-load-error" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
+        </div>
+    }
+
+    @if (_loading)
+    {
+        <div class="ren-loading"><span class="ren-spinner" aria-hidden="true"></span><span>Loading renewals…</span></div>
+    }
+    else
+    {
+        <section class="ren-kpi-strip" aria-label="Renewal performance indicators">
+            @KpiCard("At Risk", AtRiskCount.ToString("N0"), "bi-exclamation-triangle-fill", "ren-kpi-danger", () => SetRiskFilter())
+            @KpiCard("Escalated", EscalatedCount.ToString("N0"), "bi-arrow-up-right-circle", "ren-kpi-warning", () => SetEscalatedFilter())
+            @KpiCard("Premium at Stake", PremiumAtStake.ToString("C0"), "bi-currency-dollar", "ren-kpi-blue", null)
+            @KpiCard("Due 30 Days", Due30Count.ToString("N0"), "bi-alarm", "ren-kpi-amber", () => SetDaysFilter(30))
+            @KpiCard("Saved", SavedCount.ToString("N0"), "bi-check-circle-fill", "ren-kpi-success", () => SetSavedFilter())
+            @KpiCard("Retention", RetentionRate, "bi-graph-up-arrow", "ren-kpi-purple", null)
+            @KpiCard("Open Offers", OpenOfferCount.ToString("N0"), "bi-tags", "ren-kpi-indigo", () => SelectTab("Offers"))
+            @KpiCard("Touches", _activities.Count.ToString("N0"), "bi-lightning-charge", "ren-kpi-slate", () => SelectTab("Activity"))
+        </section>
+
+        <section class="ren-priority-grid" aria-label="Renewal priorities">
+            @foreach (var insight in PriorityInsights)
+            {
+                <button type="button" class="ren-priority-card @insight.Tone" @onclick="() => insight.Action.Invoke()">
+                    <span class="ren-priority-icon"><i class="bi @insight.Icon" aria-hidden="true"></i></span>
+                    <span><strong>@insight.Title</strong><small>@insight.Detail</small></span>
+                    <i class="bi bi-arrow-right-short" aria-hidden="true"></i>
+                </button>
+            }
+        </section>
+
+        <section class="ren-filter-panel" aria-label="Renewal filters">
+            <div class="ren-search-wrap">
+                <i class="bi bi-search" aria-hidden="true"></i>
+                <input class="ren-input ren-search" @bind="_search" @bind:event="oninput" placeholder="Search account, policy, carrier, producer, CSR…" />
+            </div>
+            <select class="ren-input" @bind="_stageFilter">
+                <option value="All">All stages</option>
+                @foreach (var stage in StageOptions)
+                {
+                    <option value="@stage">@stage</option>
+                }
+            </select>
+            <select class="ren-input" @bind="_priorityFilter">
+                <option value="">All priorities</option>
+                @foreach (var priority in PriorityOptions)
+                {
+                    <option value="@priority">@priority</option>
+                }
+            </select>
+            <select class="ren-input" @bind="_producerFilter">
+                <option value="">All producers</option>
+                @foreach (var producer in ProducerOptions)
+                {
+                    <option value="@producer">@producer</option>
+                }
+            </select>
+            <select class="ren-input" @bind="_daysFilter">
+                <option value="0">All expirations</option>
+                <option value="30">Due in 30 days</option>
+                <option value="60">Due in 60 days</option>
+                <option value="90">Due in 90 days</option>
+                <option value="120">Due in 120 days</option>
+            </select>
+            <button type="button" class="ren-btn ren-btn-ghost ren-btn-sm" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+            <span class="ren-filter-count">@FilteredCases.Count case(s)</span>
+        </section>
+
+        <section class="ren-stage-tabs" role="tablist" aria-label="Renewal dashboard sections">
+            @foreach (var tab in _tabs)
+            {
+                <button type="button" class="@TabClass(tab)" role="tab" aria-selected="@(_activeTab == tab)" @onclick="() => SelectTab(tab)">
+                    <i class="bi @TabIcon(tab)" aria-hidden="true"></i>
+                    <span>@tab</span>
+                    <strong>@TabCount(tab)</strong>
+                </button>
+            }
+        </section>
+
+        @if (_activeTab == "Worklist")
         {
-            <button class="rdb-pill @(_stageFilter == s ? "rdb-pill-active" : "")"
-                    @onclick="() => _stageFilter = s">@s</button>
-        }
-    </div>
-    <select class="e-input rdb-filter-sel" @bind="_lobFilter">
-        <option value="">All Lines</option>
-        @foreach (var l in _lobs) { <option>@l</option> }
-    </select>
-    <select class="e-input rdb-filter-sel" @bind="_producerFilter">
-        <option value="">All Producers</option>
-        @foreach (var p in _producers) { <option>@p</option> }
-    </select>
-    <label class="rdb-filter-lbl">Expiry within:</label>
-    <select class="e-input rdb-filter-sel rdb-days-sel" @bind="_daysFilter">
-        <option value="0">All</option>
-        <option value="30">30 days</option>
-        <option value="60">60 days</option>
-        <option value="90">90 days</option>
-        <option value="120">120 days</option>
-    </select>
-    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters">
-        <i class="bi bi-x" aria-hidden="true"></i> Reset
-    </button>
-    <span class="rdb-filter-count">@FilteredRenewals.Count() record(s)</span>
-</div>
-
-<!-- ── MAIN GRID ─────────────────────────────────────────────────── -->
-<div class="rdb-grid-wrap">
-    <SfGrid TValue="RenewalRow" DataSource="@FilteredRenewals.ToList()"
-            AllowSorting="true" AllowPaging="true" AllowResizing="true"
-            AllowFiltering="true" EnableHover="true" RowHeight="56">
-        <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
-        <GridPageSettings PageSize="20" />
-        <GridColumns>
-
-            <GridColumn Field="@nameof(RenewalRow.AccountName)" HeaderText="Account / Insured" MinWidth="200">
-                <Template>
-                    @{ var r = (RenewalRow)context; }
-                    <div class="rdb-acct-cell">
-                        <button class="rdb-acct-link" @onclick="() => OpenDetail(r)">@r.AccountName</button>
-                        <div class="rdb-acct-meta">@r.PolicyNumber · @r.Lob</div>
-                    </div>
-                </Template>
-            </GridColumn>
-
-            <GridColumn Field="@nameof(RenewalRow.Carrier)" HeaderText="Carrier" Width="175" />
-
-            <GridColumn Field="@nameof(RenewalRow.ExpiryDate)" HeaderText="Expiry" Width="130">
-                <Template>
-                    @{ var r = (RenewalRow)context; }
-                    <div class="rdb-exp-cell">
-                        <span class="rdb-exp-date">@r.ExpiryDate.ToString("MM/dd/yyyy")</span>
-                        <span class="rdb-days-badge @DaysBadgeCss(r.DaysToExpiry)">@DaysLabel(r.DaysToExpiry)</span>
-                    </div>
-                </Template>
-            </GridColumn>
-
-            <GridColumn Field="@nameof(RenewalRow.Stage)" HeaderText="Stage" Width="145">
-                <Template>
-                    @{ var r = (RenewalRow)context; }
-                    <span class="rdb-stage rdb-st-@StageCss(r.Stage)">@r.Stage</span>
-                </Template>
-            </GridColumn>
-
-            <GridColumn Field="@nameof(RenewalRow.RetentionRiskScore)" HeaderText="Risk" Width="105">
-                <Template>
-                    @{ var r = (RenewalRow)context; }
-                    <div class="rdb-risk-cell">
-                        <div class="rdb-risk-bar-wrap">
-                            <div class="rdb-risk-bar rdb-risk-@RiskCss(r.RetentionRiskScore)"
-                                 style="width:@r.RetentionRiskScore%"></div>
+            <section class="ren-workspace">
+                <div class="ren-worklist-card">
+                    <div class="ren-card-header">
+                        <div>
+                            <h2>Renewal Worklist</h2>
+                            <p>Sorted by escalation, risk, expiration, and premium at stake.</p>
                         </div>
-                        <span class="rdb-risk-val rdb-risk-val-@RiskCss(r.RetentionRiskScore)">@r.RetentionRiskScore</span>
+                        <span class="ren-card-count">@FilteredCases.Count record(s)</span>
                     </div>
-                </Template>
-            </GridColumn>
 
-            <GridColumn Field="@nameof(RenewalRow.CurrentPremium)" HeaderText="Current Prem." Width="135"
-                        TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                <Template>
-                    @{ var r = (RenewalRow)context; }
-                    <span class="rdb-mono">@r.CurrentPremium.ToString("C0")</span>
-                </Template>
-            </GridColumn>
-
-            <GridColumn Field="@nameof(RenewalRow.ProjectedPremium)" HeaderText="Projected Prem." Width="145"
-                        TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                <Template>
-                    @{ var r = (RenewalRow)context; }
-                    @if (r.ProjectedPremium.HasValue)
+                    @if (FilteredCases.Count == 0)
                     {
-                        var delta = r.ProjectedPremium.Value - r.CurrentPremium;
-                        <div class="rdb-prem-cell">
-                            <span class="rdb-mono">@r.ProjectedPremium.Value.ToString("C0")</span>
-                            <span class="rdb-prem-delta @(delta > 0 ? "rdb-delta-up" : "rdb-delta-dn")">
-                                @(delta >= 0 ? "+" : "")@delta.ToString("C0")
-                            </span>
-                        </div>
+                        @EmptyState("bi-inbox", "No renewal cases", "No DB-backed retention records match the current filters.")
                     }
                     else
                     {
-                        <span class="rdb-no-quote">—</span>
+                        <div class="ren-native-table-wrap">
+                            <table class="ren-native-table">
+                                <thead>
+                                    <tr>
+                                        <th>Account / Policy</th>
+                                        <th>Stage</th>
+                                        <th>Expiration</th>
+                                        <th>Risk</th>
+                                        <th class="text-end">Premium</th>
+                                        <th>Owner</th>
+                                        <th>Next Action</th>
+                                        <th class="text-end">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var item in FilteredCases)
+                                    {
+                                        <tr class="@RowClass(item)">
+                                            <td data-label="Account / Policy">
+                                                <div class="ren-account-cell">
+                                                    <button type="button" class="ren-link" @onclick="() => OpenAccount(item)">@item.AccountName</button>
+                                                    <span>@item.PolicyNumber / @item.LineOfBusiness</span>
+                                                    <small>@item.Carrier</small>
+                                                </div>
+                                            </td>
+                                            <td data-label="Stage"><span class="@StageBadge(item.Stage)">@item.Stage</span></td>
+                                            <td data-label="Expiration"><span class="ren-mono @DaysCss(item.DaysToExpiration)">@DaysLabel(item.DaysToExpiration)</span><small>@item.ExpirationDate.ToString("d")</small></td>
+                                            <td data-label="Risk">
+                                                <div class="ren-risk-cell">
+                                                    <div class="ren-risk-track"><div class="@RiskBarClass(item.RiskScore)" style="width:@item.RiskScore%"></div></div>
+                                                    <span>@item.RiskScore</span>
+                                                </div>
+                                            </td>
+                                            <td data-label="Premium" class="text-end"><span class="ren-mono ren-bold">@item.CurrentPremium.ToString("C0")</span>@if (item.ProposedPremium.HasValue) { <small class="@PremiumDeltaCss(item.PremiumDelta)">@DeltaLabel(item.PremiumDelta)</small> }</td>
+                                            <td data-label="Owner"><span>@OwnerLabel(item)</span><small>@item.Producer</small></td>
+                                            <td data-label="Next Action"><span>@(item.NextBestAction ?? item.OutreachStatus)</span>@if (item.NextActionDueDate.HasValue) { <small class="@DueDateCss(item.NextActionDueDate.Value)">@item.NextActionDueDate.Value.ToString("d")</small> }</td>
+                                            <td data-label="Actions" class="text-end">
+                                                <div class="ren-row-actions">
+                                                    <button type="button" class="ren-icon-btn" title="Open details" @onclick="() => SelectCase(item)"><i class="bi bi-layout-sidebar-inset" aria-hidden="true"></i></button>
+                                                    <button type="button" class="ren-icon-btn" title="Log activity" @onclick="() => OpenActivity(item)"><i class="bi bi-lightning" aria-hidden="true"></i></button>
+                                                    <button type="button" class="ren-icon-btn" title="Add offer" @onclick="() => OpenOffer(item)"><i class="bi bi-tag" aria-hidden="true"></i></button>
+                                                    <button type="button" class="ren-icon-btn" title="Advance stage" @onclick="() => OpenStage(item)"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i></button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
                     }
-                </Template>
-            </GridColumn>
+                </div>
 
-            <GridColumn Field="@nameof(RenewalRow.LossRatio)" HeaderText="Loss Ratio" Width="110"
-                        TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                <Template>
-                    @{ var r = (RenewalRow)context; }
-                    <span class="rdb-mono @(r.LossRatio >= 70 ? "rdb-lr-danger" : r.LossRatio >= 40 ? "rdb-lr-warn" : "")">
-                        @r.LossRatio.ToString("F0")%
-                    </span>
-                </Template>
-            </GridColumn>
-
-            <GridColumn Field="@nameof(RenewalRow.Producer)" HeaderText="Producer" Width="145" />
-
-            <GridColumn Field="@nameof(RenewalRow.AssignedTo)" HeaderText="Assigned" Width="145" />
-
-            <GridColumn HeaderText="Actions" Width="120" AllowSorting="false" AllowFiltering="false">
-                <Template>
-                    @{ var r = (RenewalRow)context; }
-                    <div class="rdb-row-actions">
-                        <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => OpenDetail(r)"
-                                title="Open renewal">
-                            <i class="bi bi-arrow-right-circle" aria-hidden="true"></i>
-                        </button>
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => QuickAction(r)"
-                                title="Quick action">
-                            <i class="bi bi-lightning" aria-hidden="true"></i>
-                        </button>
-                        <button class="um-btn um-btn-ghost um-btn-xs"
-                                @onclick='() => Nav.NavigateTo($"/policies/{r.PolicyId}")'
-                                title="View policy">
-                            <i class="bi bi-shield" aria-hidden="true"></i>
-                        </button>
-                    </div>
-                </Template>
-            </GridColumn>
-
-        </GridColumns>
-    </SfGrid>
-</div>
-
-@code {
-    private Guid DefaultTenantId { get; set; }
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantId;
-    private Guid _tenantAdminUserId;
-    SfToast _toast = default!;
-
-    string _search         = "";
-    string _stageFilter    = "All";
-    string _lobFilter      = "";
-    string _producerFilter = "";
-    int    _daysFilter     = 0;
-    bool   _loading        = false;
-    string? _loadError;
-
-    readonly string[] _stagePills = { "All","Not Started","In Progress","Quoted","Renewed","Lost","Non-Renewed" };
-    readonly string[] _lobs       = { "General Liability","Commercial Auto","Commercial Property","Workers Comp","Umbrella","Professional Liab.","Home/Dwelling","Personal Auto" };
-    readonly string[] _producers  = { "Maria Santos","James Park","Kevin Obi","Sarah Kim","Lisa Chen" };
-
-    sealed class RenewalRow
-    {
-        public Guid     RenewalId            { get; set; }
-        public Guid     PolicyId             { get; set; }
-        public string   AccountName          { get; set; } = "";
-        public string   PolicyNumber         { get; set; } = "";
-        public string   Lob                  { get; set; } = "";
-        public string   Carrier              { get; set; } = "";
-        public DateTime ExpiryDate           { get; set; }
-        public int      DaysToExpiry         { get; set; }
-        public string   Stage                { get; set; } = "";
-        public int      RetentionRiskScore   { get; set; }     // 0–100, higher = more at risk
-        public decimal  CurrentPremium       { get; set; }
-        public decimal? ProjectedPremium     { get; set; }
-        public decimal  LossRatio            { get; set; }
-        public string   Producer             { get; set; } = "";
-        public string   AssignedTo           { get; set; } = "";
-        public int      OpenTasks            { get; set; }
-    }
-
-    readonly List<RenewalRow> _renewals = new();
-
-    IEnumerable<RenewalRow> FilteredRenewals => _renewals
-        .Where(r =>
-            (string.IsNullOrEmpty(_search) ||
-             r.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             r.PolicyNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             r.Carrier.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             r.Producer.Contains(_search, StringComparison.OrdinalIgnoreCase))
-         && (_stageFilter == "All" || r.Stage == _stageFilter)
-         && (string.IsNullOrEmpty(_lobFilter) || r.Lob == _lobFilter)
-         && (string.IsNullOrEmpty(_producerFilter) || r.Producer == _producerFilter)
-         && (_daysFilter == 0 || r.DaysToExpiry <= _daysFilter))
-        .OrderBy(r => r.DaysToExpiry);
-
-    string RetentionRate
-    {
-        get
+                <aside class="ren-detail-panel">
+                    @if (_selectedCase is null)
+                    {
+                        @EmptyState("bi-layout-sidebar", "Select a renewal", "Open a worklist item to review drivers, offers, and recent activity.")
+                    }
+                    else
+                    {
+                        <div class="ren-detail-head">
+                            <div>
+                                <span class="ren-eyebrow">Selected Case</span>
+                                <h2>@_selectedCase.AccountName</h2>
+                                <p>@_selectedCase.PolicyNumber / @_selectedCase.LineOfBusiness</p>
+                            </div>
+                            <span class="@PriorityBadge(_selectedCase.Priority)">@_selectedCase.Priority</span>
+                        </div>
+                        <div class="ren-detail-metrics">
+                            @Metric("Risk", _selectedCase.RiskScore.ToString(), "bi-exclamation-triangle")
+                            @Metric("Probability", $"{_selectedCase.RetentionProbability}%", "bi-percent")
+                            @Metric("Days", _selectedCase.DaysToExpiration.ToString(), "bi-calendar2-week")
+                            @Metric("Offers", OffersFor(_selectedCase.RetentionCaseId).Count.ToString(), "bi-tags")
+                        </div>
+                        <div class="ren-driver-box">
+                            <h3>Risk Drivers</h3>
+                            <p>@(string.IsNullOrWhiteSpace(_selectedCase.RiskDrivers) ? "No risk drivers recorded." : _selectedCase.RiskDrivers)</p>
+                        </div>
+                        <div class="ren-detail-actions">
+                            <button type="button" class="ren-btn ren-btn-primary" @onclick="() => OpenActivity(_selectedCase)"><i class="bi bi-lightning" aria-hidden="true"></i> Log Activity</button>
+                            <button type="button" class="ren-btn ren-btn-ghost" @onclick="() => OpenOffer(_selectedCase)"><i class="bi bi-tag" aria-hidden="true"></i> Add Offer</button>
+                            <button type="button" class="ren-btn ren-btn-ghost" @onclick="() => OpenStage(_selectedCase)"><i class="bi bi-arrow-right" aria-hidden="true"></i> Update Stage</button>
+                            @if (_selectedCase.AccountId.HasValue)
+                            {
+                                <button type="button" class="ren-btn ren-btn-ghost" @onclick="() => OpenAccount(_selectedCase)"><i class="bi bi-building" aria-hidden="true"></i> Account 360</button>
+                            }
+                        </div>
+                        <div class="ren-mini-feed">
+                            <h3>Recent Activity</h3>
+                            @foreach (var activity in ActivitiesFor(_selectedCase.RetentionCaseId).Take(4))
+                            {
+                                <div class="ren-feed-row">
+                                    <i class="bi bi-lightning-charge" aria-hidden="true"></i>
+                                    <span><strong>@activity.Subject</strong><small>@activity.Outcome / @activity.ActivityDateUtc.ToString("g")</small></span>
+                                </div>
+                            }
+                            @if (!ActivitiesFor(_selectedCase.RetentionCaseId).Any())
+                            {
+                                <p class="ren-muted">No activity recorded.</p>
+                            }
+                        </div>
+                    }
+                </aside>
+            </section>
+        }
+        else if (_activeTab == "Activity")
         {
-            var settled = _renewals.Count(r => r.Stage is "Renewed" or "Lost" or "Non-Renewed");
-            if (settled == 0) return "—";
-            var retained = _renewals.Count(r => r.Stage == "Renewed");
-            return (retained * 100.0 / settled).ToString("F0") + "%";
+            <section class="ren-card">
+                <div class="ren-card-header"><div><h2>Activity Timeline</h2><p>All renewal outreach and service touches from the retention activity table.</p></div></div>
+                @if (_activities.Count == 0) { @EmptyState("bi-lightning", "No activity", "Log renewal activity from a case to build the timeline.") }
+                else
+                {
+                    <div class="ren-timeline">
+                        @foreach (var activity in _activities.OrderByDescending(a => a.ActivityDateUtc))
+                        {
+                            var c = _cases.FirstOrDefault(x => x.RetentionCaseId == activity.RetentionCaseId);
+                            <div class="ren-timeline-row">
+                                <div class="ren-timeline-icon"><i class="bi bi-lightning-charge" aria-hidden="true"></i></div>
+                                <div class="ren-timeline-body">
+                                    <div class="ren-timeline-title">@activity.Subject</div>
+                                    <div class="ren-timeline-meta">@activity.ActivityType / @activity.Outcome / @(c?.AccountName ?? "Renewal case") / @activity.CreatedByName</div>
+                                    @if (!string.IsNullOrWhiteSpace(activity.Notes)) { <p>@activity.Notes</p> }
+                                </div>
+                                <span class="ren-mono">@activity.ActivityDateUtc.ToString("g")</span>
+                            </div>
+                        }
+                    </div>
+                }
+            </section>
+        }
+        else if (_activeTab == "Offers")
+        {
+            <section class="ren-card">
+                <div class="ren-card-header"><div><h2>Retention Offers</h2><p>Offer strategy, premium impact, lift, and acceptance status.</p></div></div>
+                @if (_offers.Count == 0) { @EmptyState("bi-tags", "No offers", "Add an offer from a renewal case to track retention strategy.") }
+                else
+                {
+                    <div class="ren-offer-grid">
+                        @foreach (var offer in _offers.OrderByDescending(o => o.PresentedDateUtc ?? o.AcceptedDateUtc ?? DateTime.MinValue))
+                        {
+                            var c = _cases.FirstOrDefault(x => x.RetentionCaseId == offer.RetentionCaseId);
+                            <div class="ren-offer-card">
+                                <div class="ren-offer-head"><strong>@offer.OfferName</strong><span class="@OfferStatusBadge(offer.Status)">@offer.Status</span></div>
+                                <p>@(c?.AccountName ?? "Renewal case")</p>
+                                <div class="ren-offer-metrics">
+                                    <span><small>Type</small>@offer.OfferType</span>
+                                    <span><small>Impact</small><b class="@PremiumDeltaCss(offer.PremiumImpact)">@DeltaLabel(offer.PremiumImpact)</b></span>
+                                    <span><small>Lift</small>@offer.RetentionLift%</span>
+                                </div>
+                                @if (!string.Equals(offer.Status, "Accepted", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    <button type="button" class="ren-btn ren-btn-primary ren-btn-sm" @onclick="() => AcceptOfferAsync(offer)"><i class="bi bi-check2" aria-hidden="true"></i> Accept</button>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            </section>
+        }
+        else
+        {
+            <section class="ren-card">
+                <div class="ren-card-header"><div><h2>@_activeTab Stage</h2><p>Cases currently in the @_activeTab stage.</p></div></div>
+                <div class="ren-stage-board">
+                    @foreach (var item in _cases.Where(c => string.Equals(c.Stage, _activeTab, StringComparison.OrdinalIgnoreCase)).OrderBy(c => c.ExpirationDate))
+                    {
+                        <button type="button" class="ren-stage-card" @onclick="() => SelectCaseAndWorklist(item)">
+                            <span class="@StageBadge(item.Stage)">@item.Stage</span>
+                            <strong>@item.AccountName</strong>
+                            <small>@item.PolicyNumber / @DaysLabel(item.DaysToExpiration)</small>
+                            <span class="ren-stage-card-foot"><b>@item.CurrentPremium.ToString("C0")</b><em>@item.RiskScore risk</em></span>
+                        </button>
+                    }
+                    @if (!_cases.Any(c => string.Equals(c.Stage, _activeTab, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        @EmptyState("bi-kanban", "No stage records", "No DB-backed cases are currently in this stage.")
+                    }
+                </div>
+            </section>
         }
     }
+</div>
 
-    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync();
+@if (_showCreateCase)
+{
+<div class="ren-modal-backdrop" role="presentation" @onclick="CloseCreateCase">
+    <div class="ren-modal ren-modal-lg" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+        <div class="ren-modal-header"><i class="bi bi-plus-circle" aria-hidden="true"></i><span>New Renewal Case</span><button type="button" class="ren-btn ren-btn-ghost ren-btn-sm ren-ms-auto" @onclick="CloseCreateCase"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+        <EditForm Model="_caseForm" OnValidSubmit="CreateCaseAsync"><DataAnnotationsValidator />
+            <div class="ren-modal-body"><div class="ren-form-grid">
+                <div class="ren-field"><label>Account Name <span class="ren-text-danger">*</span></label><InputText @bind-Value="_caseForm.AccountName" class="ren-input" /></div>
+                <div class="ren-field"><label>Policy Number <span class="ren-text-danger">*</span></label><InputText @bind-Value="_caseForm.PolicyNumber" class="ren-input" /></div>
+                <div class="ren-field"><label>Line of Business <span class="ren-text-danger">*</span></label><InputText @bind-Value="_caseForm.LineOfBusiness" class="ren-input" /></div>
+                <div class="ren-field"><label>Carrier <span class="ren-text-danger">*</span></label><InputText @bind-Value="_caseForm.Carrier" class="ren-input" /></div>
+                <div class="ren-field"><label>Producer <span class="ren-text-danger">*</span></label><InputText @bind-Value="_caseForm.Producer" class="ren-input" /></div>
+                <div class="ren-field"><label>CSR <span class="ren-text-danger">*</span></label><InputText @bind-Value="_caseForm.Csr" class="ren-input" /></div>
+                <div class="ren-field"><label>Expiration <span class="ren-text-danger">*</span></label><InputDate @bind-Value="_caseForm.ExpirationDate" class="ren-input" /></div>
+                <div class="ren-field"><label>Current Premium</label><InputNumber @bind-Value="_caseForm.CurrentPremium" class="ren-input" /></div>
+                <div class="ren-field"><label>Priority <span class="ren-text-danger">*</span></label><InputSelect @bind-Value="_caseForm.Priority" class="ren-input">@foreach (var option in _priorityChoices) { <option value="@option">@option</option> }</InputSelect></div>
+                <div class="ren-field"><label>Risk Score</label><InputNumber @bind-Value="_caseForm.RiskScore" class="ren-input" /></div>
+                <div class="ren-field ren-field--full"><label>Risk Drivers</label><InputTextArea @bind-Value="_caseForm.RiskDrivers" class="ren-input" rows="3" /></div>
+                <div class="ren-field ren-field--full"><label>Next Best Action</label><InputTextArea @bind-Value="_caseForm.NextBestAction" class="ren-input" rows="2" /></div>
+            </div></div>
+            <div class="ren-modal-footer"><button type="button" class="ren-btn ren-btn-ghost" @onclick="CloseCreateCase">Cancel</button><button type="submit" class="ren-btn ren-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Create Case</button></div>
+        </EditForm>
+    </div>
+</div>
+}
+
+@if (_showStage && _stageCase is not null)
+{
+<div class="ren-modal-backdrop" role="presentation" @onclick="CloseStage">
+    <div class="ren-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+        <div class="ren-modal-header"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i><span>Update Stage</span><button type="button" class="ren-btn ren-btn-ghost ren-btn-sm ren-ms-auto" @onclick="CloseStage"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+        <EditForm Model="_stageForm" OnValidSubmit="UpdateStageAsync"><DataAnnotationsValidator />
+            <div class="ren-modal-body"><div class="ren-form-grid">
+                <div class="ren-field"><label>Stage <span class="ren-text-danger">*</span></label><InputSelect @bind-Value="_stageForm.Stage" class="ren-input">@foreach (var stage in _stageChoices) { <option value="@stage">@stage</option> }</InputSelect></div>
+                <div class="ren-field"><label>Outreach Status <span class="ren-text-danger">*</span></label><InputSelect @bind-Value="_stageForm.OutreachStatus" class="ren-input">@foreach (var status in _outreachChoices) { <option value="@status">@status</option> }</InputSelect></div>
+                <div class="ren-field"><label>Sentiment <span class="ren-text-danger">*</span></label><InputSelect @bind-Value="_stageForm.Sentiment" class="ren-input">@foreach (var sentiment in _sentimentChoices) { <option value="@sentiment">@sentiment</option> }</InputSelect></div>
+                <div class="ren-field"><label>Next Action Due</label><InputDate @bind-Value="_stageForm.NextActionDueDate" class="ren-input" /></div>
+                <div class="ren-field ren-field--checkbox"><label><InputCheckbox @bind-Value="_stageForm.IsEscalated" /> Escalated</label></div>
+                <div class="ren-field ren-field--checkbox"><label><InputCheckbox @bind-Value="_stageForm.IsAtRisk" /> At Risk</label></div>
+                <div class="ren-field ren-field--checkbox"><label><InputCheckbox @bind-Value="_stageForm.IsSaved" /> Saved</label></div>
+                <div class="ren-field ren-field--full"><label>Next Best Action</label><InputTextArea @bind-Value="_stageForm.NextBestAction" class="ren-input" rows="3" /></div>
+            </div></div>
+            <div class="ren-modal-footer"><button type="button" class="ren-btn ren-btn-ghost" @onclick="CloseStage">Cancel</button><button type="submit" class="ren-btn ren-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Save Stage</button></div>
+        </EditForm>
+    </div>
+</div>
+}
+
+@if (_showActivity && _activityCase is not null)
+{
+<div class="ren-modal-backdrop" role="presentation" @onclick="CloseActivity">
+    <div class="ren-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+        <div class="ren-modal-header"><i class="bi bi-lightning" aria-hidden="true"></i><span>Log Activity</span><button type="button" class="ren-btn ren-btn-ghost ren-btn-sm ren-ms-auto" @onclick="CloseActivity"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+        <EditForm Model="_activityForm" OnValidSubmit="CreateActivityAsync"><DataAnnotationsValidator />
+            <div class="ren-modal-body"><div class="ren-form-grid">
+                <div class="ren-field"><label>Type <span class="ren-text-danger">*</span></label><InputSelect @bind-Value="_activityForm.ActivityType" class="ren-input">@foreach (var option in _activityTypes) { <option value="@option">@option</option> }</InputSelect></div>
+                <div class="ren-field"><label>Outcome <span class="ren-text-danger">*</span></label><InputSelect @bind-Value="_activityForm.Outcome" class="ren-input">@foreach (var option in _outcomeChoices) { <option value="@option">@option</option> }</InputSelect></div>
+                <div class="ren-field"><label>Date <span class="ren-text-danger">*</span></label><InputDate @bind-Value="_activityForm.ActivityDateUtc" class="ren-input" /></div>
+                <div class="ren-field ren-field--full"><label>Subject <span class="ren-text-danger">*</span></label><InputText @bind-Value="_activityForm.Subject" class="ren-input" /></div>
+                <div class="ren-field ren-field--full"><label>Notes</label><InputTextArea @bind-Value="_activityForm.Notes" class="ren-input" rows="4" /></div>
+            </div></div>
+            <div class="ren-modal-footer"><button type="button" class="ren-btn ren-btn-ghost" @onclick="CloseActivity">Cancel</button><button type="submit" class="ren-btn ren-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Log Activity</button></div>
+        </EditForm>
+    </div>
+</div>
+}
+
+@if (_showOffer && _offerCase is not null)
+{
+<div class="ren-modal-backdrop" role="presentation" @onclick="CloseOffer">
+    <div class="ren-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+        <div class="ren-modal-header"><i class="bi bi-tag" aria-hidden="true"></i><span>Add Retention Offer</span><button type="button" class="ren-btn ren-btn-ghost ren-btn-sm ren-ms-auto" @onclick="CloseOffer"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+        <EditForm Model="_offerForm" OnValidSubmit="CreateOfferAsync"><DataAnnotationsValidator />
+            <div class="ren-modal-body"><div class="ren-form-grid">
+                <div class="ren-field ren-field--full"><label>Offer Name <span class="ren-text-danger">*</span></label><InputText @bind-Value="_offerForm.OfferName" class="ren-input" /></div>
+                <div class="ren-field"><label>Offer Type <span class="ren-text-danger">*</span></label><InputSelect @bind-Value="_offerForm.OfferType" class="ren-input">@foreach (var option in _offerTypes) { <option value="@option">@option</option> }</InputSelect></div>
+                <div class="ren-field"><label>Status <span class="ren-text-danger">*</span></label><InputSelect @bind-Value="_offerForm.Status" class="ren-input">@foreach (var option in _offerStatuses) { <option value="@option">@option</option> }</InputSelect></div>
+                <div class="ren-field"><label>Premium Impact</label><InputNumber @bind-Value="_offerForm.PremiumImpact" class="ren-input" /></div>
+                <div class="ren-field"><label>Retention Lift</label><InputNumber @bind-Value="_offerForm.RetentionLift" class="ren-input" /></div>
+                <div class="ren-field ren-field--full"><label>Notes</label><InputTextArea @bind-Value="_offerForm.Notes" class="ren-input" rows="3" /></div>
+            </div></div>
+            <div class="ren-modal-footer"><button type="button" class="ren-btn ren-btn-ghost" @onclick="CloseOffer">Cancel</button><button type="submit" class="ren-btn ren-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Add Offer</button></div>
+        </EditForm>
+    </div>
+</div>
+}
+
+@code {
+    private CurrentUserContextModel? _userContext;
+    private bool _loading;
+    private bool _saving;
+    private string? _loadError;
+    private DateTime? _lastRefreshUtc;
+
+    private List<RenewalRetentionCaseDto> _cases = [];
+    private List<RenewalRetentionActivityDto> _activities = [];
+    private List<RenewalRetentionOfferDto> _offers = [];
+    private RenewalRetentionCaseDto? _selectedCase;
+
+    private string _search = string.Empty;
+    private string _stageFilter = "All";
+    private string _priorityFilter = string.Empty;
+    private string _producerFilter = string.Empty;
+    private int _daysFilter;
+    private bool _riskOnly;
+    private bool _escalatedOnly;
+    private bool _savedOnly;
+    private string _activeTab = "Worklist";
+
+    private bool _showCreateCase;
+    private bool _showStage;
+    private bool _showActivity;
+    private bool _showOffer;
+    private RenewalRetentionCaseDto? _stageCase;
+    private RenewalRetentionCaseDto? _activityCase;
+    private RenewalRetentionCaseDto? _offerCase;
+    private CaseForm _caseForm = new();
+    private StageForm _stageForm = new();
+    private ActivityForm _activityForm = new();
+    private OfferForm _offerForm = new();
+    private readonly List<RenewalToast> _toasts = [];
+
+    private readonly string[] _tabs = ["Worklist", "Intake", "In Progress", "Quoted", "Negotiation", "Saved", "Lost", "Offers", "Activity"];
+    private readonly string[] _stageChoices = ["Intake", "In Progress", "Quoted", "Negotiation", "Saved", "Lost", "Non-Renewed"];
+    private readonly string[] _priorityChoices = ["Low", "Normal", "High", "Critical"];
+    private readonly string[] _outreachChoices = ["Not Started", "Client Contacted", "Producer Follow-Up", "Marketed", "Offer Presented", "Completed"];
+    private readonly string[] _sentimentChoices = ["Positive", "Neutral", "Concerned", "At Risk", "Negative"];
+    private readonly string[] _activityTypes = ["Call", "Email", "Meeting", "Note", "Task", "Carrier Update"];
+    private readonly string[] _outcomeChoices = ["Completed", "Left Message", "Client Responded", "Needs Follow-Up", "Escalated"];
+    private readonly string[] _offerTypes = ["Coverage Strategy", "Premium Adjustment", "Carrier Option", "Payment Plan", "Deductible Option", "Service Commitment"];
+    private readonly string[] _offerStatuses = ["Draft", "Presented", "Accepted", "Rejected"];
+
+    private List<RenewalRetentionCaseDto> FilteredCases => _cases
+        .Where(c => string.IsNullOrWhiteSpace(_search)
+            || c.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || c.PolicyNumber.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || c.Carrier.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || c.Producer.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || c.Csr.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || (c.AssignedToName?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false))
+        .Where(c => _stageFilter == "All" || string.Equals(c.Stage, _stageFilter, StringComparison.OrdinalIgnoreCase))
+        .Where(c => string.IsNullOrWhiteSpace(_priorityFilter) || string.Equals(c.Priority, _priorityFilter, StringComparison.OrdinalIgnoreCase))
+        .Where(c => string.IsNullOrWhiteSpace(_producerFilter) || string.Equals(c.Producer, _producerFilter, StringComparison.OrdinalIgnoreCase))
+        .Where(c => _daysFilter == 0 || c.DaysToExpiration <= _daysFilter)
+        .Where(c => !_riskOnly || c.IsAtRisk || c.RiskScore >= 70)
+        .Where(c => !_escalatedOnly || c.IsEscalated)
+        .Where(c => !_savedOnly || c.IsSaved || string.Equals(c.Stage, "Saved", StringComparison.OrdinalIgnoreCase))
+        .OrderByDescending(c => c.IsEscalated)
+        .ThenByDescending(c => c.IsAtRisk)
+        .ThenBy(c => c.DaysToExpiration < 0 ? int.MaxValue : c.DaysToExpiration)
+        .ThenByDescending(c => c.RiskScore)
+        .ThenByDescending(c => c.CurrentPremium)
+        .ToList();
+
+    private IEnumerable<string> StageOptions => _cases.Select(c => c.Stage).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    private IEnumerable<string> PriorityOptions => _cases.Select(c => c.Priority).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    private IEnumerable<string> ProducerOptions => _cases.Select(c => c.Producer).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+
+    private int AtRiskCount => _cases.Count(c => c.IsAtRisk || c.RiskScore >= 70);
+    private int EscalatedCount => _cases.Count(c => c.IsEscalated);
+    private int Due30Count => _cases.Count(c => c.DaysToExpiration is >= 0 and <= 30 && !c.IsSaved);
+    private int SavedCount => _cases.Count(c => c.IsSaved || string.Equals(c.Stage, "Saved", StringComparison.OrdinalIgnoreCase));
+    private int OpenOfferCount => _offers.Count(o => !string.Equals(o.Status, "Accepted", StringComparison.OrdinalIgnoreCase) && !string.Equals(o.Status, "Rejected", StringComparison.OrdinalIgnoreCase));
+    private decimal PremiumAtStake => _cases.Where(c => !c.IsSaved && !string.Equals(c.Stage, "Lost", StringComparison.OrdinalIgnoreCase) && !string.Equals(c.Stage, "Non-Renewed", StringComparison.OrdinalIgnoreCase)).Sum(c => c.CurrentPremium);
+    private string RetentionRate => _cases.Count == 0 ? "-" : $"{_cases.Average(c => c.RetentionProbability):F0}%";
+    private string LastRefreshLabel => _lastRefreshUtc.HasValue ? $"Updated {_lastRefreshUtc.Value.ToLocalTime():g}" : "Not loaded";
+    private IReadOnlyList<PriorityInsight> PriorityInsights => BuildPriorityInsights();
+
+    protected override async Task OnInitializedAsync()
+    {
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Renewals", "/renewals"));
         await LoadAsync();
     }
 
-    async Task LoadAsync()
+    private async Task LoadAsync()
     {
         _loading = true;
         _loadError = null;
         try
         {
-            var result = await Api.SearchSubmissionsAsync(DefaultTenantId, pageSize: 100);
-            _renewals.Clear();
-            _renewals.AddRange((result?.Items ?? []).Select(MapSubmissionToRenewal));
-            if (_renewals.Count == 0) BuildStub();
+            _userContext ??= await CurrentUser.RequireAsync();
+            var center = await Api.GetRenewalRetentionCenterAsync(_userContext.TenantId);
+            _cases = center?.Cases?.ToList() ?? [];
+            _activities = center?.Activities?.ToList() ?? [];
+            _offers = center?.Offers?.ToList() ?? [];
+            _selectedCase = _selectedCase is null ? _cases.FirstOrDefault() : _cases.FirstOrDefault(c => c.RetentionCaseId == _selectedCase.RetentionCaseId) ?? _cases.FirstOrDefault();
+            _lastRefreshUtc = DateTime.UtcNow;
         }
         catch (Exception ex)
         {
             _loadError = $"Failed to load renewals: {ex.Message}";
-            if (_renewals.Count == 0) BuildStub();
+            await ShowToast(_loadError, "ren-toast-danger");
         }
         finally
         {
@@ -325,118 +523,385 @@
         }
     }
 
-    RenewalRow MapSubmissionToRenewal(SubmissionDto s)
+    private Task RefreshAsync() => LoadAsync();
+
+    private async Task ExportAsync()
     {
-        var days = (int)(s.ExpirationDate.Date - DateTime.Today).TotalDays;
-        var stage = s.Status switch { "Bound" => "Renewed", "Quoted" => "Quoted", "Declined" => "Lost", "Withdrawn" => "Non-Renewed", "In Review" => "In Progress", _ => "Not Started" };
-        var premium = s.TargetPremium ?? 0;
-        var risk = Math.Clamp(days <= 0 ? 90 : days <= 30 ? 75 : days <= 60 ? 55 : 30, 10, 95);
-        return new RenewalRow
+        await ShowToast("Export prepared from the current renewal filters.");
+    }
+
+    private void ResetFilters()
+    {
+        _search = string.Empty;
+        _stageFilter = "All";
+        _priorityFilter = string.Empty;
+        _producerFilter = string.Empty;
+        _daysFilter = 0;
+        _riskOnly = false;
+        _escalatedOnly = false;
+        _savedOnly = false;
+    }
+
+    private void SetRiskFilter() { ResetFilters(); _riskOnly = true; }
+    private void SetEscalatedFilter() { ResetFilters(); _escalatedOnly = true; }
+    private void SetSavedFilter() { ResetFilters(); _savedOnly = true; }
+    private void SetDaysFilter(int days) { ResetFilters(); _daysFilter = days; }
+    private void SelectTab(string tab) => _activeTab = tab;
+    private void SelectCase(RenewalRetentionCaseDto item) => _selectedCase = item;
+    private void SelectCaseAndWorklist(RenewalRetentionCaseDto item) { _selectedCase = item; _activeTab = "Worklist"; }
+
+    private void OpenAccount(RenewalRetentionCaseDto item)
+    {
+        if (item.AccountId.HasValue)
+            Nav.NavigateTo($"/accounts/{item.AccountId.Value}");
+        else
+            _ = ShowToast("Account 360 is unavailable because this retention case is not linked to an account.", "ren-toast-danger");
+    }
+
+    private void OpenCreateCase()
+    {
+        _caseForm = new CaseForm { ExpirationDate = DateTime.UtcNow.Date.AddDays(60), Priority = "Normal", Stage = "Intake", OutreachStatus = "Not Started", Sentiment = "Neutral", RetentionProbability = 50 };
+        _showCreateCase = true;
+    }
+
+    private void CloseCreateCase() { _showCreateCase = false; _caseForm = new(); }
+
+    private async Task CreateCaseAsync()
+    {
+        if (_userContext is null)
+            return;
+
+        _saving = true;
+        try
         {
-            RenewalId = s.SubmissionId,
-            PolicyId = s.SubmissionId,
-            AccountName = s.AccountName,
-            PolicyNumber = $"POL-{s.SubmissionNumber.Replace("SUB-", string.Empty)}",
-            Lob = s.LineOfBusiness,
-            Carrier = s.QuoteCount > 0 ? "Quoted Markets" : "Pending Carrier",
-            ExpiryDate = s.ExpirationDate,
-            DaysToExpiry = days,
-            Stage = stage,
-            RetentionRiskScore = risk,
-            CurrentPremium = premium,
-            ProjectedPremium = stage is "Quoted" or "Renewed" ? Math.Round(premium * 1.06m, 2) : null,
-            LossRatio = risk,
-            Producer = s.AssignedToUserName ?? "Unassigned",
-            AssignedTo = s.AssignedToUserName ?? "Unassigned",
-            OpenTasks = stage is "Renewed" or "Lost" or "Non-Renewed" ? 0 : Math.Max(1, risk / 20)
+            var request = new CreateRenewalRetentionCaseRequest
+            {
+                TenantId = _userContext.TenantId,
+                AccountName = Normalize(_caseForm.AccountName) ?? string.Empty,
+                PolicyNumber = Normalize(_caseForm.PolicyNumber) ?? string.Empty,
+                LineOfBusiness = Normalize(_caseForm.LineOfBusiness) ?? string.Empty,
+                Carrier = Normalize(_caseForm.Carrier) ?? string.Empty,
+                Producer = Normalize(_caseForm.Producer) ?? string.Empty,
+                Csr = Normalize(_caseForm.Csr) ?? string.Empty,
+                ExpirationDate = _caseForm.ExpirationDate,
+                CurrentPremium = _caseForm.CurrentPremium,
+                ProposedPremium = _caseForm.ProposedPremium,
+                RetentionProbability = _caseForm.RetentionProbability,
+                RiskScore = _caseForm.RiskScore,
+                Stage = _caseForm.Stage,
+                Priority = _caseForm.Priority,
+                OutreachStatus = _caseForm.OutreachStatus,
+                Sentiment = _caseForm.Sentiment,
+                RiskDrivers = Normalize(_caseForm.RiskDrivers),
+                NextBestAction = Normalize(_caseForm.NextBestAction),
+                NextActionDueDate = _caseForm.NextActionDueDate,
+                AssignedToUserId = _userContext.UserScopeId,
+                AssignedToName = _caseForm.Producer,
+                IsEscalated = _caseForm.IsEscalated,
+                IsAtRisk = _caseForm.IsAtRisk,
+                CreatedByUserId = _userContext.UserId
+            };
+
+            await Api.CreateRenewalRetentionCaseAsync(request);
+            CloseCreateCase();
+            await LoadAsync();
+            await ShowToast("Renewal case created.");
+        }
+        catch (Exception ex)
+        {
+            await ShowToast($"Save failed: {ex.Message}", "ren-toast-danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void OpenStage(RenewalRetentionCaseDto item)
+    {
+        _stageCase = item;
+        _stageForm = new StageForm
+        {
+            Stage = item.Stage,
+            OutreachStatus = item.OutreachStatus,
+            Sentiment = item.Sentiment,
+            NextBestAction = item.NextBestAction,
+            NextActionDueDate = item.NextActionDueDate,
+            IsEscalated = item.IsEscalated,
+            IsAtRisk = item.IsAtRisk,
+            IsSaved = item.IsSaved
         };
+        _showStage = true;
     }
 
-    void BuildStub()
+    private void CloseStage() { _showStage = false; _stageCase = null; _stageForm = new(); }
+
+    private async Task UpdateStageAsync()
     {
-        _renewals.Clear();
-        _renewals.AddRange(new[]
+        if (_stageCase is null || _userContext is null)
+            return;
+
+        _saving = true;
+        try
         {
-            new RenewalRow { RenewalId=Guid.NewGuid(), PolicyId=Guid.NewGuid(), AccountName="Sullivan Mfg. LLC",     PolicyNumber="TRV-GL-2024-00421", Lob="General Liability",   Carrier="Travelers Indemnity",  ExpiryDate=DateTime.Today.AddDays(18),  DaysToExpiry=18,  Stage="In Progress",  RetentionRiskScore=65, CurrentPremium=17_250m, ProjectedPremium=18_800m, LossRatio=28m, Producer="Maria Santos", AssignedTo="Maria Santos", OpenTasks=3 },
-            new RenewalRow { RenewalId=Guid.NewGuid(), PolicyId=Guid.NewGuid(), AccountName="Metro Freight Co.",     PolicyNumber="HFD-CA-2024-14822",  Lob="Commercial Auto",     Carrier="Hartford Fire & Cas.", ExpiryDate=DateTime.Today.AddDays(24),  DaysToExpiry=24,  Stage="Quoted",        RetentionRiskScore=40, CurrentPremium=31_500m, ProjectedPremium=32_100m, LossRatio=55m, Producer="James Park",   AssignedTo="James Park",   OpenTasks=1 },
-            new RenewalRow { RenewalId=Guid.NewGuid(), PolicyId=Guid.NewGuid(), AccountName="Bridgewater Hotels",    PolicyNumber="LIB-GL-2024-77210",  Lob="General Liability",   Carrier="Liberty Mutual",       ExpiryDate=DateTime.Today.AddDays(37),  DaysToExpiry=37,  Stage="Not Started",   RetentionRiskScore=82, CurrentPremium=24_800m, ProjectedPremium=null,     LossRatio=71m, Producer="Maria Santos", AssignedTo="Maria Santos", OpenTasks=5 },
-            new RenewalRow { RenewalId=Guid.NewGuid(), PolicyId=Guid.NewGuid(), AccountName="Dallas Roofing LLC",    PolicyNumber="CNA-WC-2024-55102",  Lob="Workers Comp",        Carrier="CNA Commercial",       ExpiryDate=DateTime.Today.AddDays(45),  DaysToExpiry=45,  Stage="In Progress",   RetentionRiskScore=55, CurrentPremium=9_400m,  ProjectedPremium=10_200m, LossRatio=33m, Producer="Kevin Obi",    AssignedTo="Kevin Obi",    OpenTasks=2 },
-            new RenewalRow { RenewalId=Guid.NewGuid(), PolicyId=Guid.NewGuid(), AccountName="Greenleaf Nurseries",   PolicyNumber="TRV-CP-2024-62011",  Lob="Commercial Property", Carrier="Travelers Indemnity",  ExpiryDate=DateTime.Today.AddDays(52),  DaysToExpiry=52,  Stage="Renewed",       RetentionRiskScore=20, CurrentPremium=6_750m,  ProjectedPremium=6_920m,  LossRatio=12m, Producer="Sarah Kim",    AssignedTo="Sarah Kim",    OpenTasks=0 },
-            new RenewalRow { RenewalId=Guid.NewGuid(), PolicyId=Guid.NewGuid(), AccountName="Apex Medical Group",    PolicyNumber="MKL-PL-2024-28004",  Lob="Professional Liab.",  Carrier="Markel Corporation",   ExpiryDate=DateTime.Today.AddDays(61),  DaysToExpiry=61,  Stage="Not Started",   RetentionRiskScore=48, CurrentPremium=14_200m, ProjectedPremium=null,     LossRatio=5m,  Producer="Maria Santos", AssignedTo="Lisa Chen",    OpenTasks=4 },
-            new RenewalRow { RenewalId=Guid.NewGuid(), PolicyId=Guid.NewGuid(), AccountName="Sun Valley Resort",     PolicyNumber="HFD-UMB-2024-38810", Lob="Umbrella",            Carrier="Hartford Fire & Cas.", ExpiryDate=DateTime.Today.AddDays(75),  DaysToExpiry=75,  Stage="In Progress",   RetentionRiskScore=35, CurrentPremium=8_200m,  ProjectedPremium=8_500m,  LossRatio=0m,  Producer="James Park",   AssignedTo="James Park",   OpenTasks=2 },
-            new RenewalRow { RenewalId=Guid.NewGuid(), PolicyId=Guid.NewGuid(), AccountName="Coastal Seafood Dist.", PolicyNumber="CNA-GL-2024-71004",  Lob="General Liability",   Carrier="CNA Commercial",       ExpiryDate=DateTime.Today.AddDays(88),  DaysToExpiry=88,  Stage="Not Started",   RetentionRiskScore=72, CurrentPremium=11_600m, ProjectedPremium=null,     LossRatio=44m, Producer="Kevin Obi",    AssignedTo="Kevin Obi",    OpenTasks=6 },
-            new RenewalRow { RenewalId=Guid.NewGuid(), PolicyId=Guid.NewGuid(), AccountName="Pioneer Automotive",    PolicyNumber="TRV-CA-2024-90221",  Lob="Commercial Auto",     Carrier="Travelers Indemnity",  ExpiryDate=DateTime.Today.AddDays(95),  DaysToExpiry=95,  Stage="Not Started",   RetentionRiskScore=28, CurrentPremium=19_800m, ProjectedPremium=null,     LossRatio=22m, Producer="Sarah Kim",    AssignedTo="Sarah Kim",    OpenTasks=0 },
-            new RenewalRow { RenewalId=Guid.NewGuid(), PolicyId=Guid.NewGuid(), AccountName="Crestview Elementary",  PolicyNumber="LIB-GL-2023-44008",  Lob="General Liability",   Carrier="Liberty Mutual",       ExpiryDate=DateTime.Today.AddDays(-5),  DaysToExpiry=-5,  Stage="Lost",          RetentionRiskScore=90, CurrentPremium=7_400m,  ProjectedPremium=null,     LossRatio=62m, Producer="Maria Santos", AssignedTo="Maria Santos", OpenTasks=0 },
-            new RenewalRow { RenewalId=Guid.NewGuid(), PolicyId=Guid.NewGuid(), AccountName="Laredo Steel Works",    PolicyNumber="ZUR-GL-2023-18820",  Lob="General Liability",   Carrier="Zurich American",      ExpiryDate=DateTime.Today.AddDays(-15), DaysToExpiry=-15, Stage="Non-Renewed",   RetentionRiskScore=88, CurrentPremium=22_100m, ProjectedPremium=null,     LossRatio=85m, Producer="Kevin Obi",    AssignedTo="Kevin Obi",    OpenTasks=0 },
-        });
-    }
+            var request = new UpdateRenewalRetentionStageRequest
+            {
+                Stage = _stageForm.Stage,
+                OutreachStatus = _stageForm.OutreachStatus,
+                Sentiment = _stageForm.Sentiment,
+                NextBestAction = Normalize(_stageForm.NextBestAction),
+                NextActionDueDate = _stageForm.NextActionDueDate,
+                IsEscalated = _stageForm.IsEscalated,
+                IsAtRisk = _stageForm.IsAtRisk,
+                IsSaved = _stageForm.IsSaved,
+                ModifiedByUserId = _userContext.UserId
+            };
 
-    void SetStageFilter(string stage) => _stageFilter = _stageFilter == stage ? "All" : stage;
-    void ResetFilters() { _search=""; _stageFilter="All"; _lobFilter=""; _producerFilter=""; _daysFilter=0; }
-
-    void OpenDetail(RenewalRow r) => Nav.NavigateTo($"/renewals/{r.RenewalId}");
-
-    async Task QuickAction(RenewalRow r)
-    {
-        await _toast.ShowAsync(new ToastModel
+            await Api.UpdateRenewalRetentionStageAsync(_stageCase.RetentionCaseId, request);
+            CloseStage();
+            await LoadAsync();
+            await ShowToast("Renewal stage updated.");
+        }
+        catch (Exception ex)
         {
-            Title   = "Quick Action",
-            Content = $"Renewal opened for {r.AccountName}.",
-            CssClass = "e-toast-info"
-        });
-    }
-
-    async Task Refresh() => await LoadAsync();
-
-    async Task ExportAsync()
-    {
-        await _toast.ShowAsync(new ToastModel
+            await ShowToast($"Update failed: {ex.Message}", "ren-toast-danger");
+        }
+        finally
         {
-            Title   = "Exported",
-            Content = "Renewal list exported.",
-            CssClass = "e-toast-success"
-        });
+            _saving = false;
+        }
     }
 
-    static string StageCss(string stage) => stage switch
+    private void OpenActivity(RenewalRetentionCaseDto item)
     {
-        "Not Started"  => "ns",
-        "In Progress"  => "ip",
-        "Quoted"       => "qt",
-        "Renewed"      => "rn",
-        "Lost"         => "lo",
-        "Non-Renewed"  => "nr",
-        _              => "ns"
+        _activityCase = item;
+        _activityForm = new ActivityForm { ActivityType = "Call", Outcome = "Completed", ActivityDateUtc = DateTime.UtcNow, Subject = $"Renewal outreach - {item.AccountName}" };
+        _showActivity = true;
+    }
+
+    private void CloseActivity() { _showActivity = false; _activityCase = null; _activityForm = new(); }
+
+    private async Task CreateActivityAsync()
+    {
+        if (_activityCase is null || _userContext is null)
+            return;
+
+        _saving = true;
+        try
+        {
+            var request = new CreateRenewalRetentionActivityRequest
+            {
+                RetentionCaseId = _activityCase.RetentionCaseId,
+                ActivityType = _activityForm.ActivityType,
+                Subject = Normalize(_activityForm.Subject) ?? string.Empty,
+                Outcome = _activityForm.Outcome,
+                Notes = Normalize(_activityForm.Notes),
+                ActivityDateUtc = _activityForm.ActivityDateUtc,
+                CreatedByName = _userContext.TenantName ?? "Tenant user",
+                CreatedByUserId = _userContext.UserId
+            };
+
+            await Api.AddRenewalRetentionActivityAsync(request);
+            CloseActivity();
+            await LoadAsync();
+            await ShowToast("Activity logged.");
+        }
+        catch (Exception ex)
+        {
+            await ShowToast($"Save failed: {ex.Message}", "ren-toast-danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void OpenOffer(RenewalRetentionCaseDto item)
+    {
+        _offerCase = item;
+        _offerForm = new OfferForm { OfferName = "Retention strategy", OfferType = "Coverage Strategy", Status = "Draft", RetentionLift = 5 };
+        _showOffer = true;
+    }
+
+    private void CloseOffer() { _showOffer = false; _offerCase = null; _offerForm = new(); }
+
+    private async Task CreateOfferAsync()
+    {
+        if (_offerCase is null || _userContext is null)
+            return;
+
+        _saving = true;
+        try
+        {
+            var request = new CreateRenewalRetentionOfferRequest
+            {
+                RetentionCaseId = _offerCase.RetentionCaseId,
+                OfferName = Normalize(_offerForm.OfferName) ?? string.Empty,
+                OfferType = _offerForm.OfferType,
+                PremiumImpact = _offerForm.PremiumImpact,
+                RetentionLift = _offerForm.RetentionLift,
+                Status = _offerForm.Status,
+                Notes = Normalize(_offerForm.Notes),
+                CreatedByUserId = _userContext.UserId
+            };
+
+            await Api.AddRenewalRetentionOfferAsync(request);
+            CloseOffer();
+            await LoadAsync();
+            await ShowToast("Retention offer added.");
+        }
+        catch (Exception ex)
+        {
+            await ShowToast($"Save failed: {ex.Message}", "ren-toast-danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task AcceptOfferAsync(RenewalRetentionOfferDto offer)
+    {
+        if (_userContext is null)
+            return;
+
+        try
+        {
+            await Api.UpdateRenewalRetentionOfferStatusAsync(offer.RetentionOfferId, new UpdateRenewalRetentionOfferStatusRequest { Status = "Accepted", ModifiedByUserId = _userContext.UserId });
+            await LoadAsync();
+            await ShowToast("Offer accepted and renewal marked saved.");
+        }
+        catch (Exception ex)
+        {
+            await ShowToast($"Update failed: {ex.Message}", "ren-toast-danger");
+        }
+    }
+
+    private IReadOnlyList<PriorityInsight> BuildPriorityInsights()
+    {
+        var insights = new List<PriorityInsight>();
+        if (EscalatedCount > 0) insights.Add(new("Escalations", $"{EscalatedCount:N0} case(s) need executive attention", "bi-arrow-up-right-circle", "ren-priority-danger", () => SetEscalatedFilter()));
+        if (Due30Count > 0) insights.Add(new("Renewals inside 30 days", $"{Due30Count:N0} active case(s) are approaching expiration", "bi-alarm", "ren-priority-warning", () => SetDaysFilter(30)));
+        if (AtRiskCount > 0) insights.Add(new("At-risk accounts", $"{AtRiskCount:N0} case(s) have high risk indicators", "bi-exclamation-triangle", "ren-priority-warning", () => SetRiskFilter()));
+        if (OpenOfferCount > 0) insights.Add(new("Open offers", $"{OpenOfferCount:N0} retention offer(s) await decision", "bi-tags", "ren-priority-info", () => SelectTab("Offers")));
+        if (insights.Count == 0) insights.Add(new("Renewal pipeline is stable", "No escalated, at-risk, or urgent renewal exceptions detected", "bi-check-circle", "ren-priority-success", () => ResetFilters()));
+        return insights.Take(4).ToList();
+    }
+
+    private List<RenewalRetentionActivityDto> ActivitiesFor(Guid id) => _activities.Where(a => a.RetentionCaseId == id).OrderByDescending(a => a.ActivityDateUtc).ToList();
+    private List<RenewalRetentionOfferDto> OffersFor(Guid id) => _offers.Where(o => o.RetentionCaseId == id).OrderByDescending(o => o.PresentedDateUtc ?? o.AcceptedDateUtc ?? DateTime.MinValue).ToList();
+    private string OwnerLabel(RenewalRetentionCaseDto item) => item.AssignedToName ?? item.Csr;
+    private int TabCount(string tab) => tab switch { "Worklist" => FilteredCases.Count, "Activity" => _activities.Count, "Offers" => _offers.Count, _ => _cases.Count(c => string.Equals(c.Stage, tab, StringComparison.OrdinalIgnoreCase)) };
+    private string TabClass(string tab) => _activeTab == tab ? "ren-tab ren-tab--active" : "ren-tab";
+    private static string TabIcon(string tab) => tab switch { "Worklist" => "bi-list-task", "Activity" => "bi-lightning", "Offers" => "bi-tags", "Saved" => "bi-check-circle", "Lost" => "bi-x-circle", _ => "bi-kanban" };
+    private static string RowClass(RenewalRetentionCaseDto item) => item.IsEscalated ? "ren-row-escalated" : item.IsAtRisk || item.RiskScore >= 70 ? "ren-row-risk" : string.Empty;
+    private static string StageBadge(string stage) => $"ren-stage ren-stage-{CssToken(stage)}";
+    private static string PriorityBadge(string priority) => $"ren-priority-badge ren-priority-{CssToken(priority)}";
+    private static string OfferStatusBadge(string status) => $"ren-offer-status ren-offer-{CssToken(status)}";
+    private static string RiskBarClass(int score) => score >= 70 ? "ren-risk-fill ren-risk-fill-danger" : score >= 45 ? "ren-risk-fill ren-risk-fill-warning" : "ren-risk-fill ren-risk-fill-success";
+    private static string DaysCss(int days) => days < 0 ? "ren-overdue" : days <= 30 ? "ren-due-soon" : "";
+    private static string DueDateCss(DateTime date) => date.Date < DateTime.UtcNow.Date ? "ren-overdue" : date.Date <= DateTime.UtcNow.Date.AddDays(7) ? "ren-due-soon" : "ren-muted";
+    private static string PremiumDeltaCss(decimal delta) => delta > 0 ? "ren-delta-up" : delta < 0 ? "ren-delta-down" : "ren-muted";
+    private static string DaysLabel(int days) => days < 0 ? $"Expired {Math.Abs(days)}d" : days == 0 ? "Expires today" : days == 1 ? "1 day" : $"{days} days";
+    private static string DeltaLabel(decimal delta) => $"{(delta >= 0 ? "+" : string.Empty)}{delta:C0}";
+    private static string CssToken(string value) => string.IsNullOrWhiteSpace(value) ? "none" : value.ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
+    private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private RenderFragment KpiCard(string label, string value, string icon, string tone, RenewalDashboardAction? action) => __builder =>
+    {
+        <button type="button" class="@KpiClass(tone, action)" @onclick="() => action?.Invoke()">
+            <span class="ren-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span>
+            <span class="ren-kpi-label">@label</span>
+            <strong>@value</strong>
+        </button>;
     };
 
-    static string RiskCss(int score) =>
-        score >= 70 ? "high" : score >= 40 ? "med" : "low";
+    private static string KpiClass(string tone, RenewalDashboardAction? action) => action is null ? $"ren-kpi-card {tone}" : $"ren-kpi-card {tone} ren-kpi-card--clickable";
 
-    static string DaysBadgeCss(int days) =>
-        days <= 0   ? "rdb-db-expired" :
-        days <= 30  ? "rdb-db-red" :
-        days <= 60  ? "rdb-db-amber" : "rdb-db-blue";
-
-    static string DaysLabel(int days) =>
-        days <= 0   ? $"Expired {Math.Abs(days)}d ago" :
-        days == 1   ? "1 day left" : $"{days} days left";
-
-    // KPI card helper
-    RenderFragment KpiCard(string icon, string label, string val, string css, System.Action? onClick) =>
-        @<div class="rdb-kpi-card @css @(onClick is not null ? "rdb-kpi-clickable" : "")"
-              @onclick="() => onClick?.Invoke()">
-            <div class="rdb-kpi-val">@val</div>
-            <div class="rdb-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
-        </div>;
-
-    async Task ResolveCurrentUserContextAsync()
+    private static RenderFragment Metric(string label, string value, string icon) => __builder =>
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        <div class="ren-metric"><i class="bi @icon" aria-hidden="true"></i><span>@label</span><strong>@value</strong></div>;
+    };
+
+    private static RenderFragment EmptyState(string icon, string title, string detail) => __builder =>
+    {
+        <div class="ren-empty"><i class="bi @icon" aria-hidden="true"></i><strong>@title</strong><span>@detail</span></div>;
+    };
+
+    private async Task ShowToast(string message, string css = "ren-toast-success")
+    {
+        var toast = new RenewalToast(Guid.NewGuid(), message, css, css == "ren-toast-danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill");
+        _toasts.Add(toast);
+        await InvokeAsync(StateHasChanged);
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(4500);
+            await InvokeAsync(() => DismissToast(toast.Id));
+        });
     }
+
+    private void DismissToast(Guid id)
+    {
+        _toasts.RemoveAll(t => t.Id == id);
+        StateHasChanged();
+    }
+
+    private sealed class CaseForm
+    {
+        [Required, StringLength(200)] public string AccountName { get; set; } = string.Empty;
+        [Required, StringLength(60)] public string PolicyNumber { get; set; } = string.Empty;
+        [Required, StringLength(100)] public string LineOfBusiness { get; set; } = string.Empty;
+        [Required, StringLength(160)] public string Carrier { get; set; } = string.Empty;
+        [Required, StringLength(160)] public string Producer { get; set; } = string.Empty;
+        [Required, StringLength(160)] public string Csr { get; set; } = string.Empty;
+        [Required] public DateTime ExpirationDate { get; set; } = DateTime.UtcNow.Date.AddDays(60);
+        [Range(0, 999999999)] public decimal CurrentPremium { get; set; }
+        [Range(0, 999999999)] public decimal? ProposedPremium { get; set; }
+        [Range(0, 100)] public int RetentionProbability { get; set; } = 50;
+        [Range(0, 100)] public int RiskScore { get; set; }
+        [Required, StringLength(40)] public string Stage { get; set; } = "Intake";
+        [Required, StringLength(20)] public string Priority { get; set; } = "Normal";
+        [Required, StringLength(40)] public string OutreachStatus { get; set; } = "Not Started";
+        [Required, StringLength(40)] public string Sentiment { get; set; } = "Neutral";
+        [StringLength(1000)] public string? RiskDrivers { get; set; }
+        [StringLength(500)] public string? NextBestAction { get; set; }
+        public DateTime? NextActionDueDate { get; set; }
+        public bool IsEscalated { get; set; }
+        public bool IsAtRisk { get; set; }
+    }
+
+    private sealed class StageForm
+    {
+        [Required, StringLength(40)] public string Stage { get; set; } = "Intake";
+        [Required, StringLength(40)] public string OutreachStatus { get; set; } = "Not Started";
+        [Required, StringLength(40)] public string Sentiment { get; set; } = "Neutral";
+        [StringLength(500)] public string? NextBestAction { get; set; }
+        public DateTime? NextActionDueDate { get; set; }
+        public bool IsEscalated { get; set; }
+        public bool IsAtRisk { get; set; }
+        public bool IsSaved { get; set; }
+    }
+
+    private sealed class ActivityForm
+    {
+        [Required, StringLength(40)] public string ActivityType { get; set; } = "Call";
+        [Required, StringLength(180)] public string Subject { get; set; } = string.Empty;
+        [Required, StringLength(80)] public string Outcome { get; set; } = "Completed";
+        [StringLength(2000)] public string? Notes { get; set; }
+        [Required] public DateTime ActivityDateUtc { get; set; } = DateTime.UtcNow;
+    }
+
+    private sealed class OfferForm
+    {
+        [Required, StringLength(160)] public string OfferName { get; set; } = string.Empty;
+        [Required, StringLength(60)] public string OfferType { get; set; } = "Coverage Strategy";
+        [Range(-999999999, 999999999)] public decimal PremiumImpact { get; set; }
+        [Range(0, 100)] public int RetentionLift { get; set; }
+        [Required, StringLength(40)] public string Status { get; set; } = "Draft";
+        [StringLength(1000)] public string? Notes { get; set; }
+    }
+
+    private delegate void RenewalDashboardAction();
+    private sealed record PriorityInsight(string Title, string Detail, string Icon, string Tone, RenewalDashboardAction Action);
+    private sealed record RenewalToast(Guid Id, string Content, string CssClass, string Icon);
 }

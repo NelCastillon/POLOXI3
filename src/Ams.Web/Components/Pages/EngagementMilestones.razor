@@ -1,33 +1,604 @@
-﻿@page "/ops/milestones"
+@page "/ops/milestones"
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Engagements
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
-@using Ams.Application.Features.Engagements
 
-<PageTitle>Milestones — Operations</PageTitle>
-<AppPageHeader Title="Milestones Administration" Subtitle="Tenant admin oversight for operational milestones, due dates, completion, and delivery risk" Icon="bi-flag"><Actions><button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> New Milestone</button><button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button></Actions></AppPageHeader>
-<section class="ma-hero twf-hero"><div><span class="ma-eyebrow">Tenant Administration · Milestones</span><h2>Tenant Milestone Control Center</h2><p>Administer milestone delivery, overdue checkpoints, engagement dependencies, and completion risk across tenant operations.</p></div><div class="ma-hero-actions"><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/engagements")'><i class="bi bi-briefcase"></i> Engagements</button><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/ops/activities")'><i class="bi bi-clock-history"></i> Activities</button><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/workflow")'><i class="bi bi-diagram-3"></i> Workflows</button></div></section>
-<div class="pc-kpi-strip"><div class="pc-kpi-card @(_filter == null ? "pc-kpi-card--active" : "")" @onclick="() => SetFilter(null)" title="Show all"><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-flag-fill"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total</div></div></div><div class="pc-kpi-card @(_filter == "Open" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Open")' title="Open"><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-play-circle-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.StatusCode == "Open")</div><div class="pc-kpi-label">Open</div></div></div><div class="pc-kpi-card @(_filter == "Overdue" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Overdue")' title="Overdue"><span class="pc-kpi-icon pc-kpi-icon--danger"><i class="bi bi-alarm-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(IsOverdue)</div><div class="pc-kpi-label">Overdue</div></div></div></div>
-<AppFilterPanel @bind-SearchValue="_searchTerm" OnSearch="OnSearchAsync" SearchPlaceholder="Search milestones…" />
-@if (_loadError is not null) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError</div> }
-<div class="um-grid-card">@if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading…</span></div> }<SfGrid TValue="EngagementMilestoneDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52"><GridEvents TValue="EngagementMilestoneDto" RowSelected="OnRowSelected" /><GridPageSettings PageSize="25" PageSizes="@(new[] { 25, 50, 100 })" /><GridColumns><GridColumn Field="MilestoneName" HeaderText="Milestone" Width="260" /><GridColumn Field="EngagementId" HeaderText="Engagement Id" Width="250" /><GridColumn Field="DueDate" HeaderText="Due Date" Type="ColumnType.Date" Format="d" Width="130" /><GridColumn Field="CompletedDate" HeaderText="Completed" Type="ColumnType.Date" Format="d" Width="130" /><GridColumn Field="StatusCode" HeaderText="Status" Width="120" /><GridColumn Field="CreatedDateUtc" HeaderText="Created" Type="ColumnType.DateTime" Format="d" Width="130" /><GridColumn HeaderText="Actions" Width="120" TextAlign="TextAlign.Center"><Template>@{ var r = (EngagementMilestoneDto)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true" title="Edit"><i class="bi bi-pencil"></i></button><button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true" title="Delete"><i class="bi bi-trash"></i></button></Template></GridColumn></GridColumns></SfGrid></div>
-<SfDialog @bind-Visible="_showForm" Width="560px" IsModal="true" ShowCloseIcon="false"><DialogEvents Closed="ResetForm" /><DialogContent><div class="um-modal-header"><i class="bi bi-flag"></i><span>@(_editId.HasValue ? "Edit Milestone" : "New Milestone")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button></div><EditForm @key="_form" Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="ShowValidation"><DataAnnotationsValidator /><div class="um-modal-body"><div class="um-form-grid"><div class="um-field"><label>Engagement Name <span class="text-danger">*</span></label><SfDropDownList TValue="string" TItem="EngagementOption" DataSource="_engagements" @bind-Value="_form.EngagementIdText" AllowFiltering="true" FilterType="Syncfusion.Blazor.DropDowns.FilterType.Contains" Placeholder="Search engagement name" CssClass="um-input"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>@if (_showValidation) { }</div><div class="um-field"><label>Milestone <span class="text-danger">*</span></label><InputText @bind-Value="_form.MilestoneName" class="um-input" /></div><div class="um-field"><label>Due Date</label><InputDate @bind-Value="_form.DueDate" class="um-input" /></div><div class="um-field"><label>Completed Date</label><InputDate @bind-Value="_form.CompletedDate" class="um-input" /></div><div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input"><option>Pending</option><option>Open</option><option>Complete</option><option>Blocked</option></InputSelect></div></div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button></div></EditForm></DialogContent></SfDialog>
-@if (_showDelete && _deleteTarget is not null) { <div class="mt-modal-backdrop" @onclick="() => _showDelete = false"><div class="um-confirm-dialog mt-confirm" @onclick:stopPropagation="true"><div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div><div class="um-confirm-title">Delete milestone?</div><div class="um-confirm-text">This will remove <strong>@_deleteTarget.MilestoneName</strong>.</div><div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div></div></div> }
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" /><style>@@keyframes um-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }</style>
+<PageTitle>Milestones</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="ms-toast ms-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ms-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+<div class="ms-enterprise-page">
+    <section class="ms-hero">
+        <div class="ms-hero-left">
+            <span class="ms-hero-icon"><i class="bi bi-flag" aria-hidden="true"></i></span>
+            <div>
+                <div class="ms-title-row">
+                    <h1>Milestones</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> DB synced</span>
+                    <span><i class="bi bi-calendar-check" aria-hidden="true"></i> Delivery controlled</span>
+                </div>
+                <p>Enterprise milestone command center for engagement delivery checkpoints, due dates, completion status, blocked work, overdue risk, and operational execution governance.</p>
+            </div>
+        </div>
+        <div class="ms-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "ms-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_items.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="OpenEngagements"><i class="bi bi-briefcase" aria-hidden="true"></i> Engagements</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Milestone</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="ms-error-banner" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="ms-kpi-strip" aria-label="Milestone KPIs">
+        <button type="button" class="@AllKpiClass" @onclick="ShowAll"><span class="ms-kpi-icon"><i class="bi bi-flag-fill" aria-hidden="true"></i></span><span><strong>@_items.Count</strong><em>Total</em><small>Tenant milestones</small></span></button>
+        <button type="button" class="@OpenKpiClass" @onclick="ShowOpen"><span class="ms-kpi-icon"><i class="bi bi-play-circle-fill" aria-hidden="true"></i></span><span><strong>@OpenCount</strong><em>Open</em><small>Pending or in progress</small></span></button>
+        <button type="button" class="@OverdueKpiClass" @onclick="ShowOverdue"><span class="ms-kpi-icon"><i class="bi bi-alarm-fill" aria-hidden="true"></i></span><span><strong>@OverdueCount</strong><em>Overdue</em><small>Past due incomplete</small></span></button>
+        <button type="button" class="@DueKpiClass" @onclick="ShowDueSoon"><span class="ms-kpi-icon"><i class="bi bi-calendar2-week" aria-hidden="true"></i></span><span><strong>@DueSoonCount</strong><em>Due Soon</em><small>Next 14 days</small></span></button>
+        <button type="button" class="@BlockedKpiClass" @onclick="ShowBlocked"><span class="ms-kpi-icon"><i class="bi bi-slash-circle-fill" aria-hidden="true"></i></span><span><strong>@BlockedCount</strong><em>Blocked</em><small>Blocked status</small></span></button>
+        <button type="button" class="@CompletedKpiClass" @onclick="ShowCompleted"><span class="ms-kpi-icon"><i class="bi bi-check2-circle" aria-hidden="true"></i></span><span><strong>@CompletedCount</strong><em>Completed</em><small>Finished milestones</small></span></button>
+    </section>
+
+    <section class="ms-workflow-strip" aria-label="Milestone workflows">
+        <button type="button" class="ms-workflow-card" @onclick="ShowLibrary"><i class="bi bi-kanban" aria-hidden="true"></i><span><strong>Library</strong><small>Milestone register</small></span></button>
+        <button type="button" class="ms-workflow-card" @onclick="ShowTimelineView"><i class="bi bi-calendar-range" aria-hidden="true"></i><span><strong>Timeline</strong><small>Due date risk</small></span></button>
+        <button type="button" class="ms-workflow-card" @onclick="ShowGovernance"><i class="bi bi-diagram-3" aria-hidden="true"></i><span><strong>Governance</strong><small>Status lanes</small></span></button>
+        <button type="button" class="ms-workflow-card" @onclick="OpenActivities"><i class="bi bi-clock-history" aria-hidden="true"></i><span><strong>Activities</strong><small>Operational history</small></span></button>
+        <button type="button" class="ms-workflow-card" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i><span><strong>Create</strong><small>Add checkpoint</small></span></button>
+    </section>
+
+    <section class="ms-search-panel">
+        <div class="ms-search-wrap">
+            <span class="ms-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="ms-search-body">
+                <label for="ms-search">Milestone search</label>
+                <input id="ms-search" class="ms-search-input" @bind="_searchTerm" @bind:event="oninput" @bind:after="ApplyFilter" placeholder="Search milestone, status, engagement..." />
+                <span class="ms-search-hint">Filters real tenant milestone records and keeps KPIs, tabs, and detail selection in sync.</span>
+            </div>
+        </div>
+        <select class="ms-filter-select" @bind="_statusFilter" @bind:after="ApplyFilter" aria-label="Status filter">
+            <option value="all">All statuses</option>
+            @foreach (var status in StatusOptions)
+            {
+                <option value="@status">@status</option>
+            }
+        </select>
+        <select class="ms-filter-select" @bind="_priorityFilter" @bind:after="ApplyFilter" aria-label="Priority filter">
+            <option value="all">All priority</option>
+            <option value="overdue">Overdue</option>
+            <option value="due">Due soon</option>
+            <option value="blocked">Blocked</option>
+            <option value="completed">Completed</option>
+            <option value="unscheduled">Unscheduled</option>
+        </select>
+        <select class="ms-filter-select" @bind="_engagementFilter" @bind:after="ApplyFilter" aria-label="Engagement filter">
+            <option value="all">All engagements</option>
+            @foreach (var engagement in _engagements)
+            {
+                <option value="@engagement.Value">@engagement.Label</option>
+            }
+        </select>
+        <div class="ms-search-result"><strong>@_filtered.Count</strong><span>records</span></div>
+    </section>
+
+    <nav class="ms-view-tabs" aria-label="Milestone views">
+        @foreach (var view in _views)
+        {
+            <button type="button" class="ms-view-btn @(_activeView == view ? "ms-view-btn-active" : null)" @onclick="() => SetView(view)">@view</button>
+        }
+    </nav>
+
+    <section class="ms-content-layout">
+        <div class="ms-main-card">
+            @if (_loading)
+            {
+                <div class="ms-loading"><i class="bi bi-arrow-repeat ms-spin" aria-hidden="true"></i><span>Loading milestones...</span></div>
+            }
+            else if (_filtered.Count == 0)
+            {
+                <div class="ms-empty-state"><i class="bi bi-flag" aria-hidden="true"></i><h2>No milestones found</h2><p>Adjust filters or create the first engagement milestone.</p><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Milestone</button></div>
+            }
+            else if (_activeView == "Timeline")
+            {
+                <div class="ms-governance-grid">
+                    <section class="ms-panel">
+                        <header><div><i class="bi bi-calendar-range" aria-hidden="true"></i><strong>Timeline Health</strong></div><span>@TimelineScore.ToString("F0")%</span></header>
+                        <div class="ms-panel-body ms-metric-list">
+                            <div class="ms-metric-row"><span>Open</span><div><i style="@WidthStyle(OpenCount, SafeTotal)"></i></div><strong>@OpenCount</strong></div>
+                            <div class="ms-metric-row"><span>Due soon</span><div><i style="@WidthStyle(DueSoonCount, SafeTotal)"></i></div><strong>@DueSoonCount</strong></div>
+                            <div class="ms-metric-row"><span>Overdue</span><div><i style="@WidthStyle(OverdueCount, SafeTotal)"></i></div><strong>@OverdueCount</strong></div>
+                            <div class="ms-metric-row"><span>Unscheduled</span><div><i style="@WidthStyle(UnscheduledCount, SafeTotal)"></i></div><strong>@UnscheduledCount</strong></div>
+                        </div>
+                    </section>
+                    <section class="ms-panel">
+                        <header><div><i class="bi bi-briefcase" aria-hidden="true"></i><strong>Engagement Coverage</strong></div><span>@EngagementSummaries.Count</span></header>
+                        <div class="ms-panel-body ms-group-list">
+                            @foreach (var group in EngagementSummaries.Take(8))
+                            {
+                                <button type="button" class="ms-group-row" @onclick="() => FilterEngagement(group.Id)"><span>@group.Name</span><div><i style="@WidthStyle(group.Count, SafeTotal)"></i></div><strong>@group.Count</strong></button>
+                            }
+                        </div>
+                    </section>
+                    <section class="ms-panel ms-panel-wide">
+                        <header><div><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><strong>Milestone Risk Queue</strong></div><span>@RiskQueue.Count</span></header>
+                        <div class="ms-panel-body ms-review-list">
+                            @foreach (var item in RiskQueue.Take(8))
+                            {
+                                <button type="button" class="ms-review-row" @onclick="() => SelectItem(item)"><strong>@item.MilestoneName</strong><span>@RiskReason(item)</span><em>@PriorityLabel(item)</em></button>
+                            }
+                        </div>
+                    </section>
+                </div>
+            }
+            else if (_activeView == "Governance")
+            {
+                <div class="ms-board">
+                    @foreach (var lane in GovernanceLanes)
+                    {
+                        <section class="ms-board-col">
+                            <header><strong>@lane.Title</strong><span>@lane.Items.Count</span></header>
+                            @foreach (var item in lane.Items)
+                            {
+                                <button type="button" class="ms-board-card" @onclick="() => SelectItem(item)">
+                                    <div><strong>@item.MilestoneName</strong><span>@item.StatusCode</span></div>
+                                    <small>@EngagementName(item.EngagementId) · @DateSummary(item)</small>
+                                    <em>@PriorityLabel(item)</em>
+                                </button>
+                            }
+                        </section>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="ms-table-scroll">
+                    <table class="ms-table">
+                        <thead><tr><th>Milestone</th><th>Engagement</th><th>Due</th><th>Completed</th><th>Priority</th><th>Status</th><th>Created</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var item in _filtered)
+                            {
+                                <tr @onclick="() => SelectItem(item)">
+                                    <td><div class="ms-name-cell"><span class="ms-avatar @AvatarClass(item)">@Initials(item.MilestoneName)</span><span><strong>@item.MilestoneName</strong><small>@DateSummary(item)</small></span></div></td>
+                                    <td>@EngagementName(item.EngagementId)</td>
+                                    <td>@FormatDate(item.DueDate)</td>
+                                    <td>@FormatDate(item.CompletedDate)</td>
+                                    <td><span class="@PriorityClass(item)">@PriorityLabel(item)</span></td>
+                                    <td><span class="@StatusClass(item)">@StatusLabel(item)</span></td>
+                                    <td>@item.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</td>
+                                    <td><div class="ms-row-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ToggleCompleteAsync(item)" title="Complete/Reopen"><i class="bi bi-check2-circle" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(item)" title="Delete"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <aside class="ms-detail-card" aria-label="Selected milestone">
+            @if (_selected is null)
+            {
+                <div class="ms-detail-empty"><i class="bi bi-flag" aria-hidden="true"></i><h2>Milestone command brief</h2><p>Select a milestone to review engagement alignment, due date risk, completion state, and actions.</p></div>
+            }
+            else
+            {
+                <div class="ms-detail-head"><div><span class="ms-detail-eyebrow"><i class="bi bi-briefcase" aria-hidden="true"></i> @EngagementName(_selected.EngagementId)</span><h2>@_selected.MilestoneName</h2><p>@DateSummary(_selected)</p></div><span class="@StatusClass(_selected)">@StatusLabel(_selected)</span></div>
+                <div class="ms-detail-body">
+                    <div class="ms-detail-summary">
+                        <div><span>Priority</span><strong>@PriorityLabel(_selected)</strong></div>
+                        <div><span>Status</span><strong>@StatusLabel(_selected)</strong></div>
+                        <div><span>Due</span><strong>@FormatDate(_selected.DueDate)</strong></div>
+                        <div><span>Completed</span><strong>@FormatDate(_selected.CompletedDate)</strong></div>
+                    </div>
+                    <div class="ms-config-card"><span>Risk brief</span><strong>@RiskReason(_selected)</strong><small>@EngagementName(_selected.EngagementId)</small></div>
+                    <div class="ms-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit Milestone</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="DuplicateSelected"><i class="bi bi-files" aria-hidden="true"></i> Duplicate</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => ToggleCompleteAsync(_selected)"><i class="bi bi-check2-circle" aria-hidden="true"></i> @(IsCompleted(_selected) ? "Reopen" : "Complete")</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="OpenEngagements"><i class="bi bi-briefcase" aria-hidden="true"></i> Engagements</button>
+                        <button type="button" class="um-btn um-btn-ghost text-danger" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
+                    </div>
+                </div>
+            }
+        </aside>
+    </section>
+</div>
+
+@if (_showForm)
+{
+    <div class="ms-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="ms-form-title">
+        <div class="ms-modal">
+            <div class="ms-modal-header"><div class="ms-modal-title"><span class="ms-modal-icon"><i class="bi bi-flag" aria-hidden="true"></i></span><div><h2 id="ms-form-title">@(_editId.HasValue ? "Edit Milestone" : "New Milestone")</h2><p>Configure engagement checkpoint, due date, completion state, and operational status.</p></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseForm" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm @key="_form" Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="ShowValidation">
+                <DataAnnotationsValidator />
+                <div class="ms-modal-body">
+                    <div class="ms-form-banner"><i class="bi bi-info-circle" aria-hidden="true"></i><span><strong>Milestone governance</strong> Create requests start as Pending in the backend; edit milestones to update completion and status after creation.</span></div>
+                    <div class="ms-form-grid">
+                        <div class="ms-field ms-field-wide"><label>Engagement <span>*</span></label><InputSelect @bind-Value="_form.EngagementIdText" class="ms-input"><option value="">Select engagement</option>@foreach (var engagement in _engagements){<option value="@engagement.Value">@engagement.Label</option>}</InputSelect><ValidationMessage For="() => _form.EngagementIdText" class="text-danger" /></div>
+                        <div class="ms-field ms-field-wide"><label>Milestone <span>*</span></label><InputText @bind-Value="_form.MilestoneName" class="ms-input" /><ValidationMessage For="() => _form.MilestoneName" class="text-danger" /></div>
+                        <div class="ms-field"><label>Due Date</label><InputDate @bind-Value="_form.DueDate" class="ms-input" /></div>
+                        <div class="ms-field"><label>Completed Date</label><InputDate @bind-Value="_form.CompletedDate" class="ms-input" /></div>
+                        <div class="ms-field"><label>Status <span>*</span></label><InputSelect @bind-Value="_form.StatusCode" class="ms-input"><option>Pending</option><option>Open</option><option>InProgress</option><option>Blocked</option><option>Complete</option><option>Completed</option><option>Cancelled</option></InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                    </div>
+                </div>
+                <div class="ms-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check2" aria-hidden="true"></i> @(_editId.HasValue ? "Save Changes" : "Create Milestone")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showDelete)
+{
+    <div class="ms-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="ms-delete-title">
+        <div class="ms-confirm-modal">
+            <div class="ms-confirm-icon"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
+            <h2 id="ms-delete-title">Delete Milestone</h2>
+            <p>Delete <strong>@_deleteTarget?.MilestoneName</strong>? Engagement delivery history may still reference this milestone.</p>
+            <div class="ms-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete">Cancel</button><button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div>
+        </div>
+    </div>
+}
+
 @code {
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
+    private Guid TenantId { get; set; }
+    private Guid TenantAdminUserId { get; set; }
     private Guid _tenantId;
-    private Guid _tenantAdminUserId; Guid TenantId { get; set; } Guid TenantAdminUserId { get; set; } string? _searchTerm, _loadError, _filter; bool _loading, _saving, _showForm, _showDelete, _showValidation; Guid? _editId; EngagementMilestoneDto? _deleteTarget; List<EngagementMilestoneDto> _items = [], _filtered = []; List<EngagementOption> _engagements = []; SfToast _toast = default!; MilestoneForm _form = new(); protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Tasks & Workflows", "/tasks"), new("Milestones", null)); await LoadAsync(); } async Task LoadAsync() { _loading = true; _loadError = null; try { await LoadEngagementsAsync(); var result = await Api.SearchEngagementMilestonesAsync(TenantId, searchTerm: _searchTerm); _items = result?.Items.ToList() ?? []; ApplyFilter(); } catch (Exception ex) { _loadError = $"Failed to load milestones: {ex.Message}"; } finally { _loading = false; } } Task OnSearchAsync() => LoadAsync(); void ApplyFilter() => _filtered = _filter switch { "Open" => _items.Where(x => x.StatusCode == "Open").ToList(), "Overdue" => _items.Where(IsOverdue).ToList(), _ => [.. _items] }; void SetFilter(string? f) { _filter = f; ApplyFilter(); } void OnRowSelected(RowSelectEventArgs<EngagementMilestoneDto> args) => OpenEdit(args.Data); void OpenCreate() { _editId = null; _showValidation = false; _form = new(); _showForm = true; } void OpenEdit(EngagementMilestoneDto item) { _editId = item.MilestoneId; _showValidation = false; _form = new() { EngagementIdText = item.EngagementId.ToString(), MilestoneName = item.MilestoneName, DueDate = item.DueDate, CompletedDate = item.CompletedDate, StatusCode = item.StatusCode }; _showForm = true; } void ConfirmDelete(EngagementMilestoneDto item) { _deleteTarget = item; _showDelete = true; } async Task SaveAsync() { _showValidation = true; _saving = true; try { if (_editId.HasValue) await Api.UpdateEngagementMilestoneAsync(_editId.Value, new() { EngagementId = Guid.Parse(_form.EngagementIdText), MilestoneName = _form.MilestoneName, DueDate = _form.DueDate, CompletedDate = _form.CompletedDate, StatusCode = _form.StatusCode, ModifiedByUserId = TenantAdminUserId }); else await Api.CreateEngagementMilestoneAsync(new() { TenantId = TenantId, EngagementId = Guid.Parse(_form.EngagementIdText), MilestoneName = _form.MilestoneName, DueDate = _form.DueDate }); _showForm = false; await _toast.ShowAsync(new() { Content = _editId.HasValue ? "Milestone updated" : "Milestone created", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } } async Task ExecuteDeleteAsync() { if (_deleteTarget is null) return; _saving = true; try { await Api.DeleteEngagementMilestoneAsync(_deleteTarget.MilestoneId, TenantAdminUserId); _showDelete = false; await _toast.ShowAsync(new() { Content = "Milestone deleted", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } } void ResetForm() { _form = new(); _editId = null; _showValidation = false; } void ShowValidation() => _showValidation = true; async Task LoadEngagementsAsync() { if (_engagements.Count > 0) return; var result = await Api.SearchEngagementsAsync(TenantId); _engagements = (result?.Items ?? []).OrderBy(x => x.EngagementName).Select(x => new EngagementOption(x.EngagementId.ToString(), x.EngagementName)).ToList(); } static bool IsOverdue(EngagementMilestoneDto x) => x.CompletedDate is null && x.DueDate.HasValue && x.DueDate.Value < DateOnly.FromDateTime(DateTime.Today); sealed record EngagementOption(string Value, string Label); sealed class MilestoneForm { [Required(ErrorMessage = "Select an engagement.")] public string EngagementIdText { get; set; } = string.Empty; [Required, StringLength(200)] public string MilestoneName { get; set; } = string.Empty; public DateOnly? DueDate { get; set; } public DateOnly? CompletedDate { get; set; } [Required, StringLength(50)] public string StatusCode { get; set; } = "Pending"; } 
-    async Task ResolveCurrentUserContextAsync()
+    private Guid _tenantAdminUserId;
+    private bool _loading;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private bool _toastVisible;
+    private string _searchTerm = string.Empty;
+    private string _statusFilter = "all";
+    private string _priorityFilter = "all";
+    private string _engagementFilter = "all";
+    private string _activeView = "Library";
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private Guid? _editId;
+    private EngagementMilestoneDto? _selected;
+    private EngagementMilestoneDto? _deleteTarget;
+    private readonly string[] _views = ["Library", "Timeline", "Governance"];
+    private List<EngagementMilestoneDto> _items = [];
+    private List<EngagementMilestoneDto> _filtered = [];
+    private List<EngagementOption> _engagements = [];
+    private MilestoneForm _form = new();
+
+    private int OpenCount => _items.Count(IsOpen);
+    private int OverdueCount => _items.Count(IsOverdue);
+    private int DueSoonCount => _items.Count(IsDueSoon);
+    private int BlockedCount => _items.Count(IsBlocked);
+    private int CompletedCount => _items.Count(IsCompleted);
+    private int UnscheduledCount => _items.Count(IsUnscheduled);
+    private int SafeTotal => Math.Max(_items.Count, 1);
+    private double TimelineScore => _items.Count == 0 ? 0 : (OpenCount + DueSoonCount + CompletedCount - OverdueCount - BlockedCount - UnscheduledCount) * 100d / Math.Max(_items.Count * 3, 1);
+    private List<string> StatusOptions => _items.Select(StatusLabel).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+    private List<EngagementSummary> EngagementSummaries => _items.GroupBy(x => x.EngagementId).Select(g => new EngagementSummary(g.Key.ToString(), EngagementName(g.Key), g.Count())).OrderByDescending(x => x.Count).ToList();
+    private List<EngagementMilestoneDto> RiskQueue => _items.Where(x => IsOverdue(x) || IsBlocked(x) || IsUnscheduled(x) || IsDueSoon(x)).OrderBy(x => x.DueDate ?? DateOnly.MaxValue).ThenBy(x => x.MilestoneName).ToList();
+    private List<GovernanceLane> GovernanceLanes =>
+    [
+        new("Open", _filtered.Where(IsOpen).ToList()),
+        new("Overdue / Blocked", _filtered.Where(x => IsOverdue(x) || IsBlocked(x)).ToList()),
+        new("Completed", _filtered.Where(IsCompleted).ToList()),
+    ];
+    private string ToastIcon => _toastKind == "success" ? "bi-check-circle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-exclamation-triangle-fill";
+    private string AllKpiClass => KpiClass("all", "ms-blue");
+    private string OpenKpiClass => KpiClass("open", "ms-green");
+    private string OverdueKpiClass => KpiClass("overdue", "ms-amber");
+    private string DueKpiClass => KpiClass("due", "ms-cyan");
+    private string BlockedKpiClass => KpiClass("blocked", "ms-slate");
+    private string CompletedKpiClass => KpiClass("completed", "ms-purple");
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Tasks & Workflows", "/tasks"), new("Milestones", "/ops/milestones"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            await LoadEngagementsAsync();
+            var result = await Api.SearchEngagementMilestonesAsync(TenantId, searchTerm: _searchTerm);
+            _items = result?.Items.OrderBy(x => IsOverdue(x) ? 0 : IsDueSoon(x) ? 1 : 2).ThenBy(x => x.DueDate ?? DateOnly.MaxValue).ThenBy(x => x.MilestoneName).ToList() ?? [];
+            ApplyFilter();
+            _selected ??= _filtered.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load milestones: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilter()
+    {
+        IEnumerable<EngagementMilestoneDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm)) query = query.Where(MatchesSearch);
+        if (_statusFilter != "all") query = query.Where(x => string.Equals(StatusLabel(x), _statusFilter, StringComparison.OrdinalIgnoreCase));
+        if (_priorityFilter == "overdue") query = query.Where(IsOverdue);
+        else if (_priorityFilter == "due") query = query.Where(IsDueSoon);
+        else if (_priorityFilter == "blocked") query = query.Where(IsBlocked);
+        else if (_priorityFilter == "completed") query = query.Where(IsCompleted);
+        else if (_priorityFilter == "unscheduled") query = query.Where(IsUnscheduled);
+        if (_engagementFilter != "all" && Guid.TryParse(_engagementFilter, out var engagementId)) query = query.Where(x => x.EngagementId == engagementId);
+        _filtered = query.OrderBy(x => IsOverdue(x) ? 0 : IsDueSoon(x) ? 1 : 2).ThenBy(x => x.DueDate ?? DateOnly.MaxValue).ThenBy(x => x.MilestoneName).ToList();
+        if (_selected is not null && !_filtered.Any(x => x.MilestoneId == _selected.MilestoneId)) _selected = _filtered.FirstOrDefault();
+    }
+
+    private void ShowAll() { _statusFilter = "all"; _priorityFilter = "all"; _engagementFilter = "all"; ApplyFilter(); }
+    private void ShowOpen() { _statusFilter = "all"; _priorityFilter = "all"; ApplyFilter(); _filtered = _filtered.Where(IsOpen).ToList(); }
+    private void ShowOverdue() { _statusFilter = "all"; _priorityFilter = "overdue"; ApplyFilter(); }
+    private void ShowDueSoon() { _statusFilter = "all"; _priorityFilter = "due"; ApplyFilter(); }
+    private void ShowBlocked() { _statusFilter = "all"; _priorityFilter = "blocked"; ApplyFilter(); }
+    private void ShowCompleted() { _statusFilter = "all"; _priorityFilter = "completed"; ApplyFilter(); }
+    private void ShowLibrary() => SetView("Library");
+    private void ShowTimelineView() => SetView("Timeline");
+    private void ShowGovernance() => SetView("Governance");
+    private void SetView(string view) => _activeView = view;
+    private void FilterEngagement(string engagementId) { _engagementFilter = engagementId; ApplyFilter(); }
+    private void SelectItem(EngagementMilestoneDto item) => _selected = item;
+    private void OpenEngagements() => Nav.NavigateTo("/engagements");
+    private void OpenActivities() => Nav.NavigateTo("/ops/activities");
+
+    private void OpenCreate()
+    {
+        _editId = null;
+        _form = new() { DueDate = DateOnly.FromDateTime(DateTime.Today.AddDays(14)), StatusCode = "Pending" };
+        _showForm = true;
+    }
+
+    private void OpenEdit(EngagementMilestoneDto item)
+    {
+        _editId = item.MilestoneId;
+        _form = new()
+        {
+            EngagementIdText = item.EngagementId.ToString(),
+            MilestoneName = item.MilestoneName,
+            DueDate = item.DueDate,
+            CompletedDate = item.CompletedDate,
+            StatusCode = item.StatusCode
+        };
+        _showForm = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            var engagementId = Guid.Parse(_form.EngagementIdText);
+            if (_editId.HasValue)
+            {
+                await Api.UpdateEngagementMilestoneAsync(_editId.Value, new()
+                {
+                    EngagementId = engagementId,
+                    MilestoneName = _form.MilestoneName.Trim(),
+                    DueDate = _form.DueDate,
+                    CompletedDate = _form.CompletedDate,
+                    StatusCode = _form.StatusCode,
+                    ModifiedByUserId = TenantAdminUserId
+                });
+                ShowToast("Milestone updated.");
+            }
+            else
+            {
+                var id = await Api.CreateEngagementMilestoneAsync(new()
+                {
+                    TenantId = TenantId,
+                    EngagementId = engagementId,
+                    MilestoneName = _form.MilestoneName.Trim(),
+                    DueDate = _form.DueDate,
+                    CreatedByUserId = TenantAdminUserId
+                });
+                _editId = id;
+                ShowToast("Milestone created.");
+            }
+            _showForm = false;
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.MilestoneId == _editId) ?? _selected;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void ConfirmDelete(EngagementMilestoneDto item) { _deleteTarget = item; _showDelete = true; }
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteEngagementMilestoneAsync(_deleteTarget.MilestoneId, TenantAdminUserId);
+            ShowToast("Milestone deleted.");
+            if (_selected?.MilestoneId == _deleteTarget.MilestoneId) _selected = null;
+            _showDelete = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void DuplicateSelected()
+    {
+        if (_selected is null) return;
+        _editId = null;
+        _form = new()
+        {
+            EngagementIdText = _selected.EngagementId.ToString(),
+            MilestoneName = $"{_selected.MilestoneName} Copy",
+            DueDate = _selected.DueDate,
+            CompletedDate = null,
+            StatusCode = "Pending"
+        };
+        _showForm = true;
+    }
+
+    private async Task ToggleCompleteAsync(EngagementMilestoneDto item)
+    {
+        _saving = true;
+        try
+        {
+            var complete = !IsCompleted(item);
+            await Api.UpdateEngagementMilestoneAsync(item.MilestoneId, new()
+            {
+                EngagementId = item.EngagementId,
+                MilestoneName = item.MilestoneName,
+                DueDate = item.DueDate,
+                CompletedDate = complete ? DateOnly.FromDateTime(DateTime.Today) : null,
+                StatusCode = complete ? "Completed" : "Open",
+                ModifiedByUserId = TenantAdminUserId
+            });
+            ShowToast(complete ? "Milestone completed." : "Milestone reopened.");
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.MilestoneId == item.MilestoneId) ?? _selected;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Status update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private Task ExportAsync()
+    {
+        var rows = new List<string> { "Milestone,Engagement,Status,Priority,Due,Completed,Created" };
+        rows.AddRange(_filtered.Select(x => string.Join(',', Csv(x.MilestoneName), Csv(EngagementName(x.EngagementId)), Csv(StatusLabel(x)), Csv(PriorityLabel(x)), Csv(FormatDate(x.DueDate)), Csv(FormatDate(x.CompletedDate)), Csv(x.CreatedDateUtc.ToString("O")))));
+        Nav.NavigateTo("data:text/csv;charset=utf-8," + Uri.EscapeDataString(string.Join(Environment.NewLine, rows)), forceLoad: true);
+        ShowToast("Milestone export generated.");
+        return Task.CompletedTask;
+    }
+
+    private async Task LoadEngagementsAsync()
+    {
+        if (_engagements.Count > 0) return;
+        var result = await Api.SearchEngagementsAsync(TenantId);
+        _engagements = (result?.Items ?? []).OrderBy(x => x.EngagementName).Select(x => new EngagementOption(x.EngagementId.ToString(), x.EngagementName)).ToList();
+    }
+
+    private void ShowValidation() => ShowToast("Please fix validation errors before saving.", "danger");
+    private void CloseForm() { _showForm = false; _form = new(); _editId = null; }
+    private void CancelDelete() { _showDelete = false; _deleteTarget = null; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+
+    private string KpiClass(string key, string tone)
+    {
+        var active = false;
+        if (key == "all") active = _statusFilter == "all" && _priorityFilter == "all" && _engagementFilter == "all";
+        else if (key == "open") active = _statusFilter == "all" && _priorityFilter == "all" && _filtered.Count > 0 && _filtered.All(IsOpen);
+        else if (key == "overdue") active = _priorityFilter == "overdue";
+        else if (key == "due") active = _priorityFilter == "due";
+        else if (key == "blocked") active = _priorityFilter == "blocked";
+        else if (key == "completed") active = _priorityFilter == "completed";
+        return $"ms-kpi-card {tone}{(active ? " ms-kpi-card-active" : string.Empty)}";
+    }
+
+    private bool MatchesSearch(EngagementMilestoneDto item)
+    {
+        var q = _searchTerm.Trim();
+        return Contains(item.MilestoneName, q) || Contains(item.StatusCode, q) || Contains(EngagementName(item.EngagementId), q);
+    }
+
+    private static bool Contains(string? value, string search) => value?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
+    private static bool IsCompleted(EngagementMilestoneDto item) => string.Equals(item.StatusCode, "Complete", StringComparison.OrdinalIgnoreCase) || string.Equals(item.StatusCode, "Completed", StringComparison.OrdinalIgnoreCase) || item.CompletedDate.HasValue;
+    private static bool IsBlocked(EngagementMilestoneDto item) => string.Equals(item.StatusCode, "Blocked", StringComparison.OrdinalIgnoreCase);
+    private static bool IsCancelled(EngagementMilestoneDto item) => string.Equals(item.StatusCode, "Cancelled", StringComparison.OrdinalIgnoreCase);
+    private static bool IsOpen(EngagementMilestoneDto item) => !IsCompleted(item) && !IsCancelled(item) && !IsBlocked(item);
+    private static bool IsOverdue(EngagementMilestoneDto item) => !IsCompleted(item) && item.DueDate.HasValue && item.DueDate.Value < DateOnly.FromDateTime(DateTime.Today);
+    private static bool IsDueSoon(EngagementMilestoneDto item) => !IsCompleted(item) && item.DueDate.HasValue && item.DueDate.Value >= DateOnly.FromDateTime(DateTime.Today) && item.DueDate.Value <= DateOnly.FromDateTime(DateTime.Today.AddDays(14));
+    private static bool IsUnscheduled(EngagementMilestoneDto item) => !item.DueDate.HasValue;
+    private static string StatusLabel(EngagementMilestoneDto item) => string.IsNullOrWhiteSpace(item.StatusCode) ? "Pending" : item.StatusCode.Trim();
+    private static string StatusClass(EngagementMilestoneDto item) => IsCompleted(item) ? "ms-status ms-status-completed" : IsBlocked(item) || IsOverdue(item) ? "ms-status ms-status-risk" : IsOpen(item) ? "ms-status ms-status-active" : "ms-status ms-status-inactive";
+    private static string PriorityLabel(EngagementMilestoneDto item) => IsOverdue(item) ? "Overdue" : IsBlocked(item) ? "Blocked" : IsDueSoon(item) ? "Due Soon" : IsUnscheduled(item) ? "Unscheduled" : IsCompleted(item) ? "Completed" : "On Track";
+    private static string PriorityClass(EngagementMilestoneDto item) => IsOverdue(item) || IsBlocked(item) ? "ms-priority ms-priority-risk" : IsDueSoon(item) ? "ms-priority ms-priority-due" : IsUnscheduled(item) ? "ms-priority ms-priority-unscheduled" : IsCompleted(item) ? "ms-priority ms-priority-completed" : "ms-priority ms-priority-track";
+    private static string RiskReason(EngagementMilestoneDto item)
+    {
+        if (IsOverdue(item)) return "Milestone due date is past due and not completed.";
+        if (IsBlocked(item)) return "Milestone is blocked and requires operational review.";
+        if (IsUnscheduled(item)) return "Milestone does not have a due date.";
+        if (IsDueSoon(item)) return "Milestone is due within the next 14 days.";
+        if (IsCompleted(item)) return "Milestone is completed.";
+        return "Milestone is on track.";
+    }
+
+    private string EngagementName(Guid engagementId) => _engagements.FirstOrDefault(x => string.Equals(x.Value, engagementId.ToString(), StringComparison.OrdinalIgnoreCase))?.Label ?? "Unassigned engagement";
+    private static string DateSummary(EngagementMilestoneDto item) => $"Due {FormatDate(item.DueDate)} · Completed {FormatDate(item.CompletedDate)}";
+    private static string FormatDate(DateOnly? value) => value?.ToString("MMM d, yyyy") ?? "Not set";
+    private static string WidthStyle(int value, int max) => $"width:{Math.Clamp((int)Math.Round(value * 100d / Math.Max(max, 1)), 0, 100)}%;";
+    private static string AvatarClass(EngagementMilestoneDto item)
+    {
+        var index = Math.Abs(item.MilestoneName.GetHashCode()) % 6;
+        if (index == 0) return "ms-av1";
+        if (index == 1) return "ms-av2";
+        if (index == 2) return "ms-av3";
+        if (index == 3) return "ms-av4";
+        if (index == 4) return "ms-av5";
+        return "ms-av6";
+    }
+    private static string Initials(string name)
+    {
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant() : name.Length > 0 ? name[..1].ToUpperInvariant() : "?";
+    }
+    private static string Csv(string? value) => string.Concat("\"", (value ?? string.Empty).Replace("\"", "\"\""), "\"");
+
+    private async Task ResolveCurrentUserContextAsync()
     {
         var context = await CurrentUser.RequireAsync();
         TenantId = context.TenantId;
         TenantAdminUserId = context.UserId;
         _tenantId = context.TenantId;
         _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+    }
+
+    private sealed record EngagementOption(string Value, string Label);
+    private sealed record EngagementSummary(string Id, string Name, int Count);
+    private sealed record GovernanceLane(string Title, List<EngagementMilestoneDto> Items);
+    private sealed class MilestoneForm
+    {
+        [Required(ErrorMessage = "Select an engagement.")] public string EngagementIdText { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string MilestoneName { get; set; } = string.Empty;
+        public DateOnly? DueDate { get; set; }
+        public DateOnly? CompletedDate { get; set; }
+        [Required, StringLength(50)] public string StatusCode { get; set; } = "Pending";
     }
 }
