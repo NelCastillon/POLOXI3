@@ -1,110 +1,359 @@
 @page "/tenant/accounts/commercial"
+@using ChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Commercial Entity Settings — Account Configuration</PageTitle>
+<PageTitle>Commercial Entity Command Center — Account Configuration</PageTitle>
 
-<AppPageHeader Title="Commercial Entity Settings"
-               Subtitle="Configure commercial account entity defaults and classification behavior"
-               Icon="bi-briefcase">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<div class="pc-kpi-strip">
-    <div class="pc-kpi-card" title="Total commercial entity settings">
-        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-briefcase-fill" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_settings.Count</div><div class="pc-kpi-label">Total Settings</div></div>
-    </div>
-    <div class="pc-kpi-card" title="Settings enabled (Boolean true)">
-        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-toggle-on" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_settings.Count(s => s.SettingType == "Boolean" && s.SettingValue == "true")</div><div class="pc-kpi-label">Enabled</div></div>
-    </div>
-    <div class="pc-kpi-card" title="Settings disabled (Boolean false)">
-        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-toggle-off" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_settings.Count(s => s.SettingType == "Boolean" && s.SettingValue != "true")</div><div class="pc-kpi-label">Disabled</div></div>
-    </div>
-</div>
-
-@if (_loadError is not null)
-{
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
-    </div>
-}
-
-<div class="um-settings-container">
-    @if (_loading)
-    {
-        <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading…</span></div>
-    }
-    else
-    {
-        <div class="row g-4">
-            @foreach (var setting in _settings)
-            {
-                <div class="col-md-6">
-                    <div class="um-settings-card">
-                        <div class="um-settings-card__header">
-                            <div>
-                                <div class="fw-semibold">@FormatKey(setting.SettingKey)</div>
-                                <div class="text-muted small">@setting.Description</div>
-                            </div>
-                        </div>
-                        <div class="um-settings-card__body">
-                            @if (setting.SettingType == "Boolean")
-                            {
-                                <div class="form-check form-switch">
-                                    <input class="form-check-input" type="checkbox"
-                                           checked="@(setting.SettingValue == "true")"
-                                           @onchange="async e => await UpdateAsync(setting, BoolStr(e.Value))" />
-                                    <label class="form-check-label">@(setting.SettingValue == "true" ? "Enabled" : "Disabled")</label>
-                                </div>
-                            }
-                            else if (setting.SettingKey == "DefaultEntityType")
-                            {
-                                <select class="um-input" value="@setting.SettingValue"
-                                    @onchange="async e => await UpdateAsync(setting, e.Value?.ToString())">
-                                    <option value="Business">Business</option>
-                                    <option value="Corporation">Corporation</option>
-                                    <option value="LLC">LLC</option>
-                                    <option value="Partnership">Partnership</option>
-                                    <option value="Non-Profit">Non-Profit</option>
-                                </select>
-                            }
-                            else
-                            {
-                                <div class="d-flex gap-2">
-                                    <input class="um-input flex-grow-1" value="@setting.SettingValue"
-                                        @onchange="async e => await UpdateAsync(setting, e.Value?.ToString())" />
-                                    <span class="text-muted align-self-center small">@setting.SettingType</span>
-                                </div>
-                            }
+<div class="ces-page">
+    <section class="ces-hero">
+        <div class="ces-hero__content">
+            <div class="ces-hero-left">
+                <span class="ces-hero-icon"><i class="bi bi-briefcase" aria-hidden="true"></i></span>
+                <div class="ces-hero-title">
+                    <div class="ces-hero__eyebrow">Enterprise commercial account configuration</div>
+                    <div class="ces-title-row">
+                        <h1>Commercial Entity Command Center</h1>
+                        <div class="ces-hero__meta">
+                            <span><i class="bi bi-sliders" aria-hidden="true"></i>@_settings.Count settings</span>
+                            <span><i class="bi bi-toggle-on" aria-hidden="true"></i>@_settings.Count(IsEnabledBoolean) enabled</span>
+                            <span><i class="bi bi-building" aria-hidden="true"></i>@_settings.Count(IsEntitySetting) entity controls</span>
+                            <span><i class="bi bi-shield-check" aria-hidden="true"></i>@ReadinessPercent% ready</span>
                         </div>
                     </div>
                 </div>
+            </div>
+            <p>Control commercial account classification, entity defaults, business validation, ownership structure, and organization-level servicing behavior.</p>
+        </div>
+        <div class="ces-hero__actions">
+            <button type="button" class="ces-btn ces-btn--light" @onclick="RefreshAsync" disabled="@_loading">
+                <i class="bi bi-arrow-clockwise @(_loading ? "ces-spin" : null)" aria-hidden="true"></i> Refresh
+            </button>
+            <button type="button" class="ces-btn ces-btn--primary" @onclick='() => SetDashboardFocus("risk", "importance")'>
+                <i class="bi bi-shield-exclamation" aria-hidden="true"></i> Review Settings
+            </button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger ces-alert" style="border-left: 4px solid #dc3545; animation: ces-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span>@_loadError</span>
+        </div>
+    }
+
+    <section class="ces-kpi-strip" aria-label="Commercial entity settings KPIs">
+        @KpiCard("all", "Total Settings", _settings.Count.ToString(), "All commercial entity configuration settings", "bi-sliders", "blue")
+        @KpiCard("enabled", "Enabled", _settings.Count(IsEnabledBoolean).ToString(), "Boolean settings currently enabled", "bi-toggle-on", "green")
+        @KpiCard("disabled", "Disabled", _settings.Count(IsDisabledBoolean).ToString(), "Boolean settings currently disabled", "bi-toggle-off", "amber")
+        @KpiCard("entity", "Entity", _settings.Count(IsEntitySetting).ToString(), "Entity type and classification controls", "bi-building", "purple")
+        @KpiCard("validation", "Validation", _settings.Count(IsValidationSetting).ToString(), "Commercial data validation and compliance controls", "bi-check2-square", "cyan")
+        @KpiCard("risk", "Needs Review", _settings.Count(NeedsReview).ToString(), "Blank, unknown, or operationally sensitive settings", "bi-exclamation-octagon", "red")
+    </section>
+
+    <section class="ces-workflows" aria-label="Commercial entity workflows">
+        <button type="button" class="ces-workflow" @onclick='() => SetDashboardFocus("all", "importance")'><span class="ces-workflow-icon"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></span><span class="ces-workflow-meta"><strong>Importance review</strong><span>Rank settings by commercial workflow impact</span></span></button>
+        <button type="button" class="ces-workflow" @onclick='() => SetDashboardFocus("entity", "importance")'><span class="ces-workflow-icon"><i class="bi bi-building" aria-hidden="true"></i></span><span class="ces-workflow-meta"><strong>Entity defaults</strong><span>Focus business type and classification behavior</span></span></button>
+        <button type="button" class="ces-workflow" @onclick='() => SetDashboardFocus("validation", "importance")'><span class="ces-workflow-icon"><i class="bi bi-check2-square" aria-hidden="true"></i></span><span class="ces-workflow-meta"><strong>Validation controls</strong><span>Review required business data and compliance rules</span></span></button>
+        <button type="button" class="ces-workflow" @onclick='() => SetDashboardFocus("disabled", "importance")'><span class="ces-workflow-icon"><i class="bi bi-toggle-off" aria-hidden="true"></i></span><span class="ces-workflow-meta"><strong>Disabled controls</strong><span>Audit inactive commercial capabilities</span></span></button>
+        <button type="button" class="ces-workflow" @onclick='() => SetDashboardFocus("types", "type")'><span class="ces-workflow-icon"><i class="bi bi-pie-chart" aria-hidden="true"></i></span><span class="ces-workflow-meta"><strong>Type coverage</strong><span>Compare Boolean, String, and custom setting types</span></span></button>
+    </section>
+
+    <section class="ces-filter-panel" aria-label="Commercial entity setting filters">
+        <div class="ces-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input type="search"
+                   placeholder="Search key, value, type, or description…"
+                   aria-label="Search commercial entity settings"
+                   value="@_searchTerm"
+                   @oninput="args => OnSearchInputValue(args.Value?.ToString())" />
+        </div>
+        <div class="ces-filter-grid">
+            <label>
+                <span>Setting Type</span>
+                <select class="form-select" @bind="_typeFilter" @bind:after="ApplyFilters">
+                    <option value="">All types</option>
+                    @foreach (var type in TypeOptions)
+                    {
+                        <option value="@type">@type</option>
+                    }
+                </select>
+            </label>
+            <label>
+                <span>Value State</span>
+                <select class="form-select" @bind="_stateFilter" @bind:after="ApplyFilters">
+                    <option value="">All states</option>
+                    <option value="Enabled">Enabled Boolean</option>
+                    <option value="Disabled">Disabled Boolean</option>
+                    <option value="Configured">Configured Value</option>
+                    <option value="Blank">Blank Value</option>
+                    <option value="NeedsReview">Needs review</option>
+                </select>
+            </label>
+            <label>
+                <span>Sort</span>
+                <select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters">
+                    <option value="importance">Importance</option>
+                    <option value="key">Setting key</option>
+                    <option value="type">Type</option>
+                    <option value="created">Newest</option>
+                </select>
+            </label>
+        </div>
+        <button type="button" class="ces-btn ces-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)">
+            <i class="bi bi-x-lg" aria-hidden="true"></i> Reset
+        </button>
+    </section>
+
+    <nav class="ces-tabs" aria-label="Commercial entity setting views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="ces-tab @(_activeTab == tab.Key ? "ces-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </nav>
+
+    <main class="ces-dashboard">
+        <section class="ces-main-card">
+            <div class="ces-card-header">
+                <div>
+                    <span class="ces-section-kicker">@ActiveViewTitle</span>
+                    <h2>@FilteredSettings.Count() commercial settings</h2>
+                    <p>Ranked by enterprise importance: entity classification, validation impact, enabled state, configured values, and operational review priority.</p>
+                </div>
+                <div class="ces-card-actions">
+                    <button type="button" class="ces-btn ces-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Prev</button>
+                    <span class="ces-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="ces-btn ces-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="ces-loading"><span class="ces-spinner"></span> Loading commercial entity settings…</div>
             }
+            else if (!FilteredSettings.Any())
+            {
+                <div class="ces-empty">
+                    <i class="bi bi-briefcase" aria-hidden="true"></i>
+                    <strong>No commercial entity settings found</strong>
+                    <span>Adjust the active KPI, tab, search, or filters.</span>
+                </div>
+            }
+            else if (_activeTab == "types")
+            {
+                <div class="ces-group-grid">
+                    @foreach (var group in TypeGroups)
+                    {
+                        <article class="ces-group-card">
+                            <div class="ces-group-icon"><i class="bi @TypeIcon(group.Name)" aria-hidden="true"></i></div>
+                            <div class="ces-group-meta">
+                                <h3>@group.Name</h3>
+                                <p>@group.Count settings • @group.Configured configured • @group.ReviewCount need review</p>
+                                <div class="ces-mini-bar"><span style="width:@group.Percent%"></span></div>
+                            </div>
+                            <button type="button" class="ces-btn ces-btn--ghost" @onclick="() => FilterByType(group.Name)">Open</button>
+                        </article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="ces-table-wrap">
+                    <table class="ces-table">
+                        <thead>
+                            <tr>
+                                <th>Importance</th>
+                                <th>Setting</th>
+                                <th>Type</th>
+                                <th>Value</th>
+                                <th>State</th>
+                                <th>Created</th>
+                                <th class="ces-actions-col">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var setting in PagedSettings)
+                            {
+                                <tr class="@(_selected?.CommercialEntitySettingId == setting.CommercialEntitySettingId ? "ces-row ces-row--selected" : "ces-row")" @onclick="() => SelectRow(setting)">
+                                    <td>@ImportanceBadge(setting)</td>
+                                    <td>
+                                        <div class="ces-setting-cell">
+                                            <div class="ces-avatar" style="@AvatarStyle(setting.SettingKey)" aria-hidden="true">@Initials(setting.SettingKey)</div>
+                                            <div class="ces-setting-meta">
+                                                <button type="button" class="ces-link-button" @onclick:stopPropagation="true" @onclick="() => SelectRow(setting)">@FormatKey(setting.SettingKey)</button>
+                                                <small>@setting.SettingKey</small>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td><span class="ces-pill @TypeBadgeClass(setting)"><i class="bi @TypeIcon(DisplayType(setting))" aria-hidden="true"></i>@DisplayType(setting)</span></td>
+                                    <td @onclick:stopPropagation="true">
+                                        @if (IsBoolean(setting))
+                                        {
+                                            <div class="ces-switch">
+                                                <input type="checkbox" checked="@IsTrue(setting.SettingValue)" @onchange="args => ConfirmUpdate(setting, BoolStr(args.Value))" />
+                                                <span>@(IsTrue(setting.SettingValue) ? "Enabled" : "Disabled")</span>
+                                            </div>
+                                        }
+                                        else if (string.Equals(setting.SettingKey, "DefaultEntityType", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            <select class="form-select ces-inline-input" value="@setting.SettingValue" @onchange="args => ConfirmUpdate(setting, args.Value?.ToString())">
+                                                <option value="Business">Business</option>
+                                                <option value="Corporation">Corporation</option>
+                                                <option value="LLC">LLC</option>
+                                                <option value="Partnership">Partnership</option>
+                                                <option value="Non-Profit">Non-Profit</option>
+                                            </select>
+                                        }
+                                        else
+                                        {
+                                            <input class="form-control ces-inline-input" value="@setting.SettingValue" @onchange="args => ConfirmUpdate(setting, args.Value?.ToString())" />
+                                        }
+                                    </td>
+                                    <td><span class="ces-pill @StateBadgeClass(setting)">@StateLabel(setting)</span></td>
+                                    <td><span class="ces-date">@FormatDate(setting.CreatedDateUtc)</span></td>
+                                    <td class="ces-actions-col" @onclick:stopPropagation="true">
+                                        <button type="button" class="ces-btn ces-btn--ghost ces-btn--sm" @onclick="() => SelectRow(setting)"><i class="bi bi-eye" aria-hidden="true"></i> Open</button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="ces-side-panel" aria-label="Commercial entity insights">
+            <section class="ces-panel-card">
+                <span class="ces-section-kicker">Selected setting</span>
+                @if (_selected is null)
+                {
+                    <div class="ces-empty ces-empty--compact">
+                        <i class="bi bi-cursor" aria-hidden="true"></i>
+                        <strong>Select a setting</strong>
+                        <span>Open importance, recommended action, and configuration details.</span>
+                    </div>
+                }
+                else
+                {
+                    <div class="ces-selected__title">
+                        <div class="ces-avatar ces-avatar--lg" style="@AvatarStyle(_selected.SettingKey)" aria-hidden="true">@Initials(_selected.SettingKey)</div>
+                        <div>
+                            <h3>@FormatKey(_selected.SettingKey)</h3>
+                            <span>@DisplayType(_selected) • @StateLabel(_selected)</span>
+                        </div>
+                    </div>
+                    <div class="ces-score-card @ImportanceClass(_selected)">
+                        <span>Importance score</span>
+                        <strong>@ImportanceScore(_selected)</strong>
+                        <small>@RecommendedAction(_selected)</small>
+                    </div>
+                    <dl class="ces-detail-list">
+                        <div><dt>Key</dt><dd>@_selected.SettingKey</dd></div>
+                        <div><dt>Value</dt><dd>@Safe(_selected.SettingValue, "Blank")</dd></div>
+                        <div><dt>Type</dt><dd>@DisplayType(_selected)</dd></div>
+                        <div><dt>Created</dt><dd>@FormatDate(_selected.CreatedDateUtc)</dd></div>
+                    </dl>
+                    @if (!string.IsNullOrWhiteSpace(_selected.Description))
+                    {
+                        <p class="ces-description">@_selected.Description</p>
+                    }
+                }
+            </section>
+
+            <section class="ces-panel-card">
+                <span class="ces-section-kicker">Enterprise insights</span>
+                <div class="ces-insight-list">
+                    <div class="ces-insight">
+                        <i class="bi bi-briefcase" aria-hidden="true"></i>
+                        <div><strong>Commercial readiness</strong><span>@ReadinessInsight</span></div>
+                    </div>
+                    <div class="ces-insight">
+                        <i class="bi bi-building" aria-hidden="true"></i>
+                        <div><strong>Entity classification</strong><span>@EntityInsight</span></div>
+                    </div>
+                    <div class="ces-insight">
+                        <i class="bi bi-check2-square" aria-hidden="true"></i>
+                        <div><strong>Validation controls</strong><span>@ValidationInsight</span></div>
+                    </div>
+                </div>
+            </section>
+        </aside>
+    </main>
+</div>
+
+@if (_confirmVisible)
+{
+    <div class="ces-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="commercial-confirm-title">
+        <div class="ces-confirm">
+            <div class="ces-confirm__body">
+                <div class="ces-confirm-icon"><i class="bi bi-sliders" aria-hidden="true"></i></div>
+                <div>
+                    <h3 id="commercial-confirm-title">Update Commercial Setting</h3>
+                    <p>Apply <strong>@_pendingDisplayValue</strong> to <strong>@FormatKey(_pendingSetting?.SettingKey ?? string.Empty)</strong>?</p>
+                </div>
+            </div>
+            <div class="ces-modal__footer">
+                <button type="button" class="ces-btn ces-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button>
+                <button type="button" class="ces-btn ces-btn--primary" @onclick="ExecutePendingUpdateAsync" disabled="@_saving">
+                    @if (_saving) { <span class="ces-spin-sm"></span> }
+                    Apply Update
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="ces-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="ces-toast ces-toast--@toast.Kind">
+            <i class="bi @(toast.Kind == "success" ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill")" aria-hidden="true"></i>
+            <span>@toast.Message</span>
+            <button type="button" @onclick="() => DismissToast(toast.Id)" aria-label="Dismiss notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
         </div>
     }
 </div>
-
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true"><ToastPosition X="Right" Y="Bottom" /></SfToast>
 
 @code {
     Guid TenantAdminUserId { get; set; }
     Guid DevTenantId { get; set; }
     Guid DevUserId { get; set; }
-    private Guid _tenantId;
-    private Guid _tenantAdminUserId;
     Guid TenantId { get; set; }
+
+    readonly List<DashboardTab> _tabs =
+    [
+        new("all", "All", "bi-sliders"),
+        new("enabled", "Enabled", "bi-toggle-on"),
+        new("disabled", "Disabled", "bi-toggle-off"),
+        new("entity", "Entity", "bi-building"),
+        new("validation", "Validation", "bi-check2-square"),
+        new("risk", "Needs Review", "bi-exclamation-octagon"),
+        new("types", "Types", "bi-pie-chart")
+    ];
+
     List<CommercialEntitySettingDto> _settings = [];
-    bool _loading;
+    List<ToastItem> _toasts = [];
+    CommercialEntitySettingDto? _selected;
+    CommercialEntitySettingDto? _pendingSetting;
+    string? _pendingValue;
+    string _pendingDisplayValue = string.Empty;
+    string _activeTab = "all";
+    string _searchTerm = string.Empty;
+    string _typeFilter = string.Empty;
+    string _stateFilter = string.Empty;
+    string _sortMode = "importance";
     string? _loadError;
-    SfToast _toast = default!;
+    bool _loading;
+    bool _saving;
+    bool _confirmVisible;
+    int _page = 1;
+    const int PageSize = 12;
 
     protected override async Task OnInitializedAsync()
     {
@@ -113,39 +362,263 @@
         await LoadAsync();
     }
 
+    IEnumerable<CommercialEntitySettingDto> FilteredSettings
+    {
+        get
+        {
+            IEnumerable<CommercialEntitySettingDto> query = _settings;
+
+            query = _activeTab switch
+            {
+                "enabled" => query.Where(IsEnabledBoolean),
+                "disabled" => query.Where(IsDisabledBoolean),
+                "entity" => query.Where(IsEntitySetting),
+                "validation" => query.Where(IsValidationSetting),
+                "risk" => query.Where(NeedsReview),
+                _ => query
+            };
+
+            if (!string.IsNullOrWhiteSpace(_searchTerm)) query = query.Where(MatchesSearch);
+            if (!string.IsNullOrWhiteSpace(_typeFilter)) query = query.Where(x => string.Equals(DisplayType(x), _typeFilter, StringComparison.OrdinalIgnoreCase));
+
+            query = _stateFilter switch
+            {
+                "Enabled" => query.Where(IsEnabledBoolean),
+                "Disabled" => query.Where(IsDisabledBoolean),
+                "Configured" => query.Where(x => !string.IsNullOrWhiteSpace(x.SettingValue)),
+                "Blank" => query.Where(x => string.IsNullOrWhiteSpace(x.SettingValue)),
+                "NeedsReview" => query.Where(NeedsReview),
+                _ => query
+            };
+
+            return _sortMode switch
+            {
+                "key" => query.OrderBy(x => x.SettingKey),
+                "type" => query.OrderBy(DisplayType).ThenBy(x => x.SettingKey),
+                "created" => query.OrderByDescending(x => x.CreatedDateUtc),
+                _ => query.OrderByDescending(ImportanceScore).ThenBy(x => x.SettingKey)
+            };
+        }
+    }
+
+    List<CommercialEntitySettingDto> PagedSettings => FilteredSettings.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+    int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredSettings.Count() / (double)PageSize));
+    bool HasFilters => !string.IsNullOrWhiteSpace(_searchTerm) || !string.IsNullOrWhiteSpace(_typeFilter) || !string.IsNullOrWhiteSpace(_stateFilter) || _activeTab != "all" || _sortMode != "importance";
+    string ActiveViewTitle => _tabs.FirstOrDefault(x => x.Key == _activeTab)?.Label ?? "All";
+    IEnumerable<string> TypeOptions => _settings.Select(DisplayType).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    int ReadinessPercent => _settings.Count == 0 ? 0 : (int)Math.Round(_settings.Count(x => !NeedsReview(x)) * 100m / _settings.Count);
+    string ReadinessInsight => _settings.Count == 0 ? "No commercial entity settings are available yet." : $"{ReadinessPercent}% of commercial settings have configured values and no review flags.";
+    string EntityInsight => _settings.Any(IsEntitySetting) ? $"{_settings.Count(IsEntitySetting)} entity-related settings control commercial type and classification behavior." : "No entity-specific commercial settings were returned.";
+    string ValidationInsight => _settings.Any(IsValidationSetting) ? $"{_settings.Count(IsValidationSetting)} settings influence commercial account validation or compliance." : "No explicit validation settings were returned.";
+
+    List<TypeSummary> TypeGroups => _settings
+        .GroupBy(DisplayType)
+        .Select(g => new TypeSummary(g.Key, g.Count(), g.Count(x => !string.IsNullOrWhiteSpace(x.SettingValue)), g.Count(NeedsReview), _settings.Count == 0 ? 0 : Math.Round(g.Count() * 100m / _settings.Count, 0)))
+        .OrderByDescending(x => x.Count)
+        .ToList();
+
     async Task LoadAsync()
     {
         _loading = true;
         _loadError = null;
-        try { _settings = await Api.GetCommercialEntitySettingsAsync(TenantId) ?? []; }
-        catch (Exception ex) { _loadError = ex.Message; }
-        finally { _loading = false; }
-    }
-
-    async Task UpdateAsync(CommercialEntitySettingDto setting, string? newValue)
-    {
         try
         {
-            setting.SettingValue = newValue;
-            await Api.UpdateCommercialEntitySettingAsync(setting.CommercialEntitySettingId, new(newValue));
-            await _toast.ShowAsync(new() { Content = $"{FormatKey(setting.SettingKey)} updated", CssClass = "e-toast-success" });
+            _settings = await Api.GetCommercialEntitySettingsAsync(TenantId) ?? [];
+            _selected = _selected is null ? _settings.OrderByDescending(ImportanceScore).FirstOrDefault() : _settings.FirstOrDefault(x => x.CommercialEntitySettingId == _selected.CommercialEntitySettingId) ?? _settings.OrderByDescending(ImportanceScore).FirstOrDefault();
+            NormalizePage();
         }
-        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Update failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load commercial entity settings: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    static string FormatKey(string key) =>
-        System.Text.RegularExpressions.Regex.Replace(key, "(?<=[a-z])(?=[A-Z])", " ");
+    Task RefreshAsync() => LoadAsync();
+    void ApplyFilters() { _page = 1; NormalizePage(); }
+    void OnSearchInputValue(string? value) { _searchTerm = value ?? string.Empty; ApplyFilters(); }
+    void SetDashboardFocus(string tab, string sort) { _activeTab = tab; _sortMode = sort; _page = 1; NormalizePage(); }
+    void SetActiveTab(string tab) { _activeTab = tab; _page = 1; NormalizePage(); }
+    void SelectRow(CommercialEntitySettingDto setting) => _selected = setting;
+    void PreviousPage() { if (_page > 1) _page--; }
+    void NextPage() { if (_page < TotalPages) _page++; }
+    void NormalizePage() { if (_page > TotalPages) _page = TotalPages; }
 
-    static string BoolStr(object? val) => val?.ToString()?.ToLower() == "true" ? "true" : "false";
+    void ClearFilters()
+    {
+        _searchTerm = string.Empty;
+        _typeFilter = string.Empty;
+        _stateFilter = string.Empty;
+        _sortMode = "importance";
+        _activeTab = "all";
+        _page = 1;
+    }
+
+    void FilterByType(string type)
+    {
+        _activeTab = "all";
+        _typeFilter = type;
+        _sortMode = "importance";
+        _page = 1;
+    }
+
+    void ConfirmUpdate(CommercialEntitySettingDto setting, string? newValue)
+    {
+        if (string.Equals(setting.SettingValue ?? string.Empty, newValue ?? string.Empty, StringComparison.Ordinal)) return;
+        _pendingSetting = setting;
+        _pendingValue = newValue;
+        _pendingDisplayValue = string.IsNullOrWhiteSpace(newValue) ? "Blank" : newValue!;
+        _confirmVisible = true;
+    }
+
+    void CloseConfirm()
+    {
+        _confirmVisible = false;
+        _pendingSetting = null;
+        _pendingValue = null;
+        _pendingDisplayValue = string.Empty;
+    }
+
+    async Task ExecutePendingUpdateAsync()
+    {
+        if (_pendingSetting is null) return;
+
+        _saving = true;
+        try
+        {
+            await Api.UpdateCommercialEntitySettingAsync(_pendingSetting.CommercialEntitySettingId, new(_pendingValue));
+            _pendingSetting.SettingValue = _pendingValue;
+            _selected = _pendingSetting;
+            ShowToast("success", $"{FormatKey(_pendingSetting.SettingKey)} updated.");
+            CloseConfirm();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Update failed: {ex.Message}");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string color) => @<button type="button" class="ces-kpi-card ces-kpi-card--@color @(_activeTab == key ? "ces-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveTab(key)">
+        <span class="ces-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span>
+        <span class="ces-kpi-body"><span class="ces-kpi-label">@label</span><strong class="ces-kpi-value">@value</strong><span class="ces-kpi-sub">@subtitle</span></span>
+    </button>;
+
+    int TabCount(string key) => key switch
+    {
+        "enabled" => _settings.Count(IsEnabledBoolean),
+        "disabled" => _settings.Count(IsDisabledBoolean),
+        "entity" => _settings.Count(IsEntitySetting),
+        "validation" => _settings.Count(IsValidationSetting),
+        "risk" => _settings.Count(NeedsReview),
+        "types" => TypeGroups.Count,
+        _ => _settings.Count
+    };
+
+    bool MatchesSearch(CommercialEntitySettingDto setting)
+    {
+        var term = _searchTerm.Trim();
+        return Contains(setting.SettingKey, term) || Contains(setting.SettingValue, term) || Contains(setting.SettingType, term) || Contains(setting.Description, term);
+    }
+
+    static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    static bool IsBoolean(CommercialEntitySettingDto setting) => string.Equals(DisplayType(setting), "Boolean", StringComparison.OrdinalIgnoreCase);
+    static bool IsTrue(string? value) => string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+    static bool IsEnabledBoolean(CommercialEntitySettingDto setting) => IsBoolean(setting) && IsTrue(setting.SettingValue);
+    static bool IsDisabledBoolean(CommercialEntitySettingDto setting) => IsBoolean(setting) && !IsTrue(setting.SettingValue);
+    static bool IsEntitySetting(CommercialEntitySettingDto setting) => Contains(setting.SettingKey, "Entity") || Contains(setting.SettingKey, "Business") || Contains(setting.SettingKey, "Classification") || Contains(setting.Description, "entity") || Contains(setting.Description, "business") || Contains(setting.Description, "classification");
+    static bool IsValidationSetting(CommercialEntitySettingDto setting) => Contains(setting.SettingKey, "Required") || Contains(setting.SettingKey, "Validate") || Contains(setting.SettingKey, "Compliance") || Contains(setting.Description, "required") || Contains(setting.Description, "validate") || Contains(setting.Description, "compliance");
+    static bool NeedsReview(CommercialEntitySettingDto setting) => string.IsNullOrWhiteSpace(setting.SettingValue) || string.IsNullOrWhiteSpace(setting.SettingType) || string.IsNullOrWhiteSpace(setting.Description) || IsDisabledBoolean(setting);
+    static string DisplayType(CommercialEntitySettingDto setting) => string.IsNullOrWhiteSpace(setting.SettingType) ? "Unknown" : setting.SettingType.Trim();
+    static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    static string BoolStr(object? val) => val?.ToString()?.ToLowerInvariant() == "true" ? "true" : "false";
+    static string FormatDate(DateTime date) => date == default ? "—" : date.ToLocalTime().ToString("MMM d, yyyy");
+    static string FormatKey(string key) => System.Text.RegularExpressions.Regex.Replace(key, "(?<=[a-z])(?=[A-Z])", " ");
+    static string StateLabel(CommercialEntitySettingDto setting) => IsBoolean(setting) ? IsTrue(setting.SettingValue) ? "Enabled" : "Disabled" : string.IsNullOrWhiteSpace(setting.SettingValue) ? "Blank" : "Configured";
+    static string StateBadgeClass(CommercialEntitySettingDto setting) => NeedsReview(setting) ? "ces-pill--red" : IsEnabledBoolean(setting) ? "ces-pill--green" : string.IsNullOrWhiteSpace(setting.SettingValue) ? "ces-pill--neutral" : "ces-pill--blue";
+    static string TypeBadgeClass(CommercialEntitySettingDto setting) => DisplayType(setting) switch { "Boolean" => "ces-pill--green", "String" => "ces-pill--blue", "Integer" or "Number" => "ces-pill--amber", _ => "ces-pill--neutral" };
+    static string TypeIcon(string type) => type switch { "Boolean" => "bi-toggle-on", "String" => "bi-input-cursor-text", "Integer" or "Number" => "bi-123", _ => "bi-sliders" };
+
+    static int ImportanceScore(CommercialEntitySettingDto setting)
+    {
+        var score = 35;
+        if (IsEntitySetting(setting)) score += 25;
+        if (IsValidationSetting(setting)) score += 20;
+        if (IsBoolean(setting)) score += 10;
+        if (IsEnabledBoolean(setting)) score += 8;
+        if (IsDisabledBoolean(setting)) score += 18;
+        if (string.IsNullOrWhiteSpace(setting.SettingValue)) score += 18;
+        if (string.IsNullOrWhiteSpace(setting.Description)) score += 6;
+        return Math.Clamp(score, 0, 100);
+    }
+
+    static string RecommendedAction(CommercialEntitySettingDto setting)
+    {
+        if (string.IsNullOrWhiteSpace(setting.SettingValue)) return "Set a value so commercial account workflows have deterministic behavior.";
+        if (IsDisabledBoolean(setting)) return "Review whether this disabled control should remain off for commercial operations.";
+        if (string.IsNullOrWhiteSpace(setting.Description)) return "Add operational guidance for administrators.";
+        return "Setting is configured for commercial account workflows.";
+    }
+
+    static string ImportanceClass(CommercialEntitySettingDto setting) => ImportanceScore(setting) switch
+    {
+        >= 80 => "ces-score-card--red",
+        >= 65 => "ces-score-card--amber",
+        >= 45 => "ces-score-card--cyan",
+        _ => "ces-score-card--green"
+    };
+
+    static MarkupString ImportanceBadge(CommercialEntitySettingDto setting)
+    {
+        var score = ImportanceScore(setting);
+        var css = score switch { >= 80 => "red", >= 65 => "amber", >= 45 => "cyan", _ => "green" };
+        return new($"<span class=\"ces-risk-badge ces-risk-badge--{css}\">{score}</span>");
+    }
+
+    static string Initials(string? value)
+    {
+        var formatted = FormatKey(value ?? string.Empty);
+        var parts = formatted.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return parts.Length switch
+        {
+            0 => "CE",
+            1 => parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant(),
+            _ => string.Concat(parts.Take(2).Select(x => char.ToUpperInvariant(x[0])))
+        };
+    }
+
+    static string AvatarStyle(string? value)
+    {
+        var hash = Math.Abs((value ?? "CommercialEntitySetting").GetHashCode());
+        var hue = hash % 360;
+        return $"background:linear-gradient(135deg,hsl({hue},78%,48%),hsl({(hue + 35) % 360},82%,36%));";
+    }
+
+    void ShowToast(string kind, string message)
+    {
+        _toasts.Insert(0, new(Guid.NewGuid(), kind, message));
+        if (_toasts.Count > 4) _toasts.RemoveRange(4, _toasts.Count - 4);
+    }
+
+    void DismissToast(Guid id) => _toasts.RemoveAll(x => x.Id == id);
 
     async Task ResolveCurrentUserContextAsync()
     {
         var context = await CurrentUser.RequireAsync();
         TenantId = context.TenantId;
         TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
         DevTenantId = context.TenantId;
         DevUserId = context.UserId;
     }
+
+    sealed record DashboardTab(string Key, string Label, string Icon);
+    sealed record TypeSummary(string Name, int Count, int Configured, int ReviewCount, decimal Percent);
+    sealed record ToastItem(Guid Id, string Kind, string Message);
 }

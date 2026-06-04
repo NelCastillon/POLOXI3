@@ -1,34 +1,317 @@
-﻿@page "/tenant/carriers/contacts"
+@page "/tenant/carriers/contacts"
 @using System.ComponentModel.DataAnnotations
 @using Ams.Application.Common.Validation
 @using Ams.Application.Features.CarrierConfig
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
-<PageTitle>Carrier Contacts â€” Carrier Configuration</PageTitle>
-<AppPageHeader Title="Carrier Contacts" Subtitle="Maintain carrier underwriting, claims, billing, and marketing contacts" Icon="bi-person-lines-fill"><Actions><button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Add Contact</button><button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button></Actions></AppPageHeader>
-<div class="pc-kpi-strip"><div class="pc-kpi-card @(_activeFilter==""?"pc-kpi-card--active":"")" @onclick='()=>SetFilter("")' title="Show all contacts" style="cursor:pointer"><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-person-lines-fill"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total Contacts</div></div></div><div class="pc-kpi-card @(_activeFilter=="primary"?"pc-kpi-card--active":"")" @onclick='()=>SetFilter("primary")' title="Filter primary contacts" style="cursor:pointer"><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-star-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x=>x.IsPrimary)</div><div class="pc-kpi-label">Primary</div></div></div><div class="pc-kpi-card @(_activeFilter=="active"?"pc-kpi-card--active":"")" @onclick='()=>SetFilter("active")' title="Filter active contacts" style="cursor:pointer"><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x=>x.IsActive)</div><div class="pc-kpi-label">Active</div></div></div></div>
-@if(_loadError is not null){<div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError</div>}
-<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search contact name or email..." />
-<div class="um-grid-card">@if(_loading){<div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading...</span></div>}<SfGrid TValue="CarrierContactDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52"><GridEvents TValue="CarrierContactDto" RowSelected="OnRowSelected"/><GridPageSettings PageSize="25"/><GridColumns><GridColumn Field="ContactName" HeaderText="Contact" Width="200"/><GridColumn Field="Title" HeaderText="Title" Width="160"/><GridColumn Field="Email" HeaderText="Email" Width="220"/><GridColumn Field="Phone" HeaderText="Phone" Width="130"/><GridColumn Field="Department" HeaderText="Department" Width="130"/><GridColumn Field="IsPrimary" HeaderText="Primary" Width="90" TextAlign="TextAlign.Center"><Template>@{var r=(CarrierContactDto)context;}@if(r.IsPrimary){<i class="bi bi-check2-circle text-success"></i>}</Template></GridColumn><GridColumn Field="IsActive" HeaderText="Status" Width="100" TextAlign="TextAlign.Center"><Template>@{var r=(CarrierContactDto)context;}<span class="um-badge @(r.IsActive?"um-badge-success":"um-badge-neutral")">@(r.IsActive?"Active":"Inactive")</span></Template></GridColumn><GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Center"><Template>@{var r=(CarrierContactDto)context;}<button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="()=>OpenEdit(r)"><i class="bi bi-pencil"></i></button></Template></GridColumn></GridColumns></SfGrid></div>
-<SfDialog @bind-Visible="_showForm" Width="580px" IsModal="true" ShowCloseIcon="false"><DialogEvents Closed="ResetForm"/><DialogContent><div class="um-modal-header"><i class="bi bi-person-lines-fill"></i><span>@(_editId.HasValue?"Edit Carrier Contact":"Add Carrier Contact")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="()=>_showForm=false"><i class="bi bi-x-lg"></i></button></div><EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator/><div class="um-modal-body"><div class="um-form-grid"><div class="um-field"><label>Contact Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.ContactName" class="um-input"/></div><div class="um-field"><label>Title</label><InputText @bind-Value="_form.Title" class="um-input"/></div><div class="um-field"><label>Email</label><InputText @bind-Value="_form.Email" class="um-input"/></div><div class="um-field"><label>Phone</label><InputText type="tel" @bind-Value="_form.Phone" class="um-input" placeholder="(555) 123-4567" inputmode="tel" autocomplete="tel"/><small class="text-muted">Use enterprise phone format: (555) 123-4567 or +1 555 123 4567 x123.</small></div><div class="um-field"><label>Department</label><SfDropDownList TValue="string" TItem="string" @bind-Value="_form.Department" DataSource="@_departments"/></div><div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsPrimary"/> Primary</label></div><div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsActive"/> Active</label></div></div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="()=>_showForm=false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue?"Save Changes":"Create")</button></div></EditForm></DialogContent></SfDialog>
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true"><ToastPosition X="Right" Y="Bottom"/></SfToast><style>.validation-message{display:flex;align-items:center;gap:.45rem;margin-top:.55rem;color:#dc3545!important;font-size:.875rem;font-weight:700}.validation-message::before{content:"!";display:inline-flex;align-items:center;justify-content:center;width:1rem;height:1rem;min-width:1rem;flex-shrink:0;border-radius:999px;color:#fff;background:linear-gradient(135deg,#ef4444,#b91c1c);font-size:.7rem;font-weight:800}</style>
+
+<PageTitle>Carrier Contacts Command Center — Carrier Configuration</PageTitle>
+
+<div class="cct-page">
+    <section class="cct-hero">
+        <div class="cct-hero__content">
+            <div class="cct-hero-left">
+                <span class="cct-hero-icon"><i class="bi bi-person-lines-fill" aria-hidden="true"></i></span>
+                <div class="cct-hero-title">
+                    <div class="cct-hero__eyebrow">Enterprise carrier relationship directory</div>
+                    <div class="cct-title-row">
+                        <h1>Carrier Contacts Command Center</h1>
+                        <div class="cct-hero__meta">
+                            <span><i class="bi bi-person-lines-fill" aria-hidden="true"></i>@_items.Count contacts</span>
+                            <span><i class="bi bi-check-circle" aria-hidden="true"></i>@_items.Count(x => x.IsActive) active</span>
+                            <span><i class="bi bi-star-fill" aria-hidden="true"></i>@_items.Count(x => x.IsPrimary) primary</span>
+                            <span><i class="bi bi-exclamation-octagon" aria-hidden="true"></i>@_items.Count(NeedsReview) need review</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <p>Govern underwriting, claims, billing, marketing, and operations relationships with contact readiness, primary ownership, communication completeness, and carrier association workflows.</p>
+        </div>
+        <div class="cct-hero__actions">
+            <button type="button" class="cct-btn cct-btn--light" @onclick="RefreshAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "cct-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="cct-btn cct-btn--primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Contact</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger cct-alert" style="border-left: 4px solid #dc3545; animation: cct-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="cct-kpi-strip" aria-label="Carrier contact KPIs">
+        @KpiCard("all", "Total Contacts", _items.Count.ToString(), "All configured carrier contacts", "bi-person-lines-fill", "blue")
+        @KpiCard("active", "Active", _items.Count(x => x.IsActive).ToString(), "Contacts available for carrier workflows", "bi-check-circle", "green")
+        @KpiCard("primary", "Primary", _items.Count(x => x.IsPrimary).ToString(), "Primary carrier relationship owners", "bi-star-fill", "amber")
+        @KpiCard("email", "Email Ready", _items.Count(HasEmail).ToString(), "Contacts with email addresses", "bi-envelope-check", "cyan")
+        @KpiCard("phone", "Phone Ready", _items.Count(HasPhone).ToString(), "Contacts with phone numbers", "bi-telephone", "purple")
+        @KpiCard("review", "Needs Review", _items.Count(NeedsReview).ToString(), "Inactive or incomplete contact records", "bi-exclamation-octagon", "red")
+    </section>
+
+    <section class="cct-workflows" aria-label="Carrier contact workflows">
+        <button type="button" class="cct-workflow" @onclick='() => SetDashboardFocus("all", "importance")'><span class="cct-workflow-icon"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></span><span class="cct-workflow-meta"><strong>Priority review</strong><span>Rank contacts by communication and relationship value</span></span></button>
+        <button type="button" class="cct-workflow" @onclick='() => SetDashboardFocus("primary", "importance")'><span class="cct-workflow-icon"><i class="bi bi-star-fill" aria-hidden="true"></i></span><span class="cct-workflow-meta"><strong>Primary contacts</strong><span>Focus relationship owners for market workflows</span></span></button>
+        <button type="button" class="cct-workflow" @onclick='() => SetDashboardFocus("email", "importance")'><span class="cct-workflow-icon"><i class="bi bi-envelope-check" aria-hidden="true"></i></span><span class="cct-workflow-meta"><strong>Email readiness</strong><span>Review contacts available for digital communication</span></span></button>
+        <button type="button" class="cct-workflow" @onclick='() => SetDashboardFocus("review", "importance")'><span class="cct-workflow-icon"><i class="bi bi-exclamation-octagon" aria-hidden="true"></i></span><span class="cct-workflow-meta"><strong>Cleanup queue</strong><span>Resolve inactive or incomplete contacts</span></span></button>
+        <button type="button" class="cct-workflow" @onclick='() => SetDashboardFocus("departments", "department")'><span class="cct-workflow-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span><span class="cct-workflow-meta"><strong>Department mix</strong><span>Compare underwriting, claims, billing, marketing, and operations</span></span></button>
+    </section>
+
+    <section class="cct-filter-panel" aria-label="Carrier contact filters">
+        <div class="cct-search"><i class="bi bi-search" aria-hidden="true"></i><input type="search" placeholder="Search contact name, title, email, phone, department, or readiness…" aria-label="Search carrier contacts" value="@_searchTerm" @oninput="args => OnSearchInputValue(args.Value?.ToString())" /></div>
+        <div class="cct-filter-grid">
+            <label><span>Department</span><select class="form-select" @bind="_departmentFilter" @bind:after="ApplyFilters"><option value="">All departments</option>@foreach (var department in DepartmentOptions) { <option value="@department">@department</option> }</select></label>
+            <label><span>Status</span><select class="form-select" @bind="_statusFilter" @bind:after="ApplyFilters"><option value="">All statuses</option><option value="Active">Active</option><option value="Inactive">Inactive</option><option value="Primary">Primary</option><option value="EmailReady">Email ready</option><option value="PhoneReady">Phone ready</option><option value="NeedsReview">Needs review</option></select></label>
+            <label><span>Sort</span><select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters"><option value="importance">Importance</option><option value="name">Name</option><option value="department">Department</option><option value="title">Title</option><option value="created">Newest</option></select></label>
+        </div>
+        <button type="button" class="cct-btn cct-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+    </section>
+
+    <nav class="cct-tabs" aria-label="Carrier contact views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="cct-tab @(_activeTab == tab.Key ? "cct-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)"><i class="bi @tab.Icon" aria-hidden="true"></i><span>@tab.Label</span><strong>@TabCount(tab.Key)</strong></button>
+        }
+    </nav>
+
+    <main class="cct-dashboard">
+        <section class="cct-main-card">
+            <div class="cct-card-header">
+                <div><span class="cct-section-kicker">@ActiveViewTitle</span><h2>@FilteredContacts.Count() contacts</h2><p>Prioritized by enterprise importance: primary ownership, active availability, email/phone readiness, department role, carrier association, and completeness.</p></div>
+                <div class="cct-card-actions">
+                    @if (_selectedIds.Count > 0)
+                    {
+                        <span class="cct-sel-count">@_selectedIds.Count selected</span>
+                        <button type="button" class="cct-btn cct-btn--ghost" @onclick="() => ConfirmBulkToggle(true)"><i class="bi bi-check-circle" aria-hidden="true"></i> Activate</button>
+                        <button type="button" class="cct-btn cct-btn--ghost" @onclick="() => ConfirmBulkToggle(false)"><i class="bi bi-slash-circle" aria-hidden="true"></i> Deactivate</button>
+                        <button type="button" class="cct-btn cct-btn--danger-ghost" @onclick="ConfirmBulkDelete"><i class="bi bi-trash3" aria-hidden="true"></i> Remove</button>
+                    }
+                    <button type="button" class="cct-btn cct-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Prev</button>
+                    <span class="cct-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="cct-btn cct-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="cct-loading"><span class="cct-spinner"></span> Loading carrier contacts…</div>
+            }
+            else if (!FilteredContacts.Any())
+            {
+                <div class="cct-empty"><i class="bi bi-person-lines-fill" aria-hidden="true"></i><strong>No carrier contacts found</strong><span>Adjust the active KPI, tab, search, or filters.</span></div>
+            }
+            else if (_activeTab == "departments")
+            {
+                <div class="cct-group-grid">
+                    @foreach (var group in DepartmentGroups)
+                    {
+                        <article class="cct-group-card"><div class="cct-group-icon"><i class="bi @DepartmentIcon(group.Name)" aria-hidden="true"></i></div><div class="cct-group-meta"><h3>@group.Name</h3><p>@group.Count contacts • @group.Active active • @group.Primary primary • @group.ReviewCount need review</p><div class="cct-mini-bar"><span style="width:@group.Percent%"></span></div></div><button type="button" class="cct-btn cct-btn--ghost" @onclick="() => FilterByDepartment(group.Name)">Open</button></article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="cct-table-wrap">
+                    <table class="cct-table">
+                        <thead><tr><th class="cct-check-col"><input type="checkbox" checked="@AllPageSelected" @onchange="args => ToggleSelectAllPage(args.Value is bool value && value)" aria-label="Select all contacts on page" /></th><th>Importance</th><th>Contact</th><th>Department</th><th>Communication</th><th>Primary</th><th>Status</th><th>Readiness</th><th class="cct-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var contact in PagedContacts)
+                            {
+                                <tr class="@(_selected?.CarrierContactId == contact.CarrierContactId ? "cct-row cct-row--selected" : "cct-row")" @onclick="() => SelectRow(contact)">
+                                    <td class="cct-check-col" @onclick:stopPropagation="true"><input type="checkbox" checked="@IsSelected(contact)" @onchange="args => ToggleSelect(contact, args.Value is bool value && value)" aria-label="Select contact" /></td>
+                                    <td><span class="cct-risk-badge @ImportanceBadgeClass(contact)">@ImportanceScore(contact)</span></td>
+                                    <td><div class="cct-contact-cell"><div class="cct-avatar" style="@AvatarStyle(contact.ContactName)" aria-hidden="true">@Initials(contact.ContactName)</div><div class="cct-contact-meta"><button type="button" class="cct-link-button" @onclick:stopPropagation="true" @onclick="() => OpenEdit(contact)">@contact.ContactName</button><small>@Safe(contact.Title, "No title")</small></div></div></td>
+                                    <td><span class="cct-pill @DepartmentBadgeClass(contact)"><i class="bi @DepartmentIcon(Department(contact))" aria-hidden="true"></i>@Department(contact)</span></td>
+                                    <td><div class="cct-comm-stack">@if (HasEmail(contact)) { <a href="mailto:@contact.Email" class="cct-link" @onclick:stopPropagation="true"><i class="bi bi-envelope" aria-hidden="true"></i>Email</a> } @if (HasPhone(contact)) { <a href="tel:@contact.Phone" class="cct-link" @onclick:stopPropagation="true"><i class="bi bi-telephone" aria-hidden="true"></i>Phone</a> } @if (!HasEmail(contact) && !HasPhone(contact)) { <span class="cct-date">Missing</span> }</div></td>
+                                    <td><span class="cct-pill @(contact.IsPrimary ? "cct-pill--amber" : "cct-pill--neutral")">@(contact.IsPrimary ? "Primary" : "Backup")</span></td>
+                                    <td><span class="cct-pill @(contact.IsActive ? "cct-pill--green" : "cct-pill--neutral")">@(contact.IsActive ? "Active" : "Inactive")</span></td>
+                                    <td><span class="cct-pill @(NeedsReview(contact) ? "cct-pill--amber" : "cct-pill--green")">@(NeedsReview(contact) ? "Review" : "Ready")</span></td>
+                                    <td class="cct-actions-col" @onclick:stopPropagation="true"><button type="button" class="cct-icon-btn" title="Edit contact" @onclick="() => OpenEdit(contact)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="cct-icon-btn" title="@(contact.IsActive ? "Deactivate contact" : "Activate contact")" @onclick="() => ConfirmToggle(contact)"><i class="bi @(contact.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i></button><button type="button" class="cct-icon-btn cct-icon-btn--danger" title="Delete contact" @onclick="() => ConfirmDelete(contact)"><i class="bi bi-trash3" aria-hidden="true"></i></button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="cct-side-panel" aria-label="Carrier contact insights">
+            <section class="cct-panel-card">
+                <span class="cct-section-kicker">Selected contact</span>
+                @if (_selected is null)
+                {
+                    <div class="cct-empty cct-empty--compact"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a contact</strong><span>Open details, recommendations, and quick actions.</span></div>
+                }
+                else
+                {
+                    <div class="cct-selected__title"><div class="cct-avatar cct-avatar--lg" style="@AvatarStyle(_selected.ContactName)" aria-hidden="true">@Initials(_selected.ContactName)</div><div><h3>@_selected.ContactName</h3><span>@Safe(_selected.Title, "No title") • @Department(_selected)</span></div></div>
+                    <div class="cct-score-card @ImportanceClass(_selected)"><span>Importance score</span><strong>@ImportanceScore(_selected)</strong><small>@RecommendedAction(_selected)</small></div>
+                    <dl class="cct-detail-list"><div><dt>Status</dt><dd>@(_selected.IsActive ? "Active" : "Inactive")</dd></div><div><dt>Primary</dt><dd>@(_selected.IsPrimary ? "Yes" : "No")</dd></div><div><dt>Department</dt><dd>@Department(_selected)</dd></div><div><dt>Email</dt><dd>@Safe(_selected.Email, "Missing")</dd></div><div><dt>Phone</dt><dd>@Safe(_selected.Phone, "Missing")</dd></div><div><dt>Created</dt><dd>@FormatDate(_selected.CreatedDateUtc)</dd></div></dl>
+                    <div class="cct-selected-actions"><button type="button" class="cct-btn cct-btn--primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="cct-btn cct-btn--ghost" @onclick="() => ConfirmToggle(_selected)"><i class="bi @(_selected.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i> @(_selected.IsActive ? "Deactivate" : "Activate")</button></div>
+                }
+            </section>
+            <section class="cct-panel-card"><span class="cct-section-kicker">Enterprise insights</span><div class="cct-insight-list"><div class="cct-insight"><i class="bi bi-star-fill" aria-hidden="true"></i><div><strong>Primary coverage</strong><span>@PrimaryInsight</span></div></div><div class="cct-insight"><i class="bi bi-envelope-check" aria-hidden="true"></i><div><strong>Email readiness</strong><span>@EmailInsight</span></div></div><div class="cct-insight"><i class="bi bi-telephone" aria-hidden="true"></i><div><strong>Phone readiness</strong><span>@PhoneInsight</span></div></div></div></section>
+        </aside>
+    </main>
+</div>
+
+@if (_showForm)
+{
+    <div class="cct-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="carrier-contact-form-title">
+        <div class="cct-modal">
+            <div class="cct-modal__header"><i class="bi bi-person-lines-fill" aria-hidden="true"></i><span id="carrier-contact-form-title">@(_editId.HasValue ? "Edit Carrier Contact" : "Add Carrier Contact")</span><button type="button" class="cct-icon-btn cct-icon-btn--light ms-auto" @onclick="CloseForm" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator />
+                <div class="cct-modal__body"><div class="cct-validation-note"><i class="bi bi-info-circle" aria-hidden="true"></i><div><strong>Carrier relationship governance</strong><span>Contact quality affects underwriting responses, claim escalations, billing resolution, and market relationship workflows.</span></div></div><div class="cct-form-grid">
+                    <label class="cct-field"><span>Contact Name <em>*</em></span><InputText @bind-Value="_form.ContactName" class="form-control" placeholder="Jane Smith" /><ValidationMessage For="() => _form.ContactName" class="text-danger" /></label>
+                    <label class="cct-field"><span>Title</span><InputText @bind-Value="_form.Title" class="form-control" placeholder="Senior Underwriter" /><ValidationMessage For="() => _form.Title" class="text-danger" /></label>
+                    <label class="cct-field"><span>Email</span><InputText @bind-Value="_form.Email" class="form-control" placeholder="jane@carrier.com" /><ValidationMessage For="() => _form.Email" class="text-danger" /></label>
+                    <label class="cct-field"><span>Phone</span><InputText type="tel" @bind-Value="_form.Phone" class="form-control" placeholder="(555) 123-4567" inputmode="tel" autocomplete="tel" /><ValidationMessage For="() => _form.Phone" class="text-danger" /></label>
+                    <label class="cct-field"><span>Department</span><InputSelect @bind-Value="_form.Department" class="form-select"><option value="">Select department</option>@foreach (var department in _departments) { <option value="@department">@department</option> }</InputSelect><ValidationMessage For="() => _form.Department" class="text-danger" /></label>
+                    <label class="cct-check-field"><InputCheckbox @bind-Value="_form.IsPrimary" /><span>Primary contact</span></label>
+                    @if (_editId.HasValue) { <label class="cct-check-field"><InputCheckbox @bind-Value="_form.IsActive" /><span>Active</span></label> }
+                </div></div>
+                <div class="cct-modal__footer"><button type="button" class="cct-btn cct-btn--ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="cct-btn cct-btn--primary" disabled="@_saving">@if (_saving) { <span class="cct-spin-sm"></span> } @(_editId.HasValue ? "Save Changes" : "Create Contact")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_confirmVisible)
+{
+    <div class="cct-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="carrier-contact-confirm-title"><div class="cct-confirm"><div class="cct-confirm__body"><div class="cct-confirm-icon cct-confirm-icon--danger"><i class="bi @_confirmIcon" aria-hidden="true"></i></div><div><h3 id="carrier-contact-confirm-title">@_confirmTitle</h3><p>@_confirmMessage</p></div></div><div class="cct-modal__footer"><button type="button" class="cct-btn cct-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button><button type="button" class="cct-btn cct-btn--danger" @onclick="ExecuteConfirmedAsync" disabled="@_saving">@if (_saving) { <span class="cct-spin-sm"></span> } Confirm</button></div></div></div>
+}
+
+<div class="cct-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="cct-toast cct-toast--@toast.Kind"><i class="bi @(toast.Kind == "success" ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill")" aria-hidden="true"></i><span>@toast.Message</span><button type="button" @onclick="() => DismissToast(toast.Id)" aria-label="Dismiss notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+    }
+</div>
+
 @code {
     Guid TenantAdminUserId { get; set; }
     Guid DevTenantId { get; set; }
     Guid DevUserId { get; set; }
-    private Guid _tenantId;
-    private Guid _tenantAdminUserId;Guid TenantId { get; set; }static readonly string[] _departments=["Underwriting","Claims","Billing","Marketing","Operations"];List<CarrierContactDto> _items=[];List<CarrierContactDto> _filtered=[];string _activeFilter="";bool _loading,_saving,_showForm;string _search=string.Empty;string? _loadError;Guid? _editId;SfToast _toast=default!;ContactForm _form=new();protected override async Task OnInitializedAsync()
+    Guid TenantId { get; set; }
+    static readonly string[] _departments = ["Underwriting", "Claims", "Billing", "Marketing", "Operations"];
+    readonly List<DashboardTab> _tabs = [new("all", "All", "bi-person-lines-fill"), new("active", "Active", "bi-check-circle"), new("primary", "Primary", "bi-star-fill"), new("email", "Email Ready", "bi-envelope-check"), new("phone", "Phone Ready", "bi-telephone"), new("review", "Needs Review", "bi-exclamation-octagon"), new("departments", "Departments", "bi-diagram-3")];
+    List<CarrierContactDto> _items = [];
+    HashSet<Guid> _selectedIds = [];
+    List<ToastItem> _toasts = [];
+    CarrierContactDto? _selected;
+    ContactForm _form = new();
+    Func<Task>? _confirmAction;
+    Guid? _editId;
+    string _activeTab = "all";
+    string _searchTerm = string.Empty;
+    string _departmentFilter = string.Empty;
+    string _statusFilter = string.Empty;
+    string _sortMode = "importance";
+    string _confirmTitle = string.Empty;
+    string _confirmMessage = string.Empty;
+    string _confirmIcon = "bi-exclamation-triangle-fill";
+    string? _loadError;
+    bool _loading;
+    bool _saving;
+    bool _showForm;
+    bool _confirmVisible;
+    int _page = 1;
+    const int PageSize = 12;
+
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Carrier Config", null), new("Carrier Contacts", null)); await LoadAsync(); }
+
+    IEnumerable<CarrierContactDto> FilteredContacts
     {
-        await ResolveCurrentUserContextAsync();Breadcrumbs.SetCrumbs(new("Home","/"),new("Carrier Config",null),new("Carrier Contacts",null));await LoadAsync();}async Task LoadAsync(){_loading=true;_loadError=null;try{var r=await Api.SearchCarrierContactsAsync(TenantId,_search,pageSize:200);_items=r?.Items.ToList()??[];ApplyFilter();}catch(Exception ex){_loadError=ex.Message;}finally{_loading=false;}}void SetFilter(string f){_activeFilter=f;ApplyFilter();}void ApplyFilter()=>_filtered=_activeFilter switch{"primary"=>_items.Where(x=>x.IsPrimary).ToList(),"active"=>_items.Where(x=>x.IsActive).ToList(),_=>[.._items]};Task OnSearchAsync()=>LoadAsync();void OnRowSelected(RowSelectEventArgs<CarrierContactDto> args)=>OpenEdit(args.Data);void OpenCreate(){_editId=null;_form=new();_showForm=true;}void OpenEdit(CarrierContactDto i){_editId=i.CarrierContactId;_form=new(){CarrierId=i.CarrierId,ContactName=i.ContactName,Title=i.Title,Email=i.Email,Phone=i.Phone,Department=i.Department,IsPrimary=i.IsPrimary,IsActive=i.IsActive};_showForm=true;}async Task SaveAsync(){_saving=true;try{if(_editId.HasValue)await Api.UpdateCarrierContactAsync(_editId.Value,new(_form.CarrierId,_form.ContactName,_form.Title,_form.Email,_form.Phone,_form.Department,_form.IsPrimary,_form.IsActive));else await Api.CreateCarrierContactAsync(new(TenantId,_form.CarrierId,_form.ContactName,_form.Title,_form.Email,_form.Phone,_form.Department,_form.IsPrimary));_showForm=false;await _toast.ShowAsync(new(){Content="Saved successfully",CssClass="e-toast-success"});await LoadAsync();}catch(Exception ex){await _toast.ShowAsync(new(){Content=$"Save failed: {ex.Message}",CssClass="e-toast-danger"});}finally{_saving=false;}}void ResetForm(){_form=new();_editId=null;}sealed class ContactForm{public Guid? CarrierId{get;set;}[Required,StringLength(100)]public string ContactName{get;set;}=string.Empty;[StringLength(100)]public string? Title{get;set;}[AmsEmailAddress,StringLength(320)]public string? Email{get;set;}[AmsPhone,StringLength(50)]public string? Phone{get;set;}[StringLength(80)]public string? Department{get;set;}public bool IsPrimary{get;set;}public bool IsActive{get;set;}=true;}
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        get
+        {
+            IEnumerable<CarrierContactDto> query = _items;
+            query = _activeTab switch { "active" => query.Where(x => x.IsActive), "primary" => query.Where(x => x.IsPrimary), "email" => query.Where(HasEmail), "phone" => query.Where(HasPhone), "review" => query.Where(NeedsReview), _ => query };
+            if (!string.IsNullOrWhiteSpace(_searchTerm)) query = query.Where(MatchesSearch);
+            if (!string.IsNullOrWhiteSpace(_departmentFilter)) query = query.Where(x => string.Equals(Department(x), _departmentFilter, StringComparison.OrdinalIgnoreCase));
+            query = _statusFilter switch { "Active" => query.Where(x => x.IsActive), "Inactive" => query.Where(x => !x.IsActive), "Primary" => query.Where(x => x.IsPrimary), "EmailReady" => query.Where(HasEmail), "PhoneReady" => query.Where(HasPhone), "NeedsReview" => query.Where(NeedsReview), _ => query };
+            return _sortMode switch { "name" => query.OrderBy(x => x.ContactName), "department" => query.OrderBy(Department).ThenBy(x => x.ContactName), "title" => query.OrderBy(x => x.Title).ThenBy(x => x.ContactName), "created" => query.OrderByDescending(x => x.CreatedDateUtc), _ => query.OrderByDescending(ImportanceScore).ThenBy(Department).ThenBy(x => x.ContactName) };
+        }
     }
+
+    List<CarrierContactDto> PagedContacts => FilteredContacts.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+    int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredContacts.Count() / (double)PageSize));
+    bool AllPageSelected => PagedContacts.Count > 0 && PagedContacts.All(IsSelected);
+    bool HasFilters => !string.IsNullOrWhiteSpace(_searchTerm) || !string.IsNullOrWhiteSpace(_departmentFilter) || !string.IsNullOrWhiteSpace(_statusFilter) || _activeTab != "all" || _sortMode != "importance";
+    string ActiveViewTitle => _tabs.FirstOrDefault(x => x.Key == _activeTab)?.Label ?? "All";
+    IEnumerable<string> DepartmentOptions => DepartmentGroups.Select(x => x.Name);
+    string PrimaryInsight => _items.Any(x => x.IsPrimary) ? $"{_items.Count(x => x.IsPrimary)} primary contacts anchor carrier relationship ownership." : "No primary carrier contacts are configured.";
+    string EmailInsight => _items.Count == 0 ? "Create contacts before measuring email readiness." : $"{_items.Count(HasEmail)} of {_items.Count} contacts include email addresses.";
+    string PhoneInsight => _items.Count == 0 ? "Create contacts before measuring phone readiness." : $"{_items.Count(HasPhone)} of {_items.Count} contacts include phone numbers.";
+    List<DepartmentGroupSummary> DepartmentGroups => _items.GroupBy(Department).Select(g => new DepartmentGroupSummary(g.Key, g.Count(), g.Count(x => x.IsActive), g.Count(x => x.IsPrimary), g.Count(NeedsReview), _items.Count == 0 ? 0 : Math.Round(g.Count() * 100m / _items.Count, 0))).OrderByDescending(x => x.Count).ToList();
+
+    async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchCarrierContactsAsync(TenantId, null, pageSize: 500); _items = result?.Items.ToList() ?? []; _selectedIds.RemoveWhere(id => _items.All(x => x.CarrierContactId != id)); _selected = _selected is null ? _items.OrderByDescending(ImportanceScore).FirstOrDefault() : _items.FirstOrDefault(x => x.CarrierContactId == _selected.CarrierContactId) ?? _items.OrderByDescending(ImportanceScore).FirstOrDefault(); NormalizePage(); } catch (Exception ex) { _loadError = $"Failed to load carrier contacts: {ex.Message}"; } finally { _loading = false; } }
+    Task RefreshAsync() => LoadAsync();
+    void ApplyFilters() { _page = 1; NormalizePage(); }
+    void OnSearchInputValue(string? value) { _searchTerm = value ?? string.Empty; ApplyFilters(); }
+    void SetDashboardFocus(string tab, string sort) { _activeTab = tab; _sortMode = sort; _page = 1; NormalizePage(); }
+    void SetActiveTab(string tab) { _activeTab = tab; _page = 1; NormalizePage(); }
+    void PreviousPage() { if (_page > 1) _page--; }
+    void NextPage() { if (_page < TotalPages) _page++; }
+    void NormalizePage() { if (_page > TotalPages) _page = TotalPages; }
+    void SelectRow(CarrierContactDto item) => _selected = item;
+    bool IsSelected(CarrierContactDto item) => _selectedIds.Contains(item.CarrierContactId);
+    void ToggleSelect(CarrierContactDto item, bool selected) { if (selected) _selectedIds.Add(item.CarrierContactId); else _selectedIds.Remove(item.CarrierContactId); _selected = item; }
+    void ToggleSelectAllPage(bool selected) { foreach (var item in PagedContacts) { if (selected) _selectedIds.Add(item.CarrierContactId); else _selectedIds.Remove(item.CarrierContactId); } }
+    void ClearFilters() { _searchTerm = string.Empty; _departmentFilter = string.Empty; _statusFilter = string.Empty; _sortMode = "importance"; _activeTab = "all"; _page = 1; }
+    void FilterByDepartment(string department) { _activeTab = "all"; _departmentFilter = department; _sortMode = "importance"; _page = 1; }
+    void OpenCreate() { _editId = null; _form = new() { Department = "Underwriting", IsActive = true }; _showForm = true; }
+    void OpenEdit(CarrierContactDto item) { _selected = item; _editId = item.CarrierContactId; _form = new() { CarrierId = item.CarrierId, ContactName = item.ContactName, Title = item.Title, Email = item.Email, Phone = item.Phone, Department = item.Department, IsPrimary = item.IsPrimary, IsActive = item.IsActive }; _showForm = true; }
+    void CloseForm() { _showForm = false; ResetForm(); }
+    void ResetForm() { _form = new(); _editId = null; }
+
+    async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (_editId.HasValue) await Api.UpdateCarrierContactAsync(_editId.Value, new(_form.CarrierId, _form.ContactName.Trim(), NormalizeNullable(_form.Title), NormalizeNullable(_form.Email), NormalizeNullable(_form.Phone), NormalizeNullable(_form.Department), _form.IsPrimary, _form.IsActive));
+            else await Api.CreateCarrierContactAsync(new(TenantId, _form.CarrierId, _form.ContactName.Trim(), NormalizeNullable(_form.Title), NormalizeNullable(_form.Email), NormalizeNullable(_form.Phone), NormalizeNullable(_form.Department), _form.IsPrimary));
+            _showForm = false; ShowToast("success", _editId.HasValue ? "Carrier contact updated successfully." : "Carrier contact created successfully."); ResetForm(); await LoadAsync();
+        }
+        catch (Exception ex) { ShowToast("danger", $"Save failed: {ex.Message}"); }
+        finally { _saving = false; }
+    }
+
+    void ConfirmToggle(CarrierContactDto item) { var enable = !item.IsActive; OpenConfirm(enable ? "Activate Contact" : "Deactivate Contact", $"Are you sure you want to {(enable ? "activate" : "deactivate")} {item.ContactName}? This changes contact availability in carrier workflows.", "bi-shield-exclamation", () => SetContactActiveAsync(item, enable)); }
+    void ConfirmDelete(CarrierContactDto item) => OpenConfirm("Delete Contact", $"Are you sure you want to delete {item.ContactName}? This action cannot be undone.", "bi-trash3-fill", () => DeleteContactAsync(item));
+    void ConfirmBulkToggle(bool enable) => OpenConfirm(enable ? "Activate Selected Contacts" : "Deactivate Selected Contacts", $"Are you sure you want to {(enable ? "activate" : "deactivate")} {_selectedIds.Count} selected contact(s)?", "bi-shield-exclamation", () => BulkSetActiveAsync(enable));
+    void ConfirmBulkDelete() => OpenConfirm("Delete Selected Contacts", $"Are you sure you want to delete {_selectedIds.Count} selected contact(s)? This action cannot be undone.", "bi-trash3-fill", BulkDeleteAsync);
+    void OpenConfirm(string title, string message, string icon, Func<Task> action) { _confirmTitle = title; _confirmMessage = message; _confirmIcon = icon; _confirmAction = action; _confirmVisible = true; }
+    void CloseConfirm() { _confirmVisible = false; _confirmAction = null; }
+    async Task ExecuteConfirmedAsync() { if (_confirmAction is null) return; _saving = true; try { await _confirmAction(); _confirmVisible = false; _confirmAction = null; } finally { _saving = false; } }
+    async Task SetContactActiveAsync(CarrierContactDto item, bool active) { try { await Api.UpdateCarrierContactAsync(item.CarrierContactId, new(item.CarrierId, item.ContactName, item.Title, item.Email, item.Phone, item.Department, item.IsPrimary, active)); ShowToast("success", active ? "Contact activated." : "Contact deactivated."); await LoadAsync(); } catch (Exception ex) { ShowToast("danger", $"Update failed: {ex.Message}"); } }
+    async Task DeleteContactAsync(CarrierContactDto item) { try { await Api.DeleteCarrierContactAsync(item.CarrierContactId); _selectedIds.Remove(item.CarrierContactId); if (_selected?.CarrierContactId == item.CarrierContactId) _selected = null; ShowToast("success", "Contact deleted."); await LoadAsync(); } catch (Exception ex) { ShowToast("danger", $"Delete failed: {ex.Message}"); } }
+    async Task BulkSetActiveAsync(bool active) { var selected = _items.Where(x => _selectedIds.Contains(x.CarrierContactId)).ToList(); var updated = 0; foreach (var item in selected) { try { await Api.UpdateCarrierContactAsync(item.CarrierContactId, new(item.CarrierId, item.ContactName, item.Title, item.Email, item.Phone, item.Department, item.IsPrimary, active)); updated++; } catch (Exception ex) { ShowToast("danger", $"Update failed for {item.ContactName}: {ex.Message}"); } } ShowToast("success", $"{updated} contact(s) {(active ? "activated" : "deactivated")}. "); _selectedIds.Clear(); await LoadAsync(); }
+    async Task BulkDeleteAsync() { var selected = _items.Where(x => _selectedIds.Contains(x.CarrierContactId)).ToList(); var deleted = 0; foreach (var item in selected) { try { await Api.DeleteCarrierContactAsync(item.CarrierContactId); deleted++; } catch (Exception ex) { ShowToast("danger", $"Delete failed for {item.ContactName}: {ex.Message}"); } } ShowToast("success", $"{deleted} contact(s) deleted."); _selectedIds.Clear(); _selected = null; await LoadAsync(); }
+
+    RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string color) => @<button type="button" class="cct-kpi-card cct-kpi-card--@color @(_activeTab == key ? "cct-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveTab(key)"><span class="cct-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span><span class="cct-kpi-body"><span class="cct-kpi-label">@label</span><strong class="cct-kpi-value">@value</strong><span class="cct-kpi-sub">@subtitle</span></span></button>;
+    int TabCount(string key) => key switch { "active" => _items.Count(x => x.IsActive), "primary" => _items.Count(x => x.IsPrimary), "email" => _items.Count(HasEmail), "phone" => _items.Count(HasPhone), "review" => _items.Count(NeedsReview), "departments" => DepartmentGroups.Count, _ => _items.Count };
+    bool MatchesSearch(CarrierContactDto item) { var term = _searchTerm.Trim(); return Contains(item.ContactName, term) || Contains(item.Title, term) || Contains(item.Email, term) || Contains(item.Phone, term) || Contains(item.Department, term) || Contains(Department(item), term); }
+    static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    static string? NormalizeNullable(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    static string FormatDate(DateTime date) => date == default ? "—" : date.ToLocalTime().ToString("MMM d, yyyy");
+    static string Department(CarrierContactDto item) => Safe(item.Department, "Unassigned");
+    static bool HasEmail(CarrierContactDto item) => !string.IsNullOrWhiteSpace(item.Email);
+    static bool HasPhone(CarrierContactDto item) => !string.IsNullOrWhiteSpace(item.Phone);
+    static bool NeedsReview(CarrierContactDto item) => !item.IsActive || string.IsNullOrWhiteSpace(item.ContactName) || string.IsNullOrWhiteSpace(item.Department) || (!HasEmail(item) && !HasPhone(item));
+    static string DepartmentIcon(string department) => department switch { "Underwriting" => "bi-shield-check", "Claims" => "bi-clipboard2-pulse", "Billing" => "bi-receipt", "Marketing" => "bi-megaphone", "Operations" => "bi-gear", "Unassigned" => "bi-question-circle", _ => "bi-person-lines-fill" };
+    static string DepartmentBadgeClass(CarrierContactDto item) => Department(item) switch { "Underwriting" => "cct-pill--cyan", "Claims" => "cct-pill--red", "Billing" => "cct-pill--amber", "Marketing" => "cct-pill--purple", "Operations" => "cct-pill--green", _ => "cct-pill--blue" };
+    static int ImportanceScore(CarrierContactDto item) { var score = 30; if (item.IsActive) score += 14; else score += 18; if (item.IsPrimary) score += 22; if (HasEmail(item)) score += 12; else score += 8; if (HasPhone(item)) score += 10; if (!string.IsNullOrWhiteSpace(item.Department)) score += 8; if (!string.IsNullOrWhiteSpace(item.Title)) score += 4; return Math.Clamp(score, 0, 100); }
+    static string RecommendedAction(CarrierContactDto item) { if (!item.IsActive) return "Review whether this contact should remain inactive."; if (!HasEmail(item) && !HasPhone(item)) return "Add email or phone before relying on this carrier contact."; if (string.IsNullOrWhiteSpace(item.Department)) return "Assign a department for routing and reporting."; if (item.IsPrimary) return "Primary contact is ready for carrier relationship workflows."; return "Contact is ready for carrier communication workflows."; }
+    static string ImportanceClass(CarrierContactDto item) => ImportanceScore(item) switch { >= 80 => "cct-score-card--red", >= 65 => "cct-score-card--amber", >= 45 => "cct-score-card--cyan", _ => "cct-score-card--green" };
+    static string ImportanceBadgeClass(CarrierContactDto item) => ImportanceScore(item) switch { >= 80 => "cct-risk-badge--red", >= 65 => "cct-risk-badge--amber", >= 45 => "cct-risk-badge--cyan", _ => "cct-risk-badge--green" };
+    static string Initials(string? value) { var parts = (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); return parts.Length switch { 0 => "CC", 1 => parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant(), _ => string.Concat(parts.Take(2).Select(x => char.ToUpperInvariant(x[0]))) }; }
+    static string AvatarStyle(string? value) { var hash = Math.Abs((value ?? "CarrierContact").GetHashCode()); var hue = hash % 360; return $"background:linear-gradient(135deg,hsl({hue},78%,48%),hsl({(hue + 35) % 360},82%,36%));"; }
+    void ShowToast(string kind, string message) { _toasts.Insert(0, new(Guid.NewGuid(), kind, message)); if (_toasts.Count > 4) _toasts.RemoveRange(4, _toasts.Count - 4); }
+    void DismissToast(Guid id) => _toasts.RemoveAll(x => x.Id == id);
+    async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); TenantId = context.TenantId; TenantAdminUserId = context.UserId; DevTenantId = context.TenantId; DevUserId = context.UserId; }
+    sealed class ContactForm { public Guid? CarrierId { get; set; } [Required, StringLength(100)] public string ContactName { get; set; } = string.Empty; [StringLength(100)] public string? Title { get; set; } [AmsEmailAddress, StringLength(320)] public string? Email { get; set; } [AmsPhone, StringLength(50)] public string? Phone { get; set; } [StringLength(80)] public string? Department { get; set; } public bool IsPrimary { get; set; } public bool IsActive { get; set; } = true; }
+    sealed record DashboardTab(string Key, string Label, string Icon);
+    sealed record DepartmentGroupSummary(string Name, int Count, int Active, int Primary, int ReviewCount, decimal Percent);
+    sealed record ToastItem(Guid Id, string Kind, string Message);
 }

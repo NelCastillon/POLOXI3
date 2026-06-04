@@ -1,235 +1,664 @@
-﻿@page "/tenant/crm/assignment"
+@page "/tenant/crm/assignment"
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.CrmConfig
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Assignment Rules â€” CRM Configuration</PageTitle>
+<PageTitle>Assignment Rules Command Center — AMS</PageTitle>
 
-<AppPageHeader Title="Assignment Rules"
-               Subtitle="Automate lead and opportunity assignment to producers and teams"
-               Icon="bi-person-check">
-    <Actions>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Rule
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<div class="pc-kpi-strip">
-    <div class="pc-kpi-card @(_activeFilter == null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)' title="Show all">
-        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-person-check" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total Rules</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "RoundRobin" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("RoundRobin")' title="Filter: Round Robin">
-        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.AssignmentMethod == "RoundRobin")</div><div class="pc-kpi-label">Round Robin</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "Territory" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Territory")' title="Filter: Territory">
-        <span class="pc-kpi-icon" style="background:#fef9c3"><i class="bi bi-map text-warning" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.AssignmentMethod == "Territory")</div><div class="pc-kpi-label">Territory</div></div>
-    </div>
-</div>
-
-<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search rule nameâ€¦" />
-
-@if (_loadError is not null)
-{
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
-    </div>
-}
-
-<div class="um-grid-card">
-    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loadingâ€¦</span></div> }
-    <SfGrid TValue="AssignmentRuleDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-        <GridEvents TValue="AssignmentRuleDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="25" />
-        <GridColumns>
-            <GridColumn Field="RuleName" HeaderText="Rule Name" Width="230" />
-            <GridColumn Field="EntityType" HeaderText="Entity" Width="120" />
-            <GridColumn Field="AssignmentMethod" HeaderText="Method" Width="140">
-                <Template>
-                    @{ var r = (AssignmentRuleDto)context; }
-                    <span class="um-badge um-badge-info">@r.AssignmentMethod</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="Priority" HeaderText="Priority" Width="90" TextAlign="TextAlign.Center" />
-            <GridColumn Field="IsActive" HeaderText="Status" Width="100" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (AssignmentRuleDto)context; }
-                    <span class="um-badge @(r.IsActive ? "um-badge-success" : "um-badge-neutral")">@(r.IsActive ? "Active" : "Off")</span>
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="" Width="100" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (AssignmentRuleDto)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true"><i class="bi bi-pencil"></i></button>
-                    <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
-
-<SfDialog @bind-Visible="_showForm" Width="560px" IsModal="true" ShowCloseIcon="false">
-    <DialogEvents Closed="ResetForm" />
-    <DialogContent>
-        <div class="um-modal-header">
-            <i class="bi bi-person-check"></i>
-            <span>@(_editId.HasValue ? "Edit Assignment Rule" : "Add Assignment Rule")</span>
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button>
-        </div>
-        <EditForm Model="_form" OnValidSubmit="SaveAsync">
-            <DataAnnotationsValidator />
-            <div class="um-modal-body">
-                <div class="um-form-grid">
-                    <div class="um-field">
-                        <label>Rule Name <span class="text-danger">*</span></label>
-                        <InputText @bind-Value="_form.RuleName" class="um-input" />
-                    </div>
-                    <div class="um-field">
-                        <label>Entity Type <span class="text-danger">*</span></label>
-                        <SfDropDownList TValue="string" TItem="string" @bind-Value="_form.EntityType"
-                            DataSource="@(new[]{"Lead","Opportunity"})" Placeholder="Select entity" />
-                    </div>
-                    <div class="um-field">
-                        <label>Assignment Method</label>
-                        <SfDropDownList TValue="string" TItem="string" @bind-Value="_form.AssignmentMethod"
-                            DataSource="@(new[]{"RoundRobin","Territory","LoadBased","Manual"})" Placeholder="Select method" />
-                    </div>
-                    <div class="um-field">
-                        <label>Priority</label>
-                        <InputNumber @bind-Value="_form.Priority" class="um-input" />
-                    </div>
-                    <div class="um-field">
-                        <label>Assign to Team</label>
-                        <InputText @bind-Value="_form.AssignToTeam" class="um-input" placeholder="Optional team name" />
-                    </div>
-                    <div class="um-field">
-                        <label>Criteria</label>
-                        <InputTextArea @bind-Value="_form.Criteria" class="um-input" rows="2" placeholder="Optional filter expression" />
-                    </div>
-                    <div class="um-field">
-                        <label>Description</label>
-                        <InputTextArea @bind-Value="_form.Description" class="um-input" rows="2" />
-                    </div>
-                    <div class="um-field um-field--checkbox">
-                        <label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label>
+<div class="asg-page">
+    <section class="asg-hero">
+        <div class="asg-hero__content">
+            <div class="asg-hero-left">
+                <span class="asg-hero-icon"><i class="bi bi-person-check" aria-hidden="true"></i></span>
+                <div class="asg-hero-title">
+                    <div class="asg-hero__eyebrow">Enterprise CRM routing</div>
+                    <div class="asg-title-row">
+                        <h1>Assignment Rules Command Center</h1>
+                        <div class="asg-hero__meta">
+                            <span><i class="bi bi-diagram-3" aria-hidden="true"></i>@_items.Count rules</span>
+                            <span><i class="bi bi-shield-check" aria-hidden="true"></i>@_items.Count(r => r.IsActive) active</span>
+                            <span><i class="bi bi-arrow-repeat" aria-hidden="true"></i>@RoundRobinCount round robin</span>
+                            <span><i class="bi bi-exclamation-octagon" aria-hidden="true"></i>@RiskCount risks</span>
+                        </div>
                     </div>
                 </div>
             </div>
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
-                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button>
-            </div>
-        </EditForm>
-    </DialogContent>
-</SfDialog>
-
-<SfDialog @bind-Visible="_showDelete" Width="440px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
-        <div class="um-confirm-dialog">
-            <div class="um-confirm-icon um-confirm-icon--danger">
-                <i class="bi bi-trash3-fill"></i>
-            </div>
-            <div class="um-confirm-message">
-                <h6>Delete Assignment Rule?</h6>
-                <p>You are about to delete <strong>@_deleteTarget?.RuleName</strong>. This action cannot be undone.</p>
-            </div>
-            <div class="um-modal-footer" style="width:100%">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
-                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
-            </div>
+            <p>Govern lead and opportunity routing with enterprise prioritization, producer/team assignment, criteria quality, workload methods, and rule execution controls.</p>
         </div>
-    </DialogContent>
-</SfDialog>
+        <div class="asg-hero__actions">
+            <button type="button" class="asg-btn asg-btn--light" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "asg-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="asg-btn asg-btn--primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Rule</button>
+        </div>
+    </section>
 
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger asg-alert" style="border-left: 4px solid #dc3545; animation: asg-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span>@_loadError</span>
+        </div>
+    }
+
+    <section class="asg-kpi-strip" aria-label="Assignment rule KPI filters">
+        @KpiCard("all", "Total Rules", _items.Count.ToString("N0", CultureInfo.CurrentCulture), "All CRM routing rules", "bi-diagram-3", "blue")
+        @KpiCard("active", "Active", _items.Count(r => r.IsActive).ToString("N0", CultureInfo.CurrentCulture), "Rules currently assigning work", "bi-shield-check", "green")
+        @KpiCard("roundRobin", "Round Robin", RoundRobinCount.ToString("N0", CultureInfo.CurrentCulture), "Balanced producer distribution", "bi-arrow-repeat", "cyan")
+        @KpiCard("territory", "Territory", TerritoryCount.ToString("N0", CultureInfo.CurrentCulture), "Geography or market routing", "bi-map", "purple")
+        @KpiCard("risk", "Needs Review", RiskCount.ToString("N0", CultureInfo.CurrentCulture), "Inactive, untargeted, or incomplete rules", "bi-exclamation-octagon", "amber")
+        @KpiCard("targets", "Targets", TargetGroups.Count.ToString("N0", CultureInfo.CurrentCulture), "Users or teams receiving assignments", "bi-person-badge", "red")
+    </section>
+
+    <section class="asg-workflows" aria-label="Assignment rule workflows">
+        <button type="button" class="asg-workflow" @onclick='() => SetDashboardFocus("risk", "importance")'><span class="asg-workflow-icon"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></span><span class="asg-workflow-meta"><strong>Routing review</strong><span>Rank rules by execution importance</span></span></button>
+        <button type="button" class="asg-workflow" @onclick='() => SetDashboardFocus("unassigned", "risk")'><span class="asg-workflow-icon"><i class="bi bi-person-x" aria-hidden="true"></i></span><span class="asg-workflow-meta"><strong>Target gaps</strong><span>Find rules without user or team targets</span></span></button>
+        <button type="button" class="asg-workflow" @onclick='() => SetDashboardFocus("roundRobin", "priority")'><span class="asg-workflow-icon"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></span><span class="asg-workflow-meta"><strong>Round robin</strong><span>Review balanced distribution rules</span></span></button>
+        <button type="button" class="asg-workflow" @onclick='() => SetDashboardFocus("targets", "target")'><span class="asg-workflow-icon"><i class="bi bi-person-badge" aria-hidden="true"></i></span><span class="asg-workflow-meta"><strong>Target coverage</strong><span>See routing by user and team</span></span></button>
+        <button type="button" class="asg-workflow" @onclick='() => SetDashboardFocus("inactive", "risk")'><span class="asg-workflow-icon"><i class="bi bi-slash-circle" aria-hidden="true"></i></span><span class="asg-workflow-meta"><strong>Inactive cleanup</strong><span>Find disabled or stale routing rules</span></span></button>
+    </section>
+
+    <section class="asg-filter-panel" aria-label="Assignment rule filters">
+        <div class="asg-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input type="search" placeholder="Search rule name, entity, method, target, criteria, or description…" aria-label="Search assignment rules" value="@_search" @oninput="OnSearchInput" />
+        </div>
+        <div class="asg-filter-grid">
+            <label><span>Entity</span><select class="form-select" @bind="_entityFilter" @bind:after="ApplyFilters"><option value="">All entities</option>@foreach (var entity in EntityOptions) { <option value="@entity">@entity</option> }</select></label>
+            <label><span>Method</span><select class="form-select" @bind="_methodFilter" @bind:after="ApplyFilters"><option value="">All methods</option>@foreach (var method in MethodOptions) { <option value="@method">@method</option> }</select></label>
+            <label><span>Status</span><select class="form-select" @bind="_statusFilter" @bind:after="ApplyFilters"><option value="">All statuses</option><option value="Active">Active</option><option value="Inactive">Inactive</option></select></label>
+            <label><span>Sort</span><select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters"><option value="importance">Importance</option><option value="priority">Priority</option><option value="risk">Risk</option><option value="target">Target</option><option value="entity">Entity</option><option value="name">Name</option><option value="created">Newest</option></select></label>
+        </div>
+        <button type="button" class="asg-btn asg-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+    </section>
+
+    <nav class="asg-tabs" aria-label="Assignment rule views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="asg-tab @(_activeTab == tab.Key ? "asg-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </nav>
+
+    <main class="asg-dashboard">
+        <section class="asg-main-card">
+            <div class="asg-card-header">
+                <div>
+                    <span class="asg-section-kicker">@ActiveViewTitle</span>
+                    <h2>@FilteredRules.Count() rules</h2>
+                    <p>Ranked by importance: active high-priority rules, target readiness, method quality, criteria coverage, entity coverage, and workflow risk.</p>
+                </div>
+                <div class="asg-card-actions">
+                    @if (_selectedRules.Count > 0)
+                    {
+                        <span class="asg-sel-count">@_selectedRules.Count selected</span>
+                        <button type="button" class="asg-btn asg-btn--ghost" @onclick="() => ConfirmBulkSetActive(true)"><i class="bi bi-check-circle" aria-hidden="true"></i> Activate</button>
+                        <button type="button" class="asg-btn asg-btn--ghost" @onclick="() => ConfirmBulkSetActive(false)"><i class="bi bi-slash-circle" aria-hidden="true"></i> Deactivate</button>
+                        <button type="button" class="asg-btn asg-btn--danger-ghost" @onclick="ConfirmBulkDelete"><i class="bi bi-trash3" aria-hidden="true"></i> Remove</button>
+                    }
+                    <button type="button" class="asg-btn asg-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Prev</button>
+                    <span class="asg-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="asg-btn asg-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="asg-loading"><span class="asg-spinner"></span> Loading assignment rules…</div>
+            }
+            else if (!FilteredRules.Any())
+            {
+                <div class="asg-empty"><i class="bi bi-person-check" aria-hidden="true"></i><strong>No assignment rules found</strong><span>Adjust the active tab, KPI, search, or filters.</span></div>
+            }
+            else if (_activeTab == "targets")
+            {
+                <div class="asg-target-grid">
+                    @foreach (var group in TargetGroups)
+                    {
+                        <article class="asg-target-card">
+                            <div class="asg-target-icon"><i class="bi bi-person-badge" aria-hidden="true"></i></div>
+                            <div class="asg-target-meta">
+                                <h3>@group.Name</h3>
+                                <p>@group.Count rules • @group.Active active • @group.Risk needs review</p>
+                                <div class="asg-mini-bar"><span style="width:@group.Percent%"></span></div>
+                            </div>
+                            <button type="button" class="asg-btn asg-btn--ghost" @onclick="() => FilterByTarget(group.Name)">Open</button>
+                        </article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="asg-table-wrap">
+                    <table class="asg-table">
+                        <thead>
+                            <tr>
+                                <th class="asg-check-col"><input type="checkbox" checked="@AllPageSelected" @onchange="ToggleSelectAllPage" aria-label="Select all assignment rules on page" /></th>
+                                <th>Importance</th>
+                                <th>Rule</th>
+                                <th>Entity</th>
+                                <th>Method</th>
+                                <th>Priority</th>
+                                <th>Target</th>
+                                <th>Status</th>
+                                <th>Created</th>
+                                <th class="asg-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var rule in PagedRules)
+                            {
+                                <tr class="@(_selected?.AssignmentRuleId == rule.AssignmentRuleId ? "asg-row asg-row--selected" : "asg-row")" @onclick="() => SelectRow(rule)">
+                                    <td class="asg-check-col" @onclick:stopPropagation="true"><input type="checkbox" checked="@IsSelected(rule)" @onchange="() => ToggleSelect(rule)" aria-label="Select assignment rule" /></td>
+                                    <td>@ImportanceBadge(rule)</td>
+                                    <td><button type="button" class="asg-link-button" @onclick:stopPropagation="true" @onclick="() => OpenEdit(rule)">@rule.RuleName</button><small>@Safe(rule.Description, "No description")</small></td>
+                                    <td><span class="asg-pill asg-pill--blue">@rule.EntityType</span></td>
+                                    <td>@MethodBadge(rule)</td>
+                                    <td><strong>@rule.Priority</strong></td>
+                                    <td><span class="asg-target" title="@TargetName(rule)">@TargetName(rule)</span></td>
+                                    <td>@StatusBadge(rule)</td>
+                                    <td><span class="asg-date">@rule.CreatedDateUtc.ToString("MMM d, yyyy", CultureInfo.CurrentCulture)</span></td>
+                                    <td class="asg-actions-col">
+                                        <button type="button" class="asg-icon-btn" title="Open action menu" @onclick:stopPropagation="true" @onclick="() => ToggleActionMenu(rule)"><i class="bi bi-three-dots-vertical" aria-hidden="true"></i></button>
+                                        @if (_openActionMenuFor == rule.AssignmentRuleId)
+                                        {
+                                            <div class="asg-menu" role="menu" @onclick:stopPropagation="true">
+                                                <div class="asg-menu__summary"><strong>@rule.RuleName</strong><span>@rule.EntityType assignment rule</span></div>
+                                                <button type="button" class="asg-menu-item" role="menuitem" @onclick="() => SelectRow(rule)"><i class="bi bi-eye" aria-hidden="true"></i><span>Inspect rule</span></button>
+                                                <button type="button" class="asg-menu-item" role="menuitem" @onclick="() => OpenEdit(rule)"><i class="bi bi-pencil" aria-hidden="true"></i><span>Edit rule</span></button>
+                                                <button type="button" class="asg-menu-item" role="menuitem" @onclick="() => ConfirmToggleActive(rule)"><i class="bi @(rule.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i><span>@(rule.IsActive ? "Deactivate" : "Activate")</span></button>
+                                                <button type="button" class="asg-menu-item asg-menu-item--danger" role="menuitem" @onclick="() => ConfirmDelete(rule)"><i class="bi bi-trash3" aria-hidden="true"></i><span>Remove rule</span></button>
+                                            </div>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="asg-side-panel">
+            <section class="asg-panel-card">
+                <span class="asg-section-kicker">Selected rule</span>
+                @if (_selected is null)
+                {
+                    <div class="asg-empty asg-empty--compact"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a row</strong><span>Choose a rule to inspect routing quality and actions.</span></div>
+                }
+                else
+                {
+                    <div class="asg-selected">
+                        <div class="asg-selected__title"><div class="asg-rule-icon"><i class="bi bi-person-check" aria-hidden="true"></i></div><div><h3>@_selected.RuleName</h3><span>@_selected.EntityType assignment rule</span></div></div>
+                        <div class="asg-score-card asg-score-card--@ImportanceTone(_selected)"><span>Importance score</span><strong>@ImportanceScore(_selected)</strong><small>@ImportanceLevel(_selected)</small></div>
+                        <dl class="asg-detail-list">
+                            <div><dt>Entity</dt><dd>@_selected.EntityType</dd></div>
+                            <div><dt>Method</dt><dd>@Safe(_selected.AssignmentMethod, "Manual")</dd></div>
+                            <div><dt>Priority</dt><dd>@_selected.Priority</dd></div>
+                            <div><dt>Target</dt><dd>@TargetName(_selected)</dd></div>
+                            <div><dt>Status</dt><dd>@(_selected.IsActive ? "Active" : "Inactive")</dd></div>
+                            <div><dt>Criteria</dt><dd>@Safe(_selected.Criteria, "Missing")</dd></div>
+                        </dl>
+                        <div class="asg-note-card"><strong>Recommended action</strong><p>@RecommendedAction(_selected)</p></div>
+                        <div class="asg-selected-actions"><button type="button" class="asg-btn asg-btn--primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="asg-btn asg-btn--ghost" @onclick="() => ConfirmToggleActive(_selected)"><i class="bi @( _selected.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i> @( _selected.IsActive ? "Deactivate" : "Activate")</button><button type="button" class="asg-btn asg-btn--danger-ghost" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash3" aria-hidden="true"></i> Remove</button></div>
+                    </div>
+                }
+            </section>
+
+            <section class="asg-panel-card">
+                <span class="asg-section-kicker">Routing intelligence</span>
+                <div class="asg-insight-list">
+                    @foreach (var insight in Insights)
+                    {
+                        <div class="asg-insight"><i class="bi @insight.Icon" aria-hidden="true"></i><div><strong>@insight.Title</strong><span>@insight.Description</span></div></div>
+                    }
+                </div>
+            </section>
+        </aside>
+    </main>
+</div>
+
+@if (_showForm)
+{
+    <div class="asg-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="asg-modal" role="dialog" aria-modal="true" aria-labelledby="asg-form-title" @onclick:stopPropagation="true">
+            <div class="asg-modal__header"><i class="bi @(_editId.HasValue ? "bi-pencil-square" : "bi-plus-circle")" aria-hidden="true"></i><span id="asg-form-title">@(_editId.HasValue ? "Edit Assignment Rule" : "Add Assignment Rule")</span><button type="button" class="asg-icon-btn asg-icon-btn--light ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="asg-modal__body">
+                    <div class="asg-validation-note"><i class="bi bi-shield-check" aria-hidden="true"></i><div><strong>Enterprise validations enabled</strong><span>Required rule name, entity, method, priority, target, criteria, and description length checks are enforced before save.</span></div></div>
+                    <div class="asg-form-grid">
+                        <label class="asg-field"><span>Rule Name <em>*</em></span><InputText @bind-Value="_form.RuleName" class="form-control" placeholder="High value commercial lead routing" /><ValidationMessage For="() => _form.RuleName" class="text-danger" /></label>
+                        <label class="asg-field"><span>Entity Type <em>*</em></span><InputSelect @bind-Value="_form.EntityType" class="form-select"><option value="">Select entity…</option>@foreach (var entity in _entityTypes) { <option value="@entity">@entity</option> }</InputSelect><ValidationMessage For="() => _form.EntityType" class="text-danger" /></label>
+                        <label class="asg-field"><span>Assignment Method <em>*</em></span><InputSelect @bind-Value="_form.AssignmentMethod" class="form-select"><option value="">Select method…</option>@foreach (var method in _methods) { <option value="@method">@method</option> }</InputSelect><ValidationMessage For="() => _form.AssignmentMethod" class="text-danger" /></label>
+                        <label class="asg-field"><span>Priority</span><InputNumber @bind-Value="_form.Priority" class="form-control" min="0" /><ValidationMessage For="() => _form.Priority" class="text-danger" /></label>
+                        <label class="asg-field"><span>Assign to User</span><InputSelect @bind-Value="_form.AssignToUserId" class="form-select"><option value="">No direct user</option>@foreach (var user in _users) { <option value="@user.UserId">@DisplayUser(user)</option> }</InputSelect><ValidationMessage For="() => _form.AssignToUserId" class="text-danger" /></label>
+                        <label class="asg-field"><span>Assign to Team</span><InputText @bind-Value="_form.AssignToTeam" class="form-control" placeholder="Commercial Producers" /><ValidationMessage For="() => _form.AssignToTeam" class="text-danger" /></label>
+                        <label class="asg-field asg-field--wide"><span>Criteria</span><InputTextArea @bind-Value="_form.Criteria" class="form-control" rows="3" placeholder="State = 'TX' AND EstimatedPremium > 25000" /><ValidationMessage For="() => _form.Criteria" class="text-danger" /></label>
+                        <label class="asg-field asg-field--wide"><span>Description</span><InputTextArea @bind-Value="_form.Description" class="form-control" rows="3" placeholder="Describe when and why this rule assigns CRM work." /><ValidationMessage For="() => _form.Description" class="text-danger" /></label>
+                        <label class="asg-field"><span>Status</span><span class="asg-switch"><InputCheckbox @bind-Value="_form.IsActive" /> Active rule</span></label>
+                    </div>
+                    @if (!string.IsNullOrEmpty(_formError))
+                    {
+                        <div class="alert alert-danger asg-form-alert" style="border-left: 4px solid #dc3545; animation: asg-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_formError</div>
+                    }
+                </div>
+                <div class="asg-modal__footer"><button type="button" class="asg-btn asg-btn--ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="asg-btn asg-btn--primary" disabled="@_saving">@if (_saving) { <span class="asg-spin-sm" aria-hidden="true"></span> } @(_editId.HasValue ? "Save Changes" : "Create Rule")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showConfirm)
+{
+    <div class="asg-modal-backdrop" role="presentation" @onclick="CloseConfirm">
+        <div class="asg-confirm" role="dialog" aria-modal="true" aria-labelledby="asg-confirm-title" @onclick:stopPropagation="true">
+            <div class="asg-modal__header"><i class="bi @_confirmIcon" aria-hidden="true"></i><span>Confirm action</span><button type="button" class="asg-icon-btn asg-icon-btn--light ms-auto" @onclick="CloseConfirm" disabled="@_saving"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <div class="asg-confirm__body"><div class="@(_confirmDanger ? "asg-confirm-icon asg-confirm-icon--danger" : "asg-confirm-icon")"><i class="bi @_confirmIcon" aria-hidden="true"></i></div><div><h3 id="asg-confirm-title">@_confirmTitle</h3><p>@_confirmMessage</p></div></div>
+            <div class="asg-modal__footer"><button type="button" class="asg-btn asg-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button><button type="button" class="@(_confirmDanger ? "asg-btn asg-btn--danger" : "asg-btn asg-btn--primary")" @onclick="ExecuteConfirmedActionAsync" disabled="@_saving">@if (_saving) { <span class="asg-spin-sm" aria-hidden="true"></span> } Confirm</button></div>
+        </div>
+    </div>
+}
+
+<div class="asg-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="asg-toast @toast.CssClass"><i class="bi @(toast.CssClass.Contains("danger") ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i><span>@toast.Message</span><button type="button" @onclick="() => DismissToast(toast.Id)"><i class="bi bi-x" aria-hidden="true"></i></button></div>
+    }
+</div>
 
 @code {
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantId;
-    private Guid _tenantAdminUserId;
-    Guid TenantId { get; set; }
-    List<AssignmentRuleDto> _items = [], _filtered = [];
-    string? _activeFilter;
-    bool _loading, _saving;
-    string _search = string.Empty;
-    string? _loadError;
-    bool _showForm, _showDelete;
-    Guid? _editId;
-    AssignmentRuleDto? _deleteTarget;
-    SfToast _toast = default!;
-    AssignmentRuleFormModel _form = new();
+    private Guid TenantId { get; set; }
+    private Guid TenantAdminUserId { get; set; }
+    private static readonly string[] _entityTypes = ["Lead", "Opportunity"];
+    private static readonly string[] _methods = ["RoundRobin", "Territory", "LoadBased", "Manual"];
+    private readonly TabDef[] _tabs = [new("all", "All", "bi-diagram-3"), new("risk", "Needs Review", "bi-exclamation-octagon"), new("unassigned", "Target Gaps", "bi-person-x"), new("roundRobin", "Round Robin", "bi-arrow-repeat"), new("inactive", "Inactive", "bi-slash-circle"), new("targets", "By Target", "bi-person-badge")];
+    private readonly InsightDef[] _baselineInsights = [new("Target every active rule", "Rules should assign to a user or a team before routing production CRM work.", "bi-person-check"), new("Keep priority explicit", "Lower priority numbers execute first, so review high-impact rules carefully.", "bi-sort-numeric-down"), new("Criteria improves routing", "Criteria makes assignment rules auditable and reduces incorrect producer routing.", "bi-ui-checks")];
+
+    private List<AssignmentRuleDto> _items = [];
+    private List<UserDto> _users = [];
+    private readonly List<AssignmentRuleDto> _selectedRules = [];
+    private AssignmentRuleDto? _selected;
+    private bool _loading = true;
+    private bool _saving;
+    private string? _loadError;
+    private string _activeTab = "all";
+    private string _activeKpi = "all";
+    private string _search = string.Empty;
+    private string _entityFilter = string.Empty;
+    private string _methodFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _targetFilter = string.Empty;
+    private string _sortMode = "importance";
+    private int _page = 1;
+    private const int PageSize = 12;
+    private Guid? _openActionMenuFor;
+
+    private bool _showForm;
+    private string _formError = string.Empty;
+    private Guid? _editId;
+    private AssignmentRuleFormModel _form = new();
+
+    private bool _showConfirm;
+    private bool _confirmDanger;
+    private string _confirmTitle = string.Empty;
+    private string _confirmMessage = string.Empty;
+    private string _confirmIcon = "bi-question-circle";
+    private Func<Task>? _confirmedAction;
+    private readonly List<ToastMessage> _toasts = [];
 
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM Config", null), new("Assignment Rules", null));
+        var context = await CurrentUser.RequireAsync();
+        TenantId = context.TenantId;
+        TenantAdminUserId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM Configuration", null), new("Assignment Rules", null));
         await LoadAsync();
     }
 
-    async Task LoadAsync()
+    private async Task LoadAsync()
     {
         _loading = true;
         _loadError = null;
-        try { var r = await Api.SearchAssignmentRulesAsync(TenantId, _search, pageSize: 200); _items = r?.Items.ToList() ?? []; ApplyFilter(); }
-        catch (Exception ex) { _loadError = $"Failed to load assignment rules: {ex.Message}"; }
-        finally { _loading = false; }
+        StateHasChanged();
+        try
+        {
+            var rules = await Api.SearchAssignmentRulesAsync(TenantId, _search.Trim(), pageSize: 500);
+            var users = await Api.SearchUsersAsync(TenantId, pageSize: 500);
+            _items = rules?.Items.ToList() ?? [];
+            _users = users?.Items.OrderBy(DisplayUser).ToList() ?? [];
+            _selected = _selected is null ? OrderedRules(_items).FirstOrDefault() : _items.FirstOrDefault(r => r.AssignmentRuleId == _selected.AssignmentRuleId) ?? OrderedRules(_items).FirstOrDefault();
+            _selectedRules.RemoveAll(selected => _items.All(r => r.AssignmentRuleId != selected.AssignmentRuleId));
+            _page = 1;
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load assignment rules: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "asg-toast--danger");
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
     }
 
-    Task OnSearchAsync() => LoadAsync();
-    void ApplyFilter() => _filtered = _activeFilter is not null
-        ? _items.Where(x => x.AssignmentMethod == _activeFilter).ToList()
-        : [.. _items];
+    private async Task OnSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _search = e.Value?.ToString() ?? string.Empty;
+        await LoadAsync();
+    }
 
-    void SetFilter(string? key) { _activeFilter = key; ApplyFilter(); }
-    void OnRowSelected(RowSelectEventArgs<AssignmentRuleDto> args) => OpenEdit(args.Data);
+    private void SetActiveKpi(string key)
+    {
+        _activeKpi = _activeKpi == key ? "all" : key;
+        _activeTab = _activeKpi switch { "risk" => "risk", "roundRobin" => "roundRobin", "targets" => "targets", _ => "all" };
+        _methodFilter = _activeKpi switch { "roundRobin" => "RoundRobin", "territory" => "Territory", _ => string.Empty };
+        _page = 1;
+    }
 
-    void OpenCreate() { _editId = null; _form = new(); _showForm = true; }
+    private void SetActiveTab(string key)
+    {
+        _activeTab = key;
+        _activeKpi = key is "risk" or "roundRobin" or "targets" ? key : "all";
+        _page = 1;
+    }
 
-    void OpenEdit(AssignmentRuleDto item)
+    private void SetDashboardFocus(string tab, string sortMode)
+    {
+        _activeTab = tab;
+        _activeKpi = tab is "risk" or "roundRobin" or "targets" ? tab : "all";
+        _sortMode = sortMode;
+        _page = 1;
+    }
+
+    private void ApplyFilters() => _page = 1;
+
+    private void ClearFilters()
+    {
+        _entityFilter = string.Empty;
+        _methodFilter = string.Empty;
+        _statusFilter = string.Empty;
+        _targetFilter = string.Empty;
+        _sortMode = "importance";
+        _activeTab = "all";
+        _activeKpi = "all";
+        _page = 1;
+    }
+
+    private bool HasFilters => !string.IsNullOrEmpty(_entityFilter) || !string.IsNullOrEmpty(_methodFilter) || !string.IsNullOrEmpty(_statusFilter) || !string.IsNullOrEmpty(_targetFilter) || _sortMode != "importance" || _activeTab != "all";
+
+    private IEnumerable<AssignmentRuleDto> TabFiltered => _activeTab switch
+    {
+        "risk" => _items.Where(IsRisk),
+        "unassigned" => _items.Where(r => !HasTarget(r)),
+        "roundRobin" => _items.Where(r => IsMethod(r, "RoundRobin")),
+        "inactive" => _items.Where(r => !r.IsActive),
+        _ => _items,
+    };
+
+    private IEnumerable<AssignmentRuleDto> FilteredRules
+    {
+        get
+        {
+            var query = TabFiltered;
+            if (!string.IsNullOrWhiteSpace(_entityFilter)) query = query.Where(r => string.Equals(r.EntityType, _entityFilter, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(_methodFilter)) query = query.Where(r => string.Equals(r.AssignmentMethod, _methodFilter, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(r => _statusFilter == "Active" ? r.IsActive : !r.IsActive);
+            if (!string.IsNullOrWhiteSpace(_targetFilter)) query = query.Where(r => TargetName(r).Equals(_targetFilter, StringComparison.OrdinalIgnoreCase));
+            return OrderedRules(query);
+        }
+    }
+
+    private IEnumerable<AssignmentRuleDto> OrderedRules(IEnumerable<AssignmentRuleDto> query) => _sortMode switch
+    {
+        "priority" => query.OrderBy(r => r.Priority).ThenByDescending(ImportanceScore),
+        "risk" => query.OrderByDescending(RiskScore).ThenBy(r => r.Priority),
+        "target" => query.OrderBy(TargetName).ThenBy(r => r.Priority),
+        "entity" => query.OrderBy(r => r.EntityType).ThenBy(r => r.Priority),
+        "name" => query.OrderBy(r => r.RuleName),
+        "created" => query.OrderByDescending(r => r.CreatedDateUtc),
+        _ => query.OrderByDescending(ImportanceScore).ThenBy(r => r.Priority).ThenBy(r => r.RuleName),
+    };
+
+    private IEnumerable<AssignmentRuleDto> PagedRules => FilteredRules.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRules.Count() / (double)PageSize));
+    private void PreviousPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private string ActiveViewTitle => _tabs.FirstOrDefault(t => t.Key == _activeTab)?.Label ?? "Assignment Rules";
+
+    private int RoundRobinCount => _items.Count(r => IsMethod(r, "RoundRobin"));
+    private int TerritoryCount => _items.Count(r => IsMethod(r, "Territory"));
+    private int RiskCount => _items.Count(IsRisk);
+    private int TabCount(string key) => key switch
+    {
+        "risk" => _items.Count(IsRisk),
+        "unassigned" => _items.Count(r => !HasTarget(r)),
+        "roundRobin" => RoundRobinCount,
+        "inactive" => _items.Count(r => !r.IsActive),
+        "targets" => TargetGroups.Count,
+        _ => _items.Count,
+    };
+
+    private IEnumerable<string> EntityOptions => _items.Select(r => r.EntityType).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    private IEnumerable<string> MethodOptions => _items.Select(r => r.AssignmentMethod ?? "Manual").Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+
+    private List<TargetGroup> TargetGroups
+    {
+        get
+        {
+            var groups = _items.GroupBy(TargetName).ToList();
+            var max = Math.Max(1, groups.Count == 0 ? 1 : groups.Max(g => g.Count()));
+            return groups.Select(g => new TargetGroup(g.Key, g.Count(), g.Count(r => r.IsActive), g.Count(IsRisk), (int)Math.Round(g.Count() * 100.0 / max))).OrderByDescending(g => g.Risk).ThenByDescending(g => g.Active).ThenBy(g => g.Name).ToList();
+        }
+    }
+
+    private void FilterByTarget(string target)
+    {
+        _targetFilter = target;
+        _activeTab = "all";
+        _activeKpi = "all";
+        _page = 1;
+    }
+
+    private void SelectRow(AssignmentRuleDto rule) { _selected = rule; _openActionMenuFor = null; }
+    private bool IsSelected(AssignmentRuleDto rule) => _selectedRules.Any(x => x.AssignmentRuleId == rule.AssignmentRuleId);
+    private void ToggleSelect(AssignmentRuleDto rule) { if (IsSelected(rule)) _selectedRules.RemoveAll(x => x.AssignmentRuleId == rule.AssignmentRuleId); else _selectedRules.Add(rule); }
+    private bool AllPageSelected => PagedRules.Any() && PagedRules.All(IsSelected);
+    private void ToggleSelectAllPage()
+    {
+        var page = PagedRules.ToList();
+        if (page.All(IsSelected)) foreach (var rule in page) _selectedRules.RemoveAll(x => x.AssignmentRuleId == rule.AssignmentRuleId);
+        else foreach (var rule in page.Where(rule => !IsSelected(rule))) _selectedRules.Add(rule);
+    }
+
+    private void ToggleActionMenu(AssignmentRuleDto rule) => _openActionMenuFor = _openActionMenuFor == rule.AssignmentRuleId ? null : rule.AssignmentRuleId;
+
+    private void OpenCreate()
+    {
+        _editId = null;
+        _form = new();
+        _formError = string.Empty;
+        _showForm = true;
+        _openActionMenuFor = null;
+    }
+
+    private void OpenEdit(AssignmentRuleDto item)
     {
         _editId = item.AssignmentRuleId;
-        _form = new() { RuleName = item.RuleName, EntityType = item.EntityType, AssignmentMethod = item.AssignmentMethod, Priority = item.Priority, AssignToTeam = item.AssignToTeam, Criteria = item.Criteria, Description = item.Description, IsActive = item.IsActive };
+        _form = new() { RuleName = item.RuleName, EntityType = item.EntityType, AssignmentMethod = item.AssignmentMethod ?? "Manual", AssignToUserId = item.AssignToUserId, AssignToTeam = item.AssignToTeam, Priority = item.Priority, Criteria = item.Criteria, Description = item.Description, IsActive = item.IsActive };
+        _formError = string.Empty;
         _showForm = true;
+        _openActionMenuFor = null;
     }
 
-    async Task SaveAsync()
+    private void CloseForm()
+    {
+        if (_saving) return;
+        _showForm = false;
+        _form = new();
+        _editId = null;
+        _formError = string.Empty;
+    }
+
+    private async Task SaveAsync()
     {
         _saving = true;
+        _formError = string.Empty;
         try
         {
             if (_editId.HasValue)
-                await Api.UpdateAssignmentRuleAsync(_editId.Value, new(_form.RuleName, _form.EntityType, _form.AssignmentMethod, _form.Criteria, null, _form.AssignToTeam, _form.Priority, _form.Description, _form.IsActive));
+            {
+                await Api.UpdateAssignmentRuleAsync(_editId.Value, new(_form.RuleName, _form.EntityType, _form.AssignmentMethod, _form.Criteria, _form.AssignToUserId, _form.AssignToTeam, _form.Priority, _form.Description, _form.IsActive));
+                ShowToast("Assignment rule updated.", "asg-toast--success");
+            }
             else
-                await Api.CreateAssignmentRuleAsync(new(TenantId, _form.RuleName, _form.EntityType, _form.AssignmentMethod, _form.Criteria, null, _form.AssignToTeam, _form.Priority, _form.Description));
+            {
+                var id = await Api.CreateAssignmentRuleAsync(new(TenantId, _form.RuleName, _form.EntityType, _form.AssignmentMethod, _form.Criteria, _form.AssignToUserId, _form.AssignToTeam, _form.Priority, _form.Description));
+                _editId = id;
+                ShowToast("Assignment rule created.", "asg-toast--success");
+            }
             _showForm = false;
-            await _toast.ShowAsync(new() { Content = "Saved", CssClass = "e-toast-success" });
             await LoadAsync();
         }
-        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast($"Save failed: {ex.Message}", "asg-toast--danger");
+        }
         finally { _saving = false; }
     }
 
-    void ConfirmDelete(AssignmentRuleDto item) { _deleteTarget = item; _showDelete = true; }
-
-    async Task ExecuteDeleteAsync()
+    private void ConfirmToggleActive(AssignmentRuleDto rule)
     {
+        ShowConfirm(rule.IsActive ? "Deactivate assignment rule?" : "Activate assignment rule?", $"This will {(rule.IsActive ? "disable" : "enable")} '{rule.RuleName}' for {rule.EntityType} routing.", rule.IsActive ? "bi-slash-circle" : "bi-check-circle", false, async () => await SetRuleActiveAsync(rule, !rule.IsActive));
+    }
+
+    private async Task SetRuleActiveAsync(AssignmentRuleDto rule, bool isActive)
+    {
+        await Api.UpdateAssignmentRuleAsync(rule.AssignmentRuleId, new(rule.RuleName, rule.EntityType, rule.AssignmentMethod, rule.Criteria, rule.AssignToUserId, rule.AssignToTeam, rule.Priority, rule.Description, isActive));
+        ShowToast(isActive ? "Assignment rule activated." : "Assignment rule deactivated.", "asg-toast--success");
+        await LoadAsync();
+    }
+
+    private void ConfirmDelete(AssignmentRuleDto rule)
+    {
+        ShowConfirm("Remove assignment rule?", $"You are about to remove '{rule.RuleName}'. This action cannot be undone.", "bi-trash3", true, async () => await DeleteRuleAsync(rule));
+    }
+
+    private async Task DeleteRuleAsync(AssignmentRuleDto rule)
+    {
+        await Api.DeleteAssignmentRuleAsync(rule.AssignmentRuleId);
+        _selectedRules.RemoveAll(r => r.AssignmentRuleId == rule.AssignmentRuleId);
+        if (_selected?.AssignmentRuleId == rule.AssignmentRuleId) _selected = null;
+        ShowToast("Assignment rule removed.", "asg-toast--success");
+        await LoadAsync();
+    }
+
+    private void ConfirmBulkSetActive(bool isActive)
+    {
+        var count = _selectedRules.Count;
+        ShowConfirm(isActive ? "Activate selected rules?" : "Deactivate selected rules?", $"This will {(isActive ? "activate" : "deactivate")} {count} selected assignment rule(s).", isActive ? "bi-check-circle" : "bi-slash-circle", false, async () => await BulkSetActiveAsync(isActive));
+    }
+
+    private async Task BulkSetActiveAsync(bool isActive)
+    {
+        foreach (var rule in _selectedRules.ToList()) await SetRuleActiveAsync(rule, isActive);
+        _selectedRules.Clear();
+    }
+
+    private void ConfirmBulkDelete()
+    {
+        var count = _selectedRules.Count;
+        ShowConfirm("Remove selected assignment rules?", $"You are about to remove {count} selected assignment rule(s). This action cannot be undone.", "bi-trash3", true, BulkDeleteAsync);
+    }
+
+    private async Task BulkDeleteAsync()
+    {
+        foreach (var rule in _selectedRules.ToList()) await Api.DeleteAssignmentRuleAsync(rule.AssignmentRuleId);
+        _selectedRules.Clear();
+        _selected = null;
+        ShowToast("Selected assignment rules removed.", "asg-toast--success");
+        await LoadAsync();
+    }
+
+    private void ShowConfirm(string title, string message, string icon, bool danger, Func<Task> action)
+    {
+        _confirmTitle = title;
+        _confirmMessage = message;
+        _confirmIcon = icon;
+        _confirmDanger = danger;
+        _confirmedAction = action;
+        _showConfirm = true;
+        _openActionMenuFor = null;
+    }
+
+    private void CloseConfirm() { if (!_saving) _showConfirm = false; }
+
+    private async Task ExecuteConfirmedActionAsync()
+    {
+        if (_confirmedAction is null) return;
         _saving = true;
-        try { await Api.DeleteAssignmentRuleAsync(_deleteTarget!.AssignmentRuleId); _showDelete = false; await _toast.ShowAsync(new() { Content = "Deleted", CssClass = "e-toast-success" }); await LoadAsync(); }
-        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+        try
+        {
+            await _confirmedAction();
+            _showConfirm = false;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Action failed: {ex.Message}", "asg-toast--danger");
+        }
         finally { _saving = false; }
     }
 
-    void ResetForm() { _form = new(); _editId = null; }
+    private IReadOnlyList<InsightDef> Insights
+    {
+        get
+        {
+            var insights = _baselineInsights.ToList();
+            if (_items.Any(r => !HasTarget(r))) insights.Insert(0, new("Target gaps", $"{_items.Count(r => !HasTarget(r))} rule(s) need a user or team target before routing work.", "bi-person-x"));
+            if (_items.Any(r => string.IsNullOrWhiteSpace(r.Criteria))) insights.Insert(0, new("Criteria missing", $"{_items.Count(r => string.IsNullOrWhiteSpace(r.Criteria))} rule(s) should define criteria for audit-ready routing.", "bi-ui-checks-grid"));
+            if (_items.Any(r => !r.IsActive)) insights.Insert(0, new("Inactive routing", $"{_items.Count(r => !r.IsActive)} assignment rule(s) are inactive and not routing CRM work.", "bi-slash-circle"));
+            return insights.Take(5).ToList();
+        }
+    }
 
-    sealed class AssignmentRuleFormModel
+    private RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string tone) => @<button type="button" class="asg-kpi-card asg-kpi-card--@tone @(_activeKpi == key ? "asg-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveKpi(key)"><span class="asg-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span><span class="asg-kpi-body"><span class="asg-kpi-label">@label</span><span class="asg-kpi-value">@value</span><span class="asg-kpi-sub">@subtitle</span></span></button>;
+
+    private static bool IsMethod(AssignmentRuleDto rule, string method) => string.Equals(rule.AssignmentMethod ?? "Manual", method, StringComparison.OrdinalIgnoreCase);
+    private static bool HasTarget(AssignmentRuleDto rule) => rule.AssignToUserId.HasValue || !string.IsNullOrWhiteSpace(rule.AssignToTeam);
+    private static bool IsRisk(AssignmentRuleDto rule) => !rule.IsActive || !HasTarget(rule) || string.IsNullOrWhiteSpace(rule.Criteria) || string.IsNullOrWhiteSpace(rule.AssignmentMethod);
+    private static int RiskScore(AssignmentRuleDto rule) => (!rule.IsActive ? 50 : 0) + (!HasTarget(rule) ? 40 : 0) + (string.IsNullOrWhiteSpace(rule.Criteria) ? 25 : 0) + (string.IsNullOrWhiteSpace(rule.AssignmentMethod) ? 15 : 0);
+    private static int ImportanceScore(AssignmentRuleDto rule) => (rule.IsActive ? 100 : 0) + (Math.Max(0, 100 - Math.Min(rule.Priority, 100))) + (HasTarget(rule) ? 35 : 0) + (!string.IsNullOrWhiteSpace(rule.Criteria) ? 25 : 0) + MethodWeight(rule.AssignmentMethod) + (IsCoreEntity(rule.EntityType) ? 20 : 0);
+    private static int MethodWeight(string? method) => method switch { "RoundRobin" => 35, "LoadBased" => 32, "Territory" => 28, "Manual" => 15, _ => 10 };
+    private static bool IsCoreEntity(string? entity) => entity is "Lead" or "Opportunity";
+    private static string ImportanceLevel(AssignmentRuleDto rule) => ImportanceScore(rule) >= 240 ? "Critical" : ImportanceScore(rule) >= 195 ? "High" : ImportanceScore(rule) >= 145 ? "Medium" : "Low";
+    private static string ImportanceTone(AssignmentRuleDto rule) => ImportanceLevel(rule) switch { "Critical" => "red", "High" => "amber", "Medium" => "cyan", _ => "green" };
+    private static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private static string DisplayUser(UserDto user) => !string.IsNullOrWhiteSpace(user.DisplayName) ? user.DisplayName : !string.IsNullOrWhiteSpace(user.FullName) ? user.FullName : user.UserName;
+    private string UserName(Guid? userId) => userId.HasValue ? _users.FirstOrDefault(u => u.UserId == userId.Value) is { } user ? DisplayUser(user) : "Unknown user" : string.Empty;
+    private string TargetName(AssignmentRuleDto rule) => rule.AssignToUserId.HasValue ? UserName(rule.AssignToUserId) : !string.IsNullOrWhiteSpace(rule.AssignToTeam) ? rule.AssignToTeam! : "No target";
+    private static string RecommendedAction(AssignmentRuleDto rule) => !rule.IsActive ? "Activate this rule if it should route CRM work." : !HasTarget(rule) ? "Assign this rule to a producer/user or team before relying on it." : string.IsNullOrWhiteSpace(rule.Criteria) ? "Add routing criteria so assignments are auditable and predictable." : rule.Priority > 100 ? "Review priority ordering; lower numbers execute first." : "Monitor assignment outcomes and tune criteria as volume changes.";
+
+    private static string MethodTone(AssignmentRuleDto rule) => IsMethod(rule, "RoundRobin") ? "asg-pill--cyan" : IsMethod(rule, "Territory") ? "asg-pill--purple" : IsMethod(rule, "LoadBased") ? "asg-pill--green" : "asg-pill--amber";
+    private RenderFragment MethodBadge(AssignmentRuleDto rule) => @<span class="asg-pill @MethodTone(rule)">@Safe(rule.AssignmentMethod, "Manual")</span>;
+    private RenderFragment StatusBadge(AssignmentRuleDto rule) => @<span class="asg-pill @(rule.IsActive ? "asg-pill--green" : "asg-pill--neutral")">@(rule.IsActive ? "Active" : "Inactive")</span>;
+    private RenderFragment ImportanceBadge(AssignmentRuleDto rule) => @<span class="asg-risk-badge asg-risk-badge--@ImportanceTone(rule)"><i class="bi @(ImportanceTone(rule) == "red" ? "bi-exclamation-octagon" : "bi-shield-check")" aria-hidden="true"></i>@ImportanceLevel(rule)</span>;
+
+    private void ShowToast(string message, string cssClass)
+    {
+        _toasts.Add(new(Guid.NewGuid(), message.Length <= 160 ? message : $"{message[..157]}...", cssClass));
+        if (_toasts.Count > 4) _toasts.RemoveAt(0);
+    }
+
+    private void DismissToast(Guid id) => _toasts.RemoveAll(t => t.Id == id);
+
+    private sealed class AssignmentRuleFormModel
     {
         [Required(ErrorMessage = "Rule Name is required.")]
         [StringLength(200, ErrorMessage = "Rule Name cannot exceed 200 characters.")]
@@ -239,14 +668,17 @@
         [StringLength(80, ErrorMessage = "Entity Type cannot exceed 80 characters.")]
         public string EntityType { get; set; } = string.Empty;
 
+        [Required(ErrorMessage = "Assignment Method is required.")]
         [StringLength(80, ErrorMessage = "Assignment Method cannot exceed 80 characters.")]
-        public string? AssignmentMethod { get; set; }
+        public string? AssignmentMethod { get; set; } = "RoundRobin";
 
-        [Range(0, int.MaxValue, ErrorMessage = "Priority must be 0 or greater.")]
-        public int Priority { get; set; }
+        public Guid? AssignToUserId { get; set; }
 
         [StringLength(200, ErrorMessage = "Team name cannot exceed 200 characters.")]
         public string? AssignToTeam { get; set; }
+
+        [Range(0, int.MaxValue, ErrorMessage = "Priority must be 0 or greater.")]
+        public int Priority { get; set; }
 
         [StringLength(1000, ErrorMessage = "Criteria cannot exceed 1000 characters.")]
         public string? Criteria { get; set; }
@@ -257,14 +689,8 @@
         public bool IsActive { get; set; } = true;
     }
 
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
-    }
+    private sealed record TabDef(string Key, string Label, string Icon);
+    private sealed record InsightDef(string Title, string Description, string Icon);
+    private sealed record TargetGroup(string Name, int Count, int Active, int Risk, int Percent);
+    private sealed record ToastMessage(Guid Id, string Message, string CssClass);
 }

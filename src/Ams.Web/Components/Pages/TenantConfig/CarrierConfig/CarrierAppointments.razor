@@ -1,33 +1,314 @@
-﻿@page "/tenant/carriers/appointments"
+@page "/tenant/carriers/appointments"
 @using System.ComponentModel.DataAnnotations
 @using Ams.Application.Features.CarrierConfig
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
-<PageTitle>Carrier Appointments â€” Carrier Configuration</PageTitle>
-<AppPageHeader Title="Carrier Appointments" Subtitle="Manage carrier appointments by state and line of business" Icon="bi-calendar-check"><Actions><button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Add Appointment</button><button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button></Actions></AppPageHeader>
-<div class="pc-kpi-strip"><div class="pc-kpi-card @(_activeFilter==""?"pc-kpi-card--active":"")" @onclick='()=>SetFilter("")' title="Show all appointments" style="cursor:pointer"><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-calendar-check"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total</div></div></div><div class="pc-kpi-card @(_activeFilter=="active"?"pc-kpi-card--active":"")" @onclick='()=>SetFilter("active")' title="Filter active appointments" style="cursor:pointer"><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x=>x.IsActive)</div><div class="pc-kpi-label">Active</div></div></div><div class="pc-kpi-card @(_activeFilter=="expiring"?"pc-kpi-card--active":"")" @onclick='()=>SetFilter("expiring")' title="Filter expiring appointments" style="cursor:pointer"><span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-hourglass-split"></i></span><div><div class="pc-kpi-value">@_items.Count(x=>x.ExpirationDate.HasValue&&x.ExpirationDate.Value<=DateTime.Today.AddDays(60))</div><div class="pc-kpi-label">Expiring</div></div></div></div>
-@if(_loadError is not null){<div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError</div>}
-<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search appointment, state, or LOB..." />
-<div class="um-grid-card">@if(_loading){<div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading...</span></div>}<SfGrid TValue="CarrierAppointmentDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52"><GridEvents TValue="CarrierAppointmentDto" RowSelected="OnRowSelected"/><GridPageSettings PageSize="25"/><GridColumns><GridColumn Field="AppointmentCode" HeaderText="Code" Width="160"/><GridColumn Field="StateCode" HeaderText="State" Width="90"/><GridColumn Field="LineOfBusiness" HeaderText="Line of Business" Width="190"/><GridColumn Field="AppointmentDate" HeaderText="Appointed" Width="130" Format="d"/><GridColumn Field="ExpirationDate" HeaderText="Expires" Width="130" Format="d"/><GridColumn Field="IsActive" HeaderText="Status" Width="100" TextAlign="TextAlign.Center"><Template>@{var r=(CarrierAppointmentDto)context;}<span class="um-badge @(r.IsActive?"um-badge-success":"um-badge-neutral")">@(r.IsActive?"Active":"Inactive")</span></Template></GridColumn><GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Center"><Template>@{var r=(CarrierAppointmentDto)context;}<button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="()=>OpenEdit(r)"><i class="bi bi-pencil"></i></button></Template></GridColumn></GridColumns></SfGrid></div>
-<SfDialog @bind-Visible="_showForm" Width="580px" IsModal="true" ShowCloseIcon="false"><DialogEvents Closed="ResetForm"/><DialogContent><div class="um-modal-header"><i class="bi bi-calendar-check"></i><span>@(_editId.HasValue?"Edit Appointment":"Add Appointment")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="()=>_showForm=false"><i class="bi bi-x-lg"></i></button></div><EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator/><div class="um-modal-body"><div class="um-form-grid"><div class="um-field"><label>Appointment Code <span class="text-danger">*</span></label><InputText @bind-Value="_form.AppointmentCode" class="um-input"/></div><div class="um-field"><label>State <span class="text-danger">*</span></label><InputText @bind-Value="_form.StateCode" class="um-input"/></div><div class="um-field"><label>Line of Business</label><InputText @bind-Value="_form.LineOfBusiness" class="um-input"/></div><div class="um-field"><label>Appointment Date</label><InputDate @bind-Value="_form.AppointmentDate" class="um-input"/></div><div class="um-field"><label>Expiration Date</label><InputDate @bind-Value="_form.ExpirationDate" class="um-input"/></div><div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsActive"/> Active</label></div></div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="()=>_showForm=false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue?"Save Changes":"Create")</button></div></EditForm></DialogContent></SfDialog>
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true"><ToastPosition X="Right" Y="Bottom"/></SfToast><style>.validation-message{display:flex;align-items:center;gap:.45rem;margin-top:.55rem;color:#dc3545!important;font-size:.875rem;font-weight:700}.validation-message::before{content:"!";display:inline-flex;align-items:center;justify-content:center;width:1rem;height:1rem;min-width:1rem;flex-shrink:0;border-radius:999px;color:#fff;background:linear-gradient(135deg,#ef4444,#b91c1c);font-size:.7rem;font-weight:800}</style>
+
+<PageTitle>Carrier Appointments Command Center — Carrier Configuration</PageTitle>
+
+<div class="cap-page">
+    <section class="cap-hero">
+        <div class="cap-hero__content">
+            <div class="cap-hero-left">
+                <span class="cap-hero-icon"><i class="bi bi-calendar-check" aria-hidden="true"></i></span>
+                <div class="cap-hero-title">
+                    <div class="cap-hero__eyebrow">Enterprise carrier appointment governance</div>
+                    <div class="cap-title-row">
+                        <h1>Carrier Appointments Command Center</h1>
+                        <div class="cap-hero__meta">
+                            <span><i class="bi bi-calendar-check" aria-hidden="true"></i>@_items.Count appointments</span>
+                            <span><i class="bi bi-check-circle" aria-hidden="true"></i>@_items.Count(x => x.IsActive) active</span>
+                            <span><i class="bi bi-hourglass-split" aria-hidden="true"></i>@_items.Count(IsExpiringSoon) expiring</span>
+                            <span><i class="bi bi-exclamation-octagon" aria-hidden="true"></i>@_items.Count(NeedsReview) need review</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <p>Govern carrier appointments by state, line of business, expiration risk, active market access, and readiness for submission, quote, and policy placement workflows.</p>
+        </div>
+        <div class="cap-hero__actions">
+            <button type="button" class="cap-btn cap-btn--light" @onclick="RefreshAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "cap-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="cap-btn cap-btn--primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Appointment</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger cap-alert" style="border-left: 4px solid #dc3545; animation: cap-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="cap-kpi-strip" aria-label="Carrier appointment KPIs">
+        @KpiCard("all", "Total", _items.Count.ToString(), "All configured carrier appointments", "bi-calendar-check", "blue")
+        @KpiCard("active", "Active", _items.Count(x => x.IsActive).ToString(), "Appointments available for market workflows", "bi-check-circle", "green")
+        @KpiCard("expiring", "Expiring", _items.Count(IsExpiringSoon).ToString(), "Appointments expiring within 60 days", "bi-hourglass-split", "amber")
+        @KpiCard("expired", "Expired", _items.Count(IsExpired).ToString(), "Appointments past expiration", "bi-calendar-x", "red")
+        @KpiCard("states", "States", StateGroups.Count.ToString(), "States represented by appointments", "bi-map", "cyan")
+        @KpiCard("review", "Needs Review", _items.Count(NeedsReview).ToString(), "Inactive, missing dates, or incomplete appointment records", "bi-exclamation-octagon", "purple")
+    </section>
+
+    <section class="cap-workflows" aria-label="Carrier appointment workflows">
+        <button type="button" class="cap-workflow" @onclick='() => SetDashboardFocus("all", "importance")'><span class="cap-workflow-icon"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></span><span class="cap-workflow-meta"><strong>Priority review</strong><span>Rank appointments by market value and renewal risk</span></span></button>
+        <button type="button" class="cap-workflow" @onclick='() => SetDashboardFocus("expiring", "expiration")'><span class="cap-workflow-icon"><i class="bi bi-hourglass-split" aria-hidden="true"></i></span><span class="cap-workflow-meta"><strong>Expiration queue</strong><span>Review appointments expiring within 60 days</span></span></button>
+        <button type="button" class="cap-workflow" @onclick='() => SetDashboardFocus("expired", "expiration")'><span class="cap-workflow-icon"><i class="bi bi-calendar-x" aria-hidden="true"></i></span><span class="cap-workflow-meta"><strong>Expired access</strong><span>Find appointments needing renewal or deactivation</span></span></button>
+        <button type="button" class="cap-workflow" @onclick='() => SetDashboardFocus("review", "importance")'><span class="cap-workflow-icon"><i class="bi bi-exclamation-octagon" aria-hidden="true"></i></span><span class="cap-workflow-meta"><strong>Cleanup queue</strong><span>Resolve inactive, incomplete, or undated appointments</span></span></button>
+        <button type="button" class="cap-workflow" @onclick='() => SetDashboardFocus("states", "state")'><span class="cap-workflow-icon"><i class="bi bi-map" aria-hidden="true"></i></span><span class="cap-workflow-meta"><strong>State coverage</strong><span>Compare appointment distribution by state</span></span></button>
+    </section>
+
+    <section class="cap-filter-panel" aria-label="Carrier appointment filters">
+        <div class="cap-search"><i class="bi bi-search" aria-hidden="true"></i><input type="search" placeholder="Search appointment code, state, line of business, or readiness…" aria-label="Search carrier appointments" value="@_searchTerm" @oninput="args => OnSearchInputValue(args.Value?.ToString())" /></div>
+        <div class="cap-filter-grid">
+            <label><span>State</span><select class="form-select" @bind="_stateFilter" @bind:after="ApplyFilters"><option value="">All states</option>@foreach (var state in StateOptions) { <option value="@state">@state</option> }</select></label>
+            <label><span>Status</span><select class="form-select" @bind="_statusFilter" @bind:after="ApplyFilters"><option value="">All statuses</option><option value="Active">Active</option><option value="Inactive">Inactive</option><option value="Expiring">Expiring</option><option value="Expired">Expired</option><option value="NeedsReview">Needs review</option></select></label>
+            <label><span>Sort</span><select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters"><option value="importance">Importance</option><option value="expiration">Expiration</option><option value="state">State</option><option value="lob">Line of business</option><option value="code">Code</option><option value="created">Newest</option></select></label>
+        </div>
+        <button type="button" class="cap-btn cap-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+    </section>
+
+    <nav class="cap-tabs" aria-label="Carrier appointment views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="cap-tab @(_activeTab == tab.Key ? "cap-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)"><i class="bi @tab.Icon" aria-hidden="true"></i><span>@tab.Label</span><strong>@TabCount(tab.Key)</strong></button>
+        }
+    </nav>
+
+    <main class="cap-dashboard">
+        <section class="cap-main-card">
+            <div class="cap-card-header">
+                <div><span class="cap-section-kicker">@ActiveViewTitle</span><h2>@FilteredAppointments.Count() appointments</h2><p>Prioritized by enterprise importance: active market access, expiration risk, state coverage, line of business readiness, appointment dates, and completeness.</p></div>
+                <div class="cap-card-actions">
+                    @if (_selectedIds.Count > 0)
+                    {
+                        <span class="cap-sel-count">@_selectedIds.Count selected</span>
+                        <button type="button" class="cap-btn cap-btn--ghost" @onclick="() => ConfirmBulkToggle(true)"><i class="bi bi-check-circle" aria-hidden="true"></i> Activate</button>
+                        <button type="button" class="cap-btn cap-btn--ghost" @onclick="() => ConfirmBulkToggle(false)"><i class="bi bi-slash-circle" aria-hidden="true"></i> Deactivate</button>
+                        <button type="button" class="cap-btn cap-btn--danger-ghost" @onclick="ConfirmBulkDelete"><i class="bi bi-trash3" aria-hidden="true"></i> Remove</button>
+                    }
+                    <button type="button" class="cap-btn cap-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Prev</button>
+                    <span class="cap-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="cap-btn cap-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="cap-loading"><span class="cap-spinner"></span> Loading carrier appointments…</div>
+            }
+            else if (!FilteredAppointments.Any())
+            {
+                <div class="cap-empty"><i class="bi bi-calendar-check" aria-hidden="true"></i><strong>No carrier appointments found</strong><span>Adjust the active KPI, tab, search, or filters.</span></div>
+            }
+            else if (_activeTab == "states")
+            {
+                <div class="cap-group-grid">
+                    @foreach (var group in StateGroups)
+                    {
+                        <article class="cap-group-card"><div class="cap-group-icon"><i class="bi bi-map" aria-hidden="true"></i></div><div class="cap-group-meta"><h3>@group.Name</h3><p>@group.Count appointments • @group.Active active • @group.Expiring expiring • @group.ReviewCount need review</p><div class="cap-mini-bar"><span style="width:@group.Percent%"></span></div></div><button type="button" class="cap-btn cap-btn--ghost" @onclick="() => FilterByState(group.Name)">Open</button></article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="cap-table-wrap">
+                    <table class="cap-table">
+                        <thead><tr><th class="cap-check-col"><input type="checkbox" checked="@AllPageSelected" @onchange="args => ToggleSelectAllPage(args.Value is bool value && value)" aria-label="Select all appointments on page" /></th><th>Importance</th><th>Appointment</th><th>State</th><th>LOB</th><th>Dates</th><th>Status</th><th>Readiness</th><th class="cap-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var appointment in PagedAppointments)
+                            {
+                                <tr class="@(_selected?.CarrierAppointmentId == appointment.CarrierAppointmentId ? "cap-row cap-row--selected" : "cap-row")" @onclick="() => SelectRow(appointment)">
+                                    <td class="cap-check-col" @onclick:stopPropagation="true"><input type="checkbox" checked="@IsSelected(appointment)" @onchange="args => ToggleSelect(appointment, args.Value is bool value && value)" aria-label="Select appointment" /></td>
+                                    <td><span class="cap-risk-badge @ImportanceBadgeClass(appointment)">@ImportanceScore(appointment)</span></td>
+                                    <td><div class="cap-appointment-cell"><div class="cap-avatar" style="@AvatarStyle(appointment.AppointmentCode)" aria-hidden="true">@Initials(appointment.AppointmentCode)</div><div class="cap-appointment-meta"><button type="button" class="cap-link-button" @onclick:stopPropagation="true" @onclick="() => OpenEdit(appointment)">@appointment.AppointmentCode</button><small>@Safe(appointment.LineOfBusiness, "All lines")</small></div></div></td>
+                                    <td><span class="cap-pill cap-pill--blue"><i class="bi bi-map" aria-hidden="true"></i>@appointment.StateCode</span></td>
+                                    <td><span class="cap-pill cap-pill--cyan">@Safe(appointment.LineOfBusiness, "All Lines")</span></td>
+                                    <td><div class="cap-date-stack"><span>Start @FormatDate(appointment.AppointmentDate)</span><span>End @FormatDate(appointment.ExpirationDate)</span></div></td>
+                                    <td><span class="cap-pill @(appointment.IsActive ? "cap-pill--green" : "cap-pill--neutral")">@(appointment.IsActive ? "Active" : "Inactive")</span></td>
+                                    <td><span class="cap-pill @ReadinessBadgeClass(appointment)">@ReadinessLabel(appointment)</span></td>
+                                    <td class="cap-actions-col" @onclick:stopPropagation="true"><button type="button" class="cap-icon-btn" title="Edit appointment" @onclick="() => OpenEdit(appointment)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="cap-icon-btn" title="@(appointment.IsActive ? "Deactivate appointment" : "Activate appointment")" @onclick="() => ConfirmToggle(appointment)"><i class="bi @(appointment.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i></button><button type="button" class="cap-icon-btn cap-icon-btn--danger" title="Delete appointment" @onclick="() => ConfirmDelete(appointment)"><i class="bi bi-trash3" aria-hidden="true"></i></button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="cap-side-panel" aria-label="Carrier appointment insights">
+            <section class="cap-panel-card">
+                <span class="cap-section-kicker">Selected appointment</span>
+                @if (_selected is null)
+                {
+                    <div class="cap-empty cap-empty--compact"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select an appointment</strong><span>Open details, recommendations, and quick actions.</span></div>
+                }
+                else
+                {
+                    <div class="cap-selected__title"><div class="cap-avatar cap-avatar--lg" style="@AvatarStyle(_selected.AppointmentCode)" aria-hidden="true">@Initials(_selected.AppointmentCode)</div><div><h3>@_selected.AppointmentCode</h3><span>@_selected.StateCode • @Safe(_selected.LineOfBusiness, "All Lines")</span></div></div>
+                    <div class="cap-score-card @ImportanceClass(_selected)"><span>Importance score</span><strong>@ImportanceScore(_selected)</strong><small>@RecommendedAction(_selected)</small></div>
+                    <dl class="cap-detail-list"><div><dt>Status</dt><dd>@(_selected.IsActive ? "Active" : "Inactive")</dd></div><div><dt>State</dt><dd>@_selected.StateCode</dd></div><div><dt>LOB</dt><dd>@Safe(_selected.LineOfBusiness, "All Lines")</dd></div><div><dt>Appointed</dt><dd>@FormatDate(_selected.AppointmentDate)</dd></div><div><dt>Expires</dt><dd>@FormatDate(_selected.ExpirationDate)</dd></div><div><dt>Created</dt><dd>@FormatDate(_selected.CreatedDateUtc)</dd></div></dl>
+                    <div class="cap-selected-actions"><button type="button" class="cap-btn cap-btn--primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="cap-btn cap-btn--ghost" @onclick="() => ConfirmToggle(_selected)"><i class="bi @(_selected.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i> @(_selected.IsActive ? "Deactivate" : "Activate")</button></div>
+                }
+            </section>
+            <section class="cap-panel-card"><span class="cap-section-kicker">Enterprise insights</span><div class="cap-insight-list"><div class="cap-insight"><i class="bi bi-hourglass-split" aria-hidden="true"></i><div><strong>Expiration risk</strong><span>@ExpirationInsight</span></div></div><div class="cap-insight"><i class="bi bi-map" aria-hidden="true"></i><div><strong>State coverage</strong><span>@StateInsight</span></div></div><div class="cap-insight"><i class="bi bi-shield-check" aria-hidden="true"></i><div><strong>Market readiness</strong><span>@ReadinessInsight</span></div></div></div></section>
+        </aside>
+    </main>
+</div>
+
+@if (_showForm)
+{
+    <div class="cap-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="carrier-appointment-form-title">
+        <div class="cap-modal">
+            <div class="cap-modal__header"><i class="bi bi-calendar-check" aria-hidden="true"></i><span id="carrier-appointment-form-title">@(_editId.HasValue ? "Edit Appointment" : "Add Appointment")</span><button type="button" class="cap-icon-btn cap-icon-btn--light ms-auto" @onclick="CloseForm" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator />
+                <div class="cap-modal__body"><div class="cap-validation-note"><i class="bi bi-info-circle" aria-hidden="true"></i><div><strong>Appointment governance</strong><span>Appointment quality affects state availability, line-of-business placement, carrier access, and renewal readiness.</span></div></div><div class="cap-form-grid">
+                    <label class="cap-field"><span>Appointment Code <em>*</em></span><InputText @bind-Value="_form.AppointmentCode" class="form-control" placeholder="e.g. CA-GL-001" /><ValidationMessage For="() => _form.AppointmentCode" class="text-danger" /></label>
+                    <label class="cap-field"><span>State <em>*</em></span><InputText @bind-Value="_form.StateCode" class="form-control" placeholder="CA" /><ValidationMessage For="() => _form.StateCode" class="text-danger" /></label>
+                    <label class="cap-field"><span>Line of Business</span><InputText @bind-Value="_form.LineOfBusiness" class="form-control" placeholder="General Liability" /><ValidationMessage For="() => _form.LineOfBusiness" class="text-danger" /></label>
+                    <label class="cap-field"><span>Appointment Date</span><InputDate @bind-Value="_form.AppointmentDate" class="form-control" /><ValidationMessage For="() => _form.AppointmentDate" class="text-danger" /></label>
+                    <label class="cap-field"><span>Expiration Date</span><InputDate @bind-Value="_form.ExpirationDate" class="form-control" /><ValidationMessage For="() => _form.ExpirationDate" class="text-danger" /></label>
+                    @if (_editId.HasValue) { <label class="cap-check-field"><InputCheckbox @bind-Value="_form.IsActive" /><span>Active</span></label> }
+                </div></div>
+                <div class="cap-modal__footer"><button type="button" class="cap-btn cap-btn--ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="cap-btn cap-btn--primary" disabled="@_saving">@if (_saving) { <span class="cap-spin-sm"></span> } @(_editId.HasValue ? "Save Changes" : "Create Appointment")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_confirmVisible)
+{
+    <div class="cap-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="carrier-appointment-confirm-title"><div class="cap-confirm"><div class="cap-confirm__body"><div class="cap-confirm-icon cap-confirm-icon--danger"><i class="bi @_confirmIcon" aria-hidden="true"></i></div><div><h3 id="carrier-appointment-confirm-title">@_confirmTitle</h3><p>@_confirmMessage</p></div></div><div class="cap-modal__footer"><button type="button" class="cap-btn cap-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button><button type="button" class="cap-btn cap-btn--danger" @onclick="ExecuteConfirmedAsync" disabled="@_saving">@if (_saving) { <span class="cap-spin-sm"></span> } Confirm</button></div></div></div>
+}
+
+<div class="cap-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="cap-toast cap-toast--@toast.Kind"><i class="bi @(toast.Kind == "success" ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill")" aria-hidden="true"></i><span>@toast.Message</span><button type="button" @onclick="() => DismissToast(toast.Id)" aria-label="Dismiss notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+    }
+</div>
+
 @code {
     Guid TenantAdminUserId { get; set; }
     Guid DevTenantId { get; set; }
     Guid DevUserId { get; set; }
-    private Guid _tenantId;
-    private Guid _tenantAdminUserId;Guid TenantId { get; set; }List<CarrierAppointmentDto> _items=[];List<CarrierAppointmentDto> _filtered=[];string _activeFilter="";bool _loading,_saving,_showForm;string _search=string.Empty;string? _loadError;Guid? _editId;SfToast _toast=default!;AppointmentForm _form=new();protected override async Task OnInitializedAsync()
+    Guid TenantId { get; set; }
+    readonly List<DashboardTab> _tabs = [new("all", "All", "bi-calendar-check"), new("active", "Active", "bi-check-circle"), new("expiring", "Expiring", "bi-hourglass-split"), new("expired", "Expired", "bi-calendar-x"), new("review", "Needs Review", "bi-exclamation-octagon"), new("states", "States", "bi-map")];
+    List<CarrierAppointmentDto> _items = [];
+    HashSet<Guid> _selectedIds = [];
+    List<ToastItem> _toasts = [];
+    CarrierAppointmentDto? _selected;
+    AppointmentForm _form = new();
+    Func<Task>? _confirmAction;
+    Guid? _editId;
+    string _activeTab = "all";
+    string _searchTerm = string.Empty;
+    string _stateFilter = string.Empty;
+    string _statusFilter = string.Empty;
+    string _sortMode = "importance";
+    string _confirmTitle = string.Empty;
+    string _confirmMessage = string.Empty;
+    string _confirmIcon = "bi-exclamation-triangle-fill";
+    string? _loadError;
+    bool _loading;
+    bool _saving;
+    bool _showForm;
+    bool _confirmVisible;
+    int _page = 1;
+    const int PageSize = 12;
+
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Carrier Config", null), new("Carrier Appointments", null)); await LoadAsync(); }
+
+    IEnumerable<CarrierAppointmentDto> FilteredAppointments
     {
-        await ResolveCurrentUserContextAsync();Breadcrumbs.SetCrumbs(new("Home","/"),new("Carrier Config",null),new("Carrier Appointments",null));await LoadAsync();}async Task LoadAsync(){_loading=true;_loadError=null;try{var r=await Api.SearchCarrierAppointmentsAsync(TenantId,_search,pageSize:200);_items=r?.Items.ToList()??[];ApplyFilter();}catch(Exception ex){_loadError=ex.Message;}finally{_loading=false;}}void SetFilter(string f){_activeFilter=f;ApplyFilter();}void ApplyFilter()=>_filtered=_activeFilter switch{"active"=>_items.Where(x=>x.IsActive).ToList(),"expiring"=>_items.Where(x=>x.ExpirationDate.HasValue&&x.ExpirationDate.Value<=DateTime.Today.AddDays(60)).ToList(),_=>[.._items]};Task OnSearchAsync()=>LoadAsync();void OnRowSelected(RowSelectEventArgs<CarrierAppointmentDto> args)=>OpenEdit(args.Data);void OpenCreate(){_editId=null;_form=new();_showForm=true;}void OpenEdit(CarrierAppointmentDto i){_editId=i.CarrierAppointmentId;_form=new(){CarrierId=i.CarrierId,AppointmentCode=i.AppointmentCode,StateCode=i.StateCode,LineOfBusiness=i.LineOfBusiness,AppointmentDate=i.AppointmentDate,ExpirationDate=i.ExpirationDate,IsActive=i.IsActive};_showForm=true;}async Task SaveAsync(){_saving=true;try{if(_editId.HasValue)await Api.UpdateCarrierAppointmentAsync(_editId.Value,new(_form.CarrierId,_form.AppointmentCode,_form.StateCode,_form.LineOfBusiness,_form.AppointmentDate,_form.ExpirationDate,_form.IsActive));else await Api.CreateCarrierAppointmentAsync(new(TenantId,_form.CarrierId,_form.AppointmentCode,_form.StateCode,_form.LineOfBusiness,_form.AppointmentDate,_form.ExpirationDate));_showForm=false;await _toast.ShowAsync(new(){Content="Saved successfully",CssClass="e-toast-success"});await LoadAsync();}catch(Exception ex){await _toast.ShowAsync(new(){Content=$"Save failed: {ex.Message}",CssClass="e-toast-danger"});}finally{_saving=false;}}void ResetForm(){_form=new();_editId=null;}sealed class AppointmentForm{public Guid? CarrierId{get;set;}[Required,StringLength(80)]public string AppointmentCode{get;set;}=string.Empty;[Required,StringLength(10)]public string StateCode{get;set;}=string.Empty;[StringLength(100)]public string? LineOfBusiness{get;set;}public DateTime? AppointmentDate{get;set;}public DateTime? ExpirationDate{get;set;}public bool IsActive{get;set;}=true;}
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        get
+        {
+            IEnumerable<CarrierAppointmentDto> query = _items;
+            query = _activeTab switch { "active" => query.Where(x => x.IsActive), "expiring" => query.Where(IsExpiringSoon), "expired" => query.Where(IsExpired), "review" => query.Where(NeedsReview), _ => query };
+            if (!string.IsNullOrWhiteSpace(_searchTerm)) query = query.Where(MatchesSearch);
+            if (!string.IsNullOrWhiteSpace(_stateFilter)) query = query.Where(x => string.Equals(x.StateCode, _stateFilter, StringComparison.OrdinalIgnoreCase));
+            query = _statusFilter switch { "Active" => query.Where(x => x.IsActive), "Inactive" => query.Where(x => !x.IsActive), "Expiring" => query.Where(IsExpiringSoon), "Expired" => query.Where(IsExpired), "NeedsReview" => query.Where(NeedsReview), _ => query };
+            return _sortMode switch { "expiration" => query.OrderBy(x => x.ExpirationDate ?? DateTime.MaxValue).ThenBy(x => x.StateCode), "state" => query.OrderBy(x => x.StateCode).ThenBy(x => x.LineOfBusiness).ThenBy(x => x.AppointmentCode), "lob" => query.OrderBy(x => x.LineOfBusiness).ThenBy(x => x.StateCode), "code" => query.OrderBy(x => x.AppointmentCode), "created" => query.OrderByDescending(x => x.CreatedDateUtc), _ => query.OrderByDescending(ImportanceScore).ThenBy(x => x.StateCode).ThenBy(x => x.LineOfBusiness) };
+        }
     }
+
+    List<CarrierAppointmentDto> PagedAppointments => FilteredAppointments.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+    int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredAppointments.Count() / (double)PageSize));
+    bool AllPageSelected => PagedAppointments.Count > 0 && PagedAppointments.All(IsSelected);
+    bool HasFilters => !string.IsNullOrWhiteSpace(_searchTerm) || !string.IsNullOrWhiteSpace(_stateFilter) || !string.IsNullOrWhiteSpace(_statusFilter) || _activeTab != "all" || _sortMode != "importance";
+    string ActiveViewTitle => _tabs.FirstOrDefault(x => x.Key == _activeTab)?.Label ?? "All";
+    IEnumerable<string> StateOptions => StateGroups.Select(x => x.Name);
+    string ExpirationInsight => _items.Any(IsExpiringSoon) ? $"{_items.Count(IsExpiringSoon)} appointments expire within 60 days." : "No appointments are expiring within 60 days.";
+    string StateInsight => _items.Count == 0 ? "Create appointments before measuring state coverage." : $"{StateGroups.Count} states are represented by appointments.";
+    string ReadinessInsight => _items.Count == 0 ? "Create appointments before enabling carrier market workflows." : $"{_items.Count(x => x.IsActive && !NeedsReview(x))} appointments are active and ready.";
+    List<StateGroupSummary> StateGroups => _items.GroupBy(x => Safe(x.StateCode, "Unknown")).Select(g => new StateGroupSummary(g.Key, g.Count(), g.Count(x => x.IsActive), g.Count(IsExpiringSoon), g.Count(NeedsReview), _items.Count == 0 ? 0 : Math.Round(g.Count() * 100m / _items.Count, 0))).OrderByDescending(x => x.Count).ToList();
+
+    async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchCarrierAppointmentsAsync(TenantId, null, pageSize: 500); _items = result?.Items.ToList() ?? []; _selectedIds.RemoveWhere(id => _items.All(x => x.CarrierAppointmentId != id)); _selected = _selected is null ? _items.OrderByDescending(ImportanceScore).FirstOrDefault() : _items.FirstOrDefault(x => x.CarrierAppointmentId == _selected.CarrierAppointmentId) ?? _items.OrderByDescending(ImportanceScore).FirstOrDefault(); NormalizePage(); } catch (Exception ex) { _loadError = $"Failed to load carrier appointments: {ex.Message}"; } finally { _loading = false; } }
+    Task RefreshAsync() => LoadAsync();
+    void ApplyFilters() { _page = 1; NormalizePage(); }
+    void OnSearchInputValue(string? value) { _searchTerm = value ?? string.Empty; ApplyFilters(); }
+    void SetDashboardFocus(string tab, string sort) { _activeTab = tab; _sortMode = sort; _page = 1; NormalizePage(); }
+    void SetActiveTab(string tab) { _activeTab = tab; _page = 1; NormalizePage(); }
+    void PreviousPage() { if (_page > 1) _page--; }
+    void NextPage() { if (_page < TotalPages) _page++; }
+    void NormalizePage() { if (_page > TotalPages) _page = TotalPages; }
+    void SelectRow(CarrierAppointmentDto item) => _selected = item;
+    bool IsSelected(CarrierAppointmentDto item) => _selectedIds.Contains(item.CarrierAppointmentId);
+    void ToggleSelect(CarrierAppointmentDto item, bool selected) { if (selected) _selectedIds.Add(item.CarrierAppointmentId); else _selectedIds.Remove(item.CarrierAppointmentId); _selected = item; }
+    void ToggleSelectAllPage(bool selected) { foreach (var item in PagedAppointments) { if (selected) _selectedIds.Add(item.CarrierAppointmentId); else _selectedIds.Remove(item.CarrierAppointmentId); } }
+    void ClearFilters() { _searchTerm = string.Empty; _stateFilter = string.Empty; _statusFilter = string.Empty; _sortMode = "importance"; _activeTab = "all"; _page = 1; }
+    void FilterByState(string state) { _activeTab = "all"; _stateFilter = state; _sortMode = "importance"; _page = 1; }
+    void OpenCreate() { _editId = null; _form = new() { AppointmentDate = DateTime.Today, ExpirationDate = DateTime.Today.AddYears(1), IsActive = true }; _showForm = true; }
+    void OpenEdit(CarrierAppointmentDto item) { _selected = item; _editId = item.CarrierAppointmentId; _form = new() { CarrierId = item.CarrierId, AppointmentCode = item.AppointmentCode, StateCode = item.StateCode, LineOfBusiness = item.LineOfBusiness, AppointmentDate = item.AppointmentDate, ExpirationDate = item.ExpirationDate, IsActive = item.IsActive }; _showForm = true; }
+    void CloseForm() { _showForm = false; ResetForm(); }
+    void ResetForm() { _form = new(); _editId = null; }
+
+    async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (_editId.HasValue) await Api.UpdateCarrierAppointmentAsync(_editId.Value, new(_form.CarrierId, _form.AppointmentCode.Trim(), _form.StateCode.Trim().ToUpperInvariant(), NormalizeNullable(_form.LineOfBusiness), _form.AppointmentDate, _form.ExpirationDate, _form.IsActive));
+            else await Api.CreateCarrierAppointmentAsync(new(TenantId, _form.CarrierId, _form.AppointmentCode.Trim(), _form.StateCode.Trim().ToUpperInvariant(), NormalizeNullable(_form.LineOfBusiness), _form.AppointmentDate, _form.ExpirationDate));
+            _showForm = false; ShowToast("success", _editId.HasValue ? "Carrier appointment updated successfully." : "Carrier appointment created successfully."); ResetForm(); await LoadAsync();
+        }
+        catch (Exception ex) { ShowToast("danger", $"Save failed: {ex.Message}"); }
+        finally { _saving = false; }
+    }
+
+    void ConfirmToggle(CarrierAppointmentDto item) { var enable = !item.IsActive; OpenConfirm(enable ? "Activate Appointment" : "Deactivate Appointment", $"Are you sure you want to {(enable ? "activate" : "deactivate")} {item.AppointmentCode}? This changes appointment availability in carrier workflows.", "bi-shield-exclamation", () => SetAppointmentActiveAsync(item, enable)); }
+    void ConfirmDelete(CarrierAppointmentDto item) => OpenConfirm("Delete Appointment", $"Are you sure you want to delete {item.AppointmentCode}? This action cannot be undone.", "bi-trash3-fill", () => DeleteAppointmentAsync(item));
+    void ConfirmBulkToggle(bool enable) => OpenConfirm(enable ? "Activate Selected Appointments" : "Deactivate Selected Appointments", $"Are you sure you want to {(enable ? "activate" : "deactivate")} {_selectedIds.Count} selected appointment(s)?", "bi-shield-exclamation", () => BulkSetActiveAsync(enable));
+    void ConfirmBulkDelete() => OpenConfirm("Delete Selected Appointments", $"Are you sure you want to delete {_selectedIds.Count} selected appointment(s)? This action cannot be undone.", "bi-trash3-fill", BulkDeleteAsync);
+    void OpenConfirm(string title, string message, string icon, Func<Task> action) { _confirmTitle = title; _confirmMessage = message; _confirmIcon = icon; _confirmAction = action; _confirmVisible = true; }
+    void CloseConfirm() { _confirmVisible = false; _confirmAction = null; }
+    async Task ExecuteConfirmedAsync() { if (_confirmAction is null) return; _saving = true; try { await _confirmAction(); _confirmVisible = false; _confirmAction = null; } finally { _saving = false; } }
+    async Task SetAppointmentActiveAsync(CarrierAppointmentDto item, bool active) { try { await Api.UpdateCarrierAppointmentAsync(item.CarrierAppointmentId, new(item.CarrierId, item.AppointmentCode, item.StateCode, item.LineOfBusiness, item.AppointmentDate, item.ExpirationDate, active)); ShowToast("success", active ? "Appointment activated." : "Appointment deactivated."); await LoadAsync(); } catch (Exception ex) { ShowToast("danger", $"Update failed: {ex.Message}"); } }
+    async Task DeleteAppointmentAsync(CarrierAppointmentDto item) { try { await Api.DeleteCarrierAppointmentAsync(item.CarrierAppointmentId); _selectedIds.Remove(item.CarrierAppointmentId); if (_selected?.CarrierAppointmentId == item.CarrierAppointmentId) _selected = null; ShowToast("success", "Appointment deleted."); await LoadAsync(); } catch (Exception ex) { ShowToast("danger", $"Delete failed: {ex.Message}"); } }
+    async Task BulkSetActiveAsync(bool active) { var selected = _items.Where(x => _selectedIds.Contains(x.CarrierAppointmentId)).ToList(); var updated = 0; foreach (var item in selected) { try { await Api.UpdateCarrierAppointmentAsync(item.CarrierAppointmentId, new(item.CarrierId, item.AppointmentCode, item.StateCode, item.LineOfBusiness, item.AppointmentDate, item.ExpirationDate, active)); updated++; } catch (Exception ex) { ShowToast("danger", $"Update failed for {item.AppointmentCode}: {ex.Message}"); } } ShowToast("success", $"{updated} appointment(s) {(active ? "activated" : "deactivated")}. "); _selectedIds.Clear(); await LoadAsync(); }
+    async Task BulkDeleteAsync() { var selected = _items.Where(x => _selectedIds.Contains(x.CarrierAppointmentId)).ToList(); var deleted = 0; foreach (var item in selected) { try { await Api.DeleteCarrierAppointmentAsync(item.CarrierAppointmentId); deleted++; } catch (Exception ex) { ShowToast("danger", $"Delete failed for {item.AppointmentCode}: {ex.Message}"); } } ShowToast("success", $"{deleted} appointment(s) deleted."); _selectedIds.Clear(); _selected = null; await LoadAsync(); }
+
+    RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string color) => @<button type="button" class="cap-kpi-card cap-kpi-card--@color @(_activeTab == key ? "cap-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveTab(key)"><span class="cap-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span><span class="cap-kpi-body"><span class="cap-kpi-label">@label</span><strong class="cap-kpi-value">@value</strong><span class="cap-kpi-sub">@subtitle</span></span></button>;
+    int TabCount(string key) => key switch { "active" => _items.Count(x => x.IsActive), "expiring" => _items.Count(IsExpiringSoon), "expired" => _items.Count(IsExpired), "review" => _items.Count(NeedsReview), "states" => StateGroups.Count, _ => _items.Count };
+    bool MatchesSearch(CarrierAppointmentDto item) { var term = _searchTerm.Trim(); return Contains(item.AppointmentCode, term) || Contains(item.StateCode, term) || Contains(item.LineOfBusiness, term) || Contains(ReadinessLabel(item), term); }
+    static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    static string? NormalizeNullable(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    static string FormatDate(DateTime? date) => date.HasValue ? date.Value.ToLocalTime().ToString("MMM d, yyyy") : "—";
+    static string FormatDate(DateTime date) => date == default ? "—" : date.ToLocalTime().ToString("MMM d, yyyy");
+    static bool IsExpired(CarrierAppointmentDto item) => item.ExpirationDate.HasValue && item.ExpirationDate.Value.Date < DateTime.Today;
+    static bool IsExpiringSoon(CarrierAppointmentDto item) => item.ExpirationDate.HasValue && item.ExpirationDate.Value.Date >= DateTime.Today && item.ExpirationDate.Value.Date <= DateTime.Today.AddDays(60);
+    static bool NeedsReview(CarrierAppointmentDto item) => !item.IsActive || string.IsNullOrWhiteSpace(item.AppointmentCode) || string.IsNullOrWhiteSpace(item.StateCode) || !item.AppointmentDate.HasValue || IsExpired(item);
+    static string ReadinessLabel(CarrierAppointmentDto item) { if (IsExpired(item)) return "Expired"; if (IsExpiringSoon(item)) return "Expiring"; if (NeedsReview(item)) return "Review"; return "Ready"; }
+    static string ReadinessBadgeClass(CarrierAppointmentDto item) => ReadinessLabel(item) switch { "Expired" => "cap-pill--red", "Expiring" => "cap-pill--amber", "Review" => "cap-pill--amber", _ => "cap-pill--green" };
+    static int ImportanceScore(CarrierAppointmentDto item) { var score = 30; if (item.IsActive) score += 14; else score += 18; if (IsExpired(item)) score += 24; else if (IsExpiringSoon(item)) score += 22; if (!string.IsNullOrWhiteSpace(item.StateCode)) score += 10; if (!string.IsNullOrWhiteSpace(item.LineOfBusiness)) score += 8; if (item.AppointmentDate.HasValue) score += 6; else score += 8; return Math.Clamp(score, 0, 100); }
+    static string RecommendedAction(CarrierAppointmentDto item) { if (IsExpired(item)) return "Expired appointment should be renewed or deactivated."; if (IsExpiringSoon(item)) return "Appointment expires soon; prioritize renewal review."; if (!item.IsActive) return "Review whether this appointment should remain inactive."; if (!item.AppointmentDate.HasValue) return "Add appointment date to document market access readiness."; if (string.IsNullOrWhiteSpace(item.LineOfBusiness)) return "Add line of business when appointment is not all-lines."; return "Appointment is ready for carrier market workflows."; }
+    static string ImportanceClass(CarrierAppointmentDto item) => ImportanceScore(item) switch { >= 80 => "cap-score-card--red", >= 65 => "cap-score-card--amber", >= 45 => "cap-score-card--cyan", _ => "cap-score-card--green" };
+    static string ImportanceBadgeClass(CarrierAppointmentDto item) => ImportanceScore(item) switch { >= 80 => "cap-risk-badge--red", >= 65 => "cap-risk-badge--amber", >= 45 => "cap-risk-badge--cyan", _ => "cap-risk-badge--green" };
+    static string Initials(string? value) { var parts = (value ?? string.Empty).Split('-', ' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); return parts.Length switch { 0 => "AP", 1 => parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant(), _ => string.Concat(parts.Take(2).Select(x => char.ToUpperInvariant(x[0]))) }; }
+    static string AvatarStyle(string? value) { var hash = Math.Abs((value ?? "CarrierAppointment").GetHashCode()); var hue = hash % 360; return $"background:linear-gradient(135deg,hsl({hue},78%,48%),hsl({(hue + 35) % 360},82%,36%));"; }
+    void ShowToast(string kind, string message) { _toasts.Insert(0, new(Guid.NewGuid(), kind, message)); if (_toasts.Count > 4) _toasts.RemoveRange(4, _toasts.Count - 4); }
+    void DismissToast(Guid id) => _toasts.RemoveAll(x => x.Id == id);
+    async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); TenantId = context.TenantId; TenantAdminUserId = context.UserId; DevTenantId = context.TenantId; DevUserId = context.UserId; }
+    sealed class AppointmentForm { public Guid? CarrierId { get; set; } [Required, StringLength(80)] public string AppointmentCode { get; set; } = string.Empty; [Required, StringLength(10)] public string StateCode { get; set; } = string.Empty; [StringLength(100)] public string? LineOfBusiness { get; set; } public DateTime? AppointmentDate { get; set; } public DateTime? ExpirationDate { get; set; } public bool IsActive { get; set; } = true; }
+    sealed record DashboardTab(string Key, string Label, string Icon);
+    sealed record StateGroupSummary(string Name, int Count, int Active, int Expiring, int ReviewCount, decimal Percent);
+    sealed record ToastItem(Guid Id, string Kind, string Message);
 }

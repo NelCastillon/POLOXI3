@@ -1,92 +1,320 @@
-﻿@page "/tenant/policies/statuses"
+@page "/tenant/policies/statuses"
 @using System.ComponentModel.DataAnnotations
 @using Ams.Application.Features.PolicyConfig
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Policy Statuses â€” Policy Configuration</PageTitle>
+<PageTitle>Policy Status Command Center — Policy Configuration</PageTitle>
 
-<AppPageHeader Title="Policy Statuses" Subtitle="Define policy lifecycle statuses and default status behavior" Icon="bi-tags">
-    <Actions><button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Status</button><button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button></Actions>
-</AppPageHeader>
+<div class="pst-page">
+    <section class="pst-hero">
+        <div class="pst-hero__content">
+            <div class="pst-hero-left">
+                <span class="pst-hero-icon"><i class="bi bi-tags" aria-hidden="true"></i></span>
+                <div class="pst-hero-title">
+                    <div class="pst-hero__eyebrow">Enterprise policy lifecycle</div>
+                    <div class="pst-title-row">
+                        <h1>Policy Status Command Center</h1>
+                        <div class="pst-hero__meta">
+                            <span><i class="bi bi-tags" aria-hidden="true"></i>@_items.Count statuses</span>
+                            <span><i class="bi bi-check-circle" aria-hidden="true"></i>@_items.Count(x => x.IsActive) active</span>
+                            <span><i class="bi bi-star-fill" aria-hidden="true"></i>@_items.Count(x => x.IsDefault) default</span>
+                            <span><i class="bi bi-exclamation-octagon" aria-hidden="true"></i>@_items.Count(NeedsReview) need review</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <p>Govern policy lifecycle statuses, defaults, color cues, active workflow availability, and reporting segmentation across policy operations.</p>
+        </div>
+        <div class="pst-hero__actions">
+            <button type="button" class="pst-btn pst-btn--light" @onclick="RefreshAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "pst-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="pst-btn pst-btn--primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Status</button>
+        </div>
+    </section>
 
-<div class="pc-kpi-strip">
-    <div class="pc-kpi-card @(_activeFilter == "" ? "pc-kpi-card--active" : "")" title="Show all statuses" @onclick='() => SetFilter("")' style="cursor:pointer"><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-tags" aria-hidden="true"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total Statuses</div></div></div>
-    <div class="pc-kpi-card @(_activeFilter == "active" ? "pc-kpi-card--active" : "")" title="Filter active statuses" @onclick='() => SetFilter("active")' style="cursor:pointer"><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsActive)</div><div class="pc-kpi-label">Active</div></div></div>
-    <div class="pc-kpi-card @(_activeFilter == "default" ? "pc-kpi-card--active" : "")" title="Filter default statuses" @onclick='() => SetFilter("default")' style="cursor:pointer"><span class="pc-kpi-icon" style="background:#fef9c3"><i class="bi bi-star-fill text-warning" aria-hidden="true"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsDefault)</div><div class="pc-kpi-label">Default</div></div></div>
-    <div class="pc-kpi-card @(_activeFilter == "inactive" ? "pc-kpi-card--active" : "")" title="Filter inactive statuses" @onclick='() => SetFilter("inactive")' style="cursor:pointer"><span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-slash-circle" aria-hidden="true"></i></span><div><div class="pc-kpi-value">@_items.Count(x => !x.IsActive)</div><div class="pc-kpi-label">Inactive</div></div></div>
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger pst-alert" style="border-left: 4px solid #dc3545; animation: pst-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="pst-kpi-strip" aria-label="Policy status KPIs">
+        @KpiCard("all", "Total Statuses", _items.Count.ToString(), "All configured policy lifecycle statuses", "bi-tags", "blue")
+        @KpiCard("active", "Active", _items.Count(x => x.IsActive).ToString(), "Statuses available for policy workflows", "bi-check-circle", "green")
+        @KpiCard("default", "Default", _items.Count(x => x.IsDefault).ToString(), "Default policy status behavior", "bi-star", "amber")
+        @KpiCard("terminal", "Terminal", _items.Count(IsTerminalStatus).ToString(), "Cancelled, expired, closed, or non-renewed lifecycle states", "bi-stop-circle", "red")
+        @KpiCard("risk", "Needs Review", _items.Count(NeedsReview).ToString(), "Inactive defaults, missing colors, missing descriptions, or incomplete definitions", "bi-exclamation-octagon", "purple")
+        @KpiCard("inactive", "Inactive", _items.Count(x => !x.IsActive).ToString(), "Statuses hidden from workflow usage", "bi-slash-circle", "cyan")
+    </section>
+
+    <section class="pst-workflows" aria-label="Policy status workflows">
+        <button type="button" class="pst-workflow" @onclick='() => SetDashboardFocus("all", "importance")'><span class="pst-workflow-icon"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></span><span class="pst-workflow-meta"><strong>Lifecycle review</strong><span>Rank statuses by workflow importance and readiness</span></span></button>
+        <button type="button" class="pst-workflow" @onclick='() => SetDashboardFocus("default", "importance")'><span class="pst-workflow-icon"><i class="bi bi-star" aria-hidden="true"></i></span><span class="pst-workflow-meta"><strong>Default governance</strong><span>Audit fallback status behavior</span></span></button>
+        <button type="button" class="pst-workflow" @onclick='() => SetDashboardFocus("terminal", "importance")'><span class="pst-workflow-icon"><i class="bi bi-stop-circle" aria-hidden="true"></i></span><span class="pst-workflow-meta"><strong>Terminal states</strong><span>Review cancelled, expired, and closed states</span></span></button>
+        <button type="button" class="pst-workflow" @onclick='() => SetDashboardFocus("risk", "importance")'><span class="pst-workflow-icon"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></span><span class="pst-workflow-meta"><strong>Cleanup queue</strong><span>Find incomplete or risky policy status definitions</span></span></button>
+        <button type="button" class="pst-workflow" @onclick='() => SetDashboardFocus("types", "type")'><span class="pst-workflow-icon"><i class="bi bi-pie-chart" aria-hidden="true"></i></span><span class="pst-workflow-meta"><strong>Status type mix</strong><span>Compare active, pending, renewed, expired, and cancelled groups</span></span></button>
+    </section>
+
+    <section class="pst-filter-panel" aria-label="Policy status filters">
+        <div class="pst-search"><i class="bi bi-search" aria-hidden="true"></i><input type="search" placeholder="Search status code, name, type, color, or description…" aria-label="Search policy statuses" value="@_searchTerm" @oninput="args => OnSearchInputValue(args.Value?.ToString())" /></div>
+        <div class="pst-filter-grid">
+            <label><span>Status Type</span><select class="form-select" @bind="_typeFilter" @bind:after="ApplyFilters"><option value="">All types</option>@foreach (var type in StatusTypeOptions) { <option value="@type">@type</option> }</select></label>
+            <label><span>Status</span><select class="form-select" @bind="_statusFilter" @bind:after="ApplyFilters"><option value="">All statuses</option><option value="Active">Active</option><option value="Inactive">Inactive</option><option value="Default">Default</option><option value="Terminal">Terminal</option><option value="NeedsReview">Needs review</option></select></label>
+            <label><span>Sort</span><select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters"><option value="importance">Importance</option><option value="order">Sort order</option><option value="name">Name</option><option value="code">Code</option><option value="type">Type</option><option value="created">Newest</option></select></label>
+        </div>
+        <button type="button" class="pst-btn pst-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+    </section>
+
+    <nav class="pst-tabs" aria-label="Policy status views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="pst-tab @(_activeTab == tab.Key ? "pst-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)"><i class="bi @tab.Icon" aria-hidden="true"></i><span>@tab.Label</span><strong>@TabCount(tab.Key)</strong></button>
+        }
+    </nav>
+
+    <main class="pst-dashboard">
+        <section class="pst-main-card">
+            <div class="pst-card-header">
+                <div><span class="pst-section-kicker">@ActiveViewTitle</span><h2>@FilteredStatuses.Count() policy statuses</h2><p>Prioritized by enterprise importance: default behavior, active workflow usage, terminal lifecycle impact, sort precedence, visual cues, and completeness.</p></div>
+                <div class="pst-card-actions">
+                    @if (_selectedIds.Count > 0)
+                    {
+                        <span class="pst-sel-count">@_selectedIds.Count selected</span>
+                        <button type="button" class="pst-btn pst-btn--ghost" @onclick="() => ConfirmBulkToggle(true)"><i class="bi bi-check-circle" aria-hidden="true"></i> Activate</button>
+                        <button type="button" class="pst-btn pst-btn--ghost" @onclick="() => ConfirmBulkToggle(false)"><i class="bi bi-slash-circle" aria-hidden="true"></i> Deactivate</button>
+                        <button type="button" class="pst-btn pst-btn--danger-ghost" @onclick="ConfirmBulkDelete"><i class="bi bi-trash3" aria-hidden="true"></i> Remove</button>
+                    }
+                    <button type="button" class="pst-btn pst-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Prev</button>
+                    <span class="pst-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="pst-btn pst-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="pst-loading"><span class="pst-spinner"></span> Loading policy statuses…</div>
+            }
+            else if (!FilteredStatuses.Any())
+            {
+                <div class="pst-empty"><i class="bi bi-tags" aria-hidden="true"></i><strong>No policy statuses found</strong><span>Adjust the active KPI, tab, search, or filters.</span></div>
+            }
+            else if (_activeTab == "types")
+            {
+                <div class="pst-group-grid">
+                    @foreach (var group in TypeGroups)
+                    {
+                        <article class="pst-group-card"><div class="pst-group-icon"><i class="bi @StatusTypeIcon(group.Name)" aria-hidden="true"></i></div><div class="pst-group-meta"><h3>@group.Name</h3><p>@group.Count statuses • @group.Active active • @group.DefaultCount default • @group.ReviewCount need review</p><div class="pst-mini-bar"><span style="width:@group.Percent%"></span></div></div><button type="button" class="pst-btn pst-btn--ghost" @onclick="() => FilterByType(group.Name)">Open</button></article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="pst-table-wrap">
+                    <table class="pst-table">
+                        <thead><tr><th class="pst-check-col"><input type="checkbox" checked="@AllPageSelected" @onchange="args => ToggleSelectAllPage(args.Value is bool value && value)" aria-label="Select all statuses on page" /></th><th>Importance</th><th>Policy Status</th><th>Type</th><th>Color</th><th>Default</th><th>Status</th><th>Order</th><th>Created</th><th class="pst-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var status in PagedStatuses)
+                            {
+                                <tr class="@(_selected?.PolicyStatusId == status.PolicyStatusId ? "pst-row pst-row--selected" : "pst-row")" @onclick="() => SelectRow(status)">
+                                    <td class="pst-check-col" @onclick:stopPropagation="true"><input type="checkbox" checked="@IsSelected(status)" @onchange="args => ToggleSelect(status, args.Value is bool value && value)" aria-label="Select policy status" /></td>
+                                    <td>@ImportanceBadge(status)</td>
+                                    <td><div class="pst-status-cell"><div class="pst-avatar" style="@AvatarStyle(status)" aria-hidden="true">@Initials(status.StatusName)</div><div class="pst-status-meta"><button type="button" class="pst-link-button" @onclick:stopPropagation="true" @onclick="() => OpenEdit(status)">@status.StatusName</button><small>@Safe(status.StatusCode, "No code")</small></div></div></td>
+                                    <td><span class="pst-pill @StatusTypeBadgeClass(status.StatusType)"><i class="bi @StatusTypeIcon(StatusType(status))" aria-hidden="true"></i>@StatusType(status)</span></td>
+                                    <td><span class="pst-color-dot" style="background:@SafeColor(status.ColorHex)"></span><span class="pst-date">@Safe(status.ColorHex, "No color")</span></td>
+                                    <td class="pst-center">@if (status.IsDefault) { <i class="bi bi-star-fill pst-star" aria-label="Default"></i> } else { <span class="pst-muted">—</span> }</td>
+                                    <td><span class="pst-pill @(status.IsActive ? "pst-pill--green" : "pst-pill--neutral")">@(status.IsActive ? "Active" : "Inactive")</span></td>
+                                    <td><span class="pst-date">@status.SortOrder</span></td>
+                                    <td><span class="pst-date">@FormatDate(status.CreatedDateUtc)</span></td>
+                                    <td class="pst-actions-col" @onclick:stopPropagation="true"><button type="button" class="pst-icon-btn" title="Edit policy status" @onclick="() => OpenEdit(status)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="pst-icon-btn" title="@(status.IsActive ? "Deactivate policy status" : "Activate policy status")" @onclick="() => ConfirmToggle(status)"><i class="bi @(status.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i></button><button type="button" class="pst-icon-btn pst-icon-btn--danger" title="Delete policy status" @onclick="() => ConfirmDelete(status)"><i class="bi bi-trash3" aria-hidden="true"></i></button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="pst-side-panel" aria-label="Policy status insights">
+            <section class="pst-panel-card">
+                <span class="pst-section-kicker">Selected status</span>
+                @if (_selected is null)
+                {
+                    <div class="pst-empty pst-empty--compact"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a policy status</strong><span>Open details, recommendations, and quick actions.</span></div>
+                }
+                else
+                {
+                    <div class="pst-selected__title"><div class="pst-avatar pst-avatar--lg" style="@AvatarStyle(_selected)" aria-hidden="true">@Initials(_selected.StatusName)</div><div><h3>@_selected.StatusName</h3><span>@Safe(_selected.StatusCode, "No code") • @StatusType(_selected)</span></div></div>
+                    <div class="pst-score-card @ImportanceClass(_selected)"><span>Importance score</span><strong>@ImportanceScore(_selected)</strong><small>@RecommendedAction(_selected)</small></div>
+                    <dl class="pst-detail-list"><div><dt>Status</dt><dd>@(_selected.IsActive ? "Active" : "Inactive")</dd></div><div><dt>Default</dt><dd>@(_selected.IsDefault ? "Yes" : "No")</dd></div><div><dt>Type</dt><dd>@StatusType(_selected)</dd></div><div><dt>Color</dt><dd>@Safe(_selected.ColorHex, "No color")</dd></div><div><dt>Sort order</dt><dd>@_selected.SortOrder</dd></div><div><dt>Created</dt><dd>@FormatDate(_selected.CreatedDateUtc)</dd></div></dl>
+                    @if (!string.IsNullOrWhiteSpace(_selected.Description)) { <p class="pst-description">@_selected.Description</p> }
+                    <div class="pst-selected-actions"><button type="button" class="pst-btn pst-btn--primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="pst-btn pst-btn--ghost" @onclick="() => ConfirmToggle(_selected)"><i class="bi @(_selected.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i> @(_selected.IsActive ? "Deactivate" : "Activate")</button></div>
+                }
+            </section>
+            <section class="pst-panel-card"><span class="pst-section-kicker">Enterprise insights</span><div class="pst-insight-list"><div class="pst-insight"><i class="bi bi-star" aria-hidden="true"></i><div><strong>Default governance</strong><span>@DefaultInsight</span></div></div><div class="pst-insight"><i class="bi bi-stop-circle" aria-hidden="true"></i><div><strong>Terminal states</strong><span>@TerminalInsight</span></div></div><div class="pst-insight"><i class="bi bi-shield-check" aria-hidden="true"></i><div><strong>Workflow readiness</strong><span>@ReadinessInsight</span></div></div></div></section>
+        </aside>
+    </main>
 </div>
 
-@if (_loadError is not null) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError</div> }
+@if (_showForm)
+{
+    <div class="pst-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="policy-status-form-title">
+        <div class="pst-modal">
+            <div class="pst-modal__header"><i class="bi bi-tags" aria-hidden="true"></i><span id="policy-status-form-title">@(_editId.HasValue ? "Edit Policy Status" : "Add Policy Status")</span><button type="button" class="pst-icon-btn pst-icon-btn--light ms-auto" @onclick="CloseForm" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator /><div class="pst-modal__body"><div class="pst-validation-note"><i class="bi bi-info-circle" aria-hidden="true"></i><div><strong>Status lifecycle governance</strong><span>Use default, type, color, and active state intentionally because policy workflows and reporting depend on these values.</span></div></div><div class="pst-form-grid">
+                <label class="pst-field"><span>Status Code <em>*</em></span><InputText @bind-Value="_form.StatusCode" class="form-control" placeholder="e.g. ACTIVE" /><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></label>
+                <label class="pst-field"><span>Status Name <em>*</em></span><InputText @bind-Value="_form.StatusName" class="form-control" placeholder="Active" /><ValidationMessage For="() => _form.StatusName" class="text-danger" /></label>
+                <label class="pst-field"><span>Status Type</span><InputSelect @bind-Value="_form.StatusType" class="form-select"><option value="">Select type</option>@foreach (var type in _statusTypes) { <option value="@type">@type</option> }</InputSelect><ValidationMessage For="() => _form.StatusType" class="text-danger" /></label>
+                <label class="pst-field"><span>Color Hex</span><InputText @bind-Value="_form.ColorHex" class="form-control" placeholder="#3b82f6" /><ValidationMessage For="() => _form.ColorHex" class="text-danger" /></label>
+                <label class="pst-field"><span>Sort Order</span><InputNumber @bind-Value="_form.SortOrder" class="form-control" /><ValidationMessage For="() => _form.SortOrder" class="text-danger" /></label>
+                <label class="pst-field pst-field--wide"><span>Description</span><InputTextArea @bind-Value="_form.Description" class="form-control" rows="3" placeholder="Describe lifecycle meaning, workflow usage, or reporting treatment." /><ValidationMessage For="() => _form.Description" class="text-danger" /></label>
+                <label class="pst-check-field"><InputCheckbox @bind-Value="_form.IsDefault" /><span>Default</span></label>
+                @if (_editId.HasValue) { <label class="pst-check-field"><InputCheckbox @bind-Value="_form.IsActive" /><span>Active</span></label> }
+            </div></div><div class="pst-modal__footer"><button type="button" class="pst-btn pst-btn--ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="pst-btn pst-btn--primary" disabled="@_saving">@if (_saving) { <span class="pst-spin-sm"></span> } @(_editId.HasValue ? "Save Changes" : "Create Status")</button></div></EditForm>
+        </div>
+    </div>
+}
 
-<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search status name or codeâ€¦" />
+@if (_confirmVisible)
+{
+    <div class="pst-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="policy-status-confirm-title"><div class="pst-confirm"><div class="pst-confirm__body"><div class="pst-confirm-icon pst-confirm-icon--danger"><i class="bi @_confirmIcon" aria-hidden="true"></i></div><div><h3 id="policy-status-confirm-title">@_confirmTitle</h3><p>@_confirmMessage</p></div></div><div class="pst-modal__footer"><button type="button" class="pst-btn pst-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button><button type="button" class="pst-btn pst-btn--danger" @onclick="ExecuteConfirmedAsync" disabled="@_saving">@if (_saving) { <span class="pst-spin-sm"></span> } Confirm</button></div></div></div>
+}
 
-<div class="um-grid-card">
-    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loadingâ€¦</span></div> }
-    <SfGrid TValue="PolicyStatusDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-        <GridEvents TValue="PolicyStatusDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="25" />
-        <GridColumns>
-            <GridColumn Field="StatusCode" HeaderText="Code" Width="130" />
-            <GridColumn Field="StatusName" HeaderText="Status Name" Width="220" />
-            <GridColumn Field="StatusType" HeaderText="Type" Width="130" />
-            <GridColumn Field="ColorHex" HeaderText="Color" Width="90" TextAlign="TextAlign.Center"><Template>@{ var r = (PolicyStatusDto)context; }<span style="display:inline-block;width:18px;height:18px;border-radius:999px;background:@(string.IsNullOrWhiteSpace(r.ColorHex) ? "#cbd5e1" : r.ColorHex);border:1px solid #cbd5e1"></span></Template></GridColumn>
-            <GridColumn Field="IsDefault" HeaderText="Default" Width="90" TextAlign="TextAlign.Center"><Template>@{ var r = (PolicyStatusDto)context; }@if (r.IsDefault) { <i class="bi bi-check2-circle text-success"></i> }</Template></GridColumn>
-            <GridColumn Field="SortOrder" HeaderText="Order" Width="80" TextAlign="TextAlign.Center" />
-            <GridColumn Field="IsActive" HeaderText="Status" Width="100" TextAlign="TextAlign.Center"><Template>@{ var r = (PolicyStatusDto)context; }<span class="um-badge @(r.IsActive ? "um-badge-success" : "um-badge-neutral")">@(r.IsActive ? "Active" : "Inactive")</span></Template></GridColumn>
-            <GridColumn HeaderText="" Width="100" TextAlign="TextAlign.Center"><Template>@{ var r = (PolicyStatusDto)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEdit(r)"><i class="bi bi-pencil"></i></button><button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(r)"><i class="bi bi-trash"></i></button></Template></GridColumn>
-        </GridColumns>
-    </SfGrid>
+<div class="pst-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="pst-toast pst-toast--@toast.Kind"><i class="bi @(toast.Kind == "success" ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill")" aria-hidden="true"></i><span>@toast.Message</span><button type="button" @onclick="() => DismissToast(toast.Id)" aria-label="Dismiss notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+    }
 </div>
-
-<SfDialog @bind-Visible="_showForm" Width="560px" IsModal="true" ShowCloseIcon="false"><DialogEvents Closed="ResetForm" /><DialogContent><div class="um-modal-header"><i class="bi bi-tags" aria-hidden="true"></i><span>@(_editId.HasValue ? "Edit Policy Status" : "Add Policy Status")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button></div><EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator /><div class="um-modal-body"><div class="um-form-grid"><div class="um-field"><label>Status Code <span class="text-danger">*</span></label><InputText @bind-Value="_form.StatusCode" class="um-input" placeholder="e.g. ACTIVE" /></div><div class="um-field"><label>Status Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.StatusName" class="um-input" /></div><div class="um-field"><label>Status Type</label><SfDropDownList TValue="string" TItem="string" @bind-Value="_form.StatusType" DataSource="@_statusTypes" Placeholder="Select type" /></div><div class="um-field"><label>Color Hex</label><InputText @bind-Value="_form.ColorHex" class="um-input" placeholder="#3b82f6" /></div><div class="um-field"><label>Description</label><InputTextArea @bind-Value="_form.Description" class="um-input" rows="2" /></div><div class="um-field"><label>Sort Order</label><InputNumber @bind-Value="_form.SortOrder" class="um-input" /></div><div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsDefault" /> Default</label></div><div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label></div></div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button></div></EditForm></DialogContent></SfDialog>
-
-<SfDialog @bind-Visible="_showDelete" Width="420px" IsModal="true" ShowCloseIcon="false"><DialogContent><div class="um-confirm-dialog"><div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3-fill"></i></div><div class="um-confirm-title">Delete Policy Status</div><div class="um-confirm-body">Are you sure you want to delete <strong>@_deleteTarget?.StatusName</strong>?</div><div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div></div></DialogContent></SfDialog>
-
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true"><ToastPosition X="Right" Y="Bottom" /></SfToast>
-<style>.validation-message{display:flex;align-items:center;gap:.45rem;margin-top:.55rem;color:#dc3545!important;font-size:.875rem;font-weight:700}.validation-message::before{content:"!";display:inline-flex;align-items:center;justify-content:center;width:1rem;height:1rem;min-width:1rem;flex-shrink:0;border-radius:999px;color:#fff;background:linear-gradient(135deg,#ef4444,#b91c1c);font-size:.7rem;font-weight:800}.um-input.modified.invalid{border-color:#dc3545!important;box-shadow:0 0 0 .18rem rgba(220,53,69,.14)!important}</style>
 
 @code {
     Guid TenantAdminUserId { get; set; }
     Guid DevTenantId { get; set; }
     Guid DevUserId { get; set; }
-    private Guid _tenantId;
-    private Guid _tenantAdminUserId;
     Guid TenantId { get; set; }
     static readonly string[] _statusTypes = ["Active", "Pending", "Cancelled", "Expired", "Renewed"];
+    readonly List<DashboardTab> _tabs = [new("all", "All", "bi-tags"), new("active", "Active", "bi-check-circle"), new("default", "Default", "bi-star"), new("pending", "Pending", "bi-hourglass-split"), new("terminal", "Terminal", "bi-stop-circle"), new("risk", "Needs Review", "bi-exclamation-octagon"), new("inactive", "Inactive", "bi-slash-circle"), new("types", "Types", "bi-pie-chart")];
     List<PolicyStatusDto> _items = [];
-    List<PolicyStatusDto> _filtered = [];
-    string _activeFilter = "";
-    bool _loading, _saving, _showForm, _showDelete;
-    string _search = string.Empty;
-    string? _loadError;
-    Guid? _editId;
-    PolicyStatusDto? _deleteTarget;
-    SfToast _toast = default!;
+    HashSet<Guid> _selectedIds = [];
+    List<ToastItem> _toasts = [];
+    PolicyStatusDto? _selected;
     StatusFormModel _form = new();
-    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policy Config", null), new("Policy Statuses", null)); await LoadAsync(); }
-    async Task LoadAsync() { _loading = true; _loadError = null; try { var r = await Api.SearchPolicyStatusesAsync(TenantId, _search, pageSize: 200); _items = r?.Items.ToList() ?? []; ApplyFilter(); } catch (Exception ex) { _loadError = ex.Message; } finally { _loading = false; } }
-    void SetFilter(string filter) { _activeFilter = filter; ApplyFilter(); }
-    void ApplyFilter() => _filtered = _activeFilter switch { "active" => _items.Where(x => x.IsActive).ToList(), "inactive" => _items.Where(x => !x.IsActive).ToList(), "default" => _items.Where(x => x.IsDefault).ToList(), _ => [.. _items] };
-    Task OnSearchAsync() => LoadAsync();
-    void OnRowSelected(RowSelectEventArgs<PolicyStatusDto> args) => OpenEdit(args.Data);
-    void OpenCreate() { _editId = null; _form = new(); _showForm = true; }
-    void OpenEdit(PolicyStatusDto item) { _editId = item.PolicyStatusId; _form = new() { StatusCode = item.StatusCode, StatusName = item.StatusName, StatusType = item.StatusType, Description = item.Description, ColorHex = item.ColorHex, IsDefault = item.IsDefault, SortOrder = item.SortOrder, IsActive = item.IsActive }; _showForm = true; }
-    async Task SaveAsync() { _saving = true; try { if (_editId.HasValue) await Api.UpdatePolicyStatusAsync(_editId.Value, new(_form.StatusCode, _form.StatusName, _form.StatusType, _form.Description, _form.ColorHex, _form.IsDefault, _form.IsActive, _form.SortOrder)); else await Api.CreatePolicyStatusAsync(new(TenantId, _form.StatusCode, _form.StatusName, _form.StatusType, _form.Description, _form.ColorHex, _form.IsDefault, _form.SortOrder)); _showForm = false; await _toast.ShowAsync(new() { Content = "Saved successfully", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } }
-    void ConfirmDelete(PolicyStatusDto item) { _deleteTarget = item; _showDelete = true; }
-    async Task ExecuteDeleteAsync() { _saving = true; try { await Api.DeletePolicyStatusAsync(_deleteTarget!.PolicyStatusId); _showDelete = false; await _toast.ShowAsync(new() { Content = "Deleted successfully", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } }
-    void ResetForm() { _form = new(); _editId = null; }
-    sealed class StatusFormModel { [Required, StringLength(50)] public string StatusCode { get; set; } = string.Empty; [Required, StringLength(100)] public string StatusName { get; set; } = string.Empty; [StringLength(50)] public string? StatusType { get; set; } [StringLength(500)] public string? Description { get; set; } [StringLength(20)] public string? ColorHex { get; set; } public bool IsDefault { get; set; } [Range(0, 9999)] public int SortOrder { get; set; } public bool IsActive { get; set; } = true; }
+    Func<Task>? _confirmAction;
+    Guid? _editId;
+    string _activeTab = "all";
+    string _searchTerm = string.Empty;
+    string _typeFilter = string.Empty;
+    string _statusFilter = string.Empty;
+    string _sortMode = "importance";
+    string _confirmTitle = string.Empty;
+    string _confirmMessage = string.Empty;
+    string _confirmIcon = "bi-exclamation-triangle-fill";
+    string? _loadError;
+    bool _loading;
+    bool _saving;
+    bool _showForm;
+    bool _confirmVisible;
+    int _page = 1;
+    const int PageSize = 12;
 
-    async Task ResolveCurrentUserContextAsync()
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policy Config", null), new("Policy Statuses", null)); await LoadAsync(); }
+
+    IEnumerable<PolicyStatusDto> FilteredStatuses
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        get
+        {
+            IEnumerable<PolicyStatusDto> query = _items;
+            query = _activeTab switch { "active" => query.Where(x => x.IsActive), "default" => query.Where(x => x.IsDefault), "pending" => query.Where(IsPendingStatus), "terminal" => query.Where(IsTerminalStatus), "risk" => query.Where(NeedsReview), "inactive" => query.Where(x => !x.IsActive), _ => query };
+            if (!string.IsNullOrWhiteSpace(_searchTerm)) query = query.Where(MatchesSearch);
+            if (!string.IsNullOrWhiteSpace(_typeFilter)) query = query.Where(x => string.Equals(StatusType(x), _typeFilter, StringComparison.OrdinalIgnoreCase));
+            query = _statusFilter switch { "Active" => query.Where(x => x.IsActive), "Inactive" => query.Where(x => !x.IsActive), "Default" => query.Where(x => x.IsDefault), "Terminal" => query.Where(IsTerminalStatus), "NeedsReview" => query.Where(NeedsReview), _ => query };
+            return _sortMode switch { "order" => query.OrderBy(x => x.SortOrder).ThenBy(x => x.StatusName), "name" => query.OrderBy(x => x.StatusName), "code" => query.OrderBy(x => x.StatusCode), "type" => query.OrderBy(StatusType).ThenBy(x => x.SortOrder).ThenBy(x => x.StatusName), "created" => query.OrderByDescending(x => x.CreatedDateUtc), _ => query.OrderByDescending(ImportanceScore).ThenBy(x => x.SortOrder).ThenBy(x => x.StatusName) };
+        }
     }
+
+    List<PolicyStatusDto> PagedStatuses => FilteredStatuses.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+    int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredStatuses.Count() / (double)PageSize));
+    bool AllPageSelected => PagedStatuses.Count > 0 && PagedStatuses.All(IsSelected);
+    bool HasFilters => !string.IsNullOrWhiteSpace(_searchTerm) || !string.IsNullOrWhiteSpace(_typeFilter) || !string.IsNullOrWhiteSpace(_statusFilter) || _activeTab != "all" || _sortMode != "importance";
+    string ActiveViewTitle => _tabs.FirstOrDefault(x => x.Key == _activeTab)?.Label ?? "All";
+    IEnumerable<string> StatusTypeOptions => TypeGroups.Select(x => x.Name);
+    string DefaultInsight => _items.Count(x => x.IsDefault) switch { 0 => "No default policy status is configured.", 1 => "One default policy status is configured for lifecycle fallback.", var count => $"{count} default statuses exist. Review default intent." };
+    string TerminalInsight => _items.Any(IsTerminalStatus) ? $"{_items.Count(IsTerminalStatus)} terminal statuses support cancelled, expired, or closed lifecycle reporting." : "No terminal lifecycle statuses were detected.";
+    string ReadinessInsight => _items.Count == 0 ? "Create policy statuses before enabling policy lifecycle workflows." : $"{Math.Round(_items.Count(x => x.IsActive && !NeedsReview(x)) * 100m / _items.Count)}% of statuses are active with no review flags.";
+    List<TypeGroupSummary> TypeGroups => _items.GroupBy(StatusType).Select(g => new TypeGroupSummary(g.Key, g.Count(), g.Count(x => x.IsActive), g.Count(x => x.IsDefault), g.Count(NeedsReview), _items.Count == 0 ? 0 : Math.Round(g.Count() * 100m / _items.Count, 0))).OrderByDescending(x => x.Count).ToList();
+
+    async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchPolicyStatusesAsync(TenantId, null, pageSize: 500); _items = result?.Items.ToList() ?? []; _selectedIds.RemoveWhere(id => _items.All(x => x.PolicyStatusId != id)); _selected = _selected is null ? _items.OrderByDescending(ImportanceScore).FirstOrDefault() : _items.FirstOrDefault(x => x.PolicyStatusId == _selected.PolicyStatusId) ?? _items.OrderByDescending(ImportanceScore).FirstOrDefault(); NormalizePage(); } catch (Exception ex) { _loadError = $"Failed to load policy statuses: {ex.Message}"; } finally { _loading = false; } }
+    Task RefreshAsync() => LoadAsync();
+    void ApplyFilters() { _page = 1; NormalizePage(); }
+    void OnSearchInputValue(string? value) { _searchTerm = value ?? string.Empty; ApplyFilters(); }
+    void SetDashboardFocus(string tab, string sort) { _activeTab = tab; _sortMode = sort; _page = 1; NormalizePage(); }
+    void SetActiveTab(string tab) { _activeTab = tab; _page = 1; NormalizePage(); }
+    void PreviousPage() { if (_page > 1) _page--; }
+    void NextPage() { if (_page < TotalPages) _page++; }
+    void NormalizePage() { if (_page > TotalPages) _page = TotalPages; }
+    void SelectRow(PolicyStatusDto item) => _selected = item;
+    bool IsSelected(PolicyStatusDto item) => _selectedIds.Contains(item.PolicyStatusId);
+    void ToggleSelect(PolicyStatusDto item, bool selected) { if (selected) _selectedIds.Add(item.PolicyStatusId); else _selectedIds.Remove(item.PolicyStatusId); _selected = item; }
+    void ToggleSelectAllPage(bool selected) { foreach (var item in PagedStatuses) { if (selected) _selectedIds.Add(item.PolicyStatusId); else _selectedIds.Remove(item.PolicyStatusId); } }
+    void ClearFilters() { _searchTerm = string.Empty; _typeFilter = string.Empty; _statusFilter = string.Empty; _sortMode = "importance"; _activeTab = "all"; _page = 1; }
+    void FilterByType(string type) { _activeTab = "all"; _typeFilter = type; _sortMode = "importance"; _page = 1; }
+
+    void OpenCreate() { _editId = null; _form = new() { StatusType = "Active", IsActive = true, SortOrder = NextSortOrder(), ColorHex = "#3b82f6" }; _showForm = true; }
+    void OpenEdit(PolicyStatusDto item) { _selected = item; _editId = item.PolicyStatusId; _form = new() { StatusCode = item.StatusCode, StatusName = item.StatusName, StatusType = item.StatusType, Description = item.Description, ColorHex = item.ColorHex, IsDefault = item.IsDefault, SortOrder = item.SortOrder, IsActive = item.IsActive }; _showForm = true; }
+    void CloseForm() { _showForm = false; ResetForm(); }
+    void ResetForm() { _form = new(); _editId = null; }
+
+    async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (_editId.HasValue) await Api.UpdatePolicyStatusAsync(_editId.Value, new(_form.StatusCode.Trim(), _form.StatusName.Trim(), NormalizeNullable(_form.StatusType), NormalizeNullable(_form.Description), NormalizeNullable(_form.ColorHex), _form.IsDefault, _form.IsActive, _form.SortOrder));
+            else await Api.CreatePolicyStatusAsync(new(TenantId, _form.StatusCode.Trim(), _form.StatusName.Trim(), NormalizeNullable(_form.StatusType), NormalizeNullable(_form.Description), NormalizeNullable(_form.ColorHex), _form.IsDefault, _form.SortOrder));
+            _showForm = false; ShowToast("success", _editId.HasValue ? "Policy status updated successfully." : "Policy status created successfully."); ResetForm(); await LoadAsync();
+        }
+        catch (Exception ex) { ShowToast("danger", $"Save failed: {ex.Message}"); }
+        finally { _saving = false; }
+    }
+
+    void ConfirmToggle(PolicyStatusDto item) { var enable = !item.IsActive; OpenConfirm(enable ? "Activate Policy Status" : "Deactivate Policy Status", $"Are you sure you want to {(enable ? "activate" : "deactivate")} {item.StatusName}? This changes availability in policy workflows.", "bi-shield-exclamation", () => SetStatusActiveAsync(item, enable)); }
+    void ConfirmDelete(PolicyStatusDto item) => OpenConfirm("Delete Policy Status", $"Are you sure you want to delete {item.StatusName}? This action cannot be undone.", "bi-trash3-fill", () => DeleteStatusAsync(item));
+    void ConfirmBulkToggle(bool enable) => OpenConfirm(enable ? "Activate Selected Statuses" : "Deactivate Selected Statuses", $"Are you sure you want to {(enable ? "activate" : "deactivate")} {_selectedIds.Count} selected policy status(es)?", "bi-shield-exclamation", () => BulkSetActiveAsync(enable));
+    void ConfirmBulkDelete() => OpenConfirm("Delete Selected Statuses", $"Are you sure you want to delete {_selectedIds.Count} selected policy status(es)? This action cannot be undone.", "bi-trash3-fill", BulkDeleteAsync);
+    void OpenConfirm(string title, string message, string icon, Func<Task> action) { _confirmTitle = title; _confirmMessage = message; _confirmIcon = icon; _confirmAction = action; _confirmVisible = true; }
+    void CloseConfirm() { _confirmVisible = false; _confirmAction = null; }
+    async Task ExecuteConfirmedAsync() { if (_confirmAction is null) return; _saving = true; try { await _confirmAction(); _confirmVisible = false; _confirmAction = null; } finally { _saving = false; } }
+
+    async Task SetStatusActiveAsync(PolicyStatusDto item, bool active) { try { await Api.UpdatePolicyStatusAsync(item.PolicyStatusId, new(item.StatusCode, item.StatusName, item.StatusType, item.Description, item.ColorHex, item.IsDefault, active, item.SortOrder)); ShowToast("success", active ? "Policy status activated." : "Policy status deactivated."); await LoadAsync(); } catch (Exception ex) { ShowToast("danger", $"Update failed: {ex.Message}"); } }
+    async Task DeleteStatusAsync(PolicyStatusDto item) { try { await Api.DeletePolicyStatusAsync(item.PolicyStatusId); _selectedIds.Remove(item.PolicyStatusId); if (_selected?.PolicyStatusId == item.PolicyStatusId) _selected = null; ShowToast("success", "Policy status deleted."); await LoadAsync(); } catch (Exception ex) { ShowToast("danger", $"Delete failed: {ex.Message}"); } }
+    async Task BulkSetActiveAsync(bool active) { var selected = _items.Where(x => _selectedIds.Contains(x.PolicyStatusId)).ToList(); var updated = 0; foreach (var item in selected) { try { await Api.UpdatePolicyStatusAsync(item.PolicyStatusId, new(item.StatusCode, item.StatusName, item.StatusType, item.Description, item.ColorHex, item.IsDefault, active, item.SortOrder)); updated++; } catch (Exception ex) { ShowToast("danger", $"Update failed for {item.StatusName}: {ex.Message}"); } } ShowToast("success", $"{updated} policy status(es) {(active ? "activated" : "deactivated")}."); _selectedIds.Clear(); await LoadAsync(); }
+    async Task BulkDeleteAsync() { var selected = _items.Where(x => _selectedIds.Contains(x.PolicyStatusId)).ToList(); var deleted = 0; foreach (var item in selected) { try { await Api.DeletePolicyStatusAsync(item.PolicyStatusId); deleted++; } catch (Exception ex) { ShowToast("danger", $"Delete failed for {item.StatusName}: {ex.Message}"); } } ShowToast("success", $"{deleted} policy status(es) deleted."); _selectedIds.Clear(); _selected = null; await LoadAsync(); }
+
+    RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string color) => @<button type="button" class="pst-kpi-card pst-kpi-card--@color @(_activeTab == key ? "pst-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveTab(key)"><span class="pst-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span><span class="pst-kpi-body"><span class="pst-kpi-label">@label</span><strong class="pst-kpi-value">@value</strong><span class="pst-kpi-sub">@subtitle</span></span></button>;
+    int TabCount(string key) => key switch { "active" => _items.Count(x => x.IsActive), "default" => _items.Count(x => x.IsDefault), "pending" => _items.Count(IsPendingStatus), "terminal" => _items.Count(IsTerminalStatus), "risk" => _items.Count(NeedsReview), "inactive" => _items.Count(x => !x.IsActive), "types" => TypeGroups.Count, _ => _items.Count };
+    bool MatchesSearch(PolicyStatusDto item) { var term = _searchTerm.Trim(); return Contains(item.StatusCode, term) || Contains(item.StatusName, term) || Contains(item.StatusType, term) || Contains(item.Description, term) || Contains(item.ColorHex, term); }
+    static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    static string? NormalizeNullable(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    static string FormatDate(DateTime date) => date == default ? "—" : date.ToLocalTime().ToString("MMM d, yyyy");
+    static string StatusType(PolicyStatusDto item) => Safe(item.StatusType, "Unclassified");
+    static bool IsPendingStatus(PolicyStatusDto item) => Contains(item.StatusType, "Pending") || Contains(item.StatusName, "Pending") || Contains(item.StatusCode, "PEND");
+    static bool IsTerminalStatus(PolicyStatusDto item) => Contains(item.StatusType, "Cancelled") || Contains(item.StatusType, "Expired") || Contains(item.StatusName, "Cancel") || Contains(item.StatusName, "Expired") || Contains(item.StatusName, "Closed") || Contains(item.StatusName, "Non-Renew") || Contains(item.StatusCode, "CANCEL") || Contains(item.StatusCode, "EXPIRE");
+    static bool NeedsReview(PolicyStatusDto item) => !item.IsActive || (item.IsDefault && !item.IsActive) || string.IsNullOrWhiteSpace(item.StatusCode) || string.IsNullOrWhiteSpace(item.StatusName) || string.IsNullOrWhiteSpace(item.StatusType) || string.IsNullOrWhiteSpace(item.ColorHex) || string.IsNullOrWhiteSpace(item.Description);
+    static string StatusTypeIcon(string? type) => type switch { "Active" => "bi-check-circle", "Pending" => "bi-hourglass-split", "Cancelled" => "bi-x-octagon", "Expired" => "bi-clock-history", "Renewed" => "bi-arrow-repeat", "Unclassified" => "bi-question-circle", _ => "bi-tag" };
+    static string StatusTypeBadgeClass(string? type) => type switch { "Active" => "pst-pill--green", "Pending" => "pst-pill--amber", "Cancelled" => "pst-pill--red", "Expired" => "pst-pill--neutral", "Renewed" => "pst-pill--cyan", _ => "pst-pill--blue" };
+    static string SafeColor(string? color) => string.IsNullOrWhiteSpace(color) ? "#cbd5e1" : color;
+    static int ImportanceScore(PolicyStatusDto item) { var score = 30; if (item.IsDefault) score += 22; if (item.IsActive) score += 14; else score += 18; if (IsTerminalStatus(item)) score += 16; if (item.SortOrder <= 10) score += 6; if (!string.IsNullOrWhiteSpace(item.ColorHex)) score += 6; else score += 8; if (string.IsNullOrWhiteSpace(item.Description)) score += 8; return Math.Clamp(score, 0, 100); }
+    static string RecommendedAction(PolicyStatusDto item) { if (item.IsDefault && !item.IsActive) return "Activate or replace the inactive default policy status."; if (!item.IsActive) return "Review whether this status should remain inactive."; if (string.IsNullOrWhiteSpace(item.ColorHex)) return "Add a color cue for lifecycle visibility."; if (string.IsNullOrWhiteSpace(item.Description)) return "Add workflow guidance for policy operations and reporting."; return "Configuration is ready for policy lifecycle workflows."; }
+    static string ImportanceClass(PolicyStatusDto item) => ImportanceScore(item) switch { >= 80 => "pst-score-card--red", >= 65 => "pst-score-card--amber", >= 45 => "pst-score-card--cyan", _ => "pst-score-card--green" };
+    static MarkupString ImportanceBadge(PolicyStatusDto item) { var score = ImportanceScore(item); var css = score switch { >= 80 => "red", >= 65 => "amber", >= 45 => "cyan", _ => "green" }; return new($"<span class=\"pst-risk-badge pst-risk-badge--{css}\">{score}</span>"); }
+    static string Initials(string? value) { var parts = (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); return parts.Length switch { 0 => "PS", 1 => parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant(), _ => string.Concat(parts.Take(2).Select(x => char.ToUpperInvariant(x[0]))) }; }
+    static string AvatarStyle(PolicyStatusDto item) => $"background:linear-gradient(135deg,{SafeColor(item.ColorHex)},#1d4ed8);";
+    int NextSortOrder() => _items.Count == 0 ? 10 : _items.Max(x => x.SortOrder) + 10;
+    void ShowToast(string kind, string message) { _toasts.Insert(0, new(Guid.NewGuid(), kind, message)); if (_toasts.Count > 4) _toasts.RemoveRange(4, _toasts.Count - 4); }
+    void DismissToast(Guid id) => _toasts.RemoveAll(x => x.Id == id);
+    async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); TenantId = context.TenantId; TenantAdminUserId = context.UserId; DevTenantId = context.TenantId; DevUserId = context.UserId; }
+    sealed class StatusFormModel { [Required, StringLength(50)] public string StatusCode { get; set; } = string.Empty; [Required, StringLength(100)] public string StatusName { get; set; } = string.Empty; [StringLength(50)] public string? StatusType { get; set; } [StringLength(500)] public string? Description { get; set; } [StringLength(20)] public string? ColorHex { get; set; } public bool IsDefault { get; set; } [Range(0, 9999)] public int SortOrder { get; set; } public bool IsActive { get; set; } = true; }
+    sealed record DashboardTab(string Key, string Label, string Icon);
+    sealed record TypeGroupSummary(string Name, int Count, int Active, int DefaultCount, int ReviewCount, decimal Percent);
+    sealed record ToastItem(Guid Id, string Kind, string Message);
 }

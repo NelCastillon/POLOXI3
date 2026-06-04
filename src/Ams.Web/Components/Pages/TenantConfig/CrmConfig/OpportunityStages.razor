@@ -1,245 +1,375 @@
 ﻿@page "/tenant/crm/opp-stages"
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.CrmConfig
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Opportunity Stages â€” CRM Configuration</PageTitle>
+<PageTitle>Opportunity Stages - CRM Configuration</PageTitle>
 
 <AppPageHeader Title="Opportunity Stages"
-               Subtitle="Configure the sales pipeline stages for opportunity tracking"
+               Subtitle="Enterprise CRM pipeline stage command center for probability hygiene, open pipeline flow, closed outcomes, and sales governance."
                Icon="bi-bar-chart-steps">
     <Actions>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Stage
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
+        <button class="um-btn um-btn-primary" type="button" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Stage</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="CopySummaryAsync" disabled="@(!_items.Any())"><i class="bi bi-clipboard" aria-hidden="true"></i> Copy Summary</button>
     </Actions>
 </AppPageHeader>
 
-<div class="pc-kpi-strip">
-    <div class="pc-kpi-card @(_activeFilter == null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)' title="Show all">
-        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-bar-chart-steps" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total Stages</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "open" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("open")' title="Filter: Open Stages">
-        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-funnel-fill" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => !x.IsClosedStage)</div><div class="pc-kpi-label">Open Stages</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "won" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("won")' title="Filter: Won">
-        <span class="pc-kpi-icon" style="background:#dcfce7"><i class="bi bi-trophy-fill text-success" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.IsWonStage)</div><div class="pc-kpi-label">Won</div></div>
-    </div>
-</div>
-
-<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search stage name or codeâ€¦" />
-
-@if (_loadError is not null)
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    <div class="ops-toast @(_toastIsError ? "ops-toast--danger" : "ops-toast--success")" role="status">
+        <i class="bi @(_toastIsError ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" @onclick="ClearToast" aria-label="Dismiss notification"><i class="bi bi-x-lg"></i></button>
     </div>
 }
 
-<div class="um-grid-card">
-    @if (_loading)
-    {
-        <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loadingâ€¦</span></div>
-    }
-    <SfGrid TValue="OpportunityStageDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-        <GridEvents TValue="OpportunityStageDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="50" />
-        <GridColumns>
-            <GridColumn Field="StageCode" HeaderText="Code" Width="130" />
-            <GridColumn Field="StageName" HeaderText="Stage" Width="200" />
-            <GridColumn Field="ProbabilityPercent" HeaderText="Probability %" Width="130" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (OpportunityStageDto)context; }
-                    <div class="d-flex align-items-center gap-2">
-                        <div class="progress flex-grow-1" style="height:6px">
-                            <div class="progress-bar bg-primary" style="width:@r.ProbabilityPercent%"></div>
-                        </div>
-                        <span class="text-muted small">@r.ProbabilityPercent%</span>
-                    </div>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="SortOrder" HeaderText="Order" Width="80" TextAlign="TextAlign.Center" />
-            <GridColumn Field="IsClosedStage" HeaderText="Closed" Width="90" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (OpportunityStageDto)context; }
-                    <span class="um-badge @(r.IsClosedStage ? "um-badge-neutral" : "um-badge-success")">@(r.IsClosedStage ? "Yes" : "No")</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="IsActive" HeaderText="Status" Width="100" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (OpportunityStageDto)context; }
-                    <span class="um-badge @(r.IsActive ? "um-badge-success" : "um-badge-neutral")">@(r.IsActive ? "Active" : "Inactive")</span>
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="" Width="100" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (OpportunityStageDto)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true"><i class="bi bi-pencil"></i></button>
-                    <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
-
-<SfDialog @bind-Visible="_showForm" Width="540px" IsModal="true" ShowCloseIcon="false">
-    <DialogEvents Closed="ResetForm" />
-    <DialogContent>
-        <div class="um-modal-header">
-            <i class="bi bi-bar-chart-steps"></i>
-            <span>@(_editId.HasValue ? "Edit Stage" : "Add Opportunity Stage")</span>
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button>
-        </div>
-        <EditForm Model="_form" OnValidSubmit="SaveAsync">
-            <DataAnnotationsValidator />
-            <div class="um-modal-body">
-                <div class="um-form-grid">
-                    <div class="um-field">
-                        <label>Stage Code <span class="text-danger">*</span></label>
-                        <InputText @bind-Value="_form.StageCode" class="um-input" />
-                    </div>
-                    <div class="um-field">
-                        <label>Stage Name <span class="text-danger">*</span></label>
-                        <InputText @bind-Value="_form.StageName" class="um-input" />
-                    </div>
-                    <div class="um-field">
-                        <label>Probability %</label>
-                        <InputNumber @bind-Value="_form.ProbabilityPercent" class="um-input" min="0" max="100" />
-                    </div>
-                    <div class="um-field">
-                        <label>Sort Order</label>
-                        <InputNumber @bind-Value="_form.SortOrder" class="um-input" />
-                    </div>
-                    <div class="um-field um-field--checkbox">
-                        <label><InputCheckbox @bind-Value="_form.IsClosedStage" /> Closed Stage</label>
-                    </div>
-                    <div class="um-field um-field--checkbox">
-                        <label><InputCheckbox @bind-Value="_form.IsWonStage" /> Won Stage</label>
-                    </div>
-                    <div class="um-field um-field--checkbox">
-                        <label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label>
-                    </div>
+<div class="ops-page">
+    <section class="ops-hero">
+        <div class="ops-hero-left">
+            <span class="ops-hero-icon"><i class="bi bi-bar-chart-steps" aria-hidden="true"></i></span>
+            <div class="ops-hero-title">
+                <span class="ops-eyebrow"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i> CRM Configuration · Pipeline Stages</span>
+                <h1>Opportunity Stage Command Center</h1>
+                <p>Govern pipeline flow, probability weighting, closed/won outcome stages, sort order, and enterprise-ready opportunity forecasting configuration.</p>
+                <div class="ops-hero-meta">
+                    <span><i class="bi bi-bar-chart-steps" aria-hidden="true"></i> @_items.Count stages</span>
+                    <span><i class="bi bi-funnel" aria-hidden="true"></i> @OpenCount open</span>
+                    <span><i class="bi bi-lock" aria-hidden="true"></i> @ClosedCount closed</span>
+                    <span><i class="bi bi-trophy" aria-hidden="true"></i> @WonCount won</span>
+                    <span><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @NeedsReviewCount review</span>
                 </div>
             </div>
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
-                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button>
-            </div>
-        </EditForm>
-    </DialogContent>
-</SfDialog>
-
-<SfDialog @bind-Visible="_showDelete" Width="440px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
-        <div class="um-confirm-dialog">
-            <div class="um-confirm-icon um-confirm-icon--danger">
-                <i class="bi bi-trash3-fill"></i>
-            </div>
-            <div class="um-confirm-message">
-                <h6>Delete Stage?</h6>
-                <p>You are about to delete <strong>@_deleteTarget?.StageName</strong>. This action cannot be undone.</p>
-            </div>
-            <div class="um-modal-footer" style="width:100%">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
-                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
-            </div>
         </div>
-    </DialogContent>
-</SfDialog>
+        <div class="ops-hero-actions">
+            <div class="ops-score-card @ReadinessClass"><span>Pipeline readiness</span><strong>@ReadinessScore%</strong><small>@ReadinessSummary</small></div>
+            <button class="ops-workflow" type="button" @onclick='() => SetTab("review")'><i class="bi bi-exclamation-triangle"></i><span><strong>Clean stage data</strong><small>@NeedsReviewCount stage(s) need review</small></span></button>
+            <button class="ops-workflow" type="button" @onclick="OpenCreate"><i class="bi bi-plus-circle"></i><span><strong>Add pipeline stage</strong><small>Create a new tracked opportunity stage</small></span></button>
+        </div>
+    </section>
 
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
+    <section class="ops-kpi-strip" aria-label="Opportunity stage KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="ops-kpi-card ops-kpi-card--@kpi.Tone @(IsActiveTab(kpi.Key) ? "ops-kpi-card--active" : null)" title="@kpi.Tooltip" @onclick="() => SetTab(kpi.Key)">
+                <span class="ops-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="ops-kpi-body"><span class="ops-kpi-label">@kpi.Label</span><strong class="ops-kpi-value">@kpi.Value</strong><small class="ops-kpi-sub">@kpi.Detail</small></span>
+            </button>
+        }
+    </section>
+
+    <section class="ops-workflows" aria-label="Opportunity stage workflows">
+        <button class="ops-workflow-card" type="button" @onclick='() => SetTab("open")'><span><i class="bi bi-funnel"></i></span><strong>Operate active pipeline</strong><small>Review stages that keep opportunities moving forward.</small></button>
+        <button class="ops-workflow-card" type="button" @onclick='() => SetTab("closed")'><span><i class="bi bi-lock"></i></span><strong>Validate closed outcomes</strong><small>Confirm closed stages are intentional and forecast-safe.</small></button>
+        <button class="ops-workflow-card" type="button" @onclick='() => SetTab("won")'><span><i class="bi bi-trophy"></i></span><strong>Confirm won stages</strong><small>Review stages that count as converted revenue.</small></button>
+        <button class="ops-workflow-card" type="button" @onclick='() => SetTab("review")'><span><i class="bi bi-shield-check"></i></span><strong>Fix probability gaps</strong><small>Find invalid probability and closed/won combinations.</small></button>
+        <button class="ops-workflow-card" type="button" @onclick="CopySummaryAsync"><span><i class="bi bi-clipboard-data"></i></span><strong>Brief sales leaders</strong><small>Copy pipeline-stage posture summary.</small></button>
+    </section>
+
+    <section class="ops-filter-panel" aria-label="Opportunity stage filters">
+        <div class="ops-search"><i class="bi bi-search" aria-hidden="true"></i><input value="@_search" @oninput="OnSearchChanged" placeholder="Search stage name or code..." /></div>
+        <div class="ops-filter-grid">
+            <label><span>Status</span><select class="form-select" value="@_statusFilter" @onchange="OnStatusFilterChanged"><option value="">All</option><option value="Active">Active</option><option value="Inactive">Inactive</option></select></label>
+            <label><span>Stage</span><select class="form-select" value="@_stageFilter" @onchange="OnStageFilterChanged"><option value="">All</option><option value="Open">Open</option><option value="Closed">Closed</option><option value="Won">Won</option></select></label>
+            <label><span>Probability</span><select class="form-select" value="@_probabilityFilter" @onchange="OnProbabilityFilterChanged"><option value="">All</option><option value="Low">0-33%</option><option value="Medium">34-74%</option><option value="High">75-99%</option><option value="Certain">100%</option></select></label>
+            <label><span>Quality</span><select class="form-select" value="@_qualityFilter" @onchange="OnQualityFilterChanged"><option value="">All</option><option value="Ready">Ready</option><option value="Review">Needs Review</option></select></label>
+        </div>
+        <button type="button" class="ops-btn ops-btn--ghost" @onclick="ClearFilters"><i class="bi bi-x-circle"></i> Clear</button>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger ops-alert" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div>
+    }
+
+    <div class="ops-tabs" role="tablist" aria-label="Opportunity stage dashboard sections">
+        @foreach (var tab in Tabs)
+        {
+            <button type="button" role="tab" class="ops-tab @(IsActiveTab(tab.Key) ? "ops-tab--active" : null)" @onclick="() => SetTab(tab.Key)"><i class="bi @tab.Icon"></i> @tab.Label <strong>@TabCount(tab.Key)</strong></button>
+        }
+    </div>
+
+    <section class="ops-dashboard">
+        <main class="ops-main-card">
+            <div class="ops-card-header">
+                <div><span class="ops-section-kicker"><i class="bi bi-command"></i> @ActiveSectionKicker</span><h2>@ActiveSectionTitle</h2><p>@ActiveSectionDescription</p></div>
+                <div class="ops-card-actions">
+                    @if (_selected is not null)
+                    {
+                        <span class="ops-sel-count"><i class="bi bi-bar-chart-steps"></i> @_selected.StageName</span>
+                    }
+                    <button type="button" class="ops-btn ops-btn--ghost" @onclick="PreviousPage" disabled="@(_pageNumber <= 1)"><i class="bi bi-chevron-left"></i></button>
+                    <span class="ops-page-indicator">Page @_pageNumber of @TotalPages</span>
+                    <button type="button" class="ops-btn ops-btn--ghost" @onclick="NextPage" disabled="@(_pageNumber >= TotalPages)"><i class="bi bi-chevron-right"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="ops-loading"><span class="spinner-border spinner-border-sm"></span> Loading opportunity stages...</div>
+            }
+            else if (!PagedStages.Any())
+            {
+                <div class="ops-empty"><i class="bi bi-bar-chart-steps"></i><strong>No opportunity stages match this view</strong><span>Adjust filters or add a new pipeline stage.</span><button type="button" class="ops-btn ops-btn--primary" @onclick="OpenCreate">Add Stage</button></div>
+            }
+            else
+            {
+                <div class="ops-table-wrap">
+                    <table class="ops-table">
+                        <thead><tr><th>Stage</th><th>Code</th><th>Probability</th><th>Order</th><th>Outcome</th><th>Status</th><th>Readiness</th><th class="ops-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var item in PagedStages)
+                            {
+                                <tr class="ops-row @(_selected?.OpportunityStageId == item.OpportunityStageId ? "ops-row--selected" : null)" @onclick="() => Select(item)">
+                                    <td><div class="ops-stage-cell"><span class="ops-row-icon @StageIconClass(item)"><i class="bi @StageIcon(item)"></i></span><span><strong>@item.StageName</strong><small>@StageTypeLabel(item)</small></span></div></td>
+                                    <td><span class="ops-code">@item.StageCode</span></td>
+                                    <td><div class="ops-probability"><div class="ops-probability-bar"><span style="width:@ClampPercent(item.ProbabilityPercent)%"></span></div><strong>@item.ProbabilityPercent%</strong></div></td>
+                                    <td><span class="ops-order">@item.SortOrder</span></td>
+                                    <td><span class="ops-type-badge @StageTypeClass(item)">@StageTypeLabel(item)</span></td>
+                                    <td><span class="@(item.IsActive ? "ops-pill ops-pill--green" : "ops-pill ops-pill--neutral")">@(item.IsActive ? "Active" : "Inactive")</span></td>
+                                    <td><span class="@ReadinessBadgeClass(item)">@StageReadiness(item)</span></td>
+                                    <td class="ops-row-actions" @onclick:stopPropagation="true"><button type="button" class="ops-icon-btn" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil"></i></button><button type="button" class="ops-icon-btn ops-icon-btn--danger" @onclick="() => ConfirmDelete(item)" title="Delete"><i class="bi bi-trash"></i></button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </main>
+
+        <aside class="ops-side-panel">
+            <section class="ops-panel-card">
+                <span class="ops-section-kicker"><i class="bi bi-bar-chart-steps"></i> Selected Stage</span>
+                @if (_selected is null)
+                {
+                    <p class="ops-side-copy">Select an opportunity stage to inspect probability, open/closed outcome, sort order, readiness, and available actions.</p>
+                }
+                else
+                {
+                    <div class="ops-selected-title"><span class="ops-selected-icon @StageIconClass(_selected)"><i class="bi @StageIcon(_selected)"></i></span><div><h3>@_selected.StageName</h3><span>@_selected.StageCode · @StageTypeLabel(_selected)</span></div></div>
+                    <div class="ops-selected-score @StageScoreClass(_selected)"><span>Configuration readiness</span><strong>@StageReadiness(_selected)</strong><small>@ReadinessDetail(_selected)</small></div>
+                    <dl class="ops-detail-list"><div><dt>Code</dt><dd>@_selected.StageCode</dd></div><div><dt>Name</dt><dd>@_selected.StageName</dd></div><div><dt>Probability</dt><dd>@_selected.ProbabilityPercent%</dd></div><div><dt>Sort Order</dt><dd>@_selected.SortOrder</dd></div><div><dt>Closed</dt><dd>@(_selected.IsClosedStage ? "Yes" : "No")</dd></div><div><dt>Won</dt><dd>@(_selected.IsWonStage ? "Yes" : "No")</dd></div><div><dt>Status</dt><dd>@(_selected.IsActive ? "Active" : "Inactive")</dd></div></dl>
+                    <div class="ops-selected-actions"><button type="button" class="ops-btn ops-btn--primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil"></i> Edit</button><button type="button" class="ops-btn ops-btn--danger-ghost" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash"></i> Delete</button></div>
+                }
+            </section>
+
+            <section class="ops-panel-card">
+                <span class="ops-section-kicker"><i class="bi bi-lightbulb"></i> Priority Insights</span>
+                <div class="ops-insight-list">@foreach (var insight in Insights) { <button type="button" class="ops-insight" @onclick="() => SetTab(insight.Tab)"><i class="bi @insight.Icon"></i><span><strong>@insight.Title</strong><small>@insight.Detail</small></span></button> }</div>
+            </section>
+
+            <section class="ops-panel-card">
+                <span class="ops-section-kicker"><i class="bi bi-list-check"></i> Pipeline Checklist</span>
+                <div class="ops-checklist">@foreach (var item in Checklist) { <div class="ops-check-item @(item.Done ? "ops-check-item--done" : null)"><i class="bi @(item.Done ? "bi-check-circle-fill" : "bi-circle")"></i><span>@item.Text</span></div> }</div>
+            </section>
+        </aside>
+    </section>
+</div>
+
+@if (_showForm)
+{
+    <div class="ops-modal-backdrop" role="presentation">
+        <div class="ops-modal" role="dialog" aria-modal="true" aria-labelledby="opportunity-stage-form-title">
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-header"><i class="bi bi-bar-chart-steps"></i><span id="opportunity-stage-form-title">@(_editId.HasValue ? "Edit Stage" : "Add Opportunity Stage")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Stage Code <span class="text-danger">*</span></label><InputText @bind-Value="_form.StageCode" class="um-input" placeholder="e.g. QUALIFIED" /><ValidationMessage For="() => _form.StageCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Stage Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.StageName" class="um-input" placeholder="e.g. Qualified" /><ValidationMessage For="() => _form.StageName" class="text-danger" /></div>
+                        <div class="um-field"><label>Probability %</label><InputNumber @bind-Value="_form.ProbabilityPercent" class="um-input" min="0" max="100" /><ValidationMessage For="() => _form.ProbabilityPercent" class="text-danger" /></div>
+                        <div class="um-field"><label>Sort Order</label><InputNumber @bind-Value="_form.SortOrder" class="um-input" /><ValidationMessage For="() => _form.SortOrder" class="text-danger" /></div>
+                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsClosedStage" /> Closed Stage</label></div>
+                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsWonStage" /> Won Stage</label></div>
+                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label></div>
+                    </div>
+                </div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showDelete)
+{
+    <div class="ops-modal-backdrop" role="presentation">
+        <div class="ops-confirm" role="dialog" aria-modal="true" aria-labelledby="delete-title">
+            <div class="ops-confirm-body"><div class="ops-confirm-icon"><i class="bi bi-trash3-fill"></i></div><div><h3 id="delete-title">Delete Opportunity Stage?</h3><p>You are about to delete <strong>@_deleteTarget?.StageName</strong>. This action cannot be undone.</p><small>Historical CRM opportunity records may still reference this stage for reporting continuity.</small></div></div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div>
+        </div>
+    </div>
+}
 
 @code {
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
     private Guid _tenantId;
     private Guid _tenantAdminUserId;
-    Guid TenantId { get; set; }
-    List<OpportunityStageDto> _items = [], _filtered = [];
-    string? _activeFilter;
-    bool _loading, _saving;
-    string _search = string.Empty;
-    string? _loadError;
-    bool _showForm, _showDelete;
-    Guid? _editId;
-    OpportunityStageDto? _deleteTarget;
-    SfToast _toast = default!;
-    OppStageFormModel _form = new();
+    private List<OpportunityStageDto> _items = [];
+    private OpportunityStageDto? _selected;
+    private string _search = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _stageFilter = string.Empty;
+    private string _probabilityFilter = string.Empty;
+    private string _qualityFilter = string.Empty;
+    private string _activeTab = "overview";
+    private string? _loadError;
+    private string? _toastMessage;
+    private bool _toastIsError;
+    private bool _loading;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private Guid? _editId;
+    private OpportunityStageDto? _deleteTarget;
+    private int _pageNumber = 1;
+    private const int PageSize = 12;
+    private OppStageFormModel _form = new();
+
+    private static readonly List<TabItem> Tabs = [new("overview", "Overview", "bi-speedometer2"), new("open", "Open", "bi-funnel"), new("closed", "Closed", "bi-lock"), new("won", "Won", "bi-trophy"), new("active", "Active", "bi-check-circle"), new("review", "Needs Review", "bi-exclamation-triangle")];
+    private IReadOnlyList<KpiItem> Kpis => [new("overview", "Total Stages", _items.Count.ToString(), "Configured opportunity pipeline stages", "bi-bar-chart-steps", "blue", "Show all stages"), new("open", "Open Pipeline", OpenCount.ToString(), "Non-closed selling stages", "bi-funnel-fill", "green", "Show open stages"), new("closed", "Closed", ClosedCount.ToString(), "Closed outcome stages", "bi-lock-fill", "slate", "Show closed stages"), new("won", "Won", WonCount.ToString(), "Revenue-winning stages", "bi-trophy-fill", "purple", "Show won stages"), new("review", "Needs Review", NeedsReviewCount.ToString(), "Forecast readiness gaps", "bi-exclamation-triangle-fill", "amber", "Show stages needing review")];
+    private IEnumerable<OpportunityStageDto> FilteredStages => ApplyFilters();
+    private IEnumerable<OpportunityStageDto> PagedStages => FilteredStages.Skip((_pageNumber - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredStages.Count() / (double)PageSize));
+    private int ActiveCount => _items.Count(x => x.IsActive);
+    private int InactiveCount => _items.Count(x => !x.IsActive);
+    private int OpenCount => _items.Count(x => !x.IsClosedStage);
+    private int ClosedCount => _items.Count(x => x.IsClosedStage);
+    private int WonCount => _items.Count(x => x.IsWonStage);
+    private int NeedsReviewCount => _items.Count(NeedsReview);
+    private int AverageProbability => _items.Count == 0 ? 0 : (int)Math.Round(_items.Average(x => x.ProbabilityPercent));
+    private int ReadinessScore => _items.Count == 0 ? 0 : Math.Clamp(100 - (NeedsReviewCount * 10) - (OpenCount == 0 ? 18 : 0) - (ClosedCount == 0 ? 12 : 0) - (WonCount == 0 ? 12 : 0) - (InactiveCount > ActiveCount && ActiveCount > 0 ? 6 : 0), 0, 100);
+    private string ReadinessClass => ReadinessScore >= 90 ? "ops-score-card--green" : ReadinessScore >= 75 ? "ops-score-card--cyan" : ReadinessScore >= 55 ? "ops-score-card--amber" : "ops-score-card--red";
+    private string ReadinessSummary => ReadinessScore >= 90 ? "Pipeline stage configuration is enterprise ready." : ReadinessScore >= 75 ? "Review probability and outcome hygiene." : "Pipeline stage setup needs attention.";
+    private string ActiveSectionKicker => _activeTab == "review" ? "Forecast Hygiene" : "Pipeline Governance";
+    private string ActiveSectionTitle => _activeTab switch { "open" => "Open Pipeline Stages", "closed" => "Closed Outcome Stages", "won" => "Won Opportunity Stages", "active" => "Active Opportunity Stages", "review" => "Stages Needing Review", _ => "Opportunity Stage Overview" };
+    private string ActiveSectionDescription => _activeTab switch { "open" => "Stages that keep active opportunities moving through the sales pipeline.", "closed" => "Closed stages that end forecast movement and resolve opportunity outcomes.", "won" => "Stages that represent converted revenue or bound opportunities.", "active" => "Stages available for current opportunity pipeline operations.", "review" => "Stages with probability, code, active, or closed/won alignment gaps.", _ => "All opportunity stages ranked by operational importance and configuration readiness." };
+    private IReadOnlyList<InsightItem> Insights => [new("open", "Open pipeline", $"{OpenCount} stage(s) support active selling", "bi-funnel"), new("closed", "Closed outcomes", $"{ClosedCount} stage(s) close opportunities", "bi-lock"), new("won", "Revenue conversion", $"{WonCount} won stage(s) configured", "bi-trophy"), new("overview", "Avg probability", $"Average stage probability is {AverageProbability}%", "bi-percent"), new("review", "Configuration gaps", $"{NeedsReviewCount} stage(s) need cleanup", "bi-exclamation-triangle")];
+    private IReadOnlyList<ChecklistItem> Checklist => [new("At least one active stage is configured", ActiveCount > 0), new("Open pipeline stages exist", OpenCount > 0), new("Closed outcome stages exist", ClosedCount > 0), new("Won stages exist", WonCount > 0), new("All probabilities are 0-100", _items.All(x => x.ProbabilityPercent is >= 0 and <= 100)), new("No duplicate stage codes", _items.GroupBy(x => x.StageCode, StringComparer.OrdinalIgnoreCase).All(g => g.Count() == 1)), new("Review queue is clear", NeedsReviewCount == 0)];
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM Config", null), new("Opportunity Stages", null));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM Configuration", null), new("Opportunity Stages", "/tenant/crm/opp-stages"));
         await LoadAsync();
     }
 
-    async Task LoadAsync()
+    private async Task LoadAsync()
     {
         _loading = true;
         _loadError = null;
-        try { var r = await Api.SearchOpportunityStagesAsync(TenantId, _search, pageSize: 200); _items = r?.Items.ToList() ?? []; ApplyFilter(); }
-        catch (Exception ex) { _loadError = $"Failed to load opportunity stages: {ex.Message}"; }
-        finally { _loading = false; }
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchOpportunityStagesAsync(_tenantId, _search, pageSize: 5000);
+            _items = result?.Items.ToList() ?? [];
+            EnsureSelected();
+            ClampPage();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load opportunity stages: {ex.Message}";
+            ShowToast($"Failed to load opportunity stages: {ex.Message}", true);
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    Task OnSearchAsync() => LoadAsync();
-
-    void ApplyFilter() => _filtered = _activeFilter switch
+    private IEnumerable<OpportunityStageDto> ApplyFilters()
     {
-        "open" => _items.Where(x => !x.IsClosedStage).ToList(),
-        "won"  => _items.Where(x => x.IsWonStage).ToList(),
-        _      => [.. _items]
-    };
-
-    void SetFilter(string? key) { _activeFilter = key; ApplyFilter(); }
-    void OnRowSelected(RowSelectEventArgs<OpportunityStageDto> args) => OpenEdit(args.Data);
-
-    void OpenCreate() { _editId = null; _form = new(); _showForm = true; }
-
-    void OpenEdit(OpportunityStageDto item)
-    {
-        _editId = item.OpportunityStageId;
-        _form = new() { StageCode = item.StageCode, StageName = item.StageName, SortOrder = item.SortOrder, ProbabilityPercent = item.ProbabilityPercent, IsClosedStage = item.IsClosedStage, IsWonStage = item.IsWonStage, IsActive = item.IsActive };
-        _showForm = true;
+        var query = _items.AsEnumerable();
+        query = _activeTab switch { "open" => query.Where(x => !x.IsClosedStage), "closed" => query.Where(x => x.IsClosedStage), "won" => query.Where(x => x.IsWonStage), "active" => query.Where(x => x.IsActive), "review" => query.Where(NeedsReview), _ => query };
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => (x.IsActive ? "Active" : "Inactive") == _statusFilter);
+        if (!string.IsNullOrWhiteSpace(_stageFilter)) query = _stageFilter switch { "Open" => query.Where(x => !x.IsClosedStage), "Closed" => query.Where(x => x.IsClosedStage), "Won" => query.Where(x => x.IsWonStage), _ => query };
+        if (!string.IsNullOrWhiteSpace(_probabilityFilter)) query = query.Where(x => ProbabilityBand(x.ProbabilityPercent) == _probabilityFilter);
+        if (!string.IsNullOrWhiteSpace(_qualityFilter)) query = query.Where(x => (NeedsReview(x) ? "Review" : "Ready") == _qualityFilter);
+        if (!string.IsNullOrWhiteSpace(_search)) query = query.Where(x => x.StageName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.StageCode.Contains(_search, StringComparison.OrdinalIgnoreCase));
+        return query.OrderByDescending(x => x.IsActive).ThenBy(x => x.SortOrder).ThenBy(x => x.ProbabilityPercent).ThenBy(x => x.StageName);
     }
 
-    async Task SaveAsync()
+    private void EnsureSelected() => _selected = _selected is null ? FilteredStages.FirstOrDefault() : FilteredStages.FirstOrDefault(x => x.OpportunityStageId == _selected.OpportunityStageId) ?? FilteredStages.FirstOrDefault();
+    private void Select(OpportunityStageDto item) => _selected = item;
+    private void SetTab(string tab) { _activeTab = tab; _pageNumber = 1; EnsureSelected(); }
+    private bool IsActiveTab(string tab) => _activeTab == tab;
+    private int TabCount(string tab) => tab switch { "open" => OpenCount, "closed" => ClosedCount, "won" => WonCount, "active" => ActiveCount, "review" => NeedsReviewCount, _ => _items.Count };
+    private void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args) { _search = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; _ = LoadAsync(); }
+    private void OnStatusFilterChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args) { _statusFilter = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; EnsureSelected(); }
+    private void OnStageFilterChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args) { _stageFilter = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; EnsureSelected(); }
+    private void OnProbabilityFilterChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args) { _probabilityFilter = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; EnsureSelected(); }
+    private void OnQualityFilterChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args) { _qualityFilter = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; EnsureSelected(); }
+    private void ClearFilters() { _search = string.Empty; _statusFilter = string.Empty; _stageFilter = string.Empty; _probabilityFilter = string.Empty; _qualityFilter = string.Empty; _activeTab = "overview"; _pageNumber = 1; _ = LoadAsync(); }
+    private void PreviousPage() { if (_pageNumber > 1) _pageNumber--; }
+    private void NextPage() { if (_pageNumber < TotalPages) _pageNumber++; }
+    private void ClampPage() { if (_pageNumber > TotalPages) _pageNumber = TotalPages; if (_pageNumber < 1) _pageNumber = 1; }
+    private void OpenCreate() { _editId = null; _form = new(); _showForm = true; }
+    private void OpenEdit(OpportunityStageDto item) { _selected = item; _editId = item.OpportunityStageId; _form = new() { StageCode = item.StageCode, StageName = item.StageName, SortOrder = item.SortOrder, ProbabilityPercent = item.ProbabilityPercent, IsClosedStage = item.IsClosedStage, IsWonStage = item.IsWonStage, IsActive = item.IsActive }; _showForm = true; }
+    private void CloseForm() { _showForm = false; ResetForm(); }
+
+    private async Task SaveAsync()
     {
         _saving = true;
         try
         {
-            if (_editId.HasValue)
-                await Api.UpdateOpportunityStageAsync(_editId.Value, new Ams.Application.Features.CrmConfig.UpdateOpportunityStageRequest(_form.StageCode, _form.StageName, _form.SortOrder, _form.ProbabilityPercent, _form.IsClosedStage, _form.IsWonStage, _form.IsActive));
-            else
-                await Api.CreateOpportunityStageAsync(new(TenantId, _form.StageCode, _form.StageName, _form.SortOrder, _form.ProbabilityPercent, _form.IsClosedStage, _form.IsWonStage));
+            if (_editId.HasValue) await Api.UpdateOpportunityStageAsync(_editId.Value, new UpdateOpportunityStageRequest(_form.StageCode.Trim(), _form.StageName.Trim(), _form.SortOrder, _form.ProbabilityPercent, _form.IsClosedStage, _form.IsWonStage, _form.IsActive));
+            else await Api.CreateOpportunityStageAsync(new CreateOpportunityStageRequest(_tenantId, _form.StageCode.Trim(), _form.StageName.Trim(), _form.SortOrder, _form.ProbabilityPercent, _form.IsClosedStage, _form.IsWonStage));
             _showForm = false;
-            await _toast.ShowAsync(new() { Content = "Saved", CssClass = "e-toast-success" });
+            ShowToast("Opportunity stage saved successfully.");
             await LoadAsync();
         }
-        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+        catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", true); }
         finally { _saving = false; }
     }
 
-    void ConfirmDelete(OpportunityStageDto item) { _deleteTarget = item; _showDelete = true; }
+    private void ConfirmDelete(OpportunityStageDto item) { _deleteTarget = item; _showDelete = true; }
 
-    async Task ExecuteDeleteAsync()
+    private async Task ExecuteDeleteAsync()
     {
+        if (_deleteTarget is null) return;
         _saving = true;
-        try { await Api.DeleteOpportunityStageAsync(_deleteTarget!.OpportunityStageId); _showDelete = false; await _toast.ShowAsync(new() { Content = "Deleted", CssClass = "e-toast-success" }); await LoadAsync(); }
-        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+        try
+        {
+            await Api.DeleteOpportunityStageAsync(_deleteTarget.OpportunityStageId);
+            _showDelete = false;
+            ShowToast("Opportunity stage deleted.");
+            await LoadAsync();
+        }
+        catch (Exception ex) { ShowToast($"Delete failed: {ex.Message}", true); }
         finally { _saving = false; }
     }
 
-    void ResetForm() { _form = new(); _editId = null; }
+    private void ResetForm() { _form = new(); _editId = null; }
+    private async Task CopySummaryAsync()
+    {
+        var summary = $"Opportunity Stages Summary: {_items.Count} total, {ActiveCount} active, {InactiveCount} inactive, {OpenCount} open, {ClosedCount} closed, {WonCount} won, {NeedsReviewCount} needing review, average probability {AverageProbability}%, readiness {ReadinessScore}%.";
+        try { await Js.InvokeVoidAsync("navigator.clipboard.writeText", summary); ShowToast("Opportunity stage summary copied."); }
+        catch { ShowToast(summary); }
+    }
 
-    sealed class OppStageFormModel
+    private static bool NeedsReview(OpportunityStageDto item) => string.IsNullOrWhiteSpace(item.StageCode) || string.IsNullOrWhiteSpace(item.StageName) || item.StageCode.Length < 2 || item.StageName.Length < 2 || item.SortOrder < 0 || item.ProbabilityPercent is < 0 or > 100 || (item.IsWonStage && !item.IsClosedStage) || (!item.IsClosedStage && item.ProbabilityPercent >= 100) || (item.IsClosedStage && !item.IsWonStage && item.ProbabilityPercent >= 100);
+    private static int ClampPercent(int value) => Math.Clamp(value, 0, 100);
+    private static string ProbabilityBand(int probability) => probability switch { <= 33 => "Low", <= 74 => "Medium", <= 99 => "High", _ => "Certain" };
+    private static string StageTypeLabel(OpportunityStageDto item) => item.IsWonStage ? "Won" : item.IsClosedStage ? "Closed" : "Open";
+    private static string StageReadiness(OpportunityStageDto item) => NeedsReview(item) ? "Review" : item.IsActive ? "Ready" : "Retired";
+    private static string ReadinessDetail(OpportunityStageDto item) => NeedsReview(item) ? "Stage code, probability, sort order, or closed/won alignment needs cleanup." : item.IsActive ? "Stage is active and ready for opportunity pipeline use." : "Stage is inactive but retained for historical CRM reporting.";
+    private static string ReadinessBadgeClass(OpportunityStageDto item) => NeedsReview(item) ? "ops-risk-badge ops-risk-badge--red" : item.IsActive ? "ops-risk-badge ops-risk-badge--green" : "ops-risk-badge ops-risk-badge--neutral";
+    private static string StageScoreClass(OpportunityStageDto item) => NeedsReview(item) ? "ops-selected-score--red" : item.IsActive ? "ops-selected-score--green" : "ops-selected-score--neutral";
+    private static string StageTypeClass(OpportunityStageDto item) => item.IsWonStage ? "ops-type-badge--won" : item.IsClosedStage ? "ops-type-badge--closed" : "ops-type-badge--open";
+    private static string StageIcon(OpportunityStageDto item) => item.IsWonStage ? "bi-trophy" : item.IsClosedStage ? "bi-lock" : "bi-funnel";
+    private static string StageIconClass(OpportunityStageDto item) => NeedsReview(item) ? "ops-row-icon--red" : item.IsWonStage ? "ops-row-icon--gold" : item.IsClosedStage ? "ops-row-icon--neutral" : "ops-row-icon--green";
+    private void ShowToast(string message, bool isError = false) { _toastMessage = message; _toastIsError = isError; }
+    private void ClearToast() => _toastMessage = null;
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+
+    private sealed record TabItem(string Key, string Label, string Icon);
+    private sealed record KpiItem(string Key, string Label, string Value, string Detail, string Icon, string Tone, string Tooltip);
+    private sealed record InsightItem(string Tab, string Title, string Detail, string Icon);
+    private sealed record ChecklistItem(string Text, bool Done);
+
+    private sealed class OppStageFormModel
     {
         [Required(ErrorMessage = "Stage Code is required.")]
         [StringLength(80, ErrorMessage = "Stage Code cannot exceed 80 characters.")]
@@ -258,16 +388,5 @@
         public bool IsClosedStage { get; set; }
         public bool IsWonStage { get; set; }
         public bool IsActive { get; set; } = true;
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
     }
 }

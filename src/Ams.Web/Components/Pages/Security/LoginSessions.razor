@@ -1,186 +1,383 @@
-@page "/tenant/security/sessions"
+﻿@page "/tenant/security/sessions"
 @namespace Ams.Web.Components.Pages.SecurityAdmin
 @using Ams.Application.Common.Dtos
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
+@inject IJSRuntime Js
 
-<PageTitle>Login Sessions — Users &amp; Security</PageTitle>
+<PageTitle>Login Sessions - Users &amp; Security</PageTitle>
 
-@if (_toastMessage is not null)
+<AppPageHeader Title="Login Sessions"
+               Subtitle="Enterprise session command center for active access, suspicious activity, stale sessions, devices, and revoke workflows."
+               Icon="bi-display">
+    <Actions>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="CopySummaryAsync" disabled="@(!_sessions.Any())"><i class="bi bi-clipboard"></i> Copy Summary</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick='() => Nav.NavigateTo("/tenant/security/audit")'><i class="bi bi-journal-text"></i> Audit Trail</button>
+        <button class="um-btn um-btn-danger" type="button" @onclick="ConfirmRevokeAll" disabled="@(_saving || ActiveCount == 0)"><i class="bi bi-shield-x"></i> Revoke All Active</button>
+    </Actions>
+</AppPageHeader>
+
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
 {
-    <div class="mt-toast @(_toastIsError ? "mt-toast--danger" : "mt-toast--success")" role="status">
+    <div class="ss-toast @(_toastIsError ? "ss-toast--danger" : "ss-toast--success")" role="status">
         <i class="bi @(_toastIsError ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")"></i>
         <span>@_toastMessage</span>
         <button type="button" @onclick="ClearToast" aria-label="Close notification"><i class="bi bi-x-lg"></i></button>
     </div>
 }
 
-<AppPageHeader Title="Login Sessions"
-               Subtitle="Tenant Admin monitoring for active, recent, risky, mobile, and revoked agency user sessions"
-               Icon="bi-display">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "ad-spin" : "")"></i> Refresh</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/tenant/security/audit")'><i class="bi bi-journal-text"></i> User Audit Trail</button>
-        <button class="um-btn um-btn-danger" @onclick="RevokeAllAsync" disabled="@(_saving || ActiveCount == 0)"><i class="bi bi-shield-x"></i> Revoke All Active</button>
-    </Actions>
-</AppPageHeader>
+<div class="ss-page">
+    <section class="ss-hero">
+        <div class="ss-hero-left">
+            <span class="ss-hero-icon"><i class="bi bi-display"></i></span>
+            <div class="ss-hero-title">
+                <span class="ss-eyebrow"><i class="bi bi-shield-lock"></i> Tenant Security · Session Operations</span>
+                <h1>Session Command Center</h1>
+                <p>Monitor active user access, detect suspicious network patterns, revoke risky sessions, and jump directly into the enterprise audit trail.</p>
+                <div class="ss-hero-meta">
+                    <span><i class="bi bi-display"></i> @ActiveCount active</span>
+                    <span><i class="bi bi-people"></i> @UniqueUsers users</span>
+                    <span><i class="bi bi-exclamation-triangle"></i> @SuspiciousCount suspicious</span>
+                    <span><i class="bi bi-hourglass-split"></i> @StaleCount stale</span>
+                </div>
+            </div>
+        </div>
+        <div class="ss-hero-actions">
+            <div class="ss-score-card @ReadinessClass"><span>Session readiness</span><strong>@ReadinessScore%</strong><small>@ReadinessSummary</small></div>
+            <button class="ss-workflow" type="button" @onclick='() => SetTab("suspicious")'><i class="bi bi-exclamation-triangle"></i><span><strong>Review suspicious</strong><small>@SuspiciousCount session(s) need review</small></span></button>
+            <button class="ss-workflow" type="button" @onclick="ConfirmRevokeAll" disabled="@(ActiveCount == 0)"><i class="bi bi-shield-x"></i><span><strong>Revoke active access</strong><small>Confirm bulk revocation first</small></span></button>
+        </div>
+    </section>
 
-<section class="ss-hero">
-    <div>
-        <span class="ss-eyebrow">Tenant Admin Security Operations</span>
-        <h2>Session Command Center</h2>
-        <p>Review user access posture, identify risky locations or stale sessions, revoke access, and jump directly into the enterprise user audit trail.</p>
-    </div>
-    <div class="ss-hero-actions">
-        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/tenant/security/audit")'><i class="bi bi-shield-lock"></i> Open Audit Trail</button>
-        <button class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset Filters</button>
-    </div>
-</section>
-
-<section class="ss-kpi-section">
-    <div class="ss-kpi-heading"><span>Session Health</span><small>Click a KPI to filter sessions.</small></div>
-    <div class="ss-kpi-strip">
-        @KpiCard("bi-display", "Active", ActiveCount.ToString(), "Active sessions", "ss-kpi-active", "active")
-        @KpiCard("bi-people-fill", "Users", UniqueUsers.ToString(), "Unique users with sessions", "ss-kpi-users", "users")
-        @KpiCard("bi-exclamation-triangle-fill", "Suspicious", SuspiciousCount.ToString(), "Suspicious sessions", "ss-kpi-suspicious", "suspicious")
-        @KpiCard("bi-phone", "Mobile", MobileCount.ToString(), "Mobile sessions", "ss-kpi-mobile", "mobile")
-        @KpiCard("bi-hourglass-split", "Stale", StaleCount.ToString(), "No activity in 8+ hours", "ss-kpi-stale", "stale")
-        @KpiCard("bi-shield-x", "Revoked", RevokedCount.ToString(), "Revoked sessions", "ss-kpi-revoked", "revoked")
-    </div>
-</section>
-
-<section class="ss-kpi-section">
-    <div class="ss-kpi-heading"><span>Device & Location</span><small>Device posture and IP/location distribution.</small></div>
-    <div class="ss-kpi-strip ss-kpi-strip--compact">
-        @foreach (var item in TopDevices)
+    <section class="ss-kpi-strip" aria-label="Session KPI filters">
+        @foreach (var kpi in Kpis)
         {
-            @KpiCard(DeviceIcon(item.Name), item.Name, item.Count.ToString(), $"{item.Name} sessions", "ss-kpi-device", $"device:{item.Name}")
+            <button type="button" class="ss-kpi-card ss-kpi-card--@kpi.Tone @(IsActiveTab(kpi.Key) ? "ss-kpi-card--active" : null)" title="@kpi.Tooltip" @onclick="() => SetTab(kpi.Key)">
+                <span class="ss-kpi-icon"><i class="bi @kpi.Icon"></i></span>
+                <span class="ss-kpi-body"><span class="ss-kpi-label">@kpi.Label</span><strong class="ss-kpi-value">@kpi.Value</strong><small class="ss-kpi-sub">@kpi.Detail</small></span>
+            </button>
         }
-        @foreach (var item in TopLocations)
+    </section>
+
+    <section class="ss-workflows" aria-label="Priority session workflows">
+        <button class="ss-workflow-card" type="button" @onclick='() => SetTab("active")'><span><i class="bi bi-display"></i></span><strong>Monitor active sessions</strong><small>Review users currently signed in.</small></button>
+        <button class="ss-workflow-card" type="button" @onclick='() => SetTab("suspicious")'><span><i class="bi bi-exclamation-triangle"></i></span><strong>Investigate risk</strong><small>External IPs, unknown agents, or idle sign-ins.</small></button>
+        <button class="ss-workflow-card" type="button" @onclick='() => SetTab("stale")'><span><i class="bi bi-hourglass-split"></i></span><strong>Clear stale access</strong><small>Sessions idle for 8+ hours.</small></button>
+        <button class="ss-workflow-card" type="button" @onclick='() => SetTab("devices")'><span><i class="bi bi-phone"></i></span><strong>Check devices</strong><small>Mobile, tablet, desktop distribution.</small></button>
+        <button class="ss-workflow-card" type="button" @onclick='() => Nav.NavigateTo("/tenant/security/audit")'><span><i class="bi bi-journal-text"></i></span><strong>Open audit trail</strong><small>Trace user activity and security events.</small></button>
+    </section>
+
+    <section class="ss-filter-panel" aria-label="Session filters">
+        <div class="ss-search"><i class="bi bi-search"></i><input value="@_search" @oninput="OnSearchChanged" placeholder="Search user, email, IP, device, location, or agent..." /></div>
+        <div class="ss-filter-grid">
+            <label><span>Status</span><select class="form-select" value="@_statusFilter" @onchange="OnStatusFilterChanged"><option value="">All</option><option>Active</option><option>Suspicious</option><option>Expired</option><option>Revoked</option></select></label>
+            <label><span>Device</span><select class="form-select" value="@_deviceFilter" @onchange="OnDeviceFilterChanged"><option value="">All</option>@foreach (var device in DeviceTypes) { <option>@device</option> }</select></label>
+            <label><span>Location</span><select class="form-select" value="@_locationFilter" @onchange="OnLocationFilterChanged"><option value="">All</option>@foreach (var location in LocationTypes) { <option>@location</option> }</select></label>
+            <label><span>Date</span><select class="form-select" value="@_dateFilter" @onchange="OnDateFilterChanged"><option value="0">All time</option><option value="1">Today</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option></select></label>
+        </div>
+        <button type="button" class="ss-btn ss-btn--ghost" @onclick="ResetFilters"><i class="bi bi-x-circle"></i> Clear</button>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger ss-alert" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div>
+    }
+
+    <div class="ss-tabs" role="tablist" aria-label="Session dashboard sections">
+        @foreach (var tab in Tabs)
         {
-            @KpiCard("bi-geo-alt-fill", item.Name, item.Count.ToString(), $"Sessions from {item.Name}", "ss-kpi-location", $"location:{item.Name}")
+            <button type="button" role="tab" class="ss-tab @(IsActiveTab(tab.Key) ? "ss-tab--active" : null)" @onclick="() => SetTab(tab.Key)"><i class="bi @tab.Icon"></i> @tab.Label <strong>@TabCount(tab.Key)</strong></button>
         }
     </div>
-</section>
 
-<div class="ss-command-bar">
-    <div class="ss-search-wrap"><i class="bi bi-search"></i><input @bind="_search" @bind:event="oninput" placeholder="Search user, email, IP, device, location…" /></div>
-    <select class="ss-filter-sel" @bind="_statusFilter"><option value="">All statuses</option><option>Active</option><option>Expired</option><option>Revoked</option><option>Suspicious</option></select>
-    <select class="ss-filter-sel" @bind="_deviceFilter"><option value="">All devices</option>@foreach (var d in DeviceTypes) { <option>@d</option> }</select>
-    <select class="ss-filter-sel" @bind="_dateFilter"><option value="0">All time</option><option value="1">Today</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option></select>
-    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button>
-    <span class="ss-filter-count">@Filtered.Count() session(s)</span>
-</div>
+    <section class="ss-dashboard">
+        <main class="ss-main-card">
+            <div class="ss-card-header">
+                <div><span class="ss-section-kicker"><i class="bi bi-command"></i> @ActiveSectionKicker</span><h2>@ActiveSectionTitle</h2><p>@ActiveSectionDescription</p></div>
+                <div class="ss-card-actions">
+                    @if (_selected is not null)
+                    {
+                        <span class="ss-sel-count"><i class="bi bi-person-check"></i> @(_selected.UserFullName ?? _selected.UserEmail ?? "Selected session")</span>
+                    }
+                    <button type="button" class="ss-btn ss-btn--ghost" @onclick="PreviousPage" disabled="@(_pageNumber <= 1)"><i class="bi bi-chevron-left"></i></button>
+                    <span class="ss-page-indicator">Page @_pageNumber of @TotalPages</span>
+                    <button type="button" class="ss-btn ss-btn--ghost" @onclick="NextPage" disabled="@(_pageNumber >= TotalPages)"><i class="bi bi-chevron-right"></i></button>
+                </div>
+            </div>
 
-@if (_loadError is not null)
-{
-    <div class="alert alert-danger mt-load-error" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError</div>
-}
-@if (_loading)
-{
-    <div class="mt-loading"><div class="um-spinner"></div><span>Loading login sessions…</span></div>
-}
-
-<div class="ss-layout">
-    <div class="ss-session-list">
-        @foreach (var group in SessionGroups)
-        {
-            <div class="ss-date-sep"><span>@group.Label</span></div>
-            @foreach (var item in group.Items)
+            @if (_loading)
             {
-                <div class="ss-item @(IsSuspicious(item) ? "ss-item-danger" : null) @(_selected?.SessionId == item.SessionId ? "ss-item-selected" : null)" @onclick="() => Select(item)">
-                    <span class="ss-avatar" style="@AvatarStyle(item)">@Initials(item.UserFullName ?? item.UserEmail ?? "?")</span>
-                    <div class="ss-body"><div class="ss-hdr"><span class="ss-title">@(item.UserFullName ?? "Unknown User")</span><span class="ss-chip ss-chip-status-@StatusCss(Status(item))">@Status(item)</span><span class="ss-chip ss-chip-device"><i class="bi @DeviceIcon(item.DeviceType ?? "Desktop")"></i> @(item.DeviceType ?? "Desktop")</span>@if (IsSuspicious(item)) { <span class="ss-risk">Risk</span> }</div><div class="ss-meta"><span><i class="bi bi-envelope"></i> @(item.UserEmail ?? "—")</span><span><i class="bi bi-globe2"></i> @(item.IpAddress ?? "—")</span><span><i class="bi bi-geo-alt"></i> @LocationFor(item)</span><span><i class="bi bi-clock"></i> @FormatAge(item.LoginDateUtc)</span></div></div>
-                    <div class="ss-actions" @onclick:stopPropagation="true"><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenAudit(item)"><i class="bi bi-journal-text"></i></button>@if (Status(item) == "Active" || Status(item) == "Suspicious") { <button class="um-btn um-btn-danger um-btn-xs" @onclick="() => RevokeSessionAsync(item)"><i class="bi bi-x-circle"></i> Revoke</button> }</div>
+                <div class="ss-loading"><span class="spinner-border spinner-border-sm"></span> Loading login sessions...</div>
+            }
+            else if (!PagedSessions.Any())
+            {
+                <div class="ss-empty"><i class="bi bi-display"></i><strong>No sessions match this view</strong><span>Adjust filters or refresh the session posture.</span></div>
+            }
+            else
+            {
+                <div class="ss-table-wrap">
+                    <table class="ss-table">
+                        <thead><tr><th>User</th><th>Status</th><th>Device</th><th>IP / Location</th><th>Login</th><th>Last Activity</th><th>Risk</th><th class="ss-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var item in PagedSessions)
+                            {
+                                <tr class="ss-row @(_selected?.SessionId == item.SessionId ? "ss-row--selected" : null)" @onclick="() => Select(item)">
+                                    <td><div class="ss-user-cell"><span class="ss-avatar" style="@AvatarStyle(item)">@Initials(item.UserFullName ?? item.UserEmail ?? "?")</span><span><strong>@(item.UserFullName ?? "Unknown User")</strong><small>@(item.UserEmail ?? "No email")</small></span></div></td>
+                                    <td><span class="ss-pill ss-pill--@StatusCss(Status(item))">@Status(item)</span></td>
+                                    <td><span class="ss-pill ss-pill--neutral"><i class="bi @DeviceIcon(item.DeviceType ?? "Desktop")"></i> @(item.DeviceType ?? "Desktop")</span></td>
+                                    <td><div class="ss-stack"><strong>@(item.IpAddress ?? "—")</strong><small>@LocationFor(item)</small></div></td>
+                                    <td><span class="ss-date">@FormatAge(item.LoginDateUtc)</span></td>
+                                    <td><span class="ss-date">@(item.LastActivityDateUtc.HasValue ? FormatAge(item.LastActivityDateUtc.Value) : "No activity")</span></td>
+                                    <td><span class="@RiskBadgeClass(item)">@RiskLabel(item)</span></td>
+                                    <td class="ss-row-actions" @onclick:stopPropagation="true"><button type="button" class="ss-icon-btn" @onclick="() => OpenAudit(item)" title="Audit"><i class="bi bi-journal-text"></i></button>@if (CanRevoke(item)) { <button type="button" class="ss-icon-btn ss-icon-btn--danger" @onclick="() => ConfirmRevoke(item)" title="Revoke"><i class="bi bi-shield-x"></i></button> }</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
                 </div>
             }
-        }
-        @if (!Filtered.Any())
-        {
-            <div class="ss-empty"><i class="bi bi-display"></i><span>No sessions match the current filters.</span></div>
-        }
-    </div>
+        </main>
 
-    @if (_selected is not null)
-    {
-        <aside class="ss-detail-panel">
-            <div class="ss-detail-header"><span class="ss-chip ss-chip-status-@StatusCss(Status(_selected))">@Status(_selected)</span><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _selected = null"><i class="bi bi-x-lg"></i></button></div>
-            <h3>@(_selected.UserFullName ?? "Unknown User")</h3>
-            <div class="ss-detail-grid"><div><span>Email</span><strong>@(_selected.UserEmail ?? "—")</strong></div><div><span>IP Address</span><strong>@(_selected.IpAddress ?? "—")</strong></div><div><span>Location</span><strong>@LocationFor(_selected)</strong></div><div><span>Device</span><strong>@(_selected.DeviceType ?? "Desktop")</strong></div><div><span>User Agent</span><strong>@(_selected.UserAgent ?? "—")</strong></div><div><span>Login</span><strong>@_selected.LoginDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</strong></div><div><span>Last Activity</span><strong>@(_selected.LastActivityDateUtc?.ToLocalTime().ToString("MMM d, yyyy h:mm tt") ?? "—")</strong></div><div><span>Expires</span><strong>@_selected.ExpiresDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</strong></div><div><span>Revoked Reason</span><strong>@(_selected.RevokedReason ?? "—")</strong></div></div>
-            <div class="ss-detail-actions"><button class="um-btn um-btn-primary" @onclick="() => OpenAudit(_selected)"><i class="bi bi-journal-text"></i> View Audit Trail</button>@if (Status(_selected) == "Active" || Status(_selected) == "Suspicious") { <button class="um-btn um-btn-danger" @onclick="() => RevokeSessionAsync(_selected)"><i class="bi bi-shield-x"></i> Revoke Session</button> }</div>
+        <aside class="ss-side-panel">
+            <section class="ss-panel-card">
+                <span class="ss-section-kicker"><i class="bi bi-display"></i> Selected Session</span>
+                @if (_selected is null)
+                {
+                    <p class="ss-side-copy">Select a session to inspect access posture, revoke access, or open the audit trail.</p>
+                }
+                else
+                {
+                    <div class="ss-selected-title"><span class="ss-avatar ss-avatar--lg" style="@AvatarStyle(_selected)">@Initials(_selected.UserFullName ?? _selected.UserEmail ?? "?")</span><div><h3>@(_selected.UserFullName ?? "Unknown User")</h3><span>@(_selected.UserEmail ?? "No email")</span></div></div>
+                    <div class="ss-selected-score @RiskScoreClass(_selected)"><span>Risk posture</span><strong>@RiskLabel(_selected)</strong><small>@RiskDetail(_selected)</small></div>
+                    <dl class="ss-detail-list"><div><dt>Status</dt><dd>@Status(_selected)</dd></div><div><dt>IP Address</dt><dd>@(_selected.IpAddress ?? "—")</dd></div><div><dt>Location</dt><dd>@LocationFor(_selected)</dd></div><div><dt>Device</dt><dd>@(_selected.DeviceType ?? "Desktop")</dd></div><div><dt>Login</dt><dd>@_selected.LoginDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</dd></div><div><dt>Last Activity</dt><dd>@(_selected.LastActivityDateUtc?.ToLocalTime().ToString("MMM d, yyyy h:mm tt") ?? "—")</dd></div><div><dt>Expires</dt><dd>@_selected.ExpiresDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</dd></div><div><dt>Revoked Reason</dt><dd>@(_selected.RevokedReason ?? "—")</dd></div></dl>
+                    <div class="ss-selected-actions"><button type="button" class="ss-btn ss-btn--primary" @onclick="() => OpenAudit(_selected)"><i class="bi bi-journal-text"></i> Audit Trail</button>@if (CanRevoke(_selected)) { <button type="button" class="ss-btn ss-btn--danger-ghost" @onclick="() => ConfirmRevoke(_selected)"><i class="bi bi-shield-x"></i> Revoke</button> }</div>
+                }
+            </section>
+
+            <section class="ss-panel-card">
+                <span class="ss-section-kicker"><i class="bi bi-lightbulb"></i> Priority Insights</span>
+                <div class="ss-insight-list">@foreach (var insight in Insights) { <button type="button" class="ss-insight" @onclick="() => SetTab(insight.Tab)"><i class="bi @insight.Icon"></i><span><strong>@insight.Title</strong><small>@insight.Detail</small></span></button> }</div>
+            </section>
+
+            <section class="ss-panel-card">
+                <span class="ss-section-kicker"><i class="bi bi-list-check"></i> Governance Checklist</span>
+                <div class="ss-checklist">@foreach (var item in Checklist) { <div class="ss-check-item @(item.Done ? "ss-check-item--done" : null)"><i class="bi @(item.Done ? "bi-check-circle-fill" : "bi-circle")"></i><span>@item.Text</span></div> }</div>
+            </section>
         </aside>
-    }
+    </section>
 </div>
 
+@if (_showConfirm)
+{
+    <div class="ss-modal-backdrop" role="presentation">
+        <div class="ss-confirm" role="dialog" aria-modal="true" aria-labelledby="ss-confirm-title">
+            <div class="ss-confirm-body"><div class="ss-confirm-icon"><i class="bi bi-exclamation-triangle"></i></div><div><h3 id="ss-confirm-title">@_confirmTitle</h3><p>@_confirmMessage</p><small>@_confirmDetail</small></div></div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseConfirm">Cancel</button><button type="button" class="um-btn um-btn-danger" @onclick="ExecuteConfirmAsync" disabled="@_saving">@_confirmButton</button></div>
+        </div>
+    </div>
+}
+
 @code {
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
     private Guid _tenantId;
     private Guid _tenantAdminUserId;
-    Guid TenantId { get; set; }
-    string _search = string.Empty;
-    string _statusFilter = string.Empty;
-    string _deviceFilter = string.Empty;
-    string _activeFilter = string.Empty;
-    int _dateFilter = 30;
-    string? _loadError;
-    string? _toastMessage;
-    bool _toastIsError;
-    bool _loading;
-    bool _saving;
-    List<UserSessionDto> _sessions = [];
-    UserSessionDto? _selected;
+    private string _search = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _deviceFilter = string.Empty;
+    private string _locationFilter = string.Empty;
+    private string _activeTab = "overview";
+    private int _dateFilter = 30;
+    private int _pageNumber = 1;
+    private const int PageSize = 12;
+    private string? _loadError;
+    private string? _toastMessage;
+    private bool _toastIsError;
+    private bool _loading;
+    private bool _saving;
+    private bool _showConfirm;
+    private ConfirmAction _confirmAction = ConfirmAction.None;
+    private UserSessionDto? _pendingSession;
+    private string _confirmTitle = string.Empty;
+    private string _confirmMessage = string.Empty;
+    private string _confirmDetail = string.Empty;
+    private string _confirmButton = "Confirm";
+    private List<UserSessionDto> _sessions = [];
+    private UserSessionDto? _selected;
 
-    int ActiveCount => _sessions.Count(x => Status(x) == "Active");
-    int UniqueUsers => _sessions.Select(x => x.UserId).Distinct().Count();
-    int SuspiciousCount => _sessions.Count(IsSuspicious);
-    int MobileCount => _sessions.Count(x => string.Equals(x.DeviceType, "Mobile", StringComparison.OrdinalIgnoreCase));
-    int StaleCount => _sessions.Count(IsStale);
-    int RevokedCount => _sessions.Count(x => x.IsRevoked);
-    string[] DeviceTypes => _sessions.Select(x => x.DeviceType ?? "Desktop").Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray();
-    IEnumerable<KpiItem> TopDevices => _sessions.GroupBy(x => x.DeviceType ?? "Desktop", StringComparer.OrdinalIgnoreCase).Select(g => new KpiItem(g.Key, g.Count())).OrderByDescending(x => x.Count).Take(4);
-    IEnumerable<KpiItem> TopLocations => _sessions.GroupBy(LocationFor, StringComparer.OrdinalIgnoreCase).Select(g => new KpiItem(g.Key, g.Count())).OrderByDescending(x => x.Count).Take(4);
-    IEnumerable<UserSessionDto> Filtered => _sessions.Where(x => (string.IsNullOrEmpty(_statusFilter) || Status(x) == _statusFilter) && (string.IsNullOrEmpty(_deviceFilter) || string.Equals(x.DeviceType, _deviceFilter, StringComparison.OrdinalIgnoreCase)) && MatchesDate(x.LoginDateUtc) && MatchesKpi(x) && (string.IsNullOrEmpty(_search) || (x.UserFullName?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) || (x.UserEmail?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) || (x.IpAddress?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) || (x.UserAgent?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) || LocationFor(x).Contains(_search, StringComparison.OrdinalIgnoreCase))).OrderByDescending(x => x.LoginDateUtc);
-    IEnumerable<Group<UserSessionDto>> SessionGroups => Filtered.GroupBy(x => x.LoginDateUtc.ToLocalTime().Date).OrderByDescending(g => g.Key).Select(g => new Group<UserSessionDto>(FormatDateLabel(g.Key), g.ToList()));
+    private static readonly List<TabItem> Tabs = [new("overview", "Overview", "bi-speedometer2"), new("active", "Active", "bi-display"), new("suspicious", "Suspicious", "bi-exclamation-triangle"), new("stale", "Stale", "bi-hourglass-split"), new("devices", "Devices", "bi-phone"), new("revoked", "Revoked", "bi-shield-x")];
+    private IReadOnlyList<KpiItem> Kpis => [new("active", "Active", ActiveCount.ToString(), "Currently valid sessions", "bi-display", "blue", "Show active sessions"), new("overview", "Users", UniqueUsers.ToString(), "Unique users with sessions", "bi-people-fill", "green", "Show all users"), new("suspicious", "Suspicious", SuspiciousCount.ToString(), "External, unknown, or idle patterns", "bi-exclamation-triangle-fill", "red", "Show suspicious sessions"), new("devices", "Mobile", MobileCount.ToString(), "Mobile sessions", "bi-phone", "purple", "Show device posture"), new("stale", "Stale", StaleCount.ToString(), "No activity in 8+ hours", "bi-hourglass-split", "amber", "Show stale sessions"), new("revoked", "Revoked", RevokedCount.ToString(), "Revoked sessions", "bi-shield-x", "cyan", "Show revoked sessions")];
 
-    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Users & Security", "/tenant/security/users"), new("Login Sessions", "/tenant/security/sessions")); await LoadAsync(); }
-    async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchUserSessionsAsync(TenantId, searchTerm: _search); _sessions = result?.Items.ToList() ?? []; _selected = _selected is null ? Filtered.FirstOrDefault() : Filtered.FirstOrDefault(x => x.SessionId == _selected.SessionId) ?? Filtered.FirstOrDefault(); } catch (Exception ex) { _loadError = $"Failed to load login sessions: {ex.Message}"; } finally { _loading = false; } }
-    void Select(UserSessionDto item) => _selected = item;
-    void ResetFilters() { _search = string.Empty; _statusFilter = string.Empty; _deviceFilter = string.Empty; _activeFilter = string.Empty; _dateFilter = 30; }
-    bool MatchesDate(DateTime utc) => _dateFilter == 0 || utc >= DateTime.UtcNow.AddDays(-_dateFilter);
-    bool MatchesKpi(UserSessionDto item) => _activeFilter switch { "active" => Status(item) == "Active", "users" => true, "suspicious" => IsSuspicious(item), "mobile" => string.Equals(item.DeviceType, "Mobile", StringComparison.OrdinalIgnoreCase), "stale" => IsStale(item), "revoked" => item.IsRevoked, _ when _activeFilter.StartsWith("device:", StringComparison.OrdinalIgnoreCase) => string.Equals(item.DeviceType ?? "Desktop", _activeFilter[7..], StringComparison.OrdinalIgnoreCase), _ when _activeFilter.StartsWith("location:", StringComparison.OrdinalIgnoreCase) => string.Equals(LocationFor(item), _activeFilter[9..], StringComparison.OrdinalIgnoreCase), _ => true };
-    async Task RevokeSessionAsync(UserSessionDto item) { _saving = true; try { await Api.RevokeUserSessionAsync(item.SessionId, "Revoked from Tenant Admin Login Sessions"); ShowToast("Session revoked"); await LoadAsync(); } catch (Exception ex) { ShowToast($"Revoke failed: {ex.Message}", true); } finally { _saving = false; } }
-    async Task RevokeAllAsync() { _saving = true; try { await Api.RevokeAllUserSessionsAsync(TenantId, reason: "Bulk revoke from Tenant Admin Login Sessions"); ShowToast("All active sessions revoked"); await LoadAsync(); } catch (Exception ex) { ShowToast($"Bulk revoke failed: {ex.Message}", true); } finally { _saving = false; } }
-    void OpenAudit(UserSessionDto item) => Nav.NavigateTo($"/tenant/security/audit?search={Uri.EscapeDataString(item.UserEmail ?? item.UserFullName ?? item.IpAddress ?? string.Empty)}");
-    void ShowToast(string message, bool isError = false) { _toastMessage = message; _toastIsError = isError; }
-    void ClearToast() => _toastMessage = null;
-    void SetFilter(string? filter) => _activeFilter = _activeFilter == (filter ?? string.Empty) ? string.Empty : filter ?? string.Empty;
-    static string Status(UserSessionDto item) => item.IsRevoked ? "Revoked" : item.ExpiresDateUtc <= DateTime.UtcNow ? "Expired" : IsSuspicious(item) ? "Suspicious" : "Active";
-    static bool IsSuspicious(UserSessionDto item) => !item.IsRevoked && (IsExternalIp(item.IpAddress) || (item.LastActivityDateUtc is null && item.LoginDateUtc < DateTime.UtcNow.AddHours(-6)) || (item.UserAgent?.Contains("Unknown", StringComparison.OrdinalIgnoreCase) ?? false));
-    static bool IsStale(UserSessionDto item) => !item.IsRevoked && (DateTime.UtcNow - (item.LastActivityDateUtc ?? item.LoginDateUtc)).TotalHours >= 8;
-    static bool IsExternalIp(string? ip) => !string.IsNullOrWhiteSpace(ip) && !(ip.StartsWith("10.") || ip.StartsWith("192.168.") || ip.StartsWith("172.16."));
-    static string LocationFor(UserSessionDto item) => IsExternalIp(item.IpAddress) ? "External" : item.IpAddress?.StartsWith("10.20.") == true ? "Agency HQ" : item.IpAddress?.StartsWith("192.168.") == true ? "Branch Office" : "Unknown";
-    static string StatusCss(string status) => status.ToLowerInvariant();
-    static string Initials(string value) { var parts = value.Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : value.Length >= 1 ? value[..1] : "?"; }
-    static string AvatarStyle(UserSessionDto item) { var hue = Math.Abs((item.UserEmail ?? item.UserFullName ?? item.UserId.ToString()).GetHashCode()) % 360; return $"background:hsl({hue},50%,42%);color:#fff;"; }
-    static string DeviceIcon(string device) => device switch { "Mobile" => "bi-phone", "Tablet" => "bi-tablet", _ => "bi-display" };
-    static string FormatDateLabel(DateTime date) => date.Date == DateTime.Today ? "Today" : date.Date == DateTime.Today.AddDays(-1) ? "Yesterday" : date.ToString("dddd, MMMM d");
-    static string FormatAge(DateTime utc) { var diff = DateTime.UtcNow - utc; if (diff.TotalMinutes < 60) return $"{Math.Max(1, (int)diff.TotalMinutes)}m ago"; if (diff.TotalHours < 24) return $"{(int)diff.TotalHours}h ago"; if (diff.TotalDays < 7) return $"{(int)diff.TotalDays}d ago"; return utc.ToLocalTime().ToString("MMM d"); }
-    RenderFragment KpiCard(string icon, string label, string value, string title, string css, string? filter) => @<button class="ss-kpi-card @css @(_activeFilter == (filter ?? string.Empty) ? "ss-kpi-active" : "")" title="@title" @onclick="() => SetFilter(filter)"><div class="ss-kpi-val">@value</div><div class="ss-kpi-lbl"><i class="bi @icon"></i> @label</div></button>;
-    sealed record Group<T>(string Label, List<T> Items);
-    sealed record KpiItem(string Name, int Count);
+    private int ActiveCount => _sessions.Count(x => Status(x) == "Active");
+    private int UniqueUsers => _sessions.Select(x => x.UserId).Distinct().Count();
+    private int SuspiciousCount => _sessions.Count(IsSuspicious);
+    private int MobileCount => _sessions.Count(x => string.Equals(x.DeviceType, "Mobile", StringComparison.OrdinalIgnoreCase));
+    private int StaleCount => _sessions.Count(IsStale);
+    private int RevokedCount => _sessions.Count(x => x.IsRevoked);
+    private int ExternalCount => _sessions.Count(x => IsExternalIp(x.IpAddress));
+    private int ReadinessScore => _sessions.Count == 0 ? 100 : Math.Clamp(100 - (SuspiciousCount * 12) - (StaleCount * 5) - (ExternalCount * 2), 0, 100);
+    private string ReadinessClass => ReadinessScore >= 90 ? "ss-score-card--green" : ReadinessScore >= 75 ? "ss-score-card--cyan" : ReadinessScore >= 55 ? "ss-score-card--amber" : "ss-score-card--red";
+    private string ReadinessSummary => ReadinessScore >= 90 ? "Session posture is healthy." : ReadinessScore >= 75 ? "Review suspicious and stale access." : "Immediate session remediation recommended.";
+    private string[] DeviceTypes => _sessions.Select(x => x.DeviceType ?? "Desktop").Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray();
+    private string[] LocationTypes => _sessions.Select(LocationFor).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray();
+    private IEnumerable<UserSessionDto> Filtered => ApplyFilters();
+    private IEnumerable<UserSessionDto> PagedSessions => Filtered.Skip((_pageNumber - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(Filtered.Count() / (double)PageSize));
+    private string ActiveSectionKicker => _activeTab == "devices" ? "Device & Location" : "Session Assurance";
+    private string ActiveSectionTitle => _activeTab switch { "active" => "Active Sessions", "suspicious" => "Suspicious Sessions", "stale" => "Stale Sessions", "devices" => "Device Posture", "revoked" => "Revoked Sessions", _ => "Session Posture Overview" };
+    private string ActiveSectionDescription => _activeTab switch { "active" => "Currently valid sessions sorted by enterprise risk priority.", "suspicious" => "External IPs, unknown agents, and inactive sign-ins requiring review.", "stale" => "Sessions with no activity for 8+ hours and candidates for revocation.", "devices" => "Device and location posture across current session inventory.", "revoked" => "Revoked access history and reasons from the current session dataset.", _ => "All sessions ranked by risk, recency, and operational importance." };
+    private IReadOnlyList<InsightItem> Insights => [new("suspicious", "Risk review", $"{SuspiciousCount} suspicious session(s)", "bi-exclamation-triangle"), new("stale", "Stale access", $"{StaleCount} session(s) idle for 8+ hours", "bi-hourglass-split"), new("active", "Active access", $"{ActiveCount} active session(s)", "bi-display"), new("devices", "External network", $"{ExternalCount} external IP session(s)", "bi-globe2")];
+    private IReadOnlyList<ChecklistItem> Checklist => [new("No suspicious active sessions", SuspiciousCount == 0), new("No stale sessions over 8 hours", StaleCount == 0), new("Active sessions are below 50", ActiveCount < 50), new("Revoked sessions are auditable", _sessions.Where(s => s.IsRevoked).All(s => !string.IsNullOrWhiteSpace(s.RevokedReason))), new("External IP sessions reviewed", ExternalCount == 0)];
 
-    async Task ResolveCurrentUserContextAsync()
+    protected override async Task OnInitializedAsync()
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Users & Security", "/tenant/security/users"), new("Login Sessions", "/tenant/security/sessions"));
+        await LoadAsync();
     }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchUserSessionsAsync(_tenantId, searchTerm: _search);
+            _sessions = result?.Items.ToList() ?? [];
+            EnsureSelected();
+            ClampPage();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load login sessions: {ex.Message}";
+            ShowToast($"Failed to load login sessions: {ex.Message}", true);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private IEnumerable<UserSessionDto> ApplyFilters()
+    {
+        var query = _sessions.AsEnumerable();
+        query = _activeTab switch
+        {
+            "active" => query.Where(x => Status(x) == "Active"),
+            "suspicious" => query.Where(IsSuspicious),
+            "stale" => query.Where(IsStale),
+            "devices" => query.Where(x => !string.IsNullOrWhiteSpace(x.DeviceType) || !string.IsNullOrWhiteSpace(x.IpAddress)),
+            "revoked" => query.Where(x => x.IsRevoked),
+            _ => query
+        };
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => Status(x) == _statusFilter);
+        if (!string.IsNullOrWhiteSpace(_deviceFilter)) query = query.Where(x => string.Equals(x.DeviceType ?? "Desktop", _deviceFilter, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(_locationFilter)) query = query.Where(x => string.Equals(LocationFor(x), _locationFilter, StringComparison.OrdinalIgnoreCase));
+        if (_dateFilter > 0) query = query.Where(x => x.LoginDateUtc >= DateTime.UtcNow.AddDays(-_dateFilter));
+        if (!string.IsNullOrWhiteSpace(_search)) query = query.Where(x => (x.UserFullName?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) || (x.UserEmail?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) || (x.IpAddress?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) || (x.UserAgent?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) || (x.DeviceType?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) || LocationFor(x).Contains(_search, StringComparison.OrdinalIgnoreCase));
+        return query.OrderByDescending(RiskWeight).ThenByDescending(x => x.LoginDateUtc);
+    }
+
+    private void EnsureSelected() => _selected = _selected is null ? Filtered.FirstOrDefault() : Filtered.FirstOrDefault(x => x.SessionId == _selected.SessionId) ?? Filtered.FirstOrDefault();
+    private void Select(UserSessionDto item) => _selected = item;
+    private void SetTab(string tab) { _activeTab = tab; _pageNumber = 1; EnsureSelected(); }
+    private bool IsActiveTab(string tab) => _activeTab == tab;
+    private int TabCount(string tab) => tab switch { "active" => ActiveCount, "suspicious" => SuspiciousCount, "stale" => StaleCount, "devices" => MobileCount, "revoked" => RevokedCount, _ => _sessions.Count };
+    private void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args) { _search = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; _ = LoadAsync(); }
+    private void OnStatusFilterChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args) { _statusFilter = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; }
+    private void OnDeviceFilterChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args) { _deviceFilter = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; }
+    private void OnLocationFilterChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args) { _locationFilter = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; }
+    private void OnDateFilterChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args) { _dateFilter = int.TryParse(args.Value?.ToString(), out var days) ? days : 0; _pageNumber = 1; }
+    private void ResetFilters() { _search = string.Empty; _statusFilter = string.Empty; _deviceFilter = string.Empty; _locationFilter = string.Empty; _dateFilter = 30; _activeTab = "overview"; _pageNumber = 1; _ = LoadAsync(); }
+    private void PreviousPage() { if (_pageNumber > 1) _pageNumber--; }
+    private void NextPage() { if (_pageNumber < TotalPages) _pageNumber++; }
+    private void ClampPage() { if (_pageNumber > TotalPages) _pageNumber = TotalPages; if (_pageNumber < 1) _pageNumber = 1; }
+
+    private void ConfirmRevoke(UserSessionDto item)
+    {
+        _pendingSession = item;
+        _confirmAction = ConfirmAction.RevokeOne;
+        _confirmTitle = "Revoke session?";
+        _confirmMessage = $"Revoke the session for {item.UserFullName ?? item.UserEmail ?? "this user"}?";
+        _confirmDetail = $"IP: {item.IpAddress ?? "—"} · Device: {item.DeviceType ?? "Desktop"} · Login: {item.LoginDateUtc.ToLocalTime():MMM d, yyyy h:mm tt}";
+        _confirmButton = "Revoke Session";
+        _showConfirm = true;
+    }
+
+    private void ConfirmRevokeAll()
+    {
+        _pendingSession = null;
+        _confirmAction = ConfirmAction.RevokeAll;
+        _confirmTitle = "Revoke all active sessions?";
+        _confirmMessage = $"Revoke {ActiveCount} active session(s) for this tenant?";
+        _confirmDetail = "Users with active sessions will need to sign in again. This action is confirmation-gated for security.";
+        _confirmButton = "Revoke All Active";
+        _showConfirm = true;
+    }
+
+    private void CloseConfirm() { _showConfirm = false; _pendingSession = null; _confirmAction = ConfirmAction.None; }
+
+    private async Task ExecuteConfirmAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (_confirmAction == ConfirmAction.RevokeOne && _pendingSession is not null)
+            {
+                await Api.RevokeUserSessionAsync(_pendingSession.SessionId, "Revoked from Tenant Admin Login Sessions");
+                ShowToast("Session revoked.");
+            }
+            else if (_confirmAction == ConfirmAction.RevokeAll)
+            {
+                await Api.RevokeAllUserSessionsAsync(_tenantId, reason: "Bulk revoke from Tenant Admin Login Sessions");
+                ShowToast("All active sessions revoked.");
+            }
+            CloseConfirm();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Revoke failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void OpenAudit(UserSessionDto item) => Nav.NavigateTo($"/tenant/security/audit?search={Uri.EscapeDataString(item.UserEmail ?? item.UserFullName ?? item.IpAddress ?? string.Empty)}");
+    private async Task CopySummaryAsync()
+    {
+        var summary = $"Login Sessions Summary: {ActiveCount} active, {UniqueUsers} unique users, {SuspiciousCount} suspicious, {StaleCount} stale, {MobileCount} mobile, {RevokedCount} revoked, readiness {ReadinessScore}%.";
+        try { await Js.InvokeVoidAsync("navigator.clipboard.writeText", summary); ShowToast("Session summary copied."); }
+        catch { ShowToast(summary); }
+    }
+
+    private void ShowToast(string message, bool isError = false) { _toastMessage = message; _toastIsError = isError; }
+    private void ClearToast() => _toastMessage = null;
+    private static bool CanRevoke(UserSessionDto item) => Status(item) is "Active" or "Suspicious";
+    private static string Status(UserSessionDto item) => item.IsRevoked ? "Revoked" : item.ExpiresDateUtc <= DateTime.UtcNow ? "Expired" : IsSuspicious(item) ? "Suspicious" : "Active";
+    private static bool IsSuspicious(UserSessionDto item) => !item.IsRevoked && (IsExternalIp(item.IpAddress) || (item.LastActivityDateUtc is null && item.LoginDateUtc < DateTime.UtcNow.AddHours(-6)) || (item.UserAgent?.Contains("Unknown", StringComparison.OrdinalIgnoreCase) ?? false));
+    private static bool IsStale(UserSessionDto item) => !item.IsRevoked && (DateTime.UtcNow - (item.LastActivityDateUtc ?? item.LoginDateUtc)).TotalHours >= 8;
+    private static bool IsExternalIp(string? ip) => !string.IsNullOrWhiteSpace(ip) && !(ip.StartsWith("10.") || ip.StartsWith("192.168.") || ip.StartsWith("172.16.") || ip.StartsWith("172.17.") || ip.StartsWith("172.18.") || ip.StartsWith("172.19.") || ip.StartsWith("172.2") || ip.StartsWith("172.30.") || ip.StartsWith("172.31."));
+    private static string LocationFor(UserSessionDto item) => IsExternalIp(item.IpAddress) ? "External" : item.IpAddress?.StartsWith("10.20.") == true ? "Agency HQ" : item.IpAddress?.StartsWith("192.168.") == true ? "Branch Office" : item.IpAddress?.StartsWith("10.") == true ? "Internal" : "Unknown";
+    private static int RiskWeight(UserSessionDto item) => Status(item) == "Suspicious" ? 4 : IsStale(item) ? 3 : Status(item) == "Active" ? 2 : 1;
+    private static string RiskLabel(UserSessionDto item) => Status(item) == "Suspicious" ? "High" : IsStale(item) ? "Medium" : Status(item) == "Active" ? "Normal" : "Closed";
+    private static string RiskDetail(UserSessionDto item) => Status(item) == "Suspicious" ? "External IP, unknown agent, or no activity after sign-in." : IsStale(item) ? "No activity for 8+ hours." : Status(item) == "Active" ? "Active session within expected posture." : "Session is expired or revoked.";
+    private static string RiskBadgeClass(UserSessionDto item) => RiskLabel(item) switch { "High" => "ss-risk-badge ss-risk-badge--red", "Medium" => "ss-risk-badge ss-risk-badge--amber", "Normal" => "ss-risk-badge ss-risk-badge--green", _ => "ss-risk-badge ss-risk-badge--neutral" };
+    private static string RiskScoreClass(UserSessionDto item) => RiskLabel(item) switch { "High" => "ss-selected-score--red", "Medium" => "ss-selected-score--amber", "Normal" => "ss-selected-score--green", _ => "ss-selected-score--neutral" };
+    private static string StatusCss(string status) => status.ToLowerInvariant();
+    private static string Initials(string value) { var parts = value.Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant() : value.Length >= 1 ? value[..1].ToUpperInvariant() : "?"; }
+    private static string AvatarStyle(UserSessionDto item) { var hue = Math.Abs((item.UserEmail ?? item.UserFullName ?? item.UserId.ToString()).GetHashCode()) % 360; return $"background:hsl({hue},50%,42%);color:#fff;"; }
+    private static string DeviceIcon(string device) => device switch { "Mobile" => "bi-phone", "Tablet" => "bi-tablet", _ => "bi-display" };
+    private static string FormatAge(DateTime utc) { var diff = DateTime.UtcNow - utc; if (diff.TotalMinutes < 60) return $"{Math.Max(1, (int)diff.TotalMinutes)}m ago"; if (diff.TotalHours < 24) return $"{(int)diff.TotalHours}h ago"; if (diff.TotalDays < 7) return $"{(int)diff.TotalDays}d ago"; return utc.ToLocalTime().ToString("MMM d"); }
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+
+    private sealed record TabItem(string Key, string Label, string Icon);
+    private sealed record KpiItem(string Key, string Label, string Value, string Detail, string Icon, string Tone, string Tooltip);
+    private sealed record InsightItem(string Tab, string Title, string Detail, string Icon);
+    private sealed record ChecklistItem(string Text, bool Done);
+    private enum ConfirmAction { None, RevokeOne, RevokeAll }
 }

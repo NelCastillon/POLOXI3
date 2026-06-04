@@ -1,33 +1,320 @@
-﻿@page "/tenant/carriers/performance"
+@page "/tenant/carriers/performance"
 @using System.ComponentModel.DataAnnotations
 @using Ams.Application.Features.CarrierConfig
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
-<PageTitle>Carrier Performance â€” Carrier Configuration</PageTitle>
-<AppPageHeader Title="Carrier Performance" Subtitle="Track premium, loss ratio, hit ratio, quotes, and binds by carrier period" Icon="bi-graph-up"><Actions><button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Add Metric</button><button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button></Actions></AppPageHeader>
-<div class="pc-kpi-strip"><div class="pc-kpi-card" title="Total performance records"><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-graph-up"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Records</div></div></div><div class="pc-kpi-card" title="Total written premium"><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-currency-dollar"></i></span><div><div class="pc-kpi-value">@_items.Sum(x=>x.WrittenPremium).ToString("C0")</div><div class="pc-kpi-label">Premium</div></div></div><div class="pc-kpi-card" title="Average hit ratio"><span class="pc-kpi-icon" style="background:#dbeafe"><i class="bi bi-bullseye text-primary"></i></span><div><div class="pc-kpi-value">@AvgHit.ToString("0.0")%</div><div class="pc-kpi-label">Hit Ratio</div></div></div><div class="pc-kpi-card" title="Average loss ratio"><span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-activity"></i></span><div><div class="pc-kpi-value">@AvgLoss.ToString("0.0")%</div><div class="pc-kpi-label">Loss Ratio</div></div></div></div>
-@if(_loadError is not null){<div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError</div>}
-<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search period..." />
-<div class="um-grid-card">@if(_loading){<div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading...</span></div>}<SfGrid TValue="CarrierPerformanceDto" DataSource="@_items" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52"><GridEvents TValue="CarrierPerformanceDto" RowSelected="OnRowSelected"/><GridPageSettings PageSize="25"/><GridColumns><GridColumn Field="Period" HeaderText="Period" Width="110"/><GridColumn Field="WrittenPremium" HeaderText="Premium" Width="130" Format="C2" TextAlign="TextAlign.Right"/><GridColumn Field="LossRatio" HeaderText="Loss Ratio" Width="120" Format="N2" TextAlign="TextAlign.Right"/><GridColumn Field="HitRatio" HeaderText="Hit Ratio" Width="120" Format="N2" TextAlign="TextAlign.Right"/><GridColumn Field="QuoteCount" HeaderText="Quotes" Width="90" TextAlign="TextAlign.Center"/><GridColumn Field="BindCount" HeaderText="Binds" Width="90" TextAlign="TextAlign.Center"/><GridColumn Field="IsActive" HeaderText="Status" Width="100" TextAlign="TextAlign.Center"><Template>@{var r=(CarrierPerformanceDto)context;}<span class="um-badge @(r.IsActive?"um-badge-success":"um-badge-neutral")">@(r.IsActive?"Active":"Inactive")</span></Template></GridColumn><GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Center"><Template>@{var r=(CarrierPerformanceDto)context;}<button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="()=>OpenEdit(r)"><i class="bi bi-pencil"></i></button></Template></GridColumn></GridColumns></SfGrid></div>
-<SfDialog @bind-Visible="_showForm" Width="580px" IsModal="true" ShowCloseIcon="false"><DialogEvents Closed="ResetForm"/><DialogContent><div class="um-modal-header"><i class="bi bi-graph-up"></i><span>@(_editId.HasValue?"Edit Performance Metric":"Add Performance Metric")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="()=>_showForm=false"><i class="bi bi-x-lg"></i></button></div><EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator/><div class="um-modal-body"><div class="um-form-grid"><div class="um-field"><label>Period <span class="text-danger">*</span></label><InputText @bind-Value="_form.Period" class="um-input" placeholder="2025-Q1"/></div><div class="um-field"><label>Written Premium</label><InputNumber @bind-Value="_form.WrittenPremium" class="um-input"/></div><div class="um-field"><label>Loss Ratio</label><InputNumber @bind-Value="_form.LossRatio" class="um-input"/></div><div class="um-field"><label>Hit Ratio</label><InputNumber @bind-Value="_form.HitRatio" class="um-input"/></div><div class="um-field"><label>Quote Count</label><InputNumber @bind-Value="_form.QuoteCount" class="um-input"/></div><div class="um-field"><label>Bind Count</label><InputNumber @bind-Value="_form.BindCount" class="um-input"/></div><div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsActive"/> Active</label></div></div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="()=>_showForm=false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue?"Save Changes":"Create")</button></div></EditForm></DialogContent></SfDialog>
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true"><ToastPosition X="Right" Y="Bottom"/></SfToast><style>.validation-message{display:flex;align-items:center;gap:.45rem;margin-top:.55rem;color:#dc3545!important;font-size:.875rem;font-weight:700}.validation-message::before{content:"!";display:inline-flex;align-items:center;justify-content:center;width:1rem;height:1rem;min-width:1rem;flex-shrink:0;border-radius:999px;color:#fff;background:linear-gradient(135deg,#ef4444,#b91c1c);font-size:.7rem;font-weight:800}</style>
+
+<PageTitle>Carrier Performance Command Center — Carrier Configuration</PageTitle>
+
+<div class="cpf-page">
+    <section class="cpf-hero">
+        <div class="cpf-hero__content">
+            <div class="cpf-hero-left">
+                <span class="cpf-hero-icon"><i class="bi bi-graph-up" aria-hidden="true"></i></span>
+                <div class="cpf-hero-title">
+                    <div class="cpf-hero__eyebrow">Enterprise carrier performance intelligence</div>
+                    <div class="cpf-title-row">
+                        <h1>Carrier Performance Command Center</h1>
+                        <div class="cpf-hero__meta">
+                            <span><i class="bi bi-graph-up" aria-hidden="true"></i>@_items.Count records</span>
+                            <span><i class="bi bi-currency-dollar" aria-hidden="true"></i>@TotalPremium.ToString("C0") premium</span>
+                            <span><i class="bi bi-bullseye" aria-hidden="true"></i>@AvgHit.ToString("0.0")% hit</span>
+                            <span><i class="bi bi-exclamation-octagon" aria-hidden="true"></i>@_items.Count(NeedsReview) need review</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <p>Govern carrier performance by period, written premium, loss ratio, hit ratio, quote activity, bind conversion, and portfolio readiness for market strategy decisions.</p>
+        </div>
+        <div class="cpf-hero__actions">
+            <button type="button" class="cpf-btn cpf-btn--light" @onclick="RefreshAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "cpf-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="cpf-btn cpf-btn--primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Metric</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger cpf-alert" style="border-left: 4px solid #dc3545; animation: cpf-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="cpf-kpi-strip" aria-label="Carrier performance KPIs">
+        @KpiCard("all", "Records", _items.Count.ToString(), "All carrier performance records", "bi-graph-up", "blue")
+        @KpiCard("premium", "Premium", TotalPremium.ToString("C0"), "Total written premium", "bi-currency-dollar", "green")
+        @KpiCard("profitable", "Healthy Loss", _items.Count(IsHealthyLoss).ToString(), "Records with loss ratio at or below 60%", "bi-shield-check", "cyan")
+        @KpiCard("conversion", "High Convert", _items.Count(IsHighConversion).ToString(), "Records with strong bind conversion", "bi-bullseye", "purple")
+        @KpiCard("risk", "Loss Risk", _items.Count(IsLossRisk).ToString(), "Records with elevated loss ratio", "bi-activity", "amber")
+        @KpiCard("review", "Needs Review", _items.Count(NeedsReview).ToString(), "Inactive, incomplete, or low-signal records", "bi-exclamation-octagon", "red")
+    </section>
+
+    <section class="cpf-workflows" aria-label="Carrier performance workflows">
+        <button type="button" class="cpf-workflow" @onclick='() => SetDashboardFocus("all", "importance")'><span class="cpf-workflow-icon"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></span><span class="cpf-workflow-meta"><strong>Priority review</strong><span>Rank records by premium, conversion, and loss risk</span></span></button>
+        <button type="button" class="cpf-workflow" @onclick='() => SetDashboardFocus("premium", "premium")'><span class="cpf-workflow-icon"><i class="bi bi-currency-dollar" aria-hidden="true"></i></span><span class="cpf-workflow-meta"><strong>Premium leaders</strong><span>Focus high-volume carrier performance periods</span></span></button>
+        <button type="button" class="cpf-workflow" @onclick='() => SetDashboardFocus("conversion", "conversion")'><span class="cpf-workflow-icon"><i class="bi bi-bullseye" aria-hidden="true"></i></span><span class="cpf-workflow-meta"><strong>Conversion wins</strong><span>Review strong hit and bind performance</span></span></button>
+        <button type="button" class="cpf-workflow" @onclick='() => SetDashboardFocus("risk", "loss")'><span class="cpf-workflow-icon"><i class="bi bi-activity" aria-hidden="true"></i></span><span class="cpf-workflow-meta"><strong>Loss risk</strong><span>Identify elevated loss ratio records</span></span></button>
+        <button type="button" class="cpf-workflow" @onclick='() => SetDashboardFocus("periods", "period")'><span class="cpf-workflow-icon"><i class="bi bi-calendar3" aria-hidden="true"></i></span><span class="cpf-workflow-meta"><strong>Period mix</strong><span>Compare performance across reporting periods</span></span></button>
+    </section>
+
+    <section class="cpf-filter-panel" aria-label="Carrier performance filters">
+        <div class="cpf-search"><i class="bi bi-search" aria-hidden="true"></i><input type="search" placeholder="Search period, performance signal, premium, ratios, or readiness…" aria-label="Search carrier performance" value="@_searchTerm" @oninput="args => OnSearchInputValue(args.Value?.ToString())" /></div>
+        <div class="cpf-filter-grid">
+            <label><span>Performance Signal</span><select class="form-select" @bind="_signalFilter" @bind:after="ApplyFilters"><option value="">All signals</option><option value="HealthyLoss">Healthy loss</option><option value="HighConversion">High conversion</option><option value="LossRisk">Loss risk</option><option value="NeedsReview">Needs review</option></select></label>
+            <label><span>Status</span><select class="form-select" @bind="_statusFilter" @bind:after="ApplyFilters"><option value="">All statuses</option><option value="Active">Active</option><option value="Inactive">Inactive</option></select></label>
+            <label><span>Sort</span><select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters"><option value="importance">Importance</option><option value="premium">Premium</option><option value="loss">Loss ratio</option><option value="conversion">Conversion</option><option value="period">Period</option><option value="created">Newest</option></select></label>
+        </div>
+        <button type="button" class="cpf-btn cpf-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+    </section>
+
+    <nav class="cpf-tabs" aria-label="Carrier performance views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="cpf-tab @(_activeTab == tab.Key ? "cpf-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)"><i class="bi @tab.Icon" aria-hidden="true"></i><span>@tab.Label</span><strong>@TabCount(tab.Key)</strong></button>
+        }
+    </nav>
+
+    <main class="cpf-dashboard">
+        <section class="cpf-main-card">
+            <div class="cpf-card-header">
+                <div><span class="cpf-section-kicker">@ActiveViewTitle</span><h2>@FilteredRecords.Count() performance records</h2><p>Prioritized by enterprise importance: premium volume, loss ratio risk, hit ratio, bind conversion, quote activity, active state, and reporting completeness.</p></div>
+                <div class="cpf-card-actions">
+                    @if (_selectedIds.Count > 0)
+                    {
+                        <span class="cpf-sel-count">@_selectedIds.Count selected</span>
+                        <button type="button" class="cpf-btn cpf-btn--ghost" @onclick="() => ConfirmBulkToggle(true)"><i class="bi bi-check-circle" aria-hidden="true"></i> Activate</button>
+                        <button type="button" class="cpf-btn cpf-btn--ghost" @onclick="() => ConfirmBulkToggle(false)"><i class="bi bi-slash-circle" aria-hidden="true"></i> Deactivate</button>
+                        <button type="button" class="cpf-btn cpf-btn--danger-ghost" @onclick="ConfirmBulkDelete"><i class="bi bi-trash3" aria-hidden="true"></i> Remove</button>
+                    }
+                    <button type="button" class="cpf-btn cpf-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Prev</button>
+                    <span class="cpf-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="cpf-btn cpf-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="cpf-loading"><span class="cpf-spinner"></span> Loading carrier performance…</div>
+            }
+            else if (!FilteredRecords.Any())
+            {
+                <div class="cpf-empty"><i class="bi bi-graph-up" aria-hidden="true"></i><strong>No carrier performance records found</strong><span>Adjust the active KPI, tab, search, or filters.</span></div>
+            }
+            else if (_activeTab == "periods")
+            {
+                <div class="cpf-group-grid">
+                    @foreach (var group in PeriodGroups)
+                    {
+                        <article class="cpf-group-card"><div class="cpf-group-icon"><i class="bi bi-calendar3" aria-hidden="true"></i></div><div class="cpf-group-meta"><h3>@group.Name</h3><p>@group.Count records • @group.Premium.ToString("C0") premium • @group.AvgHit.ToString("0.0")% hit • @group.RiskCount risk</p><div class="cpf-mini-bar"><span style="width:@group.Percent%"></span></div></div><button type="button" class="cpf-btn cpf-btn--ghost" @onclick="() => FilterByPeriod(group.Name)">Open</button></article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="cpf-table-wrap">
+                    <table class="cpf-table">
+                        <thead><tr><th class="cpf-check-col"><input type="checkbox" checked="@AllPageSelected" @onchange="args => ToggleSelectAllPage(args.Value is bool value && value)" aria-label="Select all performance records on page" /></th><th>Importance</th><th>Period</th><th>Premium</th><th>Loss Ratio</th><th>Hit Ratio</th><th>Conversion</th><th>Status</th><th class="cpf-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var record in PagedRecords)
+                            {
+                                <tr class="@(_selected?.CarrierPerformanceId == record.CarrierPerformanceId ? "cpf-row cpf-row--selected" : "cpf-row")" @onclick="() => SelectRow(record)">
+                                    <td class="cpf-check-col" @onclick:stopPropagation="true"><input type="checkbox" checked="@IsSelected(record)" @onchange="args => ToggleSelect(record, args.Value is bool value && value)" aria-label="Select performance record" /></td>
+                                    <td><span class="cpf-risk-badge @ImportanceBadgeClass(record)">@ImportanceScore(record)</span></td>
+                                    <td><div class="cpf-record-cell"><div class="cpf-avatar" style="@AvatarStyle(record.Period)" aria-hidden="true">@Initials(record.Period)</div><div class="cpf-record-meta"><button type="button" class="cpf-link-button" @onclick:stopPropagation="true" @onclick="() => OpenEdit(record)">@record.Period</button><small>@PerformanceSignal(record)</small></div></div></td>
+                                    <td><span class="cpf-money">@record.WrittenPremium.ToString("C0")</span></td>
+                                    <td><span class="cpf-pill @LossBadgeClass(record)">@record.LossRatio.ToString("0.0")%</span></td>
+                                    <td><span class="cpf-pill @HitBadgeClass(record)">@record.HitRatio.ToString("0.0")%</span></td>
+                                    <td><div class="cpf-date-stack"><span>@record.BindCount binds</span><span>@record.QuoteCount quotes • @BindRate(record).ToString("0.0")%</span></div></td>
+                                    <td><span class="cpf-pill @(record.IsActive ? "cpf-pill--green" : "cpf-pill--neutral")">@(record.IsActive ? "Active" : "Inactive")</span></td>
+                                    <td class="cpf-actions-col" @onclick:stopPropagation="true"><button type="button" class="cpf-icon-btn" title="Edit record" @onclick="() => OpenEdit(record)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="cpf-icon-btn" title="@(record.IsActive ? "Deactivate record" : "Activate record")" @onclick="() => ConfirmToggle(record)"><i class="bi @(record.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i></button><button type="button" class="cpf-icon-btn cpf-icon-btn--danger" title="Delete record" @onclick="() => ConfirmDelete(record)"><i class="bi bi-trash3" aria-hidden="true"></i></button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="cpf-side-panel" aria-label="Carrier performance insights">
+            <section class="cpf-panel-card">
+                <span class="cpf-section-kicker">Selected record</span>
+                @if (_selected is null)
+                {
+                    <div class="cpf-empty cpf-empty--compact"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a performance record</strong><span>Open details, recommendations, and quick actions.</span></div>
+                }
+                else
+                {
+                    <div class="cpf-selected__title"><div class="cpf-avatar cpf-avatar--lg" style="@AvatarStyle(_selected.Period)" aria-hidden="true">@Initials(_selected.Period)</div><div><h3>@_selected.Period</h3><span>@PerformanceSignal(_selected)</span></div></div>
+                    <div class="cpf-score-card @ImportanceClass(_selected)"><span>Importance score</span><strong>@ImportanceScore(_selected)</strong><small>@RecommendedAction(_selected)</small></div>
+                    <dl class="cpf-detail-list"><div><dt>Status</dt><dd>@(_selected.IsActive ? "Active" : "Inactive")</dd></div><div><dt>Premium</dt><dd>@_selected.WrittenPremium.ToString("C0")</dd></div><div><dt>Loss Ratio</dt><dd>@_selected.LossRatio.ToString("0.0")%</dd></div><div><dt>Hit Ratio</dt><dd>@_selected.HitRatio.ToString("0.0")%</dd></div><div><dt>Conversion</dt><dd>@BindRate(_selected).ToString("0.0")%</dd></div><div><dt>Created</dt><dd>@FormatDate(_selected.CreatedDateUtc)</dd></div></dl>
+                    <div class="cpf-selected-actions"><button type="button" class="cpf-btn cpf-btn--primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="cpf-btn cpf-btn--ghost" @onclick="() => ConfirmToggle(_selected)"><i class="bi @(_selected.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i> @(_selected.IsActive ? "Deactivate" : "Activate")</button></div>
+                }
+            </section>
+            <section class="cpf-panel-card"><span class="cpf-section-kicker">Enterprise insights</span><div class="cpf-insight-list"><div class="cpf-insight"><i class="bi bi-currency-dollar" aria-hidden="true"></i><div><strong>Premium volume</strong><span>@PremiumInsight</span></div></div><div class="cpf-insight"><i class="bi bi-bullseye" aria-hidden="true"></i><div><strong>Conversion posture</strong><span>@ConversionInsight</span></div></div><div class="cpf-insight"><i class="bi bi-activity" aria-hidden="true"></i><div><strong>Loss posture</strong><span>@LossInsight</span></div></div></div></section>
+        </aside>
+    </main>
+</div>
+
+@if (_showForm)
+{
+    <div class="cpf-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="carrier-performance-form-title">
+        <div class="cpf-modal">
+            <div class="cpf-modal__header"><i class="bi bi-graph-up" aria-hidden="true"></i><span id="carrier-performance-form-title">@(_editId.HasValue ? "Edit Performance Metric" : "Add Performance Metric")</span><button type="button" class="cpf-icon-btn cpf-icon-btn--light ms-auto" @onclick="CloseForm" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator />
+                <div class="cpf-modal__body"><div class="cpf-validation-note"><i class="bi bi-info-circle" aria-hidden="true"></i><div><strong>Carrier performance governance</strong><span>Performance records drive market strategy, carrier negotiations, loss-ratio reviews, and placement prioritization.</span></div></div><div class="cpf-form-grid">
+                    <label class="cpf-field"><span>Period <em>*</em></span><InputText @bind-Value="_form.Period" class="form-control" placeholder="2025-Q1" /><ValidationMessage For="() => _form.Period" class="text-danger" /></label>
+                    <label class="cpf-field"><span>Written Premium</span><InputNumber @bind-Value="_form.WrittenPremium" class="form-control" /><ValidationMessage For="() => _form.WrittenPremium" class="text-danger" /></label>
+                    <label class="cpf-field"><span>Loss Ratio</span><InputNumber @bind-Value="_form.LossRatio" class="form-control" /><ValidationMessage For="() => _form.LossRatio" class="text-danger" /></label>
+                    <label class="cpf-field"><span>Hit Ratio</span><InputNumber @bind-Value="_form.HitRatio" class="form-control" /><ValidationMessage For="() => _form.HitRatio" class="text-danger" /></label>
+                    <label class="cpf-field"><span>Quote Count</span><InputNumber @bind-Value="_form.QuoteCount" class="form-control" /><ValidationMessage For="() => _form.QuoteCount" class="text-danger" /></label>
+                    <label class="cpf-field"><span>Bind Count</span><InputNumber @bind-Value="_form.BindCount" class="form-control" /><ValidationMessage For="() => _form.BindCount" class="text-danger" /></label>
+                    @if (_editId.HasValue) { <label class="cpf-check-field"><InputCheckbox @bind-Value="_form.IsActive" /><span>Active</span></label> }
+                </div></div>
+                <div class="cpf-modal__footer"><button type="button" class="cpf-btn cpf-btn--ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="cpf-btn cpf-btn--primary" disabled="@_saving">@if (_saving) { <span class="cpf-spin-sm"></span> } @(_editId.HasValue ? "Save Changes" : "Create Metric")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_confirmVisible)
+{
+    <div class="cpf-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="carrier-performance-confirm-title"><div class="cpf-confirm"><div class="cpf-confirm__body"><div class="cpf-confirm-icon cpf-confirm-icon--danger"><i class="bi @_confirmIcon" aria-hidden="true"></i></div><div><h3 id="carrier-performance-confirm-title">@_confirmTitle</h3><p>@_confirmMessage</p></div></div><div class="cpf-modal__footer"><button type="button" class="cpf-btn cpf-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button><button type="button" class="cpf-btn cpf-btn--danger" @onclick="ExecuteConfirmedAsync" disabled="@_saving">@if (_saving) { <span class="cpf-spin-sm"></span> } Confirm</button></div></div></div>
+}
+
+<div class="cpf-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="cpf-toast cpf-toast--@toast.Kind"><i class="bi @(toast.Kind == "success" ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill")" aria-hidden="true"></i><span>@toast.Message</span><button type="button" @onclick="() => DismissToast(toast.Id)" aria-label="Dismiss notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+    }
+</div>
+
 @code {
     Guid TenantAdminUserId { get; set; }
     Guid DevTenantId { get; set; }
     Guid DevUserId { get; set; }
-    private Guid _tenantId;
-    private Guid _tenantAdminUserId;Guid TenantId { get; set; }List<CarrierPerformanceDto> _items=[];bool _loading,_saving,_showForm;string _search=string.Empty;string? _loadError;Guid? _editId;SfToast _toast=default!;decimal AvgHit=>_items.Count==0?0:_items.Average(x=>x.HitRatio);decimal AvgLoss=>_items.Count==0?0:_items.Average(x=>x.LossRatio);PerfForm _form=new();protected override async Task OnInitializedAsync()
+    Guid TenantId { get; set; }
+    readonly List<DashboardTab> _tabs = [new("all", "All", "bi-graph-up"), new("premium", "Premium", "bi-currency-dollar"), new("profitable", "Healthy Loss", "bi-shield-check"), new("conversion", "High Convert", "bi-bullseye"), new("risk", "Loss Risk", "bi-activity"), new("review", "Needs Review", "bi-exclamation-octagon"), new("periods", "Periods", "bi-calendar3")];
+    List<CarrierPerformanceDto> _items = [];
+    HashSet<Guid> _selectedIds = [];
+    List<ToastItem> _toasts = [];
+    CarrierPerformanceDto? _selected;
+    PerfForm _form = new();
+    Func<Task>? _confirmAction;
+    Guid? _editId;
+    string _activeTab = "all";
+    string _searchTerm = string.Empty;
+    string _signalFilter = string.Empty;
+    string _statusFilter = string.Empty;
+    string _sortMode = "importance";
+    string _confirmTitle = string.Empty;
+    string _confirmMessage = string.Empty;
+    string _confirmIcon = "bi-exclamation-triangle-fill";
+    string? _loadError;
+    bool _loading;
+    bool _saving;
+    bool _showForm;
+    bool _confirmVisible;
+    int _page = 1;
+    const int PageSize = 12;
+
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Carrier Config", null), new("Carrier Performance", null)); await LoadAsync(); }
+
+    IEnumerable<CarrierPerformanceDto> FilteredRecords
     {
-        await ResolveCurrentUserContextAsync();Breadcrumbs.SetCrumbs(new("Home","/"),new("Carrier Config",null),new("Carrier Performance",null));await LoadAsync();}async Task LoadAsync(){_loading=true;_loadError=null;try{var r=await Api.SearchCarrierPerformanceAsync(TenantId,_search,pageSize:200);_items=r?.Items.ToList()??[];}catch(Exception ex){_loadError=ex.Message;}finally{_loading=false;}}Task OnSearchAsync()=>LoadAsync();void OnRowSelected(RowSelectEventArgs<CarrierPerformanceDto> args)=>OpenEdit(args.Data);void OpenCreate(){_editId=null;_form=new();_showForm=true;}void OpenEdit(CarrierPerformanceDto i){_editId=i.CarrierPerformanceId;_form=new(){CarrierId=i.CarrierId,Period=i.Period,WrittenPremium=i.WrittenPremium,LossRatio=i.LossRatio,HitRatio=i.HitRatio,QuoteCount=i.QuoteCount,BindCount=i.BindCount,IsActive=i.IsActive};_showForm=true;}async Task SaveAsync(){_saving=true;try{if(_editId.HasValue)await Api.UpdateCarrierPerformanceAsync(_editId.Value,new(_form.CarrierId,_form.Period,_form.WrittenPremium,_form.LossRatio,_form.HitRatio,_form.QuoteCount,_form.BindCount,_form.IsActive));else await Api.CreateCarrierPerformanceAsync(new(TenantId,_form.CarrierId,_form.Period,_form.WrittenPremium,_form.LossRatio,_form.HitRatio,_form.QuoteCount,_form.BindCount));_showForm=false;await _toast.ShowAsync(new(){Content="Saved successfully",CssClass="e-toast-success"});await LoadAsync();}catch(Exception ex){await _toast.ShowAsync(new(){Content=$"Save failed: {ex.Message}",CssClass="e-toast-danger"});}finally{_saving=false;}}void ResetForm(){_form=new();_editId=null;}sealed class PerfForm{public Guid? CarrierId{get;set;}[Required,StringLength(20)]public string Period{get;set;}=string.Empty;[Range(0,999999999)]public decimal WrittenPremium{get;set;}[Range(0,999)]public decimal LossRatio{get;set;}[Range(0,999)]public decimal HitRatio{get;set;}[Range(0,999999)]public int QuoteCount{get;set;}[Range(0,999999)]public int BindCount{get;set;}public bool IsActive{get;set;}=true;}
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        get
+        {
+            IEnumerable<CarrierPerformanceDto> query = _items;
+            query = _activeTab switch { "premium" => query.Where(x => x.WrittenPremium > 0), "profitable" => query.Where(IsHealthyLoss), "conversion" => query.Where(IsHighConversion), "risk" => query.Where(IsLossRisk), "review" => query.Where(NeedsReview), _ => query };
+            if (!string.IsNullOrWhiteSpace(_searchTerm)) query = query.Where(MatchesSearch);
+            query = _signalFilter switch { "HealthyLoss" => query.Where(IsHealthyLoss), "HighConversion" => query.Where(IsHighConversion), "LossRisk" => query.Where(IsLossRisk), "NeedsReview" => query.Where(NeedsReview), _ => query };
+            query = _statusFilter switch { "Active" => query.Where(x => x.IsActive), "Inactive" => query.Where(x => !x.IsActive), _ => query };
+            return _sortMode switch { "premium" => query.OrderByDescending(x => x.WrittenPremium), "loss" => query.OrderByDescending(x => x.LossRatio), "conversion" => query.OrderByDescending(BindRate).ThenByDescending(x => x.HitRatio), "period" => query.OrderByDescending(x => x.Period), "created" => query.OrderByDescending(x => x.CreatedDateUtc), _ => query.OrderByDescending(ImportanceScore).ThenByDescending(x => x.WrittenPremium) };
+        }
     }
+
+    List<CarrierPerformanceDto> PagedRecords => FilteredRecords.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+    int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRecords.Count() / (double)PageSize));
+    bool AllPageSelected => PagedRecords.Count > 0 && PagedRecords.All(IsSelected);
+    bool HasFilters => !string.IsNullOrWhiteSpace(_searchTerm) || !string.IsNullOrWhiteSpace(_signalFilter) || !string.IsNullOrWhiteSpace(_statusFilter) || _activeTab != "all" || _sortMode != "importance";
+    string ActiveViewTitle => _tabs.FirstOrDefault(x => x.Key == _activeTab)?.Label ?? "All";
+    decimal TotalPremium => _items.Sum(x => x.WrittenPremium);
+    decimal AvgHit => _items.Count == 0 ? 0 : _items.Average(x => x.HitRatio);
+    decimal AvgLoss => _items.Count == 0 ? 0 : _items.Average(x => x.LossRatio);
+    string PremiumInsight => _items.Count == 0 ? "Create performance records before measuring premium volume." : $"{TotalPremium:C0} written premium is represented across {_items.Count} records.";
+    string ConversionInsight => _items.Count == 0 ? "Create performance records before measuring conversion." : $"Average hit ratio is {AvgHit:0.0}% with {TotalBinds} binds from {TotalQuotes} quotes.";
+    string LossInsight => _items.Any(IsLossRisk) ? $"{_items.Count(IsLossRisk)} records have elevated loss ratio." : "No elevated loss-ratio records were detected.";
+    int TotalQuotes => _items.Sum(x => x.QuoteCount);
+    int TotalBinds => _items.Sum(x => x.BindCount);
+    List<PeriodGroupSummary> PeriodGroups => _items.GroupBy(x => Safe(x.Period, "Unassigned")).Select(g => new PeriodGroupSummary(g.Key, g.Count(), g.Sum(x => x.WrittenPremium), g.Any() ? g.Average(x => x.HitRatio) : 0, g.Count(IsLossRisk), _items.Count == 0 ? 0 : Math.Round(g.Count() * 100m / _items.Count, 0))).OrderByDescending(x => x.Premium).ToList();
+
+    async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchCarrierPerformanceAsync(TenantId, null, pageSize: 500); _items = result?.Items.ToList() ?? []; _selectedIds.RemoveWhere(id => _items.All(x => x.CarrierPerformanceId != id)); _selected = _selected is null ? _items.OrderByDescending(ImportanceScore).FirstOrDefault() : _items.FirstOrDefault(x => x.CarrierPerformanceId == _selected.CarrierPerformanceId) ?? _items.OrderByDescending(ImportanceScore).FirstOrDefault(); NormalizePage(); } catch (Exception ex) { _loadError = $"Failed to load carrier performance: {ex.Message}"; } finally { _loading = false; } }
+    Task RefreshAsync() => LoadAsync();
+    void ApplyFilters() { _page = 1; NormalizePage(); }
+    void OnSearchInputValue(string? value) { _searchTerm = value ?? string.Empty; ApplyFilters(); }
+    void SetDashboardFocus(string tab, string sort) { _activeTab = tab; _sortMode = sort; _page = 1; NormalizePage(); }
+    void SetActiveTab(string tab) { _activeTab = tab; _page = 1; NormalizePage(); }
+    void PreviousPage() { if (_page > 1) _page--; }
+    void NextPage() { if (_page < TotalPages) _page++; }
+    void NormalizePage() { if (_page > TotalPages) _page = TotalPages; }
+    void SelectRow(CarrierPerformanceDto item) => _selected = item;
+    bool IsSelected(CarrierPerformanceDto item) => _selectedIds.Contains(item.CarrierPerformanceId);
+    void ToggleSelect(CarrierPerformanceDto item, bool selected) { if (selected) _selectedIds.Add(item.CarrierPerformanceId); else _selectedIds.Remove(item.CarrierPerformanceId); _selected = item; }
+    void ToggleSelectAllPage(bool selected) { foreach (var item in PagedRecords) { if (selected) _selectedIds.Add(item.CarrierPerformanceId); else _selectedIds.Remove(item.CarrierPerformanceId); } }
+    void ClearFilters() { _searchTerm = string.Empty; _signalFilter = string.Empty; _statusFilter = string.Empty; _sortMode = "importance"; _activeTab = "all"; _page = 1; }
+    void FilterByPeriod(string period) { _activeTab = "all"; _searchTerm = period; _sortMode = "importance"; _page = 1; }
+    void OpenCreate() { _editId = null; _form = new() { Period = DateTime.Today.ToString("yyyy-MM"), IsActive = true }; _showForm = true; }
+    void OpenEdit(CarrierPerformanceDto item) { _selected = item; _editId = item.CarrierPerformanceId; _form = new() { CarrierId = item.CarrierId, Period = item.Period, WrittenPremium = item.WrittenPremium, LossRatio = item.LossRatio, HitRatio = item.HitRatio, QuoteCount = item.QuoteCount, BindCount = item.BindCount, IsActive = item.IsActive }; _showForm = true; }
+    void CloseForm() { _showForm = false; ResetForm(); }
+    void ResetForm() { _form = new(); _editId = null; }
+
+    async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (_editId.HasValue) await Api.UpdateCarrierPerformanceAsync(_editId.Value, new(_form.CarrierId, _form.Period.Trim(), _form.WrittenPremium, _form.LossRatio, _form.HitRatio, _form.QuoteCount, _form.BindCount, _form.IsActive));
+            else await Api.CreateCarrierPerformanceAsync(new(TenantId, _form.CarrierId, _form.Period.Trim(), _form.WrittenPremium, _form.LossRatio, _form.HitRatio, _form.QuoteCount, _form.BindCount));
+            _showForm = false; ShowToast("success", _editId.HasValue ? "Carrier performance metric updated successfully." : "Carrier performance metric created successfully."); ResetForm(); await LoadAsync();
+        }
+        catch (Exception ex) { ShowToast("danger", $"Save failed: {ex.Message}"); }
+        finally { _saving = false; }
+    }
+
+    void ConfirmToggle(CarrierPerformanceDto item) { var enable = !item.IsActive; OpenConfirm(enable ? "Activate Performance Record" : "Deactivate Performance Record", $"Are you sure you want to {(enable ? "activate" : "deactivate")} {item.Period}? This changes availability in performance dashboards.", "bi-shield-exclamation", () => SetRecordActiveAsync(item, enable)); }
+    void ConfirmDelete(CarrierPerformanceDto item) => OpenConfirm("Delete Performance Record", $"Are you sure you want to delete {item.Period}? This action cannot be undone.", "bi-trash3-fill", () => DeleteRecordAsync(item));
+    void ConfirmBulkToggle(bool enable) => OpenConfirm(enable ? "Activate Selected Records" : "Deactivate Selected Records", $"Are you sure you want to {(enable ? "activate" : "deactivate")} {_selectedIds.Count} selected performance record(s)?", "bi-shield-exclamation", () => BulkSetActiveAsync(enable));
+    void ConfirmBulkDelete() => OpenConfirm("Delete Selected Records", $"Are you sure you want to delete {_selectedIds.Count} selected performance record(s)? This action cannot be undone.", "bi-trash3-fill", BulkDeleteAsync);
+    void OpenConfirm(string title, string message, string icon, Func<Task> action) { _confirmTitle = title; _confirmMessage = message; _confirmIcon = icon; _confirmAction = action; _confirmVisible = true; }
+    void CloseConfirm() { _confirmVisible = false; _confirmAction = null; }
+    async Task ExecuteConfirmedAsync() { if (_confirmAction is null) return; _saving = true; try { await _confirmAction(); _confirmVisible = false; _confirmAction = null; } finally { _saving = false; } }
+    async Task SetRecordActiveAsync(CarrierPerformanceDto item, bool active) { try { await Api.UpdateCarrierPerformanceAsync(item.CarrierPerformanceId, new(item.CarrierId, item.Period, item.WrittenPremium, item.LossRatio, item.HitRatio, item.QuoteCount, item.BindCount, active)); ShowToast("success", active ? "Performance record activated." : "Performance record deactivated."); await LoadAsync(); } catch (Exception ex) { ShowToast("danger", $"Update failed: {ex.Message}"); } }
+    async Task DeleteRecordAsync(CarrierPerformanceDto item) { try { await Api.DeleteCarrierPerformanceAsync(item.CarrierPerformanceId); _selectedIds.Remove(item.CarrierPerformanceId); if (_selected?.CarrierPerformanceId == item.CarrierPerformanceId) _selected = null; ShowToast("success", "Performance record deleted."); await LoadAsync(); } catch (Exception ex) { ShowToast("danger", $"Delete failed: {ex.Message}"); } }
+    async Task BulkSetActiveAsync(bool active) { var selected = _items.Where(x => _selectedIds.Contains(x.CarrierPerformanceId)).ToList(); var updated = 0; foreach (var item in selected) { try { await Api.UpdateCarrierPerformanceAsync(item.CarrierPerformanceId, new(item.CarrierId, item.Period, item.WrittenPremium, item.LossRatio, item.HitRatio, item.QuoteCount, item.BindCount, active)); updated++; } catch (Exception ex) { ShowToast("danger", $"Update failed for {item.Period}: {ex.Message}"); } } ShowToast("success", $"{updated} performance record(s) {(active ? "activated" : "deactivated")}. "); _selectedIds.Clear(); await LoadAsync(); }
+    async Task BulkDeleteAsync() { var selected = _items.Where(x => _selectedIds.Contains(x.CarrierPerformanceId)).ToList(); var deleted = 0; foreach (var item in selected) { try { await Api.DeleteCarrierPerformanceAsync(item.CarrierPerformanceId); deleted++; } catch (Exception ex) { ShowToast("danger", $"Delete failed for {item.Period}: {ex.Message}"); } } ShowToast("success", $"{deleted} performance record(s) deleted."); _selectedIds.Clear(); _selected = null; await LoadAsync(); }
+
+    RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string color) => @<button type="button" class="cpf-kpi-card cpf-kpi-card--@color @(_activeTab == key ? "cpf-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveTab(key)"><span class="cpf-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span><span class="cpf-kpi-body"><span class="cpf-kpi-label">@label</span><strong class="cpf-kpi-value">@value</strong><span class="cpf-kpi-sub">@subtitle</span></span></button>;
+    int TabCount(string key) => key switch { "premium" => _items.Count(x => x.WrittenPremium > 0), "profitable" => _items.Count(IsHealthyLoss), "conversion" => _items.Count(IsHighConversion), "risk" => _items.Count(IsLossRisk), "review" => _items.Count(NeedsReview), "periods" => PeriodGroups.Count, _ => _items.Count };
+    bool MatchesSearch(CarrierPerformanceDto item) { var term = _searchTerm.Trim(); return Contains(item.Period, term) || Contains(PerformanceSignal(item), term) || item.WrittenPremium.ToString().Contains(term, StringComparison.OrdinalIgnoreCase) || item.LossRatio.ToString().Contains(term, StringComparison.OrdinalIgnoreCase) || item.HitRatio.ToString().Contains(term, StringComparison.OrdinalIgnoreCase); }
+    static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    static string FormatDate(DateTime date) => date == default ? "—" : date.ToLocalTime().ToString("MMM d, yyyy");
+    static decimal BindRate(CarrierPerformanceDto item) => item.QuoteCount <= 0 ? 0 : Math.Round(item.BindCount * 100m / item.QuoteCount, 1);
+    static bool IsHealthyLoss(CarrierPerformanceDto item) => item.LossRatio > 0 && item.LossRatio <= 60m;
+    static bool IsLossRisk(CarrierPerformanceDto item) => item.LossRatio >= 75m;
+    static bool IsHighConversion(CarrierPerformanceDto item) => item.HitRatio >= 30m || BindRate(item) >= 25m;
+    static bool NeedsReview(CarrierPerformanceDto item) => !item.IsActive || string.IsNullOrWhiteSpace(item.Period) || item.QuoteCount == 0 || item.BindCount > item.QuoteCount || item.WrittenPremium == 0;
+    static string PerformanceSignal(CarrierPerformanceDto item) { if (IsLossRisk(item)) return "Loss risk"; if (IsHighConversion(item)) return "High conversion"; if (IsHealthyLoss(item)) return "Healthy loss"; if (NeedsReview(item)) return "Needs review"; return "Standard"; }
+    static string LossBadgeClass(CarrierPerformanceDto item) => item.LossRatio switch { >= 75 => "cpf-pill--red", > 60 => "cpf-pill--amber", > 0 => "cpf-pill--green", _ => "cpf-pill--neutral" };
+    static string HitBadgeClass(CarrierPerformanceDto item) => item.HitRatio switch { >= 30 => "cpf-pill--green", >= 15 => "cpf-pill--cyan", > 0 => "cpf-pill--amber", _ => "cpf-pill--neutral" };
+    static int ImportanceScore(CarrierPerformanceDto item) { var score = 30; if (item.IsActive) score += 10; else score += 12; if (item.WrittenPremium > 0) score += Math.Min(20, (int)(item.WrittenPremium / 50000m)); else score += 10; if (IsLossRisk(item)) score += 24; else if (IsHealthyLoss(item)) score += 12; if (IsHighConversion(item)) score += 18; if (item.QuoteCount > 0) score += 6; if (NeedsReview(item)) score += 8; return Math.Clamp(score, 0, 100); }
+    static string RecommendedAction(CarrierPerformanceDto item) { if (item.BindCount > item.QuoteCount) return "Bind count exceeds quote count; validate source data."; if (IsLossRisk(item)) return "Elevated loss ratio should be reviewed with carrier strategy stakeholders."; if (item.WrittenPremium == 0) return "Add written premium to improve performance analysis."; if (item.QuoteCount == 0) return "Add quote activity to calculate conversion reliability."; if (IsHighConversion(item)) return "Strong conversion record is ready for carrier growth review."; return "Performance record is ready for reporting workflows."; }
+    static string ImportanceClass(CarrierPerformanceDto item) => ImportanceScore(item) switch { >= 80 => "cpf-score-card--red", >= 65 => "cpf-score-card--amber", >= 45 => "cpf-score-card--cyan", _ => "cpf-score-card--green" };
+    static string ImportanceBadgeClass(CarrierPerformanceDto item) => ImportanceScore(item) switch { >= 80 => "cpf-risk-badge--red", >= 65 => "cpf-risk-badge--amber", >= 45 => "cpf-risk-badge--cyan", _ => "cpf-risk-badge--green" };
+    static string Initials(string? value) { var parts = (value ?? string.Empty).Split('-', ' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); return parts.Length switch { 0 => "PF", 1 => parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant(), _ => string.Concat(parts.Take(2).Select(x => char.ToUpperInvariant(x[0]))) }; }
+    static string AvatarStyle(string? value) { var hash = Math.Abs((value ?? "CarrierPerformance").GetHashCode()); var hue = hash % 360; return $"background:linear-gradient(135deg,hsl({hue},78%,48%),hsl({(hue + 35) % 360},82%,36%));"; }
+    void ShowToast(string kind, string message) { _toasts.Insert(0, new(Guid.NewGuid(), kind, message)); if (_toasts.Count > 4) _toasts.RemoveRange(4, _toasts.Count - 4); }
+    void DismissToast(Guid id) => _toasts.RemoveAll(x => x.Id == id);
+    async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); TenantId = context.TenantId; TenantAdminUserId = context.UserId; DevTenantId = context.TenantId; DevUserId = context.UserId; }
+    sealed class PerfForm { public Guid? CarrierId { get; set; } [Required, StringLength(20)] public string Period { get; set; } = string.Empty; [Range(0, 999999999)] public decimal WrittenPremium { get; set; } [Range(0, 999)] public decimal LossRatio { get; set; } [Range(0, 999)] public decimal HitRatio { get; set; } [Range(0, 999999)] public int QuoteCount { get; set; } [Range(0, 999999)] public int BindCount { get; set; } public bool IsActive { get; set; } = true; }
+    sealed record DashboardTab(string Key, string Label, string Icon);
+    sealed record PeriodGroupSummary(string Name, int Count, decimal Premium, decimal AvgHit, int RiskCount, decimal Percent);
+    sealed record ToastItem(Guid Id, string Kind, string Message);
 }

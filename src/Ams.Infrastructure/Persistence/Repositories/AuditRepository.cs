@@ -308,11 +308,31 @@ public sealed class AuditRepository : IAuditRepository
 
     public async Task<PagedResult<RetentionPolicyDto>> SearchRetentionPoliciesAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
-        var sql = RepositorySql.BuildPagedSearchSql(
-            "Audit.RetentionPolicy",
-            "Id AS RetentionPolicyId, TenantId, EntityName, RetentionDays, ActionCode, IsEnabled, Description, LastAppliedDateUtc, LastAppliedCount, CreatedDateUtc, ModifiedDateUtc",
-            "EntityName LIKE '%' + @SearchTerm + '%' OR Description LIKE '%' + @SearchTerm + '%'",
-            "EntityName ASC");
+        const string sql = """
+            SELECT RetentionPolicyId,
+                   TenantId,
+                   COALESCE(ApplicableEntityType, ApplicableCategory, PolicyName) AS EntityName,
+                   RetentionPeriodYears * 365 AS RetentionDays,
+                   ActionOnExpiry AS ActionCode,
+                   IsActive AS IsEnabled,
+                   Description,
+                   CAST(NULL AS DATETIME2) AS LastAppliedDateUtc,
+                   CAST(NULL AS INT) AS LastAppliedCount,
+                   CreatedDateUtc,
+                   ModifiedDateUtc
+            FROM DMS.DocumentRetentionPolicy
+            WHERE TenantId = @TenantId
+              AND IsDeleted = 0
+              AND (@SearchTerm IS NULL OR @SearchTerm = '' OR PolicyName LIKE '%' + @SearchTerm + '%' OR PolicyCode LIKE '%' + @SearchTerm + '%' OR Description LIKE '%' + @SearchTerm + '%' OR ApplicableCategory LIKE '%' + @SearchTerm + '%')
+            ORDER BY PolicyName ASC
+            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+
+            SELECT COUNT(1)
+            FROM DMS.DocumentRetentionPolicy
+            WHERE TenantId = @TenantId
+              AND IsDeleted = 0
+              AND (@SearchTerm IS NULL OR @SearchTerm = '' OR PolicyName LIKE '%' + @SearchTerm + '%' OR PolicyCode LIKE '%' + @SearchTerm + '%' OR Description LIKE '%' + @SearchTerm + '%' OR ApplicableCategory LIKE '%' + @SearchTerm + '%');
+            """;
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         using var multi = await cn.QueryMultipleAsync(
@@ -325,10 +345,19 @@ public sealed class AuditRepository : IAuditRepository
     public async Task<RetentionPolicyDto?> GetRetentionPolicyByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
         const string sql = """
-            SELECT Id AS RetentionPolicyId, TenantId, EntityName, RetentionDays, ActionCode,
-                   IsEnabled, Description, LastAppliedDateUtc, LastAppliedCount, CreatedDateUtc, ModifiedDateUtc
-            FROM Audit.RetentionPolicy
-            WHERE Id = @Id AND IsDeleted = 0;
+            SELECT RetentionPolicyId,
+                   TenantId,
+                   COALESCE(ApplicableEntityType, ApplicableCategory, PolicyName) AS EntityName,
+                   RetentionPeriodYears * 365 AS RetentionDays,
+                   ActionOnExpiry AS ActionCode,
+                   IsActive AS IsEnabled,
+                   Description,
+                   CAST(NULL AS DATETIME2) AS LastAppliedDateUtc,
+                   CAST(NULL AS INT) AS LastAppliedCount,
+                   CreatedDateUtc,
+                   ModifiedDateUtc
+            FROM DMS.DocumentRetentionPolicy
+            WHERE RetentionPolicyId = @Id AND IsDeleted = 0;
             """;
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         return await cn.QuerySingleOrDefaultAsync<RetentionPolicyDto>(
@@ -339,10 +368,12 @@ public sealed class AuditRepository : IAuditRepository
     {
         var id = Guid.NewGuid();
         const string sql = """
-            INSERT INTO Audit.RetentionPolicy (Id, TenantId, EntityName, RetentionDays, ActionCode, IsEnabled, Description,
-                                               CreatedDateUtc, CreatedByUserId, IsDeleted)
-            VALUES (@Id, @TenantId, @EntityName, @RetentionDays, @ActionCode, 1, @Description,
-                    SYSUTCDATETIME(), @CreatedByUserId, 0);
+            INSERT INTO DMS.DocumentRetentionPolicy (RetentionPolicyId, TenantId, PolicyName, PolicyCode, Description, ApplicableEntityType,
+                                                     RetentionPeriodYears, RetentionStartTrigger, ActionOnExpiry, RequireApprovalToDelete,
+                                                     IsActive, EffectiveDate, CreatedDateUtc, CreatedByUserId, IsDeleted)
+            VALUES (@Id, @TenantId, @EntityName, @PolicyCode, @Description, @EntityName,
+                    @RetentionPeriodYears, N'Creation', @ActionCode, 1,
+                    1, CAST(SYSUTCDATETIME() AS DATE), SYSUTCDATETIME(), @CreatedByUserId, 0);
             """;
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new
@@ -350,7 +381,8 @@ public sealed class AuditRepository : IAuditRepository
             Id = id,
             request.TenantId,
             request.EntityName,
-            request.RetentionDays,
+            PolicyCode = $"AUDIT-{request.EntityName}-{Guid.NewGuid():N}"[..50],
+            RetentionPeriodYears = Math.Max(1, (int)Math.Ceiling(request.RetentionDays / 365d)),
             request.ActionCode,
             request.Description,
             request.CreatedByUserId
@@ -361,20 +393,20 @@ public sealed class AuditRepository : IAuditRepository
     public async Task UpdateRetentionPolicyAsync(UpdateRetentionPolicyRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = """
-            UPDATE Audit.RetentionPolicy
-            SET RetentionDays   = @RetentionDays,
-                ActionCode      = @ActionCode,
-                IsEnabled       = @IsEnabled,
-                Description     = @Description,
-                ModifiedDateUtc = SYSUTCDATETIME(),
-                ModifiedByUserId = @ModifiedByUserId
-            WHERE Id = @RetentionPolicyId AND IsDeleted = 0;
+            UPDATE DMS.DocumentRetentionPolicy
+            SET RetentionPeriodYears = @RetentionPeriodYears,
+                ActionOnExpiry       = @ActionCode,
+                IsActive             = @IsEnabled,
+                Description          = @Description,
+                ModifiedDateUtc      = SYSUTCDATETIME(),
+                ModifiedByUserId     = @ModifiedByUserId
+            WHERE RetentionPolicyId = @RetentionPolicyId AND IsDeleted = 0;
             """;
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new
         {
             request.RetentionPolicyId,
-            request.RetentionDays,
+            RetentionPeriodYears = Math.Max(1, (int)Math.Ceiling(request.RetentionDays / 365d)),
             request.ActionCode,
             request.IsEnabled,
             request.Description,
@@ -386,8 +418,11 @@ public sealed class AuditRepository : IAuditRepository
     {
         const string sql = """
             DECLARE @EntityName NVARCHAR(256), @RetentionDays INT, @ActionCode NVARCHAR(50), @TenantId UNIQUEIDENTIFIER;
-            SELECT @EntityName = EntityName, @RetentionDays = RetentionDays, @ActionCode = ActionCode, @TenantId = TenantId
-            FROM Audit.RetentionPolicy WHERE Id = @PolicyId AND IsDeleted = 0 AND IsEnabled = 1;
+            SELECT @EntityName = COALESCE(ApplicableEntityType, ApplicableCategory, PolicyName),
+                   @RetentionDays = RetentionPeriodYears * 365,
+                   @ActionCode = ActionOnExpiry,
+                   @TenantId = TenantId
+            FROM DMS.DocumentRetentionPolicy WHERE RetentionPolicyId = @PolicyId AND IsDeleted = 0 AND IsActive = 1;
 
             DECLARE @Affected INT = 0;
 
@@ -423,8 +458,6 @@ public sealed class AuditRepository : IAuditRepository
                     UPDATE Audit.ExportLog SET IsDeleted = 1 WHERE TenantId = @TenantId AND IsDeleted = 0 AND CreatedDateUtc < DATEADD(DAY, -@RetentionDays, SYSUTCDATETIME());
                 SET @Affected = @@ROWCOUNT;
             END
-
-            UPDATE Audit.RetentionPolicy SET LastAppliedDateUtc = SYSUTCDATETIME(), LastAppliedCount = @Affected WHERE Id = @PolicyId;
 
             SELECT @Affected;
             """;

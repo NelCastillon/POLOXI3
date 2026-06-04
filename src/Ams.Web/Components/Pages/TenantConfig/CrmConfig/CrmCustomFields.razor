@@ -1,262 +1,680 @@
-﻿@page "/tenant/crm/custom-fields"
+@page "/tenant/crm/custom-fields"
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.CrmConfig
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>CRM Custom Fields â€” CRM Configuration</PageTitle>
+<PageTitle>CRM Custom Fields Command Center — AMS</PageTitle>
 
-<AppPageHeader Title="CRM Custom Fields"
-               Subtitle="Extend Lead, Opportunity, and Account records with custom data fields"
-               Icon="bi-layout-text-window-reverse">
-    <Actions>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Field
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<div class="pc-kpi-strip">
-    <div class="pc-kpi-card @(_activeFilter == null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)' title="Show all">
-        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-input-cursor-text" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total Fields</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "active" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("active")' title="Filter: Active">
-        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.IsActive)</div><div class="pc-kpi-label">Active</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "required" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("required")' title="Filter: Required">
-        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.IsRequired)</div><div class="pc-kpi-label">Required</div></div>
-    </div>
-</div>
-
-<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search field name or codeâ€¦">
-    <Filters>
-        <SfDropDownList TValue="string" TItem="string" DataSource="@_entityTypes" Placeholder="All Entities"
-            ShowClearButton="true" Width="150px" Value="_filterEntity"
-            ValueChanged="@((string v) => { _filterEntity = v; ApplyFilter(); })" />
-    </Filters>
-</AppFilterPanel>
-
-@if (_loadError is not null)
-{
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
-    </div>
-}
-
-<div class="um-grid-card">
-    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loadingâ€¦</span></div> }
-    <SfGrid TValue="CrmCustomFieldDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-        <GridEvents TValue="CrmCustomFieldDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="25" />
-        <GridColumns>
-            <GridColumn Field="FieldCode" HeaderText="Field Code" Width="150" />
-            <GridColumn Field="FieldName" HeaderText="Field Name" Width="200" />
-            <GridColumn Field="EntityType" HeaderText="Entity" Width="120" />
-            <GridColumn Field="FieldType" HeaderText="Type" Width="110">
-                <Template>
-                    @{ var r = (CrmCustomFieldDto)context; }
-                    <span class="um-badge um-badge-neutral">@r.FieldType</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="IsRequired" HeaderText="Required" Width="100" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (CrmCustomFieldDto)context; }
-                    @if (r.IsRequired) { <i class="bi bi-asterisk text-danger"></i> }
-                </Template>
-            </GridColumn>
-            <GridColumn Field="IsActive" HeaderText="Status" Width="100" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (CrmCustomFieldDto)context; }
-                    <span class="um-badge @(r.IsActive ? "um-badge-success" : "um-badge-neutral")">@(r.IsActive ? "Active" : "Off")</span>
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="" Width="100" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (CrmCustomFieldDto)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true"><i class="bi bi-pencil"></i></button>
-                    <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
-
-<SfDialog @bind-Visible="_showForm" Width="560px" IsModal="true" ShowCloseIcon="false">
-    <DialogEvents Closed="ResetForm" />
-    <DialogContent>
-        <div class="um-modal-header">
-            <i class="bi bi-input-cursor-text"></i>
-            <span>@(_editId.HasValue ? "Edit Custom Field" : "Add Custom Field")</span>
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button>
-        </div>
-        <EditForm Model="_form" OnValidSubmit="SaveAsync">
-            <DataAnnotationsValidator />
-            <div class="um-modal-body">
-                <div class="um-form-grid">
-                    <div class="um-field">
-                        <label>Field Code <span class="text-danger">*</span></label>
-                        <InputText @bind-Value="_form.FieldCode" class="um-input" placeholder="e.g. INDUSTRY_NICHE" />
-                    </div>
-                    <div class="um-field">
-                        <label>Field Name <span class="text-danger">*</span></label>
-                        <InputText @bind-Value="_form.FieldName" class="um-input" />
-                    </div>
-                    <div class="um-field">
-                        <label>Entity Type <span class="text-danger">*</span></label>
-                        <SfDropDownList TValue="string" TItem="string" @bind-Value="_form.EntityType"
-                            DataSource="@(new[]{"Lead","Opportunity","Account"})" Placeholder="Select entity" />
-                    </div>
-                    <div class="um-field">
-                        <label>Field Type <span class="text-danger">*</span></label>
-                        <SfDropDownList TValue="string" TItem="string" @bind-Value="_form.FieldType"
-                            DataSource="@(new[]{"Text","Number","Date","Dropdown","Checkbox"})" Placeholder="Select type" />
-                    </div>
-                    <div class="um-field">
-                        <label>Default Value</label>
-                        <InputText @bind-Value="_form.DefaultValue" class="um-input" />
-                    </div>
-                    <div class="um-field">
-                        <label>Dropdown Options</label>
-                        <InputTextArea @bind-Value="_form.DropdownOptions" class="um-input" rows="2" placeholder="Comma-separated values (for Dropdown type)" />
-                    </div>
-                    <div class="um-field">
-                        <label>Sort Order</label>
-                        <InputNumber @bind-Value="_form.SortOrder" class="um-input" />
-                    </div>
-                    <div class="um-field um-field--checkbox">
-                        <label><InputCheckbox @bind-Value="_form.IsRequired" /> Required</label>
-                    </div>
-                    <div class="um-field um-field--checkbox">
-                        <label><InputCheckbox @bind-Value="_form.IsSearchable" /> Searchable</label>
-                    </div>
-                    <div class="um-field um-field--checkbox">
-                        <label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label>
+<div class="cfd-page">
+    <section class="cfd-hero">
+        <div class="cfd-hero__content">
+            <div class="cfd-hero-left">
+                <span class="cfd-hero-icon"><i class="bi bi-layout-text-window-reverse" aria-hidden="true"></i></span>
+                <div class="cfd-hero-title">
+                    <div class="cfd-hero__eyebrow">Enterprise CRM data model</div>
+                    <div class="cfd-title-row">
+                        <h1>CRM Custom Fields Command Center</h1>
+                        <div class="cfd-hero__meta">
+                            <span><i class="bi bi-input-cursor-text" aria-hidden="true"></i>@_items.Count fields</span>
+                            <span><i class="bi bi-shield-check" aria-hidden="true"></i>@_items.Count(f => f.IsActive) active</span>
+                            <span><i class="bi bi-asterisk" aria-hidden="true"></i>@RequiredCount required</span>
+                            <span><i class="bi bi-exclamation-octagon" aria-hidden="true"></i>@RiskCount risks</span>
+                        </div>
                     </div>
                 </div>
             </div>
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
-                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button>
-            </div>
-        </EditForm>
-    </DialogContent>
-</SfDialog>
-
-<SfDialog @bind-Visible="_showDelete" Width="440px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
-        <div class="um-confirm-dialog">
-            <div class="um-confirm-icon um-confirm-icon--danger">
-                <i class="bi bi-trash3-fill"></i>
-            </div>
-            <div class="um-confirm-message">
-                <h6>Delete Custom Field?</h6>
-                <p>You are about to delete <strong>@_deleteTarget?.FieldName</strong>. This action cannot be undone.</p>
-            </div>
-            <div class="um-modal-footer" style="width:100%">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
-                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
-            </div>
+            <p>Govern tenant CRM field extensions across leads, opportunities, and accounts with enterprise visibility into required data, searchable fields, dropdown quality, entity coverage, and data-model risk.</p>
         </div>
-    </DialogContent>
-</SfDialog>
+        <div class="cfd-hero__actions">
+            <button type="button" class="cfd-btn cfd-btn--light" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "cfd-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="cfd-btn cfd-btn--primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Field</button>
+        </div>
+    </section>
 
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger cfd-alert" style="border-left: 4px solid #dc3545; animation: cfd-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span>@_loadError</span>
+        </div>
+    }
+
+    <section class="cfd-kpi-strip" aria-label="CRM custom field KPI filters">
+        @KpiCard("all", "Total Fields", _items.Count.ToString("N0", CultureInfo.CurrentCulture), "All tenant CRM custom fields", "bi-input-cursor-text", "blue")
+        @KpiCard("active", "Active", _items.Count(f => f.IsActive).ToString("N0", CultureInfo.CurrentCulture), "Fields available in CRM workflows", "bi-shield-check", "green")
+        @KpiCard("required", "Required", RequiredCount.ToString("N0", CultureInfo.CurrentCulture), "Required business data fields", "bi-asterisk", "red")
+        @KpiCard("searchable", "Searchable", SearchableCount.ToString("N0", CultureInfo.CurrentCulture), "Fields indexed for search and filters", "bi-search", "cyan")
+        @KpiCard("risk", "Needs Review", RiskCount.ToString("N0", CultureInfo.CurrentCulture), "Inactive, incomplete, or misconfigured fields", "bi-exclamation-octagon", "amber")
+        @KpiCard("entities", "Entities", EntityGroups.Count.ToString("N0", CultureInfo.CurrentCulture), "CRM entities extended", "bi-diagram-3", "purple")
+    </section>
+
+    <section class="cfd-workflows" aria-label="CRM custom field workflows">
+        <button type="button" class="cfd-workflow" @onclick='() => SetDashboardFocus("risk", "importance")'><span class="cfd-workflow-icon"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></span><span class="cfd-workflow-meta"><strong>Data model review</strong><span>Rank fields by enterprise importance</span></span></button>
+        <button type="button" class="cfd-workflow" @onclick='() => SetDashboardFocus("required", "sort")'><span class="cfd-workflow-icon"><i class="bi bi-asterisk" aria-hidden="true"></i></span><span class="cfd-workflow-meta"><strong>Required fields</strong><span>Validate critical user-entry fields</span></span></button>
+        <button type="button" class="cfd-workflow" @onclick='() => SetDashboardFocus("dropdown", "risk")'><span class="cfd-workflow-icon"><i class="bi bi-list-check" aria-hidden="true"></i></span><span class="cfd-workflow-meta"><strong>Dropdown quality</strong><span>Find dropdowns without options</span></span></button>
+        <button type="button" class="cfd-workflow" @onclick='() => SetDashboardFocus("entities", "entity")'><span class="cfd-workflow-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span><span class="cfd-workflow-meta"><strong>Entity coverage</strong><span>See fields by CRM entity</span></span></button>
+        <button type="button" class="cfd-workflow" @onclick='() => SetDashboardFocus("inactive", "risk")'><span class="cfd-workflow-icon"><i class="bi bi-slash-circle" aria-hidden="true"></i></span><span class="cfd-workflow-meta"><strong>Inactive cleanup</strong><span>Review disabled field definitions</span></span></button>
+    </section>
+
+    <section class="cfd-filter-panel" aria-label="CRM custom field filters">
+        <div class="cfd-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input type="search" placeholder="Search field name, code, entity, type, default value, or dropdown options…" aria-label="Search CRM custom fields" value="@_search" @oninput="OnSearchInput" />
+        </div>
+        <div class="cfd-filter-grid">
+            <label><span>Entity</span><select class="form-select" @bind="_entityFilter" @bind:after="ApplyFilters"><option value="">All entities</option>@foreach (var entity in EntityOptions) { <option value="@entity">@entity</option> }</select></label>
+            <label><span>Type</span><select class="form-select" @bind="_typeFilter" @bind:after="ApplyFilters"><option value="">All types</option>@foreach (var type in TypeOptions) { <option value="@type">@type</option> }</select></label>
+            <label><span>Status</span><select class="form-select" @bind="_statusFilter" @bind:after="ApplyFilters"><option value="">All statuses</option><option value="Active">Active</option><option value="Inactive">Inactive</option></select></label>
+            <label><span>Sort</span><select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters"><option value="importance">Importance</option><option value="sort">Sort order</option><option value="risk">Risk</option><option value="entity">Entity</option><option value="type">Type</option><option value="name">Name</option><option value="created">Newest</option></select></label>
+        </div>
+        <button type="button" class="cfd-btn cfd-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+    </section>
+
+    <nav class="cfd-tabs" aria-label="CRM custom field views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="cfd-tab @(_activeTab == tab.Key ? "cfd-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </nav>
+
+    <main class="cfd-dashboard">
+        <section class="cfd-main-card">
+            <div class="cfd-card-header">
+                <div>
+                    <span class="cfd-section-kicker">@ActiveViewTitle</span>
+                    <h2>@FilteredFields.Count() fields</h2>
+                    <p>Ranked by importance: active required/searchable fields, entity coverage, field-type quality, dropdown configuration, sort-order quality, and data-model risk.</p>
+                </div>
+                <div class="cfd-card-actions">
+                    @if (_selectedFields.Count > 0)
+                    {
+                        <span class="cfd-sel-count">@_selectedFields.Count selected</span>
+                        <button type="button" class="cfd-btn cfd-btn--ghost" @onclick="() => ConfirmBulkSetActive(true)"><i class="bi bi-check-circle" aria-hidden="true"></i> Activate</button>
+                        <button type="button" class="cfd-btn cfd-btn--ghost" @onclick="() => ConfirmBulkSetActive(false)"><i class="bi bi-slash-circle" aria-hidden="true"></i> Deactivate</button>
+                        <button type="button" class="cfd-btn cfd-btn--danger-ghost" @onclick="ConfirmBulkDelete"><i class="bi bi-trash3" aria-hidden="true"></i> Remove</button>
+                    }
+                    <button type="button" class="cfd-btn cfd-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Prev</button>
+                    <span class="cfd-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="cfd-btn cfd-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="cfd-loading"><span class="cfd-spinner"></span> Loading CRM custom fields…</div>
+            }
+            else if (!FilteredFields.Any())
+            {
+                <div class="cfd-empty"><i class="bi bi-input-cursor-text" aria-hidden="true"></i><strong>No custom fields found</strong><span>Adjust the active tab, KPI, search, or filters.</span></div>
+            }
+            else if (_activeTab == "entities")
+            {
+                <div class="cfd-entity-grid">
+                    @foreach (var group in EntityGroups)
+                    {
+                        <article class="cfd-entity-card">
+                            <div class="cfd-entity-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></div>
+                            <div class="cfd-entity-meta">
+                                <h3>@group.Name</h3>
+                                <p>@group.Count fields • @group.Required required • @group.Risk needs review</p>
+                                <div class="cfd-mini-bar"><span style="width:@group.Percent%"></span></div>
+                            </div>
+                            <button type="button" class="cfd-btn cfd-btn--ghost" @onclick="() => FilterByEntity(group.Name)">Open</button>
+                        </article>
+                    }
+                </div>
+            }
+            else if (_activeTab == "types")
+            {
+                <div class="cfd-entity-grid">
+                    @foreach (var group in TypeGroups)
+                    {
+                        <article class="cfd-entity-card">
+                            <div class="cfd-entity-icon"><i class="bi bi-ui-checks" aria-hidden="true"></i></div>
+                            <div class="cfd-entity-meta">
+                                <h3>@group.Name</h3>
+                                <p>@group.Count fields • @group.Required required • @group.Risk needs review</p>
+                                <div class="cfd-mini-bar"><span style="width:@group.Percent%"></span></div>
+                            </div>
+                            <button type="button" class="cfd-btn cfd-btn--ghost" @onclick="() => FilterByType(group.Name)">Open</button>
+                        </article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="cfd-table-wrap">
+                    <table class="cfd-table">
+                        <thead>
+                            <tr>
+                                <th class="cfd-check-col"><input type="checkbox" checked="@AllPageSelected" @onchange="ToggleSelectAllPage" aria-label="Select all custom fields on page" /></th>
+                                <th>Importance</th>
+                                <th>Field</th>
+                                <th>Entity</th>
+                                <th>Type</th>
+                                <th>Required</th>
+                                <th>Search</th>
+                                <th>Sort</th>
+                                <th>Status</th>
+                                <th class="cfd-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var field in PagedFields)
+                            {
+                                <tr class="@(_selected?.CustomFieldId == field.CustomFieldId ? "cfd-row cfd-row--selected" : "cfd-row")" @onclick="() => SelectRow(field)">
+                                    <td class="cfd-check-col" @onclick:stopPropagation="true"><input type="checkbox" checked="@IsSelected(field)" @onchange="() => ToggleSelect(field)" aria-label="Select custom field" /></td>
+                                    <td>@ImportanceBadge(field)</td>
+                                    <td><button type="button" class="cfd-link-button" @onclick:stopPropagation="true" @onclick="() => OpenEdit(field)">@field.FieldName</button><small>@field.FieldCode</small></td>
+                                    <td><span class="cfd-pill cfd-pill--blue">@field.EntityType</span></td>
+                                    <td>@TypeBadge(field)</td>
+                                    <td class="cfd-center">@if (field.IsRequired) { <i class="bi bi-asterisk cfd-required" title="Required" aria-hidden="true"></i> } else { <span class="cfd-muted">No</span> }</td>
+                                    <td class="cfd-center"><i class="bi @(field.IsSearchable ? "bi-search cfd-searchable" : "bi-dash-circle cfd-muted")" title="@(field.IsSearchable ? "Searchable" : "Not searchable")" aria-hidden="true"></i></td>
+                                    <td><strong>@field.SortOrder</strong></td>
+                                    <td>@StatusBadge(field)</td>
+                                    <td class="cfd-actions-col">
+                                        <button type="button" class="cfd-icon-btn" title="Open action menu" @onclick:stopPropagation="true" @onclick="() => ToggleActionMenu(field)"><i class="bi bi-three-dots-vertical" aria-hidden="true"></i></button>
+                                        @if (_openActionMenuFor == field.CustomFieldId)
+                                        {
+                                            <div class="cfd-menu" role="menu" @onclick:stopPropagation="true">
+                                                <div class="cfd-menu__summary"><strong>@field.FieldName</strong><span>@field.FieldCode</span></div>
+                                                <button type="button" class="cfd-menu-item" role="menuitem" @onclick="() => SelectRow(field)"><i class="bi bi-eye" aria-hidden="true"></i><span>Inspect field</span></button>
+                                                <button type="button" class="cfd-menu-item" role="menuitem" @onclick="() => OpenEdit(field)"><i class="bi bi-pencil" aria-hidden="true"></i><span>Edit field</span></button>
+                                                <button type="button" class="cfd-menu-item" role="menuitem" @onclick="() => ConfirmToggleActive(field)"><i class="bi @(field.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i><span>@(field.IsActive ? "Deactivate" : "Activate")</span></button>
+                                                <button type="button" class="cfd-menu-item cfd-menu-item--danger" role="menuitem" @onclick="() => ConfirmDelete(field)"><i class="bi bi-trash3" aria-hidden="true"></i><span>Remove field</span></button>
+                                            </div>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="cfd-side-panel">
+            <section class="cfd-panel-card">
+                <span class="cfd-section-kicker">Selected field</span>
+                @if (_selected is null)
+                {
+                    <div class="cfd-empty cfd-empty--compact"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a row</strong><span>Choose a field to inspect configuration quality and actions.</span></div>
+                }
+                else
+                {
+                    <div class="cfd-selected">
+                        <div class="cfd-selected__title"><div class="cfd-field-icon"><i class="bi bi-input-cursor-text" aria-hidden="true"></i></div><div><h3>@_selected.FieldName</h3><span>@_selected.FieldCode</span></div></div>
+                        <div class="cfd-score-card cfd-score-card--@ImportanceTone(_selected)"><span>Importance score</span><strong>@ImportanceScore(_selected)</strong><small>@ImportanceLevel(_selected)</small></div>
+                        <dl class="cfd-detail-list">
+                            <div><dt>Entity</dt><dd>@_selected.EntityType</dd></div>
+                            <div><dt>Type</dt><dd>@_selected.FieldType</dd></div>
+                            <div><dt>Required</dt><dd>@(_selected.IsRequired ? "Yes" : "No")</dd></div>
+                            <div><dt>Searchable</dt><dd>@(_selected.IsSearchable ? "Yes" : "No")</dd></div>
+                            <div><dt>Status</dt><dd>@(_selected.IsActive ? "Active" : "Inactive")</dd></div>
+                            <div><dt>Sort order</dt><dd>@_selected.SortOrder</dd></div>
+                        </dl>
+                        <div class="cfd-note-card"><strong>Recommended action</strong><p>@RecommendedAction(_selected)</p></div>
+                        <div class="cfd-selected-actions"><button type="button" class="cfd-btn cfd-btn--primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="cfd-btn cfd-btn--ghost" @onclick="() => ConfirmToggleActive(_selected)"><i class="bi @( _selected.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i> @( _selected.IsActive ? "Deactivate" : "Activate")</button><button type="button" class="cfd-btn cfd-btn--danger-ghost" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash3" aria-hidden="true"></i> Remove</button></div>
+                    </div>
+                }
+            </section>
+
+            <section class="cfd-panel-card">
+                <span class="cfd-section-kicker">Field intelligence</span>
+                <div class="cfd-insight-list">
+                    @foreach (var insight in Insights)
+                    {
+                        <div class="cfd-insight"><i class="bi @insight.Icon" aria-hidden="true"></i><div><strong>@insight.Title</strong><span>@insight.Description</span></div></div>
+                    }
+                </div>
+            </section>
+        </aside>
+    </main>
+</div>
+
+@if (_showForm)
+{
+    <div class="cfd-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="cfd-modal" role="dialog" aria-modal="true" aria-labelledby="cfd-form-title" @onclick:stopPropagation="true">
+            <div class="cfd-modal__header"><i class="bi @(_editId.HasValue ? "bi-pencil-square" : "bi-plus-circle")" aria-hidden="true"></i><span id="cfd-form-title">@(_editId.HasValue ? "Edit CRM Custom Field" : "Add CRM Custom Field")</span><button type="button" class="cfd-icon-btn cfd-icon-btn--light ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="cfd-modal__body">
+                    <div class="cfd-validation-note"><i class="bi bi-shield-check" aria-hidden="true"></i><div><strong>Enterprise validations enabled</strong><span>Field code, name, entity, type, default values, dropdown options, and sort order constraints are enforced before save.</span></div></div>
+                    <div class="cfd-form-grid">
+                        <label class="cfd-field"><span>Field Code <em>*</em></span><InputText @bind-Value="_form.FieldCode" class="form-control" placeholder="INDUSTRY_NICHE" /><ValidationMessage For="() => _form.FieldCode" class="text-danger" /></label>
+                        <label class="cfd-field"><span>Field Name <em>*</em></span><InputText @bind-Value="_form.FieldName" class="form-control" placeholder="Industry Niche" /><ValidationMessage For="() => _form.FieldName" class="text-danger" /></label>
+                        <label class="cfd-field"><span>Entity Type <em>*</em></span><InputSelect @bind-Value="_form.EntityType" class="form-select"><option value="">Select entity…</option>@foreach (var entity in _entityTypes) { <option value="@entity">@entity</option> }</InputSelect><ValidationMessage For="() => _form.EntityType" class="text-danger" /></label>
+                        <label class="cfd-field"><span>Field Type <em>*</em></span><InputSelect @bind-Value="_form.FieldType" class="form-select"><option value="">Select type…</option>@foreach (var type in _fieldTypes) { <option value="@type">@type</option> }</InputSelect><ValidationMessage For="() => _form.FieldType" class="text-danger" /></label>
+                        <label class="cfd-field"><span>Default Value</span><InputText @bind-Value="_form.DefaultValue" class="form-control" /><ValidationMessage For="() => _form.DefaultValue" class="text-danger" /></label>
+                        <label class="cfd-field"><span>Sort Order</span><InputNumber @bind-Value="_form.SortOrder" class="form-control" min="0" /><ValidationMessage For="() => _form.SortOrder" class="text-danger" /></label>
+                        <label class="cfd-field cfd-field--wide"><span>Dropdown Options</span><InputTextArea @bind-Value="_form.DropdownOptions" class="form-control" rows="3" placeholder="Comma-separated values for Dropdown fields" /><ValidationMessage For="() => _form.DropdownOptions" class="text-danger" /></label>
+                        <label class="cfd-field"><span>Required</span><span class="cfd-switch"><InputCheckbox @bind-Value="_form.IsRequired" /> Require user entry</span></label>
+                        <label class="cfd-field"><span>Searchable</span><span class="cfd-switch"><InputCheckbox @bind-Value="_form.IsSearchable" /> Include in CRM search</span></label>
+                        <label class="cfd-field"><span>Status</span><span class="cfd-switch"><InputCheckbox @bind-Value="_form.IsActive" /> Active field</span></label>
+                    </div>
+                    @if (!string.IsNullOrEmpty(_formError))
+                    {
+                        <div class="alert alert-danger cfd-form-alert" style="border-left: 4px solid #dc3545; animation: cfd-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_formError</div>
+                    }
+                </div>
+                <div class="cfd-modal__footer"><button type="button" class="cfd-btn cfd-btn--ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="cfd-btn cfd-btn--primary" disabled="@_saving">@if (_saving) { <span class="cfd-spin-sm" aria-hidden="true"></span> } @(_editId.HasValue ? "Save Changes" : "Create Field")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showConfirm)
+{
+    <div class="cfd-modal-backdrop" role="presentation" @onclick="CloseConfirm">
+        <div class="cfd-confirm" role="dialog" aria-modal="true" aria-labelledby="cfd-confirm-title" @onclick:stopPropagation="true">
+            <div class="cfd-modal__header"><i class="bi @_confirmIcon" aria-hidden="true"></i><span>Confirm action</span><button type="button" class="cfd-icon-btn cfd-icon-btn--light ms-auto" @onclick="CloseConfirm" disabled="@_saving"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <div class="cfd-confirm__body"><div class="@(_confirmDanger ? "cfd-confirm-icon cfd-confirm-icon--danger" : "cfd-confirm-icon")"><i class="bi @_confirmIcon" aria-hidden="true"></i></div><div><h3 id="cfd-confirm-title">@_confirmTitle</h3><p>@_confirmMessage</p></div></div>
+            <div class="cfd-modal__footer"><button type="button" class="cfd-btn cfd-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button><button type="button" class="@(_confirmDanger ? "cfd-btn cfd-btn--danger" : "cfd-btn cfd-btn--primary")" @onclick="ExecuteConfirmedActionAsync" disabled="@_saving">@if (_saving) { <span class="cfd-spin-sm" aria-hidden="true"></span> } Confirm</button></div>
+        </div>
+    </div>
+}
+
+<div class="cfd-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="cfd-toast @toast.CssClass"><i class="bi @(toast.CssClass.Contains("danger") ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i><span>@toast.Message</span><button type="button" @onclick="() => DismissToast(toast.Id)"><i class="bi bi-x" aria-hidden="true"></i></button></div>
+    }
+</div>
 
 @code {
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantId;
-    private Guid _tenantAdminUserId;
-    Guid TenantId { get; set; }
-    static readonly string[] _entityTypes = ["Lead", "Opportunity", "Account"];
-    List<CrmCustomFieldDto> _items = [], _filtered = [];
-    bool _loading, _saving;
-    string _search = string.Empty, _filterEntity = string.Empty;
-    string? _activeFilter;
-    string? _loadError;
-    bool _showForm, _showDelete;
-    Guid? _editId;
-    CrmCustomFieldDto? _deleteTarget;
-    SfToast _toast = default!;
-    CrmFieldFormModel _form = new();
+    private Guid TenantId { get; set; }
+    private Guid TenantAdminUserId { get; set; }
+    private static readonly string[] _entityTypes = ["Lead", "Opportunity", "Account"];
+    private static readonly string[] _fieldTypes = ["Text", "Number", "Date", "Dropdown", "Checkbox"];
+    private readonly TabDef[] _tabs = [new("all", "All", "bi-input-cursor-text"), new("risk", "Needs Review", "bi-exclamation-octagon"), new("required", "Required", "bi-asterisk"), new("dropdown", "Dropdowns", "bi-list-check"), new("inactive", "Inactive", "bi-slash-circle"), new("entities", "By Entity", "bi-diagram-3"), new("types", "By Type", "bi-ui-checks")];
+    private readonly InsightDef[] _baselineInsights = [new("Keep required fields intentional", "Required fields should support compliance, conversion, or operational routing.", "bi-asterisk"), new("Dropdowns need options", "Dropdown fields should include controlled values before activation.", "bi-list-check"), new("Searchable fields drive productivity", "Mark important lookup fields searchable for dashboard and workflow filtering.", "bi-search")];
+
+    private List<CrmCustomFieldDto> _items = [];
+    private readonly List<CrmCustomFieldDto> _selectedFields = [];
+    private CrmCustomFieldDto? _selected;
+    private bool _loading = true;
+    private bool _saving;
+    private string? _loadError;
+    private string _activeTab = "all";
+    private string _activeKpi = "all";
+    private string _search = string.Empty;
+    private string _entityFilter = string.Empty;
+    private string _typeFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _sortMode = "importance";
+    private int _page = 1;
+    private const int PageSize = 12;
+    private Guid? _openActionMenuFor;
+
+    private bool _showForm;
+    private string _formError = string.Empty;
+    private Guid? _editId;
+    private CrmFieldFormModel _form = new();
+
+    private bool _showConfirm;
+    private bool _confirmDanger;
+    private string _confirmTitle = string.Empty;
+    private string _confirmMessage = string.Empty;
+    private string _confirmIcon = "bi-question-circle";
+    private Func<Task>? _confirmedAction;
+    private readonly List<ToastMessage> _toasts = [];
 
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM Config", null), new("Custom Fields", null));
+        var context = await CurrentUser.RequireAsync();
+        TenantId = context.TenantId;
+        TenantAdminUserId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM Configuration", null), new("Custom Fields", null));
         await LoadAsync();
     }
 
-    async Task LoadAsync()
+    private async Task LoadAsync()
     {
         _loading = true;
         _loadError = null;
-        try { var r = await Api.SearchCrmCustomFieldsAsync(TenantId, _search, pageSize: 200); _items = r?.Items.ToList() ?? []; ApplyFilter(); }
-        catch (Exception ex) { _loadError = $"Failed to load custom fields: {ex.Message}"; }
-        finally { _loading = false; }
-    }
-
-    Task OnSearchAsync() => LoadAsync();
-
-    void ApplyFilter()
-    {
-        var q = string.IsNullOrEmpty(_filterEntity) ? _items : _items.Where(x => x.EntityType == _filterEntity);
-        _filtered = _activeFilter switch
+        StateHasChanged();
+        try
         {
-            "active"   => q.Where(x => x.IsActive).ToList(),
-            "required" => q.Where(x => x.IsRequired).ToList(),
-            _          => q.ToList()
-        };
+            var result = await Api.SearchCrmCustomFieldsAsync(TenantId, _search.Trim(), pageSize: 500);
+            _items = result?.Items.ToList() ?? [];
+            _selected = _selected is null ? OrderedFields(_items).FirstOrDefault() : _items.FirstOrDefault(f => f.CustomFieldId == _selected.CustomFieldId) ?? OrderedFields(_items).FirstOrDefault();
+            _selectedFields.RemoveAll(selected => _items.All(f => f.CustomFieldId != selected.CustomFieldId));
+            _page = 1;
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load CRM custom fields: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "cfd-toast--danger");
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
     }
 
-    void SetFilter(string? key) { _activeFilter = key; ApplyFilter(); }
-    void OnRowSelected(RowSelectEventArgs<CrmCustomFieldDto> args) => OpenEdit(args.Data);
+    private async Task OnSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _search = e.Value?.ToString() ?? string.Empty;
+        await LoadAsync();
+    }
 
-    void OpenCreate() { _editId = null; _form = new(); _showForm = true; }
+    private void SetActiveKpi(string key)
+    {
+        _activeKpi = _activeKpi == key ? "all" : key;
+        _activeTab = _activeKpi switch { "risk" => "risk", "required" => "required", "entities" => "entities", _ => "all" };
+        _page = 1;
+    }
 
-    void OpenEdit(CrmCustomFieldDto item)
+    private void SetActiveTab(string key)
+    {
+        _activeTab = key;
+        _activeKpi = key is "risk" or "required" or "entities" ? key : "all";
+        _page = 1;
+    }
+
+    private void SetDashboardFocus(string tab, string sortMode)
+    {
+        _activeTab = tab;
+        _activeKpi = tab is "risk" or "required" or "entities" ? tab : "all";
+        _sortMode = sortMode;
+        _page = 1;
+    }
+
+    private void ApplyFilters() => _page = 1;
+
+    private void ClearFilters()
+    {
+        _entityFilter = string.Empty;
+        _typeFilter = string.Empty;
+        _statusFilter = string.Empty;
+        _sortMode = "importance";
+        _activeTab = "all";
+        _activeKpi = "all";
+        _page = 1;
+    }
+
+    private bool HasFilters => !string.IsNullOrEmpty(_entityFilter) || !string.IsNullOrEmpty(_typeFilter) || !string.IsNullOrEmpty(_statusFilter) || _sortMode != "importance" || _activeTab != "all";
+
+    private IEnumerable<CrmCustomFieldDto> TabFiltered => _activeTab switch
+    {
+        "risk" => _items.Where(IsRisk),
+        "required" => _items.Where(f => f.IsRequired),
+        "dropdown" => _items.Where(f => IsType(f, "Dropdown")),
+        "inactive" => _items.Where(f => !f.IsActive),
+        _ => _items,
+    };
+
+    private IEnumerable<CrmCustomFieldDto> FilteredFields
+    {
+        get
+        {
+            var query = TabFiltered;
+            if (!string.IsNullOrWhiteSpace(_entityFilter)) query = query.Where(f => string.Equals(f.EntityType, _entityFilter, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(_typeFilter)) query = query.Where(f => string.Equals(f.FieldType, _typeFilter, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(f => _statusFilter == "Active" ? f.IsActive : !f.IsActive);
+            return OrderedFields(query);
+        }
+    }
+
+    private IEnumerable<CrmCustomFieldDto> OrderedFields(IEnumerable<CrmCustomFieldDto> query) => _sortMode switch
+    {
+        "sort" => query.OrderBy(f => f.SortOrder).ThenBy(f => f.FieldName),
+        "risk" => query.OrderByDescending(RiskScore).ThenByDescending(ImportanceScore),
+        "entity" => query.OrderBy(f => f.EntityType).ThenBy(f => f.SortOrder).ThenBy(f => f.FieldName),
+        "type" => query.OrderBy(f => f.FieldType).ThenBy(f => f.FieldName),
+        "name" => query.OrderBy(f => f.FieldName),
+        "created" => query.OrderByDescending(f => f.CreatedDateUtc),
+        _ => query.OrderByDescending(ImportanceScore).ThenBy(f => f.SortOrder).ThenBy(f => f.FieldName),
+    };
+
+    private IEnumerable<CrmCustomFieldDto> PagedFields => FilteredFields.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredFields.Count() / (double)PageSize));
+    private void PreviousPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private string ActiveViewTitle => _tabs.FirstOrDefault(t => t.Key == _activeTab)?.Label ?? "CRM Custom Fields";
+
+    private int RequiredCount => _items.Count(f => f.IsRequired);
+    private int SearchableCount => _items.Count(f => f.IsSearchable);
+    private int RiskCount => _items.Count(IsRisk);
+    private int TabCount(string key) => key switch
+    {
+        "risk" => _items.Count(IsRisk),
+        "required" => RequiredCount,
+        "dropdown" => _items.Count(f => IsType(f, "Dropdown")),
+        "inactive" => _items.Count(f => !f.IsActive),
+        "entities" => EntityGroups.Count,
+        "types" => TypeGroups.Count,
+        _ => _items.Count,
+    };
+
+    private IEnumerable<string> EntityOptions => _items.Select(f => f.EntityType).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    private IEnumerable<string> TypeOptions => _items.Select(f => f.FieldType).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+
+    private List<FieldGroup> EntityGroups => BuildGroups(_items.GroupBy(f => string.IsNullOrWhiteSpace(f.EntityType) ? "Unassigned" : f.EntityType));
+    private List<FieldGroup> TypeGroups => BuildGroups(_items.GroupBy(f => string.IsNullOrWhiteSpace(f.FieldType) ? "Unknown" : f.FieldType));
+
+    private static List<FieldGroup> BuildGroups(IEnumerable<IGrouping<string, CrmCustomFieldDto>> groups)
+    {
+        var list = groups.ToList();
+        var max = Math.Max(1, list.Count == 0 ? 1 : list.Max(g => g.Count()));
+        return list.Select(g => new FieldGroup(g.Key, g.Count(), g.Count(f => f.IsRequired), g.Count(IsRisk), (int)Math.Round(g.Count() * 100.0 / max))).OrderByDescending(g => g.Risk).ThenByDescending(g => g.Required).ThenBy(g => g.Name).ToList();
+    }
+
+    private void FilterByEntity(string entity)
+    {
+        _entityFilter = entity == "Unassigned" ? string.Empty : entity;
+        _activeTab = "all";
+        _activeKpi = "all";
+        _page = 1;
+    }
+
+    private void FilterByType(string type)
+    {
+        _typeFilter = type == "Unknown" ? string.Empty : type;
+        _activeTab = "all";
+        _activeKpi = "all";
+        _page = 1;
+    }
+
+    private void SelectRow(CrmCustomFieldDto field) { _selected = field; _openActionMenuFor = null; }
+    private bool IsSelected(CrmCustomFieldDto field) => _selectedFields.Any(x => x.CustomFieldId == field.CustomFieldId);
+    private void ToggleSelect(CrmCustomFieldDto field) { if (IsSelected(field)) _selectedFields.RemoveAll(x => x.CustomFieldId == field.CustomFieldId); else _selectedFields.Add(field); }
+    private bool AllPageSelected => PagedFields.Any() && PagedFields.All(IsSelected);
+    private void ToggleSelectAllPage()
+    {
+        var page = PagedFields.ToList();
+        if (page.All(IsSelected)) foreach (var field in page) _selectedFields.RemoveAll(x => x.CustomFieldId == field.CustomFieldId);
+        else foreach (var field in page.Where(field => !IsSelected(field))) _selectedFields.Add(field);
+    }
+
+    private void ToggleActionMenu(CrmCustomFieldDto field) => _openActionMenuFor = _openActionMenuFor == field.CustomFieldId ? null : field.CustomFieldId;
+
+    private void OpenCreate()
+    {
+        _editId = null;
+        _form = new();
+        _formError = string.Empty;
+        _showForm = true;
+        _openActionMenuFor = null;
+    }
+
+    private void OpenEdit(CrmCustomFieldDto item)
     {
         _editId = item.CustomFieldId;
         _form = new() { FieldCode = item.FieldCode, FieldName = item.FieldName, EntityType = item.EntityType, FieldType = item.FieldType, DefaultValue = item.DefaultValue, DropdownOptions = item.DropdownOptions, IsRequired = item.IsRequired, IsSearchable = item.IsSearchable, SortOrder = item.SortOrder, IsActive = item.IsActive };
+        _formError = string.Empty;
         _showForm = true;
+        _openActionMenuFor = null;
     }
 
-    async Task SaveAsync()
+    private void CloseForm()
+    {
+        if (_saving) return;
+        _showForm = false;
+        _form = new();
+        _editId = null;
+        _formError = string.Empty;
+    }
+
+    private async Task SaveAsync()
     {
         _saving = true;
+        _formError = string.Empty;
         try
         {
             if (_editId.HasValue)
+            {
                 await Api.UpdateCrmCustomFieldAsync(_editId.Value, new(_form.FieldCode, _form.FieldName, _form.EntityType, _form.FieldType, _form.DefaultValue, _form.DropdownOptions, _form.IsRequired, _form.IsSearchable, _form.IsActive, _form.SortOrder));
+                ShowToast("CRM custom field updated.", "cfd-toast--success");
+            }
             else
-                await Api.CreateCrmCustomFieldAsync(new(TenantId, _form.FieldCode, _form.FieldName, _form.EntityType, _form.FieldType, _form.DefaultValue, _form.DropdownOptions, _form.IsRequired, _form.IsSearchable, _form.SortOrder));
+            {
+                var id = await Api.CreateCrmCustomFieldAsync(new(TenantId, _form.FieldCode, _form.FieldName, _form.EntityType, _form.FieldType, _form.DefaultValue, _form.DropdownOptions, _form.IsRequired, _form.IsSearchable, _form.SortOrder));
+                _editId = id;
+                ShowToast("CRM custom field created.", "cfd-toast--success");
+            }
             _showForm = false;
-            await _toast.ShowAsync(new() { Content = "Saved", CssClass = "e-toast-success" });
             await LoadAsync();
         }
-        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast($"Save failed: {ex.Message}", "cfd-toast--danger");
+        }
         finally { _saving = false; }
     }
 
-    void ConfirmDelete(CrmCustomFieldDto item) { _deleteTarget = item; _showDelete = true; }
-
-    async Task ExecuteDeleteAsync()
+    private void ConfirmToggleActive(CrmCustomFieldDto field)
     {
+        ShowConfirm(field.IsActive ? "Deactivate CRM custom field?" : "Activate CRM custom field?", $"This will {(field.IsActive ? "disable" : "enable")} '{field.FieldName}' for {field.EntityType} records.", field.IsActive ? "bi-slash-circle" : "bi-check-circle", false, async () => await SetFieldActiveAsync(field, !field.IsActive));
+    }
+
+    private async Task SetFieldActiveAsync(CrmCustomFieldDto field, bool isActive)
+    {
+        await Api.UpdateCrmCustomFieldAsync(field.CustomFieldId, new(field.FieldCode, field.FieldName, field.EntityType, field.FieldType, field.DefaultValue, field.DropdownOptions, field.IsRequired, field.IsSearchable, isActive, field.SortOrder));
+        ShowToast(isActive ? "CRM custom field activated." : "CRM custom field deactivated.", "cfd-toast--success");
+        await LoadAsync();
+    }
+
+    private void ConfirmDelete(CrmCustomFieldDto field)
+    {
+        ShowConfirm("Remove CRM custom field?", $"You are about to remove '{field.FieldName}'. This action cannot be undone.", "bi-trash3", true, async () => await DeleteFieldAsync(field));
+    }
+
+    private async Task DeleteFieldAsync(CrmCustomFieldDto field)
+    {
+        await Api.DeleteCrmCustomFieldAsync(field.CustomFieldId);
+        _selectedFields.RemoveAll(f => f.CustomFieldId == field.CustomFieldId);
+        if (_selected?.CustomFieldId == field.CustomFieldId) _selected = null;
+        ShowToast("CRM custom field removed.", "cfd-toast--success");
+        await LoadAsync();
+    }
+
+    private void ConfirmBulkSetActive(bool isActive)
+    {
+        var count = _selectedFields.Count;
+        ShowConfirm(isActive ? "Activate selected fields?" : "Deactivate selected fields?", $"This will {(isActive ? "activate" : "deactivate")} {count} selected custom field(s).", isActive ? "bi-check-circle" : "bi-slash-circle", false, async () => await BulkSetActiveAsync(isActive));
+    }
+
+    private async Task BulkSetActiveAsync(bool isActive)
+    {
+        foreach (var field in _selectedFields.ToList()) await SetFieldActiveAsync(field, isActive);
+        _selectedFields.Clear();
+    }
+
+    private void ConfirmBulkDelete()
+    {
+        var count = _selectedFields.Count;
+        ShowConfirm("Remove selected CRM custom fields?", $"You are about to remove {count} selected custom field(s). This action cannot be undone.", "bi-trash3", true, BulkDeleteAsync);
+    }
+
+    private async Task BulkDeleteAsync()
+    {
+        foreach (var field in _selectedFields.ToList()) await Api.DeleteCrmCustomFieldAsync(field.CustomFieldId);
+        _selectedFields.Clear();
+        _selected = null;
+        ShowToast("Selected CRM custom fields removed.", "cfd-toast--success");
+        await LoadAsync();
+    }
+
+    private void ShowConfirm(string title, string message, string icon, bool danger, Func<Task> action)
+    {
+        _confirmTitle = title;
+        _confirmMessage = message;
+        _confirmIcon = icon;
+        _confirmDanger = danger;
+        _confirmedAction = action;
+        _showConfirm = true;
+        _openActionMenuFor = null;
+    }
+
+    private void CloseConfirm() { if (!_saving) _showConfirm = false; }
+
+    private async Task ExecuteConfirmedActionAsync()
+    {
+        if (_confirmedAction is null) return;
         _saving = true;
-        try { await Api.DeleteCrmCustomFieldAsync(_deleteTarget!.CustomFieldId); _showDelete = false; await _toast.ShowAsync(new() { Content = "Deleted", CssClass = "e-toast-success" }); await LoadAsync(); }
-        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+        try
+        {
+            await _confirmedAction();
+            _showConfirm = false;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Action failed: {ex.Message}", "cfd-toast--danger");
+        }
         finally { _saving = false; }
     }
 
-    void ResetForm() { _form = new(); _editId = null; }
+    private IReadOnlyList<InsightDef> Insights
+    {
+        get
+        {
+            var insights = _baselineInsights.ToList();
+            if (_items.Any(f => IsType(f, "Dropdown") && string.IsNullOrWhiteSpace(f.DropdownOptions))) insights.Insert(0, new("Dropdown options missing", $"{_items.Count(f => IsType(f, "Dropdown") && string.IsNullOrWhiteSpace(f.DropdownOptions))} dropdown field(s) need controlled options.", "bi-list-check"));
+            if (_items.Any(f => !f.IsActive)) insights.Insert(0, new("Inactive fields", $"{_items.Count(f => !f.IsActive)} custom field(s) are inactive and unavailable in CRM workflows.", "bi-slash-circle"));
+            if (_items.Count(f => f.IsSearchable) == 0 && _items.Count > 0) insights.Insert(0, new("No searchable fields", "Mark high-value custom fields searchable to improve CRM discovery and reporting.", "bi-search"));
+            return insights.Take(5).ToList();
+        }
+    }
 
-    sealed class CrmFieldFormModel
+    private RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string tone) => @<button type="button" class="cfd-kpi-card cfd-kpi-card--@tone @(_activeKpi == key ? "cfd-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveKpi(key)"><span class="cfd-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span><span class="cfd-kpi-body"><span class="cfd-kpi-label">@label</span><span class="cfd-kpi-value">@value</span><span class="cfd-kpi-sub">@subtitle</span></span></button>;
+
+    private static bool IsType(CrmCustomFieldDto field, string type) => string.Equals(field.FieldType, type, StringComparison.OrdinalIgnoreCase);
+    private static bool IsRisk(CrmCustomFieldDto field) => !field.IsActive || (IsType(field, "Dropdown") && string.IsNullOrWhiteSpace(field.DropdownOptions)) || string.IsNullOrWhiteSpace(field.FieldCode) || field.SortOrder < 0;
+    private static int RiskScore(CrmCustomFieldDto field) => (!field.IsActive ? 50 : 0) + (IsType(field, "Dropdown") && string.IsNullOrWhiteSpace(field.DropdownOptions) ? 35 : 0) + (string.IsNullOrWhiteSpace(field.FieldCode) ? 25 : 0) + (field.SortOrder < 0 ? 15 : 0);
+    private static int ImportanceScore(CrmCustomFieldDto field) => (field.IsActive ? 100 : 0) + (field.IsRequired ? 60 : 0) + (field.IsSearchable ? 35 : 0) + (IsCoreEntity(field.EntityType) ? 25 : 0) + FieldTypeWeight(field.FieldType) + Math.Max(0, 30 - Math.Min(field.SortOrder, 30));
+    private static int FieldTypeWeight(string? type) => type switch { "Dropdown" => 35, "Text" => 25, "Number" => 24, "Date" => 22, "Checkbox" => 18, _ => 10 };
+    private static bool IsCoreEntity(string? entity) => entity is "Lead" or "Opportunity" or "Account";
+    private static string ImportanceLevel(CrmCustomFieldDto field) => ImportanceScore(field) >= 220 ? "Critical" : ImportanceScore(field) >= 175 ? "High" : ImportanceScore(field) >= 130 ? "Medium" : "Low";
+    private static string ImportanceTone(CrmCustomFieldDto field) => ImportanceLevel(field) switch { "Critical" => "red", "High" => "amber", "Medium" => "cyan", _ => "green" };
+    private static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private static string RecommendedAction(CrmCustomFieldDto field) => !field.IsActive ? "Activate this field if it is still needed in CRM workflows." : IsType(field, "Dropdown") && string.IsNullOrWhiteSpace(field.DropdownOptions) ? "Add dropdown options before users rely on this field." : field.IsRequired && !field.IsSearchable ? "Consider making this required field searchable for reporting and workflow filters." : field.SortOrder > 100 ? "Review sort order so important fields appear earlier in forms." : "Monitor usage and keep naming, type, and search settings aligned to workflow needs.";
+
+    private static string TypeTone(CrmCustomFieldDto field) => IsType(field, "Dropdown") ? "cfd-pill--purple" : IsType(field, "Text") ? "cfd-pill--blue" : IsType(field, "Number") ? "cfd-pill--cyan" : IsType(field, "Date") ? "cfd-pill--green" : "cfd-pill--amber";
+    private RenderFragment TypeBadge(CrmCustomFieldDto field) => @<span class="cfd-pill @TypeTone(field)">@field.FieldType</span>;
+    private RenderFragment StatusBadge(CrmCustomFieldDto field) => @<span class="cfd-pill @(field.IsActive ? "cfd-pill--green" : "cfd-pill--neutral")">@(field.IsActive ? "Active" : "Inactive")</span>;
+    private RenderFragment ImportanceBadge(CrmCustomFieldDto field) => @<span class="cfd-risk-badge cfd-risk-badge--@ImportanceTone(field)"><i class="bi @(ImportanceTone(field) == "red" ? "bi-exclamation-octagon" : "bi-shield-check")" aria-hidden="true"></i>@ImportanceLevel(field)</span>;
+
+    private void ShowToast(string message, string cssClass)
+    {
+        _toasts.Add(new(Guid.NewGuid(), message.Length <= 160 ? message : $"{message[..157]}...", cssClass));
+        if (_toasts.Count > 4) _toasts.RemoveAt(0);
+    }
+
+    private void DismissToast(Guid id) => _toasts.RemoveAll(t => t.Id == id);
+
+    private sealed class CrmFieldFormModel
     {
         [Required(ErrorMessage = "Field Code is required.")]
         [StringLength(80, ErrorMessage = "Field Code cannot exceed 80 characters.")]
@@ -288,14 +706,8 @@
         public bool IsActive { get; set; } = true;
     }
 
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
-    }
+    private sealed record TabDef(string Key, string Label, string Icon);
+    private sealed record InsightDef(string Title, string Description, string Icon);
+    private sealed record FieldGroup(string Name, int Count, int Required, int Risk, int Percent);
+    private sealed record ToastMessage(Guid Id, string Message, string CssClass);
 }

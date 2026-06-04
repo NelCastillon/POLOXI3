@@ -1,36 +1,317 @@
-﻿@page "/tenant/policies/cancellations"
+@page "/tenant/policies/cancellations"
 @using System.ComponentModel.DataAnnotations
 @using Ams.Application.Features.PolicyConfig
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Cancellation Reasons â€” Policy Configuration</PageTitle>
-<AppPageHeader Title="Cancellation Reasons" Subtitle="Manage cancellation reason codes and cancellation categories" Icon="bi-x-circle"><Actions><button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Add Reason</button><button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button></Actions></AppPageHeader>
-<div class="pc-kpi-strip"><div class="pc-kpi-card @(_activeFilter == "" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("")' title="Show all cancellation reasons" style="cursor:pointer"><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-x-circle"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total Types</div></div></div><div class="pc-kpi-card @(_activeFilter == "active" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("active")' title="Filter active types" style="cursor:pointer"><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsActive)</div><div class="pc-kpi-label">Active</div></div></div><div class="pc-kpi-card @(_activeFilter == "inactive" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("inactive")' title="Filter inactive types" style="cursor:pointer"><span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-slash-circle"></i></span><div><div class="pc-kpi-value">@_items.Count(x => !x.IsActive)</div><div class="pc-kpi-label">Inactive</div></div></div></div>
-@if (_loadError is not null) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError</div> }
-<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search endorsement typeâ€¦" />
-<div class="um-grid-card">@if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loadingâ€¦</span></div> }<SfGrid TValue="CancellationReasonDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52"><GridEvents TValue="CancellationReasonDto" RowSelected="OnRowSelected" /><GridPageSettings PageSize="25" /><GridColumns><GridColumn Field="ReasonCode" HeaderText="Code" Width="130" /><GridColumn Field="ReasonName" HeaderText="Reason Name" Width="220" /><GridColumn Field="Description" HeaderText="Description" Width="260" /><GridColumn Field="SortOrder" HeaderText="Order" Width="80" TextAlign="TextAlign.Center" /><GridColumn Field="IsActive" HeaderText="Status" Width="100" TextAlign="TextAlign.Center"><Template>@{ var r = (CancellationReasonDto)context; }<span class="um-badge @(r.IsActive ? "um-badge-success" : "um-badge-neutral")">@(r.IsActive ? "Active" : "Inactive")</span></Template></GridColumn><GridColumn HeaderText="" Width="100" TextAlign="TextAlign.Center"><Template>@{ var r = (CancellationReasonDto)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEdit(r)"><i class="bi bi-x-circlecil"></i></button><button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(r)"><i class="bi bi-trash"></i></button></Template></GridColumn></GridColumns></SfGrid></div>
-<SfDialog @bind-Visible="_showForm" Width="520px" IsModal="true" ShowCloseIcon="false"><DialogEvents Closed="ResetForm" /><DialogContent><div class="um-modal-header"><i class="bi bi-x-circle"></i><span>@(_editId.HasValue ? "Edit Cancellation Reason" : "Add Cancellation Reason")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button></div><EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator /><div class="um-modal-body"><div class="um-form-grid"><div class="um-field"><label>Reason Code <span class="text-danger">*</span></label><InputText @bind-Value="_form.ReasonCode" class="um-input" placeholder="e.g. ADD_VEHICLE" /></div><div class="um-field"><label>Reason Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.ReasonName" class="um-input" /></div><div class="um-field"><label>Reason Type</label><SfDropDownList TValue="string" TItem="string" @bind-Value="_form.ReasonType" DataSource="@(new[]{"Insured Request","Non-Payment","Underwriting","Carrier Initiated"})" Placeholder="Select type" /></div><div class="um-field"><label>Description</label><InputTextArea @bind-Value="_form.Description" class="um-input" rows="2" /></div><div class="um-field"><label>Sort Order</label><InputNumber @bind-Value="_form.SortOrder" class="um-input" /></div><div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label></div></div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button></div></EditForm></DialogContent></SfDialog>
-<SfDialog @bind-Visible="_showDelete" Width="420px" IsModal="true" ShowCloseIcon="false"><DialogContent><div class="um-confirm-dialog"><div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3-fill"></i></div><div class="um-confirm-title">Delete Cancellation Reason</div><div class="um-confirm-body">Are you sure you want to delete <strong>@_deleteTarget?.ReasonName</strong>?</div><div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div></div></DialogContent></SfDialog>
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true"><ToastPosition X="Right" Y="Bottom" /></SfToast><style>.validation-message{display:flex;align-items:center;gap:.45rem;margin-top:.55rem;color:#dc3545!important;font-size:.875rem;font-weight:700}.validation-message::before{content:"!";display:inline-flex;align-items:center;justify-content:center;width:1rem;height:1rem;min-width:1rem;flex-shrink:0;border-radius:999px;color:#fff;background:linear-gradient(135deg,#ef4444,#b91c1c);font-size:.7rem;font-weight:800}.um-input.modified.invalid{border-color:#dc3545!important;box-shadow:0 0 0 .18rem rgba(220,53,69,.14)!important}</style>
+<PageTitle>Cancellation Command Center — Policy Configuration</PageTitle>
+
+<div class="cnl-page">
+    <section class="cnl-hero">
+        <div class="cnl-hero__content">
+            <div class="cnl-hero-left">
+                <span class="cnl-hero-icon"><i class="bi bi-x-circle" aria-hidden="true"></i></span>
+                <div class="cnl-hero-title">
+                    <div class="cnl-hero__eyebrow">Enterprise cancellation configuration</div>
+                    <div class="cnl-title-row">
+                        <h1>Cancellation Command Center</h1>
+                        <div class="cnl-hero__meta">
+                            <span><i class="bi bi-x-circle" aria-hidden="true"></i>@_items.Count reasons</span>
+                            <span><i class="bi bi-check-circle" aria-hidden="true"></i>@_items.Count(x => x.IsActive) active</span>
+                            <span><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>@_items.Count(IsHighImpactReason) high impact</span>
+                            <span><i class="bi bi-exclamation-octagon" aria-hidden="true"></i>@_items.Count(NeedsReview) need review</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <p>Govern policy cancellation reason codes, categories, compliance risk, non-payment handling, underwriting outcomes, and reporting workflows.</p>
+        </div>
+        <div class="cnl-hero__actions">
+            <button type="button" class="cnl-btn cnl-btn--light" @onclick="RefreshAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "cnl-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="cnl-btn cnl-btn--primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Reason</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger cnl-alert" style="border-left: 4px solid #dc3545; animation: cnl-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="cnl-kpi-strip" aria-label="Cancellation reason KPIs">
+        @KpiCard("all", "Total Reasons", _items.Count.ToString(), "All configured cancellation reasons", "bi-x-circle", "blue")
+        @KpiCard("active", "Active", _items.Count(x => x.IsActive).ToString(), "Reasons available for cancellation workflows", "bi-check-circle", "green")
+        @KpiCard("nonpayment", "Non-Payment", _items.Count(IsNonPaymentReason).ToString(), "Payment-related cancellation reasons", "bi-credit-card", "amber")
+        @KpiCard("underwriting", "Underwriting", _items.Count(IsUnderwritingReason).ToString(), "Underwriting or carrier-driven cancellation reasons", "bi-shield-exclamation", "purple")
+        @KpiCard("risk", "Needs Review", _items.Count(NeedsReview).ToString(), "Inactive, uncategorized, or incomplete cancellation reasons", "bi-exclamation-octagon", "red")
+        @KpiCard("inactive", "Inactive", _items.Count(x => !x.IsActive).ToString(), "Reasons hidden from workflow usage", "bi-slash-circle", "cyan")
+    </section>
+
+    <section class="cnl-workflows" aria-label="Cancellation workflows">
+        <button type="button" class="cnl-workflow" @onclick='() => SetDashboardFocus("all", "importance")'><span class="cnl-workflow-icon"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></span><span class="cnl-workflow-meta"><strong>Reason review</strong><span>Rank cancellation reasons by operational importance</span></span></button>
+        <button type="button" class="cnl-workflow" @onclick='() => SetDashboardFocus("nonpayment", "importance")'><span class="cnl-workflow-icon"><i class="bi bi-credit-card" aria-hidden="true"></i></span><span class="cnl-workflow-meta"><strong>Payment risk</strong><span>Focus non-payment and billing cancellation reasons</span></span></button>
+        <button type="button" class="cnl-workflow" @onclick='() => SetDashboardFocus("underwriting", "importance")'><span class="cnl-workflow-icon"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></span><span class="cnl-workflow-meta"><strong>Underwriting</strong><span>Review carrier and underwriting cancellation drivers</span></span></button>
+        <button type="button" class="cnl-workflow" @onclick='() => SetDashboardFocus("risk", "importance")'><span class="cnl-workflow-icon"><i class="bi bi-exclamation-octagon" aria-hidden="true"></i></span><span class="cnl-workflow-meta"><strong>Cleanup queue</strong><span>Find inactive or incomplete cancellation reasons</span></span></button>
+        <button type="button" class="cnl-workflow" @onclick='() => SetDashboardFocus("types", "type")'><span class="cnl-workflow-icon"><i class="bi bi-pie-chart" aria-hidden="true"></i></span><span class="cnl-workflow-meta"><strong>Reason mix</strong><span>Compare insured, non-payment, underwriting, and carrier groups</span></span></button>
+    </section>
+
+    <section class="cnl-filter-panel" aria-label="Cancellation reason filters">
+        <div class="cnl-search"><i class="bi bi-search" aria-hidden="true"></i><input type="search" placeholder="Search reason code, name, type, or description…" aria-label="Search cancellation reasons" value="@_searchTerm" @oninput="args => OnSearchInputValue(args.Value?.ToString())" /></div>
+        <div class="cnl-filter-grid">
+            <label><span>Reason Type</span><select class="form-select" @bind="_typeFilter" @bind:after="ApplyFilters"><option value="">All types</option>@foreach (var type in ReasonTypeOptions) { <option value="@type">@type</option> }</select></label>
+            <label><span>Status</span><select class="form-select" @bind="_statusFilter" @bind:after="ApplyFilters"><option value="">All statuses</option><option value="Active">Active</option><option value="Inactive">Inactive</option><option value="HighImpact">High impact</option><option value="NeedsReview">Needs review</option></select></label>
+            <label><span>Sort</span><select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters"><option value="importance">Importance</option><option value="order">Sort order</option><option value="name">Name</option><option value="code">Code</option><option value="type">Reason type</option><option value="created">Newest</option></select></label>
+        </div>
+        <button type="button" class="cnl-btn cnl-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+    </section>
+
+    <nav class="cnl-tabs" aria-label="Cancellation reason views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="cnl-tab @(_activeTab == tab.Key ? "cnl-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)"><i class="bi @tab.Icon" aria-hidden="true"></i><span>@tab.Label</span><strong>@TabCount(tab.Key)</strong></button>
+        }
+    </nav>
+
+    <main class="cnl-dashboard">
+        <section class="cnl-main-card">
+            <div class="cnl-card-header">
+                <div><span class="cnl-section-kicker">@ActiveViewTitle</span><h2>@FilteredReasons.Count() cancellation reasons</h2><p>Prioritized by enterprise importance: active workflow usage, reason category, compliance/payment impact, sort precedence, and completeness.</p></div>
+                <div class="cnl-card-actions">
+                    @if (_selectedIds.Count > 0)
+                    {
+                        <span class="cnl-sel-count">@_selectedIds.Count selected</span>
+                        <button type="button" class="cnl-btn cnl-btn--ghost" @onclick="() => ConfirmBulkToggle(true)"><i class="bi bi-check-circle" aria-hidden="true"></i> Activate</button>
+                        <button type="button" class="cnl-btn cnl-btn--ghost" @onclick="() => ConfirmBulkToggle(false)"><i class="bi bi-slash-circle" aria-hidden="true"></i> Deactivate</button>
+                        <button type="button" class="cnl-btn cnl-btn--danger-ghost" @onclick="ConfirmBulkDelete"><i class="bi bi-trash3" aria-hidden="true"></i> Remove</button>
+                    }
+                    <button type="button" class="cnl-btn cnl-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Prev</button>
+                    <span class="cnl-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="cnl-btn cnl-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="cnl-loading"><span class="cnl-spinner"></span> Loading cancellation reasons…</div>
+            }
+            else if (!FilteredReasons.Any())
+            {
+                <div class="cnl-empty"><i class="bi bi-x-circle" aria-hidden="true"></i><strong>No cancellation reasons found</strong><span>Adjust the active KPI, tab, search, or filters.</span></div>
+            }
+            else if (_activeTab == "types")
+            {
+                <div class="cnl-group-grid">
+                    @foreach (var group in TypeGroups)
+                    {
+                        <article class="cnl-group-card"><div class="cnl-group-icon"><i class="bi @ReasonTypeIcon(group.Name)" aria-hidden="true"></i></div><div class="cnl-group-meta"><h3>@group.Name</h3><p>@group.Count reasons • @group.Active active • @group.HighImpact high impact • @group.ReviewCount need review</p><div class="cnl-mini-bar"><span style="width:@group.Percent%"></span></div></div><button type="button" class="cnl-btn cnl-btn--ghost" @onclick="() => FilterByType(group.Name)">Open</button></article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="cnl-table-wrap">
+                    <table class="cnl-table">
+                        <thead><tr><th class="cnl-check-col"><input type="checkbox" checked="@AllPageSelected" @onchange="args => ToggleSelectAllPage(args.Value is bool value && value)" aria-label="Select all cancellation reasons on page" /></th><th>Importance</th><th>Cancellation Reason</th><th>Type</th><th>Status</th><th>Readiness</th><th>Order</th><th>Created</th><th class="cnl-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var reason in PagedReasons)
+                            {
+                                <tr class="@(_selected?.CancellationReasonId == reason.CancellationReasonId ? "cnl-row cnl-row--selected" : "cnl-row")" @onclick="() => SelectRow(reason)">
+                                    <td class="cnl-check-col" @onclick:stopPropagation="true"><input type="checkbox" checked="@IsSelected(reason)" @onchange="args => ToggleSelect(reason, args.Value is bool value && value)" aria-label="Select cancellation reason" /></td>
+                                    <td>@ImportanceBadge(reason)</td>
+                                    <td><div class="cnl-reason-cell"><div class="cnl-avatar" style="@AvatarStyle(reason.ReasonName)" aria-hidden="true">@Initials(reason.ReasonName)</div><div class="cnl-reason-meta"><button type="button" class="cnl-link-button" @onclick:stopPropagation="true" @onclick="() => OpenEdit(reason)">@reason.ReasonName</button><small>@Safe(reason.ReasonCode, "No code")</small></div></div></td>
+                                    <td><span class="cnl-pill @ReasonTypeBadgeClass(reason)"><i class="bi @ReasonTypeIcon(ReasonType(reason))" aria-hidden="true"></i>@ReasonType(reason)</span></td>
+                                    <td><span class="cnl-pill @(reason.IsActive ? "cnl-pill--green" : "cnl-pill--neutral")">@(reason.IsActive ? "Active" : "Inactive")</span></td>
+                                    <td><span class="cnl-pill @(NeedsReview(reason) ? "cnl-pill--amber" : "cnl-pill--green")">@(NeedsReview(reason) ? "Review" : "Ready")</span></td>
+                                    <td><span class="cnl-date">@reason.SortOrder</span></td>
+                                    <td><span class="cnl-date">@FormatDate(reason.CreatedDateUtc)</span></td>
+                                    <td class="cnl-actions-col" @onclick:stopPropagation="true"><button type="button" class="cnl-icon-btn" title="Edit cancellation reason" @onclick="() => OpenEdit(reason)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="cnl-icon-btn" title="@(reason.IsActive ? "Deactivate cancellation reason" : "Activate cancellation reason")" @onclick="() => ConfirmToggle(reason)"><i class="bi @(reason.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i></button><button type="button" class="cnl-icon-btn cnl-icon-btn--danger" title="Delete cancellation reason" @onclick="() => ConfirmDelete(reason)"><i class="bi bi-trash3" aria-hidden="true"></i></button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="cnl-side-panel" aria-label="Cancellation insights">
+            <section class="cnl-panel-card">
+                <span class="cnl-section-kicker">Selected reason</span>
+                @if (_selected is null)
+                {
+                    <div class="cnl-empty cnl-empty--compact"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a cancellation reason</strong><span>Open details, recommendations, and quick actions.</span></div>
+                }
+                else
+                {
+                    <div class="cnl-selected__title"><div class="cnl-avatar cnl-avatar--lg" style="@AvatarStyle(_selected.ReasonName)" aria-hidden="true">@Initials(_selected.ReasonName)</div><div><h3>@_selected.ReasonName</h3><span>@Safe(_selected.ReasonCode, "No code") • @ReasonType(_selected)</span></div></div>
+                    <div class="cnl-score-card @ImportanceClass(_selected)"><span>Importance score</span><strong>@ImportanceScore(_selected)</strong><small>@RecommendedAction(_selected)</small></div>
+                    <dl class="cnl-detail-list"><div><dt>Status</dt><dd>@(_selected.IsActive ? "Active" : "Inactive")</dd></div><div><dt>Reason type</dt><dd>@ReasonType(_selected)</dd></div><div><dt>High impact</dt><dd>@(IsHighImpactReason(_selected) ? "Yes" : "No")</dd></div><div><dt>Sort order</dt><dd>@_selected.SortOrder</dd></div><div><dt>Created</dt><dd>@FormatDate(_selected.CreatedDateUtc)</dd></div></dl>
+                    @if (!string.IsNullOrWhiteSpace(_selected.Description)) { <p class="cnl-description">@_selected.Description</p> }
+                    <div class="cnl-selected-actions"><button type="button" class="cnl-btn cnl-btn--primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="cnl-btn cnl-btn--ghost" @onclick="() => ConfirmToggle(_selected)"><i class="bi @(_selected.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i> @(_selected.IsActive ? "Deactivate" : "Activate")</button></div>
+                }
+            </section>
+            <section class="cnl-panel-card"><span class="cnl-section-kicker">Enterprise insights</span><div class="cnl-insight-list"><div class="cnl-insight"><i class="bi bi-credit-card" aria-hidden="true"></i><div><strong>Payment risk</strong><span>@PaymentInsight</span></div></div><div class="cnl-insight"><i class="bi bi-pie-chart" aria-hidden="true"></i><div><strong>Reason coverage</strong><span>@TypeInsight</span></div></div><div class="cnl-insight"><i class="bi bi-shield-check" aria-hidden="true"></i><div><strong>Workflow readiness</strong><span>@ReadinessInsight</span></div></div></div></section>
+        </aside>
+    </main>
+</div>
+
+@if (_showForm)
+{
+    <div class="cnl-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="cancellation-form-title">
+        <div class="cnl-modal">
+            <div class="cnl-modal__header"><i class="bi bi-x-circle" aria-hidden="true"></i><span id="cancellation-form-title">@(_editId.HasValue ? "Edit Cancellation Reason" : "Add Cancellation Reason")</span><button type="button" class="cnl-icon-btn cnl-icon-btn--light ms-auto" @onclick="CloseForm" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator /><div class="cnl-modal__body"><div class="cnl-validation-note"><i class="bi bi-info-circle" aria-hidden="true"></i><div><strong>Cancellation governance</strong><span>Reason codes and categories should support compliance, servicing, billing, carrier, and reporting workflows.</span></div></div><div class="cnl-form-grid">
+                <label class="cnl-field"><span>Reason Code <em>*</em></span><InputText @bind-Value="_form.ReasonCode" class="form-control" placeholder="e.g. NON_PAYMENT" /><ValidationMessage For="() => _form.ReasonCode" class="text-danger" /></label>
+                <label class="cnl-field"><span>Reason Name <em>*</em></span><InputText @bind-Value="_form.ReasonName" class="form-control" placeholder="Non-Payment of Premium" /><ValidationMessage For="() => _form.ReasonName" class="text-danger" /></label>
+                <label class="cnl-field"><span>Reason Type</span><InputSelect @bind-Value="_form.ReasonType" class="form-select"><option value="">Select type</option>@foreach (var type in _reasonTypes) { <option value="@type">@type</option> }</InputSelect><ValidationMessage For="() => _form.ReasonType" class="text-danger" /></label>
+                <label class="cnl-field"><span>Sort Order</span><InputNumber @bind-Value="_form.SortOrder" class="form-control" /><ValidationMessage For="() => _form.SortOrder" class="text-danger" /></label>
+                <label class="cnl-field cnl-field--wide"><span>Description</span><InputTextArea @bind-Value="_form.Description" class="form-control" rows="3" placeholder="Describe when this cancellation reason should be used." /><ValidationMessage For="() => _form.Description" class="text-danger" /></label>
+                @if (_editId.HasValue) { <label class="cnl-check-field"><InputCheckbox @bind-Value="_form.IsActive" /><span>Active</span></label> }
+            </div></div><div class="cnl-modal__footer"><button type="button" class="cnl-btn cnl-btn--ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="cnl-btn cnl-btn--primary" disabled="@_saving">@if (_saving) { <span class="cnl-spin-sm"></span> } @(_editId.HasValue ? "Save Changes" : "Create Reason")</button></div></EditForm>
+        </div>
+    </div>
+}
+
+@if (_confirmVisible)
+{
+    <div class="cnl-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="cancellation-confirm-title"><div class="cnl-confirm"><div class="cnl-confirm__body"><div class="cnl-confirm-icon cnl-confirm-icon--danger"><i class="bi @_confirmIcon" aria-hidden="true"></i></div><div><h3 id="cancellation-confirm-title">@_confirmTitle</h3><p>@_confirmMessage</p></div></div><div class="cnl-modal__footer"><button type="button" class="cnl-btn cnl-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button><button type="button" class="cnl-btn cnl-btn--danger" @onclick="ExecuteConfirmedAsync" disabled="@_saving">@if (_saving) { <span class="cnl-spin-sm"></span> } Confirm</button></div></div></div>
+}
+
+<div class="cnl-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="cnl-toast cnl-toast--@toast.Kind"><i class="bi @(toast.Kind == "success" ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill")" aria-hidden="true"></i><span>@toast.Message</span><button type="button" @onclick="() => DismissToast(toast.Id)" aria-label="Dismiss notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+    }
+</div>
+
 @code {
     Guid TenantAdminUserId { get; set; }
     Guid DevTenantId { get; set; }
     Guid DevUserId { get; set; }
-    private Guid _tenantId;
-    private Guid _tenantAdminUserId; Guid TenantId { get; set; } List<CancellationReasonDto> _items=[]; List<CancellationReasonDto> _filtered=[]; string _activeFilter=""; bool _loading,_saving,_showForm,_showDelete; string _search=string.Empty; string? _loadError; Guid? _editId; CancellationReasonDto? _deleteTarget; SfToast _toast=default!; ReasonFormModel _form=new(); protected override async Task OnInitializedAsync()
-    {
-        await ResolveCurrentUserContextAsync();Breadcrumbs.SetCrumbs(new("Home","/"),new("Policy Config",null),new("Cancellation Reasons",null)); await LoadAsync();} async Task LoadAsync(){_loading=true;_loadError=null;try{var r=await Api.SearchCancellationReasonsAsync(TenantId,_search,pageSize:200);_items=r?.Items.ToList()??[];ApplyFilter();}catch(Exception ex){_loadError=ex.Message;}finally{_loading=false;}} void SetFilter(string f){_activeFilter=f;ApplyFilter();} void ApplyFilter()=>_filtered=_activeFilter switch{"active"=>_items.Where(x=>x.IsActive).ToList(),"inactive"=>_items.Where(x=>!x.IsActive).ToList(),_=>[.._items]}; Task OnSearchAsync()=>LoadAsync(); void OnRowSelected(RowSelectEventArgs<CancellationReasonDto> args)=>OpenEdit(args.Data); void OpenCreate(){_editId=null;_form=new();_showForm=true;} void OpenEdit(CancellationReasonDto item){_editId=item.CancellationReasonId;_form=new(){ReasonCode=item.ReasonCode,ReasonName=item.ReasonName,ReasonType=item.ReasonType,Description=item.Description,SortOrder=item.SortOrder,IsActive=item.IsActive};_showForm=true;} async Task SaveAsync(){_saving=true;try{if(_editId.HasValue)await Api.UpdateCancellationReasonAsync(_editId.Value,new(_form.ReasonCode,_form.ReasonName,_form.ReasonType,_form.Description,_form.IsActive,_form.SortOrder));else await Api.CreateCancellationReasonAsync(new(TenantId,_form.ReasonCode,_form.ReasonName,_form.ReasonType,_form.Description,_form.SortOrder));_showForm=false;await _toast.ShowAsync(new(){Content="Saved successfully",CssClass="e-toast-success"});await LoadAsync();}catch(Exception ex){await _toast.ShowAsync(new(){Content=$"Save failed: {ex.Message}",CssClass="e-toast-danger"});}finally{_saving=false;}} void ConfirmDelete(CancellationReasonDto item){_deleteTarget=item;_showDelete=true;} async Task ExecuteDeleteAsync(){_saving=true;try{await Api.DeleteCancellationReasonAsync(_deleteTarget!.CancellationReasonId);_showDelete=false;await _toast.ShowAsync(new(){Content="Deleted successfully",CssClass="e-toast-success"});await LoadAsync();}catch(Exception ex){await _toast.ShowAsync(new(){Content=$"Delete failed: {ex.Message}",CssClass="e-toast-danger"});}finally{_saving=false;}} void ResetForm(){_form=new();_editId=null;} sealed class ReasonFormModel{[Required,StringLength(50)]public string ReasonCode{get;set;}=string.Empty;[Required,StringLength(100)]public string ReasonName{get;set;}=string.Empty;[StringLength(50)]public string? ReasonType{get;set;}[StringLength(500)]public string? Description{get;set;}[Range(0,9999)]public int SortOrder{get;set;}public bool IsActive{get;set;}=true;} 
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
-    }
-}
+    Guid TenantId { get; set; }
+    static readonly string[] _reasonTypes = ["Insured Request", "Non-Payment", "Underwriting", "Carrier Initiated"];
+    readonly List<DashboardTab> _tabs = [new("all", "All", "bi-x-circle"), new("active", "Active", "bi-check-circle"), new("nonpayment", "Non-Payment", "bi-credit-card"), new("underwriting", "Underwriting", "bi-shield-exclamation"), new("risk", "Needs Review", "bi-exclamation-octagon"), new("inactive", "Inactive", "bi-slash-circle"), new("types", "Types", "bi-pie-chart")];
+    List<CancellationReasonDto> _items = [];
+    HashSet<Guid> _selectedIds = [];
+    List<ToastItem> _toasts = [];
+    CancellationReasonDto? _selected;
+    ReasonFormModel _form = new();
+    Func<Task>? _confirmAction;
+    Guid? _editId;
+    string _activeTab = "all";
+    string _searchTerm = string.Empty;
+    string _typeFilter = string.Empty;
+    string _statusFilter = string.Empty;
+    string _sortMode = "importance";
+    string _confirmTitle = string.Empty;
+    string _confirmMessage = string.Empty;
+    string _confirmIcon = "bi-exclamation-triangle-fill";
+    string? _loadError;
+    bool _loading;
+    bool _saving;
+    bool _showForm;
+    bool _confirmVisible;
+    int _page = 1;
+    const int PageSize = 12;
 
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policy Config", null), new("Cancellation Reasons", null)); await LoadAsync(); }
+
+    IEnumerable<CancellationReasonDto> FilteredReasons
+    {
+        get
+        {
+            IEnumerable<CancellationReasonDto> query = _items;
+            query = _activeTab switch { "active" => query.Where(x => x.IsActive), "nonpayment" => query.Where(IsNonPaymentReason), "underwriting" => query.Where(IsUnderwritingReason), "risk" => query.Where(NeedsReview), "inactive" => query.Where(x => !x.IsActive), _ => query };
+            if (!string.IsNullOrWhiteSpace(_searchTerm)) query = query.Where(MatchesSearch);
+            if (!string.IsNullOrWhiteSpace(_typeFilter)) query = query.Where(x => string.Equals(ReasonType(x), _typeFilter, StringComparison.OrdinalIgnoreCase));
+            query = _statusFilter switch { "Active" => query.Where(x => x.IsActive), "Inactive" => query.Where(x => !x.IsActive), "HighImpact" => query.Where(IsHighImpactReason), "NeedsReview" => query.Where(NeedsReview), _ => query };
+            return _sortMode switch { "order" => query.OrderBy(x => x.SortOrder).ThenBy(x => x.ReasonName), "name" => query.OrderBy(x => x.ReasonName), "code" => query.OrderBy(x => x.ReasonCode), "type" => query.OrderBy(ReasonType).ThenBy(x => x.SortOrder).ThenBy(x => x.ReasonName), "created" => query.OrderByDescending(x => x.CreatedDateUtc), _ => query.OrderByDescending(ImportanceScore).ThenBy(x => x.SortOrder).ThenBy(x => x.ReasonName) };
+        }
+    }
+
+    List<CancellationReasonDto> PagedReasons => FilteredReasons.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+    int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredReasons.Count() / (double)PageSize));
+    bool AllPageSelected => PagedReasons.Count > 0 && PagedReasons.All(IsSelected);
+    bool HasFilters => !string.IsNullOrWhiteSpace(_searchTerm) || !string.IsNullOrWhiteSpace(_typeFilter) || !string.IsNullOrWhiteSpace(_statusFilter) || _activeTab != "all" || _sortMode != "importance";
+    string ActiveViewTitle => _tabs.FirstOrDefault(x => x.Key == _activeTab)?.Label ?? "All";
+    IEnumerable<string> ReasonTypeOptions => TypeGroups.Select(x => x.Name);
+    string PaymentInsight => _items.Any(IsNonPaymentReason) ? $"{_items.Count(IsNonPaymentReason)} non-payment reasons support billing cancellation workflows." : "No non-payment cancellation reasons were detected.";
+    string TypeInsight => _items.Count == 0 ? "Create cancellation reasons before enabling cancellation workflows." : $"{TypeGroups.Count} cancellation reason types are represented.";
+    string ReadinessInsight => _items.Count == 0 ? "Create cancellation reasons before enabling cancellation workflows." : $"{Math.Round(_items.Count(x => x.IsActive && !NeedsReview(x)) * 100m / _items.Count)}% of cancellation reasons are active with no review flags.";
+    List<TypeGroupSummary> TypeGroups => _items.GroupBy(ReasonType).Select(g => new TypeGroupSummary(g.Key, g.Count(), g.Count(x => x.IsActive), g.Count(IsHighImpactReason), g.Count(NeedsReview), _items.Count == 0 ? 0 : Math.Round(g.Count() * 100m / _items.Count, 0))).OrderByDescending(x => x.Count).ToList();
+
+    async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchCancellationReasonsAsync(TenantId, null, pageSize: 500); _items = result?.Items.ToList() ?? []; _selectedIds.RemoveWhere(id => _items.All(x => x.CancellationReasonId != id)); _selected = _selected is null ? _items.OrderByDescending(ImportanceScore).FirstOrDefault() : _items.FirstOrDefault(x => x.CancellationReasonId == _selected.CancellationReasonId) ?? _items.OrderByDescending(ImportanceScore).FirstOrDefault(); NormalizePage(); } catch (Exception ex) { _loadError = $"Failed to load cancellation reasons: {ex.Message}"; } finally { _loading = false; } }
+    Task RefreshAsync() => LoadAsync();
+    void ApplyFilters() { _page = 1; NormalizePage(); }
+    void OnSearchInputValue(string? value) { _searchTerm = value ?? string.Empty; ApplyFilters(); }
+    void SetDashboardFocus(string tab, string sort) { _activeTab = tab; _sortMode = sort; _page = 1; NormalizePage(); }
+    void SetActiveTab(string tab) { _activeTab = tab; _page = 1; NormalizePage(); }
+    void PreviousPage() { if (_page > 1) _page--; }
+    void NextPage() { if (_page < TotalPages) _page++; }
+    void NormalizePage() { if (_page > TotalPages) _page = TotalPages; }
+    void SelectRow(CancellationReasonDto item) => _selected = item;
+    bool IsSelected(CancellationReasonDto item) => _selectedIds.Contains(item.CancellationReasonId);
+    void ToggleSelect(CancellationReasonDto item, bool selected) { if (selected) _selectedIds.Add(item.CancellationReasonId); else _selectedIds.Remove(item.CancellationReasonId); _selected = item; }
+    void ToggleSelectAllPage(bool selected) { foreach (var item in PagedReasons) { if (selected) _selectedIds.Add(item.CancellationReasonId); else _selectedIds.Remove(item.CancellationReasonId); } }
+    void ClearFilters() { _searchTerm = string.Empty; _typeFilter = string.Empty; _statusFilter = string.Empty; _sortMode = "importance"; _activeTab = "all"; _page = 1; }
+    void FilterByType(string type) { _activeTab = "all"; _typeFilter = type; _sortMode = "importance"; _page = 1; }
+
+    void OpenCreate() { _editId = null; _form = new() { ReasonType = "Insured Request", IsActive = true, SortOrder = NextSortOrder() }; _showForm = true; }
+    void OpenEdit(CancellationReasonDto item) { _selected = item; _editId = item.CancellationReasonId; _form = new() { ReasonCode = item.ReasonCode, ReasonName = item.ReasonName, ReasonType = item.ReasonType, Description = item.Description, SortOrder = item.SortOrder, IsActive = item.IsActive }; _showForm = true; }
+    void CloseForm() { _showForm = false; ResetForm(); }
+    void ResetForm() { _form = new(); _editId = null; }
+
+    async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (_editId.HasValue) await Api.UpdateCancellationReasonAsync(_editId.Value, new(_form.ReasonCode.Trim(), _form.ReasonName.Trim(), NormalizeNullable(_form.ReasonType), NormalizeNullable(_form.Description), _form.IsActive, _form.SortOrder));
+            else await Api.CreateCancellationReasonAsync(new(TenantId, _form.ReasonCode.Trim(), _form.ReasonName.Trim(), NormalizeNullable(_form.ReasonType), NormalizeNullable(_form.Description), _form.SortOrder));
+            _showForm = false; ShowToast("success", _editId.HasValue ? "Cancellation reason updated successfully." : "Cancellation reason created successfully."); ResetForm(); await LoadAsync();
+        }
+        catch (Exception ex) { ShowToast("danger", $"Save failed: {ex.Message}"); }
+        finally { _saving = false; }
+    }
+
+    void ConfirmToggle(CancellationReasonDto item) { var enable = !item.IsActive; OpenConfirm(enable ? "Activate Cancellation Reason" : "Deactivate Cancellation Reason", $"Are you sure you want to {(enable ? "activate" : "deactivate")} {item.ReasonName}? This changes availability in cancellation workflows.", "bi-shield-exclamation", () => SetReasonActiveAsync(item, enable)); }
+    void ConfirmDelete(CancellationReasonDto item) => OpenConfirm("Delete Cancellation Reason", $"Are you sure you want to delete {item.ReasonName}? This action cannot be undone.", "bi-trash3-fill", () => DeleteReasonAsync(item));
+    void ConfirmBulkToggle(bool enable) => OpenConfirm(enable ? "Activate Selected Reasons" : "Deactivate Selected Reasons", $"Are you sure you want to {(enable ? "activate" : "deactivate")} {_selectedIds.Count} selected cancellation reason(s)?", "bi-shield-exclamation", () => BulkSetActiveAsync(enable));
+    void ConfirmBulkDelete() => OpenConfirm("Delete Selected Reasons", $"Are you sure you want to delete {_selectedIds.Count} selected cancellation reason(s)? This action cannot be undone.", "bi-trash3-fill", BulkDeleteAsync);
+    void OpenConfirm(string title, string message, string icon, Func<Task> action) { _confirmTitle = title; _confirmMessage = message; _confirmIcon = icon; _confirmAction = action; _confirmVisible = true; }
+    void CloseConfirm() { _confirmVisible = false; _confirmAction = null; }
+    async Task ExecuteConfirmedAsync() { if (_confirmAction is null) return; _saving = true; try { await _confirmAction(); _confirmVisible = false; _confirmAction = null; } finally { _saving = false; } }
+
+    async Task SetReasonActiveAsync(CancellationReasonDto item, bool active) { try { await Api.UpdateCancellationReasonAsync(item.CancellationReasonId, new(item.ReasonCode, item.ReasonName, item.ReasonType, item.Description, active, item.SortOrder)); ShowToast("success", active ? "Cancellation reason activated." : "Cancellation reason deactivated."); await LoadAsync(); } catch (Exception ex) { ShowToast("danger", $"Update failed: {ex.Message}"); } }
+    async Task DeleteReasonAsync(CancellationReasonDto item) { try { await Api.DeleteCancellationReasonAsync(item.CancellationReasonId); _selectedIds.Remove(item.CancellationReasonId); if (_selected?.CancellationReasonId == item.CancellationReasonId) _selected = null; ShowToast("success", "Cancellation reason deleted."); await LoadAsync(); } catch (Exception ex) { ShowToast("danger", $"Delete failed: {ex.Message}"); } }
+    async Task BulkSetActiveAsync(bool active) { var selected = _items.Where(x => _selectedIds.Contains(x.CancellationReasonId)).ToList(); var updated = 0; foreach (var item in selected) { try { await Api.UpdateCancellationReasonAsync(item.CancellationReasonId, new(item.ReasonCode, item.ReasonName, item.ReasonType, item.Description, active, item.SortOrder)); updated++; } catch (Exception ex) { ShowToast("danger", $"Update failed for {item.ReasonName}: {ex.Message}"); } } ShowToast("success", $"{updated} cancellation reason(s) {(active ? "activated" : "deactivated")}."); _selectedIds.Clear(); await LoadAsync(); }
+    async Task BulkDeleteAsync() { var selected = _items.Where(x => _selectedIds.Contains(x.CancellationReasonId)).ToList(); var deleted = 0; foreach (var item in selected) { try { await Api.DeleteCancellationReasonAsync(item.CancellationReasonId); deleted++; } catch (Exception ex) { ShowToast("danger", $"Delete failed for {item.ReasonName}: {ex.Message}"); } } ShowToast("success", $"{deleted} cancellation reason(s) deleted."); _selectedIds.Clear(); _selected = null; await LoadAsync(); }
+
+    RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string color) => @<button type="button" class="cnl-kpi-card cnl-kpi-card--@color @(_activeTab == key ? "cnl-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveTab(key)"><span class="cnl-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span><span class="cnl-kpi-body"><span class="cnl-kpi-label">@label</span><strong class="cnl-kpi-value">@value</strong><span class="cnl-kpi-sub">@subtitle</span></span></button>;
+    int TabCount(string key) => key switch { "active" => _items.Count(x => x.IsActive), "nonpayment" => _items.Count(IsNonPaymentReason), "underwriting" => _items.Count(IsUnderwritingReason), "risk" => _items.Count(NeedsReview), "inactive" => _items.Count(x => !x.IsActive), "types" => TypeGroups.Count, _ => _items.Count };
+    bool MatchesSearch(CancellationReasonDto item) { var term = _searchTerm.Trim(); return Contains(item.ReasonCode, term) || Contains(item.ReasonName, term) || Contains(item.ReasonType, term) || Contains(item.Description, term); }
+    static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    static string? NormalizeNullable(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    static string FormatDate(DateTime date) => date == default ? "—" : date.ToLocalTime().ToString("MMM d, yyyy");
+    static string ReasonType(CancellationReasonDto item) => Safe(item.ReasonType, "Unclassified");
+    static bool NeedsReview(CancellationReasonDto item) => !item.IsActive || string.IsNullOrWhiteSpace(item.ReasonCode) || string.IsNullOrWhiteSpace(item.ReasonName) || string.IsNullOrWhiteSpace(item.ReasonType) || string.IsNullOrWhiteSpace(item.Description);
+    static bool IsNonPaymentReason(CancellationReasonDto item) => Contains(item.ReasonType, "Non-Payment") || Contains(item.ReasonName, "Payment") || Contains(item.ReasonName, "Premium") || Contains(item.ReasonCode, "PAY");
+    static bool IsUnderwritingReason(CancellationReasonDto item) => Contains(item.ReasonType, "Underwriting") || Contains(item.ReasonType, "Carrier") || Contains(item.ReasonName, "Underwriting") || Contains(item.ReasonName, "Carrier") || Contains(item.ReasonCode, "UW");
+    static bool IsHighImpactReason(CancellationReasonDto item) => IsNonPaymentReason(item) || IsUnderwritingReason(item) || Contains(item.ReasonName, "Fraud") || Contains(item.ReasonName, "Material") || Contains(item.Description, "compliance");
+    static string ReasonTypeIcon(string type) => type switch { "Non-Payment" => "bi-credit-card", "Underwriting" => "bi-shield-exclamation", "Carrier Initiated" => "bi-building", "Insured Request" => "bi-person-check", "Unclassified" => "bi-question-circle", _ => "bi-tag" };
+    static string ReasonTypeBadgeClass(CancellationReasonDto item) => ReasonType(item) switch { "Non-Payment" => "cnl-pill--amber", "Underwriting" => "cnl-pill--purple", "Carrier Initiated" => "cnl-pill--red", "Insured Request" => "cnl-pill--cyan", _ => "cnl-pill--blue" };
+    static int ImportanceScore(CancellationReasonDto item) { var score = 30; if (item.IsActive) score += 14; else score += 18; if (IsHighImpactReason(item)) score += 22; if (IsNonPaymentReason(item)) score += 8; if (item.SortOrder <= 10) score += 6; if (!string.IsNullOrWhiteSpace(item.Description)) score += 6; else score += 10; return Math.Clamp(score, 0, 100); }
+    static string RecommendedAction(CancellationReasonDto item) { if (!item.IsActive) return "Review whether this cancellation reason should remain inactive."; if (string.IsNullOrWhiteSpace(item.ReasonType)) return "Assign a reason type for reporting and compliance routing."; if (string.IsNullOrWhiteSpace(item.Description)) return "Add usage guidance for cancellation and reporting teams."; if (IsHighImpactReason(item)) return "High-impact reason is ready for cancellation workflow governance."; return "Configuration is ready for cancellation workflows."; }
+    static string ImportanceClass(CancellationReasonDto item) => ImportanceScore(item) switch { >= 80 => "cnl-score-card--red", >= 65 => "cnl-score-card--amber", >= 45 => "cnl-score-card--cyan", _ => "cnl-score-card--green" };
+    static MarkupString ImportanceBadge(CancellationReasonDto item) { var score = ImportanceScore(item); var css = score switch { >= 80 => "red", >= 65 => "amber", >= 45 => "cyan", _ => "green" }; return new($"<span class=\"cnl-risk-badge cnl-risk-badge--{css}\">{score}</span>"); }
+    static string Initials(string? value) { var parts = (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); return parts.Length switch { 0 => "CR", 1 => parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant(), _ => string.Concat(parts.Take(2).Select(x => char.ToUpperInvariant(x[0]))) }; }
+    static string AvatarStyle(string? value) { var hash = Math.Abs((value ?? "CancellationReason").GetHashCode()); var hue = hash % 360; return $"background:linear-gradient(135deg,hsl({hue},78%,48%),hsl({(hue + 35) % 360},82%,36%));"; }
+    int NextSortOrder() => _items.Count == 0 ? 10 : _items.Max(x => x.SortOrder) + 10;
+    void ShowToast(string kind, string message) { _toasts.Insert(0, new(Guid.NewGuid(), kind, message)); if (_toasts.Count > 4) _toasts.RemoveRange(4, _toasts.Count - 4); }
+    void DismissToast(Guid id) => _toasts.RemoveAll(x => x.Id == id);
+    async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); TenantId = context.TenantId; TenantAdminUserId = context.UserId; DevTenantId = context.TenantId; DevUserId = context.UserId; }
+    sealed class ReasonFormModel { [Required, StringLength(50)] public string ReasonCode { get; set; } = string.Empty; [Required, StringLength(100)] public string ReasonName { get; set; } = string.Empty; [StringLength(50)] public string? ReasonType { get; set; } [StringLength(500)] public string? Description { get; set; } [Range(0, 9999)] public int SortOrder { get; set; } public bool IsActive { get; set; } = true; }
+    sealed record DashboardTab(string Key, string Label, string Icon);
+    sealed record TypeGroupSummary(string Name, int Count, int Active, int HighImpact, int ReviewCount, decimal Percent);
+    sealed record ToastItem(Guid Id, string Kind, string Message);
+}

@@ -1,235 +1,650 @@
-﻿@page "/tenant/crm/dup-rules"
+@page "/tenant/crm/dup-rules"
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.CrmConfig
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Duplicate Rules â€” CRM Configuration</PageTitle>
+<PageTitle>Duplicate Rules Command Center — AMS</PageTitle>
 
-<AppPageHeader Title="Duplicate Detection Rules"
-               Subtitle="Define rules to identify and handle duplicate records"
-               Icon="bi-copy">
-    <Actions>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Rule
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<div class="pc-kpi-strip">
-    <div class="pc-kpi-card @(_activeFilter == null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)' title="Show all">
-        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-copy" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total Rules</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "active" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("active")' title="Filter: Active">
-        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-shield-check" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.IsActive)</div><div class="pc-kpi-label">Active</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "block" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("block")' title="Filter: Block Rules">
-        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-x-octagon" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.ActionOnMatch == "Block")</div><div class="pc-kpi-label">Block Rules</div></div>
-    </div>
-</div>
-
-<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search rule nameâ€¦" />
-
-@if (_loadError is not null)
-{
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
-    </div>
-}
-
-<div class="um-grid-card">
-    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loadingâ€¦</span></div> }
-    <SfGrid TValue="DuplicateRuleDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-        <GridEvents TValue="DuplicateRuleDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="25" />
-        <GridColumns>
-            <GridColumn Field="RuleName" HeaderText="Rule Name" Width="220" />
-            <GridColumn Field="EntityType" HeaderText="Entity" Width="110" />
-            <GridColumn Field="MatchFields" HeaderText="Match Fields" Width="200" />
-            <GridColumn Field="MatchThreshold" HeaderText="Threshold %" Width="120" TextAlign="TextAlign.Center" />
-            <GridColumn Field="ActionOnMatch" HeaderText="Action" Width="110">
-                <Template>
-                    @{ var r = (DuplicateRuleDto)context; }
-                    <span class="um-badge @(r.ActionOnMatch == "Block" ? "um-badge-danger" : r.ActionOnMatch == "Merge" ? "um-badge-info" : "um-badge-warning")">@r.ActionOnMatch</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="IsActive" HeaderText="Status" Width="100" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (DuplicateRuleDto)context; }
-                    <span class="um-badge @(r.IsActive ? "um-badge-success" : "um-badge-neutral")">@(r.IsActive ? "Active" : "Off")</span>
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="" Width="100" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (DuplicateRuleDto)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true"><i class="bi bi-pencil"></i></button>
-                    <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
-
-<SfDialog @bind-Visible="_showForm" Width="560px" IsModal="true" ShowCloseIcon="false">
-    <DialogEvents Closed="ResetForm" />
-    <DialogContent>
-        <div class="um-modal-header">
-            <i class="bi bi-copy"></i>
-            <span>@(_editId.HasValue ? "Edit Duplicate Rule" : "Add Duplicate Rule")</span>
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button>
-        </div>
-        <EditForm Model="_form" OnValidSubmit="SaveAsync">
-            <DataAnnotationsValidator />
-            <div class="um-modal-body">
-                <div class="um-form-grid">
-                    <div class="um-field">
-                        <label>Rule Name <span class="text-danger">*</span></label>
-                        <InputText @bind-Value="_form.RuleName" class="um-input" />
-                    </div>
-                    <div class="um-field">
-                        <label>Entity Type <span class="text-danger">*</span></label>
-                        <SfDropDownList TValue="string" TItem="string" @bind-Value="_form.EntityType"
-                            DataSource="@(new[]{"Lead","Account","Contact","Opportunity"})" Placeholder="Select entity" />
-                    </div>
-                    <div class="um-field">
-                        <label>Match Fields</label>
-                        <InputText @bind-Value="_form.MatchFields" class="um-input" placeholder="e.g. Email or FirstName,LastName,Phone" />
-                    </div>
-                    <div class="um-field">
-                        <label>Match Threshold %</label>
-                        <InputNumber @bind-Value="_form.MatchThreshold" class="um-input" min="0" max="100" />
-                    </div>
-                    <div class="um-field">
-                        <label>Action on Match</label>
-                        <SfDropDownList TValue="string" TItem="string" @bind-Value="_form.ActionOnMatch"
-                            DataSource="@(new[]{"Flag","Block","Merge"})" Placeholder="Select action" />
-                    </div>
-                    <div class="um-field">
-                        <label>Description</label>
-                        <InputTextArea @bind-Value="_form.Description" class="um-input" rows="2" />
-                    </div>
-                    <div class="um-field um-field--checkbox">
-                        <label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label>
+<div class="dup-page">
+    <section class="dup-hero">
+        <div class="dup-hero__content">
+            <div class="dup-hero-left">
+                <span class="dup-hero-icon"><i class="bi bi-copy" aria-hidden="true"></i></span>
+                <div class="dup-hero-title">
+                    <div class="dup-hero__eyebrow">Enterprise CRM data quality</div>
+                    <div class="dup-title-row">
+                        <h1>Duplicate Rules Command Center</h1>
+                        <div class="dup-hero__meta">
+                            <span><i class="bi bi-copy" aria-hidden="true"></i>@_items.Count rules</span>
+                            <span><i class="bi bi-shield-check" aria-hidden="true"></i>@_items.Count(r => r.IsActive) active</span>
+                            <span><i class="bi bi-x-octagon" aria-hidden="true"></i>@BlockCount block</span>
+                            <span><i class="bi bi-exclamation-octagon" aria-hidden="true"></i>@RiskCount risks</span>
+                        </div>
                     </div>
                 </div>
             </div>
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
-                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button>
-            </div>
-        </EditForm>
-    </DialogContent>
-</SfDialog>
-
-<SfDialog @bind-Visible="_showDelete" Width="440px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
-        <div class="um-confirm-dialog">
-            <div class="um-confirm-icon um-confirm-icon--danger">
-                <i class="bi bi-trash3-fill"></i>
-            </div>
-            <div class="um-confirm-message">
-                <h6>Delete Duplicate Rule?</h6>
-                <p>You are about to delete <strong>@_deleteTarget?.RuleName</strong>. This action cannot be undone.</p>
-            </div>
-            <div class="um-modal-footer" style="width:100%">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
-                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
-            </div>
+            <p>Govern duplicate detection across leads, accounts, contacts, and opportunities with enterprise prioritization, action coverage, threshold quality, and workflow controls.</p>
         </div>
-    </DialogContent>
-</SfDialog>
+        <div class="dup-hero__actions">
+            <button type="button" class="dup-btn dup-btn--light" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "dup-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="dup-btn dup-btn--primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Rule</button>
+        </div>
+    </section>
 
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger dup-alert" style="border-left: 4px solid #dc3545; animation: dup-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span>@_loadError</span>
+        </div>
+    }
+
+    <section class="dup-kpi-strip" aria-label="Duplicate rule KPI filters">
+        @KpiCard("all", "Total Rules", _items.Count.ToString("N0", CultureInfo.CurrentCulture), "All duplicate detection rules", "bi-copy", "blue")
+        @KpiCard("active", "Active", _items.Count(r => r.IsActive).ToString("N0", CultureInfo.CurrentCulture), "Rules currently enforcing detection", "bi-shield-check", "green")
+        @KpiCard("block", "Block", BlockCount.ToString("N0", CultureInfo.CurrentCulture), "Rules that prevent duplicates", "bi-x-octagon", "red")
+        @KpiCard("high", "High Threshold", HighThresholdCount.ToString("N0", CultureInfo.CurrentCulture), "Rules at 90%+ match confidence", "bi-speedometer2", "purple")
+        @KpiCard("risk", "Needs Review", RiskCount.ToString("N0", CultureInfo.CurrentCulture), "Inactive, weak, or incomplete rules", "bi-exclamation-octagon", "amber")
+        @KpiCard("entities", "Entities", EntityGroups.Count.ToString("N0", CultureInfo.CurrentCulture), "Entity types protected", "bi-diagram-3", "cyan")
+    </section>
+
+    <section class="dup-workflows" aria-label="Duplicate rule workflows">
+        <button type="button" class="dup-workflow" @onclick='() => SetDashboardFocus("risk", "importance")'><span class="dup-workflow-icon"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></span><span class="dup-workflow-meta"><strong>Data quality review</strong><span>Rank rules by enterprise importance</span></span></button>
+        <button type="button" class="dup-workflow" @onclick='() => SetDashboardFocus("block", "threshold")'><span class="dup-workflow-icon"><i class="bi bi-x-octagon" aria-hidden="true"></i></span><span class="dup-workflow-meta"><strong>Blocking controls</strong><span>Inspect rules that stop duplicates</span></span></button>
+        <button type="button" class="dup-workflow" @onclick='() => SetDashboardFocus("merge", "importance")'><span class="dup-workflow-icon"><i class="bi bi-intersect" aria-hidden="true"></i></span><span class="dup-workflow-meta"><strong>Merge automation</strong><span>Review merge action coverage</span></span></button>
+        <button type="button" class="dup-workflow" @onclick='() => SetDashboardFocus("entities", "entity")'><span class="dup-workflow-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span><span class="dup-workflow-meta"><strong>Entity coverage</strong><span>See protection by entity</span></span></button>
+        <button type="button" class="dup-workflow" @onclick='() => SetDashboardFocus("inactive", "risk")'><span class="dup-workflow-icon"><i class="bi bi-slash-circle" aria-hidden="true"></i></span><span class="dup-workflow-meta"><strong>Inactive cleanup</strong><span>Find disabled or incomplete rules</span></span></button>
+    </section>
+
+    <section class="dup-filter-panel" aria-label="Duplicate rule filters">
+        <div class="dup-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input type="search" placeholder="Search rule name, entity, fields, action, or description…" aria-label="Search duplicate rules" value="@_search" @oninput="OnSearchInput" />
+        </div>
+        <div class="dup-filter-grid">
+            <label><span>Entity</span><select class="form-select" @bind="_entityFilter" @bind:after="ApplyFilters"><option value="">All entities</option>@foreach (var entity in EntityOptions) { <option value="@entity">@entity</option> }</select></label>
+            <label><span>Action</span><select class="form-select" @bind="_actionFilter" @bind:after="ApplyFilters"><option value="">All actions</option>@foreach (var action in ActionOptions) { <option value="@action">@action</option> }</select></label>
+            <label><span>Status</span><select class="form-select" @bind="_statusFilter" @bind:after="ApplyFilters"><option value="">All statuses</option><option value="Active">Active</option><option value="Inactive">Inactive</option></select></label>
+            <label><span>Sort</span><select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters"><option value="importance">Importance</option><option value="threshold">Threshold</option><option value="entity">Entity</option><option value="name">Name</option><option value="created">Newest</option><option value="risk">Risk</option></select></label>
+        </div>
+        <button type="button" class="dup-btn dup-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+    </section>
+
+    <nav class="dup-tabs" aria-label="Duplicate rule views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="dup-tab @(_activeTab == tab.Key ? "dup-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </nav>
+
+    <main class="dup-dashboard">
+        <section class="dup-main-card">
+            <div class="dup-card-header">
+                <div>
+                    <span class="dup-section-kicker">@ActiveViewTitle</span>
+                    <h2>@FilteredRules.Count() rules</h2>
+                    <p>Ranked by importance: active blocking controls, threshold strength, entity coverage, match-field completeness, action type, and review risk.</p>
+                </div>
+                <div class="dup-card-actions">
+                    @if (_selectedRules.Count > 0)
+                    {
+                        <span class="dup-sel-count">@_selectedRules.Count selected</span>
+                        <button type="button" class="dup-btn dup-btn--ghost" @onclick="() => ConfirmBulkSetActive(true)"><i class="bi bi-check-circle" aria-hidden="true"></i> Activate</button>
+                        <button type="button" class="dup-btn dup-btn--ghost" @onclick="() => ConfirmBulkSetActive(false)"><i class="bi bi-slash-circle" aria-hidden="true"></i> Deactivate</button>
+                        <button type="button" class="dup-btn dup-btn--danger-ghost" @onclick="ConfirmBulkDelete"><i class="bi bi-trash3" aria-hidden="true"></i> Remove</button>
+                    }
+                    <button type="button" class="dup-btn dup-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Prev</button>
+                    <span class="dup-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="dup-btn dup-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="dup-loading"><span class="dup-spinner"></span> Loading duplicate rules…</div>
+            }
+            else if (!FilteredRules.Any())
+            {
+                <div class="dup-empty"><i class="bi bi-copy" aria-hidden="true"></i><strong>No duplicate rules found</strong><span>Adjust the active tab, KPI, search, or filters.</span></div>
+            }
+            else if (_activeTab == "entities")
+            {
+                <div class="dup-entity-grid">
+                    @foreach (var group in EntityGroups)
+                    {
+                        <article class="dup-entity-card">
+                            <div class="dup-entity-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></div>
+                            <div class="dup-entity-meta">
+                                <h3>@group.Name</h3>
+                                <p>@group.Count rules • @group.Block block • @group.Risk needs review</p>
+                                <div class="dup-mini-bar"><span style="width:@group.Percent%"></span></div>
+                            </div>
+                            <button type="button" class="dup-btn dup-btn--ghost" @onclick="() => FilterByEntity(group.Name)">Open</button>
+                        </article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="dup-table-wrap">
+                    <table class="dup-table">
+                        <thead>
+                            <tr>
+                                <th class="dup-check-col"><input type="checkbox" checked="@AllPageSelected" @onchange="ToggleSelectAllPage" aria-label="Select all duplicate rules on page" /></th>
+                                <th>Importance</th>
+                                <th>Rule</th>
+                                <th>Entity</th>
+                                <th>Match Fields</th>
+                                <th>Threshold</th>
+                                <th>Action</th>
+                                <th>Status</th>
+                                <th>Created</th>
+                                <th class="dup-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var rule in PagedRules)
+                            {
+                                <tr class="@(_selected?.DuplicateRuleId == rule.DuplicateRuleId ? "dup-row dup-row--selected" : "dup-row")" @onclick="() => SelectRow(rule)">
+                                    <td class="dup-check-col" @onclick:stopPropagation="true"><input type="checkbox" checked="@IsSelected(rule)" @onchange="() => ToggleSelect(rule)" aria-label="Select duplicate rule" /></td>
+                                    <td>@ImportanceBadge(rule)</td>
+                                    <td><button type="button" class="dup-link-button" @onclick:stopPropagation="true" @onclick="() => OpenEdit(rule)">@rule.RuleName</button><small>@Safe(rule.Description, "No description")</small></td>
+                                    <td><span class="dup-pill dup-pill--blue">@rule.EntityType</span></td>
+                                    <td><span class="dup-fields" title="@rule.MatchFields">@Safe(rule.MatchFields, "Missing fields")</span></td>
+                                    <td><div class="dup-threshold"><span style="width:@ThresholdWidth(rule)"></span></div><strong>@rule.MatchThreshold%</strong></td>
+                                    <td>@ActionBadge(rule)</td>
+                                    <td>@StatusBadge(rule)</td>
+                                    <td><span class="dup-date">@rule.CreatedDateUtc.ToString("MMM d, yyyy", CultureInfo.CurrentCulture)</span></td>
+                                    <td class="dup-actions-col">
+                                        <button type="button" class="dup-icon-btn" title="Open action menu" @onclick:stopPropagation="true" @onclick="() => ToggleActionMenu(rule)"><i class="bi bi-three-dots-vertical" aria-hidden="true"></i></button>
+                                        @if (_openActionMenuFor == rule.DuplicateRuleId)
+                                        {
+                                            <div class="dup-menu" role="menu" @onclick:stopPropagation="true">
+                                                <div class="dup-menu__summary"><strong>@rule.RuleName</strong><span>@rule.EntityType duplicate rule</span></div>
+                                                <button type="button" class="dup-menu-item" role="menuitem" @onclick="() => SelectRow(rule)"><i class="bi bi-eye" aria-hidden="true"></i><span>Inspect rule</span></button>
+                                                <button type="button" class="dup-menu-item" role="menuitem" @onclick="() => OpenEdit(rule)"><i class="bi bi-pencil" aria-hidden="true"></i><span>Edit rule</span></button>
+                                                <button type="button" class="dup-menu-item" role="menuitem" @onclick="() => ConfirmToggleActive(rule)"><i class="bi @(rule.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i><span>@(rule.IsActive ? "Deactivate" : "Activate")</span></button>
+                                                <button type="button" class="dup-menu-item dup-menu-item--danger" role="menuitem" @onclick="() => ConfirmDelete(rule)"><i class="bi bi-trash3" aria-hidden="true"></i><span>Remove rule</span></button>
+                                            </div>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="dup-side-panel">
+            <section class="dup-panel-card">
+                <span class="dup-section-kicker">Selected rule</span>
+                @if (_selected is null)
+                {
+                    <div class="dup-empty dup-empty--compact"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a row</strong><span>Choose a rule to inspect quality and actions.</span></div>
+                }
+                else
+                {
+                    <div class="dup-selected">
+                        <div class="dup-selected__title"><div class="dup-rule-icon"><i class="bi bi-copy" aria-hidden="true"></i></div><div><h3>@_selected.RuleName</h3><span>@_selected.EntityType duplicate rule</span></div></div>
+                        <div class="dup-score-card dup-score-card--@ImportanceTone(_selected)"><span>Importance score</span><strong>@ImportanceScore(_selected)</strong><small>@ImportanceLevel(_selected)</small></div>
+                        <dl class="dup-detail-list">
+                            <div><dt>Entity</dt><dd>@_selected.EntityType</dd></div>
+                            <div><dt>Action</dt><dd>@Safe(_selected.ActionOnMatch, "Flag")</dd></div>
+                            <div><dt>Threshold</dt><dd>@_selected.MatchThreshold%</dd></div>
+                            <div><dt>Status</dt><dd>@(_selected.IsActive ? "Active" : "Inactive")</dd></div>
+                            <div><dt>Match fields</dt><dd>@Safe(_selected.MatchFields, "Missing")</dd></div>
+                            <div><dt>Created</dt><dd>@_selected.CreatedDateUtc.ToString("MMM d, yyyy", CultureInfo.CurrentCulture)</dd></div>
+                        </dl>
+                        <div class="dup-note-card"><strong>Recommended action</strong><p>@RecommendedAction(_selected)</p></div>
+                        <div class="dup-selected-actions"><button type="button" class="dup-btn dup-btn--primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="dup-btn dup-btn--ghost" @onclick="() => ConfirmToggleActive(_selected)"><i class="bi @( _selected.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i> @( _selected.IsActive ? "Deactivate" : "Activate")</button><button type="button" class="dup-btn dup-btn--danger-ghost" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash3" aria-hidden="true"></i> Remove</button></div>
+                    </div>
+                }
+            </section>
+
+            <section class="dup-panel-card">
+                <span class="dup-section-kicker">Duplicate intelligence</span>
+                <div class="dup-insight-list">
+                    @foreach (var insight in Insights)
+                    {
+                        <div class="dup-insight"><i class="bi @insight.Icon" aria-hidden="true"></i><div><strong>@insight.Title</strong><span>@insight.Description</span></div></div>
+                    }
+                </div>
+            </section>
+        </aside>
+    </main>
+</div>
+
+@if (_showForm)
+{
+    <div class="dup-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="dup-modal" role="dialog" aria-modal="true" aria-labelledby="dup-form-title" @onclick:stopPropagation="true">
+            <div class="dup-modal__header"><i class="bi @(_editId.HasValue ? "bi-pencil-square" : "bi-plus-circle")" aria-hidden="true"></i><span id="dup-form-title">@(_editId.HasValue ? "Edit Duplicate Rule" : "Add Duplicate Rule")</span><button type="button" class="dup-icon-btn dup-icon-btn--light ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="dup-modal__body">
+                    <div class="dup-validation-note"><i class="bi bi-shield-check" aria-hidden="true"></i><div><strong>Enterprise validations enabled</strong><span>Required rule name, entity, threshold, match fields, action, and description length checks are enforced before save.</span></div></div>
+                    <div class="dup-form-grid">
+                        <label class="dup-field"><span>Rule Name <em>*</em></span><InputText @bind-Value="_form.RuleName" class="form-control" placeholder="Lead email and phone duplicate" /><ValidationMessage For="() => _form.RuleName" class="text-danger" /></label>
+                        <label class="dup-field"><span>Entity Type <em>*</em></span><InputSelect @bind-Value="_form.EntityType" class="form-select"><option value="">Select entity…</option>@foreach (var entity in _entityTypes) { <option value="@entity">@entity</option> }</InputSelect><ValidationMessage For="() => _form.EntityType" class="text-danger" /></label>
+                        <label class="dup-field"><span>Match Fields <em>*</em></span><InputText @bind-Value="_form.MatchFields" class="form-control" placeholder="Email,Phone" /><ValidationMessage For="() => _form.MatchFields" class="text-danger" /></label>
+                        <label class="dup-field"><span>Match Threshold %</span><InputNumber @bind-Value="_form.MatchThreshold" class="form-control" min="0" max="100" /><ValidationMessage For="() => _form.MatchThreshold" class="text-danger" /></label>
+                        <label class="dup-field"><span>Action on Match <em>*</em></span><InputSelect @bind-Value="_form.ActionOnMatch" class="form-select"><option value="">Select action…</option>@foreach (var action in _actions) { <option value="@action">@action</option> }</InputSelect><ValidationMessage For="() => _form.ActionOnMatch" class="text-danger" /></label>
+                        <label class="dup-field"><span>Status</span><span class="dup-switch"><InputCheckbox @bind-Value="_form.IsActive" /> Active rule</span></label>
+                        <label class="dup-field dup-field--wide"><span>Description</span><InputTextArea @bind-Value="_form.Description" class="form-control" rows="3" placeholder="Describe how this rule protects CRM data quality." /><ValidationMessage For="() => _form.Description" class="text-danger" /></label>
+                    </div>
+                    @if (!string.IsNullOrEmpty(_formError))
+                    {
+                        <div class="alert alert-danger dup-form-alert" style="border-left: 4px solid #dc3545; animation: dup-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_formError</div>
+                    }
+                </div>
+                <div class="dup-modal__footer"><button type="button" class="dup-btn dup-btn--ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="dup-btn dup-btn--primary" disabled="@_saving">@if (_saving) { <span class="dup-spin-sm" aria-hidden="true"></span> } @(_editId.HasValue ? "Save Changes" : "Create Rule")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showConfirm)
+{
+    <div class="dup-modal-backdrop" role="presentation" @onclick="CloseConfirm">
+        <div class="dup-confirm" role="dialog" aria-modal="true" aria-labelledby="dup-confirm-title" @onclick:stopPropagation="true">
+            <div class="dup-modal__header"><i class="bi @_confirmIcon" aria-hidden="true"></i><span>Confirm action</span><button type="button" class="dup-icon-btn dup-icon-btn--light ms-auto" @onclick="CloseConfirm" disabled="@_saving"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <div class="dup-confirm__body"><div class="@(_confirmDanger ? "dup-confirm-icon dup-confirm-icon--danger" : "dup-confirm-icon")"><i class="bi @_confirmIcon" aria-hidden="true"></i></div><div><h3 id="dup-confirm-title">@_confirmTitle</h3><p>@_confirmMessage</p></div></div>
+            <div class="dup-modal__footer"><button type="button" class="dup-btn dup-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button><button type="button" class="@(_confirmDanger ? "dup-btn dup-btn--danger" : "dup-btn dup-btn--primary")" @onclick="ExecuteConfirmedActionAsync" disabled="@_saving">@if (_saving) { <span class="dup-spin-sm" aria-hidden="true"></span> } Confirm</button></div>
+        </div>
+    </div>
+}
+
+<div class="dup-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="dup-toast @toast.CssClass"><i class="bi @(toast.CssClass.Contains("danger") ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i><span>@toast.Message</span><button type="button" @onclick="() => DismissToast(toast.Id)"><i class="bi bi-x" aria-hidden="true"></i></button></div>
+    }
+</div>
 
 @code {
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantId;
-    private Guid _tenantAdminUserId;
-    Guid TenantId { get; set; }
-    List<DuplicateRuleDto> _items = [], _filtered = [];
-    string? _activeFilter;
-    bool _loading, _saving;
-    string _search = string.Empty;
-    string? _loadError;
-    bool _showForm, _showDelete;
-    Guid? _editId;
-    DuplicateRuleDto? _deleteTarget;
-    SfToast _toast = default!;
-    DupRuleFormModel _form = new();
+    private Guid TenantId { get; set; }
+    private Guid TenantAdminUserId { get; set; }
+    private static readonly string[] _entityTypes = ["Lead", "Account", "Contact", "Opportunity"];
+    private static readonly string[] _actions = ["Flag", "Block", "Merge"];
+    private readonly TabDef[] _tabs = [new("all", "All", "bi-copy"), new("risk", "Needs Review", "bi-exclamation-octagon"), new("block", "Block", "bi-x-octagon"), new("merge", "Merge", "bi-intersect"), new("inactive", "Inactive", "bi-slash-circle"), new("entities", "By Entity", "bi-diagram-3")];
+    private readonly InsightDef[] _baselineInsights = [new("Block high-confidence duplicates", "Use Block for critical entities when threshold and match fields are strong.", "bi-x-octagon"), new("Complete match fields", "Rules without match fields cannot provide reliable duplicate detection.", "bi-ui-checks"), new("Review inactive controls", "Inactive duplicate rules reduce data quality protection across CRM workflows.", "bi-shield-exclamation")];
+
+    private List<DuplicateRuleDto> _items = [];
+    private readonly List<DuplicateRuleDto> _selectedRules = [];
+    private DuplicateRuleDto? _selected;
+    private bool _loading = true;
+    private bool _saving;
+    private string? _loadError;
+    private string _activeTab = "all";
+    private string _activeKpi = "all";
+    private string _search = string.Empty;
+    private string _entityFilter = string.Empty;
+    private string _actionFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _sortMode = "importance";
+    private int _page = 1;
+    private const int PageSize = 12;
+    private Guid? _openActionMenuFor;
+
+    private bool _showForm;
+    private string _formError = string.Empty;
+    private Guid? _editId;
+    private DupRuleFormModel _form = new();
+
+    private bool _showConfirm;
+    private bool _confirmDanger;
+    private string _confirmTitle = string.Empty;
+    private string _confirmMessage = string.Empty;
+    private string _confirmIcon = "bi-question-circle";
+    private Func<Task>? _confirmedAction;
+    private readonly List<ToastMessage> _toasts = [];
 
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM Config", null), new("Duplicate Rules", null));
+        var context = await CurrentUser.RequireAsync();
+        TenantId = context.TenantId;
+        TenantAdminUserId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM Configuration", null), new("Duplicate Rules", null));
         await LoadAsync();
     }
 
-    async Task LoadAsync()
+    private async Task LoadAsync()
     {
         _loading = true;
         _loadError = null;
-        try { var r = await Api.SearchDuplicateRulesAsync(TenantId, _search, pageSize: 200); _items = r?.Items.ToList() ?? []; ApplyFilter(); }
-        catch (Exception ex) { _loadError = $"Failed to load duplicate rules: {ex.Message}"; }
-        finally { _loading = false; }
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchDuplicateRulesAsync(TenantId, _search.Trim(), pageSize: 500);
+            _items = result?.Items.ToList() ?? [];
+            _selected = _selected is null ? OrderedRules(_items).FirstOrDefault() : _items.FirstOrDefault(r => r.DuplicateRuleId == _selected.DuplicateRuleId) ?? OrderedRules(_items).FirstOrDefault();
+            _selectedRules.RemoveAll(selected => _items.All(r => r.DuplicateRuleId != selected.DuplicateRuleId));
+            _page = 1;
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load duplicate rules: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "dup-toast--danger");
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
     }
 
-    Task OnSearchAsync() => LoadAsync();
-    void ApplyFilter() => _filtered = _activeFilter switch
+    private async Task OnSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
     {
-        "active" => _items.Where(x => x.IsActive).ToList(),
-        "block"  => _items.Where(x => x.ActionOnMatch == "Block").ToList(),
-        _        => [.. _items]
+        _search = e.Value?.ToString() ?? string.Empty;
+        await LoadAsync();
+    }
+
+    private void SetActiveKpi(string key)
+    {
+        _activeKpi = _activeKpi == key ? "all" : key;
+        _activeTab = _activeKpi switch { "risk" => "risk", "block" => "block", "entities" => "entities", _ => "all" };
+        _page = 1;
+    }
+
+    private void SetActiveTab(string key)
+    {
+        _activeTab = key;
+        _activeKpi = key is "risk" or "block" or "entities" ? key : "all";
+        _page = 1;
+    }
+
+    private void SetDashboardFocus(string tab, string sortMode)
+    {
+        _activeTab = tab;
+        _activeKpi = tab is "risk" or "block" or "entities" ? tab : "all";
+        _sortMode = sortMode;
+        _page = 1;
+    }
+
+    private void ApplyFilters() => _page = 1;
+
+    private void ClearFilters()
+    {
+        _entityFilter = string.Empty;
+        _actionFilter = string.Empty;
+        _statusFilter = string.Empty;
+        _sortMode = "importance";
+        _activeTab = "all";
+        _activeKpi = "all";
+        _page = 1;
+    }
+
+    private bool HasFilters => !string.IsNullOrEmpty(_entityFilter) || !string.IsNullOrEmpty(_actionFilter) || !string.IsNullOrEmpty(_statusFilter) || _sortMode != "importance" || _activeTab != "all";
+
+    private IEnumerable<DuplicateRuleDto> TabFiltered => _activeTab switch
+    {
+        "risk" => _items.Where(IsRisk),
+        "block" => _items.Where(r => IsAction(r, "Block")),
+        "merge" => _items.Where(r => IsAction(r, "Merge")),
+        "inactive" => _items.Where(r => !r.IsActive),
+        _ => _items,
     };
 
-    void SetFilter(string? key) { _activeFilter = key; ApplyFilter(); }
-    void OnRowSelected(RowSelectEventArgs<DuplicateRuleDto> args) => OpenEdit(args.Data);
-
-    void OpenCreate() { _editId = null; _form = new(); _showForm = true; }
-
-    void OpenEdit(DuplicateRuleDto item)
+    private IEnumerable<DuplicateRuleDto> FilteredRules
     {
-        _editId = item.DuplicateRuleId;
-        _form = new() { RuleName = item.RuleName, EntityType = item.EntityType, MatchFields = item.MatchFields, MatchThreshold = item.MatchThreshold, ActionOnMatch = item.ActionOnMatch, Description = item.Description, IsActive = item.IsActive };
-        _showForm = true;
+        get
+        {
+            var query = TabFiltered;
+            if (!string.IsNullOrWhiteSpace(_entityFilter)) query = query.Where(r => string.Equals(r.EntityType, _entityFilter, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(_actionFilter)) query = query.Where(r => string.Equals(r.ActionOnMatch, _actionFilter, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(r => _statusFilter == "Active" ? r.IsActive : !r.IsActive);
+            return OrderedRules(query);
+        }
     }
 
-    async Task SaveAsync()
+    private IEnumerable<DuplicateRuleDto> OrderedRules(IEnumerable<DuplicateRuleDto> query) => _sortMode switch
+    {
+        "threshold" => query.OrderByDescending(r => r.MatchThreshold).ThenByDescending(ImportanceScore),
+        "entity" => query.OrderBy(r => r.EntityType).ThenByDescending(ImportanceScore),
+        "name" => query.OrderBy(r => r.RuleName),
+        "created" => query.OrderByDescending(r => r.CreatedDateUtc),
+        "risk" => query.OrderByDescending(RiskScore).ThenByDescending(ImportanceScore),
+        _ => query.OrderByDescending(ImportanceScore).ThenBy(r => r.RuleName),
+    };
+
+    private IEnumerable<DuplicateRuleDto> PagedRules => FilteredRules.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRules.Count() / (double)PageSize));
+    private void PreviousPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private string ActiveViewTitle => _tabs.FirstOrDefault(t => t.Key == _activeTab)?.Label ?? "Duplicate Rules";
+
+    private int BlockCount => _items.Count(r => IsAction(r, "Block"));
+    private int HighThresholdCount => _items.Count(r => r.MatchThreshold >= 90);
+    private int RiskCount => _items.Count(IsRisk);
+    private int TabCount(string key) => key switch
+    {
+        "risk" => _items.Count(IsRisk),
+        "block" => BlockCount,
+        "merge" => _items.Count(r => IsAction(r, "Merge")),
+        "inactive" => _items.Count(r => !r.IsActive),
+        "entities" => EntityGroups.Count,
+        _ => _items.Count,
+    };
+
+    private IEnumerable<string> EntityOptions => _items.Select(r => r.EntityType).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    private IEnumerable<string> ActionOptions => _items.Select(r => r.ActionOnMatch ?? "Flag").Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+
+    private List<EntityGroup> EntityGroups
+    {
+        get
+        {
+            var groups = _items.GroupBy(r => string.IsNullOrWhiteSpace(r.EntityType) ? "Unassigned" : r.EntityType).ToList();
+            var max = Math.Max(1, groups.Count == 0 ? 1 : groups.Max(g => g.Count()));
+            return groups.Select(g => new EntityGroup(g.Key, g.Count(), g.Count(r => IsAction(r, "Block")), g.Count(IsRisk), (int)Math.Round(g.Count() * 100.0 / max))).OrderByDescending(g => g.Risk).ThenByDescending(g => g.Block).ThenBy(g => g.Name).ToList();
+        }
+    }
+
+    private void FilterByEntity(string entity)
+    {
+        _entityFilter = entity == "Unassigned" ? string.Empty : entity;
+        _activeTab = "all";
+        _activeKpi = "all";
+        _page = 1;
+    }
+
+    private void SelectRow(DuplicateRuleDto rule) { _selected = rule; _openActionMenuFor = null; }
+    private bool IsSelected(DuplicateRuleDto rule) => _selectedRules.Any(x => x.DuplicateRuleId == rule.DuplicateRuleId);
+    private void ToggleSelect(DuplicateRuleDto rule) { if (IsSelected(rule)) _selectedRules.RemoveAll(x => x.DuplicateRuleId == rule.DuplicateRuleId); else _selectedRules.Add(rule); }
+    private bool AllPageSelected => PagedRules.Any() && PagedRules.All(IsSelected);
+    private void ToggleSelectAllPage()
+    {
+        var page = PagedRules.ToList();
+        if (page.All(IsSelected)) foreach (var rule in page) _selectedRules.RemoveAll(x => x.DuplicateRuleId == rule.DuplicateRuleId);
+        else foreach (var rule in page.Where(rule => !IsSelected(rule))) _selectedRules.Add(rule);
+    }
+
+    private void ToggleActionMenu(DuplicateRuleDto rule) => _openActionMenuFor = _openActionMenuFor == rule.DuplicateRuleId ? null : rule.DuplicateRuleId;
+
+    private void OpenCreate()
+    {
+        _editId = null;
+        _form = new();
+        _formError = string.Empty;
+        _showForm = true;
+        _openActionMenuFor = null;
+    }
+
+    private void OpenEdit(DuplicateRuleDto item)
+    {
+        _editId = item.DuplicateRuleId;
+        _form = new() { RuleName = item.RuleName, EntityType = item.EntityType, MatchFields = item.MatchFields, MatchThreshold = item.MatchThreshold, ActionOnMatch = item.ActionOnMatch ?? "Flag", Description = item.Description, IsActive = item.IsActive };
+        _formError = string.Empty;
+        _showForm = true;
+        _openActionMenuFor = null;
+    }
+
+    private void CloseForm()
+    {
+        if (_saving) return;
+        _showForm = false;
+        _form = new();
+        _editId = null;
+        _formError = string.Empty;
+    }
+
+    private async Task SaveAsync()
     {
         _saving = true;
+        _formError = string.Empty;
         try
         {
             if (_editId.HasValue)
+            {
                 await Api.UpdateDuplicateRuleAsync(_editId.Value, new(_form.RuleName, _form.EntityType, _form.MatchFields, _form.MatchThreshold, _form.ActionOnMatch, _form.Description, _form.IsActive));
+                ShowToast("Duplicate rule updated.", "dup-toast--success");
+            }
             else
-                await Api.CreateDuplicateRuleAsync(new(TenantId, _form.RuleName, _form.EntityType, _form.MatchFields, _form.MatchThreshold, _form.ActionOnMatch, _form.Description));
+            {
+                var id = await Api.CreateDuplicateRuleAsync(new(TenantId, _form.RuleName, _form.EntityType, _form.MatchFields, _form.MatchThreshold, _form.ActionOnMatch, _form.Description));
+                _editId = id;
+                ShowToast("Duplicate rule created.", "dup-toast--success");
+            }
             _showForm = false;
-            await _toast.ShowAsync(new() { Content = "Saved", CssClass = "e-toast-success" });
             await LoadAsync();
         }
-        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast($"Save failed: {ex.Message}", "dup-toast--danger");
+        }
         finally { _saving = false; }
     }
 
-    void ConfirmDelete(DuplicateRuleDto item) { _deleteTarget = item; _showDelete = true; }
-
-    async Task ExecuteDeleteAsync()
+    private void ConfirmToggleActive(DuplicateRuleDto rule)
     {
+        ShowConfirm(rule.IsActive ? "Deactivate duplicate rule?" : "Activate duplicate rule?", $"This will {(rule.IsActive ? "disable" : "enable")} '{rule.RuleName}' for {rule.EntityType} duplicate detection.", rule.IsActive ? "bi-slash-circle" : "bi-check-circle", false, async () => await SetRuleActiveAsync(rule, !rule.IsActive));
+    }
+
+    private async Task SetRuleActiveAsync(DuplicateRuleDto rule, bool isActive)
+    {
+        await Api.UpdateDuplicateRuleAsync(rule.DuplicateRuleId, new(rule.RuleName, rule.EntityType, rule.MatchFields, rule.MatchThreshold, rule.ActionOnMatch, rule.Description, isActive));
+        ShowToast(isActive ? "Duplicate rule activated." : "Duplicate rule deactivated.", "dup-toast--success");
+        await LoadAsync();
+    }
+
+    private void ConfirmDelete(DuplicateRuleDto rule)
+    {
+        ShowConfirm("Remove duplicate rule?", $"You are about to remove '{rule.RuleName}'. This action cannot be undone.", "bi-trash3", true, async () => await DeleteRuleAsync(rule));
+    }
+
+    private async Task DeleteRuleAsync(DuplicateRuleDto rule)
+    {
+        await Api.DeleteDuplicateRuleAsync(rule.DuplicateRuleId);
+        _selectedRules.RemoveAll(r => r.DuplicateRuleId == rule.DuplicateRuleId);
+        if (_selected?.DuplicateRuleId == rule.DuplicateRuleId) _selected = null;
+        ShowToast("Duplicate rule removed.", "dup-toast--success");
+        await LoadAsync();
+    }
+
+    private void ConfirmBulkSetActive(bool isActive)
+    {
+        var count = _selectedRules.Count;
+        ShowConfirm(isActive ? "Activate selected rules?" : "Deactivate selected rules?", $"This will {(isActive ? "activate" : "deactivate")} {count} selected duplicate rule(s).", isActive ? "bi-check-circle" : "bi-slash-circle", false, async () => await BulkSetActiveAsync(isActive));
+    }
+
+    private async Task BulkSetActiveAsync(bool isActive)
+    {
+        foreach (var rule in _selectedRules.ToList()) await SetRuleActiveAsync(rule, isActive);
+        _selectedRules.Clear();
+    }
+
+    private void ConfirmBulkDelete()
+    {
+        var count = _selectedRules.Count;
+        ShowConfirm("Remove selected duplicate rules?", $"You are about to remove {count} selected duplicate rule(s). This action cannot be undone.", "bi-trash3", true, BulkDeleteAsync);
+    }
+
+    private async Task BulkDeleteAsync()
+    {
+        foreach (var rule in _selectedRules.ToList()) await Api.DeleteDuplicateRuleAsync(rule.DuplicateRuleId);
+        _selectedRules.Clear();
+        _selected = null;
+        ShowToast("Selected duplicate rules removed.", "dup-toast--success");
+        await LoadAsync();
+    }
+
+    private void ShowConfirm(string title, string message, string icon, bool danger, Func<Task> action)
+    {
+        _confirmTitle = title;
+        _confirmMessage = message;
+        _confirmIcon = icon;
+        _confirmDanger = danger;
+        _confirmedAction = action;
+        _showConfirm = true;
+        _openActionMenuFor = null;
+    }
+
+    private void CloseConfirm() { if (!_saving) _showConfirm = false; }
+
+    private async Task ExecuteConfirmedActionAsync()
+    {
+        if (_confirmedAction is null) return;
         _saving = true;
-        try { await Api.DeleteDuplicateRuleAsync(_deleteTarget!.DuplicateRuleId); _showDelete = false; await _toast.ShowAsync(new() { Content = "Deleted", CssClass = "e-toast-success" }); await LoadAsync(); }
-        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+        try
+        {
+            await _confirmedAction();
+            _showConfirm = false;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Action failed: {ex.Message}", "dup-toast--danger");
+        }
         finally { _saving = false; }
     }
 
-    void ResetForm() { _form = new(); _editId = null; }
+    private IReadOnlyList<InsightDef> Insights
+    {
+        get
+        {
+            var insights = _baselineInsights.ToList();
+            if (_items.Any(r => string.IsNullOrWhiteSpace(r.MatchFields))) insights.Insert(0, new("Match fields missing", $"{_items.Count(r => string.IsNullOrWhiteSpace(r.MatchFields))} rule(s) need match fields before they can reliably detect duplicates.", "bi-ui-checks-grid"));
+            if (_items.Any(r => !r.IsActive)) insights.Insert(0, new("Inactive controls", $"{_items.Count(r => !r.IsActive)} duplicate rule(s) are inactive and not protecting CRM data.", "bi-slash-circle"));
+            if (BlockCount == 0) insights.Insert(0, new("No blocking rules", "Consider at least one high-confidence Block rule for critical duplicate prevention.", "bi-x-octagon"));
+            return insights.Take(5).ToList();
+        }
+    }
 
-    sealed class DupRuleFormModel
+    private RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string tone) => @<button type="button" class="dup-kpi-card dup-kpi-card--@tone @(_activeKpi == key ? "dup-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveKpi(key)"><span class="dup-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span><span class="dup-kpi-body"><span class="dup-kpi-label">@label</span><span class="dup-kpi-value">@value</span><span class="dup-kpi-sub">@subtitle</span></span></button>;
+
+    private static bool IsAction(DuplicateRuleDto rule, string action) => string.Equals(rule.ActionOnMatch ?? "Flag", action, StringComparison.OrdinalIgnoreCase);
+    private static bool IsRisk(DuplicateRuleDto rule) => !rule.IsActive || string.IsNullOrWhiteSpace(rule.MatchFields) || rule.MatchThreshold < 70 || string.IsNullOrWhiteSpace(rule.ActionOnMatch);
+    private static int RiskScore(DuplicateRuleDto rule) => (!rule.IsActive ? 50 : 0) + (string.IsNullOrWhiteSpace(rule.MatchFields) ? 35 : 0) + (rule.MatchThreshold < 70 ? 25 : 0) + (string.IsNullOrWhiteSpace(rule.ActionOnMatch) ? 15 : 0);
+    private static int ImportanceScore(DuplicateRuleDto rule) => (rule.IsActive ? 100 : 0) + (IsAction(rule, "Block") ? 90 : IsAction(rule, "Merge") ? 55 : 35) + Math.Clamp(rule.MatchThreshold, 0, 100) + (IsCoreEntity(rule.EntityType) ? 30 : 0) + (!string.IsNullOrWhiteSpace(rule.MatchFields) ? 25 : 0);
+    private static bool IsCoreEntity(string? entity) => entity is "Lead" or "Account" or "Contact" or "Opportunity";
+    private static string ImportanceLevel(DuplicateRuleDto rule) => ImportanceScore(rule) >= 230 ? "Critical" : ImportanceScore(rule) >= 185 ? "High" : ImportanceScore(rule) >= 135 ? "Medium" : "Low";
+    private static string ImportanceTone(DuplicateRuleDto rule) => ImportanceLevel(rule) switch { "Critical" => "red", "High" => "amber", "Medium" => "cyan", _ => "green" };
+    private static string ThresholdWidth(DuplicateRuleDto rule) => Math.Clamp(rule.MatchThreshold, 0, 100).ToString(CultureInfo.InvariantCulture) + "%";
+    private static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private static string RecommendedAction(DuplicateRuleDto rule) => !rule.IsActive ? "Activate this rule if it is still required for CRM duplicate protection." : string.IsNullOrWhiteSpace(rule.MatchFields) ? "Add match fields such as email, phone, name, or address before relying on this rule." : rule.MatchThreshold < 70 ? "Increase the threshold or refine match fields to reduce false positives." : IsAction(rule, "Block") ? "Monitor blocked duplicate attempts and tune threshold quality." : "Review whether this rule should flag, merge, or block based on business impact.";
+
+    private static string ActionTone(DuplicateRuleDto rule) => IsAction(rule, "Block") ? "dup-pill--red" : IsAction(rule, "Merge") ? "dup-pill--cyan" : "dup-pill--amber";
+    private RenderFragment ActionBadge(DuplicateRuleDto rule) => @<span class="dup-pill @ActionTone(rule)">@Safe(rule.ActionOnMatch, "Flag")</span>;
+    private RenderFragment StatusBadge(DuplicateRuleDto rule) => @<span class="dup-pill @(rule.IsActive ? "dup-pill--green" : "dup-pill--neutral")">@(rule.IsActive ? "Active" : "Inactive")</span>;
+    private RenderFragment ImportanceBadge(DuplicateRuleDto rule) => @<span class="dup-risk-badge dup-risk-badge--@ImportanceTone(rule)"><i class="bi @(ImportanceTone(rule) == "red" ? "bi-exclamation-octagon" : "bi-shield-check")" aria-hidden="true"></i>@ImportanceLevel(rule)</span>;
+
+    private void ShowToast(string message, string cssClass)
+    {
+        _toasts.Add(new(Guid.NewGuid(), message.Length <= 160 ? message : $"{message[..157]}...", cssClass));
+        if (_toasts.Count > 4) _toasts.RemoveAt(0);
+    }
+
+    private void DismissToast(Guid id) => _toasts.RemoveAll(t => t.Id == id);
+
+    private sealed class DupRuleFormModel
     {
         [Required(ErrorMessage = "Rule Name is required.")]
         [StringLength(200, ErrorMessage = "Rule Name cannot exceed 200 characters.")]
@@ -239,14 +654,16 @@
         [StringLength(80, ErrorMessage = "Entity Type cannot exceed 80 characters.")]
         public string EntityType { get; set; } = string.Empty;
 
+        [Required(ErrorMessage = "Match Fields are required.")]
         [StringLength(500, ErrorMessage = "Match Fields cannot exceed 500 characters.")]
         public string? MatchFields { get; set; }
 
         [Range(0, 100, ErrorMessage = "Threshold must be between 0 and 100.")]
         public int MatchThreshold { get; set; } = 80;
 
+        [Required(ErrorMessage = "Action on Match is required.")]
         [StringLength(80, ErrorMessage = "Action cannot exceed 80 characters.")]
-        public string? ActionOnMatch { get; set; }
+        public string? ActionOnMatch { get; set; } = "Flag";
 
         [StringLength(500, ErrorMessage = "Description cannot exceed 500 characters.")]
         public string? Description { get; set; }
@@ -254,14 +671,8 @@
         public bool IsActive { get; set; } = true;
     }
 
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
-    }
+    private sealed record TabDef(string Key, string Label, string Icon);
+    private sealed record InsightDef(string Title, string Description, string Icon);
+    private sealed record EntityGroup(string Name, int Count, int Block, int Risk, int Percent);
+    private sealed record ToastMessage(Guid Id, string Message, string CssClass);
 }

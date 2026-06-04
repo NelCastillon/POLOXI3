@@ -1,244 +1,380 @@
 ﻿@page "/tenant/crm/lead-statuses"
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Lead Statuses â€” CRM Configuration</PageTitle>
+<PageTitle>Lead Statuses - CRM Configuration</PageTitle>
 
 <AppPageHeader Title="Lead Statuses"
-               Subtitle="Define the lifecycle stages for lead progression"
+               Subtitle="Enterprise CRM lead lifecycle command center for qualification flow, default stage readiness, conversion outcomes, and status governance."
                Icon="bi-tags">
     <Actions>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Status
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
+        <button class="um-btn um-btn-primary" type="button" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Lead Status</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="CopySummaryAsync" disabled="@(!_items.Any())"><i class="bi bi-clipboard" aria-hidden="true"></i> Copy Summary</button>
     </Actions>
 </AppPageHeader>
 
-<div class="pc-kpi-strip">
-    <div class="pc-kpi-card @(_activeFilter == null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)' title="Show all">
-        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-tags-fill" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "Open" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Open")' title="Filter: Open">
-        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.StatusType == "Open")</div><div class="pc-kpi-label">Open Types</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "Won" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Won")' title="Filter: Won">
-        <span class="pc-kpi-icon pc-kpi-icon--total" style="background:#dcfce7"><i class="bi bi-trophy-fill text-success" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.StatusType == "Won")</div><div class="pc-kpi-label">Won</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "Lost" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Lost")' title="Filter: Lost">
-        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-x-circle-fill" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.StatusType == "Lost")</div><div class="pc-kpi-label">Lost</div></div>
-    </div>
-</div>
-
-<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search status name or codeâ€¦" />
-
-@if (_loadError is not null)
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    <div class="lst-toast @(_toastIsError ? "lst-toast--danger" : "lst-toast--success")" role="status">
+        <i class="bi @(_toastIsError ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" @onclick="ClearToast" aria-label="Dismiss notification"><i class="bi bi-x-lg"></i></button>
     </div>
 }
 
-<div class="um-grid-card">
-    @if (_loading)
-    {
-        <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loadingâ€¦</span></div>
-    }
-    <SfGrid TValue="LeadStatusDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-        <GridEvents TValue="LeadStatusDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="50" />
-        <GridColumns>
-            <GridColumn Field="StatusCode" HeaderText="Code" Width="130" />
-            <GridColumn HeaderText="Status" Width="180">
-                <Template>
-                    @{ var r = (LeadStatusDto)context; }
-                    <span class="um-badge" style="background:@(r.ColorHex ?? "#6b7280")22;color:@(r.ColorHex ?? "#6b7280");border:1px solid @(r.ColorHex ?? "#6b7280")44">@r.StatusName</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="StatusType" HeaderText="Type" Width="110" />
-            <GridColumn Field="IsDefault" HeaderText="Default" Width="90" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (LeadStatusDto)context; }
-                    @if (r.IsDefault) { <i class="bi bi-check2-circle text-success"></i> }
-                </Template>
-            </GridColumn>
-            <GridColumn Field="SortOrder" HeaderText="Order" Width="80" TextAlign="TextAlign.Center" />
-            <GridColumn Field="IsActive" HeaderText="Status" Width="100" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (LeadStatusDto)context; }
-                    <span class="um-badge @(r.IsActive ? "um-badge-success" : "um-badge-neutral")">@(r.IsActive ? "Active" : "Inactive")</span>
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="" Width="100" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (LeadStatusDto)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true"><i class="bi bi-pencil"></i></button>
-                    <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
-
-<SfDialog @bind-Visible="_showForm" Width="540px" IsModal="true" ShowCloseIcon="false">
-    <DialogEvents Closed="ResetForm" />
-    <DialogContent>
-        <div class="um-modal-header">
-            <i class="bi bi-tags-fill"></i>
-            <span>@(_editId.HasValue ? "Edit Lead Status" : "Add Lead Status")</span>
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button>
-        </div>
-        <EditForm Model="_form" OnValidSubmit="SaveAsync">
-            <DataAnnotationsValidator />
-            <div class="um-modal-body">
-                <div class="um-form-grid">
-                    <div class="um-field">
-                        <label>Status Code <span class="text-danger">*</span></label>
-                        <InputText @bind-Value="_form.StatusCode" class="um-input" placeholder="e.g. NEW" />
-                    </div>
-                    <div class="um-field">
-                        <label>Status Name <span class="text-danger">*</span></label>
-                        <InputText @bind-Value="_form.StatusName" class="um-input" placeholder="e.g. New" />
-                    </div>
-                    <div class="um-field">
-                        <label>Type</label>
-                        <SfDropDownList TValue="string" TItem="string" @bind-Value="_form.StatusType"
-                            DataSource="@(new[]{"Open","Won","Lost","Inactive"})" Placeholder="Select type" />
-                    </div>
-                    <div class="um-field">
-                        <label>Color (hex)</label>
-                        <InputText @bind-Value="_form.ColorHex" class="um-input" placeholder="#3b82f6" />
-                    </div>
-                    <div class="um-field">
-                        <label>Sort Order</label>
-                        <InputNumber @bind-Value="_form.SortOrder" class="um-input" />
-                    </div>
-                    <div class="um-field um-field--checkbox">
-                        <label><InputCheckbox @bind-Value="_form.IsDefault" /> Default Status</label>
-                    </div>
-                    <div class="um-field um-field--checkbox">
-                        <label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label>
-                    </div>
+<div class="lst-page">
+    <section class="lst-hero">
+        <div class="lst-hero-left">
+            <span class="lst-hero-icon"><i class="bi bi-tags-fill" aria-hidden="true"></i></span>
+            <div class="lst-hero-title">
+                <span class="lst-eyebrow"><i class="bi bi-diagram-3" aria-hidden="true"></i> CRM Configuration · Lead Lifecycle</span>
+                <h1>Lead Status Command Center</h1>
+                <p>Govern qualification statuses, default entry points, win/loss outcomes, sort order, and lifecycle configuration quality for every lead workflow.</p>
+                <div class="lst-hero-meta">
+                    <span><i class="bi bi-tags" aria-hidden="true"></i> @_items.Count statuses</span>
+                    <span><i class="bi bi-check-circle" aria-hidden="true"></i> @ActiveCount active</span>
+                    <span><i class="bi bi-trophy" aria-hidden="true"></i> @WonCount won</span>
+                    <span><i class="bi bi-x-circle" aria-hidden="true"></i> @LostCount lost</span>
+                    <span><i class="bi bi-star" aria-hidden="true"></i> @DefaultCount default</span>
                 </div>
             </div>
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
-                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button>
-            </div>
-        </EditForm>
-    </DialogContent>
-</SfDialog>
-
-<SfDialog @bind-Visible="_showDelete" Width="440px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
-        <div class="um-confirm-dialog">
-            <div class="um-confirm-icon um-confirm-icon--danger">
-                <i class="bi bi-trash3-fill"></i>
-            </div>
-            <div class="um-confirm-message">
-                <h6>Delete Lead Status?</h6>
-                <p>You are about to delete <strong>@_deleteTarget?.StatusName</strong>. This action cannot be undone.</p>
-            </div>
-            <div class="um-modal-footer" style="width:100%">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
-                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
-            </div>
         </div>
-    </DialogContent>
-</SfDialog>
+        <div class="lst-hero-actions">
+            <div class="lst-score-card @ReadinessClass"><span>Lifecycle readiness</span><strong>@ReadinessScore%</strong><small>@ReadinessSummary</small></div>
+            <button class="lst-workflow" type="button" @onclick='() => SetTab("review")'><i class="bi bi-exclamation-triangle"></i><span><strong>Clean status data</strong><small>@NeedsReviewCount status(es) need review</small></span></button>
+            <button class="lst-workflow" type="button" @onclick="OpenCreate"><i class="bi bi-plus-circle"></i><span><strong>Add lifecycle status</strong><small>Create a new tracked lead state</small></span></button>
+        </div>
+    </section>
 
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
+    <section class="lst-kpi-strip" aria-label="Lead status KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="lst-kpi-card lst-kpi-card--@kpi.Tone @(IsActiveTab(kpi.Key) ? "lst-kpi-card--active" : null)" title="@kpi.Tooltip" @onclick="() => SetTab(kpi.Key)">
+                <span class="lst-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="lst-kpi-body"><span class="lst-kpi-label">@kpi.Label</span><strong class="lst-kpi-value">@kpi.Value</strong><small class="lst-kpi-sub">@kpi.Detail</small></span>
+            </button>
+        }
+    </section>
+
+    <section class="lst-workflows" aria-label="Lead status workflows">
+        <button class="lst-workflow-card" type="button" @onclick='() => SetTab("open")'><span><i class="bi bi-play-circle"></i></span><strong>Operate open flow</strong><small>Review statuses that move leads through qualification.</small></button>
+        <button class="lst-workflow-card" type="button" @onclick='() => SetTab("won")'><span><i class="bi bi-trophy"></i></span><strong>Validate conversion outcomes</strong><small>Confirm won statuses align to account/opportunity conversion.</small></button>
+        <button class="lst-workflow-card" type="button" @onclick='() => SetTab("lost")'><span><i class="bi bi-x-octagon"></i></span><strong>Govern disqualification</strong><small>Review lost statuses used for disqualified leads.</small></button>
+        <button class="lst-workflow-card" type="button" @onclick='() => SetTab("default")'><span><i class="bi bi-star"></i></span><strong>Confirm defaults</strong><small>Ensure one active default entry status exists.</small></button>
+        <button class="lst-workflow-card" type="button" @onclick="CopySummaryAsync"><span><i class="bi bi-clipboard-data"></i></span><strong>Brief CRM owners</strong><small>Copy lifecycle posture summary.</small></button>
+    </section>
+
+    <section class="lst-filter-panel" aria-label="Lead status filters">
+        <div class="lst-search"><i class="bi bi-search" aria-hidden="true"></i><input value="@_search" @oninput="OnSearchChanged" placeholder="Search status name or code..." /></div>
+        <div class="lst-filter-grid">
+            <label><span>Status</span><select class="form-select" value="@_statusFilter" @onchange="OnStatusFilterChanged"><option value="">All</option><option value="Active">Active</option><option value="Inactive">Inactive</option></select></label>
+            <label><span>Type</span><select class="form-select" value="@_typeFilter" @onchange="OnTypeFilterChanged"><option value="">All</option><option value="Open">Open</option><option value="Won">Won</option><option value="Lost">Lost</option><option value="Inactive">Inactive</option><option value="Other">Other</option></select></label>
+            <label><span>Quality</span><select class="form-select" value="@_qualityFilter" @onchange="OnQualityFilterChanged"><option value="">All</option><option value="Ready">Ready</option><option value="Review">Needs Review</option></select></label>
+            <label><span>Default</span><select class="form-select" value="@_defaultFilter" @onchange="OnDefaultFilterChanged"><option value="">All</option><option value="Default">Default</option><option value="Standard">Standard</option></select></label>
+        </div>
+        <button type="button" class="lst-btn lst-btn--ghost" @onclick="ClearFilters"><i class="bi bi-x-circle"></i> Clear</button>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger lst-alert" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div>
+    }
+
+    <div class="lst-tabs" role="tablist" aria-label="Lead status dashboard sections">
+        @foreach (var tab in Tabs)
+        {
+            <button type="button" role="tab" class="lst-tab @(IsActiveTab(tab.Key) ? "lst-tab--active" : null)" @onclick="() => SetTab(tab.Key)"><i class="bi @tab.Icon"></i> @tab.Label <strong>@TabCount(tab.Key)</strong></button>
+        }
+    </div>
+
+    <section class="lst-dashboard">
+        <main class="lst-main-card">
+            <div class="lst-card-header">
+                <div><span class="lst-section-kicker"><i class="bi bi-command"></i> @ActiveSectionKicker</span><h2>@ActiveSectionTitle</h2><p>@ActiveSectionDescription</p></div>
+                <div class="lst-card-actions">
+                    @if (_selected is not null)
+                    {
+                        <span class="lst-sel-count"><i class="bi bi-tags"></i> @_selected.StatusName</span>
+                    }
+                    <button type="button" class="lst-btn lst-btn--ghost" @onclick="PreviousPage" disabled="@(_pageNumber <= 1)"><i class="bi bi-chevron-left"></i></button>
+                    <span class="lst-page-indicator">Page @_pageNumber of @TotalPages</span>
+                    <button type="button" class="lst-btn lst-btn--ghost" @onclick="NextPage" disabled="@(_pageNumber >= TotalPages)"><i class="bi bi-chevron-right"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="lst-loading"><span class="spinner-border spinner-border-sm"></span> Loading lead statuses...</div>
+            }
+            else if (!PagedStatuses.Any())
+            {
+                <div class="lst-empty"><i class="bi bi-tags"></i><strong>No lead statuses match this view</strong><span>Adjust filters or add a new lead lifecycle status.</span><button type="button" class="lst-btn lst-btn--primary" @onclick="OpenCreate">Add Lead Status</button></div>
+            }
+            else
+            {
+                <div class="lst-table-wrap">
+                    <table class="lst-table">
+                        <thead><tr><th>Status</th><th>Code</th><th>Type</th><th>Default</th><th>Sort</th><th>State</th><th>Readiness</th><th class="lst-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var item in PagedStatuses)
+                            {
+                                <tr class="lst-row @(_selected?.LeadStatusId == item.LeadStatusId ? "lst-row--selected" : null)" @onclick="() => Select(item)">
+                                    <td><div class="lst-status-cell"><span class="lst-row-icon @StatusIconClass(item)" style="--status-color:@StatusColor(item)"><i class="bi @StatusIcon(item)"></i></span><span><strong>@item.StatusName</strong><small>@(string.IsNullOrWhiteSpace(item.Description) ? StatusTypeLabel(item) : item.Description)</small></span></div></td>
+                                    <td><span class="lst-code">@item.StatusCode</span></td>
+                                    <td><span class="lst-type-badge @StatusTypeClass(item)">@StatusTypeLabel(item)</span></td>
+                                    <td>@if (item.IsDefault) { <span class="lst-pill lst-pill--gold"><i class="bi bi-star-fill"></i> Default</span> } else { <span class="lst-muted">Standard</span> }</td>
+                                    <td><span class="lst-order">@item.SortOrder</span></td>
+                                    <td><span class="@(item.IsActive ? "lst-pill lst-pill--green" : "lst-pill lst-pill--neutral")">@(item.IsActive ? "Active" : "Inactive")</span></td>
+                                    <td><span class="@ReadinessBadgeClass(item)">@StatusReadiness(item)</span></td>
+                                    <td class="lst-row-actions" @onclick:stopPropagation="true"><button type="button" class="lst-icon-btn" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil"></i></button><button type="button" class="lst-icon-btn lst-icon-btn--danger" @onclick="() => ConfirmDelete(item)" title="Delete"><i class="bi bi-trash"></i></button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </main>
+
+        <aside class="lst-side-panel">
+            <section class="lst-panel-card">
+                <span class="lst-section-kicker"><i class="bi bi-tags"></i> Selected Status</span>
+                @if (_selected is null)
+                {
+                    <p class="lst-side-copy">Select a lead status to inspect lifecycle type, readiness, default behavior, sort order, and available actions.</p>
+                }
+                else
+                {
+                    <div class="lst-selected-title"><span class="lst-selected-icon @StatusIconClass(_selected)" style="--status-color:@StatusColor(_selected)"><i class="bi @StatusIcon(_selected)"></i></span><div><h3>@_selected.StatusName</h3><span>@_selected.StatusCode · @StatusTypeLabel(_selected)</span></div></div>
+                    <div class="lst-selected-score @StatusScoreClass(_selected)"><span>Configuration readiness</span><strong>@StatusReadiness(_selected)</strong><small>@ReadinessDetail(_selected)</small></div>
+                    <dl class="lst-detail-list"><div><dt>Code</dt><dd>@_selected.StatusCode</dd></div><div><dt>Name</dt><dd>@_selected.StatusName</dd></div><div><dt>Type</dt><dd>@StatusTypeLabel(_selected)</dd></div><div><dt>Default</dt><dd>@(_selected.IsDefault ? "Yes" : "No")</dd></div><div><dt>Sort Order</dt><dd>@_selected.SortOrder</dd></div><div><dt>Status</dt><dd>@(_selected.IsActive ? "Active" : "Inactive")</dd></div><div><dt>Created</dt><dd>@_selected.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</dd></div></dl>
+                    <div class="lst-selected-actions"><button type="button" class="lst-btn lst-btn--primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil"></i> Edit</button><button type="button" class="lst-btn lst-btn--danger-ghost" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash"></i> Delete</button></div>
+                }
+            </section>
+
+            <section class="lst-panel-card">
+                <span class="lst-section-kicker"><i class="bi bi-lightbulb"></i> Priority Insights</span>
+                <div class="lst-insight-list">@foreach (var insight in Insights) { <button type="button" class="lst-insight" @onclick="() => SetTab(insight.Tab)"><i class="bi @insight.Icon"></i><span><strong>@insight.Title</strong><small>@insight.Detail</small></span></button> }</div>
+            </section>
+
+            <section class="lst-panel-card">
+                <span class="lst-section-kicker"><i class="bi bi-list-check"></i> Lifecycle Checklist</span>
+                <div class="lst-checklist">@foreach (var item in Checklist) { <div class="lst-check-item @(item.Done ? "lst-check-item--done" : null)"><i class="bi @(item.Done ? "bi-check-circle-fill" : "bi-circle")"></i><span>@item.Text</span></div> }</div>
+            </section>
+        </aside>
+    </section>
+</div>
+
+@if (_showForm)
+{
+    <div class="lst-modal-backdrop" role="presentation">
+        <div class="lst-modal" role="dialog" aria-modal="true" aria-labelledby="lead-status-form-title">
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-header"><i class="bi bi-tags-fill"></i><span id="lead-status-form-title">@(_editId.HasValue ? "Edit Lead Status" : "Add Lead Status")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Status Code <span class="text-danger">*</span></label><InputText @bind-Value="_form.StatusCode" class="um-input" placeholder="e.g. NEW" /><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Status Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.StatusName" class="um-input" placeholder="e.g. New" /><ValidationMessage For="() => _form.StatusName" class="text-danger" /></div>
+                        <div class="um-field"><label>Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusType" class="um-input"><option value="Open">Open</option><option value="Won">Won</option><option value="Lost">Lost</option><option value="Inactive">Inactive</option></InputSelect><ValidationMessage For="() => _form.StatusType" class="text-danger" /></div>
+                        <div class="um-field"><label>Description</label><InputTextArea @bind-Value="_form.Description" class="um-input" placeholder="Lifecycle usage notes" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
+                        <div class="um-field"><label>Color Hex</label><InputText @bind-Value="_form.ColorHex" class="um-input" placeholder="#3b82f6" /><ValidationMessage For="() => _form.ColorHex" class="text-danger" /></div>
+                        <div class="um-field"><label>Sort Order</label><InputNumber @bind-Value="_form.SortOrder" class="um-input" /><ValidationMessage For="() => _form.SortOrder" class="text-danger" /></div>
+                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsDefault" /> Default Status</label></div>
+                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label></div>
+                    </div>
+                </div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showDelete)
+{
+    <div class="lst-modal-backdrop" role="presentation">
+        <div class="lst-confirm" role="dialog" aria-modal="true" aria-labelledby="delete-title">
+            <div class="lst-confirm-body"><div class="lst-confirm-icon"><i class="bi bi-trash3-fill"></i></div><div><h3 id="delete-title">Delete Lead Status?</h3><p>You are about to delete <strong>@_deleteTarget?.StatusName</strong>. This action cannot be undone.</p><small>Historical CRM records may still reference this lifecycle status for reporting continuity.</small></div></div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div>
+        </div>
+    </div>
+}
 
 @code {
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
     private Guid _tenantId;
     private Guid _tenantAdminUserId;
-    Guid TenantId { get; set; }
-    List<LeadStatusDto> _items = [], _filtered = [];
-    string? _activeFilter;
-    bool _loading, _saving;
-    string _search = string.Empty;
-    string? _loadError;
-    bool _showForm, _showDelete;
-    Guid? _editId;
-    LeadStatusDto? _deleteTarget;
-    SfToast _toast = default!;
-    LeadStatusFormModel _form = new();
+    private List<LeadStatusDto> _items = [];
+    private LeadStatusDto? _selected;
+    private string _search = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _typeFilter = string.Empty;
+    private string _qualityFilter = string.Empty;
+    private string _defaultFilter = string.Empty;
+    private string _activeTab = "overview";
+    private string? _loadError;
+    private string? _toastMessage;
+    private bool _toastIsError;
+    private bool _loading;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private Guid? _editId;
+    private LeadStatusDto? _deleteTarget;
+    private int _pageNumber = 1;
+    private const int PageSize = 12;
+    private LeadStatusFormModel _form = new();
+
+    private static readonly List<TabItem> Tabs = [new("overview", "Overview", "bi-speedometer2"), new("open", "Open", "bi-play-circle"), new("won", "Won", "bi-trophy"), new("lost", "Lost", "bi-x-octagon"), new("default", "Default", "bi-star"), new("review", "Needs Review", "bi-exclamation-triangle")];
+    private IReadOnlyList<KpiItem> Kpis => [new("overview", "Total Statuses", _items.Count.ToString(), "Configured lead lifecycle states", "bi-tags-fill", "blue", "Show all lead statuses"), new("open", "Open Flow", OpenCount.ToString(), "Qualification statuses", "bi-play-circle-fill", "green", "Show open statuses"), new("won", "Won", WonCount.ToString(), "Conversion outcome statuses", "bi-trophy-fill", "purple", "Show won statuses"), new("lost", "Lost", LostCount.ToString(), "Disqualification statuses", "bi-x-circle-fill", "red", "Show lost statuses"), new("review", "Needs Review", NeedsReviewCount.ToString(), "Lifecycle readiness gaps", "bi-exclamation-triangle-fill", "amber", "Show statuses needing review")];
+    private IEnumerable<LeadStatusDto> FilteredStatuses => ApplyFilters();
+    private IEnumerable<LeadStatusDto> PagedStatuses => FilteredStatuses.Skip((_pageNumber - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredStatuses.Count() / (double)PageSize));
+    private int ActiveCount => _items.Count(x => x.IsActive);
+    private int InactiveCount => _items.Count(x => !x.IsActive);
+    private int OpenCount => _items.Count(x => IsStatusType(x, "Open"));
+    private int WonCount => _items.Count(x => IsStatusType(x, "Won"));
+    private int LostCount => _items.Count(x => IsStatusType(x, "Lost"));
+    private int DefaultCount => _items.Count(x => x.IsDefault);
+    private int RecentCount => _items.Count(IsRecent);
+    private int NeedsReviewCount => _items.Count(NeedsReview);
+    private int ReadinessScore => _items.Count == 0 ? 0 : Math.Clamp(100 - (NeedsReviewCount * 10) - (DefaultCount == 0 ? 20 : 0) - (OpenCount == 0 ? 16 : 0) - (WonCount == 0 ? 10 : 0) - (LostCount == 0 ? 10 : 0) - (InactiveCount > ActiveCount && ActiveCount > 0 ? 6 : 0), 0, 100);
+    private string ReadinessClass => ReadinessScore >= 90 ? "lst-score-card--green" : ReadinessScore >= 75 ? "lst-score-card--cyan" : ReadinessScore >= 55 ? "lst-score-card--amber" : "lst-score-card--red";
+    private string ReadinessSummary => ReadinessScore >= 90 ? "Lead lifecycle configuration is enterprise ready." : ReadinessScore >= 75 ? "Review lifecycle defaults and status hygiene." : "Lead lifecycle setup needs attention.";
+    private string ActiveSectionKicker => _activeTab == "review" ? "Configuration Hygiene" : "Lifecycle Governance";
+    private string ActiveSectionTitle => _activeTab switch { "open" => "Open Lead Statuses", "won" => "Won Lead Statuses", "lost" => "Lost Lead Statuses", "default" => "Default Statuses", "review" => "Statuses Needing Review", _ => "Lead Status Overview" };
+    private string ActiveSectionDescription => _activeTab switch { "open" => "Statuses that keep leads moving through qualification and nurturing.", "won" => "Conversion outcomes used when a lead becomes qualified business.", "lost" => "Disqualification outcomes used for closed or rejected leads.", "default" => "Default entry statuses used when new leads are created.", "review" => "Statuses with missing, weak, or inconsistent lifecycle configuration.", _ => "All lead statuses ranked by operational importance and configuration readiness." };
+    private IReadOnlyList<InsightItem> Insights => [new("open", "Open coverage", $"{OpenCount} status(es) support active qualification", "bi-play-circle"), new("default", "Default readiness", $"{DefaultCount} default status(es) configured", "bi-star"), new("won", "Conversion outcomes", $"{WonCount} won status(es) configured", "bi-trophy"), new("lost", "Disqualification outcomes", $"{LostCount} lost status(es) configured", "bi-x-octagon"), new("review", "Configuration gaps", $"{NeedsReviewCount} status(es) need cleanup", "bi-exclamation-triangle")];
+    private IReadOnlyList<ChecklistItem> Checklist => [new("At least one active status is configured", ActiveCount > 0), new("An active default status exists", _items.Any(x => x.IsDefault && x.IsActive)), new("Open lifecycle statuses exist", OpenCount > 0), new("Won outcome statuses exist", WonCount > 0), new("Lost outcome statuses exist", LostCount > 0), new("No duplicate status codes", _items.GroupBy(x => x.StatusCode, StringComparer.OrdinalIgnoreCase).All(g => g.Count() == 1)), new("Review queue is clear", NeedsReviewCount == 0)];
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM Config", null), new("Lead Statuses", null));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM Configuration", null), new("Lead Statuses", "/tenant/crm/lead-statuses"));
         await LoadAsync();
     }
 
-    async Task LoadAsync()
+    private async Task LoadAsync()
     {
         _loading = true;
         _loadError = null;
-        try { var r = await Api.SearchLeadStatusesAsync(TenantId, _search, pageSize: 200); _items = r?.Items.ToList() ?? []; ApplyFilter(); }
-        catch (Exception ex) { _loadError = $"Failed to load lead statuses: {ex.Message}"; }
-        finally { _loading = false; }
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchLeadStatusesAsync(_tenantId, _search, pageSize: 5000);
+            _items = result?.Items.ToList() ?? [];
+            EnsureSelected();
+            ClampPage();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load lead statuses: {ex.Message}";
+            ShowToast($"Failed to load lead statuses: {ex.Message}", true);
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    Task OnSearchAsync() => LoadAsync();
-
-    void ApplyFilter() => _filtered = _activeFilter is not null
-        ? _items.Where(x => x.StatusType == _activeFilter).ToList()
-        : [.. _items];
-
-    void SetFilter(string? key) { _activeFilter = key; ApplyFilter(); }
-    void OnRowSelected(RowSelectEventArgs<LeadStatusDto> args) => OpenEdit(args.Data);
-
-    void OpenCreate() { _editId = null; _form = new(); _showForm = true; }
-
-    void OpenEdit(LeadStatusDto item)
+    private IEnumerable<LeadStatusDto> ApplyFilters()
     {
-        _editId = item.LeadStatusId;
-        _form = new() { StatusCode = item.StatusCode, StatusName = item.StatusName, StatusType = item.StatusType, ColorHex = item.ColorHex, IsDefault = item.IsDefault, SortOrder = item.SortOrder, IsActive = item.IsActive };
-        _showForm = true;
+        var query = _items.AsEnumerable();
+        query = _activeTab switch { "open" => query.Where(x => IsStatusType(x, "Open")), "won" => query.Where(x => IsStatusType(x, "Won")), "lost" => query.Where(x => IsStatusType(x, "Lost")), "default" => query.Where(x => x.IsDefault), "review" => query.Where(NeedsReview), _ => query };
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => (x.IsActive ? "Active" : "Inactive") == _statusFilter);
+        if (!string.IsNullOrWhiteSpace(_typeFilter)) query = _typeFilter == "Other" ? query.Where(x => !KnownTypes.Contains(NormalizeType(x.StatusType))) : query.Where(x => NormalizeType(x.StatusType) == _typeFilter);
+        if (!string.IsNullOrWhiteSpace(_qualityFilter)) query = query.Where(x => (NeedsReview(x) ? "Review" : "Ready") == _qualityFilter);
+        if (!string.IsNullOrWhiteSpace(_defaultFilter)) query = query.Where(x => (x.IsDefault ? "Default" : "Standard") == _defaultFilter);
+        if (!string.IsNullOrWhiteSpace(_search)) query = query.Where(x => x.StatusName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.StatusCode.Contains(_search, StringComparison.OrdinalIgnoreCase) || (x.StatusType?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false));
+        return query.OrderByDescending(x => x.IsActive).ThenBy(x => x.SortOrder).ThenByDescending(x => x.IsDefault).ThenBy(x => x.StatusName);
     }
 
-    async Task SaveAsync()
+    private void EnsureSelected() => _selected = _selected is null ? FilteredStatuses.FirstOrDefault() : FilteredStatuses.FirstOrDefault(x => x.LeadStatusId == _selected.LeadStatusId) ?? FilteredStatuses.FirstOrDefault();
+    private void Select(LeadStatusDto item) => _selected = item;
+    private void SetTab(string tab) { _activeTab = tab; _pageNumber = 1; EnsureSelected(); }
+    private bool IsActiveTab(string tab) => _activeTab == tab;
+    private int TabCount(string tab) => tab switch { "open" => OpenCount, "won" => WonCount, "lost" => LostCount, "default" => DefaultCount, "review" => NeedsReviewCount, _ => _items.Count };
+    private void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args) { _search = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; _ = LoadAsync(); }
+    private void OnStatusFilterChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args) { _statusFilter = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; EnsureSelected(); }
+    private void OnTypeFilterChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args) { _typeFilter = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; EnsureSelected(); }
+    private void OnQualityFilterChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args) { _qualityFilter = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; EnsureSelected(); }
+    private void OnDefaultFilterChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args) { _defaultFilter = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; EnsureSelected(); }
+    private void ClearFilters() { _search = string.Empty; _statusFilter = string.Empty; _typeFilter = string.Empty; _qualityFilter = string.Empty; _defaultFilter = string.Empty; _activeTab = "overview"; _pageNumber = 1; _ = LoadAsync(); }
+    private void PreviousPage() { if (_pageNumber > 1) _pageNumber--; }
+    private void NextPage() { if (_pageNumber < TotalPages) _pageNumber++; }
+    private void ClampPage() { if (_pageNumber > TotalPages) _pageNumber = TotalPages; if (_pageNumber < 1) _pageNumber = 1; }
+    private void OpenCreate() { _editId = null; _form = new(); _showForm = true; }
+    private void OpenEdit(LeadStatusDto item) { _selected = item; _editId = item.LeadStatusId; _form = new() { StatusCode = item.StatusCode, StatusName = item.StatusName, StatusType = NormalizeType(item.StatusType), Description = item.Description, ColorHex = item.ColorHex, IsDefault = item.IsDefault, SortOrder = item.SortOrder, IsActive = item.IsActive }; _showForm = true; }
+    private void CloseForm() { _showForm = false; ResetForm(); }
+
+    private async Task SaveAsync()
     {
         _saving = true;
         try
         {
-            if (_editId.HasValue)
-                await Api.UpdateLeadStatusAsync(_editId.Value, new(_form.StatusCode, _form.StatusName, _form.StatusType, null, _form.ColorHex, _form.IsDefault, _form.IsActive, _form.SortOrder));
-            else
-                await Api.CreateLeadStatusAsync(new(TenantId, _form.StatusCode, _form.StatusName, _form.StatusType, null, _form.ColorHex, _form.IsDefault, _form.SortOrder));
+            if (_editId.HasValue) await Api.UpdateLeadStatusAsync(_editId.Value, new(_form.StatusCode.Trim(), _form.StatusName.Trim(), _form.StatusType, _form.Description, _form.ColorHex, _form.IsDefault, _form.IsActive, _form.SortOrder));
+            else await Api.CreateLeadStatusAsync(new(_tenantId, _form.StatusCode.Trim(), _form.StatusName.Trim(), _form.StatusType, _form.Description, _form.ColorHex, _form.IsDefault, _form.SortOrder));
             _showForm = false;
-            await _toast.ShowAsync(new() { Content = "Saved", CssClass = "e-toast-success" });
+            ShowToast("Lead status saved successfully.");
             await LoadAsync();
         }
-        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+        catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", true); }
         finally { _saving = false; }
     }
 
-    void ConfirmDelete(LeadStatusDto item) { _deleteTarget = item; _showDelete = true; }
+    private void ConfirmDelete(LeadStatusDto item) { _deleteTarget = item; _showDelete = true; }
 
-    async Task ExecuteDeleteAsync()
+    private async Task ExecuteDeleteAsync()
     {
+        if (_deleteTarget is null) return;
         _saving = true;
-        try { await Api.DeleteLeadStatusAsync(_deleteTarget!.LeadStatusId); _showDelete = false; await _toast.ShowAsync(new() { Content = "Deleted", CssClass = "e-toast-success" }); await LoadAsync(); }
-        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+        try
+        {
+            await Api.DeleteLeadStatusAsync(_deleteTarget.LeadStatusId);
+            _showDelete = false;
+            ShowToast("Lead status deleted.");
+            await LoadAsync();
+        }
+        catch (Exception ex) { ShowToast($"Delete failed: {ex.Message}", true); }
         finally { _saving = false; }
     }
 
-    void ResetForm() { _form = new(); _editId = null; }
+    private void ResetForm() { _form = new(); _editId = null; }
+    private async Task CopySummaryAsync()
+    {
+        var summary = $"Lead Statuses Summary: {_items.Count} total, {ActiveCount} active, {InactiveCount} inactive, {OpenCount} open, {WonCount} won, {LostCount} lost, {DefaultCount} default, {NeedsReviewCount} needing review, readiness {ReadinessScore}%.";
+        try { await Js.InvokeVoidAsync("navigator.clipboard.writeText", summary); ShowToast("Lead status summary copied."); }
+        catch { ShowToast(summary); }
+    }
 
-    sealed class LeadStatusFormModel
+    private static readonly HashSet<string> KnownTypes = new(StringComparer.OrdinalIgnoreCase) { "Open", "Won", "Lost", "Inactive" };
+    private static bool IsRecent(LeadStatusDto item) => item.CreatedDateUtc >= DateTime.UtcNow.AddDays(-30);
+    private static bool IsStatusType(LeadStatusDto item, string type) => NormalizeType(item.StatusType) == type;
+    private static string NormalizeType(string? type) => string.IsNullOrWhiteSpace(type) ? "Open" : KnownTypes.Contains(type.Trim()) ? type.Trim() : "Other";
+    private static bool NeedsReview(LeadStatusDto item) => string.IsNullOrWhiteSpace(item.StatusCode) || string.IsNullOrWhiteSpace(item.StatusName) || item.StatusCode.Length < 2 || item.StatusName.Length < 2 || string.IsNullOrWhiteSpace(item.StatusType) || item.SortOrder < 0 || (item.IsActive && NormalizeType(item.StatusType) == "Inactive");
+    private static string StatusReadiness(LeadStatusDto item) => NeedsReview(item) ? "Review" : item.IsActive ? "Ready" : "Retired";
+    private static string ReadinessDetail(LeadStatusDto item) => NeedsReview(item) ? "Status code, type, sort order, or active/type alignment needs cleanup." : item.IsActive ? "Status is active and ready for lead lifecycle use." : "Status is inactive but retained for historical CRM reporting.";
+    private static string ReadinessBadgeClass(LeadStatusDto item) => NeedsReview(item) ? "lst-risk-badge lst-risk-badge--red" : item.IsActive ? "lst-risk-badge lst-risk-badge--green" : "lst-risk-badge lst-risk-badge--neutral";
+    private static string StatusScoreClass(LeadStatusDto item) => NeedsReview(item) ? "lst-selected-score--red" : item.IsActive ? "lst-selected-score--green" : "lst-selected-score--neutral";
+    private static string StatusTypeLabel(LeadStatusDto item) => NormalizeType(item.StatusType);
+    private static string StatusTypeClass(LeadStatusDto item) => NormalizeType(item.StatusType) switch { "Won" => "lst-type-badge--won", "Lost" => "lst-type-badge--lost", "Inactive" => "lst-type-badge--inactive", "Other" => "lst-type-badge--other", _ => "lst-type-badge--open" };
+    private static string StatusIcon(LeadStatusDto item) => NormalizeType(item.StatusType) switch { "Won" => "bi-trophy", "Lost" => "bi-x-octagon", "Inactive" => "bi-archive", "Other" => "bi-question-circle", _ => "bi-play-circle" };
+    private static string StatusIconClass(LeadStatusDto item) => NeedsReview(item) ? "lst-row-icon--red" : NormalizeType(item.StatusType) switch { "Won" => "lst-row-icon--gold", "Lost" => "lst-row-icon--red", "Inactive" => "lst-row-icon--neutral", _ => "lst-row-icon--green" };
+    private static string StatusColor(LeadStatusDto item) => string.IsNullOrWhiteSpace(item.ColorHex) ? NormalizeType(item.StatusType) switch { "Won" => "#16a34a", "Lost" => "#dc2626", "Inactive" => "#64748b", _ => "#2563eb" } : item.ColorHex;
+    private void ShowToast(string message, bool isError = false) { _toastMessage = message; _toastIsError = isError; }
+    private void ClearToast() => _toastMessage = null;
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+
+    private sealed record TabItem(string Key, string Label, string Icon);
+    private sealed record KpiItem(string Key, string Label, string Value, string Detail, string Icon, string Tone, string Tooltip);
+    private sealed record InsightItem(string Tab, string Title, string Detail, string Icon);
+    private sealed record ChecklistItem(string Text, bool Done);
+
+    private sealed class LeadStatusFormModel
     {
         [Required(ErrorMessage = "Status Code is required.")]
         [StringLength(80, ErrorMessage = "Status Code cannot exceed 80 characters.")]
@@ -248,8 +384,12 @@
         [StringLength(200, ErrorMessage = "Status Name cannot exceed 200 characters.")]
         public string StatusName { get; set; } = string.Empty;
 
+        [Required(ErrorMessage = "Type is required.")]
         [StringLength(50, ErrorMessage = "Type cannot exceed 50 characters.")]
-        public string? StatusType { get; set; }
+        public string StatusType { get; set; } = "Open";
+
+        [StringLength(500, ErrorMessage = "Description cannot exceed 500 characters.")]
+        public string? Description { get; set; }
 
         [StringLength(20, ErrorMessage = "Color hex cannot exceed 20 characters.")]
         public string? ColorHex { get; set; }
@@ -260,16 +400,5 @@
         public int SortOrder { get; set; }
 
         public bool IsActive { get; set; } = true;
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
     }
 }

@@ -1,4 +1,4 @@
-@page "/crm/opportunities/pipeline"
+@page "/tenant/crm/pipeline"
 @namespace Ams.Web.Components.Pages.Crm
 @using System.Globalization
 @using Ams.Application.Common.Dtos
@@ -9,7 +9,7 @@
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Enterprise Opportunity Pipeline</PageTitle>
+<PageTitle>CRM Pipeline Command Center — AMS</PageTitle>
 
 @if (_toastVisible)
 {
@@ -42,17 +42,23 @@
 
 <div class="opl-enterprise-page">
     <section class="opl-hero">
-        <div class="opl-hero-left">
-            <span class="opl-hero-icon"><i class="bi bi-funnel" aria-hidden="true"></i></span>
-            <div>
-                <div class="opl-title-row">
-                    <h1>Opportunity Pipeline Command Center</h1>
-                    <span><i class="bi bi-cash-coin" aria-hidden="true"></i> Weighted pipeline</span>
-                    <span><i class="bi bi-kanban" aria-hidden="true"></i> Stage execution</span>
-                    <span><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+        <div class="opl-hero__content">
+            <div class="opl-hero-left">
+                <span class="opl-hero-icon"><i class="bi bi-funnel" aria-hidden="true"></i></span>
+                <div class="opl-hero-title">
+                    <div class="opl-hero__eyebrow">Enterprise CRM command center</div>
+                    <div class="opl-title-row">
+                        <h1>CRM Pipeline Command Center</h1>
+                        <div class="opl-hero__meta">
+                            <span><i class="bi bi-trophy" aria-hidden="true"></i>@_rows.Count opportunities</span>
+                            <span><i class="bi bi-cash-coin" aria-hidden="true"></i>@FormatCurrency(PipelineAmount) pipeline</span>
+                            <span><i class="bi bi-calendar-x" aria-hidden="true"></i>@AtRiskCount at risk</span>
+                            <span><i class="bi bi-check2-circle" aria-hidden="true"></i>@CommitCount commit</span>
+                        </div>
+                    </div>
                 </div>
-                <p>Analyze stage flow, forecast confidence, owner workload, urgency, and revenue quality across the active CRM pipeline.</p>
             </div>
+            <p>Prioritize revenue, stage movement, close urgency, owner workload, forecast confidence, and CRM workflow quality across the active tenant pipeline.</p>
         </div>
         <div class="opl-hero-actions">
             <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat opl-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
@@ -88,6 +94,8 @@
             <button type="button" class="opl-workflow-card" @onclick='() => SetFilter("closing")'><i class="bi bi-calendar-x" aria-hidden="true"></i><span><strong>Closing focus</strong><span>Work near-term revenue risk.</span></span></button>
             <button type="button" class="opl-workflow-card" @onclick='() => SetFilter("commit")'><i class="bi bi-check2-circle" aria-hidden="true"></i><span><strong>Commit review</strong><span>Inspect committed forecast.</span></span></button>
             <button type="button" class="opl-workflow-card" @onclick='() => SetView("forecast")'><i class="bi bi-graph-up-arrow" aria-hidden="true"></i><span><strong>Forecast quality</strong><span>Review weighted performance.</span></span></button>
+            <button type="button" class="opl-workflow-card" @onclick='() => SetView("risk")'><i class="bi bi-exclamation-octagon" aria-hidden="true"></i><span><strong>Risk queue</strong><span>Prioritize overdue and unassigned deals.</span></span></button>
+            <button type="button" class="opl-workflow-card" @onclick='() => SetView("settings")'><i class="bi bi-sliders2" aria-hidden="true"></i><span><strong>Configuration</strong><span>Inspect synced stage and pipeline rules.</span></span></button>
         </section>
 
         <section class="opl-filter-panel">
@@ -148,6 +156,16 @@
                         <div class="opl-section-head"><div><h2>Owner pipeline workload</h2><p>Open pipeline, weighted revenue, urgent closes, and forecast pressure by owner.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("closing")'>Closing</button></div>
                         <div class="opl-card-grid">@foreach (var owner in OwnerRows) { <article class="@(IsSelected(owner) ? "opl-owner-card opl-owner-card-selected" : "opl-owner-card")" @onclick="@(() => SelectOwner(owner))"><div class="opl-card-top"><span class="opl-owner-avatar">@Initials(owner.OwnerName)</span><span class="opl-badge @OwnerBadgeClass(owner)">@owner.Status</span></div><h3>@owner.OwnerName</h3><p>@owner.Summary</p><div class="opl-card-stats"><div><span>Open</span><strong>@owner.OpenCount</strong></div><div><span>Weighted</span><strong>@FormatCurrency(owner.WeightedAmount)</strong></div></div></article> }</div>
                     }
+                    else if (_view == "risk")
+                    {
+                        <div class="opl-section-head"><div><h2>At-risk pipeline queue</h2><p>Enterprise-ranked deals needing action because they are overdue, closing soon, unassigned, low-confidence, or high-value without commit.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetFilter("atRisk")'>At Risk</button></div>
+                        <div class="opl-card-grid">@foreach (var item in AtRiskRows) { <article class="@(IsSelected(item) ? "opl-risk-card opl-risk-card-selected" : "opl-risk-card")" @onclick="@(() => SelectOpportunity(item))"><div class="opl-card-top"><span class="opl-badge @RiskBadgeClass(item)">@RiskLabel(item)</span><button type="button" class="opl-card-check" @onclick:stopPropagation="true" @onclick="@(() => ToggleSelection(item.Id))"><i class="bi @(_selectedIds.Contains(item.Id) ? "bi-check-square-fill" : "bi-square")" aria-hidden="true"></i></button></div><h3>@item.Name</h3><p>@item.AccountName · @item.Owner</p><div class="opl-card-stats"><div><span>Close</span><strong>@FormatDate(item.CloseDate)</strong></div><div><span>Weighted</span><strong>@FormatCurrency(item.WeightedAmount)</strong></div></div><footer><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="@(() => MoveStageAsync(item, NextStage(item.Stage)))">Move</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick:stopPropagation="true" @onclick="@(() => NavigateOpportunity(item.Id))">Open</button></footer></article> }</div>
+                    }
+                    else if (_view == "settings")
+                    {
+                        <div class="opl-section-head"><div><h2>Pipeline configuration sync</h2><p>Tenant CRM settings and stage definitions currently driving board columns, probability signals, and workflow decisions.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/tenant/crm/pipeline-settings")'><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Manage Settings</button></div>
+                        <div class="opl-config-grid"><section class="opl-panel"><h3><i class="bi bi-diagram-3" aria-hidden="true"></i> Stage definitions</h3><div class="opl-config-list">@foreach (var stage in StageConfigRows) { <button type="button" class="opl-config-row" @onclick="@(() => SelectStage(stage.StageName))"><span><strong>@stage.StageName</strong><small>@stage.StageCode · sort @stage.SortOrder</small></span><span class="opl-badge @(stage.IsClosedStage ? stage.IsWonStage ? "opl-badge-success" : "opl-badge-danger" : "opl-badge-info")">@(stage.IsClosedStage ? stage.IsWonStage ? "Won" : "Closed" : $"{stage.ProbabilityPercent}%")</span></button> }</div></section><section class="opl-panel"><h3><i class="bi bi-sliders2" aria-hidden="true"></i> Pipeline settings</h3><div class="opl-config-list">@if (_settings.Count == 0) { <div class="opl-empty-compact">No pipeline settings configured for this tenant.</div> } else { @foreach (var setting in _settings) { <div class="opl-config-row"><span><strong>@setting.SettingKey</strong><small>@setting.Category · @setting.Description</small></span><span class="opl-setting-value">@setting.SettingValue</span></div> } }</div></section></div>
+                    }
                     else
                     {
                         <div class="opl-section-head"><div><h2>Pipeline operating table</h2><p>Native table synchronized from CRM opportunities, owners, accounts, stages, and forecast data.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters">Reset</button></div>
@@ -204,28 +222,34 @@
     private List<PipelineRow> _rows = [];
     private List<AccountDto> _accounts = [];
     private List<UserDto> _users = [];
+    private List<OpportunityStageDto> _stages = [];
+    private List<PipelineSettingDto> _settings = [];
     private HashSet<Guid> _selectedIds = [];
 
-    private static readonly string[] StageOptions = ["Qualification", "Needs Analysis", "Proposal", "Negotiation", "Closed Won", "Closed Lost"];
+    private static readonly string[] DefaultStageOptions = ["Qualification", "Needs Analysis", "Proposal", "Negotiation", "Closed Won", "Closed Lost"];
     private static readonly string[] ForecastOptions = ["Pipeline", "Best Case", "Commit", "Closed"];
-    private readonly ViewDef[] _views = [new("overview", "Overview", "bi-speedometer2"), new("board", "Stage Board", "bi-kanban"), new("forecast", "Forecast", "bi-graph-up-arrow"), new("owners", "Owners", "bi-people"), new("table", "Table", "bi-table")];
+    private readonly ViewDef[] _views = [new("overview", "Overview", "bi-speedometer2"), new("board", "Stage Board", "bi-kanban"), new("forecast", "Forecast", "bi-graph-up-arrow"), new("owners", "Owners", "bi-people"), new("risk", "At Risk", "bi-exclamation-octagon"), new("settings", "Settings", "bi-sliders2"), new("table", "Table", "bi-table")];
 
     private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
+    private IReadOnlyList<string> StageOptions => _stages.Count == 0 ? DefaultStageOptions : _stages.Where(s => s.IsActive).OrderBy(s => s.SortOrder).ThenBy(s => s.StageName).Select(s => s.StageName).DefaultIfEmpty().Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
     private IReadOnlyList<PipelineRow> FilteredRows => ApplyFilters(_rows).ToList();
     private IReadOnlyList<DistributionRow> StageRows => BuildDistribution(FilteredRows.Select(r => new DistributionSource(r.Stage, 1, r.Amount)));
     private IReadOnlyList<DistributionRow> ForecastRows => BuildDistribution(FilteredRows.Select(r => new DistributionSource(r.Forecast, 1, r.WeightedAmount)));
     private IReadOnlyList<DistributionRow> WinRows => BuildDistribution(FilteredRows.Select(r => new DistributionSource(WinBand(r.WinPct), 1, r.WeightedAmount)));
     private IReadOnlyList<OwnerRow> OwnerRows => BuildOwnerRows();
+    private IReadOnlyList<OpportunityStageDto> StageConfigRows => _stages.Count > 0 ? _stages : DefaultStageOptions.Select((name, index) => new OpportunityStageDto { StageCode = name.Replace(" ", string.Empty).ToUpperInvariant(), StageName = name, SortOrder = (index + 1) * 10, ProbabilityPercent = DefaultProbability(name), IsClosedStage = name.StartsWith("Closed", StringComparison.OrdinalIgnoreCase), IsWonStage = name.Equals("Closed Won", StringComparison.OrdinalIgnoreCase), IsActive = true }).ToList();
     private IEnumerable<string> OwnerOptions => _rows.Select(r => r.Owner).Where(o => !string.IsNullOrWhiteSpace(o) && o != "Unassigned").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(o => o);
     private PipelineRow? TopOpportunity => FilteredRows.OrderByDescending(r => r.PriorityScore).ThenByDescending(r => r.Amount).FirstOrDefault();
     private int OpenCount => _rows.Count(r => r.IsOpen);
     private int ClosingCount => _rows.Count(r => r.IsOpen && r.DaysToClose <= 7);
+    private int AtRiskCount => _rows.Count(IsAtRisk);
     private int CommitCount => _rows.Count(r => r.Forecast == "Commit");
     private decimal PipelineAmount => _rows.Where(r => r.IsOpen).Sum(r => r.Amount);
     private decimal WeightedAmount => _rows.Where(r => r.IsOpen).Sum(r => r.WeightedAmount);
     private double AverageWinRate => _rows.Count == 0 ? 0 : _rows.Average(r => (double)r.WinPct);
     private string GuidanceText => ClosingCount > 0 ? $"{ClosingCount.ToString("N0", CultureInfo.CurrentCulture)} open opportunity(s) close within 7 days and need immediate follow-up." : CommitCount > 0 ? $"{CommitCount.ToString("N0", CultureInfo.CurrentCulture)} committed opportunity(s) should be protected through close." : "Pipeline is ready for prioritization by stage, weighted value, and close timing.";
-    private IReadOnlyList<Metric> Metrics => [new("all", _rows.Count.ToString("N0", CultureInfo.CurrentCulture), "Total", "All pipeline records", "bi-funnel", "opl-kpi-blue"), new("open", OpenCount.ToString("N0", CultureInfo.CurrentCulture), "Open", "Active stages", "bi-kanban", "opl-kpi-green"), new("pipeline", FormatCurrency(PipelineAmount), "Pipeline", "Open estimated amount", "bi-cash-coin", "opl-kpi-cyan"), new("weighted", FormatCurrency(WeightedAmount), "Weighted", "Probability-adjusted value", "bi-graph-up-arrow", "opl-kpi-purple"), new("closing", ClosingCount.ToString("N0", CultureInfo.CurrentCulture), "Closing", "Due within 7 days", "bi-calendar-x", "opl-kpi-amber"), new("commit", CommitCount.ToString("N0", CultureInfo.CurrentCulture), "Commit", "Committed forecast", "bi-check2-circle", "opl-kpi-green")];
+    private IReadOnlyList<PipelineRow> AtRiskRows => FilteredRows.Where(IsAtRisk).OrderByDescending(r => r.RiskScore).ThenBy(r => r.CloseDate).ToList();
+    private IReadOnlyList<Metric> Metrics => [new("all", _rows.Count.ToString("N0", CultureInfo.CurrentCulture), "Total", "All pipeline records", "bi-funnel", "opl-kpi-blue"), new("open", OpenCount.ToString("N0", CultureInfo.CurrentCulture), "Open", "Active stages", "bi-kanban", "opl-kpi-green"), new("pipeline", FormatCurrency(PipelineAmount), "Pipeline", "Open estimated amount", "bi-cash-coin", "opl-kpi-cyan"), new("weighted", FormatCurrency(WeightedAmount), "Weighted", "Probability-adjusted value", "bi-graph-up-arrow", "opl-kpi-purple"), new("atRisk", AtRiskCount.ToString("N0", CultureInfo.CurrentCulture), "At Risk", "Overdue, unassigned, or low-confidence", "bi-exclamation-octagon", "opl-kpi-red"), new("commit", CommitCount.ToString("N0", CultureInfo.CurrentCulture), "Commit", "Committed forecast", "bi-check2-circle", "opl-kpi-green")];
 
     protected override async Task OnInitializedAsync()
     {
@@ -244,8 +268,12 @@
             var opportunities = await Api.SearchOpportunitiesAsync(_tenantId, pageSize: 500);
             var accounts = await Api.SearchAccountsAsync(_tenantId, pageSize: 500);
             var users = await Api.SearchUsersAsync(_tenantId, pageSize: 500);
+            var stages = await Api.SearchOpportunityStagesAsync(_tenantId, pageSize: 200);
+            var settings = await Api.GetPipelineSettingsAsync(_tenantId);
             _accounts = accounts?.Items.ToList() ?? [];
             _users = users?.Items.ToList() ?? [];
+            _stages = stages?.Items.OrderBy(s => s.SortOrder).ThenBy(s => s.StageName).ToList() ?? [];
+            _settings = settings?.OrderBy(s => s.Category).ThenBy(s => s.SettingKey).ToList() ?? [];
             _rows = (opportunities?.Items ?? []).Select(MapOpportunity).OrderByDescending(r => r.PriorityScore).ToList();
             _selected = _selected is null ? FilteredRows.FirstOrDefault() : _rows.FirstOrDefault(r => r.Id == _selected.Id) ?? FilteredRows.FirstOrDefault();
             _selectedOwner = null;
@@ -280,7 +308,7 @@
         if (!string.IsNullOrWhiteSpace(_stageFilter)) query = query.Where(r => r.Stage == _stageFilter);
         if (!string.IsNullOrWhiteSpace(_ownerFilter)) query = _ownerFilter == "Unassigned" ? query.Where(r => r.Owner == "Unassigned") : query.Where(r => r.Owner == _ownerFilter);
         if (!string.IsNullOrWhiteSpace(_forecastFilter)) query = query.Where(r => r.Forecast == _forecastFilter);
-        query = _activeFilter switch { "open" => query.Where(r => r.IsOpen), "pipeline" => query.Where(r => r.IsOpen), "weighted" => query.Where(r => r.IsOpen && r.WinPct > 0), "closing" => query.Where(r => r.IsOpen && r.DaysToClose <= 7), "highprob" => query.Where(r => r.WinPct >= 70), "commit" => query.Where(r => r.Forecast == "Commit"), _ => query };
+        query = _activeFilter switch { "open" => query.Where(r => r.IsOpen), "pipeline" => query.Where(r => r.IsOpen), "weighted" => query.Where(r => r.IsOpen && r.WinPct > 0), "closing" => query.Where(r => r.IsOpen && r.DaysToClose <= 7), "atRisk" => query.Where(IsAtRisk), "highprob" => query.Where(r => r.WinPct >= 70), "commit" => query.Where(r => r.Forecast == "Commit"), _ => query };
         return query.OrderByDescending(r => r.PriorityScore).ThenBy(r => r.CloseDate);
     }
 
@@ -341,7 +369,7 @@
         }
     }
 
-    private void SetFilter(string filter) { _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter; if (filter is "closing" or "commit" or "highprob") _view = "table"; _selected = FilteredRows.FirstOrDefault(); _selectedOwner = null; }
+    private void SetFilter(string filter) { _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter; if (filter is "atRisk") _view = "risk"; else if (filter is "closing" or "commit" or "highprob") _view = "table"; _selected = FilteredRows.FirstOrDefault(); _selectedOwner = null; }
     private void SetView(string view) { _view = view; _selected = FilteredRows.FirstOrDefault(); _selectedOwner = null; }
     private void SelectOpportunity(PipelineRow row) { _selected = row; _selectedOwner = null; }
     private void SelectOwner(OwnerRow owner) { _selectedOwner = owner; _selected = null; }
@@ -349,7 +377,7 @@
     private void SelectStage(string stage) { _stageFilter = _stageFilter == stage ? string.Empty : stage; _view = "table"; _selected = FilteredRows.FirstOrDefault(); }
     private void ToggleSelection(Guid id) { if (!_selectedIds.Remove(id)) _selectedIds.Add(id); }
     private void ClearSelection() => _selectedIds.Clear();
-    private void OpenStageModal() { if (_selected is not null) _selectedIds.Add(_selected.Id); _bulkStage = StageOptions.First(); _modalError = string.Empty; _showStageModal = true; }
+    private void OpenStageModal() { if (_selected is not null) _selectedIds.Add(_selected.Id); _bulkStage = StageOptions.FirstOrDefault() ?? DefaultStageOptions[0]; _modalError = string.Empty; _showStageModal = true; }
     private void CloseStageModal() { if (!_busy) { _showStageModal = false; _modalError = string.Empty; } }
     private void ResetFilters() { _activeFilter = "all"; _search = string.Empty; _stageFilter = string.Empty; _ownerFilter = string.Empty; _forecastFilter = string.Empty; _selected = FilteredRows.FirstOrDefault(); _selectedOwner = null; }
     private void OnSearchChanged(BlazorChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault(); }
@@ -360,7 +388,7 @@
     private void HideToast() => _toastVisible = false;
     private void ShowToast(string message, string kind) { _toastMessage = message.Length <= 150 ? message : $"{message[..147]}..."; _toastKind = ToastKind(kind); _toastVisible = true; }
 
-    private int ViewCount(string view) => view switch { "owners" => OwnerRows.Count, _ => FilteredRows.Count };
+    private int ViewCount(string view) => view switch { "owners" => OwnerRows.Count, "risk" => AtRiskRows.Count, "board" => StageOptions.Count, "settings" => StageConfigRows.Count + _settings.Count, _ => FilteredRows.Count };
     private bool IsSelected(PipelineRow row) => _selected?.Id == row.Id;
     private bool IsSelected(OwnerRow owner) => _selectedOwner?.OwnerName == owner.OwnerName;
     private string AccountName(Guid accountId) => _accounts.FirstOrDefault(a => a.AccountId == accountId)?.AccountName ?? "Unknown account";
@@ -368,8 +396,9 @@
     private static string DisplayUser(UserDto user) => !string.IsNullOrWhiteSpace(user.DisplayName) ? user.DisplayName : !string.IsNullOrWhiteSpace(user.FullName) ? user.FullName : user.UserName;
     private static string Initials(string name) { var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : parts.Length == 1 ? parts[0][..1] : "?"; }
     private static string StageName(int statusCode) => statusCode switch { 2 => "Needs Analysis", 3 => "Proposal", 4 => "Negotiation", 5 => "Closed Won", 6 => "Closed Lost", _ => "Qualification" };
-    private static string NextStage(string stage) { var index = Array.IndexOf(StageOptions, stage); return index < 0 || index >= StageOptions.Length - 1 ? stage : StageOptions[index + 1]; }
+    private string NextStage(string stage) { var stages = StageOptions.ToList(); var index = stages.FindIndex(s => string.Equals(s, stage, StringComparison.OrdinalIgnoreCase)); return index < 0 || index >= stages.Count - 1 ? stage : stages[index + 1]; }
     private static string WinBand(decimal winPct) => winPct >= 70 ? "High 70%+" : winPct >= 40 ? "Medium 40-69%" : "Low <40%";
+    private static int DefaultProbability(string stage) => stage switch { "Needs Analysis" => 25, "Proposal" => 50, "Negotiation" => 75, "Closed Won" => 100, "Closed Lost" => 0, _ => 10 };
     private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
     private static string FormatCurrency(decimal value) => value.ToString("C0", CultureInfo.CurrentCulture);
     private static string FormatDate(DateTime value) => value.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture);
@@ -380,6 +409,9 @@
     private static string StageBadgeClass(string stage) => stage switch { "Closed Won" => "opl-badge-success", "Closed Lost" => "opl-badge-danger", "Negotiation" => "opl-badge-warning", "Proposal" => "opl-badge-purple", "Needs Analysis" => "opl-badge-info", _ => "opl-badge-neutral" };
     private static string ForecastBadgeClass(string forecast) => forecast switch { "Commit" => "opl-badge-success", "Best Case" => "opl-badge-info", "Closed" => "opl-badge-purple", _ => "opl-badge-neutral" };
     private static string OwnerBadgeClass(OwnerRow owner) => owner.Status switch { "Gap" => "opl-badge-danger", "Urgent" => "opl-badge-warning", "High Value" => "opl-badge-success", _ => "opl-badge-info" };
+    private static bool IsAtRisk(PipelineRow row) => row.IsOpen && (row.IsOverdue || row.DaysToClose <= 7 || row.Owner == "Unassigned" || row.WinPct < 35 || (row.Amount >= 100000 && row.Forecast != "Commit"));
+    private static string RiskLabel(PipelineRow row) => row.IsOverdue ? "Overdue" : row.Owner == "Unassigned" ? "Unassigned" : row.DaysToClose <= 7 ? "Closing" : row.WinPct < 35 ? "Low Confidence" : "High Value";
+    private static string RiskBadgeClass(PipelineRow row) => row.IsOverdue || row.Owner == "Unassigned" ? "opl-badge-danger" : row.DaysToClose <= 7 ? "opl-badge-warning" : row.WinPct < 35 ? "opl-badge-info" : "opl-badge-purple";
     private static string NextBestAction(PipelineRow row) => row.IsOverdue ? "Close date is overdue. Update the close plan, decision outcome, or stage immediately." : row.DaysToClose <= 7 ? "Confirm the decision path, remove blockers, and update the forecast before close." : row.WinPct >= 70 ? "Protect this high-probability opportunity and drive it toward commit or close." : "Create the next activity and strengthen qualification or proposal signals.";
     private static IEnumerable<string> Signals(PipelineRow row) { yield return $"Stage: {row.Stage}."; yield return $"Weighted value: {FormatCurrency(row.WeightedAmount)}."; if (row.DaysToClose <= 7) yield return "Close date is within seven days."; if (row.WinPct >= 70) yield return "High win probability."; if (row.Owner == "Unassigned") yield return "Owner assignment is required."; }
 
@@ -415,6 +447,7 @@
         public int DaysToClose => (int)Math.Ceiling((CloseDate.Date - DateTime.UtcNow.Date).TotalDays);
         public bool IsOverdue => IsOpen && CloseDate.Date < DateTime.UtcNow.Date;
         public decimal WeightedAmount => Amount * WinPct / 100m;
+        public decimal RiskScore => (IsOverdue ? 500000 : 0) + (Owner == "Unassigned" ? 300000 : 0) + (DaysToClose <= 7 ? 250000 : 0) + (WinPct < 35 ? 125000 : 0) + Amount;
         public decimal PriorityScore => (IsOpen ? 500 : 0) + WeightedAmount + (DaysToClose <= 7 ? 250000 : 0) + (Forecast == "Commit" ? 150000 : 0) + (WinPct * 1000);
     }
 }

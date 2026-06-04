@@ -3,151 +3,377 @@
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>ID Card Settings — Policy Configuration</PageTitle>
+<PageTitle>ID Card Command Center — Policy Configuration</PageTitle>
 
-<AppPageHeader Title="ID Card Settings"
-               Subtitle="Configure insurance ID card generation, delivery, and display defaults"
-               Icon="bi-card-text">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<div class="pc-kpi-strip">
-    <div class="pc-kpi-card" title="Total ID card settings">
-        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-card-text" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_settings.Count</div><div class="pc-kpi-label">Total Settings</div></div>
-    </div>
-    <div class="pc-kpi-card" title="Boolean settings enabled">
-        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-toggle-on" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_settings.Count(s => IsBoolean(s) && IsTrue(s.SettingValue))</div><div class="pc-kpi-label">Enabled</div></div>
-    </div>
-    <div class="pc-kpi-card" title="Boolean settings disabled">
-        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-toggle-off" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_settings.Count(s => IsBoolean(s) && !IsTrue(s.SettingValue))</div><div class="pc-kpi-label">Disabled</div></div>
-    </div>
-</div>
-
-@if (_loadError is not null)
-{
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
-    </div>
-}
-
-<div class="um-settings-container">
-    @if (_loading)
-    {
-        <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading…</span></div>
-    }
-    else
-    {
-        <div class="row g-4">
-            @foreach (var setting in _settings)
-            {
-                <div class="col-md-6">
-                    <div class="um-settings-card">
-                        <div class="um-settings-card__header">
-                            <div>
-                                <div class="fw-semibold">@FormatKey(setting.SettingKey)</div>
-                                <div class="text-muted small">@setting.Description</div>
-                            </div>
-                        </div>
-                        <div class="um-settings-card__body">
-                            @if (IsBoolean(setting))
-                            {
-                                <div class="form-check form-switch">
-                                    <input class="form-check-input" type="checkbox"
-                                           checked="@IsTrue(setting.SettingValue)"
-                                           @onchange="async e => await UpdateAsync(setting, BoolStr(e.Value))" />
-                                    <label class="form-check-label">@(IsTrue(setting.SettingValue) ? "Enabled" : "Disabled")</label>
-                                </div>
-                            }
-                            else if (setting.SettingKey.Contains("Format", StringComparison.OrdinalIgnoreCase))
-                            {
-                                <select class="um-input" value="@setting.SettingValue" @onchange="async e => await UpdateAsync(setting, e.Value?.ToString())">
-                                    <option value="Standard">Standard</option>
-                                    <option value="Compact">Compact</option>
-                                    <option value="StateSpecific">State Specific</option>
-                                    <option value="CarrierTemplate">Carrier Template</option>
-                                </select>
-                            }
-                            else
-                            {
-                                <div class="d-flex gap-2">
-                                    <input class="um-input flex-grow-1" value="@setting.SettingValue" @onchange="async e => await UpdateAsync(setting, e.Value?.ToString())" />
-                                    <span class="text-muted align-self-center small">@setting.SettingType</span>
-                                </div>
-                            }
+<div class="idc-page">
+    <section class="idc-hero">
+        <div class="idc-hero__content">
+            <div class="idc-hero-left">
+                <span class="idc-hero-icon"><i class="bi bi-card-text" aria-hidden="true"></i></span>
+                <div class="idc-hero-title">
+                    <div class="idc-hero__eyebrow">Enterprise ID card configuration</div>
+                    <div class="idc-title-row">
+                        <h1>ID Card Command Center</h1>
+                        <div class="idc-hero__meta">
+                            <span><i class="bi bi-sliders" aria-hidden="true"></i>@_settings.Count settings</span>
+                            <span><i class="bi bi-toggle-on" aria-hidden="true"></i>@_settings.Count(x => IsBoolean(x) && IsTrue(x.SettingValue)) enabled</span>
+                            <span><i class="bi bi-send-check" aria-hidden="true"></i>@_settings.Count(IsDeliverySetting) delivery</span>
+                            <span><i class="bi bi-exclamation-octagon" aria-hidden="true"></i>@_settings.Count(NeedsReview) need review</span>
                         </div>
                     </div>
                 </div>
-            }
+            </div>
+            <p>Govern insurance ID card defaults, delivery options, state-specific formats, vehicle display rules, compliance language, and servicing readiness from one enterprise workspace.</p>
         </div>
+        <div class="idc-hero__actions">
+            <button type="button" class="idc-btn idc-btn--light" @onclick="RefreshAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "idc-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="idc-btn idc-btn--primary" @onclick="SaveDirtyAsync" disabled="@(!_dirtyValues.Any() || _saving)"><i class="bi bi-cloud-check" aria-hidden="true"></i> Save Changes</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger idc-alert" style="border-left: 4px solid #dc3545; animation: idc-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
     }
+
+    <section class="idc-kpi-strip" aria-label="ID Card settings KPIs">
+        @KpiCard("all", "Total Settings", _settings.Count.ToString(), "All ID card configuration controls", "bi-sliders", "blue")
+        @KpiCard("enabled", "Enabled", _settings.Count(x => IsBoolean(x) && IsTrue(x.SettingValue)).ToString(), "Boolean settings currently enabled", "bi-toggle-on", "green")
+        @KpiCard("delivery", "Issuance", _settings.Count(IsDeliverySetting).ToString(), "ID card issuance, delivery, print, and portal controls", "bi-send-check", "cyan")
+        @KpiCard("templates", "Formats", _settings.Count(IsTemplateSetting).ToString(), "State, carrier, template, display, and branding controls", "bi-file-earmark-richtext", "purple")
+        @KpiCard("compliance", "Compliance", _settings.Count(IsComplianceSetting).ToString(), "State, vehicle, coverage, legal, and audit-sensitive controls", "bi-shield-check", "amber")
+        @KpiCard("review", "Needs Review", _settings.Count(NeedsReview).ToString(), "Blank, disabled, or incomplete high-value settings", "bi-exclamation-octagon", "red")
+    </section>
+
+    <section class="idc-workflows" aria-label="ID Card workflows">
+        <button type="button" class="idc-workflow" @onclick='() => SetDashboardFocus("all", "importance")'><span class="idc-workflow-icon"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></span><span class="idc-workflow-meta"><strong>Priority review</strong><span>Rank settings by enterprise impact and readiness</span></span></button>
+        <button type="button" class="idc-workflow" @onclick='() => SetDashboardFocus("delivery", "importance")'><span class="idc-workflow-icon"><i class="bi bi-send-check" aria-hidden="true"></i></span><span class="idc-workflow-meta"><strong>Issuance readiness</strong><span>Review email, portal, download, and print defaults</span></span></button>
+        <button type="button" class="idc-workflow" @onclick='() => SetDashboardFocus("templates", "importance")'><span class="idc-workflow-icon"><i class="bi bi-file-earmark-richtext" aria-hidden="true"></i></span><span class="idc-workflow-meta"><strong>State formats</strong><span>Control template, carrier, state, and display settings</span></span></button>
+        <button type="button" class="idc-workflow" @onclick='() => SetDashboardFocus("compliance", "importance")'><span class="idc-workflow-icon"><i class="bi bi-shield-check" aria-hidden="true"></i></span><span class="idc-workflow-meta"><strong>Compliance controls</strong><span>Focus state proof, vehicle, coverage, and audit settings</span></span></button>
+        <button type="button" class="idc-workflow" @onclick='() => SetDashboardFocus("groups", "category")'><span class="idc-workflow-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span><span class="idc-workflow-meta"><strong>Setting groups</strong><span>Compare issuance, format, compliance, and automation mix</span></span></button>
+    </section>
+
+    <section class="idc-filter-panel" aria-label="ID Card settings filters">
+        <div class="idc-search"><i class="bi bi-search" aria-hidden="true"></i><input type="search" placeholder="Search setting key, value, type, category, or description…" aria-label="Search ID card settings" value="@_searchTerm" @oninput="args => OnSearchInputValue(args.Value?.ToString())" /></div>
+        <div class="idc-filter-grid">
+            <label><span>Category</span><select class="form-select" @bind="_categoryFilter" @bind:after="ApplyFilters"><option value="">All categories</option>@foreach (var category in CategoryOptions) { <option value="@category">@category</option> }</select></label>
+            <label><span>Value Type</span><select class="form-select" @bind="_typeFilter" @bind:after="ApplyFilters"><option value="">All types</option>@foreach (var type in TypeOptions) { <option value="@type">@type</option> }</select></label>
+            <label><span>Sort</span><select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters"><option value="importance">Importance</option><option value="category">Category</option><option value="key">Setting key</option><option value="type">Type</option><option value="created">Newest</option></select></label>
+        </div>
+        <button type="button" class="idc-btn idc-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+    </section>
+
+    @if (_dirtyValues.Any())
+    {
+        <section class="idc-change-bar" aria-label="Pending ID card setting changes">
+            <div><i class="bi bi-pencil-square" aria-hidden="true"></i><strong>@_dirtyValues.Count pending change(s)</strong><span>Review and save changes to sync ID card workflows.</span></div>
+            <div class="idc-change-actions"><button type="button" class="idc-btn idc-btn--ghost" @onclick="DiscardDirtyChanges" disabled="@_saving">Discard</button><button type="button" class="idc-btn idc-btn--primary" @onclick="SaveDirtyAsync" disabled="@_saving">@if (_saving) { <span class="idc-spin-sm"></span> } Save All</button></div>
+        </section>
+    }
+
+    <nav class="idc-tabs" aria-label="ID Card setting views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="idc-tab @(_activeTab == tab.Key ? "idc-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)"><i class="bi @tab.Icon" aria-hidden="true"></i><span>@tab.Label</span><strong>@TabCount(tab.Key)</strong></button>
+        }
+    </nav>
+
+    <main class="idc-dashboard">
+        <section class="idc-main-card">
+            <div class="idc-card-header">
+                <div><span class="idc-section-kicker">@ActiveViewTitle</span><h2>@FilteredSettings.Count() ID card settings</h2><p>Prioritized by ID card delivery impact, compliance sensitivity, template readiness, enabled state, and configuration completeness.</p></div>
+                <div class="idc-card-actions">
+                    <button type="button" class="idc-btn idc-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Prev</button>
+                    <span class="idc-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="idc-btn idc-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="idc-loading"><span class="idc-spinner"></span> Loading ID card settings…</div>
+            }
+            else if (!FilteredSettings.Any())
+            {
+                <div class="idc-empty"><i class="bi bi-card-text" aria-hidden="true"></i><strong>No ID card settings found</strong><span>Adjust the active KPI, tab, search, or filters.</span></div>
+            }
+            else if (_activeTab == "groups")
+            {
+                <div class="idc-group-grid">
+                    @foreach (var group in CategoryGroups)
+                    {
+                        <article class="idc-group-card"><div class="idc-group-icon"><i class="bi @CategoryIcon(group.Name)" aria-hidden="true"></i></div><div class="idc-group-meta"><h3>@group.Name</h3><p>@group.Count settings • @group.Enabled enabled • @group.ReviewCount need review • @group.DirtyCount pending</p><div class="idc-mini-bar"><span style="width:@group.Percent%"></span></div></div><button type="button" class="idc-btn idc-btn--ghost" @onclick="() => FilterByCategory(group.Name)">Open</button></article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="idc-table-wrap">
+                    <table class="idc-table">
+                        <thead><tr><th>Importance</th><th>Setting</th><th>Category</th><th>Value</th><th>Type</th><th>Readiness</th><th>Updated</th><th class="idc-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var setting in PagedSettings)
+                            {
+                                <tr class="@(_selected?.IdCardSettingId == setting.IdCardSettingId ? "idc-row idc-row--selected" : "idc-row")" @onclick="() => SelectRow(setting)">
+                                    <td>@ImportanceBadge(setting)</td>
+                                    <td><div class="idc-setting-cell"><div class="idc-avatar" style="@AvatarStyle(setting.SettingKey)" aria-hidden="true">@Initials(setting.SettingKey)</div><div class="idc-setting-meta"><button type="button" class="idc-link-button" @onclick:stopPropagation="true" @onclick="() => OpenEdit(setting)">@FormatKey(setting.SettingKey)</button><small>@setting.SettingKey</small></div></div></td>
+                                    <td><span class="idc-pill @CategoryBadgeClass(setting)"><i class="bi @CategoryIcon(Category(setting))" aria-hidden="true"></i>@Category(setting)</span></td>
+                                    <td @onclick:stopPropagation="true">@SettingValueEditor(setting)</td>
+                                    <td><span class="idc-pill idc-pill--neutral">@Safe(setting.SettingType, "Text")</span></td>
+                                    <td><span class="idc-pill @(NeedsReview(setting) ? "idc-pill--amber" : "idc-pill--green")">@(NeedsReview(setting) ? "Review" : "Ready")</span></td>
+                                    <td><span class="idc-date">@FormatDate(setting.CreatedDateUtc)</span></td>
+                                    <td class="idc-actions-col" @onclick:stopPropagation="true"><button type="button" class="idc-icon-btn" title="Edit ID card setting" @onclick="() => OpenEdit(setting)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="idc-icon-btn" title="Reset pending value" @onclick="() => ResetSetting(setting)" disabled="@(!IsDirty(setting))"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i></button><button type="button" class="idc-icon-btn idc-icon-btn--success" title="Save setting" @onclick="() => SaveSingleAsync(setting)" disabled="@(!IsDirty(setting) || _saving)"><i class="bi bi-cloud-check" aria-hidden="true"></i></button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="idc-side-panel" aria-label="ID Card insights">
+            <section class="idc-panel-card">
+                <span class="idc-section-kicker">Selected setting</span>
+                @if (_selected is null)
+                {
+                    <div class="idc-empty idc-empty--compact"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select an ID card setting</strong><span>Open details, recommendations, and quick actions.</span></div>
+                }
+                else
+                {
+                    <div class="idc-selected__title"><div class="idc-avatar idc-avatar--lg" style="@AvatarStyle(_selected.SettingKey)" aria-hidden="true">@Initials(_selected.SettingKey)</div><div><h3>@FormatKey(_selected.SettingKey)</h3><span>@_selected.SettingKey • @Category(_selected)</span></div></div>
+                    <div class="idc-score-card @ImportanceClass(_selected)"><span>Importance score</span><strong>@ImportanceScore(_selected)</strong><small>@RecommendedAction(_selected)</small></div>
+                    <dl class="idc-detail-list"><div><dt>Current value</dt><dd>@Safe(CurrentValue(_selected), "Blank")</dd></div><div><dt>Type</dt><dd>@Safe(_selected.SettingType, "Text")</dd></div><div><dt>Category</dt><dd>@Category(_selected)</dd></div><div><dt>Pending change</dt><dd>@(IsDirty(_selected) ? "Yes" : "No")</dd></div><div><dt>Created</dt><dd>@FormatDate(_selected.CreatedDateUtc)</dd></div></dl>
+                    @if (!string.IsNullOrWhiteSpace(_selected.Description)) { <p class="idc-description">@_selected.Description</p> }
+                    <div class="idc-selected-actions"><button type="button" class="idc-btn idc-btn--primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="idc-btn idc-btn--ghost" @onclick="() => SaveSingleAsync(_selected)" disabled="@(!IsDirty(_selected) || _saving)"><i class="bi bi-cloud-check" aria-hidden="true"></i> Save</button><button type="button" class="idc-btn idc-btn--ghost" @onclick="() => ResetSetting(_selected)" disabled="@(!IsDirty(_selected))"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset</button></div>
+                }
+            </section>
+            <section class="idc-panel-card"><span class="idc-section-kicker">Enterprise insights</span><div class="idc-insight-list"><div class="idc-insight"><i class="bi bi-send-check" aria-hidden="true"></i><div><strong>Delivery readiness</strong><span>@DeliveryInsight</span></div></div><div class="idc-insight"><i class="bi bi-shield-check" aria-hidden="true"></i><div><strong>Compliance posture</strong><span>@ComplianceInsight</span></div></div><div class="idc-insight"><i class="bi bi-cloud-check" aria-hidden="true"></i><div><strong>Change control</strong><span>@ChangeInsight</span></div></div></div></section>
+        </aside>
+    </main>
 </div>
 
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true"><ToastPosition X="Right" Y="Bottom" /></SfToast>
+@if (_showEditor && _editingSetting is not null)
+{
+    <div class="idc-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="idcard-form-title">
+        <div class="idc-modal">
+            <div class="idc-modal__header"><i class="bi bi-card-text" aria-hidden="true"></i><span id="idcard-form-title">Edit ID Card Setting</span><button type="button" class="idc-icon-btn idc-icon-btn--light ms-auto" @onclick="CloseEditor" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <div class="idc-modal__body">
+                <div class="idc-validation-note"><i class="bi bi-info-circle" aria-hidden="true"></i><div><strong>ID Card governance</strong><span>Changes affect ID card issuance, state-specific proof of insurance, vehicle display, and policy servicing workflows.</span></div></div>
+                <div class="idc-form-grid">
+                    <label class="idc-field"><span>Setting Key</span><input class="form-control" value="@_editingSetting.SettingKey" disabled /></label>
+                    <label class="idc-field"><span>Category</span><input class="form-control" value="@Category(_editingSetting)" disabled /></label>
+                    <label class="idc-field"><span>Type</span><input class="form-control" value="@Safe(_editingSetting.SettingType, "Text")" disabled /></label>
+                    <label class="idc-field"><span>Value</span>@ModalValueEditor(_editingSetting)<span class="text-danger">@_editorError</span></label>
+                    <label class="idc-field idc-field--wide"><span>Description</span><textarea class="form-control" rows="3" disabled>@_editingSetting.Description</textarea></label>
+                </div>
+            </div>
+            <div class="idc-modal__footer"><button type="button" class="idc-btn idc-btn--ghost" @onclick="CloseEditor">Close</button><button type="button" class="idc-btn idc-btn--ghost" @onclick="() => ResetSetting(_editingSetting)" disabled="@(!IsDirty(_editingSetting))">Reset</button><button type="button" class="idc-btn idc-btn--primary" @onclick="() => SaveSingleAsync(_editingSetting)" disabled="@(!IsDirty(_editingSetting) || _saving)">@if (_saving) { <span class="idc-spin-sm"></span> } Save Setting</button></div>
+        </div>
+    </div>
+}
+
+@if (_confirmVisible)
+{
+    <div class="idc-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="idcard-confirm-title"><div class="idc-confirm"><div class="idc-confirm__body"><div class="idc-confirm-icon idc-confirm-icon--danger"><i class="bi @_confirmIcon" aria-hidden="true"></i></div><div><h3 id="idcard-confirm-title">@_confirmTitle</h3><p>@_confirmMessage</p></div></div><div class="idc-modal__footer"><button type="button" class="idc-btn idc-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button><button type="button" class="idc-btn idc-btn--danger" @onclick="ExecuteConfirmedAsync" disabled="@_saving">@if (_saving) { <span class="idc-spin-sm"></span> } Confirm</button></div></div></div>
+}
+
+<div class="idc-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="idc-toast idc-toast--@toast.Kind"><i class="bi @(toast.Kind == "success" ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill")" aria-hidden="true"></i><span>@toast.Message</span><button type="button" @onclick="() => DismissToast(toast.Id)" aria-label="Dismiss notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+    }
+</div>
 
 @code {
     Guid TenantAdminUserId { get; set; }
     Guid DevTenantId { get; set; }
     Guid DevUserId { get; set; }
-    private Guid _tenantId;
-    private Guid _tenantAdminUserId;
     Guid TenantId { get; set; }
-    List<IdCardSettingDto> _settings = [];
-    bool _loading;
-    string? _loadError;
-    SfToast _toast = default!;
 
-    protected override async Task OnInitializedAsync()
+    readonly List<DashboardTab> _tabs = [new("all", "All", "bi-sliders"), new("enabled", "Enabled", "bi-toggle-on"), new("delivery", "Delivery", "bi-send-check"), new("templates", "Templates", "bi-file-earmark-richtext"), new("compliance", "Compliance", "bi-shield-check"), new("review", "Needs Review", "bi-exclamation-octagon"), new("groups", "Groups", "bi-diagram-3")];
+    readonly Dictionary<Guid, string?> _dirtyValues = [];
+    readonly List<ToastItem> _toasts = [];
+    List<IdCardSettingDto> _settings = [];
+    IdCardSettingDto? _selected;
+    IdCardSettingDto? _editingSetting;
+    Func<Task>? _confirmAction;
+    string _activeTab = "all";
+    string _searchTerm = string.Empty;
+    string _categoryFilter = string.Empty;
+    string _typeFilter = string.Empty;
+    string _sortMode = "importance";
+    string _editorValue = string.Empty;
+    string _editorError = string.Empty;
+    string _confirmTitle = string.Empty;
+    string _confirmMessage = string.Empty;
+    string _confirmIcon = "bi-exclamation-triangle-fill";
+    string? _loadError;
+    bool _loading;
+    bool _saving;
+    bool _showEditor;
+    bool _confirmVisible;
+    int _page = 1;
+    const int PageSize = 12;
+
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policy Config", null), new("ID Card Settings", null)); await LoadAsync(); }
+
+    IEnumerable<IdCardSettingDto> FilteredSettings
     {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policy Config", null), new("ID Card Settings", null));
-        await LoadAsync();
+        get
+        {
+            IEnumerable<IdCardSettingDto> query = _settings;
+            query = _activeTab switch { "enabled" => query.Where(x => IsBoolean(x) && IsTrue(CurrentValue(x))), "delivery" => query.Where(IsDeliverySetting), "templates" => query.Where(IsTemplateSetting), "compliance" => query.Where(IsComplianceSetting), "review" => query.Where(NeedsReview), _ => query };
+            if (!string.IsNullOrWhiteSpace(_searchTerm)) query = query.Where(MatchesSearch);
+            if (!string.IsNullOrWhiteSpace(_categoryFilter)) query = query.Where(x => string.Equals(Category(x), _categoryFilter, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(_typeFilter)) query = query.Where(x => string.Equals(Safe(x.SettingType, "Text"), _typeFilter, StringComparison.OrdinalIgnoreCase));
+            return _sortMode switch { "category" => query.OrderBy(Category).ThenBy(x => x.SettingKey), "key" => query.OrderBy(x => x.SettingKey), "type" => query.OrderBy(x => Safe(x.SettingType, "Text")).ThenBy(x => x.SettingKey), "created" => query.OrderByDescending(x => x.CreatedDateUtc), _ => query.OrderByDescending(ImportanceScore).ThenBy(Category).ThenBy(x => x.SettingKey) };
+        }
     }
+
+    List<IdCardSettingDto> PagedSettings => FilteredSettings.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+    int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredSettings.Count() / (double)PageSize));
+    bool HasFilters => !string.IsNullOrWhiteSpace(_searchTerm) || !string.IsNullOrWhiteSpace(_categoryFilter) || !string.IsNullOrWhiteSpace(_typeFilter) || _activeTab != "all" || _sortMode != "importance";
+    string ActiveViewTitle => _tabs.FirstOrDefault(x => x.Key == _activeTab)?.Label ?? "All";
+    IEnumerable<string> CategoryOptions => CategoryGroups.Select(x => x.Name);
+    IEnumerable<string> TypeOptions => _settings.Select(x => Safe(x.SettingType, "Text")).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    string DeliveryInsight => _settings.Any(IsDeliverySetting) ? $"{_settings.Count(IsDeliverySetting)} issuance settings control ID card distribution channels." : "No issuance settings were detected.";
+    string ComplianceInsight => _settings.Any(IsComplianceSetting) ? $"{_settings.Count(IsComplianceSetting)} compliance-sensitive settings should be reviewed before production rollout." : "No compliance-sensitive settings were detected.";
+    string ChangeInsight => _dirtyValues.Count == 0 ? "All ID card settings are synced with the current tenant configuration." : $"{_dirtyValues.Count} setting change(s) are pending save.";
+    List<CategoryGroupSummary> CategoryGroups => _settings.GroupBy(Category).Select(g => new CategoryGroupSummary(g.Key, g.Count(), g.Count(x => IsBoolean(x) && IsTrue(CurrentValue(x))), g.Count(NeedsReview), g.Count(IsDirty), _settings.Count == 0 ? 0 : Math.Round(g.Count() * 100m / _settings.Count, 0))).OrderByDescending(x => x.Count).ToList();
 
     async Task LoadAsync()
     {
         _loading = true;
         _loadError = null;
-        try { _settings = await Api.GetIdCardSettingsAsync(TenantId) ?? []; }
-        catch (Exception ex) { _loadError = ex.Message; }
+        try
+        {
+            _settings = await Api.GetIdCardSettingsAsync(TenantId) ?? [];
+            _dirtyValues.Clear();
+            _selected = _selected is null ? _settings.OrderByDescending(ImportanceScore).FirstOrDefault() : _settings.FirstOrDefault(x => x.IdCardSettingId == _selected.IdCardSettingId) ?? _settings.OrderByDescending(ImportanceScore).FirstOrDefault();
+            NormalizePage();
+        }
+        catch (Exception ex) { _loadError = $"Failed to load ID card settings: {ex.Message}"; }
         finally { _loading = false; }
     }
 
-    async Task UpdateAsync(IdCardSettingDto setting, string? newValue)
+    Task RefreshAsync()
     {
-        var oldValue = setting.SettingValue;
-        try
-        {
-            setting.SettingValue = newValue;
-            await Api.UpdateIdCardSettingAsync(setting.IdCardSettingId, new(newValue));
-            await _toast.ShowAsync(new() { Content = $"{FormatKey(setting.SettingKey)} updated", CssClass = "e-toast-success" });
-        }
-        catch (Exception ex)
-        {
-            setting.SettingValue = oldValue;
-            await _toast.ShowAsync(new() { Content = $"Update failed: {ex.Message}", CssClass = "e-toast-danger" });
-        }
+        if (!_dirtyValues.Any()) return LoadAsync();
+        OpenConfirm("Discard Pending ID Card Changes", "Refreshing will discard unsaved ID card setting changes. Continue?", "bi-arrow-clockwise", LoadAsync);
+        return Task.CompletedTask;
     }
 
+    void ApplyFilters() { _page = 1; NormalizePage(); }
+    void OnSearchInputValue(string? value) { _searchTerm = value ?? string.Empty; ApplyFilters(); }
+    void SetDashboardFocus(string tab, string sort) { _activeTab = tab; _sortMode = sort; _page = 1; NormalizePage(); }
+    void SetActiveTab(string tab) { _activeTab = tab; _page = 1; NormalizePage(); }
+    void PreviousPage() { if (_page > 1) _page--; }
+    void NextPage() { if (_page < TotalPages) _page++; }
+    void NormalizePage() { if (_page > TotalPages) _page = TotalPages; }
+    void SelectRow(IdCardSettingDto item) => _selected = item;
+    void ClearFilters() { _searchTerm = string.Empty; _categoryFilter = string.Empty; _typeFilter = string.Empty; _sortMode = "importance"; _activeTab = "all"; _page = 1; }
+    void FilterByCategory(string category) { _activeTab = "all"; _categoryFilter = category; _sortMode = "importance"; _page = 1; }
+    void OpenEdit(IdCardSettingDto setting) { _selected = setting; _editingSetting = setting; _editorValue = CurrentValue(setting) ?? string.Empty; _editorError = string.Empty; _showEditor = true; }
+    void CloseEditor() { _showEditor = false; _editingSetting = null; _editorValue = string.Empty; _editorError = string.Empty; }
+
+    void SetPendingValue(IdCardSettingDto setting, string? value)
+    {
+        if (string.Equals(setting.SettingValue, value, StringComparison.Ordinal)) _dirtyValues.Remove(setting.IdCardSettingId);
+        else _dirtyValues[setting.IdCardSettingId] = value;
+        if (_editingSetting?.IdCardSettingId == setting.IdCardSettingId) _editorValue = value ?? string.Empty;
+    }
+
+    void ResetSetting(IdCardSettingDto setting)
+    {
+        _dirtyValues.Remove(setting.IdCardSettingId);
+        if (_editingSetting?.IdCardSettingId == setting.IdCardSettingId) _editorValue = setting.SettingValue ?? string.Empty;
+    }
+
+    void DiscardDirtyChanges()
+    {
+        if (!_dirtyValues.Any()) return;
+        OpenConfirm("Discard ID Card Changes", $"Discard {_dirtyValues.Count} pending ID card setting change(s)?", "bi-arrow-counterclockwise", () => { _dirtyValues.Clear(); if (_editingSetting is not null) _editorValue = _editingSetting.SettingValue ?? string.Empty; ShowToast("success", "Pending ID card changes discarded."); return Task.CompletedTask; });
+    }
+
+    async Task SaveSingleAsync(IdCardSettingDto setting)
+    {
+        if (!IsDirty(setting)) return;
+        _saving = true;
+        try
+        {
+            var value = CurrentValue(setting);
+            await Api.UpdateIdCardSettingAsync(setting.IdCardSettingId, new(value));
+            setting.SettingValue = value;
+            _dirtyValues.Remove(setting.IdCardSettingId);
+            ShowToast("success", $"{FormatKey(setting.SettingKey)} updated.");
+        }
+        catch (Exception ex) { ShowToast("danger", $"Update failed: {ex.Message}"); }
+        finally { _saving = false; }
+    }
+
+    async Task SaveDirtyAsync()
+    {
+        if (!_dirtyValues.Any()) return;
+        _saving = true;
+        var saved = 0;
+        try
+        {
+            foreach (var pending in _dirtyValues.ToList())
+            {
+                var setting = _settings.FirstOrDefault(x => x.IdCardSettingId == pending.Key);
+                if (setting is null) continue;
+                try
+                {
+                    await Api.UpdateIdCardSettingAsync(setting.IdCardSettingId, new(pending.Value));
+                    setting.SettingValue = pending.Value;
+                    _dirtyValues.Remove(setting.IdCardSettingId);
+                    saved++;
+                }
+                catch (Exception ex) { ShowToast("danger", $"Update failed for {FormatKey(setting.SettingKey)}: {ex.Message}"); }
+            }
+            if (saved > 0) ShowToast("success", $"{saved} ID card setting(s) saved.");
+        }
+        finally { _saving = false; }
+    }
+
+    void OpenConfirm(string title, string message, string icon, Func<Task> action) { _confirmTitle = title; _confirmMessage = message; _confirmIcon = icon; _confirmAction = action; _confirmVisible = true; }
+    void CloseConfirm() { _confirmVisible = false; _confirmAction = null; }
+    async Task ExecuteConfirmedAsync() { if (_confirmAction is null) return; _saving = true; try { await _confirmAction(); _confirmVisible = false; _confirmAction = null; } finally { _saving = false; } }
+
+    RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string color) => @<button type="button" class="idc-kpi-card idc-kpi-card--@color @(_activeTab == key ? "idc-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveTab(key)"><span class="idc-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span><span class="idc-kpi-body"><span class="idc-kpi-label">@label</span><strong class="idc-kpi-value">@value</strong><span class="idc-kpi-sub">@subtitle</span></span></button>;
+    RenderFragment SettingValueEditor(IdCardSettingDto setting) => @<div class="idc-value-editor @(IsDirty(setting) ? "idc-value-editor--dirty" : null)">@if (IsBoolean(setting)) { <label class="idc-switch"><input type="checkbox" checked="@IsTrue(CurrentValue(setting))" @onchange="args => SetPendingValue(setting, BoolStr(args.Value))" /><span></span></label> <small>@(IsTrue(CurrentValue(setting)) ? "Enabled" : "Disabled")</small> } else if (IsDeliverySetting(setting)) { <select class="form-select form-select-sm" value="@CurrentValue(setting)" @onchange="args => SetPendingValue(setting, args.Value?.ToString())"><option value="Email">Email</option><option value="Portal">Portal</option><option value="Download">Download</option><option value="Print">Print</option><option value="EmailAndPortal">Email + Portal</option></select> } else if (IsTemplateSetting(setting) && Contains(setting.SettingKey, "Format")) { <select class="form-select form-select-sm" value="@CurrentValue(setting)" @onchange="args => SetPendingValue(setting, args.Value?.ToString())"><option value="Standard">Standard</option><option value="Compact">Compact</option><option value="StateSpecific">State Specific</option><option value="CarrierTemplate">Carrier Template</option><option value="Custom">Custom</option></select> } else { <input class="form-control form-control-sm" value="@CurrentValue(setting)" @onchange="args => SetPendingValue(setting, args.Value?.ToString())" /> }</div>;
+    RenderFragment ModalValueEditor(IdCardSettingDto setting) => @<div>@if (IsBoolean(setting)) { <label class="idc-switch idc-switch--modal"><input type="checkbox" checked="@IsTrue(_editorValue)" @onchange="args => SetPendingValue(setting, BoolStr(args.Value))" /><span></span><strong>@(IsTrue(_editorValue) ? "Enabled" : "Disabled")</strong></label> } else if (IsDeliverySetting(setting)) { <select class="form-select" value="@_editorValue" @onchange="args => SetPendingValue(setting, args.Value?.ToString())"><option value="Email">Email</option><option value="Portal">Portal</option><option value="Download">Download</option><option value="Print">Print</option><option value="EmailAndPortal">Email + Portal</option></select> } else { <input class="form-control" value="@_editorValue" @onchange="args => SetPendingValue(setting, args.Value?.ToString())" /> }</div>;
+
+    int TabCount(string key) => key switch { "enabled" => _settings.Count(x => IsBoolean(x) && IsTrue(CurrentValue(x))), "delivery" => _settings.Count(IsDeliverySetting), "templates" => _settings.Count(IsTemplateSetting), "compliance" => _settings.Count(IsComplianceSetting), "review" => _settings.Count(NeedsReview), "groups" => CategoryGroups.Count, _ => _settings.Count };
+    bool MatchesSearch(IdCardSettingDto item) { var term = _searchTerm.Trim(); return Contains(item.SettingKey, term) || Contains(item.SettingValue, term) || Contains(CurrentValue(item), term) || Contains(item.SettingType, term) || Contains(item.Description, term) || Contains(Category(item), term); }
+    bool IsDirty(IdCardSettingDto item) => _dirtyValues.ContainsKey(item.IdCardSettingId);
+    string? CurrentValue(IdCardSettingDto item) => _dirtyValues.TryGetValue(item.IdCardSettingId, out var value) ? value : item.SettingValue;
     static bool IsBoolean(IdCardSettingDto setting) => setting.SettingType?.Equals("Boolean", StringComparison.OrdinalIgnoreCase) == true;
     static bool IsTrue(string? value) => value?.Equals("true", StringComparison.OrdinalIgnoreCase) == true;
     static string BoolStr(object? val) => val?.ToString()?.Equals("true", StringComparison.OrdinalIgnoreCase) == true ? "true" : "false";
+    static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    static string FormatDate(DateTime date) => date == default ? "—" : date.ToLocalTime().ToString("MMM d, yyyy");
     static string FormatKey(string key) => System.Text.RegularExpressions.Regex.Replace(key, "(?<=[a-z])(?=[A-Z])", " ");
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
-    }
+    static bool IsDeliverySetting(IdCardSettingDto item) => Contains(item.SettingKey, "Delivery") || Contains(item.SettingKey, "Issue") || Contains(item.SettingKey, "Issuance") || Contains(item.SettingKey, "Email") || Contains(item.SettingKey, "Portal") || Contains(item.SettingKey, "Download") || Contains(item.SettingKey, "Print") || Contains(item.Description, "delivery") || Contains(item.Description, "issuance");
+    static bool IsTemplateSetting(IdCardSettingDto item) => Contains(item.SettingKey, "Template") || Contains(item.SettingKey, "Format") || Contains(item.SettingKey, "Display") || Contains(item.SettingKey, "Logo") || Contains(item.SettingKey, "Brand") || Contains(item.SettingKey, "State") || Contains(item.SettingKey, "Carrier") || Contains(item.Description, "template") || Contains(item.Description, "state");
+    static bool IsComplianceSetting(IdCardSettingDto item) => Contains(item.SettingKey, "Compliance") || Contains(item.SettingKey, "State") || Contains(item.SettingKey, "Vehicle") || Contains(item.SettingKey, "Coverage") || Contains(item.SettingKey, "Legal") || Contains(item.SettingKey, "Audit") || Contains(item.Description, "compliance") || Contains(item.Description, "vehicle") || Contains(item.Description, "proof");
+    static bool IsAutomationSetting(IdCardSettingDto item) => Contains(item.SettingKey, "Auto") || Contains(item.SettingKey, "Default") || Contains(item.SettingKey, "Renewal") || Contains(item.Description, "automatic");
+    static string Category(IdCardSettingDto item) { if (IsDeliverySetting(item)) return "Issuance"; if (IsTemplateSetting(item)) return "Format"; if (IsComplianceSetting(item)) return "Compliance"; if (IsAutomationSetting(item)) return "Automation"; if (Contains(item.SettingKey, "Security") || Contains(item.SettingKey, "Permission")) return "Security"; return "General"; }
+    bool NeedsReview(IdCardSettingDto item) => string.IsNullOrWhiteSpace(CurrentValue(item)) || string.IsNullOrWhiteSpace(item.Description) || (IsBoolean(item) && !IsTrue(CurrentValue(item)) && (IsDeliverySetting(item) || IsComplianceSetting(item)));
+    static string CategoryIcon(string category) => category switch { "Issuance" => "bi-send-check", "Format" => "bi-file-earmark-richtext", "Compliance" => "bi-shield-check", "Automation" => "bi-magic", "Security" => "bi-lock", _ => "bi-sliders" };
+    static string CategoryBadgeClass(IdCardSettingDto item) => Category(item) switch { "Issuance" => "idc-pill--cyan", "Format" => "idc-pill--purple", "Compliance" => "idc-pill--amber", "Automation" => "idc-pill--green", "Security" => "idc-pill--red", _ => "idc-pill--blue" };
+    int ImportanceScore(IdCardSettingDto item) { var score = 30; if (IsDeliverySetting(item)) score += 18; if (IsComplianceSetting(item)) score += 22; if (IsTemplateSetting(item)) score += 14; if (IsAutomationSetting(item)) score += 10; if (IsBoolean(item) && IsTrue(CurrentValue(item))) score += 8; if (IsDirty(item)) score += 12; if (string.IsNullOrWhiteSpace(CurrentValue(item))) score += 14; if (!string.IsNullOrWhiteSpace(item.Description)) score += 4; return Math.Clamp(score, 0, 100); }
+    string RecommendedAction(IdCardSettingDto item) { if (IsDirty(item)) return "Save or discard the pending setting change."; if (string.IsNullOrWhiteSpace(CurrentValue(item))) return "Provide a value before relying on this ID card workflow."; if (IsBoolean(item) && !IsTrue(CurrentValue(item)) && IsDeliverySetting(item)) return "Review disabled delivery behavior before production use."; if (IsComplianceSetting(item)) return "Compliance-sensitive setting should be reviewed with ID card governance."; return "Setting is ready for ID card workflows."; }
+    string ImportanceClass(IdCardSettingDto item) => ImportanceScore(item) switch { >= 80 => "idc-score-card--red", >= 65 => "idc-score-card--amber", >= 45 => "idc-score-card--cyan", _ => "idc-score-card--green" };
+    MarkupString ImportanceBadge(IdCardSettingDto item) { var score = ImportanceScore(item); var css = score switch { >= 80 => "red", >= 65 => "amber", >= 45 => "cyan", _ => "green" }; return new($"<span class=\"idc-risk-badge idc-risk-badge--{css}\">{score}</span>"); }
+    static string Initials(string? value) { var parts = FormatKey(value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); return parts.Length switch { 0 => "CS", 1 => parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant(), _ => string.Concat(parts.Take(2).Select(x => char.ToUpperInvariant(x[0]))) }; }
+    static string AvatarStyle(string? value) { var hash = Math.Abs((value ?? "IdCardSetting").GetHashCode()); var hue = hash % 360; return $"background:linear-gradient(135deg,hsl({hue},78%,48%),hsl({(hue + 35) % 360},82%,36%));"; }
+    void ShowToast(string kind, string message) { _toasts.Insert(0, new(Guid.NewGuid(), kind, message)); if (_toasts.Count > 4) _toasts.RemoveRange(4, _toasts.Count - 4); }
+    void DismissToast(Guid id) => _toasts.RemoveAll(x => x.Id == id);
+    async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); TenantId = context.TenantId; TenantAdminUserId = context.UserId; DevTenantId = context.TenantId; DevUserId = context.UserId; }
+    sealed record DashboardTab(string Key, string Label, string Icon);
+    sealed record CategoryGroupSummary(string Name, int Count, int Enabled, int ReviewCount, int DirtyCount, decimal Percent);
+    sealed record ToastItem(Guid Id, string Kind, string Message);
 }
+

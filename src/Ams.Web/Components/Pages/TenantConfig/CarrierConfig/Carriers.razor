@@ -1,34 +1,312 @@
-﻿@page "/tenant/carriers"
+@page "/tenant/carriers"
 @using System.ComponentModel.DataAnnotations
 @using Ams.Application.Features.Carriers
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Carriers â€” Carrier Configuration</PageTitle>
-<AppPageHeader Title="Carriers" Subtitle="Manage appointed carriers, NAIC codes, AM Best ratings, and admitted status" Icon="bi-shield-check"><Actions><button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Add Carrier</button><button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button></Actions></AppPageHeader>
-<div class="pc-kpi-strip"><div class="pc-kpi-card @(_activeFilter==""?"pc-kpi-card--active":"")" title="Show all carriers" @onclick='()=>SetFilter("")' style="cursor:pointer"><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-shield-check"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total Carriers</div></div></div><div class="pc-kpi-card @(_activeFilter=="admitted"?"pc-kpi-card--active":"")" title="Filter admitted carriers" @onclick='()=>SetFilter("admitted")' style="cursor:pointer"><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x=>x.IsAdmitted)</div><div class="pc-kpi-label">Admitted</div></div></div><div class="pc-kpi-card @(_activeFilter=="nonadmitted"?"pc-kpi-card--active":"")" title="Filter non-admitted carriers" @onclick='()=>SetFilter("nonadmitted")' style="cursor:pointer"><span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-slash-circle"></i></span><div><div class="pc-kpi-value">@_items.Count(x=>!x.IsAdmitted)</div><div class="pc-kpi-label">Non-Admitted</div></div></div><div class="pc-kpi-card @(_activeFilter=="arated"?"pc-kpi-card--active":"")" title="Filter A-rated carriers" @onclick='()=>SetFilter("arated")' style="cursor:pointer"><span class="pc-kpi-icon" style="background:#fef9c3"><i class="bi bi-star-fill text-warning"></i></span><div><div class="pc-kpi-value">@_items.Count(x=>x.AmBestRating.StartsWith("A"))</div><div class="pc-kpi-label">A-Rated</div></div></div></div>
-@if(_loadError is not null){<div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError</div>}
-<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search carrier name or NAIC..." />
-<div class="um-grid-card">@if(_loading){<div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading...</span></div>}<SfGrid TValue="CarrierDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52"><GridEvents TValue="CarrierDto" RowSelected="OnRowSelected" /><GridPageSettings PageSize="25" /><GridColumns><GridColumn Field="CarrierName" HeaderText="Carrier" Width="240" /><GridColumn Field="NaicCode" HeaderText="NAIC" Width="110" /><GridColumn Field="AmBestRating" HeaderText="AM Best" Width="110" /><GridColumn Field="IsAdmitted" HeaderText="Type" Width="130"><Template>@{var r=(CarrierDto)context;}<span class="um-badge @(r.IsAdmitted?"um-badge-info":"um-badge-neutral")">@(r.IsAdmitted?"Admitted":"Non-Admitted")</span></Template></GridColumn><GridColumn Field="AppointmentDate" HeaderText="Appointed" Width="130" Format="d" /><GridColumn Field="IsActive" HeaderText="Status" Width="100" TextAlign="TextAlign.Center"><Template>@{var r=(CarrierDto)context;}<span class="um-badge @(r.IsActive?"um-badge-success":"um-badge-neutral")">@(r.IsActive?"Active":"Inactive")</span></Template></GridColumn><GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Center"><Template>@{var r=(CarrierDto)context;}<button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="()=>OpenEdit(r)"><i class="bi bi-pencil"></i></button></Template></GridColumn></GridColumns></SfGrid></div>
-<SfDialog @bind-Visible="_showForm" Width="560px" IsModal="true" ShowCloseIcon="false"><DialogEvents Closed="ResetForm"/><DialogContent><div class="um-modal-header"><i class="bi bi-shield-check"></i><span>@(_editId.HasValue?"Edit Carrier":"Add Carrier")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="()=>_showForm=false"><i class="bi bi-x-lg"></i></button></div><EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator/><div class="um-modal-body"><div class="um-form-grid"><div class="um-field"><label>Carrier Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.CarrierName" class="um-input"/></div><div class="um-field"><label>NAIC Code <span class="text-danger">*</span></label><InputText @bind-Value="_form.NaicCode" class="um-input"/></div><div class="um-field"><label>AM Best Rating</label><SfDropDownList TValue="string" TItem="string" @bind-Value="_form.AmBestRating" DataSource="@_ratings"/></div><div class="um-field"><label>Appointment Date</label><InputDate @bind-Value="_form.AppointmentDate" class="um-input"/></div><div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsAdmitted"/> Admitted</label></div><div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsActive"/> Active</label></div></div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="()=>_showForm=false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue?"Save Changes":"Create")</button></div></EditForm></DialogContent></SfDialog>
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true"><ToastPosition X="Right" Y="Bottom"/></SfToast><style>.validation-message{display:flex;align-items:center;gap:.45rem;margin-top:.55rem;color:#dc3545!important;font-size:.875rem;font-weight:700}.validation-message::before{content:"!";display:inline-flex;align-items:center;justify-content:center;width:1rem;height:1rem;min-width:1rem;flex-shrink:0;border-radius:999px;color:#fff;background:linear-gradient(135deg,#ef4444,#b91c1c);font-size:.7rem;font-weight:800}</style>
+<PageTitle>Carrier Command Center — Carrier Configuration</PageTitle>
+
+<div class="car-page">
+    <section class="car-hero">
+        <div class="car-hero__content">
+            <div class="car-hero-left">
+                <span class="car-hero-icon"><i class="bi bi-shield-check" aria-hidden="true"></i></span>
+                <div class="car-hero-title">
+                    <div class="car-hero__eyebrow">Enterprise carrier market access</div>
+                    <div class="car-title-row">
+                        <h1>Carrier Command Center</h1>
+                        <div class="car-hero__meta">
+                            <span><i class="bi bi-building" aria-hidden="true"></i>@_items.Count carriers</span>
+                            <span><i class="bi bi-check-circle" aria-hidden="true"></i>@_items.Count(x => x.IsActive) active</span>
+                            <span><i class="bi bi-bank" aria-hidden="true"></i>@_items.Count(x => x.IsAdmitted) admitted</span>
+                            <span><i class="bi bi-star-fill" aria-hidden="true"></i>@_items.Count(IsTopRated) top rated</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <p>Govern appointed carriers, admitted market access, AM Best strength, NAIC readiness, appointment timing, and carrier availability for policy placement workflows.</p>
+        </div>
+        <div class="car-hero__actions">
+            <button type="button" class="car-btn car-btn--light" @onclick="RefreshAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "car-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="car-btn car-btn--primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Carrier</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger car-alert" style="border-left: 4px solid #dc3545; animation: car-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="car-kpi-strip" aria-label="Carrier KPIs">
+        @KpiCard("all", "Total Carriers", _items.Count.ToString(), "All configured carriers", "bi-building", "blue")
+        @KpiCard("active", "Active", _items.Count(x => x.IsActive).ToString(), "Carriers available for market workflows", "bi-check-circle", "green")
+        @KpiCard("admitted", "Admitted", _items.Count(x => x.IsAdmitted).ToString(), "Admitted market carriers", "bi-bank", "cyan")
+        @KpiCard("nonadmitted", "Non-Admitted", _items.Count(x => !x.IsAdmitted).ToString(), "E&S or non-admitted market access", "bi-globe-americas", "purple")
+        @KpiCard("toprated", "Top Rated", _items.Count(IsTopRated).ToString(), "A-range AM Best carriers", "bi-star-fill", "amber")
+        @KpiCard("review", "Needs Review", _items.Count(NeedsReview).ToString(), "Inactive, unrated, missing NAIC, or appointment gaps", "bi-exclamation-octagon", "red")
+    </section>
+
+    <section class="car-workflows" aria-label="Carrier workflows">
+        <button type="button" class="car-workflow" @onclick='() => SetDashboardFocus("all", "importance")'><span class="car-workflow-icon"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></span><span class="car-workflow-meta"><strong>Priority review</strong><span>Rank carriers by market value and readiness</span></span></button>
+        <button type="button" class="car-workflow" @onclick='() => SetDashboardFocus("admitted", "rating")'><span class="car-workflow-icon"><i class="bi bi-bank" aria-hidden="true"></i></span><span class="car-workflow-meta"><strong>Admitted markets</strong><span>Focus admitted carrier access for standard placements</span></span></button>
+        <button type="button" class="car-workflow" @onclick='() => SetDashboardFocus("nonadmitted", "rating")'><span class="car-workflow-icon"><i class="bi bi-globe-americas" aria-hidden="true"></i></span><span class="car-workflow-meta"><strong>E&S access</strong><span>Review non-admitted specialty carrier capacity</span></span></button>
+        <button type="button" class="car-workflow" @onclick='() => SetDashboardFocus("toprated", "rating")'><span class="car-workflow-icon"><i class="bi bi-star-fill" aria-hidden="true"></i></span><span class="car-workflow-meta"><strong>Financial strength</strong><span>Prioritize A-range AM Best markets</span></span></button>
+        <button type="button" class="car-workflow" @onclick='() => SetDashboardFocus("segments", "segment")'><span class="car-workflow-icon"><i class="bi bi-pie-chart" aria-hidden="true"></i></span><span class="car-workflow-meta"><strong>Market mix</strong><span>Compare admitted, non-admitted, rated, and inactive segments</span></span></button>
+    </section>
+
+    <section class="car-filter-panel" aria-label="Carrier filters">
+        <div class="car-search"><i class="bi bi-search" aria-hidden="true"></i><input type="search" placeholder="Search carrier name, NAIC, rating, or market type…" aria-label="Search carriers" value="@_searchTerm" @oninput="args => OnSearchInputValue(args.Value?.ToString())" /></div>
+        <div class="car-filter-grid">
+            <label><span>Market Type</span><select class="form-select" @bind="_marketFilter" @bind:after="ApplyFilters"><option value="">All markets</option><option value="Admitted">Admitted</option><option value="NonAdmitted">Non-Admitted</option></select></label>
+            <label><span>Rating</span><select class="form-select" @bind="_ratingFilter" @bind:after="ApplyFilters"><option value="">All ratings</option>@foreach (var rating in _ratings) { <option value="@rating">@rating</option> }</select></label>
+            <label><span>Sort</span><select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters"><option value="importance">Importance</option><option value="rating">AM Best rating</option><option value="name">Carrier name</option><option value="naic">NAIC</option><option value="appointment">Appointment date</option><option value="segment">Market type</option></select></label>
+        </div>
+        <button type="button" class="car-btn car-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+    </section>
+
+    <nav class="car-tabs" aria-label="Carrier views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="car-tab @(_activeTab == tab.Key ? "car-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)"><i class="bi @tab.Icon" aria-hidden="true"></i><span>@tab.Label</span><strong>@TabCount(tab.Key)</strong></button>
+        }
+    </nav>
+
+    <main class="car-dashboard">
+        <section class="car-main-card">
+            <div class="car-card-header">
+                <div><span class="car-section-kicker">@ActiveViewTitle</span><h2>@FilteredCarriers.Count() carriers</h2><p>Prioritized by enterprise importance: active placement availability, admitted access, AM Best strength, NAIC completeness, appointment recency, and review risk.</p></div>
+                <div class="car-card-actions">
+                    @if (_selectedIds.Count > 0)
+                    {
+                        <span class="car-sel-count">@_selectedIds.Count selected</span>
+                        <button type="button" class="car-btn car-btn--ghost" @onclick="() => ConfirmBulkToggle(true)"><i class="bi bi-check-circle" aria-hidden="true"></i> Activate</button>
+                        <button type="button" class="car-btn car-btn--danger-ghost" @onclick="() => ConfirmBulkToggle(false)"><i class="bi bi-slash-circle" aria-hidden="true"></i> Deactivate</button>
+                    }
+                    <button type="button" class="car-btn car-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Prev</button>
+                    <span class="car-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="car-btn car-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="car-loading"><span class="car-spinner"></span> Loading carriers…</div>
+            }
+            else if (!FilteredCarriers.Any())
+            {
+                <div class="car-empty"><i class="bi bi-shield-check" aria-hidden="true"></i><strong>No carriers found</strong><span>Adjust the active KPI, tab, search, or filters.</span></div>
+            }
+            else if (_activeTab == "segments")
+            {
+                <div class="car-group-grid">
+                    @foreach (var group in SegmentGroups)
+                    {
+                        <article class="car-group-card"><div class="car-group-icon"><i class="bi @SegmentIcon(group.Name)" aria-hidden="true"></i></div><div class="car-group-meta"><h3>@group.Name</h3><p>@group.Count carriers • @group.Active active • @group.TopRated top rated • @group.ReviewCount need review</p><div class="car-mini-bar"><span style="width:@group.Percent%"></span></div></div><button type="button" class="car-btn car-btn--ghost" @onclick="() => FilterBySegment(group.Name)">Open</button></article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="car-table-wrap">
+                    <table class="car-table">
+                        <thead><tr><th class="car-check-col"><input type="checkbox" checked="@AllPageSelected" @onchange="args => ToggleSelectAllPage(args.Value is bool value && value)" aria-label="Select all carriers on page" /></th><th>Importance</th><th>Carrier</th><th>NAIC</th><th>AM Best</th><th>Market</th><th>Status</th><th>Appointed</th><th class="car-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var carrier in PagedCarriers)
+                            {
+                                <tr class="@(_selected?.CarrierId == carrier.CarrierId ? "car-row car-row--selected" : "car-row")" @onclick="() => SelectRow(carrier)">
+                                    <td class="car-check-col" @onclick:stopPropagation="true"><input type="checkbox" checked="@IsSelected(carrier)" @onchange="args => ToggleSelect(carrier, args.Value is bool value && value)" aria-label="Select carrier" /></td>
+                                    <td><span class="car-risk-badge @ImportanceBadgeClass(carrier)">@ImportanceScore(carrier)</span></td>
+                                    <td><div class="car-carrier-cell"><div class="car-avatar" style="@AvatarStyle(carrier.CarrierName)" aria-hidden="true">@Initials(carrier.CarrierName)</div><div class="car-carrier-meta"><button type="button" class="car-link-button" @onclick:stopPropagation="true" @onclick="() => OpenEdit(carrier)">@carrier.CarrierName</button><small>@MarketLabel(carrier)</small></div></div></td>
+                                    <td><span class="car-date">@Safe(carrier.NaicCode, "Missing")</span></td>
+                                    <td><span class="car-pill @RatingBadgeClass(carrier)"><i class="bi @RatingIcon(carrier)" aria-hidden="true"></i>@Safe(carrier.AmBestRating, "NR")</span></td>
+                                    <td><span class="car-pill @(carrier.IsAdmitted ? "car-pill--cyan" : "car-pill--purple")">@(carrier.IsAdmitted ? "Admitted" : "Non-Admitted")</span></td>
+                                    <td><span class="car-pill @(carrier.IsActive ? "car-pill--green" : "car-pill--neutral")">@(carrier.IsActive ? "Active" : "Inactive")</span></td>
+                                    <td><span class="car-date">@FormatDate(carrier.AppointmentDate)</span></td>
+                                    <td class="car-actions-col" @onclick:stopPropagation="true"><button type="button" class="car-icon-btn" title="Edit carrier" @onclick="() => OpenEdit(carrier)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="car-icon-btn @(carrier.IsActive ? "car-icon-btn--danger" : "")" title="@(carrier.IsActive ? "Deactivate carrier" : "Activate carrier")" @onclick="() => ConfirmToggle(carrier)"><i class="bi @(carrier.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i></button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="car-side-panel" aria-label="Carrier insights">
+            <section class="car-panel-card">
+                <span class="car-section-kicker">Selected carrier</span>
+                @if (_selected is null)
+                {
+                    <div class="car-empty car-empty--compact"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a carrier</strong><span>Open details, recommendations, and quick actions.</span></div>
+                }
+                else
+                {
+                    <div class="car-selected__title"><div class="car-avatar car-avatar--lg" style="@AvatarStyle(_selected.CarrierName)" aria-hidden="true">@Initials(_selected.CarrierName)</div><div><h3>@_selected.CarrierName</h3><span>@Safe(_selected.NaicCode, "No NAIC") • @MarketLabel(_selected)</span></div></div>
+                    <div class="car-score-card @ImportanceClass(_selected)"><span>Importance score</span><strong>@ImportanceScore(_selected)</strong><small>@RecommendedAction(_selected)</small></div>
+                    <dl class="car-detail-list"><div><dt>Status</dt><dd>@(_selected.IsActive ? "Active" : "Inactive")</dd></div><div><dt>Market</dt><dd>@MarketLabel(_selected)</dd></div><div><dt>AM Best</dt><dd>@Safe(_selected.AmBestRating, "NR")</dd></div><div><dt>NAIC</dt><dd>@Safe(_selected.NaicCode, "Missing")</dd></div><div><dt>Appointed</dt><dd>@FormatDate(_selected.AppointmentDate)</dd></div><div><dt>Created</dt><dd>@FormatDate(_selected.CreatedDateUtc)</dd></div></dl>
+                    <div class="car-selected-actions"><button type="button" class="car-btn car-btn--primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="car-btn car-btn--ghost" @onclick="() => ConfirmToggle(_selected)"><i class="bi @(_selected.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i> @(_selected.IsActive ? "Deactivate" : "Activate")</button></div>
+                }
+            </section>
+            <section class="car-panel-card"><span class="car-section-kicker">Enterprise insights</span><div class="car-insight-list"><div class="car-insight"><i class="bi bi-bank" aria-hidden="true"></i><div><strong>Market access</strong><span>@MarketInsight</span></div></div><div class="car-insight"><i class="bi bi-star-fill" aria-hidden="true"></i><div><strong>Financial strength</strong><span>@RatingInsight</span></div></div><div class="car-insight"><i class="bi bi-calendar-check" aria-hidden="true"></i><div><strong>Appointment readiness</strong><span>@AppointmentInsight</span></div></div></div></section>
+        </aside>
+    </main>
+</div>
+
+@if (_showForm)
+{
+    <div class="car-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="carrier-form-title">
+        <div class="car-modal">
+            <div class="car-modal__header"><i class="bi bi-shield-check" aria-hidden="true"></i><span id="carrier-form-title">@(_editId.HasValue ? "Edit Carrier" : "Add Carrier")</span><button type="button" class="car-icon-btn car-icon-btn--light ms-auto" @onclick="CloseForm" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator />
+                <div class="car-modal__body"><div class="car-validation-note"><i class="bi bi-info-circle" aria-hidden="true"></i><div><strong>Carrier governance</strong><span>Carrier details drive submissions, market selection, appointment tracking, and policy placement workflows.</span></div></div><div class="car-form-grid">
+                    <label class="car-field"><span>Carrier Name <em>*</em></span><InputText @bind-Value="_form.CarrierName" class="form-control" placeholder="e.g. Acme Insurance Company" /><ValidationMessage For="() => _form.CarrierName" class="text-danger" /></label>
+                    <label class="car-field"><span>NAIC Code <em>*</em></span><InputText @bind-Value="_form.NaicCode" class="form-control" placeholder="12345" /><ValidationMessage For="() => _form.NaicCode" class="text-danger" /></label>
+                    <label class="car-field"><span>AM Best Rating <em>*</em></span><InputSelect @bind-Value="_form.AmBestRating" class="form-select">@foreach (var rating in _ratings) { <option value="@rating">@rating</option> }</InputSelect><ValidationMessage For="() => _form.AmBestRating" class="text-danger" /></label>
+                    <label class="car-field"><span>Appointment Date</span><InputDate @bind-Value="_form.AppointmentDate" class="form-control" /><ValidationMessage For="() => _form.AppointmentDate" class="text-danger" /></label>
+                    <label class="car-check-field"><InputCheckbox @bind-Value="_form.IsAdmitted" /><span>Admitted market</span></label>
+                    @if (_editId.HasValue) { <label class="car-check-field"><InputCheckbox @bind-Value="_form.IsActive" /><span>Active</span></label> }
+                </div></div>
+                <div class="car-modal__footer"><button type="button" class="car-btn car-btn--ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="car-btn car-btn--primary" disabled="@_saving">@if (_saving) { <span class="car-spin-sm"></span> } @(_editId.HasValue ? "Save Changes" : "Create Carrier")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_confirmVisible)
+{
+    <div class="car-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="carrier-confirm-title"><div class="car-confirm"><div class="car-confirm__body"><div class="car-confirm-icon car-confirm-icon--danger"><i class="bi @_confirmIcon" aria-hidden="true"></i></div><div><h3 id="carrier-confirm-title">@_confirmTitle</h3><p>@_confirmMessage</p></div></div><div class="car-modal__footer"><button type="button" class="car-btn car-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button><button type="button" class="car-btn car-btn--danger" @onclick="ExecuteConfirmedAsync" disabled="@_saving">@if (_saving) { <span class="car-spin-sm"></span> } Confirm</button></div></div></div>
+}
+
+<div class="car-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="car-toast car-toast--@toast.Kind"><i class="bi @(toast.Kind == "success" ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill")" aria-hidden="true"></i><span>@toast.Message</span><button type="button" @onclick="() => DismissToast(toast.Id)" aria-label="Dismiss notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+    }
+</div>
+
 @code {
     Guid TenantAdminUserId { get; set; }
     Guid DevTenantId { get; set; }
     Guid DevUserId { get; set; }
-    private Guid _tenantId;
-    private Guid _tenantAdminUserId;Guid TenantId { get; set; }static readonly string[] _ratings=["A++","A+","A","A-","B++","B+","NR"];List<CarrierDto> _items=[];List<CarrierDto> _filtered=[];string _activeFilter="";bool _loading,_saving,_showForm;string _search=string.Empty;string? _loadError;Guid? _editId;SfToast _toast=default!;CarrierForm _form=new();protected override async Task OnInitializedAsync()
+    Guid TenantId { get; set; }
+    static readonly string[] _ratings = ["A++", "A+", "A", "A-", "B++", "B+", "B", "B-", "C++", "C+", "NR"];
+    readonly List<DashboardTab> _tabs = [new("all", "All", "bi-building"), new("active", "Active", "bi-check-circle"), new("admitted", "Admitted", "bi-bank"), new("nonadmitted", "Non-Admitted", "bi-globe-americas"), new("toprated", "Top Rated", "bi-star-fill"), new("review", "Needs Review", "bi-exclamation-octagon"), new("segments", "Segments", "bi-pie-chart")];
+    List<CarrierDto> _items = [];
+    HashSet<Guid> _selectedIds = [];
+    List<ToastItem> _toasts = [];
+    CarrierDto? _selected;
+    CarrierForm _form = new();
+    Func<Task>? _confirmAction;
+    Guid? _editId;
+    string _activeTab = "all";
+    string _searchTerm = string.Empty;
+    string _marketFilter = string.Empty;
+    string _ratingFilter = string.Empty;
+    string _sortMode = "importance";
+    string _confirmTitle = string.Empty;
+    string _confirmMessage = string.Empty;
+    string _confirmIcon = "bi-exclamation-triangle-fill";
+    string? _loadError;
+    bool _loading;
+    bool _saving;
+    bool _showForm;
+    bool _confirmVisible;
+    int _page = 1;
+    const int PageSize = 12;
+
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Carrier Config", null), new("Carriers", null)); await LoadAsync(); }
+
+    IEnumerable<CarrierDto> FilteredCarriers
     {
-        await ResolveCurrentUserContextAsync();Breadcrumbs.SetCrumbs(new("Home","/"),new("Carrier Config",null),new("Carriers",null));await LoadAsync();}async Task LoadAsync(){_loading=true;_loadError=null;try{var r=await Api.SearchCarriersAsync(TenantId,_search,pageSize:200);_items=r?.Items.ToList()??[];ApplyFilter();}catch(Exception ex){_loadError=ex.Message;}finally{_loading=false;}}void SetFilter(string f){_activeFilter=f;ApplyFilter();}void ApplyFilter()=>_filtered=_activeFilter switch{"admitted"=>_items.Where(x=>x.IsAdmitted).ToList(),"nonadmitted"=>_items.Where(x=>!x.IsAdmitted).ToList(),"arated"=>_items.Where(x=>x.AmBestRating.StartsWith("A")).ToList(),_=>[.._items]};Task OnSearchAsync()=>LoadAsync();void OnRowSelected(RowSelectEventArgs<CarrierDto> args)=>OpenEdit(args.Data);void OpenCreate(){_editId=null;_form=new();_showForm=true;}void OpenEdit(CarrierDto i){_editId=i.CarrierId;_form=new(){CarrierName=i.CarrierName,NaicCode=i.NaicCode,AmBestRating=i.AmBestRating,IsAdmitted=i.IsAdmitted,AppointmentDate=i.AppointmentDate,IsActive=i.IsActive};_showForm=true;}async Task SaveAsync(){_saving=true;try{if(_editId.HasValue)await Api.UpdateCarrierAsync(_editId.Value,new(_form.CarrierName,_form.NaicCode,_form.AmBestRating,_form.IsAdmitted,_form.AppointmentDate,_form.IsActive));else await Api.CreateCarrierAsync(new(TenantId,_form.CarrierName,_form.NaicCode,_form.AmBestRating,_form.IsAdmitted,_form.AppointmentDate));_showForm=false;await _toast.ShowAsync(new(){Content="Saved successfully",CssClass="e-toast-success"});await LoadAsync();}catch(Exception ex){await _toast.ShowAsync(new(){Content=$"Save failed: {ex.Message}",CssClass="e-toast-danger"});}finally{_saving=false;}}void ResetForm(){_form=new();_editId=null;}sealed class CarrierForm{[Required,StringLength(200)]public string CarrierName{get;set;}=string.Empty;[Required,StringLength(20)]public string NaicCode{get;set;}=string.Empty;[Required,StringLength(20)]public string AmBestRating{get;set;}="NR";public bool IsAdmitted{get;set;}=true;public DateTime? AppointmentDate{get;set;}public bool IsActive{get;set;}=true;}
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        get
+        {
+            IEnumerable<CarrierDto> query = _items;
+            query = _activeTab switch { "active" => query.Where(x => x.IsActive), "admitted" => query.Where(x => x.IsAdmitted), "nonadmitted" => query.Where(x => !x.IsAdmitted), "toprated" => query.Where(IsTopRated), "review" => query.Where(NeedsReview), _ => query };
+            if (!string.IsNullOrWhiteSpace(_searchTerm)) query = query.Where(MatchesSearch);
+            query = _marketFilter switch { "Admitted" => query.Where(x => x.IsAdmitted), "NonAdmitted" => query.Where(x => !x.IsAdmitted), _ => query };
+            if (!string.IsNullOrWhiteSpace(_ratingFilter)) query = query.Where(x => string.Equals(x.AmBestRating, _ratingFilter, StringComparison.OrdinalIgnoreCase));
+            return _sortMode switch { "rating" => query.OrderByDescending(RatingRank).ThenBy(x => x.CarrierName), "name" => query.OrderBy(x => x.CarrierName), "naic" => query.OrderBy(x => x.NaicCode), "appointment" => query.OrderByDescending(x => x.AppointmentDate ?? DateTime.MinValue), "segment" => query.OrderBy(MarketLabel).ThenByDescending(RatingRank).ThenBy(x => x.CarrierName), _ => query.OrderByDescending(ImportanceScore).ThenBy(x => x.CarrierName) };
+        }
     }
+
+    List<CarrierDto> PagedCarriers => FilteredCarriers.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+    int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredCarriers.Count() / (double)PageSize));
+    bool AllPageSelected => PagedCarriers.Count > 0 && PagedCarriers.All(IsSelected);
+    bool HasFilters => !string.IsNullOrWhiteSpace(_searchTerm) || !string.IsNullOrWhiteSpace(_marketFilter) || !string.IsNullOrWhiteSpace(_ratingFilter) || _activeTab != "all" || _sortMode != "importance";
+    string ActiveViewTitle => _tabs.FirstOrDefault(x => x.Key == _activeTab)?.Label ?? "All";
+    string MarketInsight => _items.Count == 0 ? "Create carriers before configuring placement workflows." : $"{_items.Count(x => x.IsAdmitted)} admitted and {_items.Count(x => !x.IsAdmitted)} non-admitted carriers are configured.";
+    string RatingInsight => _items.Any(IsTopRated) ? $"{_items.Count(IsTopRated)} carriers have A-range AM Best ratings." : "No A-range AM Best carriers were detected.";
+    string AppointmentInsight => _items.Any(x => x.AppointmentDate.HasValue) ? $"{_items.Count(x => x.AppointmentDate.HasValue)} carriers include appointment dates." : "No appointment dates are configured for carriers.";
+    List<SegmentGroupSummary> SegmentGroups => _items.GroupBy(Segment).Select(g => new SegmentGroupSummary(g.Key, g.Count(), g.Count(x => x.IsActive), g.Count(IsTopRated), g.Count(NeedsReview), _items.Count == 0 ? 0 : Math.Round(g.Count() * 100m / _items.Count, 0))).OrderByDescending(x => x.Count).ToList();
+
+    async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchCarriersAsync(TenantId, null, pageSize: 500); _items = result?.Items.ToList() ?? []; _selectedIds.RemoveWhere(id => _items.All(x => x.CarrierId != id)); _selected = _selected is null ? _items.OrderByDescending(ImportanceScore).FirstOrDefault() : _items.FirstOrDefault(x => x.CarrierId == _selected.CarrierId) ?? _items.OrderByDescending(ImportanceScore).FirstOrDefault(); NormalizePage(); } catch (Exception ex) { _loadError = $"Failed to load carriers: {ex.Message}"; } finally { _loading = false; } }
+    Task RefreshAsync() => LoadAsync();
+    void ApplyFilters() { _page = 1; NormalizePage(); }
+    void OnSearchInputValue(string? value) { _searchTerm = value ?? string.Empty; ApplyFilters(); }
+    void SetDashboardFocus(string tab, string sort) { _activeTab = tab; _sortMode = sort; _page = 1; NormalizePage(); }
+    void SetActiveTab(string tab) { _activeTab = tab; _page = 1; NormalizePage(); }
+    void PreviousPage() { if (_page > 1) _page--; }
+    void NextPage() { if (_page < TotalPages) _page++; }
+    void NormalizePage() { if (_page > TotalPages) _page = TotalPages; }
+    void SelectRow(CarrierDto item) => _selected = item;
+    bool IsSelected(CarrierDto item) => _selectedIds.Contains(item.CarrierId);
+    void ToggleSelect(CarrierDto item, bool selected) { if (selected) _selectedIds.Add(item.CarrierId); else _selectedIds.Remove(item.CarrierId); _selected = item; }
+    void ToggleSelectAllPage(bool selected) { foreach (var item in PagedCarriers) { if (selected) _selectedIds.Add(item.CarrierId); else _selectedIds.Remove(item.CarrierId); } }
+    void ClearFilters() { _searchTerm = string.Empty; _marketFilter = string.Empty; _ratingFilter = string.Empty; _sortMode = "importance"; _activeTab = "all"; _page = 1; }
+    void FilterBySegment(string segment) { _activeTab = segment switch { "Admitted" => "admitted", "Non-Admitted" => "nonadmitted", "Inactive" => "review", "Top Rated" => "toprated", _ => "all" }; _sortMode = "importance"; _page = 1; }
+    void OpenCreate() { _editId = null; _form = new() { AmBestRating = "NR", IsAdmitted = true, IsActive = true, AppointmentDate = DateTime.Today }; _showForm = true; }
+    void OpenEdit(CarrierDto item) { _selected = item; _editId = item.CarrierId; _form = new() { CarrierName = item.CarrierName, NaicCode = item.NaicCode, AmBestRating = item.AmBestRating, IsAdmitted = item.IsAdmitted, AppointmentDate = item.AppointmentDate, IsActive = item.IsActive }; _showForm = true; }
+    void CloseForm() { _showForm = false; ResetForm(); }
+    void ResetForm() { _form = new(); _editId = null; }
+
+    async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (_editId.HasValue) await Api.UpdateCarrierAsync(_editId.Value, new(_form.CarrierName.Trim(), _form.NaicCode.Trim(), _form.AmBestRating, _form.IsAdmitted, _form.AppointmentDate, _form.IsActive));
+            else await Api.CreateCarrierAsync(new(TenantId, _form.CarrierName.Trim(), _form.NaicCode.Trim(), _form.AmBestRating, _form.IsAdmitted, _form.AppointmentDate));
+            _showForm = false; ShowToast("success", _editId.HasValue ? "Carrier updated successfully." : "Carrier created successfully."); ResetForm(); await LoadAsync();
+        }
+        catch (Exception ex) { ShowToast("danger", $"Save failed: {ex.Message}"); }
+        finally { _saving = false; }
+    }
+
+    void ConfirmToggle(CarrierDto item) { var enable = !item.IsActive; OpenConfirm(enable ? "Activate Carrier" : "Deactivate Carrier", $"Are you sure you want to {(enable ? "activate" : "deactivate")} {item.CarrierName}? This changes carrier availability in placement workflows.", "bi-shield-exclamation", () => SetCarrierActiveAsync(item, enable)); }
+    void ConfirmBulkToggle(bool enable) => OpenConfirm(enable ? "Activate Selected Carriers" : "Deactivate Selected Carriers", $"Are you sure you want to {(enable ? "activate" : "deactivate")} {_selectedIds.Count} selected carrier(s)?", "bi-shield-exclamation", () => BulkSetActiveAsync(enable));
+    void OpenConfirm(string title, string message, string icon, Func<Task> action) { _confirmTitle = title; _confirmMessage = message; _confirmIcon = icon; _confirmAction = action; _confirmVisible = true; }
+    void CloseConfirm() { _confirmVisible = false; _confirmAction = null; }
+    async Task ExecuteConfirmedAsync() { if (_confirmAction is null) return; _saving = true; try { await _confirmAction(); _confirmVisible = false; _confirmAction = null; } finally { _saving = false; } }
+    async Task SetCarrierActiveAsync(CarrierDto item, bool active) { try { await Api.UpdateCarrierAsync(item.CarrierId, new(item.CarrierName, item.NaicCode, item.AmBestRating, item.IsAdmitted, item.AppointmentDate, active)); ShowToast("success", active ? "Carrier activated." : "Carrier deactivated."); await LoadAsync(); } catch (Exception ex) { ShowToast("danger", $"Update failed: {ex.Message}"); } }
+    async Task BulkSetActiveAsync(bool active) { var selected = _items.Where(x => _selectedIds.Contains(x.CarrierId)).ToList(); var updated = 0; foreach (var item in selected) { try { await Api.UpdateCarrierAsync(item.CarrierId, new(item.CarrierName, item.NaicCode, item.AmBestRating, item.IsAdmitted, item.AppointmentDate, active)); updated++; } catch (Exception ex) { ShowToast("danger", $"Update failed for {item.CarrierName}: {ex.Message}"); } } ShowToast("success", $"{updated} carrier(s) {(active ? "activated" : "deactivated")}. "); _selectedIds.Clear(); await LoadAsync(); }
+
+    RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string color) => @<button type="button" class="car-kpi-card car-kpi-card--@color @(_activeTab == key ? "car-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveTab(key)"><span class="car-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span><span class="car-kpi-body"><span class="car-kpi-label">@label</span><strong class="car-kpi-value">@value</strong><span class="car-kpi-sub">@subtitle</span></span></button>;
+    int TabCount(string key) => key switch { "active" => _items.Count(x => x.IsActive), "admitted" => _items.Count(x => x.IsAdmitted), "nonadmitted" => _items.Count(x => !x.IsAdmitted), "toprated" => _items.Count(IsTopRated), "review" => _items.Count(NeedsReview), "segments" => SegmentGroups.Count, _ => _items.Count };
+    bool MatchesSearch(CarrierDto item) { var term = _searchTerm.Trim(); return Contains(item.CarrierName, term) || Contains(item.NaicCode, term) || Contains(item.AmBestRating, term) || Contains(MarketLabel(item), term); }
+    static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    static string FormatDate(DateTime? date) => date.HasValue ? date.Value.ToLocalTime().ToString("MMM d, yyyy") : "—";
+    static string FormatDate(DateTime date) => date == default ? "—" : date.ToLocalTime().ToString("MMM d, yyyy");
+    static string MarketLabel(CarrierDto item) => item.IsAdmitted ? "Admitted" : "Non-Admitted";
+    static bool IsTopRated(CarrierDto item) => item.AmBestRating.StartsWith("A", StringComparison.OrdinalIgnoreCase);
+    static bool IsUnrated(CarrierDto item) => string.IsNullOrWhiteSpace(item.AmBestRating) || item.AmBestRating.Equals("NR", StringComparison.OrdinalIgnoreCase);
+    static bool NeedsReview(CarrierDto item) => !item.IsActive || string.IsNullOrWhiteSpace(item.NaicCode) || IsUnrated(item) || !item.AppointmentDate.HasValue;
+    static string Segment(CarrierDto item) { if (!item.IsActive) return "Inactive"; if (IsTopRated(item)) return "Top Rated"; return item.IsAdmitted ? "Admitted" : "Non-Admitted"; }
+    static string SegmentIcon(string segment) => segment switch { "Admitted" => "bi-bank", "Non-Admitted" => "bi-globe-americas", "Top Rated" => "bi-star-fill", "Inactive" => "bi-slash-circle", _ => "bi-building" };
+    static int RatingRank(CarrierDto item) => item.AmBestRating switch { "A++" => 10, "A+" => 9, "A" => 8, "A-" => 7, "B++" => 6, "B+" => 5, "B" => 4, "B-" => 3, "C++" => 2, "C+" => 1, _ => 0 };
+    static string RatingIcon(CarrierDto item) => IsTopRated(item) ? "bi-star-fill" : IsUnrated(item) ? "bi-question-circle" : "bi-star-half";
+    static string RatingBadgeClass(CarrierDto item) => IsTopRated(item) ? "car-pill--amber" : IsUnrated(item) ? "car-pill--neutral" : "car-pill--blue";
+    static int ImportanceScore(CarrierDto item) { var score = 30; if (item.IsActive) score += 14; else score += 18; if (item.IsAdmitted) score += 12; else score += 10; if (IsTopRated(item)) score += 22; else score += RatingRank(item); if (!string.IsNullOrWhiteSpace(item.NaicCode)) score += 8; else score += 10; if (item.AppointmentDate.HasValue) score += 8; else score += 8; return Math.Clamp(score, 0, 100); }
+    static string RecommendedAction(CarrierDto item) { if (!item.IsActive) return "Review whether this carrier should remain inactive for placement workflows."; if (string.IsNullOrWhiteSpace(item.NaicCode)) return "Add NAIC code before relying on carrier reporting and integrations."; if (IsUnrated(item)) return "Confirm AM Best rating for market strength governance."; if (!item.AppointmentDate.HasValue) return "Add appointment date to document market access readiness."; if (IsTopRated(item)) return "Top-rated carrier is ready for priority placement workflows."; return "Carrier is ready for placement workflows."; }
+    static string ImportanceClass(CarrierDto item) => ImportanceScore(item) switch { >= 80 => "car-score-card--red", >= 65 => "car-score-card--amber", >= 45 => "car-score-card--cyan", _ => "car-score-card--green" };
+    static string ImportanceBadgeClass(CarrierDto item) => ImportanceScore(item) switch { >= 80 => "car-risk-badge--red", >= 65 => "car-risk-badge--amber", >= 45 => "car-risk-badge--cyan", _ => "car-risk-badge--green" };
+    static string Initials(string? value) { var parts = (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); return parts.Length switch { 0 => "CA", 1 => parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant(), _ => string.Concat(parts.Take(2).Select(x => char.ToUpperInvariant(x[0]))) }; }
+    static string AvatarStyle(string? value) { var hash = Math.Abs((value ?? "Carrier").GetHashCode()); var hue = hash % 360; return $"background:linear-gradient(135deg,hsl({hue},78%,48%),hsl({(hue + 35) % 360},82%,36%));"; }
+    void ShowToast(string kind, string message) { _toasts.Insert(0, new(Guid.NewGuid(), kind, message)); if (_toasts.Count > 4) _toasts.RemoveRange(4, _toasts.Count - 4); }
+    void DismissToast(Guid id) => _toasts.RemoveAll(x => x.Id == id);
+    async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); TenantId = context.TenantId; TenantAdminUserId = context.UserId; DevTenantId = context.TenantId; DevUserId = context.UserId; }
+    sealed class CarrierForm { [Required, StringLength(200)] public string CarrierName { get; set; } = string.Empty; [Required, StringLength(20)] public string NaicCode { get; set; } = string.Empty; [Required, StringLength(20)] public string AmBestRating { get; set; } = "NR"; public bool IsAdmitted { get; set; } = true; public DateTime? AppointmentDate { get; set; } public bool IsActive { get; set; } = true; }
+    sealed record DashboardTab(string Key, string Label, string Icon);
+    sealed record SegmentGroupSummary(string Name, int Count, int Active, int TopRated, int ReviewCount, decimal Percent);
+    sealed record ToastItem(Guid Id, string Kind, string Message);
 }

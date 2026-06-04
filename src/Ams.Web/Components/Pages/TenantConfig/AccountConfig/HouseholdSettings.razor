@@ -1,107 +1,356 @@
 @page "/tenant/accounts/household"
+@using ChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Household Settings — Account Configuration</PageTitle>
+<PageTitle>Household Command Center — Account Configuration</PageTitle>
 
-<AppPageHeader Title="Household Settings"
-               Subtitle="Configure household grouping and policy aggregation behavior"
-               Icon="bi-house">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<div class="pc-kpi-strip">
-    <div class="pc-kpi-card" title="Total household settings">
-        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-house-fill" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_settings.Count</div><div class="pc-kpi-label">Total Settings</div></div>
-    </div>
-    <div class="pc-kpi-card" title="Settings enabled (Boolean true)">
-        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-toggle-on" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_settings.Count(s => s.SettingType == "Boolean" && s.SettingValue == "true")</div><div class="pc-kpi-label">Enabled</div></div>
-    </div>
-    <div class="pc-kpi-card" title="Settings disabled (Boolean false)">
-        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-toggle-off" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_settings.Count(s => s.SettingType == "Boolean" && s.SettingValue != "true")</div><div class="pc-kpi-label">Disabled</div></div>
-    </div>
-</div>
-
-@if (_loadError is not null)
-{
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
-    </div>
-}
-
-<div class="um-settings-container">
-    @if (_loading)
-    {
-        <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading…</span></div>
-    }
-    else
-    {
-        <div class="row g-4">
-            @foreach (var setting in _settings)
-            {
-                <div class="col-md-6">
-                    <div class="um-settings-card">
-                        <div class="um-settings-card__header">
-                            <div>
-                                <div class="fw-semibold">@FormatKey(setting.SettingKey)</div>
-                                <div class="text-muted small">@setting.Description</div>
-                            </div>
-                        </div>
-                        <div class="um-settings-card__body">
-                            @if (setting.SettingType == "Boolean")
-                            {
-                                <div class="form-check form-switch">
-                                    <input class="form-check-input" type="checkbox"
-                                           checked="@(setting.SettingValue == "true")"
-                                           @onchange="async e => await UpdateAsync(setting, BoolStr(e.Value))" />
-                                    <label class="form-check-label">@(setting.SettingValue == "true" ? "Enabled" : "Disabled")</label>
-                                </div>
-                            }
-                            else if (setting.SettingKey == "HouseholdBillingDefault")
-                            {
-                                <select class="um-input" value="@setting.SettingValue"
-                                    @onchange="async e => await UpdateAsync(setting, e.Value?.ToString())">
-                                    <option value="Individual">Individual</option>
-                                    <option value="Household">Household</option>
-                                </select>
-                            }
-                            else
-                            {
-                                <div class="d-flex gap-2">
-                                    <input class="um-input flex-grow-1" value="@setting.SettingValue"
-                                        @onchange="async e => await UpdateAsync(setting, e.Value?.ToString())" />
-                                    <span class="text-muted align-self-center small">@setting.SettingType</span>
-                                </div>
-                            }
+<div class="hhd-page">
+    <section class="hhd-hero">
+        <div class="hhd-hero__content">
+            <div class="hhd-hero-left">
+                <span class="hhd-hero-icon"><i class="bi bi-house-heart" aria-hidden="true"></i></span>
+                <div class="hhd-hero-title">
+                    <div class="hhd-hero__eyebrow">Enterprise household configuration</div>
+                    <div class="hhd-title-row">
+                        <h1>Household Command Center</h1>
+                        <div class="hhd-hero__meta">
+                            <span><i class="bi bi-sliders" aria-hidden="true"></i>@_settings.Count settings</span>
+                            <span><i class="bi bi-toggle-on" aria-hidden="true"></i>@_settings.Count(IsEnabledBoolean) enabled</span>
+                            <span><i class="bi bi-exclamation-octagon" aria-hidden="true"></i>@_settings.Count(NeedsReview) need review</span>
+                            <span><i class="bi bi-shield-check" aria-hidden="true"></i>@ReadinessPercent% ready</span>
                         </div>
                     </div>
                 </div>
+            </div>
+            <p>Control household grouping, billing defaults, policy aggregation, member matching, and family-level servicing behavior across account workflows.</p>
+        </div>
+        <div class="hhd-hero__actions">
+            <button type="button" class="hhd-btn hhd-btn--light" @onclick="RefreshAsync" disabled="@_loading">
+                <i class="bi bi-arrow-clockwise @(_loading ? "hhd-spin" : null)" aria-hidden="true"></i> Refresh
+            </button>
+            <button type="button" class="hhd-btn hhd-btn--primary" @onclick='() => SetDashboardFocus("risk", "importance")'>
+                <i class="bi bi-shield-exclamation" aria-hidden="true"></i> Review Settings
+            </button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger hhd-alert" style="border-left: 4px solid #dc3545; animation: hhd-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span>@_loadError</span>
+        </div>
+    }
+
+    <section class="hhd-kpi-strip" aria-label="Household settings KPIs">
+        @KpiCard("all", "Total Settings", _settings.Count.ToString(), "All household configuration settings", "bi-sliders", "blue")
+        @KpiCard("enabled", "Enabled", _settings.Count(IsEnabledBoolean).ToString(), "Boolean settings currently enabled", "bi-toggle-on", "green")
+        @KpiCard("disabled", "Disabled", _settings.Count(IsDisabledBoolean).ToString(), "Boolean settings currently disabled", "bi-toggle-off", "amber")
+        @KpiCard("billing", "Billing", _settings.Count(IsBillingSetting).ToString(), "Billing and invoice aggregation controls", "bi-receipt", "purple")
+        @KpiCard("matching", "Matching", _settings.Count(IsMatchingSetting).ToString(), "Household member matching and grouping controls", "bi-people", "cyan")
+        @KpiCard("risk", "Needs Review", _settings.Count(NeedsReview).ToString(), "Blank, unknown, or operationally sensitive settings", "bi-exclamation-octagon", "red")
+    </section>
+
+    <section class="hhd-workflows" aria-label="Household workflows">
+        <button type="button" class="hhd-workflow" @onclick='() => SetDashboardFocus("all", "importance")'><span class="hhd-workflow-icon"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></span><span class="hhd-workflow-meta"><strong>Importance review</strong><span>Rank settings by household workflow impact</span></span></button>
+        <button type="button" class="hhd-workflow" @onclick='() => SetDashboardFocus("billing", "importance")'><span class="hhd-workflow-icon"><i class="bi bi-receipt" aria-hidden="true"></i></span><span class="hhd-workflow-meta"><strong>Billing defaults</strong><span>Focus household billing and aggregation behavior</span></span></button>
+        <button type="button" class="hhd-workflow" @onclick='() => SetDashboardFocus("matching", "importance")'><span class="hhd-workflow-icon"><i class="bi bi-people" aria-hidden="true"></i></span><span class="hhd-workflow-meta"><strong>Member matching</strong><span>Review grouping and match policy controls</span></span></button>
+        <button type="button" class="hhd-workflow" @onclick='() => SetDashboardFocus("disabled", "importance")'><span class="hhd-workflow-icon"><i class="bi bi-toggle-off" aria-hidden="true"></i></span><span class="hhd-workflow-meta"><strong>Disabled controls</strong><span>Audit inactive household capabilities</span></span></button>
+        <button type="button" class="hhd-workflow" @onclick='() => SetDashboardFocus("types", "type")'><span class="hhd-workflow-icon"><i class="bi bi-pie-chart" aria-hidden="true"></i></span><span class="hhd-workflow-meta"><strong>Type coverage</strong><span>Compare Boolean, String, and custom setting types</span></span></button>
+    </section>
+
+    <section class="hhd-filter-panel" aria-label="Household setting filters">
+        <div class="hhd-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input type="search"
+                   placeholder="Search key, value, type, or description…"
+                   aria-label="Search household settings"
+                   value="@_searchTerm"
+                   @oninput="args => OnSearchInputValue(args.Value?.ToString())" />
+        </div>
+        <div class="hhd-filter-grid">
+            <label>
+                <span>Setting Type</span>
+                <select class="form-select" @bind="_typeFilter" @bind:after="ApplyFilters">
+                    <option value="">All types</option>
+                    @foreach (var type in TypeOptions)
+                    {
+                        <option value="@type">@type</option>
+                    }
+                </select>
+            </label>
+            <label>
+                <span>Value State</span>
+                <select class="form-select" @bind="_stateFilter" @bind:after="ApplyFilters">
+                    <option value="">All states</option>
+                    <option value="Enabled">Enabled Boolean</option>
+                    <option value="Disabled">Disabled Boolean</option>
+                    <option value="Configured">Configured Value</option>
+                    <option value="Blank">Blank Value</option>
+                    <option value="NeedsReview">Needs review</option>
+                </select>
+            </label>
+            <label>
+                <span>Sort</span>
+                <select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters">
+                    <option value="importance">Importance</option>
+                    <option value="key">Setting key</option>
+                    <option value="type">Type</option>
+                    <option value="created">Newest</option>
+                </select>
+            </label>
+        </div>
+        <button type="button" class="hhd-btn hhd-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)">
+            <i class="bi bi-x-lg" aria-hidden="true"></i> Reset
+        </button>
+    </section>
+
+    <nav class="hhd-tabs" aria-label="Household setting views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="hhd-tab @(_activeTab == tab.Key ? "hhd-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </nav>
+
+    <main class="hhd-dashboard">
+        <section class="hhd-main-card">
+            <div class="hhd-card-header">
+                <div>
+                    <span class="hhd-section-kicker">@ActiveViewTitle</span>
+                    <h2>@FilteredSettings.Count() household settings</h2>
+                    <p>Ranked by enterprise importance: billing impact, grouping behavior, enabled state, configured values, and operational review priority.</p>
+                </div>
+                <div class="hhd-card-actions">
+                    <button type="button" class="hhd-btn hhd-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Prev</button>
+                    <span class="hhd-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="hhd-btn hhd-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="hhd-loading"><span class="hhd-spinner"></span> Loading household settings…</div>
             }
+            else if (!FilteredSettings.Any())
+            {
+                <div class="hhd-empty">
+                    <i class="bi bi-house" aria-hidden="true"></i>
+                    <strong>No household settings found</strong>
+                    <span>Adjust the active KPI, tab, search, or filters.</span>
+                </div>
+            }
+            else if (_activeTab == "types")
+            {
+                <div class="hhd-group-grid">
+                    @foreach (var group in TypeGroups)
+                    {
+                        <article class="hhd-group-card">
+                            <div class="hhd-group-icon"><i class="bi @TypeIcon(group.Name)" aria-hidden="true"></i></div>
+                            <div class="hhd-group-meta">
+                                <h3>@group.Name</h3>
+                                <p>@group.Count settings • @group.Configured configured • @group.ReviewCount need review</p>
+                                <div class="hhd-mini-bar"><span style="width:@group.Percent%"></span></div>
+                            </div>
+                            <button type="button" class="hhd-btn hhd-btn--ghost" @onclick="() => FilterByType(group.Name)">Open</button>
+                        </article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="hhd-table-wrap">
+                    <table class="hhd-table">
+                        <thead>
+                            <tr>
+                                <th>Importance</th>
+                                <th>Setting</th>
+                                <th>Type</th>
+                                <th>Value</th>
+                                <th>State</th>
+                                <th>Created</th>
+                                <th class="hhd-actions-col">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var setting in PagedSettings)
+                            {
+                                <tr class="@(_selected?.HouseholdSettingId == setting.HouseholdSettingId ? "hhd-row hhd-row--selected" : "hhd-row")" @onclick="() => SelectRow(setting)">
+                                    <td>@ImportanceBadge(setting)</td>
+                                    <td>
+                                        <div class="hhd-setting-cell">
+                                            <div class="hhd-avatar" style="@AvatarStyle(setting.SettingKey)" aria-hidden="true">@Initials(setting.SettingKey)</div>
+                                            <div class="hhd-setting-meta">
+                                                <button type="button" class="hhd-link-button" @onclick:stopPropagation="true" @onclick="() => SelectRow(setting)">@FormatKey(setting.SettingKey)</button>
+                                                <small>@setting.SettingKey</small>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td><span class="hhd-pill @TypeBadgeClass(setting)"><i class="bi @TypeIcon(DisplayType(setting))" aria-hidden="true"></i>@DisplayType(setting)</span></td>
+                                    <td @onclick:stopPropagation="true">
+                                        @if (IsBoolean(setting))
+                                        {
+                                            <div class="hhd-switch">
+                                                <input type="checkbox" checked="@IsTrue(setting.SettingValue)" @onchange="args => ConfirmUpdate(setting, BoolStr(args.Value))" />
+                                                <span>@(IsTrue(setting.SettingValue) ? "Enabled" : "Disabled")</span>
+                                            </div>
+                                        }
+                                        else if (string.Equals(setting.SettingKey, "HouseholdBillingDefault", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            <select class="form-select hhd-inline-input" value="@setting.SettingValue" @onchange="args => ConfirmUpdate(setting, args.Value?.ToString())">
+                                                <option value="Individual">Individual</option>
+                                                <option value="Household">Household</option>
+                                            </select>
+                                        }
+                                        else
+                                        {
+                                            <input class="form-control hhd-inline-input" value="@setting.SettingValue" @onchange="args => ConfirmUpdate(setting, args.Value?.ToString())" />
+                                        }
+                                    </td>
+                                    <td><span class="hhd-pill @StateBadgeClass(setting)">@StateLabel(setting)</span></td>
+                                    <td><span class="hhd-date">@FormatDate(setting.CreatedDateUtc)</span></td>
+                                    <td class="hhd-actions-col" @onclick:stopPropagation="true">
+                                        <button type="button" class="hhd-btn hhd-btn--ghost hhd-btn--sm" @onclick="() => SelectRow(setting)"><i class="bi bi-eye" aria-hidden="true"></i> Open</button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="hhd-side-panel" aria-label="Household insights">
+            <section class="hhd-panel-card">
+                <span class="hhd-section-kicker">Selected setting</span>
+                @if (_selected is null)
+                {
+                    <div class="hhd-empty hhd-empty--compact">
+                        <i class="bi bi-cursor" aria-hidden="true"></i>
+                        <strong>Select a setting</strong>
+                        <span>Open importance, recommended action, and configuration details.</span>
+                    </div>
+                }
+                else
+                {
+                    <div class="hhd-selected__title">
+                        <div class="hhd-avatar hhd-avatar--lg" style="@AvatarStyle(_selected.SettingKey)" aria-hidden="true">@Initials(_selected.SettingKey)</div>
+                        <div>
+                            <h3>@FormatKey(_selected.SettingKey)</h3>
+                            <span>@DisplayType(_selected) • @StateLabel(_selected)</span>
+                        </div>
+                    </div>
+                    <div class="hhd-score-card @ImportanceClass(_selected)">
+                        <span>Importance score</span>
+                        <strong>@ImportanceScore(_selected)</strong>
+                        <small>@RecommendedAction(_selected)</small>
+                    </div>
+                    <dl class="hhd-detail-list">
+                        <div><dt>Key</dt><dd>@_selected.SettingKey</dd></div>
+                        <div><dt>Value</dt><dd>@Safe(_selected.SettingValue, "Blank")</dd></div>
+                        <div><dt>Type</dt><dd>@DisplayType(_selected)</dd></div>
+                        <div><dt>Created</dt><dd>@FormatDate(_selected.CreatedDateUtc)</dd></div>
+                    </dl>
+                    @if (!string.IsNullOrWhiteSpace(_selected.Description))
+                    {
+                        <p class="hhd-description">@_selected.Description</p>
+                    }
+                }
+            </section>
+
+            <section class="hhd-panel-card">
+                <span class="hhd-section-kicker">Enterprise insights</span>
+                <div class="hhd-insight-list">
+                    <div class="hhd-insight">
+                        <i class="bi bi-house-check" aria-hidden="true"></i>
+                        <div><strong>Household readiness</strong><span>@ReadinessInsight</span></div>
+                    </div>
+                    <div class="hhd-insight">
+                        <i class="bi bi-receipt" aria-hidden="true"></i>
+                        <div><strong>Billing behavior</strong><span>@BillingInsight</span></div>
+                    </div>
+                    <div class="hhd-insight">
+                        <i class="bi bi-people" aria-hidden="true"></i>
+                        <div><strong>Grouping controls</strong><span>@MatchingInsight</span></div>
+                    </div>
+                </div>
+            </section>
+        </aside>
+    </main>
+</div>
+
+@if (_confirmVisible)
+{
+    <div class="hhd-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="household-confirm-title">
+        <div class="hhd-confirm">
+            <div class="hhd-confirm__body">
+                <div class="hhd-confirm-icon"><i class="bi bi-sliders" aria-hidden="true"></i></div>
+                <div>
+                    <h3 id="household-confirm-title">Update Household Setting</h3>
+                    <p>Apply <strong>@_pendingDisplayValue</strong> to <strong>@FormatKey(_pendingSetting?.SettingKey ?? string.Empty)</strong>?</p>
+                </div>
+            </div>
+            <div class="hhd-modal__footer">
+                <button type="button" class="hhd-btn hhd-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button>
+                <button type="button" class="hhd-btn hhd-btn--primary" @onclick="ExecutePendingUpdateAsync" disabled="@_saving">
+                    @if (_saving) { <span class="hhd-spin-sm"></span> }
+                    Apply Update
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="hhd-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="hhd-toast hhd-toast--@toast.Kind">
+            <i class="bi @(toast.Kind == "success" ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill")" aria-hidden="true"></i>
+            <span>@toast.Message</span>
+            <button type="button" @onclick="() => DismissToast(toast.Id)" aria-label="Dismiss notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
         </div>
     }
 </div>
-
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true"><ToastPosition X="Right" Y="Bottom" /></SfToast>
 
 @code {
     Guid TenantAdminUserId { get; set; }
     Guid DevTenantId { get; set; }
     Guid DevUserId { get; set; }
-    private Guid _tenantId;
-    private Guid _tenantAdminUserId;
     Guid TenantId { get; set; }
+
+    readonly List<DashboardTab> _tabs =
+    [
+        new("all", "All", "bi-sliders"),
+        new("enabled", "Enabled", "bi-toggle-on"),
+        new("disabled", "Disabled", "bi-toggle-off"),
+        new("billing", "Billing", "bi-receipt"),
+        new("matching", "Matching", "bi-people"),
+        new("risk", "Needs Review", "bi-exclamation-octagon"),
+        new("types", "Types", "bi-pie-chart")
+    ];
+
     List<HouseholdSettingDto> _settings = [];
-    bool _loading;
+    List<ToastItem> _toasts = [];
+    HouseholdSettingDto? _selected;
+    HouseholdSettingDto? _pendingSetting;
+    string? _pendingValue;
+    string _pendingDisplayValue = string.Empty;
+    string _activeTab = "all";
+    string _searchTerm = string.Empty;
+    string _typeFilter = string.Empty;
+    string _stateFilter = string.Empty;
+    string _sortMode = "importance";
     string? _loadError;
-    SfToast _toast = default!;
+    bool _loading;
+    bool _saving;
+    bool _confirmVisible;
+    int _page = 1;
+    const int PageSize = 12;
 
     protected override async Task OnInitializedAsync()
     {
@@ -110,39 +359,263 @@
         await LoadAsync();
     }
 
+    IEnumerable<HouseholdSettingDto> FilteredSettings
+    {
+        get
+        {
+            IEnumerable<HouseholdSettingDto> query = _settings;
+
+            query = _activeTab switch
+            {
+                "enabled" => query.Where(IsEnabledBoolean),
+                "disabled" => query.Where(IsDisabledBoolean),
+                "billing" => query.Where(IsBillingSetting),
+                "matching" => query.Where(IsMatchingSetting),
+                "risk" => query.Where(NeedsReview),
+                _ => query
+            };
+
+            if (!string.IsNullOrWhiteSpace(_searchTerm)) query = query.Where(MatchesSearch);
+            if (!string.IsNullOrWhiteSpace(_typeFilter)) query = query.Where(x => string.Equals(DisplayType(x), _typeFilter, StringComparison.OrdinalIgnoreCase));
+
+            query = _stateFilter switch
+            {
+                "Enabled" => query.Where(IsEnabledBoolean),
+                "Disabled" => query.Where(IsDisabledBoolean),
+                "Configured" => query.Where(x => !string.IsNullOrWhiteSpace(x.SettingValue)),
+                "Blank" => query.Where(x => string.IsNullOrWhiteSpace(x.SettingValue)),
+                "NeedsReview" => query.Where(NeedsReview),
+                _ => query
+            };
+
+            return _sortMode switch
+            {
+                "key" => query.OrderBy(x => x.SettingKey),
+                "type" => query.OrderBy(DisplayType).ThenBy(x => x.SettingKey),
+                "created" => query.OrderByDescending(x => x.CreatedDateUtc),
+                _ => query.OrderByDescending(ImportanceScore).ThenBy(x => x.SettingKey)
+            };
+        }
+    }
+
+    List<HouseholdSettingDto> PagedSettings => FilteredSettings.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+    int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredSettings.Count() / (double)PageSize));
+    bool HasFilters => !string.IsNullOrWhiteSpace(_searchTerm) || !string.IsNullOrWhiteSpace(_typeFilter) || !string.IsNullOrWhiteSpace(_stateFilter) || _activeTab != "all" || _sortMode != "importance";
+    string ActiveViewTitle => _tabs.FirstOrDefault(x => x.Key == _activeTab)?.Label ?? "All";
+    IEnumerable<string> TypeOptions => _settings.Select(DisplayType).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    int ReadinessPercent => _settings.Count == 0 ? 0 : (int)Math.Round(_settings.Count(x => !NeedsReview(x)) * 100m / _settings.Count);
+    string ReadinessInsight => _settings.Count == 0 ? "No household settings are available yet." : $"{ReadinessPercent}% of household settings have configured values and no review flags.";
+    string BillingInsight => _settings.Any(IsBillingSetting) ? $"{_settings.Count(IsBillingSetting)} billing-related settings control household invoice and payment behavior." : "No billing-specific household settings were returned.";
+    string MatchingInsight => _settings.Any(IsMatchingSetting) ? $"{_settings.Count(IsMatchingSetting)} settings influence household grouping or member matching." : "No explicit grouping or matching settings were returned.";
+
+    List<TypeSummary> TypeGroups => _settings
+        .GroupBy(DisplayType)
+        .Select(g => new TypeSummary(g.Key, g.Count(), g.Count(x => !string.IsNullOrWhiteSpace(x.SettingValue)), g.Count(NeedsReview), _settings.Count == 0 ? 0 : Math.Round(g.Count() * 100m / _settings.Count, 0)))
+        .OrderByDescending(x => x.Count)
+        .ToList();
+
     async Task LoadAsync()
     {
         _loading = true;
         _loadError = null;
-        try { _settings = await Api.GetHouseholdSettingsAsync(TenantId) ?? []; }
-        catch (Exception ex) { _loadError = ex.Message; }
-        finally { _loading = false; }
-    }
-
-    async Task UpdateAsync(HouseholdSettingDto setting, string? newValue)
-    {
         try
         {
-            setting.SettingValue = newValue;
-            await Api.UpdateHouseholdSettingAsync(setting.HouseholdSettingId, new(newValue));
-            await _toast.ShowAsync(new() { Content = $"{FormatKey(setting.SettingKey)} updated", CssClass = "e-toast-success" });
+            _settings = await Api.GetHouseholdSettingsAsync(TenantId) ?? [];
+            _selected = _selected is null ? _settings.OrderByDescending(ImportanceScore).FirstOrDefault() : _settings.FirstOrDefault(x => x.HouseholdSettingId == _selected.HouseholdSettingId) ?? _settings.OrderByDescending(ImportanceScore).FirstOrDefault();
+            NormalizePage();
         }
-        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Update failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load household settings: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    static string FormatKey(string key) =>
-        System.Text.RegularExpressions.Regex.Replace(key, "(?<=[a-z])(?=[A-Z])", " ");
+    Task RefreshAsync() => LoadAsync();
+    void ApplyFilters() { _page = 1; NormalizePage(); }
+    void OnSearchInputValue(string? value) { _searchTerm = value ?? string.Empty; ApplyFilters(); }
+    void SetDashboardFocus(string tab, string sort) { _activeTab = tab; _sortMode = sort; _page = 1; NormalizePage(); }
+    void SetActiveTab(string tab) { _activeTab = tab; _page = 1; NormalizePage(); }
+    void SelectRow(HouseholdSettingDto setting) => _selected = setting;
+    void PreviousPage() { if (_page > 1) _page--; }
+    void NextPage() { if (_page < TotalPages) _page++; }
+    void NormalizePage() { if (_page > TotalPages) _page = TotalPages; }
 
-    static string BoolStr(object? val) => val?.ToString()?.ToLower() == "true" ? "true" : "false";
+    void ClearFilters()
+    {
+        _searchTerm = string.Empty;
+        _typeFilter = string.Empty;
+        _stateFilter = string.Empty;
+        _sortMode = "importance";
+        _activeTab = "all";
+        _page = 1;
+    }
+
+    void FilterByType(string type)
+    {
+        _activeTab = "all";
+        _typeFilter = type;
+        _sortMode = "importance";
+        _page = 1;
+    }
+
+    void ConfirmUpdate(HouseholdSettingDto setting, string? newValue)
+    {
+        if (string.Equals(setting.SettingValue ?? string.Empty, newValue ?? string.Empty, StringComparison.Ordinal)) return;
+        _pendingSetting = setting;
+        _pendingValue = newValue;
+        _pendingDisplayValue = string.IsNullOrWhiteSpace(newValue) ? "Blank" : newValue!;
+        _confirmVisible = true;
+    }
+
+    void CloseConfirm()
+    {
+        _confirmVisible = false;
+        _pendingSetting = null;
+        _pendingValue = null;
+        _pendingDisplayValue = string.Empty;
+    }
+
+    async Task ExecutePendingUpdateAsync()
+    {
+        if (_pendingSetting is null) return;
+
+        _saving = true;
+        try
+        {
+            await Api.UpdateHouseholdSettingAsync(_pendingSetting.HouseholdSettingId, new(_pendingValue));
+            _pendingSetting.SettingValue = _pendingValue;
+            _selected = _pendingSetting;
+            ShowToast("success", $"{FormatKey(_pendingSetting.SettingKey)} updated.");
+            CloseConfirm();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Update failed: {ex.Message}");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string color) => @<button type="button" class="hhd-kpi-card hhd-kpi-card--@color @(_activeTab == key ? "hhd-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveTab(key)">
+        <span class="hhd-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span>
+        <span class="hhd-kpi-body"><span class="hhd-kpi-label">@label</span><strong class="hhd-kpi-value">@value</strong><span class="hhd-kpi-sub">@subtitle</span></span>
+    </button>;
+
+    int TabCount(string key) => key switch
+    {
+        "enabled" => _settings.Count(IsEnabledBoolean),
+        "disabled" => _settings.Count(IsDisabledBoolean),
+        "billing" => _settings.Count(IsBillingSetting),
+        "matching" => _settings.Count(IsMatchingSetting),
+        "risk" => _settings.Count(NeedsReview),
+        "types" => TypeGroups.Count,
+        _ => _settings.Count
+    };
+
+    bool MatchesSearch(HouseholdSettingDto setting)
+    {
+        var term = _searchTerm.Trim();
+        return Contains(setting.SettingKey, term) || Contains(setting.SettingValue, term) || Contains(setting.SettingType, term) || Contains(setting.Description, term);
+    }
+
+    static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    static bool IsBoolean(HouseholdSettingDto setting) => string.Equals(DisplayType(setting), "Boolean", StringComparison.OrdinalIgnoreCase);
+    static bool IsTrue(string? value) => string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+    static bool IsEnabledBoolean(HouseholdSettingDto setting) => IsBoolean(setting) && IsTrue(setting.SettingValue);
+    static bool IsDisabledBoolean(HouseholdSettingDto setting) => IsBoolean(setting) && !IsTrue(setting.SettingValue);
+    static bool IsBillingSetting(HouseholdSettingDto setting) => Contains(setting.SettingKey, "Billing") || Contains(setting.Description, "billing") || Contains(setting.Description, "invoice") || Contains(setting.Description, "payment");
+    static bool IsMatchingSetting(HouseholdSettingDto setting) => Contains(setting.SettingKey, "Match") || Contains(setting.SettingKey, "Group") || Contains(setting.SettingKey, "Member") || Contains(setting.Description, "match") || Contains(setting.Description, "group");
+    static bool NeedsReview(HouseholdSettingDto setting) => string.IsNullOrWhiteSpace(setting.SettingValue) || string.IsNullOrWhiteSpace(setting.SettingType) || string.IsNullOrWhiteSpace(setting.Description) || IsDisabledBoolean(setting);
+    static string DisplayType(HouseholdSettingDto setting) => string.IsNullOrWhiteSpace(setting.SettingType) ? "Unknown" : setting.SettingType.Trim();
+    static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    static string BoolStr(object? val) => val?.ToString()?.ToLowerInvariant() == "true" ? "true" : "false";
+    static string FormatDate(DateTime date) => date == default ? "—" : date.ToLocalTime().ToString("MMM d, yyyy");
+    static string FormatKey(string key) => System.Text.RegularExpressions.Regex.Replace(key, "(?<=[a-z])(?=[A-Z])", " ");
+    static string StateLabel(HouseholdSettingDto setting) => IsBoolean(setting) ? IsTrue(setting.SettingValue) ? "Enabled" : "Disabled" : string.IsNullOrWhiteSpace(setting.SettingValue) ? "Blank" : "Configured";
+    static string StateBadgeClass(HouseholdSettingDto setting) => NeedsReview(setting) ? "hhd-pill--red" : IsEnabledBoolean(setting) ? "hhd-pill--green" : string.IsNullOrWhiteSpace(setting.SettingValue) ? "hhd-pill--neutral" : "hhd-pill--blue";
+    static string TypeBadgeClass(HouseholdSettingDto setting) => DisplayType(setting) switch { "Boolean" => "hhd-pill--green", "String" => "hhd-pill--blue", "Integer" or "Number" => "hhd-pill--amber", _ => "hhd-pill--neutral" };
+    static string TypeIcon(string type) => type switch { "Boolean" => "bi-toggle-on", "String" => "bi-input-cursor-text", "Integer" or "Number" => "bi-123", _ => "bi-sliders" };
+
+    static int ImportanceScore(HouseholdSettingDto setting)
+    {
+        var score = 35;
+        if (IsBillingSetting(setting)) score += 25;
+        if (IsMatchingSetting(setting)) score += 20;
+        if (IsBoolean(setting)) score += 10;
+        if (IsEnabledBoolean(setting)) score += 8;
+        if (IsDisabledBoolean(setting)) score += 18;
+        if (string.IsNullOrWhiteSpace(setting.SettingValue)) score += 18;
+        if (string.IsNullOrWhiteSpace(setting.Description)) score += 6;
+        return Math.Clamp(score, 0, 100);
+    }
+
+    static string RecommendedAction(HouseholdSettingDto setting)
+    {
+        if (string.IsNullOrWhiteSpace(setting.SettingValue)) return "Set a value so household workflows have deterministic behavior.";
+        if (IsDisabledBoolean(setting)) return "Review whether this disabled control should remain off for household operations.";
+        if (string.IsNullOrWhiteSpace(setting.Description)) return "Add operational guidance for administrators.";
+        return "Setting is configured for household workflows.";
+    }
+
+    static string ImportanceClass(HouseholdSettingDto setting) => ImportanceScore(setting) switch
+    {
+        >= 80 => "hhd-score-card--red",
+        >= 65 => "hhd-score-card--amber",
+        >= 45 => "hhd-score-card--cyan",
+        _ => "hhd-score-card--green"
+    };
+
+    static MarkupString ImportanceBadge(HouseholdSettingDto setting)
+    {
+        var score = ImportanceScore(setting);
+        var css = score switch { >= 80 => "red", >= 65 => "amber", >= 45 => "cyan", _ => "green" };
+        return new($"<span class=\"hhd-risk-badge hhd-risk-badge--{css}\">{score}</span>");
+    }
+
+    static string Initials(string? value)
+    {
+        var formatted = FormatKey(value ?? string.Empty);
+        var parts = formatted.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return parts.Length switch
+        {
+            0 => "HH",
+            1 => parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant(),
+            _ => string.Concat(parts.Take(2).Select(x => char.ToUpperInvariant(x[0])))
+        };
+    }
+
+    static string AvatarStyle(string? value)
+    {
+        var hash = Math.Abs((value ?? "HouseholdSetting").GetHashCode());
+        var hue = hash % 360;
+        return $"background:linear-gradient(135deg,hsl({hue},78%,48%),hsl({(hue + 35) % 360},82%,36%));";
+    }
+
+    void ShowToast(string kind, string message)
+    {
+        _toasts.Insert(0, new(Guid.NewGuid(), kind, message));
+        if (_toasts.Count > 4) _toasts.RemoveRange(4, _toasts.Count - 4);
+    }
+
+    void DismissToast(Guid id) => _toasts.RemoveAll(x => x.Id == id);
 
     async Task ResolveCurrentUserContextAsync()
     {
         var context = await CurrentUser.RequireAsync();
         TenantId = context.TenantId;
         TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
         DevTenantId = context.TenantId;
         DevUserId = context.UserId;
     }
+
+    sealed record DashboardTab(string Key, string Label, string Icon);
+    sealed record TypeSummary(string Name, int Count, int Configured, int ReviewCount, decimal Percent);
+    sealed record ToastItem(Guid Id, string Kind, string Message);
 }

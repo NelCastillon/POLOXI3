@@ -1,437 +1,390 @@
-@page "/tenant/security/teams2"
+﻿@page "/tenant/security/audit"
 @namespace Ams.Web.Components.Pages.SecurityAdmin
-@using System.ComponentModel.DataAnnotations
-@using Ams.Application.Features.Iam
+@using Ams.Application.Common.Dtos
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Team Access â€” Users &amp; Security</PageTitle>
+<PageTitle>Security Audit - Users &amp; Security</PageTitle>
 
-<AppPageHeader Title="Team Access"
-               Subtitle="Control which users and roles have access to each team"
-               Icon="bi-people-fill">
+<AppPageHeader Title="Security Audit"
+               Subtitle="Enterprise audit command center for security events, record history, field changes, exports, and retention governance."
+               Icon="bi-journal-text">
     <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Access Rule
-        </button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+        <button class="um-btn um-btn-ghost" type="button" @onclick="CopySummaryAsync" disabled="@(!AllRows.Any())"><i class="bi bi-clipboard"></i> Copy Summary</button>
+        <button class="um-btn um-btn-primary" type="button" @onclick='() => SetTab("security")'><i class="bi bi-shield-lock"></i> Review Security Events</button>
     </Actions>
 </AppPageHeader>
 
-<!-- KPI strip -->
-<div class="sta-kpi-strip">
-    <div class="sta-kpi-card @KpiClass("teams")" @onclick='() => SetKpiFilter("teams")' role="button" tabindex="0" title="Show all team access rules">
-        <span class="sta-kpi-icon sta-kpi-icon--teams"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
-        <div><div class="sta-kpi-value">@_teamCount</div><div class="sta-kpi-label">Teams</div></div>
-    </div>
-    <div class="sta-kpi-card @KpiClass("users")" @onclick='() => SetKpiFilter("users")' role="button" tabindex="0" title="Show users with team access">
-        <span class="sta-kpi-icon sta-kpi-icon--users"><i class="bi bi-person-badge" aria-hidden="true"></i></span>
-        <div><div class="sta-kpi-value">@_userCount</div><div class="sta-kpi-label">Users with Access</div></div>
-    </div>
-    <div class="sta-kpi-card @KpiClass("restricted")" @onclick='() => SetKpiFilter("restricted")' role="button" tabindex="0" title="Show restricted access rules">
-        <span class="sta-kpi-icon sta-kpi-icon--restricted"><i class="bi bi-lock-fill" aria-hidden="true"></i></span>
-        <div><div class="sta-kpi-value">@_restrictedCount</div><div class="sta-kpi-label">Restricted Teams</div></div>
-    </div>
-</div>
-
-<!-- Filter toolbar -->
-<AppFilterPanel @bind-SearchValue="_search"
-                OnSearch="OnSearchAsync"
-                SearchPlaceholder="Search team or userâ€¦">
-    <Filters>
-        <SfDropDownList TValue="string" TItem="LabelValue"
-                        DataSource="_teamOptions"
-                        Placeholder="All Teams"
-                        ShowClearButton="true"
-                        Width="180px"
-                        Value="_filterTeam"
-                        ValueChanged="@((string v) => { _filterTeam = v; ApplyFilters(); })">
-            <DropDownListFieldSettings Value="Value" Text="Label" />
-        </SfDropDownList>
-    </Filters>
-</AppFilterPanel>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
 {
-    <div class="alert alert-danger" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+    <div class="tsa-toast @(_toastIsError ? "tsa-toast--danger" : "tsa-toast--success")" role="status">
+        <i class="bi @(_toastIsError ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")"></i>
+        <span>@_toastMessage</span>
+        <button type="button" @onclick="ClearToast" aria-label="Close notification"><i class="bi bi-x-lg"></i></button>
+    </div>
 }
 
-<!-- Grid -->
-<div class="um-grid-card app-datagrid">
-    @if (_loading)
-    {
-        <div class="um-loading-overlay" aria-live="polite">
-            <div class="um-spinner" aria-hidden="true"></div>
-            <span>Loadingâ€¦</span>
+<div class="tsa-page">
+    <section class="tsa-hero">
+        <div class="tsa-hero-left">
+            <span class="tsa-hero-icon"><i class="bi bi-journal-check"></i></span>
+            <div class="tsa-hero-title">
+                <span class="tsa-eyebrow"><i class="bi bi-shield-lock"></i> Tenant Security · Audit Operations</span>
+                <h1>Security Audit Command Center</h1>
+                <p>Prioritize high-risk security events, prove record history, review sensitive exports, inspect field changes, and govern retention policy evidence.</p>
+                <div class="tsa-hero-meta">
+                    <span><i class="bi bi-activity"></i> @TotalEvents audit records</span>
+                    <span><i class="bi bi-exclamation-triangle"></i> @HighRiskCount high risk</span>
+                    <span><i class="bi bi-x-octagon"></i> @FailureCount failures</span>
+                    <span><i class="bi bi-download"></i> @ExportCount exports</span>
+                </div>
+            </div>
         </div>
+        <div class="tsa-hero-actions">
+            <div class="tsa-score-card @ReadinessClass"><span>Audit readiness</span><strong>@ReadinessScore%</strong><small>@ReadinessSummary</small></div>
+            <button class="tsa-workflow" type="button" @onclick='() => SetTab("security")'><i class="bi bi-exclamation-triangle"></i><span><strong>Investigate security</strong><small>@HighRiskCount high-risk event(s)</small></span></button>
+            <button class="tsa-workflow" type="button" @onclick='() => SetTab("exports")'><i class="bi bi-download"></i><span><strong>Review exports</strong><small>@ExportCount data export record(s)</small></span></button>
+        </div>
+    </section>
+
+    <section class="tsa-kpi-strip" aria-label="Audit KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="tsa-kpi-card tsa-kpi-card--@kpi.Tone @(IsActiveTab(kpi.Key) ? "tsa-kpi-card--active" : null)" title="@kpi.Tooltip" @onclick="() => SetTab(kpi.Key)">
+                <span class="tsa-kpi-icon"><i class="bi @kpi.Icon"></i></span>
+                <span class="tsa-kpi-body"><span class="tsa-kpi-label">@kpi.Label</span><strong class="tsa-kpi-value">@kpi.Value</strong><small class="tsa-kpi-sub">@kpi.Detail</small></span>
+            </button>
+        }
+    </section>
+
+    <section class="tsa-workflows" aria-label="Priority audit workflows">
+        <button class="tsa-workflow-card" type="button" @onclick='() => SetTab("security")'><span><i class="bi bi-shield-lock"></i></span><strong>Security event review</strong><small>Failures, high risk, permission denial, and account locks.</small></button>
+        <button class="tsa-workflow-card" type="button" @onclick='() => SetTab("audit")'><span><i class="bi bi-clock-history"></i></span><strong>Record history</strong><small>Entity and action audit evidence.</small></button>
+        <button class="tsa-workflow-card" type="button" @onclick='() => SetTab("fields")'><span><i class="bi bi-input-cursor-text"></i></span><strong>Field changes</strong><small>Before/after field-level changes.</small></button>
+        <button class="tsa-workflow-card" type="button" @onclick='() => SetTab("exports")'><span><i class="bi bi-download"></i></span><strong>Export oversight</strong><small>Data movement and record counts.</small></button>
+        <button class="tsa-workflow-card" type="button" @onclick='() => SetTab("retention")'><span><i class="bi bi-archive"></i></span><strong>Retention governance</strong><small>Apply and monitor enabled policies.</small></button>
+    </section>
+
+    <section class="tsa-filter-panel" aria-label="Audit filters">
+        <div class="tsa-search"><i class="bi bi-search"></i><input value="@_search" @oninput="OnSearchChanged" placeholder="Search users, entity, action, event, IP, file, or correlation..." /></div>
+        <div class="tsa-filter-grid">
+            <label><span>Event Type</span><select class="form-select" value="@_eventTypeFilter" @onchange="OnEventTypeFilterChanged"><option value="">All</option>@foreach (var type in EventTypes) { <option>@type</option> }</select></label>
+            <label><span>Risk</span><select class="form-select" value="@_riskFilter" @onchange="OnRiskFilterChanged"><option value="">All</option><option value="High">High</option><option value="Medium">Medium</option><option value="Low">Low</option></select></label>
+            <label><span>Outcome</span><select class="form-select" value="@_outcomeFilter" @onchange="OnOutcomeFilterChanged"><option value="">All</option><option value="Success">Success</option><option value="Failure">Failure</option></select></label>
+            <label><span>Date</span><select class="form-select" value="@_dateFilter" @onchange="OnDateFilterChanged"><option value="0">All time</option><option value="1">Today</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option></select></label>
+        </div>
+        <button type="button" class="tsa-btn tsa-btn--ghost" @onclick="ClearFilters"><i class="bi bi-x-circle"></i> Clear</button>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger tsa-alert" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div>
     }
-    <SfGrid TValue="TeamAccessEntry"
-            DataSource="_entries"
-            AllowPaging="true"
-            AllowSorting="true"
-            EnableHover="true"
-            RowHeight="52">
-        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
-        <GridColumns>
-            <GridColumn Field="@nameof(TeamAccessEntry.TeamName)" HeaderText="Team" Width="180">
-                <Template>
-                    @{ var e = (TeamAccessEntry)context; }
-                    <div class="sta-team-cell">
-                        <span class="sta-team-icon" aria-hidden="true"><i class="bi bi-people"></i></span>
-                        <div>
-                            <div class="sta-team-name">@e.TeamName</div>
-                            <div class="sta-team-dept">@e.Department</div>
-                        </div>
+
+    <div class="tsa-tabs" role="tablist" aria-label="Audit sections">
+        @foreach (var tab in Tabs)
+        {
+            <button type="button" role="tab" class="tsa-tab @(IsActiveTab(tab.Key) ? "tsa-tab--active" : null)" @onclick="() => SetTab(tab.Key)"><i class="bi @tab.Icon"></i> @tab.Label <strong>@TabCount(tab.Key)</strong></button>
+        }
+    </div>
+    <section class="tsa-dashboard">
+        <main class="tsa-main-card">
+            <div class="tsa-card-header">
+                <div><span class="tsa-section-kicker"><i class="bi bi-command"></i> @ActiveSectionKicker</span><h2>@ActiveSectionTitle</h2><p>@ActiveSectionDescription</p></div>
+                <div class="tsa-card-actions">
+                    @if (_selected is not null)
+                    {
+                        <span class="tsa-sel-count"><i class="bi bi-check2-circle"></i> @_selected.Title</span>
+                    }
+                    <button type="button" class="tsa-btn tsa-btn--ghost" @onclick="PreviousPage" disabled="@(_pageNumber <= 1)"><i class="bi bi-chevron-left"></i></button>
+                    <span class="tsa-page-indicator">Page @_pageNumber of @TotalPages</span>
+                    <button type="button" class="tsa-btn tsa-btn--ghost" @onclick="NextPage" disabled="@(_pageNumber >= TotalPages)"><i class="bi bi-chevron-right"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="tsa-loading"><span class="spinner-border spinner-border-sm"></span> Loading audit evidence...</div>
+            }
+            else if (!PagedRows.Any())
+            {
+                <div class="tsa-empty"><i class="bi bi-journal-text"></i><strong>No audit evidence matches this view</strong><span>Adjust filters or refresh the audit posture.</span></div>
+            }
+            else
+            {
+                <div class="tsa-table-wrap">
+                    <table class="tsa-table">
+                        <thead><tr><th>Evidence</th><th>Category</th><th>Actor</th><th>IP / Entity</th><th>Outcome</th><th>Risk</th><th>Date</th><th class="tsa-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var row in PagedRows)
+                            {
+                                <tr class="tsa-row @(_selected?.Id == row.Id ? "tsa-row--selected" : null)" @onclick="() => Select(row)">
+                                    <td><div class="tsa-evidence-cell"><span class="tsa-row-icon tsa-row-icon--@row.Tone"><i class="bi @row.Icon"></i></span><span><strong>@row.Title</strong><small>@row.Description</small></span></div></td>
+                                    <td><span class="tsa-pill tsa-pill--blue">@row.Category</span></td>
+                                    <td>@(row.Actor ?? "System")</td>
+                                    <td><div class="tsa-stack"><strong>@(row.IpAddress ?? row.EntityName ?? "—")</strong><small>@(row.EntityId?.ToString() ?? row.CorrelationId ?? "No reference")</small></div></td>
+                                    <td><span class="@(row.IsSuccess ? "tsa-pill tsa-pill--green" : "tsa-pill tsa-pill--red")">@(row.IsSuccess ? "Success" : "Failure")</span></td>
+                                    <td><span class="@RiskBadgeClass(row)">@row.RiskLabel</span></td>
+                                    <td><span class="tsa-date">@FormatAge(row.OccurredDateUtc)</span></td>
+                                    <td class="tsa-row-actions" @onclick:stopPropagation="true"><button type="button" class="tsa-icon-btn" @onclick="() => Select(row)" title="View"><i class="bi bi-eye"></i></button><button type="button" class="tsa-icon-btn" @onclick="() => CopyRowAsync(row)" title="Copy"><i class="bi bi-clipboard"></i></button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </main>
+
+        <aside class="tsa-side-panel">
+            <section class="tsa-panel-card">
+                <span class="tsa-section-kicker"><i class="bi bi-file-earmark-text"></i> Selected Evidence</span>
+                @if (_selected is null)
+                {
+                    <p class="tsa-side-copy">Select an audit record to inspect actor, event, IP address, correlation, and governance context.</p>
+                }
+                else
+                {
+                    <div class="tsa-selected-title"><span class="tsa-selected-icon tsa-row-icon--@_selected.Tone"><i class="bi @_selected.Icon"></i></span><div><h3>@_selected.Title</h3><span>@_selected.Category · @FormatAge(_selected.OccurredDateUtc)</span></div></div>
+                    <div class="tsa-selected-score @RiskScoreClass(_selected)"><span>Audit priority</span><strong>@_selected.RiskLabel</strong><small>@RiskDetail(_selected)</small></div>
+                    <dl class="tsa-detail-list"><div><dt>Actor</dt><dd>@(_selected.Actor ?? "System")</dd></div><div><dt>Outcome</dt><dd>@(_selected.IsSuccess ? "Success" : "Failure")</dd></div><div><dt>IP Address</dt><dd>@(_selected.IpAddress ?? "—")</dd></div><div><dt>Entity</dt><dd>@(_selected.EntityName ?? "—")</dd></div><div><dt>Correlation</dt><dd>@(_selected.CorrelationId ?? "—")</dd></div><div><dt>Occurred</dt><dd>@_selected.OccurredDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</dd></div></dl>
+                    <div class="tsa-detail-box"><strong>Detail</strong><p>@_selected.Description</p></div>
+                    <div class="tsa-selected-actions"><button type="button" class="tsa-btn tsa-btn--primary" @onclick="() => CopyRowAsync(_selected)"><i class="bi bi-clipboard"></i> Copy Evidence</button>@if (_selected.Source == "security") { <button type="button" class="tsa-btn tsa-btn--ghost" @onclick='() => SetTab("security")'><i class="bi bi-shield-lock"></i> Security Events</button> }</div>
+                }
+            </section>
+
+            <section class="tsa-panel-card">
+                <span class="tsa-section-kicker"><i class="bi bi-lightbulb"></i> Priority Insights</span>
+                <div class="tsa-insight-list">@foreach (var insight in Insights) { <button type="button" class="tsa-insight" @onclick="() => SetTab(insight.Tab)"><i class="bi @insight.Icon"></i><span><strong>@insight.Title</strong><small>@insight.Detail</small></span></button> }</div>
+            </section>
+
+            <section class="tsa-panel-card">
+                <span class="tsa-section-kicker"><i class="bi bi-list-check"></i> Governance Checklist</span>
+                <div class="tsa-checklist">@foreach (var item in Checklist) { <div class="tsa-check-item @(item.Done ? "tsa-check-item--done" : null)"><i class="bi @(item.Done ? "bi-check-circle-fill" : "bi-circle")"></i><span>@item.Text</span></div> }</div>
+            </section>
+
+            @if (_retentionPolicies.Any())
+            {
+                <section class="tsa-panel-card">
+                    <span class="tsa-section-kicker"><i class="bi bi-archive"></i> Retention Actions</span>
+                    <div class="tsa-retention-list">
+                        @foreach (var policy in _retentionPolicies.Where(p => p.IsEnabled).Take(4))
+                        {
+                            <button type="button" class="tsa-retention-item" @onclick="() => ConfirmApplyPolicy(policy)"><strong>@policy.EntityName</strong><small>@policy.ActionCode · @policy.RetentionDays days · @(policy.LastAppliedDateUtc.HasValue ? FormatAge(policy.LastAppliedDateUtc.Value) : "Never applied")</small></button>
+                        }
                     </div>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(TeamAccessEntry.UserFullName)" HeaderText="User" Width="180">
-                <Template>
-                    @{ var e = (TeamAccessEntry)context; }
-                    <div class="sta-user-cell">
-                        <span class="sta-avatar" style="@AvatarStyle(e)" aria-hidden="true">@Initials(e.UserFullName)</span>
-                        <span>@e.UserFullName</span>
-                    </div>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(TeamAccessEntry.AccessLevel)" HeaderText="Access Level" Width="140">
-                <Template>
-                    @{ var e = (TeamAccessEntry)context; }
-                    <span class="@AccessBadgeClass(e.AccessLevel)">@e.AccessLevel</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(TeamAccessEntry.GrantedByName)" HeaderText="Granted By" Width="160" />
-            <GridColumn Field="@nameof(TeamAccessEntry.GrantedDate)" HeaderText="Granted" Width="130">
-                <Template>
-                    @{ var e = (TeamAccessEntry)context; }
-                    <span>@e.GrantedDate.ToString("d")</span>
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
-                <Template>
-                    @{ var e = (TeamAccessEntry)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditDrawer(e)" title="Edit">
-                        <i class="bi bi-pencil" aria-hidden="true"></i>
-                    </button>
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ConfirmRemove(e)" title="Remove access">
-                        <i class="bi bi-trash3" aria-hidden="true"></i>
-                    </button>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
+                </section>
+            }
+        </aside>
+    </section>
 </div>
 
-<!-- Add/Edit Drawer -->
-<AppCrudDrawer @bind-Visible="_showDrawer"
-               Title="@(_editModel.AccessId == Guid.Empty ? "Add Access Rule" : "Edit Access Rule")"
-               OnConfirm="SaveAsync"
-               OnClose="CloseDrawer">
-    <Content>
-        @if (_editContext is not null)
-        {
-            <EditForm EditContext="@_editContext">
-                <DataAnnotationsValidator />
-                <div class="um-modal-body"><div class="um-form-grid">
-                    <div class="um-field">
-                    <label>Team <span class="text-danger">*</span></label>
-                    <SfDropDownList TValue="string" TItem="LabelValue"
-                                    DataSource="_teamOptions"
-                                    @bind-Value="_editModel.TeamName"
-                                    Placeholder="Select team"
-                                    Width="100%">
-                        <DropDownListFieldSettings Value="Value" Text="Label" />
-                    </SfDropDownList>
-                    </div>
-
-                    <div class="um-field">
-                    <label>User <span class="text-danger">*</span></label>
-                    <SfDropDownList TValue="Guid" TItem="UserOption"
-                                    DataSource="_userOptions"
-                                    @bind-Value="_editModel.UserId"
-                                    Placeholder="Select user"
-                                    Width="100%">
-                        <DropDownListFieldSettings Value="UserId" Text="FullName" />
-                    </SfDropDownList>
-                    </div>
-
-                    <div class="um-field">
-                    <label>Access Level <span class="text-danger">*</span></label>
-                    <SfDropDownList TValue="string" TItem="LabelValue"
-                                    DataSource="_accessLevelOptions"
-                                    @bind-Value="_editModel.AccessLevel"
-                                    Width="100%">
-                        <DropDownListFieldSettings Value="Value" Text="Label" />
-                    </SfDropDownList>
-                    </div>
-                </div></div>
-            </EditForm>
-        }
-    </Content>
-</AppCrudDrawer>
-
-<SfDialog @bind-Visible="_showRemoveConfirm" Width="440px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-confirm-dialog">
-                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></div>
-                <div><h3>Remove team access?</h3><p>Remove access for <strong>@_pendingRemove?.UserFullName</strong> to <strong>@_pendingRemove?.TeamName</strong>?</p></div>
-            </div>
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseRemoveConfirm">Cancel</button>
-                <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteRemoveAsync">Remove</button>
-            </div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
-
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+@if (_showConfirm)
+{
+    <div class="tsa-modal-backdrop" role="presentation">
+        <div class="tsa-confirm" role="dialog" aria-modal="true" aria-labelledby="tsa-confirm-title">
+            <div class="tsa-confirm-body"><div class="tsa-confirm-icon"><i class="bi bi-exclamation-triangle"></i></div><div><h3 id="tsa-confirm-title">@_confirmTitle</h3><p>@_confirmMessage</p><small>@_confirmDetail</small></div></div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseConfirm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="ExecuteConfirmAsync" disabled="@_saving">@_confirmButton</button></div>
+        </div>
+    </div>
+}
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private SfToast? _toast;
-
-    private List<TeamAccessEntry> _allEntries = [];
-    private List<TeamAccessEntry> _entries    = [];
-    private List<LabelValue> _teamOptions = [];
-    private List<UserOption> _userOptions = [];
-
-    private bool _loading    = false;
-    private bool _showDrawer = false;
-    private bool _showRemoveConfirm = false;
-
-    private string _search      = string.Empty;
-    private string _filterTeam  = string.Empty;
-    private string _activeFilter = string.Empty;
+    private List<AuditLogDto> _auditLogs = [];
+    private List<SecurityEventLogDto> _securityEvents = [];
+    private List<FieldChangeLogDto> _fieldChanges = [];
+    private List<ExportLogDto> _exportLogs = [];
+    private List<RetentionPolicyDto> _retentionPolicies = [];
+    private AuditEvidenceRow? _selected;
+    private RetentionPolicyDto? _pendingPolicy;
+    private bool _loading;
+    private bool _saving;
+    private bool _showConfirm;
+    private string _activeTab = "overview";
+    private string _search = string.Empty;
+    private string _eventTypeFilter = string.Empty;
+    private string _riskFilter = string.Empty;
+    private string _outcomeFilter = string.Empty;
+    private int _dateFilter = 30;
+    private int _pageNumber = 1;
+    private const int PageSize = 12;
     private string? _loadError;
+    private string? _toastMessage;
+    private bool _toastIsError;
+    private string _confirmTitle = string.Empty;
+    private string _confirmMessage = string.Empty;
+    private string _confirmDetail = string.Empty;
+    private string _confirmButton = "Confirm";
 
-    private int _teamCount       = 0;
-    private int _userCount       = 0;
-    private int _restrictedCount = 0;
+    private static readonly List<TabItem> Tabs = [new("overview", "Overview", "bi-speedometer2"), new("security", "Security Events", "bi-shield-lock"), new("audit", "Record History", "bi-clock-history"), new("fields", "Field Changes", "bi-input-cursor-text"), new("exports", "Exports", "bi-download"), new("retention", "Retention", "bi-archive")];
+    private IReadOnlyList<KpiItem> Kpis => [new("security", "Security Events", _securityEvents.Count.ToString(), $"{FailureCount} failed · {HighRiskCount} high risk", "bi-shield-lock", "red", "Show security events"), new("audit", "Record History", _auditLogs.Count.ToString(), "Entity/action evidence", "bi-clock-history", "blue", "Show audit history"), new("fields", "Field Changes", _fieldChanges.Count.ToString(), "Before/after changes", "bi-input-cursor-text", "amber", "Show field changes"), new("exports", "Exports", ExportCount.ToString(), $"{ExportRecordCount:N0} records exported", "bi-download", "purple", "Show export logs"), new("retention", "Retention", _retentionPolicies.Count.ToString(), $"{EnabledPolicyCount} enabled policies", "bi-archive", "green", "Show retention policies"), new("overview", "Recent 24h", Recent24hCount.ToString(), "Audit events in last 24 hours", "bi-activity", "cyan", "Show overview")];
 
-    private static readonly List<LabelValue> _accessLevelOptions =
-    [
-        new("Full",      "Full Access"),
-        new("ReadOnly",  "Read Only"),
-        new("Limited",   "Limited"),
-    ];
-
-    private TeamAccessEntry _editModel = new();
-    private TeamAccessEntry? _pendingRemove;
-    private EditContext? _editContext;
+    private List<AuditEvidenceRow> AllRows => BuildRows();
+    private IEnumerable<AuditEvidenceRow> FilteredRows => ApplyFilters();
+    private IEnumerable<AuditEvidenceRow> PagedRows => FilteredRows.Skip((_pageNumber - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRows.Count() / (double)PageSize));
+    private int TotalEvents => AllRows.Count;
+    private int HighRiskCount => _securityEvents.Count(e => (e.RiskScore ?? 0) >= 70);
+    private int FailureCount => _securityEvents.Count(e => !e.IsSuccess);
+    private int ExportCount => _exportLogs.Count;
+    private int ExportRecordCount => _exportLogs.Sum(e => e.RecordCount);
+    private int EnabledPolicyCount => _retentionPolicies.Count(p => p.IsEnabled);
+    private int Recent24hCount => AllRows.Count(r => r.OccurredDateUtc >= DateTime.UtcNow.AddDays(-1));
+    private int ReadinessScore => TotalEvents == 0 ? 100 : Math.Clamp(100 - (HighRiskCount * 8) - (FailureCount * 4) - (EnabledPolicyCount == 0 ? 12 : 0), 0, 100);
+    private string ReadinessClass => ReadinessScore >= 90 ? "tsa-score-card--green" : ReadinessScore >= 75 ? "tsa-score-card--cyan" : ReadinessScore >= 55 ? "tsa-score-card--amber" : "tsa-score-card--red";
+    private string ReadinessSummary => ReadinessScore >= 90 ? "Audit posture is enterprise ready." : ReadinessScore >= 75 ? "Monitor failures and policy coverage." : "High-risk audit review is required.";
+    private IEnumerable<string> EventTypes => _securityEvents.Select(e => e.EventTypeCode).Concat(_auditLogs.Select(a => a.EventTypeCode)).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    private string ActiveSectionKicker => _activeTab == "retention" ? "Governance" : "Audit Evidence";
+    private string ActiveSectionTitle => _activeTab switch { "security" => "Security Events", "audit" => "Record History", "fields" => "Field-Level Changes", "exports" => "Export & Download History", "retention" => "Retention Governance", _ => "Audit Posture Overview" };
+    private string ActiveSectionDescription => _activeTab switch { "security" => "Authentication, authorization, and security events ranked by risk.", "audit" => "Entity and action audit history for compliance evidence.", "fields" => "Before and after field-level changes with source and actor evidence.", "exports" => "Data export activity, files, record counts, and IP addresses.", "retention" => "Retention policy coverage and apply workflow.", _ => "All audit evidence ranked by security importance and recency." };
+    private IReadOnlyList<InsightItem> Insights => [new("security", "High-risk security", $"{HighRiskCount} high-risk event(s)", "bi-exclamation-triangle"), new("security", "Failed controls", $"{FailureCount} failed security event(s)", "bi-x-octagon"), new("exports", "Data movement", $"{ExportCount} export(s), {ExportRecordCount:N0} records", "bi-download"), new("retention", "Retention coverage", $"{EnabledPolicyCount} enabled policy/policies", "bi-archive")];
+    private IReadOnlyList<ChecklistItem> Checklist => [new("No high-risk security events", HighRiskCount == 0), new("No failed security events", FailureCount == 0), new("Retention policies are enabled", EnabledPolicyCount > 0), new("Exports are auditable", _exportLogs.All(e => e.PerformedByUserId.HasValue || !string.IsNullOrWhiteSpace(e.IpAddress))), new("Recent audit activity is available", Recent24hCount > 0)];
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(
-            new("Home",             "/"),
-            new("Users & Security", "/tenant/security/users"),
-            new("Team Access",      "/tenant/security/teams"));
-
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Users & Security", "/tenant/security/users"), new("Security Audit", "/tenant/security/audit"));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
         _loading = true;
+        _loadError = null;
         StateHasChanged();
         try
         {
-            _loadError = null;
-            await LoadLookupOptionsAsync();
-            var scopes = await Api.SearchUserScopesAsync(_tenantId, scopeTypeCode: "Team", pageSize: 5000);
-            _allEntries = scopes?.Items.Where(s => s.IsActive).Select(MapScope).ToList() ?? [];
-            ComputeKpi();
-            ApplyFilters();
+            var auditTask = Api.SearchAuditAsync(_tenantId, _search);
+            var securityTask = Api.SearchSecurityEventsAsync(_tenantId, _search, pageSize: 5000);
+            var fieldTask = Api.SearchFieldChangesAsync(_tenantId, fieldName: _search, pageSize: 5000);
+            var exportTask = Api.SearchExportLogsAsync(_tenantId, entityName: _search, pageSize: 5000);
+            var retentionTask = Api.SearchRetentionPoliciesAsync(_tenantId, _search);
+            await Task.WhenAll(auditTask, securityTask, fieldTask, exportTask, retentionTask);
+            _auditLogs = auditTask.Result?.Items.ToList() ?? [];
+            _securityEvents = securityTask.Result?.Items.ToList() ?? [];
+            _fieldChanges = fieldTask.Result?.Items.ToList() ?? [];
+            _exportLogs = exportTask.Result?.Items.ToList() ?? [];
+            _retentionPolicies = retentionTask.Result?.Items.ToList() ?? [];
+            EnsureSelected();
+            ClampPage();
         }
         catch (Exception ex)
         {
             _loadError = $"Load failed: {ex.Message}";
-            await ShowToastAsync($"Load failed: {ex.Message}", "e-toast-danger");
+            ShowToast($"Load failed: {ex.Message}", true);
         }
-        finally { _loading = false; }
+        finally
+        {
+            _loading = false;
+        }
+    }
+    private List<AuditEvidenceRow> BuildRows()
+    {
+        var rows = new List<AuditEvidenceRow>();
+        rows.AddRange(_securityEvents.Select(e => new AuditEvidenceRow(e.SecurityEventId, "security", "Security", e.EventTypeCode, e.EventDescription, e.UserFullName ?? e.UserEmail, e.IpAddress, null, null, e.SessionId, e.CreatedDateUtc, e.IsSuccess, e.RiskScore ?? 0, "bi-shield-lock", RiskTone(e.RiskScore ?? 0))));
+        rows.AddRange(_auditLogs.Select(a => new AuditEvidenceRow(a.AuditLogId, "audit", "Audit", a.ActionName, $"{a.EventTypeCode} on {a.EntityName}", a.PerformedByUserId?.ToString(), a.IpAddress, a.EntityName, a.EntityId, a.CorrelationId, a.PerformedDateUtc, true, 20, "bi-clock-history", "blue")));
+        rows.AddRange(_fieldChanges.Select(f => new AuditEvidenceRow(f.FieldChangeLogId, "fields", "Field Change", f.FieldName, $"{f.EntityName}: {TrimValue(f.OldValue)} → {TrimValue(f.NewValue)}", f.ChangedByUserId?.ToString(), f.IpAddress, f.EntityName, f.EntityId, f.ChangeSource, f.ChangedDateUtc, true, 40, "bi-input-cursor-text", "amber")));
+        rows.AddRange(_exportLogs.Select(e => new AuditEvidenceRow(e.ExportLogId, "exports", "Export", e.ExportTypeCode, $"{e.FileName ?? e.EntityName} · {e.RecordCount:N0} records · {e.FormatCode ?? "Unknown format"}", e.PerformedByUserId?.ToString(), e.IpAddress, e.EntityName, e.EntityId, null, e.CreatedDateUtc, true, e.RecordCount > 1000 ? 70 : 45, "bi-download", e.RecordCount > 1000 ? "red" : "purple")));
+        rows.AddRange(_retentionPolicies.Select(p => new AuditEvidenceRow(p.RetentionPolicyId, "retention", "Retention", p.EntityName, $"{p.ActionCode} after {p.RetentionDays} days · {(p.IsEnabled ? "Enabled" : "Disabled")}", "System", null, p.EntityName, null, null, p.LastAppliedDateUtc ?? p.CreatedDateUtc, p.IsEnabled, p.IsEnabled ? 20 : 60, "bi-archive", p.IsEnabled ? "green" : "amber")));
+        return rows;
     }
 
-    private async Task OnSearchAsync(string _) => await LoadAsync();
-
-    private void ApplyFilters()
+    private IEnumerable<AuditEvidenceRow> ApplyFilters()
     {
-        _entries = _allEntries.Where(e =>
-            (string.IsNullOrEmpty(_filterTeam) || e.TeamName == _filterTeam) &&
-            (string.IsNullOrEmpty(_search) ||
-             e.TeamName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             e.UserFullName.Contains(_search, StringComparison.OrdinalIgnoreCase))
-        ).ToList();
-        if (_activeFilter == "restricted") _entries = _entries.Where(e => e.AccessLevel != "Full").ToList();
-        if (_activeFilter == "users") _entries = _entries.Where(e => !string.IsNullOrWhiteSpace(e.UserFullName)).ToList();
-        StateHasChanged();
+        var query = AllRows.AsEnumerable();
+        if (_activeTab != "overview") query = query.Where(r => r.Source == _activeTab);
+        if (!string.IsNullOrWhiteSpace(_eventTypeFilter)) query = query.Where(r => string.Equals(r.Title, _eventTypeFilter, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(_riskFilter)) query = query.Where(r => r.RiskLabel == _riskFilter);
+        if (!string.IsNullOrWhiteSpace(_outcomeFilter)) query = query.Where(r => (r.IsSuccess ? "Success" : "Failure") == _outcomeFilter);
+        if (_dateFilter > 0) query = query.Where(r => r.OccurredDateUtc >= DateTime.UtcNow.AddDays(-_dateFilter));
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            query = query.Where(r => r.Title.Contains(_search, StringComparison.OrdinalIgnoreCase) || r.Description.Contains(_search, StringComparison.OrdinalIgnoreCase) || (r.Actor?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) || (r.IpAddress?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) || (r.EntityName?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) || (r.CorrelationId?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false));
+        }
+        return query.OrderByDescending(r => r.RiskScore).ThenByDescending(r => r.OccurredDateUtc);
     }
 
-    private void SetKpiFilter(string filter)
+    private void EnsureSelected() => _selected = _selected is null ? FilteredRows.FirstOrDefault() : FilteredRows.FirstOrDefault(r => r.Id == _selected.Id) ?? FilteredRows.FirstOrDefault();
+    private void Select(AuditEvidenceRow row) => _selected = row;
+    private void SetTab(string tab) { _activeTab = tab; _pageNumber = 1; EnsureSelected(); }
+    private bool IsActiveTab(string tab) => _activeTab == tab;
+    private int TabCount(string tab) => tab switch { "security" => _securityEvents.Count, "audit" => _auditLogs.Count, "fields" => _fieldChanges.Count, "exports" => _exportLogs.Count, "retention" => _retentionPolicies.Count, _ => TotalEvents };
+    private void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args) { _search = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; _ = LoadAsync(); }
+    private void OnEventTypeFilterChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args) { _eventTypeFilter = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; }
+    private void OnRiskFilterChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args) { _riskFilter = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; }
+    private void OnOutcomeFilterChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args) { _outcomeFilter = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; }
+    private void OnDateFilterChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args) { _dateFilter = int.TryParse(args.Value?.ToString(), out var days) ? days : 0; _pageNumber = 1; }
+    private void ClearFilters() { _search = string.Empty; _eventTypeFilter = string.Empty; _riskFilter = string.Empty; _outcomeFilter = string.Empty; _dateFilter = 30; _activeTab = "overview"; _pageNumber = 1; _ = LoadAsync(); }
+    private void PreviousPage() { if (_pageNumber > 1) _pageNumber--; }
+    private void NextPage() { if (_pageNumber < TotalPages) _pageNumber++; }
+    private void ClampPage() { if (_pageNumber > TotalPages) _pageNumber = TotalPages; if (_pageNumber < 1) _pageNumber = 1; }
+
+    private void ConfirmApplyPolicy(RetentionPolicyDto policy)
     {
-        _activeFilter = _activeFilter == filter ? string.Empty : filter;
-        ApplyFilters();
+        _pendingPolicy = policy;
+        _confirmTitle = "Apply retention policy?";
+        _confirmMessage = $"Apply {policy.ActionCode} retention for {policy.EntityName}?";
+        _confirmDetail = $"Retention: {policy.RetentionDays} days. Last applied: {(policy.LastAppliedDateUtc.HasValue ? FormatAge(policy.LastAppliedDateUtc.Value) : "Never")}.";
+        _confirmButton = "Apply Policy";
+        _showConfirm = true;
     }
 
-    private string KpiClass(string filter) => _activeFilter == filter ? "sta-kpi-card--active" : string.Empty;
+    private void CloseConfirm() { _showConfirm = false; _pendingPolicy = null; }
 
-    private void ComputeKpi()
+    private async Task ExecuteConfirmAsync()
     {
-        _teamCount       = _allEntries.Select(e => e.TeamName).Distinct().Count();
-        _userCount       = _allEntries.Select(e => e.UserFullName).Distinct().Count();
-        _restrictedCount = _allEntries.Count(e => e.AccessLevel != "Full");
-    }
-
-    private void OpenAddDrawer()  { _editModel = new(); _editContext = new EditContext(_editModel); _showDrawer = true; }
-    private void OpenEditDrawer(TeamAccessEntry e) { _editModel = new TeamAccessEntry { AccessId = e.AccessId, TeamName = e.TeamName, Department = e.Department, UserId = e.UserId, UserFullName = e.UserFullName, AccessLevel = e.AccessLevel, GrantedByName = e.GrantedByName, GrantedDate = e.GrantedDate }; _editContext = new EditContext(_editModel); _showDrawer = true; }
-    private void CloseDrawer() => _showDrawer = false;
-
-    private async Task SaveAsync()
-    {
+        if (_pendingPolicy is null) return;
+        _saving = true;
         try
         {
-            if (_editContext?.Validate() != true)
-            {
-                await ShowToastAsync("Please fix validation errors before saving.", "e-toast-danger");
-                return;
-            }
-
-            if (_editModel.AccessId != Guid.Empty)
-                await Api.RevokeUserScopeAsync(_editModel.AccessId);
-
-            await Api.AssignUserScopeAsync(new AssignUserScopeRequest
-            {
-                TenantId = _tenantId,
-                UserId = _editModel.UserId,
-                ScopeTypeCode = "Team",
-                ScopeValue = $"{_editModel.TeamName}|{_editModel.AccessLevel}"
-            });
-
-            _showDrawer = false;
+            var affected = await Api.ApplyRetentionPolicyAsync(_pendingPolicy.RetentionPolicyId);
+            ShowToast($"Retention policy applied. {affected:N0} record(s) affected.");
+            CloseConfirm();
             await LoadAsync();
-            await ShowToastAsync("Access rule saved.", "e-toast-success");
         }
         catch (Exception ex)
         {
-            await ShowToastAsync($"Save failed: {ex.Message}", "e-toast-danger");
+            ShowToast($"Apply policy failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _saving = false;
         }
     }
 
-    private void ConfirmRemove(TeamAccessEntry entry) { _pendingRemove = entry; _showRemoveConfirm = true; }
-    private void CloseRemoveConfirm() { _pendingRemove = null; _showRemoveConfirm = false; }
-    private async Task ExecuteRemoveAsync()
+    private async Task CopySummaryAsync()
     {
-        if (_pendingRemove is null) return;
-        try
-        {
-            await Api.RevokeUserScopeAsync(_pendingRemove.AccessId);
-            CloseRemoveConfirm();
-            await LoadAsync();
-            await ShowToastAsync("Access rule removed.", "e-toast-success");
-        }
-        catch (Exception ex)
-        {
-            await ShowToastAsync($"Remove failed: {ex.Message}", "e-toast-danger");
-        }
+        var summary = $"Security Audit Summary: {TotalEvents} audit records, {HighRiskCount} high-risk events, {FailureCount} failures, {ExportCount} exports, {ExportRecordCount:N0} exported records, {EnabledPolicyCount} enabled retention policies, readiness {ReadinessScore}%.";
+        try { await Js.InvokeVoidAsync("navigator.clipboard.writeText", summary); ShowToast("Audit summary copied."); }
+        catch { ShowToast(summary); }
     }
 
-    private async Task LoadLookupOptionsAsync()
+    private async Task CopyRowAsync(AuditEvidenceRow row)
     {
-        var teams = await Api.GetTeamsAsync(_tenantId);
-        _teamOptions = teams?.Where(t => t.IsActive).OrderBy(t => t.TeamName).Select(t => new LabelValue(t.TeamName, t.TeamName)).ToList() ?? [];
-
-        var users = await Api.SearchUsersAsync(_tenantId, pageSize: 5000);
-        _userOptions = users?.Items.OrderBy(u => u.FullName).Select(u => new UserOption(u.UserId, u.FullName, u.Email)).ToList() ?? [];
+        var detail = $"{row.Category}: {row.Title} | {row.Description} | Actor: {row.Actor ?? "System"} | IP: {row.IpAddress ?? "—"} | Date: {row.OccurredDateUtc:u} | Risk: {row.RiskLabel}";
+        try { await Js.InvokeVoidAsync("navigator.clipboard.writeText", detail); ShowToast("Audit evidence copied."); }
+        catch { ShowToast(detail); }
     }
 
-    private TeamAccessEntry MapScope(UserScopeDto scope)
-    {
-        var parts = scope.ScopeValue.Split('|', 2, StringSplitOptions.TrimEntries);
-        var teamName = parts.ElementAtOrDefault(0) ?? scope.ScopeValue;
-        var accessLevel = parts.ElementAtOrDefault(1) ?? "Full";
-        var team = _teamOptions.FirstOrDefault(t => t.Value == teamName);
-        return new TeamAccessEntry
-        {
-            AccessId = scope.UserScopeId,
-            UserId = scope.UserId,
-            UserFullName = scope.UserFullName ?? _userOptions.FirstOrDefault(u => u.UserId == scope.UserId)?.FullName ?? string.Empty,
-            TeamName = teamName,
-            Department = team?.Label == teamName ? string.Empty : string.Empty,
-            AccessLevel = accessLevel,
-            GrantedByName = scope.GrantedByFullName ?? "Tenant",
-            GrantedDate = scope.GrantedDateUtc
-        };
-    }
+    private static string RiskTone(int risk) => risk >= 70 ? "red" : risk >= 40 ? "amber" : "green";
+    private static string TrimValue(string? value) => string.IsNullOrWhiteSpace(value) ? "empty" : value.Length > 38 ? value[..38] + "…" : value;
+    private static string RiskBadgeClass(AuditEvidenceRow row) => row.RiskLabel switch { "High" => "tsa-risk-badge tsa-risk-badge--red", "Medium" => "tsa-risk-badge tsa-risk-badge--amber", _ => "tsa-risk-badge tsa-risk-badge--green" };
+    private static string RiskScoreClass(AuditEvidenceRow row) => row.RiskLabel switch { "High" => "tsa-selected-score--red", "Medium" => "tsa-selected-score--amber", _ => "tsa-selected-score--green" };
+    private static string RiskDetail(AuditEvidenceRow row) => row.RiskLabel switch { "High" => "Immediate security or compliance review recommended.", "Medium" => "Review during the next audit sweep.", _ => "Normal audit evidence." };
+    private static string FormatAge(DateTime utc) { var diff = DateTime.UtcNow - utc; if (diff.TotalMinutes < 60) return $"{Math.Max(1, (int)diff.TotalMinutes)}m ago"; if (diff.TotalHours < 24) return $"{(int)diff.TotalHours}h ago"; if (diff.TotalDays < 7) return $"{(int)diff.TotalDays}d ago"; return utc.ToLocalTime().ToString("MMM d"); }
+    private void ShowToast(string message, bool isError = false) { _toastMessage = message; _toastIsError = isError; }
+    private void ClearToast() => _toastMessage = null;
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; }
 
-    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    private sealed record TabItem(string Key, string Label, string Icon);
+    private sealed record KpiItem(string Key, string Label, string Value, string Detail, string Icon, string Tone, string Tooltip);
+    private sealed record InsightItem(string Tab, string Title, string Detail, string Icon);
+    private sealed record ChecklistItem(string Text, bool Done);
+    private sealed record AuditEvidenceRow(Guid Id, string Source, string Category, string Title, string Description, string? Actor, string? IpAddress, string? EntityName, Guid? EntityId, string? CorrelationId, DateTime OccurredDateUtc, bool IsSuccess, int RiskScore, string Icon, string Tone)
     {
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
-    }
-
-    private static string Initials(string fullName)
-    {
-        var parts = fullName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : fullName.Length >= 1 ? fullName[..1] : "?";
-    }
-
-    private static string AvatarStyle(TeamAccessEntry e)
-    {
-        var hue = Math.Abs(e.UserFullName.GetHashCode()) % 360;
-        return $"background:hsl({hue},50%,42%);color:#fff;";
-    }
-
-    private static string AccessBadgeClass(string level) => level switch
-    {
-        "Full"     => "sta-access-badge sta-access-badge--full",
-        "ReadOnly" => "sta-access-badge sta-access-badge--readonly",
-        "Limited"  => "sta-access-badge sta-access-badge--limited",
-        _          => "sta-access-badge",
-    };
-
-    private sealed record LabelValue(string Value, string Label);
-    private sealed record UserOption(Guid UserId, string FullName, string Email);
-
-    private sealed class TeamAccessEntry
-    {
-        public Guid     AccessId      { get; set; } = Guid.Empty;
-        [Required]
-        public string   TeamName      { get; set; } = string.Empty;
-        public string   Department    { get; set; } = string.Empty;
-        [Required]
-        public Guid     UserId        { get; set; } = Guid.Empty;
-        [RequiredGuid(ErrorMessage = "User is required.")]
-        public Guid     UserValidationId { get => UserId; set => UserId = value; }
-        public string   UserFullName  { get; set; } = string.Empty;
-        [Required]
-        public string   AccessLevel   { get; set; } = "Full";
-        public string   GrantedByName { get; set; } = string.Empty;
-        public DateTime GrantedDate   { get; set; } = DateTime.Today;
-    }
-
-    private sealed class RequiredGuidAttribute : ValidationAttribute
-    {
-        public override bool IsValid(object? value) => value is Guid guid && guid != Guid.Empty;
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        public string RiskLabel => RiskScore >= 70 ? "High" : RiskScore >= 40 ? "Medium" : "Low";
     }
 }

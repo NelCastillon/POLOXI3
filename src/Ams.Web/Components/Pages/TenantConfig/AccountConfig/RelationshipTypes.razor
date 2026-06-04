@@ -1,201 +1,431 @@
-﻿@page "/tenant/accounts/rel-types"
+@page "/tenant/accounts/rel-types"
 @using System.ComponentModel.DataAnnotations
+@using ChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
+@using Action = System.Action
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Relationship Types â€” Account Configuration</PageTitle>
+<PageTitle>Relationship Type Command Center — Account Configuration</PageTitle>
 
-<AppPageHeader Title="Relationship Types"
-               Subtitle="Define how accounts and contacts relate to each other"
-               Icon="bi-link-45deg">
-    <Actions>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Type
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<div class="pc-kpi-strip">
-    <div class="pc-kpi-card @(_activeFilter == "" ? "pc-kpi-card--active" : "")"
-         title="Show all relationship types" @onclick='() => SetFilter("")' style="cursor:pointer">
-        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-diagram-3-fill" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total Types</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "active" ? "pc-kpi-card--active" : "")"
-         title="Filter active types" @onclick='() => SetFilter("active")' style="cursor:pointer">
-        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.IsActive)</div><div class="pc-kpi-label">Active</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "bidirectional" ? "pc-kpi-card--active" : "")"
-         title="Filter bidirectional types" @onclick='() => SetFilter("bidirectional")' style="cursor:pointer">
-        <span class="pc-kpi-icon" style="background:#dbeafe"><i class="bi bi-arrow-left-right text-primary" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.IsBidirectional)</div><div class="pc-kpi-label">Bidirectional</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "oneway" ? "pc-kpi-card--active" : "")"
-         title="Filter one-way types" @onclick='() => SetFilter("oneway")' style="cursor:pointer">
-        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-arrow-right" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => !x.IsBidirectional)</div><div class="pc-kpi-label">One-way</div></div>
-    </div>
-</div>
-
-@if (_loadError is not null)
-{
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
-    </div>
-}
-
-<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search relationship typeâ€¦" />
-
-<div class="um-grid-card">
-    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loadingâ€¦</span></div> }
-    <SfGrid TValue="RelationshipTypeDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-        <GridEvents TValue="RelationshipTypeDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="25" />
-        <GridColumns>
-            <GridColumn Field="TypeCode" HeaderText="Code" Width="130" />
-            <GridColumn Field="TypeName" HeaderText="Type Name" Width="200" />
-            <GridColumn Field="IsBidirectional" HeaderText="Bidirectional" Width="130" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (RelationshipTypeDto)context; }
-                    @if (r.IsBidirectional) { <i class="bi bi-arrow-left-right text-primary"></i> } else { <i class="bi bi-arrow-right text-muted"></i> }
-                </Template>
-            </GridColumn>
-            <GridColumn Field="InverseTypeCode" HeaderText="Inverse" Width="120" />
-            <GridColumn Field="IsActive" HeaderText="Status" Width="100" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (RelationshipTypeDto)context; }
-                    <span class="um-badge @(r.IsActive ? "um-badge-success" : "um-badge-neutral")">@(r.IsActive ? "Active" : "Inactive")</span>
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="" Width="100" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (RelationshipTypeDto)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEdit(r)"><i class="bi bi-pencil"></i></button>
-                    <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(r)"><i class="bi bi-trash"></i></button>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
-
-<SfDialog @bind-Visible="_showForm" Width="520px" IsModal="true" ShowCloseIcon="false">
-    <DialogEvents Closed="ResetForm" />
-    <DialogContent>
-        <div class="um-modal-header">
-            <i class="bi bi-link-45deg" aria-hidden="true"></i>
-            <span>@(_editId.HasValue ? "Edit Relationship Type" : "Add Relationship Type")</span>
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button>
-        </div>
-        <EditForm Model="_form" OnValidSubmit="SaveAsync">
-            <DataAnnotationsValidator />
-            <div class="um-modal-body">
-                <div class="um-form-grid">
-                    <div class="um-field">
-                        <label>Type Code <span class="text-danger">*</span></label>
-                        <InputText @bind-Value="_form.TypeCode" class="um-input" placeholder="e.g. PARENT_CO" />
-                    </div>
-                    <div class="um-field">
-                        <label>Type Name <span class="text-danger">*</span></label>
-                        <InputText @bind-Value="_form.TypeName" class="um-input" />
-                    </div>
-                    <div class="um-field">
-                        <label>Inverse Type Code</label>
-                        <InputText @bind-Value="_form.InverseTypeCode" class="um-input" placeholder="e.g. SUBSIDIARY" />
-                    </div>
-                    <div class="um-field">
-                        <label>Description</label>
-                        <InputTextArea @bind-Value="_form.Description" class="um-input" rows="2" />
-                    </div>
-                    <div class="um-field">
-                        <label>Sort Order</label>
-                        <InputNumber @bind-Value="_form.SortOrder" class="um-input" />
-                    </div>
-                    <div class="um-field um-field--checkbox">
-                        <label><InputCheckbox @bind-Value="_form.IsBidirectional" /> Bidirectional</label>
-                    </div>
-                    <div class="um-field um-field--checkbox">
-                        <label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label>
+<div class="rty-page">
+    <section class="rty-hero">
+        <div class="rty-hero__content">
+            <div class="rty-hero-left">
+                <span class="rty-hero-icon"><i class="bi bi-link-45deg" aria-hidden="true"></i></span>
+                <div class="rty-hero-title">
+                    <div class="rty-hero__eyebrow">Enterprise relationship configuration</div>
+                    <div class="rty-title-row">
+                        <h1>Relationship Type Command Center</h1>
+                        <div class="rty-hero__meta">
+                            <span><i class="bi bi-diagram-3" aria-hidden="true"></i>@_items.Count types</span>
+                            <span><i class="bi bi-arrow-left-right" aria-hidden="true"></i>@_items.Count(x => x.IsBidirectional) bidirectional</span>
+                            <span><i class="bi bi-check-circle" aria-hidden="true"></i>@_items.Count(x => x.IsActive) active</span>
+                            <span><i class="bi bi-exclamation-octagon" aria-hidden="true"></i>@_items.Count(NeedsReview) need review</span>
+                        </div>
                     </div>
                 </div>
             </div>
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
-                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button>
-            </div>
-        </EditForm>
-    </DialogContent>
-</SfDialog>
+            <p>Govern how accounts, contacts, households, affiliates, and commercial entities relate across service, sales, and reporting workflows.</p>
+        </div>
+        <div class="rty-hero__actions">
+            <button type="button" class="rty-btn rty-btn--light" @onclick="RefreshAsync" disabled="@_loading">
+                <i class="bi bi-arrow-clockwise @(_loading ? "rty-spin" : null)" aria-hidden="true"></i> Refresh
+            </button>
+            <button type="button" class="rty-btn rty-btn--primary" @onclick="OpenCreate">
+                <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Type
+            </button>
+        </div>
+    </section>
 
-<SfDialog @bind-Visible="_showDelete" Width="420px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
-        <div class="um-confirm-dialog">
-            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3-fill"></i></div>
-            <div class="um-confirm-title">Delete Relationship Type</div>
-            <div class="um-confirm-body">Are you sure you want to delete <strong>@_deleteTarget?.TypeName</strong>? This action cannot be undone.</div>
-            <div class="um-modal-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
-                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger rty-alert" style="border-left: 4px solid #dc3545; animation: rty-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span>@_loadError</span>
+        </div>
+    }
+
+    <section class="rty-kpi-strip" aria-label="Relationship type KPIs">
+        @KpiCard("all", "Total Types", _items.Count.ToString(), "All configured relationship classifications", "bi-diagram-3", "blue")
+        @KpiCard("active", "Active", _items.Count(x => x.IsActive).ToString(), "Types available for account relationship workflows", "bi-check-circle", "green")
+        @KpiCard("bidirectional", "Bidirectional", _items.Count(x => x.IsBidirectional).ToString(), "Mutual relationships with the same meaning both ways", "bi-arrow-left-right", "purple")
+        @KpiCard("oneway", "One-way", _items.Count(x => !x.IsBidirectional).ToString(), "Directional relationships requiring clear inverse handling", "bi-arrow-right", "cyan")
+        @KpiCard("inverse", "Inverse Mapped", _items.Count(HasInverse).ToString(), "Relationships with explicit inverse type codes", "bi-arrow-repeat", "amber")
+        @KpiCard("risk", "Needs Review", _items.Count(NeedsReview).ToString(), "Inactive, missing inverse, or incomplete configuration", "bi-exclamation-octagon", "red")
+    </section>
+
+    <section class="rty-workflows" aria-label="Relationship type workflows">
+        <button type="button" class="rty-workflow" @onclick='() => SetDashboardFocus("all", "importance")'><span class="rty-workflow-icon"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></span><span class="rty-workflow-meta"><strong>Relationship review</strong><span>Rank relationship types by workflow importance</span></span></button>
+        <button type="button" class="rty-workflow" @onclick='() => SetDashboardFocus("risk", "importance")'><span class="rty-workflow-icon"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></span><span class="rty-workflow-meta"><strong>Risk cleanup</strong><span>Find inactive or incomplete relationship definitions</span></span></button>
+        <button type="button" class="rty-workflow" @onclick='() => SetDashboardFocus("inverse", "importance")'><span class="rty-workflow-icon"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></span><span class="rty-workflow-meta"><strong>Inverse mapping</strong><span>Audit directional relationship pairings</span></span></button>
+        <button type="button" class="rty-workflow" @onclick='() => SetDashboardFocus("bidirectional", "order")'><span class="rty-workflow-icon"><i class="bi bi-arrow-left-right" aria-hidden="true"></i></span><span class="rty-workflow-meta"><strong>Mutual relationships</strong><span>Focus on partner, spouse, and affiliate links</span></span></button>
+        <button type="button" class="rty-workflow" @onclick='() => SetDashboardFocus("patterns", "pattern")'><span class="rty-workflow-icon"><i class="bi bi-pie-chart" aria-hidden="true"></i></span><span class="rty-workflow-meta"><strong>Pattern coverage</strong><span>Compare bidirectional, inverse, and one-way coverage</span></span></button>
+    </section>
+
+    <section class="rty-filter-panel" aria-label="Relationship type filters">
+        <div class="rty-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input type="search"
+                   placeholder="Search code, name, inverse, or description…"
+                   aria-label="Search relationship types"
+                   value="@_searchTerm"
+                   @oninput="args => OnSearchInputValue(args.Value?.ToString())" />
+        </div>
+        <div class="rty-filter-grid">
+            <label>
+                <span>Direction</span>
+                <select class="form-select" @bind="_directionFilter" @bind:after="ApplyFilters">
+                    <option value="">All directions</option>
+                    <option value="Bidirectional">Bidirectional</option>
+                    <option value="OneWay">One-way</option>
+                    <option value="InverseMapped">Inverse mapped</option>
+                    <option value="MissingInverse">Missing inverse</option>
+                </select>
+            </label>
+            <label>
+                <span>Status</span>
+                <select class="form-select" @bind="_statusFilter" @bind:after="ApplyFilters">
+                    <option value="">All statuses</option>
+                    <option value="Active">Active</option>
+                    <option value="Inactive">Inactive</option>
+                    <option value="NeedsReview">Needs review</option>
+                </select>
+            </label>
+            <label>
+                <span>Sort</span>
+                <select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters">
+                    <option value="importance">Importance</option>
+                    <option value="order">Sort order</option>
+                    <option value="name">Name</option>
+                    <option value="direction">Direction</option>
+                    <option value="created">Newest</option>
+                </select>
+            </label>
+        </div>
+        <button type="button" class="rty-btn rty-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)">
+            <i class="bi bi-x-lg" aria-hidden="true"></i> Reset
+        </button>
+    </section>
+
+    <nav class="rty-tabs" aria-label="Relationship type views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="rty-tab @(_activeTab == tab.Key ? "rty-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </nav>
+
+    <main class="rty-dashboard">
+        <section class="rty-main-card">
+            <div class="rty-card-header">
+                <div>
+                    <span class="rty-section-kicker">@ActiveViewTitle</span>
+                    <h2>@FilteredTypes.Count() relationship types</h2>
+                    <p>Ranked by enterprise importance: directionality, inverse mapping, activation state, sort precedence, and configuration completeness.</p>
+                </div>
+                <div class="rty-card-actions">
+                    @if (_selectedIds.Count > 0)
+                    {
+                        <span class="rty-sel-count">@_selectedIds.Count selected</span>
+                        <button type="button" class="rty-btn rty-btn--ghost" @onclick="() => ConfirmBulkToggle(true)"><i class="bi bi-check-circle" aria-hidden="true"></i> Activate</button>
+                        <button type="button" class="rty-btn rty-btn--ghost" @onclick="() => ConfirmBulkToggle(false)"><i class="bi bi-slash-circle" aria-hidden="true"></i> Deactivate</button>
+                        <button type="button" class="rty-btn rty-btn--danger-ghost" @onclick="ConfirmBulkDelete"><i class="bi bi-trash3" aria-hidden="true"></i> Remove</button>
+                    }
+                    <button type="button" class="rty-btn rty-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Prev</button>
+                    <span class="rty-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="rty-btn rty-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="rty-loading"><span class="rty-spinner"></span> Loading relationship types…</div>
+            }
+            else if (!FilteredTypes.Any())
+            {
+                <div class="rty-empty">
+                    <i class="bi bi-link-45deg" aria-hidden="true"></i>
+                    <strong>No relationship types found</strong>
+                    <span>Adjust the active KPI, tab, search, or filters.</span>
+                </div>
+            }
+            else if (_activeTab == "patterns")
+            {
+                <div class="rty-group-grid">
+                    @foreach (var group in PatternGroups)
+                    {
+                        <article class="rty-group-card">
+                            <div class="rty-group-icon"><i class="bi @PatternIcon(group.Name)" aria-hidden="true"></i></div>
+                            <div class="rty-group-meta">
+                                <h3>@group.Name</h3>
+                                <p>@group.Count types • @group.Active active • @group.ReviewCount need review</p>
+                                <div class="rty-mini-bar"><span style="width:@group.Percent%"></span></div>
+                            </div>
+                            <button type="button" class="rty-btn rty-btn--ghost" @onclick="() => FilterByPattern(group.Key)">Open</button>
+                        </article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="rty-table-wrap">
+                    <table class="rty-table">
+                        <thead>
+                            <tr>
+                                <th class="rty-check-col"><input type="checkbox" checked="@AllPageSelected" @onchange="args => ToggleSelectAllPageValue(args.Value is bool value && value)" aria-label="Select all relationship types on page" /></th>
+                                <th>Importance</th>
+                                <th>Relationship Type</th>
+                                <th>Direction</th>
+                                <th>Inverse</th>
+                                <th>Status</th>
+                                <th>Order</th>
+                                <th>Created</th>
+                                <th class="rty-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var type in PagedTypes)
+                            {
+                                <tr class="@(_selected?.RelationshipTypeId == type.RelationshipTypeId ? "rty-row rty-row--selected" : "rty-row")" @onclick="() => SelectRow(type)">
+                                    <td class="rty-check-col" @onclick:stopPropagation="true">
+                                        <input type="checkbox" checked="@IsSelected(type)" @onchange="() => ToggleSelect(type)" aria-label="Select relationship type" />
+                                    </td>
+                                    <td>@ImportanceBadge(type)</td>
+                                    <td>
+                                        <div class="rty-type-cell">
+                                            <div class="rty-avatar" style="@AvatarStyle(type.TypeName)" aria-hidden="true">@Initials(type.TypeName)</div>
+                                            <div class="rty-type-meta">
+                                                <button type="button" class="rty-link-button" @onclick:stopPropagation="true" @onclick="() => OpenEdit(type)">@type.TypeName</button>
+                                                <small>@Safe(type.TypeCode, "No code")</small>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td><span class="rty-pill @DirectionBadgeClass(type)"><i class="bi @DirectionIcon(type)" aria-hidden="true"></i>@DirectionLabel(type)</span></td>
+                                    <td><span class="rty-date">@Safe(type.InverseTypeCode, "—")</span></td>
+                                    <td><span class="rty-pill @(type.IsActive ? "rty-pill--green" : "rty-pill--neutral")">@(type.IsActive ? "Active" : "Inactive")</span></td>
+                                    <td><span class="rty-date">@type.SortOrder</span></td>
+                                    <td><span class="rty-date">@FormatDate(type.CreatedDateUtc)</span></td>
+                                    <td class="rty-actions-col" @onclick:stopPropagation="true">
+                                        <button type="button" class="rty-icon-btn" title="Edit relationship type" @onclick="() => OpenEdit(type)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                        <button type="button" class="rty-icon-btn" title="@(type.IsActive ? "Deactivate relationship type" : "Activate relationship type")" @onclick="() => ConfirmToggle(type)"><i class="bi @(type.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i></button>
+                                        <button type="button" class="rty-icon-btn rty-icon-btn--danger" title="Delete relationship type" @onclick="() => ConfirmDelete(type)"><i class="bi bi-trash3" aria-hidden="true"></i></button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="rty-side-panel" aria-label="Relationship type insights">
+            <section class="rty-panel-card">
+                <span class="rty-section-kicker">Selected relationship</span>
+                @if (_selected is null)
+                {
+                    <div class="rty-empty rty-empty--compact">
+                        <i class="bi bi-cursor" aria-hidden="true"></i>
+                        <strong>Select a relationship type</strong>
+                        <span>Open details, recommendations, and quick actions.</span>
+                    </div>
+                }
+                else
+                {
+                    <div class="rty-selected__title">
+                        <div class="rty-avatar rty-avatar--lg" style="@AvatarStyle(_selected.TypeName)" aria-hidden="true">@Initials(_selected.TypeName)</div>
+                        <div>
+                            <h3>@_selected.TypeName</h3>
+                            <span>@Safe(_selected.TypeCode, "No code") • @DirectionLabel(_selected)</span>
+                        </div>
+                    </div>
+                    <div class="rty-score-card @ImportanceClass(_selected)">
+                        <span>Importance score</span>
+                        <strong>@ImportanceScore(_selected)</strong>
+                        <small>@RecommendedAction(_selected)</small>
+                    </div>
+                    <dl class="rty-detail-list">
+                        <div><dt>Status</dt><dd>@(_selected.IsActive ? "Active" : "Inactive")</dd></div>
+                        <div><dt>Direction</dt><dd>@DirectionLabel(_selected)</dd></div>
+                        <div><dt>Inverse</dt><dd>@Safe(_selected.InverseTypeCode, "Not mapped")</dd></div>
+                        <div><dt>Sort order</dt><dd>@_selected.SortOrder</dd></div>
+                        <div><dt>Created</dt><dd>@FormatDate(_selected.CreatedDateUtc)</dd></div>
+                    </dl>
+                    @if (!string.IsNullOrWhiteSpace(_selected.Description))
+                    {
+                        <p class="rty-description">@_selected.Description</p>
+                    }
+                    <div class="rty-selected-actions">
+                        <button type="button" class="rty-btn rty-btn--primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                        <button type="button" class="rty-btn rty-btn--ghost" @onclick="() => ConfirmToggle(_selected)"><i class="bi @(_selected.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i> @(_selected.IsActive ? "Deactivate" : "Activate")</button>
+                    </div>
+                }
+            </section>
+
+            <section class="rty-panel-card">
+                <span class="rty-section-kicker">Enterprise insights</span>
+                <div class="rty-insight-list">
+                    <div class="rty-insight">
+                        <i class="bi bi-arrow-left-right" aria-hidden="true"></i>
+                        <div><strong>Direction coverage</strong><span>@DirectionInsight</span></div>
+                    </div>
+                    <div class="rty-insight">
+                        <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                        <div><strong>Inverse coverage</strong><span>@InverseInsight</span></div>
+                    </div>
+                    <div class="rty-insight">
+                        <i class="bi bi-shield-check" aria-hidden="true"></i>
+                        <div><strong>Workflow readiness</strong><span>@ReadinessInsight</span></div>
+                    </div>
+                </div>
+            </section>
+        </aside>
+    </main>
+</div>
+
+@if (_showForm)
+{
+    <div class="rty-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="relationship-type-form-title">
+        <div class="rty-modal">
+            <div class="rty-modal__header">
+                <i class="bi bi-link-45deg" aria-hidden="true"></i>
+                <span id="relationship-type-form-title">@(_editId.HasValue ? "Edit Relationship Type" : "Add Relationship Type")</span>
+                <button type="button" class="rty-icon-btn rty-icon-btn--light ms-auto" @onclick="CloseForm" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="rty-modal__body">
+                    <div class="rty-validation-note">
+                        <i class="bi bi-info-circle" aria-hidden="true"></i>
+                        <div><strong>Relationship governance</strong><span>Code and name are required. One-way relationships should include an inverse code whenever a reverse label is needed.</span></div>
+                    </div>
+                    <div class="rty-form-grid">
+                        <label class="rty-field">
+                            <span>Type Code <em>*</em></span>
+                            <InputText @bind-Value="_form.TypeCode" class="form-control" placeholder="e.g. PARENT_CO" />
+                            <ValidationMessage For="() => _form.TypeCode" class="text-danger" />
+                        </label>
+                        <label class="rty-field">
+                            <span>Type Name <em>*</em></span>
+                            <InputText @bind-Value="_form.TypeName" class="form-control" placeholder="Parent Company" />
+                            <ValidationMessage For="() => _form.TypeName" class="text-danger" />
+                        </label>
+                        <label class="rty-field">
+                            <span>Inverse Type Code</span>
+                            <InputText @bind-Value="_form.InverseTypeCode" class="form-control" placeholder="e.g. SUBSIDIARY" />
+                            <ValidationMessage For="() => _form.InverseTypeCode" class="text-danger" />
+                        </label>
+                        <label class="rty-field">
+                            <span>Sort Order</span>
+                            <InputNumber @bind-Value="_form.SortOrder" class="form-control" />
+                            <ValidationMessage For="() => _form.SortOrder" class="text-danger" />
+                        </label>
+                        <label class="rty-field rty-field--wide">
+                            <span>Description</span>
+                            <InputTextArea @bind-Value="_form.Description" class="form-control" rows="3" placeholder="Describe when this relationship should be used." />
+                            <ValidationMessage For="() => _form.Description" class="text-danger" />
+                        </label>
+                        <label class="rty-check-field">
+                            <InputCheckbox @bind-Value="_form.IsBidirectional" />
+                            <span>Bidirectional relationship</span>
+                        </label>
+                        @if (_editId.HasValue)
+                        {
+                            <label class="rty-check-field">
+                                <InputCheckbox @bind-Value="_form.IsActive" />
+                                <span>Active</span>
+                            </label>
+                        }
+                    </div>
+                </div>
+                <div class="rty-modal__footer">
+                    <button type="button" class="rty-btn rty-btn--ghost" @onclick="CloseForm">Cancel</button>
+                    <button type="submit" class="rty-btn rty-btn--primary" disabled="@_saving">
+                        @if (_saving) { <span class="rty-spin-sm"></span> }
+                        @(_editId.HasValue ? "Save Changes" : "Create Type")
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_confirmVisible)
+{
+    <div class="rty-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="relationship-type-confirm-title">
+        <div class="rty-confirm">
+            <div class="rty-confirm__body">
+                <div class="rty-confirm-icon rty-confirm-icon--danger"><i class="bi @_confirmIcon" aria-hidden="true"></i></div>
+                <div>
+                    <h3 id="relationship-type-confirm-title">@_confirmTitle</h3>
+                    <p>@_confirmMessage</p>
+                </div>
+            </div>
+            <div class="rty-modal__footer">
+                <button type="button" class="rty-btn rty-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button>
+                <button type="button" class="rty-btn rty-btn--danger" @onclick="ExecuteConfirmedAsync" disabled="@_saving">
+                    @if (_saving) { <span class="rty-spin-sm"></span> }
+                    Confirm
+                </button>
             </div>
         </div>
-    </DialogContent>
-</SfDialog>
+    </div>
+}
 
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true"><ToastPosition X="Right" Y="Bottom" /></SfToast>
-
-<style>
-    .validation-message {
-        display: flex;
-        align-items: center;
-        gap: .45rem;
-        margin-top: .55rem;
-        color: #dc3545 !important;
-        font-size: .875rem;
-        font-weight: 700;
+<div class="rty-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="rty-toast rty-toast--@toast.Kind">
+            <i class="bi @(toast.Kind == "success" ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill")" aria-hidden="true"></i>
+            <span>@toast.Message</span>
+            <button type="button" @onclick="() => DismissToast(toast.Id)" aria-label="Dismiss notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+        </div>
     }
-    .validation-message::before {
-        content: "!";
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 1rem;
-        height: 1rem;
-        min-width: 1rem;
-        flex-shrink: 0;
-        border-radius: 999px;
-        color: #fff;
-        background: linear-gradient(135deg, #ef4444, #b91c1c);
-        font-size: .7rem;
-        font-weight: 800;
-    }
-    .um-input.modified.invalid {
-        border-color: #dc3545 !important;
-        box-shadow: 0 0 0 .18rem rgba(220,53,69,.14) !important;
-    }
-</style>
+</div>
 
 @code {
     Guid TenantAdminUserId { get; set; }
     Guid DevTenantId { get; set; }
     Guid DevUserId { get; set; }
-    private Guid _tenantId;
-    private Guid _tenantAdminUserId;
     Guid TenantId { get; set; }
+
+    readonly List<DashboardTab> _tabs =
+    [
+        new("all", "All", "bi-diagram-3"),
+        new("active", "Active", "bi-check-circle"),
+        new("bidirectional", "Bidirectional", "bi-arrow-left-right"),
+        new("oneway", "One-way", "bi-arrow-right"),
+        new("inverse", "Inverse", "bi-arrow-repeat"),
+        new("risk", "Needs Review", "bi-exclamation-octagon"),
+        new("inactive", "Inactive", "bi-slash-circle"),
+        new("patterns", "Patterns", "bi-pie-chart")
+    ];
+
     List<RelationshipTypeDto> _items = [];
-    List<RelationshipTypeDto> _filtered = [];
-    string _activeFilter = "";
-    bool _loading, _saving;
-    string _search = string.Empty;
-    string? _loadError;
-    bool _showForm, _showDelete;
-    Guid? _editId;
-    RelationshipTypeDto? _deleteTarget;
-    SfToast _toast = default!;
+    HashSet<Guid> _selectedIds = [];
+    List<ToastItem> _toasts = [];
+    RelationshipTypeDto? _selected;
     RelTypeFormModel _form = new();
+    Func<Task>? _confirmAction;
+    Guid? _editId;
+    string _activeTab = "all";
+    string _searchTerm = string.Empty;
+    string _directionFilter = string.Empty;
+    string _statusFilter = string.Empty;
+    string _sortMode = "importance";
+    string _confirmTitle = string.Empty;
+    string _confirmMessage = string.Empty;
+    string _confirmIcon = "bi-exclamation-triangle-fill";
+    string? _loadError;
+    bool _loading;
+    bool _saving;
+    bool _showForm;
+    bool _confirmVisible;
+    int _page = 1;
+    const int PageSize = 12;
 
     protected override async Task OnInitializedAsync()
     {
@@ -204,45 +434,167 @@
         await LoadAsync();
     }
 
+    IEnumerable<RelationshipTypeDto> FilteredTypes
+    {
+        get
+        {
+            IEnumerable<RelationshipTypeDto> query = _items;
+
+            query = _activeTab switch
+            {
+                "active" => query.Where(x => x.IsActive),
+                "bidirectional" => query.Where(x => x.IsBidirectional),
+                "oneway" => query.Where(x => !x.IsBidirectional),
+                "inverse" => query.Where(HasInverse),
+                "risk" => query.Where(NeedsReview),
+                "inactive" => query.Where(x => !x.IsActive),
+                _ => query
+            };
+
+            if (!string.IsNullOrWhiteSpace(_searchTerm)) query = query.Where(MatchesSearch);
+
+            query = _directionFilter switch
+            {
+                "Bidirectional" => query.Where(x => x.IsBidirectional),
+                "OneWay" => query.Where(x => !x.IsBidirectional),
+                "InverseMapped" => query.Where(HasInverse),
+                "MissingInverse" => query.Where(x => !x.IsBidirectional && !HasInverse(x)),
+                _ => query
+            };
+
+            query = _statusFilter switch
+            {
+                "Active" => query.Where(x => x.IsActive),
+                "Inactive" => query.Where(x => !x.IsActive),
+                "NeedsReview" => query.Where(NeedsReview),
+                _ => query
+            };
+
+            return _sortMode switch
+            {
+                "order" => query.OrderBy(x => x.SortOrder).ThenBy(x => x.TypeName),
+                "name" => query.OrderBy(x => x.TypeName),
+                "direction" or "pattern" => query.OrderBy(DirectionLabel).ThenBy(x => x.SortOrder).ThenBy(x => x.TypeName),
+                "created" => query.OrderByDescending(x => x.CreatedDateUtc),
+                _ => query.OrderByDescending(ImportanceScore).ThenBy(x => x.SortOrder).ThenBy(x => x.TypeName)
+            };
+        }
+    }
+
+    List<RelationshipTypeDto> PagedTypes => FilteredTypes.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+    int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredTypes.Count() / (double)PageSize));
+    bool AllPageSelected => PagedTypes.Count > 0 && PagedTypes.All(IsSelected);
+    bool HasFilters => !string.IsNullOrWhiteSpace(_searchTerm) || !string.IsNullOrWhiteSpace(_directionFilter) || !string.IsNullOrWhiteSpace(_statusFilter) || _activeTab != "all" || _sortMode != "importance";
+    string ActiveViewTitle => _tabs.FirstOrDefault(x => x.Key == _activeTab)?.Label ?? "All";
+    string DirectionInsight => $"{_items.Count(x => x.IsBidirectional)} bidirectional and {_items.Count(x => !x.IsBidirectional)} one-way relationship types are configured.";
+    string InverseInsight => _items.Count(x => !x.IsBidirectional) == 0 ? "No one-way relationships require inverse mapping." : $"{_items.Count(x => !x.IsBidirectional && HasInverse(x))} of {_items.Count(x => !x.IsBidirectional)} one-way types include inverse codes.";
+    string ReadinessInsight => _items.Count == 0 ? "Create relationship types before enabling account relationship workflows." : $"{Math.Round(_items.Count(x => x.IsActive) * 100m / _items.Count)}% of relationship types are active.";
+
+    List<PatternSummary> PatternGroups => _items
+        .GroupBy(PatternKey)
+        .Select(g => new PatternSummary(g.Key, PatternLabel(g.Key), g.Count(), g.Count(x => x.IsActive), g.Count(NeedsReview), _items.Count == 0 ? 0 : Math.Round(g.Count() * 100m / _items.Count, 0)))
+        .OrderByDescending(x => x.Count)
+        .ToList();
+
     async Task LoadAsync()
     {
         _loading = true;
         _loadError = null;
         try
         {
-            var r = await Api.SearchRelationshipTypesAsync(TenantId, _search, pageSize: 200);
-            _items = r?.Items.ToList() ?? [];
-            ApplyFilter();
+            var result = await Api.SearchRelationshipTypesAsync(TenantId, null, pageSize: 500);
+            _items = result?.Items.ToList() ?? [];
+            _selectedIds.RemoveWhere(id => _items.All(x => x.RelationshipTypeId != id));
+            _selected = _selected is null ? _items.OrderByDescending(ImportanceScore).FirstOrDefault() : _items.FirstOrDefault(x => x.RelationshipTypeId == _selected.RelationshipTypeId) ?? _items.OrderByDescending(ImportanceScore).FirstOrDefault();
+            NormalizePage();
         }
-        catch (Exception ex) { _loadError = ex.Message; }
-        finally { _loading = false; }
-    }
-
-    void SetFilter(string filter) { _activeFilter = filter; ApplyFilter(); }
-
-    void ApplyFilter()
-    {
-        _filtered = _activeFilter switch
+        catch (Exception ex)
         {
-            "active"        => _items.Where(x => x.IsActive).ToList(),
-            "bidirectional" => _items.Where(x => x.IsBidirectional).ToList(),
-            "oneway"        => _items.Where(x => !x.IsBidirectional).ToList(),
-            _               => [.. _items]
-        };
+            _loadError = $"Failed to load relationship types: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    Task OnSearchAsync() => LoadAsync();
+    Task RefreshAsync() => LoadAsync();
+    void ApplyFilters() { _page = 1; NormalizePage(); }
+    void OnSearchInputValue(string? value) { _searchTerm = value ?? string.Empty; ApplyFilters(); }
+    void SetDashboardFocus(string tab, string sort) { _activeTab = tab; _sortMode = sort; _page = 1; NormalizePage(); }
+    void SetActiveTab(string tab) { _activeTab = tab; _page = 1; NormalizePage(); }
 
-    void OnRowSelected(RowSelectEventArgs<RelationshipTypeDto> args) => OpenEdit(args.Data);
+    void ClearFilters()
+    {
+        _searchTerm = string.Empty;
+        _directionFilter = string.Empty;
+        _statusFilter = string.Empty;
+        _sortMode = "importance";
+        _activeTab = "all";
+        _page = 1;
+    }
 
-    void OpenCreate() { _editId = null; _form = new(); _showForm = true; }
+    void FilterByPattern(string key)
+    {
+        _activeTab = key switch
+        {
+            "bidirectional" => "bidirectional",
+            "inverse" => "inverse",
+            "oneway" => "oneway",
+            _ => "all"
+        };
+        _directionFilter = key == "missing" ? "MissingInverse" : string.Empty;
+        _sortMode = "importance";
+        _page = 1;
+    }
+
+    void PreviousPage() { if (_page > 1) _page--; }
+    void NextPage() { if (_page < TotalPages) _page++; }
+    void NormalizePage() { if (_page > TotalPages) _page = TotalPages; }
+    void SelectRow(RelationshipTypeDto item) => _selected = item;
+    bool IsSelected(RelationshipTypeDto item) => _selectedIds.Contains(item.RelationshipTypeId);
+
+    void ToggleSelect(RelationshipTypeDto item)
+    {
+        if (!_selectedIds.Add(item.RelationshipTypeId)) _selectedIds.Remove(item.RelationshipTypeId);
+        _selected = item;
+    }
+
+    void ToggleSelectAllPageValue(bool shouldSelect)
+    {
+        foreach (var item in PagedTypes)
+        {
+            if (shouldSelect) _selectedIds.Add(item.RelationshipTypeId);
+            else _selectedIds.Remove(item.RelationshipTypeId);
+        }
+    }
+
+    void OpenCreate()
+    {
+        _editId = null;
+        _form = new() { IsActive = true, SortOrder = NextSortOrder() };
+        _showForm = true;
+    }
 
     void OpenEdit(RelationshipTypeDto item)
     {
+        _selected = item;
         _editId = item.RelationshipTypeId;
-        _form = new() { TypeCode = item.TypeCode, TypeName = item.TypeName, IsBidirectional = item.IsBidirectional, InverseTypeCode = item.InverseTypeCode, Description = item.Description, SortOrder = item.SortOrder, IsActive = item.IsActive };
+        _form = new()
+        {
+            TypeCode = item.TypeCode,
+            TypeName = item.TypeName,
+            IsBidirectional = item.IsBidirectional,
+            InverseTypeCode = item.InverseTypeCode,
+            Description = item.Description,
+            IsActive = item.IsActive,
+            SortOrder = item.SortOrder
+        };
         _showForm = true;
     }
+
+    void CloseForm() { _showForm = false; ResetForm(); }
+    void ResetForm() { _form = new(); _editId = null; }
 
     async Task SaveAsync()
     {
@@ -250,54 +602,262 @@
         try
         {
             if (_editId.HasValue)
-                await Api.UpdateRelationshipTypeAsync(_editId.Value, new(_form.TypeCode, _form.TypeName, _form.IsBidirectional, _form.InverseTypeCode, _form.Description, _form.IsActive, _form.SortOrder));
+            {
+                await Api.UpdateRelationshipTypeAsync(_editId.Value, new(_form.TypeCode.Trim(), _form.TypeName.Trim(), _form.IsBidirectional, NormalizeNullable(_form.InverseTypeCode), NormalizeNullable(_form.Description), _form.IsActive, _form.SortOrder));
+            }
             else
-                await Api.CreateRelationshipTypeAsync(new(TenantId, _form.TypeCode, _form.TypeName, _form.IsBidirectional, _form.InverseTypeCode, _form.Description, _form.SortOrder));
+            {
+                await Api.CreateRelationshipTypeAsync(new(TenantId, _form.TypeCode.Trim(), _form.TypeName.Trim(), _form.IsBidirectional, NormalizeNullable(_form.InverseTypeCode), NormalizeNullable(_form.Description), _form.SortOrder));
+            }
+
             _showForm = false;
-            await _toast.ShowAsync(new() { Content = "Saved successfully", CssClass = "e-toast-success" });
+            ShowToast("success", _editId.HasValue ? "Relationship type updated successfully." : "Relationship type created successfully.");
+            ResetForm();
             await LoadAsync();
         }
-        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); }
-        finally { _saving = false; }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Save failed: {ex.Message}");
+        }
+        finally
+        {
+            _saving = false;
+        }
     }
 
-    void ConfirmDelete(RelationshipTypeDto item) { _deleteTarget = item; _showDelete = true; }
-
-    async Task ExecuteDeleteAsync()
+    void ConfirmToggle(RelationshipTypeDto item)
     {
+        var enable = !item.IsActive;
+        OpenConfirm(enable ? "Activate Relationship Type" : "Deactivate Relationship Type", $"Are you sure you want to {(enable ? "activate" : "deactivate")} {item.TypeName}? This changes availability for relationship workflows.", "bi-shield-exclamation", () => SetTypeActiveAsync(item, enable));
+    }
+
+    void ConfirmDelete(RelationshipTypeDto item) => OpenConfirm("Delete Relationship Type", $"Are you sure you want to delete {item.TypeName}? This action cannot be undone.", "bi-trash3-fill", () => DeleteTypeAsync(item));
+    void ConfirmBulkToggle(bool enable) => OpenConfirm(enable ? "Activate Selected Types" : "Deactivate Selected Types", $"Are you sure you want to {(enable ? "activate" : "deactivate")} {_selectedIds.Count} selected relationship type(s)?", "bi-shield-exclamation", () => BulkSetActiveAsync(enable));
+    void ConfirmBulkDelete() => OpenConfirm("Delete Selected Types", $"Are you sure you want to delete {_selectedIds.Count} selected relationship type(s)? This action cannot be undone.", "bi-trash3-fill", BulkDeleteAsync);
+
+    void OpenConfirm(string title, string message, string icon, Func<Task> action)
+    {
+        _confirmTitle = title;
+        _confirmMessage = message;
+        _confirmIcon = icon;
+        _confirmAction = action;
+        _confirmVisible = true;
+    }
+
+    void CloseConfirm() { _confirmVisible = false; _confirmAction = null; }
+
+    async Task ExecuteConfirmedAsync()
+    {
+        if (_confirmAction is null) return;
         _saving = true;
         try
         {
-            await Api.DeleteRelationshipTypeAsync(_deleteTarget!.RelationshipTypeId);
-            _showDelete = false;
-            await _toast.ShowAsync(new() { Content = "Deleted successfully", CssClass = "e-toast-success" });
+            await _confirmAction();
+            _confirmVisible = false;
+            _confirmAction = null;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    async Task SetTypeActiveAsync(RelationshipTypeDto item, bool active)
+    {
+        try
+        {
+            await Api.UpdateRelationshipTypeAsync(item.RelationshipTypeId, new(item.TypeCode, item.TypeName, item.IsBidirectional, item.InverseTypeCode, item.Description, active, item.SortOrder));
+            ShowToast("success", active ? "Relationship type activated." : "Relationship type deactivated.");
             await LoadAsync();
         }
-        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); }
-        finally { _saving = false; }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Update failed: {ex.Message}");
+        }
     }
 
-    void ResetForm() { _form = new(); _editId = null; }
-
-    sealed class RelTypeFormModel
+    async Task DeleteTypeAsync(RelationshipTypeDto item)
     {
-        [Required, StringLength(50)]  public string  TypeCode        { get; set; } = string.Empty;
-        [Required, StringLength(100)] public string  TypeName        { get; set; } = string.Empty;
-        public bool    IsBidirectional  { get; set; }
-        [StringLength(50)]  public string? InverseTypeCode { get; set; }
-        [StringLength(500)] public string? Description     { get; set; }
-        [Range(0, 9999)] public int SortOrder       { get; set; }
-        public bool    IsActive         { get; set; } = true;
+        try
+        {
+            await Api.DeleteRelationshipTypeAsync(item.RelationshipTypeId);
+            _selectedIds.Remove(item.RelationshipTypeId);
+            if (_selected?.RelationshipTypeId == item.RelationshipTypeId) _selected = null;
+            ShowToast("success", "Relationship type deleted.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Delete failed: {ex.Message}");
+        }
     }
+
+    async Task BulkSetActiveAsync(bool active)
+    {
+        var selected = _items.Where(x => _selectedIds.Contains(x.RelationshipTypeId)).ToList();
+        var updated = 0;
+        foreach (var item in selected)
+        {
+            try
+            {
+                await Api.UpdateRelationshipTypeAsync(item.RelationshipTypeId, new(item.TypeCode, item.TypeName, item.IsBidirectional, item.InverseTypeCode, item.Description, active, item.SortOrder));
+                updated++;
+            }
+            catch (Exception ex)
+            {
+                ShowToast("danger", $"Update failed for {item.TypeName}: {ex.Message}");
+            }
+        }
+
+        ShowToast("success", $"{updated} relationship type(s) {(active ? "activated" : "deactivated")}.");
+        _selectedIds.Clear();
+        await LoadAsync();
+    }
+
+    async Task BulkDeleteAsync()
+    {
+        var selected = _items.Where(x => _selectedIds.Contains(x.RelationshipTypeId)).ToList();
+        var deleted = 0;
+        foreach (var item in selected)
+        {
+            try
+            {
+                await Api.DeleteRelationshipTypeAsync(item.RelationshipTypeId);
+                deleted++;
+            }
+            catch (Exception ex)
+            {
+                ShowToast("danger", $"Delete failed for {item.TypeName}: {ex.Message}");
+            }
+        }
+
+        ShowToast("success", $"{deleted} relationship type(s) deleted.");
+        _selectedIds.Clear();
+        _selected = null;
+        await LoadAsync();
+    }
+
+    RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string color) => @<button type="button" class="rty-kpi-card rty-kpi-card--@color @(_activeTab == key ? "rty-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveTab(key)">
+        <span class="rty-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span>
+        <span class="rty-kpi-body"><span class="rty-kpi-label">@label</span><strong class="rty-kpi-value">@value</strong><span class="rty-kpi-sub">@subtitle</span></span>
+    </button>;
+
+    int TabCount(string key) => key switch
+    {
+        "active" => _items.Count(x => x.IsActive),
+        "bidirectional" => _items.Count(x => x.IsBidirectional),
+        "oneway" => _items.Count(x => !x.IsBidirectional),
+        "inverse" => _items.Count(HasInverse),
+        "risk" => _items.Count(NeedsReview),
+        "inactive" => _items.Count(x => !x.IsActive),
+        "patterns" => PatternGroups.Count,
+        _ => _items.Count
+    };
+
+    bool MatchesSearch(RelationshipTypeDto item)
+    {
+        var term = _searchTerm.Trim();
+        return Contains(item.TypeCode, term) || Contains(item.TypeName, term) || Contains(item.InverseTypeCode, term) || Contains(item.Description, term);
+    }
+
+    static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    static bool HasInverse(RelationshipTypeDto item) => !string.IsNullOrWhiteSpace(item.InverseTypeCode);
+    static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    static string? NormalizeNullable(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    static string FormatDate(DateTime date) => date == default ? "—" : date.ToLocalTime().ToString("MMM d, yyyy");
+    static string DirectionLabel(RelationshipTypeDto item) => item.IsBidirectional ? "Bidirectional" : HasInverse(item) ? "One-way mapped" : "One-way";
+    static string DirectionIcon(RelationshipTypeDto item) => item.IsBidirectional ? "bi-arrow-left-right" : HasInverse(item) ? "bi-arrow-repeat" : "bi-arrow-right";
+    static string DirectionBadgeClass(RelationshipTypeDto item) => item.IsBidirectional ? "rty-pill--purple" : HasInverse(item) ? "rty-pill--amber" : "rty-pill--cyan";
+    static string PatternKey(RelationshipTypeDto item) => item.IsBidirectional ? "bidirectional" : HasInverse(item) ? "inverse" : "missing";
+    static string PatternLabel(string key) => key switch { "bidirectional" => "Bidirectional", "inverse" => "One-way mapped", "missing" => "Missing inverse", _ => "Other" };
+    static string PatternIcon(string name) => name switch { "Bidirectional" => "bi-arrow-left-right", "One-way mapped" => "bi-arrow-repeat", "Missing inverse" => "bi-exclamation-octagon", _ => "bi-diagram-3" };
+    static bool NeedsReview(RelationshipTypeDto item) => !item.IsActive || (!item.IsBidirectional && !HasInverse(item)) || string.IsNullOrWhiteSpace(item.TypeCode) || string.IsNullOrWhiteSpace(item.TypeName) || string.IsNullOrWhiteSpace(item.Description);
+    static bool IsHighImportance(RelationshipTypeDto item) => ImportanceScore(item) >= 70;
+
+    static int ImportanceScore(RelationshipTypeDto item)
+    {
+        var score = 35;
+        if (item.IsActive) score += 15; else score += 20;
+        if (item.IsBidirectional) score += 18;
+        if (!item.IsBidirectional && HasInverse(item)) score += 20;
+        if (!item.IsBidirectional && !HasInverse(item)) score += 24;
+        if (item.SortOrder <= 10) score += 8;
+        if (string.IsNullOrWhiteSpace(item.Description)) score += 8;
+        return Math.Clamp(score, 0, 100);
+    }
+
+    static string RecommendedAction(RelationshipTypeDto item)
+    {
+        if (!item.IsActive) return "Review whether this relationship should be reactivated or retired.";
+        if (!item.IsBidirectional && !HasInverse(item)) return "Add an inverse code if users need the reverse relationship label.";
+        if (string.IsNullOrWhiteSpace(item.Description)) return "Add usage guidance for operations and reporting.";
+        return "Configuration is ready for relationship workflows.";
+    }
+
+    static string ImportanceClass(RelationshipTypeDto item) => ImportanceScore(item) switch
+    {
+        >= 80 => "rty-score-card--red",
+        >= 65 => "rty-score-card--amber",
+        >= 45 => "rty-score-card--cyan",
+        _ => "rty-score-card--green"
+    };
+
+    static MarkupString ImportanceBadge(RelationshipTypeDto item)
+    {
+        var score = ImportanceScore(item);
+        var css = score switch { >= 80 => "red", >= 65 => "amber", >= 45 => "cyan", _ => "green" };
+        return new($"<span class=\"rty-risk-badge rty-risk-badge--{css}\">{score}</span>");
+    }
+
+    static string Initials(string? value)
+    {
+        var parts = (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return parts.Length switch
+        {
+            0 => "RT",
+            1 => parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant(),
+            _ => string.Concat(parts.Take(2).Select(x => char.ToUpperInvariant(x[0])))
+        };
+    }
+
+    static string AvatarStyle(string? value)
+    {
+        var hash = Math.Abs((value ?? "RelationshipType").GetHashCode());
+        var hue = hash % 360;
+        return $"background:linear-gradient(135deg,hsl({hue},78%,48%),hsl({(hue + 35) % 360},82%,36%));";
+    }
+
+    int NextSortOrder() => _items.Count == 0 ? 10 : _items.Max(x => x.SortOrder) + 10;
+
+    void ShowToast(string kind, string message)
+    {
+        _toasts.Insert(0, new(Guid.NewGuid(), kind, message));
+        if (_toasts.Count > 4) _toasts.RemoveRange(4, _toasts.Count - 4);
+    }
+
+    void DismissToast(Guid id) => _toasts.RemoveAll(x => x.Id == id);
 
     async Task ResolveCurrentUserContextAsync()
     {
         var context = await CurrentUser.RequireAsync();
         TenantId = context.TenantId;
         TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
         DevTenantId = context.TenantId;
         DevUserId = context.UserId;
     }
+
+    sealed class RelTypeFormModel
+    {
+        [Required, StringLength(50)] public string TypeCode { get; set; } = string.Empty;
+        [Required, StringLength(100)] public string TypeName { get; set; } = string.Empty;
+        public bool IsBidirectional { get; set; }
+        [StringLength(50)] public string? InverseTypeCode { get; set; }
+        [StringLength(500)] public string? Description { get; set; }
+        [Range(0, 9999)] public int SortOrder { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+
+    sealed record DashboardTab(string Key, string Label, string Icon);
+    sealed record PatternSummary(string Key, string Name, int Count, int Active, int ReviewCount, decimal Percent);
+    sealed record ToastItem(Guid Id, string Kind, string Message);
 }
