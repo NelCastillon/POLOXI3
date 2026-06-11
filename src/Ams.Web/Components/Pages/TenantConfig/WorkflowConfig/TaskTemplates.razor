@@ -1,2 +1,907 @@
 @page "/tenant/workflows/tasks"
-<WorkflowConfigPage Kind="TaskTemplate" Title="Task Templates" Subtitle="Configure reusable task templates for workflow automation" Icon="bi bi-check2-square" />
+@using System.ComponentModel.DataAnnotations
+@using System.Text.Json
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.WorkflowConfig
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Task Templates — Workflow Configuration</PageTitle>
+
+<div class="wtt-page">
+    <section class="wtt-hero">
+        <div class="wtt-hero-left">
+            <div class="wtt-hero-icon"><i class="bi bi-check2-square"></i></div>
+            <div class="wtt-hero-title">
+                <span class="wtt-hero__eyebrow"><i class="bi bi-diagram-3"></i> Workflow configuration</span>
+                <div class="wtt-title-row">
+                    <h1>Task Templates</h1>
+                    <span class="wtt-pill wtt-pill--blue">@_filtered.Count visible</span>
+                </div>
+                <p>Design reusable, governed workflow tasks for service, sales, renewals, submissions, claims, compliance, and accounting teams.</p>
+                <div class="wtt-hero__meta">
+                    <span><i class="bi bi-shield-check"></i> Tenant scoped</span>
+                    <span><i class="bi bi-arrow-repeat"></i> API synchronized</span>
+                    <span><i class="bi bi-list-task"></i> @_items.Count templates</span>
+                </div>
+            </div>
+        </div>
+        <div class="wtt-hero__actions">
+            <button class="wtt-btn wtt-btn--light" type="button" @onclick="RefreshAsync" disabled="@_loading">
+                <i class="bi bi-arrow-clockwise"></i> Refresh
+            </button>
+            <button class="wtt-btn wtt-btn--light" type="button" @onclick="ResetFilters">
+                <i class="bi bi-funnel"></i> Reset filters
+            </button>
+            <button class="wtt-btn wtt-btn--primary" type="button" @onclick="OpenCreate">
+                <i class="bi bi-plus-lg"></i> New template
+            </button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger wtt-alert" style="border-left: 4px solid #dc3545; animation: wtt-shake 0.3s ease;">
+            <i class="bi bi-exclamation-triangle-fill"></i> @_loadError
+        </div>
+    }
+
+    <section class="wtt-kpi-strip" aria-label="Task template KPIs">
+        @KpiCard("All templates", _items.Count, "Complete reusable workflow catalog", "bi bi-collection", "blue", "all")
+        @KpiCard("Active", _items.Count(x => x.IsActive), "Ready for workflow assignment", "bi bi-check-circle-fill", "green", "active")
+        @KpiCard("Critical", _items.Count(x => x.Importance >= 80), "Highest operational impact", "bi bi-exclamation-octagon-fill", "red", "critical")
+        @KpiCard("SLA governed", _items.Count(x => x.SlaHours > 0), "Templates with target hours", "bi bi-stopwatch-fill", "amber", "sla")
+        @KpiCard("Automated", _items.Count(x => x.Automation != "Manual"), "Trigger or rule assisted work", "bi bi-lightning-charge-fill", "purple", "automated")
+        @KpiCard("Inactive", _items.Count(x => !x.IsActive), "Paused or retired templates", "bi bi-pause-circle", "cyan", "inactive")
+    </section>
+
+    <section class="wtt-workflows" aria-label="Workflow shortcuts">
+        @WorkflowButton("Service response", "Prioritize client service and follow-up work", "bi bi-headset", "Service")
+        @WorkflowButton("Revenue pipeline", "Sales, submissions, renewals, and quote work", "bi bi-graph-up-arrow", "Sales")
+        @WorkflowButton("Compliance", "Evidence, audit, and required control tasks", "bi bi-patch-check", "Compliance")
+        @WorkflowButton("Accounting", "Billing, receivables, and finance work", "bi bi-receipt", "Accounting")
+        @WorkflowButton("Automation", "Rule-triggered or system-assisted templates", "bi bi-lightning", "Automated")
+    </section>
+
+    <section class="wtt-filter-panel">
+        <div class="wtt-search">
+            <i class="bi bi-search"></i>
+            <input type="search" placeholder="Search code, name, category, owner, or description..." @bind="_search" @bind:event="oninput" @onkeyup="ApplyFilter" aria-label="Search task templates" />
+        </div>
+        <div class="wtt-filter-grid">
+            <label>
+                <span>Category</span>
+                <select class="form-select" @bind="_categoryFilter" @bind:after="ApplyFilter">
+                    <option value="">All categories</option>
+                    @foreach (var category in _categoryOptions)
+                    {
+                        <option value="@category">@category</option>
+                    }
+                </select>
+            </label>
+            <label>
+                <span>Owner</span>
+                <select class="form-select" @bind="_ownerFilter" @bind:after="ApplyFilter">
+                    <option value="">All owners</option>
+                    @foreach (var owner in _ownerOptions)
+                    {
+                        <option value="@owner">@owner</option>
+                    }
+                </select>
+            </label>
+            <label>
+                <span>Automation</span>
+                <select class="form-select" @bind="_automationFilter" @bind:after="ApplyFilter">
+                    <option value="">All modes</option>
+                    <option value="Manual">Manual</option>
+                    <option value="Trigger">Trigger</option>
+                    <option value="Rule">Rule</option>
+                    <option value="Scheduled">Scheduled</option>
+                </select>
+            </label>
+            <label>
+                <span>Sort</span>
+                <select class="form-select" @bind="_sortMode" @bind:after="ApplyFilter">
+                    <option value="importance">Importance</option>
+                    <option value="name">Name</option>
+                    <option value="sla">SLA hours</option>
+                    <option value="order">Sort order</option>
+                </select>
+            </label>
+        </div>
+    </section>
+
+    <nav class="wtt-tabs" aria-label="Task template filters">
+        @TabButton("all", "All", _items.Count)
+        @TabButton("critical", "Critical", _items.Count(x => x.Importance >= 80))
+        @TabButton("sla", "SLA", _items.Count(x => x.SlaHours > 0))
+        @TabButton("automated", "Automated", _items.Count(x => x.Automation != "Manual"))
+        @TabButton("active", "Active", _items.Count(x => x.IsActive))
+        @TabButton("inactive", "Inactive", _items.Count(x => !x.IsActive))
+    </nav>
+
+    <section class="wtt-dashboard">
+        <article class="wtt-main-card">
+            <div class="wtt-card-header">
+                <div>
+                    <span class="wtt-section-kicker"><i class="bi bi-list-check"></i> Enterprise template catalog</span>
+                    <h2>Prioritized workflow task templates</h2>
+                    <p>Click a row to inspect template governance, owner, SLA, automation, and configuration details.</p>
+                </div>
+                <div class="wtt-card-actions">
+                    @if (_selected.Count > 0)
+                    {
+                        <span class="wtt-sel-count">@_selected.Count selected</span>
+                        <button class="wtt-btn wtt-btn--ghost" type="button" @onclick="BulkActivateAsync"><i class="bi bi-check2-circle"></i> Activate</button>
+                        <button class="wtt-btn wtt-btn--ghost" type="button" @onclick="BulkDeactivateAsync"><i class="bi bi-pause-circle"></i> Pause</button>
+                    }
+                    <button class="wtt-btn wtt-btn--primary" type="button" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Add template</button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="wtt-loading"><span class="wtt-spinner"></span> Loading task templates...</div>
+            }
+            else if (_filtered.Count == 0)
+            {
+                <div class="wtt-empty">
+                    <i class="bi bi-inboxes"></i>
+                    <strong>No task templates found</strong>
+                    <span>Adjust filters or create a new workflow task template.</span>
+                    <button class="wtt-btn wtt-btn--primary" type="button" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> New template</button>
+                </div>
+            }
+            else
+            {
+                <div class="wtt-table-wrap">
+                    <table class="wtt-table">
+                        <thead>
+                            <tr>
+                                <th class="wtt-check-col"><input type="checkbox" checked="@AllVisibleSelected" @onchange="ToggleSelectAll" aria-label="Select all visible templates" /></th>
+                                <th>Template</th>
+                                <th>Category</th>
+                                <th>Owner</th>
+                                <th>SLA</th>
+                                <th>Automation</th>
+                                <th>Importance</th>
+                                <th>Status</th>
+                                <th class="wtt-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var template in _paged)
+                            {
+                                <tr class="wtt-row @(IsSelected(template) ? "wtt-row--selected" : null)" @onclick="() => SelectTemplate(template)">
+                                    <td class="wtt-check-col"><input type="checkbox" checked="@_selected.Contains(template.Id)" @onclick:stopPropagation="true" @onchange="args => ToggleSelected(template, args)" aria-label="Select @template.Name" /></td>
+                                    <td>
+                                        <div class="wtt-template-cell">
+                                            <div class="wtt-template-icon @ImportanceClass(template)"><i class="@CategoryIcon(template.Category)"></i></div>
+                                            <div class="wtt-template-meta">
+                                                <button type="button" class="wtt-link-button" @onclick:stopPropagation="true" @onclick="() => OpenEdit(template)">@template.Name</button>
+                                                <small>@template.Code</small>
+                                                @if (!string.IsNullOrWhiteSpace(template.Description))
+                                                {
+                                                    <span>@template.Description</span>
+                                                }
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td><span class="wtt-pill wtt-pill--neutral">@template.Category</span></td>
+                                    <td>@template.OwnerTeam</td>
+                                    <td><span class="wtt-date">@(template.SlaHours > 0 ? $"{template.SlaHours}h" : "Not set")</span></td>
+                                    <td><span class="wtt-pill @AutomationPillClass(template.Automation)">@template.Automation</span></td>
+                                    <td><span class="wtt-risk-badge @ImportanceClass(template)">@template.ImportanceLevel</span></td>
+                                    <td><span class="wtt-pill @(template.IsActive ? "wtt-pill--green" : "wtt-pill--neutral")">@(template.IsActive ? "Active" : "Inactive")</span></td>
+                                    <td class="wtt-actions-col">
+                                        <button class="wtt-icon-btn" type="button" @onclick:stopPropagation="true" @onclick="() => ToggleMenu(template.Id)" aria-label="Template actions"><i class="bi bi-three-dots"></i></button>
+                                        @if (_openMenuId == template.Id)
+                                        {
+                                            <div class="wtt-menu" @onclick:stopPropagation="true">
+                                                <div class="wtt-menu__summary"><strong>@template.Name</strong><span>@template.Code</span></div>
+                                                <button class="wtt-menu-item" type="button" @onclick="() => OpenEdit(template)"><i class="bi bi-pencil"></i> Edit template</button>
+                                                <button class="wtt-menu-item" type="button" @onclick="() => DuplicateTemplateAsync(template)"><i class="bi bi-files"></i> Duplicate</button>
+                                                <button class="wtt-menu-item" type="button" @onclick="() => ToggleActiveAsync(template)"><i class="bi @(template.IsActive ? "bi-pause-circle" : "bi-play-circle")"></i> @(template.IsActive ? "Pause" : "Activate")</button>
+                                                <button class="wtt-menu-item wtt-menu-item--danger" type="button" @onclick="() => ConfirmDelete(template)"><i class="bi bi-trash"></i> Delete</button>
+                                            </div>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="wtt-pager">
+                    <span class="wtt-page-indicator">Page @_page of @_totalPages · @_filtered.Count templates</span>
+                    <div>
+                        <button class="wtt-btn wtt-btn--ghost" type="button" disabled="@(_page <= 1)" @onclick="PreviousPage"><i class="bi bi-chevron-left"></i> Previous</button>
+                        <button class="wtt-btn wtt-btn--ghost" type="button" disabled="@(_page >= _totalPages)" @onclick="NextPage">Next <i class="bi bi-chevron-right"></i></button>
+                    </div>
+                </div>
+            }
+        </article>
+
+        <aside class="wtt-side-panel">
+            <section class="wtt-panel-card">
+                <span class="wtt-section-kicker"><i class="bi bi-clipboard-data"></i> Selected template</span>
+                @if (_selectedTemplate is null)
+                {
+                    <div class="wtt-empty wtt-empty--compact">
+                        <i class="bi bi-cursor"></i>
+                        <strong>Select a task template</strong>
+                        <span>Review operational impact, ownership, and automation details.</span>
+                    </div>
+                }
+                else
+                {
+                    <div class="wtt-selected__title">
+                        <div class="wtt-template-icon @ImportanceClass(_selectedTemplate)"><i class="@CategoryIcon(_selectedTemplate.Category)"></i></div>
+                        <div>
+                            <h3>@_selectedTemplate.Name</h3>
+                            <span>@_selectedTemplate.Code</span>
+                        </div>
+                    </div>
+                    <div class="wtt-score-card @ImportanceClass(_selectedTemplate)">
+                        <span>Importance score</span>
+                        <strong>@_selectedTemplate.Importance</strong>
+                        <small>@_selectedTemplate.ImportanceLevel impact</small>
+                    </div>
+                    <dl class="wtt-detail-list">
+                        <div><dt>Category</dt><dd>@_selectedTemplate.Category</dd></div>
+                        <div><dt>Owner</dt><dd>@_selectedTemplate.OwnerTeam</dd></div>
+                        <div><dt>SLA target</dt><dd>@(_selectedTemplate.SlaHours > 0 ? $"{_selectedTemplate.SlaHours} hours" : "Not set")</dd></div>
+                        <div><dt>Automation</dt><dd>@_selectedTemplate.Automation</dd></div>
+                        <div><dt>Trigger</dt><dd>@_selectedTemplate.Trigger</dd></div>
+                        <div><dt>Sort order</dt><dd>@_selectedTemplate.SortOrder</dd></div>
+                    </dl>
+                    <div class="wtt-selected-actions">
+                        <button class="wtt-btn wtt-btn--primary" type="button" @onclick="() => OpenEdit(_selectedTemplate)"><i class="bi bi-pencil"></i> Edit</button>
+                        <button class="wtt-btn wtt-btn--ghost" type="button" @onclick="() => DuplicateTemplateAsync(_selectedTemplate)"><i class="bi bi-files"></i> Duplicate</button>
+                        <button class="wtt-btn wtt-btn--danger-ghost" type="button" @onclick="() => ConfirmDelete(_selectedTemplate)"><i class="bi bi-trash"></i> Delete</button>
+                    </div>
+                }
+            </section>
+            <section class="wtt-panel-card">
+                <span class="wtt-section-kicker"><i class="bi bi-stars"></i> Enterprise guidance</span>
+                <div class="wtt-insight-list">
+                    <div class="wtt-insight"><i class="bi bi-1-circle"></i><div><strong>Prioritize customer commitments</strong><span>Critical templates surface first when they affect renewals, claims, binders, quotes, or compliance.</span></div></div>
+                    <div class="wtt-insight"><i class="bi bi-stopwatch"></i><div><strong>Govern every SLA</strong><span>Use SLA hours for work that must escalate or appear in manager queues.</span></div></div>
+                    <div class="wtt-insight"><i class="bi bi-lightning"></i><div><strong>Automate repeatable triggers</strong><span>Trigger and rule modes are best for intake, renewal, submission, and claim follow-up events.</span></div></div>
+                </div>
+            </section>
+        </aside>
+    </section>
+</div>
+
+@if (_showForm)
+{
+    <div class="wtt-modal-backdrop" @onclick="CloseForm">
+        <div class="wtt-modal" @onclick:stopPropagation="true" role="dialog" aria-modal="true" aria-labelledby="task-template-dialog-title">
+            <div class="wtt-modal__header">
+                <i class="bi bi-check2-square"></i>
+                <span id="task-template-dialog-title">@(_editId.HasValue ? "Edit task template" : "Create task template")</span>
+                <button type="button" class="wtt-icon-btn wtt-icon-btn--light ms-auto" @onclick="CloseForm" aria-label="Close dialog"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="wtt-modal__body">
+                    <div class="wtt-validation-note">
+                        <i class="bi bi-info-circle"></i>
+                        <div><strong>Enterprise workflow template</strong><span>Required values are validated against the workflow configuration contract and persisted as task-template configuration JSON.</span></div>
+                    </div>
+                    <div class="wtt-form-grid">
+                        <label class="wtt-field"><span>Code <em>*</em></span><InputText @bind-Value="_form.Code" class="form-control" /><ValidationMessage For="() => _form.Code" class="text-danger" /></label>
+                        <label class="wtt-field"><span>Name <em>*</em></span><InputText @bind-Value="_form.Name" class="form-control" /><ValidationMessage For="() => _form.Name" class="text-danger" /></label>
+                        <label class="wtt-field"><span>Category <em>*</em></span><InputSelect @bind-Value="_form.Category" class="form-select"><option value="">Select category</option><option>Service</option><option>Sales</option><option>Submissions</option><option>Renewals</option><option>Claims</option><option>Compliance</option><option>Accounting</option><option>Operations</option></InputSelect><ValidationMessage For="() => _form.Category" class="text-danger" /></label>
+                        <label class="wtt-field"><span>Owner team <em>*</em></span><InputText @bind-Value="_form.OwnerTeam" class="form-control" /><ValidationMessage For="() => _form.OwnerTeam" class="text-danger" /></label>
+                        <label class="wtt-field"><span>SLA hours</span><InputNumber @bind-Value="_form.SlaHours" class="form-control" /><ValidationMessage For="() => _form.SlaHours" class="text-danger" /></label>
+                        <label class="wtt-field"><span>Importance</span><InputNumber @bind-Value="_form.Importance" class="form-control" /><ValidationMessage For="() => _form.Importance" class="text-danger" /></label>
+                        <label class="wtt-field"><span>Automation</span><InputSelect @bind-Value="_form.Automation" class="form-select"><option>Manual</option><option>Trigger</option><option>Rule</option><option>Scheduled</option></InputSelect><ValidationMessage For="() => _form.Automation" class="text-danger" /></label>
+                        <label class="wtt-field"><span>Sort order</span><InputNumber @bind-Value="_form.SortOrder" class="form-control" /><ValidationMessage For="() => _form.SortOrder" class="text-danger" /></label>
+                        <label class="wtt-field wtt-field--full"><span>Trigger</span><InputText @bind-Value="_form.Trigger" class="form-control" /><ValidationMessage For="() => _form.Trigger" class="text-danger" /></label>
+                        <label class="wtt-field wtt-field--full"><span>Description</span><InputTextArea @bind-Value="_form.Description" class="form-control" rows="3" /><ValidationMessage For="() => _form.Description" class="text-danger" /></label>
+                        <label class="wtt-field wtt-field--checkbox"><InputCheckbox @bind-Value="_form.IsActive" /> <span>Active and available for workflow assignment</span></label>
+                    </div>
+                    @if (_formError is not null)
+                    {
+                        <div class="alert alert-danger wtt-form-alert" style="border-left: 4px solid #dc3545; animation: wtt-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill"></i> @_formError</div>
+                    }
+                </div>
+                <div class="wtt-modal__footer">
+                    <button type="button" class="wtt-btn wtt-btn--ghost" @onclick="CloseForm">Cancel</button>
+                    <button type="submit" class="wtt-btn wtt-btn--primary" disabled="@_saving">@(_saving ? "Saving..." : _editId.HasValue ? "Save changes" : "Create template")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showDelete)
+{
+    <div class="wtt-modal-backdrop" @onclick="() => _showDelete = false">
+        <div class="wtt-confirm" @onclick:stopPropagation="true" role="dialog" aria-modal="true">
+            <div class="wtt-confirm__body">
+                <div class="wtt-confirm-icon wtt-confirm-icon--danger"><i class="bi bi-trash3-fill"></i></div>
+                <div>
+                    <h3>Delete task template</h3>
+                    <p>Delete <strong>@_deleteTarget?.Name</strong>? This removes the reusable template from workflow assignment.</p>
+                </div>
+            </div>
+            <div class="wtt-modal__footer">
+                <button type="button" class="wtt-btn wtt-btn--ghost" @onclick="() => _showDelete = false">Cancel</button>
+                <button type="button" class="wtt-btn wtt-btn--danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="wtt-toast-stack" aria-live="polite">
+    @foreach (var toast in _toasts)
+    {
+        <div class="wtt-toast wtt-toast--@toast.Kind">
+            <i class="bi @(toast.Kind == "success" ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill")"></i>
+            <span>@toast.Message</span>
+            <button type="button" @onclick="() => DismissToast(toast.Id)" aria-label="Dismiss notification"><i class="bi bi-x-lg"></i></button>
+        </div>
+    }
+</div>
+
+@code {
+    private const string Kind = "TaskTemplate";
+    private Guid TenantId { get; set; }
+    private Guid TenantAdminUserId { get; set; }
+
+    private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
+    private readonly HashSet<Guid> _selected = new();
+    private readonly List<ToastMessage> _toasts = [];
+    private List<TaskTemplateViewModel> _items = [];
+    private List<TaskTemplateViewModel> _filtered = [];
+    private List<TaskTemplateViewModel> _paged = [];
+    private List<string> _categoryOptions = [];
+    private List<string> _ownerOptions = [];
+    private TaskTemplateViewModel? _selectedTemplate;
+    private TaskTemplateViewModel? _deleteTarget;
+    private string _activeFilter = "all";
+    private string _search = string.Empty;
+    private string _categoryFilter = string.Empty;
+    private string _ownerFilter = string.Empty;
+    private string _automationFilter = string.Empty;
+    private string _sortMode = "importance";
+    private string? _loadError;
+    private string? _formError;
+    private Guid? _editId;
+    private Guid? _openMenuId;
+    private bool _loading;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private int _page = 1;
+    private readonly int _pageSize = 12;
+    private int _totalPages = 1;
+    private FormModel _form = new();
+
+    private bool AllVisibleSelected => _paged.Count > 0 && _paged.All(x => _selected.Contains(x.Id));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        TenantId = context.TenantId;
+        TenantAdminUserId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Workflow & SLA", null), new("Task Templates", null));
+        await LoadAsync();
+    }
+
+    private async Task RefreshAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchWorkflowConfigItemsAsync(TenantId, Kind, pageSize: 500);
+            _items = (result?.Items ?? []).Select(ToViewModel).ToList();
+            _categoryOptions = _items.Select(x => x.Category).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+            _ownerOptions = _items.Select(x => x.OwnerTeam).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+            ApplyFilter();
+            _selectedTemplate ??= _filtered.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private TaskTemplateViewModel ToViewModel(WorkflowConfigItemDto item)
+    {
+        var details = ParseDetails(item.ConfigurationJson);
+        var category = string.IsNullOrWhiteSpace(item.Category) ? details.Category : item.Category;
+        if (string.IsNullOrWhiteSpace(category)) category = "Operations";
+
+        return new()
+        {
+            Id = item.WorkflowConfigItemId,
+            Code = item.Code,
+            Name = item.Name,
+            Category = category,
+            Description = item.Description ?? details.Description ?? string.Empty,
+            ConfigurationJson = item.ConfigurationJson,
+            IsActive = item.IsActive,
+            SortOrder = item.SortOrder,
+            CreatedDateUtc = item.CreatedDateUtc,
+            OwnerTeam = string.IsNullOrWhiteSpace(details.OwnerTeam) ? DefaultOwner(category) : details.OwnerTeam,
+            SlaHours = details.SlaHours,
+            Automation = string.IsNullOrWhiteSpace(details.Automation) ? "Manual" : details.Automation,
+            Trigger = string.IsNullOrWhiteSpace(details.Trigger) ? "Manual assignment" : details.Trigger,
+            Importance = details.Importance > 0 ? details.Importance : CalculateImportance(category, item.SortOrder, details.SlaHours, item.IsActive)
+        };
+    }
+
+    private TaskTemplateDetails ParseDetails(string? configurationJson)
+    {
+        if (string.IsNullOrWhiteSpace(configurationJson)) return new();
+        try
+        {
+            return JsonSerializer.Deserialize<TaskTemplateDetails>(configurationJson, _jsonOptions) ?? new();
+        }
+        catch
+        {
+            return new();
+        }
+    }
+
+    private void ApplyFilter()
+    {
+        IEnumerable<TaskTemplateViewModel> query = _items;
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var search = _search.Trim();
+            query = query.Where(x => x.Code.Contains(search, StringComparison.OrdinalIgnoreCase)
+                || x.Name.Contains(search, StringComparison.OrdinalIgnoreCase)
+                || x.Category.Contains(search, StringComparison.OrdinalIgnoreCase)
+                || x.OwnerTeam.Contains(search, StringComparison.OrdinalIgnoreCase)
+                || x.Description.Contains(search, StringComparison.OrdinalIgnoreCase));
+        }
+        if (!string.IsNullOrWhiteSpace(_categoryFilter)) query = query.Where(x => x.Category.Equals(_categoryFilter, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(_ownerFilter)) query = query.Where(x => x.OwnerTeam.Equals(_ownerFilter, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(_automationFilter)) query = query.Where(x => x.Automation.Equals(_automationFilter, StringComparison.OrdinalIgnoreCase));
+
+        query = _activeFilter switch
+        {
+            "active" => query.Where(x => x.IsActive),
+            "inactive" => query.Where(x => !x.IsActive),
+            "critical" => query.Where(x => x.Importance >= 80),
+            "sla" => query.Where(x => x.SlaHours > 0),
+            "automated" => query.Where(x => x.Automation != "Manual"),
+            _ => query
+        };
+
+        query = _sortMode switch
+        {
+            "name" => query.OrderBy(x => x.Name),
+            "sla" => query.OrderByDescending(x => x.SlaHours).ThenByDescending(x => x.Importance),
+            "order" => query.OrderBy(x => x.SortOrder).ThenBy(x => x.Name),
+            _ => query.OrderByDescending(x => x.Importance).ThenBy(x => x.SortOrder).ThenBy(x => x.Name)
+        };
+
+        _filtered = query.ToList();
+        _totalPages = Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)_pageSize));
+        if (_page > _totalPages) _page = _totalPages;
+        _paged = _filtered.Skip((_page - 1) * _pageSize).Take(_pageSize).ToList();
+        if (_selectedTemplate is not null && _filtered.All(x => x.Id != _selectedTemplate.Id))
+        {
+            _selectedTemplate = _filtered.FirstOrDefault();
+        }
+        StateHasChanged();
+    }
+
+    private void SetFilter(string filter)
+    {
+        _activeFilter = filter;
+        _page = 1;
+        ApplyFilter();
+    }
+
+    private void ResetFilters()
+    {
+        _search = string.Empty;
+        _categoryFilter = string.Empty;
+        _ownerFilter = string.Empty;
+        _automationFilter = string.Empty;
+        _sortMode = "importance";
+        _activeFilter = "all";
+        _page = 1;
+        ApplyFilter();
+    }
+
+    private void SelectTemplate(TaskTemplateViewModel template)
+    {
+        _selectedTemplate = template;
+        _openMenuId = null;
+    }
+
+    private bool IsSelected(TaskTemplateViewModel template) => _selectedTemplate?.Id == template.Id;
+
+    private void ToggleSelected(TaskTemplateViewModel template, Microsoft.AspNetCore.Components.ChangeEventArgs args)
+    {
+        if (args.Value is bool isChecked && isChecked) _selected.Add(template.Id);
+        else _selected.Remove(template.Id);
+    }
+
+    private void ToggleSelectAll(Microsoft.AspNetCore.Components.ChangeEventArgs args)
+    {
+        var isChecked = args.Value is bool value && value;
+        foreach (var template in _paged)
+        {
+            if (isChecked) _selected.Add(template.Id);
+            else _selected.Remove(template.Id);
+        }
+    }
+
+    private void ToggleMenu(Guid id) => _openMenuId = _openMenuId == id ? null : id;
+
+    private void PreviousPage()
+    {
+        if (_page <= 1) return;
+        _page--;
+        ApplyFilter();
+    }
+
+    private void NextPage()
+    {
+        if (_page >= _totalPages) return;
+        _page++;
+        ApplyFilter();
+    }
+
+    private void OpenCreate()
+    {
+        _editId = null;
+        _formError = null;
+        _form = new()
+        {
+            Code = NextCode(),
+            Category = "Service",
+            OwnerTeam = "Service Operations",
+            Automation = "Manual",
+            Trigger = "Manual assignment",
+            Importance = 60,
+            SlaHours = 24,
+            SortOrder = _items.Count == 0 ? 10 : _items.Max(x => x.SortOrder) + 10,
+            IsActive = true
+        };
+        _showForm = true;
+    }
+
+    private void OpenEdit(TaskTemplateViewModel template)
+    {
+        _openMenuId = null;
+        _editId = template.Id;
+        _formError = null;
+        _form = new()
+        {
+            Code = template.Code,
+            Name = template.Name,
+            Category = template.Category,
+            OwnerTeam = template.OwnerTeam,
+            Description = template.Description,
+            SlaHours = template.SlaHours,
+            Automation = template.Automation,
+            Trigger = template.Trigger,
+            Importance = template.Importance,
+            SortOrder = template.SortOrder,
+            IsActive = template.IsActive
+        };
+        _showForm = true;
+    }
+
+    private void CloseForm()
+    {
+        _showForm = false;
+        _formError = null;
+        _editId = null;
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        _formError = null;
+        try
+        {
+            var details = new TaskTemplateDetails
+            {
+                Category = _form.Category,
+                OwnerTeam = _form.OwnerTeam,
+                SlaHours = _form.SlaHours,
+                Automation = _form.Automation,
+                Trigger = _form.Trigger,
+                Importance = _form.Importance,
+                Description = _form.Description
+            };
+            var json = JsonSerializer.Serialize(details, _jsonOptions);
+            if (_editId.HasValue)
+            {
+                await Api.UpdateWorkflowConfigItemAsync(_editId.Value, new(_form.Code.Trim(), _form.Name.Trim(), _form.Category, _form.Description, json, _form.IsActive, _form.SortOrder));
+                ShowToast("success", "Task template saved successfully.");
+            }
+            else
+            {
+                await Api.CreateWorkflowConfigItemAsync(new(TenantId, Kind, _form.Code.Trim(), _form.Name.Trim(), _form.Category, _form.Description, json, _form.SortOrder));
+                ShowToast("success", "Task template created successfully.");
+            }
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = ex.Message;
+            ShowToast("danger", $"Save failed: {ex.Message}");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ToggleActiveAsync(TaskTemplateViewModel template)
+    {
+        _openMenuId = null;
+        await UpdateActiveAsync(template, !template.IsActive);
+    }
+
+    private async Task BulkActivateAsync() => await BulkSetActiveAsync(true);
+
+    private async Task BulkDeactivateAsync() => await BulkSetActiveAsync(false);
+
+    private async Task BulkSetActiveAsync(bool isActive)
+    {
+        foreach (var id in _selected.ToList())
+        {
+            if (_items.FirstOrDefault(x => x.Id == id) is { } template)
+            {
+                await UpdateActiveAsync(template, isActive, showToast: false);
+            }
+        }
+        _selected.Clear();
+        ShowToast("success", isActive ? "Selected templates activated." : "Selected templates paused.");
+        await LoadAsync();
+    }
+
+    private async Task UpdateActiveAsync(TaskTemplateViewModel template, bool isActive, bool showToast = true)
+    {
+        try
+        {
+            var details = new TaskTemplateDetails
+            {
+                Category = template.Category,
+                OwnerTeam = template.OwnerTeam,
+                SlaHours = template.SlaHours,
+                Automation = template.Automation,
+                Trigger = template.Trigger,
+                Importance = template.Importance,
+                Description = template.Description
+            };
+            await Api.UpdateWorkflowConfigItemAsync(template.Id, new(template.Code, template.Name, template.Category, template.Description, JsonSerializer.Serialize(details, _jsonOptions), isActive, template.SortOrder));
+            if (showToast) ShowToast("success", isActive ? "Template activated." : "Template paused.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Update failed: {ex.Message}");
+        }
+    }
+
+    private async Task DuplicateTemplateAsync(TaskTemplateViewModel template)
+    {
+        _openMenuId = null;
+        try
+        {
+            var details = new TaskTemplateDetails
+            {
+                Category = template.Category,
+                OwnerTeam = template.OwnerTeam,
+                SlaHours = template.SlaHours,
+                Automation = template.Automation,
+                Trigger = template.Trigger,
+                Importance = template.Importance,
+                Description = template.Description
+            };
+            await Api.CreateWorkflowConfigItemAsync(new(TenantId, Kind, $"{template.Code}-COPY", $"{template.Name} Copy", template.Category, template.Description, JsonSerializer.Serialize(details, _jsonOptions), template.SortOrder + 1));
+            ShowToast("success", "Template duplicated successfully.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Duplicate failed: {ex.Message}");
+        }
+    }
+
+    private void ConfirmDelete(TaskTemplateViewModel template)
+    {
+        _openMenuId = null;
+        _deleteTarget = template;
+        _showDelete = true;
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteWorkflowConfigItemAsync(_deleteTarget.Id);
+            _selected.Remove(_deleteTarget.Id);
+            _showDelete = false;
+            ShowToast("success", "Task template deleted successfully.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Delete failed: {ex.Message}");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private RenderFragment KpiCard(string label, int value, string sub, string icon, string color, string filter) => __builder =>
+    {
+        <button class="wtt-kpi-card wtt-kpi-card--@color @(_activeFilter == filter ? "wtt-kpi-card--active" : null)" type="button" title="@sub" @onclick="() => SetFilter(filter)">
+            <span class="wtt-kpi-icon"><i class="@icon"></i></span>
+            <span class="wtt-kpi-body"><span class="wtt-kpi-label">@label</span><strong class="wtt-kpi-value">@value</strong><span class="wtt-kpi-sub">@sub</span></span>
+        </button>
+    };
+
+    private RenderFragment WorkflowButton(string title, string sub, string icon, string category) => __builder =>
+    {
+        <button class="wtt-workflow" type="button" @onclick="() => SetCategoryShortcut(category)">
+            <span class="wtt-workflow-icon"><i class="@icon"></i></span>
+            <span class="wtt-workflow-meta"><strong>@title</strong><span>@sub</span></span>
+        </button>
+    };
+
+    private RenderFragment TabButton(string filter, string label, int count) => __builder =>
+    {
+        <button class="wtt-tab @(_activeFilter == filter ? "wtt-tab--active" : null)" type="button" @onclick="() => SetFilter(filter)">@label <strong>@count</strong></button>
+    };
+
+    private void SetCategoryShortcut(string category)
+    {
+        if (category == "Automated")
+        {
+            _automationFilter = "";
+            SetFilter("automated");
+            return;
+        }
+        _categoryFilter = category;
+        _activeFilter = "all";
+        _page = 1;
+        ApplyFilter();
+    }
+
+    private static string DefaultOwner(string category) => category switch
+    {
+        "Sales" or "Submissions" => "Producer Team",
+        "Renewals" => "Renewal Desk",
+        "Claims" => "Claims Advocacy",
+        "Compliance" => "Compliance Office",
+        "Accounting" => "Accounting Team",
+        _ => "Service Operations"
+    };
+
+    private static int CalculateImportance(string category, int sortOrder, int slaHours, bool active)
+    {
+        var score = category switch
+        {
+            "Claims" or "Compliance" => 88,
+            "Renewals" or "Submissions" => 82,
+            "Sales" => 76,
+            "Accounting" => 70,
+            _ => 64
+        };
+        if (slaHours is > 0 and <= 8) score += 8;
+        if (!active) score -= 20;
+        score -= Math.Min(12, Math.Max(0, sortOrder / 100));
+        return Math.Clamp(score, 1, 100);
+    }
+
+    private static string CategoryIcon(string category) => category switch
+    {
+        "Sales" => "bi bi-graph-up-arrow",
+        "Submissions" => "bi bi-file-earmark-plus",
+        "Renewals" => "bi bi-arrow-clockwise",
+        "Claims" => "bi bi-exclamation-circle",
+        "Compliance" => "bi bi-patch-check",
+        "Accounting" => "bi bi-receipt",
+        _ => "bi bi-check2-square"
+    };
+
+    private static string ImportanceClass(TaskTemplateViewModel template) => template.Importance switch
+    {
+        >= 85 => "wtt-risk-badge--red",
+        >= 70 => "wtt-risk-badge--amber",
+        >= 50 => "wtt-risk-badge--cyan",
+        _ => "wtt-risk-badge--green"
+    };
+
+    private static string AutomationPillClass(string automation) => automation switch
+    {
+        "Trigger" => "wtt-pill--purple",
+        "Rule" => "wtt-pill--blue",
+        "Scheduled" => "wtt-pill--amber",
+        _ => "wtt-pill--neutral"
+    };
+
+    private string NextCode()
+    {
+        var next = _items.Count + 1;
+        string code;
+        do
+        {
+            code = $"TASK-{next:000}";
+            next++;
+        } while (_items.Any(x => x.Code.Equals(code, StringComparison.OrdinalIgnoreCase)));
+        return code;
+    }
+
+    private void ShowToast(string kind, string message)
+    {
+        _toasts.Add(new(Guid.NewGuid(), kind, message));
+        if (_toasts.Count > 4) _toasts.RemoveAt(0);
+    }
+
+    private void DismissToast(Guid id) => _toasts.RemoveAll(x => x.Id == id);
+
+    private sealed class TaskTemplateViewModel
+    {
+        public Guid Id { get; set; }
+        public string Code { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string? ConfigurationJson { get; set; }
+        public bool IsActive { get; set; }
+        public int SortOrder { get; set; }
+        public DateTime CreatedDateUtc { get; set; }
+        public string OwnerTeam { get; set; } = string.Empty;
+        public int SlaHours { get; set; }
+        public string Automation { get; set; } = "Manual";
+        public string Trigger { get; set; } = "Manual assignment";
+        public int Importance { get; set; }
+        public string ImportanceLevel => Importance switch { >= 85 => "Critical", >= 70 => "High", >= 50 => "Managed", _ => "Routine" };
+    }
+
+    private sealed class TaskTemplateDetails
+    {
+        public string? Category { get; set; }
+        public string? OwnerTeam { get; set; }
+        public int SlaHours { get; set; }
+        public string? Automation { get; set; }
+        public string? Trigger { get; set; }
+        public int Importance { get; set; }
+        public string? Description { get; set; }
+    }
+
+    private sealed class FormModel
+    {
+        [Required, StringLength(80)] public string Code { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string Name { get; set; } = string.Empty;
+        [Required, StringLength(120)] public string Category { get; set; } = string.Empty;
+        [Required, StringLength(120)] public string OwnerTeam { get; set; } = string.Empty;
+        [StringLength(500)] public string? Description { get; set; }
+        [Range(0, 720)] public int SlaHours { get; set; }
+        [Required, StringLength(40)] public string Automation { get; set; } = "Manual";
+        [StringLength(200)] public string? Trigger { get; set; }
+        [Range(1, 100)] public int Importance { get; set; } = 60;
+        [Range(0, 9999)] public int SortOrder { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+
+    private sealed record ToastMessage(Guid Id, string Kind, string Message);
+}

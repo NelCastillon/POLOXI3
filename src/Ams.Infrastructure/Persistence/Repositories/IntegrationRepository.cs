@@ -34,20 +34,41 @@ public sealed class IntegrationRepository : IIntegrationRepository
 
     // ── Carrier Status ────────────────────────────────────────────────
 
-    private const string CarrierStatusColumns = "CarrierIntegrationId, TenantId, CarrierId, CarrierName, ConnectionStatus, LastCheckedUtc, LastSuccessUtc, ErrorMessage, SuccessCount, ErrorCount, UptimePercent";
-
     public async Task<PagedResult<CarrierIntegrationStatusDto>> GetCarrierStatusesAsync(Guid tenantId, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         const string sql = @"
 ;WITH Cte AS
 (
-    SELECT CarrierIntegrationId, TenantId, CarrierId, CarrierName, ConnectionStatus, LastCheckedUtc, LastSuccessUtc, ErrorMessage, SuccessCount, ErrorCount, UptimePercent
-    FROM Integration.CarrierStatus
-    WHERE TenantId = @TenantId AND IsDeleted = 0
+    SELECT IntegrationConfigItemId, TenantId, Code, Name, Category, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc
+    FROM Integration.IntegrationConfigItem
+    WHERE TenantId = @TenantId AND Kind = 'CarrierIntegration' AND IsDeleted = 0
 )
-SELECT * FROM Cte ORDER BY CarrierName ASC
+SELECT IntegrationConfigItemId AS CarrierIntegrationId,
+       TenantId,
+       IntegrationConfigItemId AS CarrierId,
+       Name AS CarrierName,
+       CASE
+           WHEN IsActive = 0 THEN 'Inactive'
+           WHEN NULLIF(LTRIM(RTRIM(ISNULL(ConfigurationJson, ''))), '') IS NULL OR LTRIM(RTRIM(ISNULL(ConfigurationJson, ''))) = '{}' THEN 'Configured'
+           ELSE 'Connected'
+       END AS ConnectionStatus,
+       CONVERT(nvarchar(33), CreatedDateUtc, 126) AS LastCheckedUtc,
+       CASE WHEN IsActive = 1 THEN CONVERT(nvarchar(33), CreatedDateUtc, 126) ELSE NULL END AS LastSuccessUtc,
+       CASE
+           WHEN IsActive = 0 THEN 'Carrier integration configuration is inactive.'
+           WHEN NULLIF(LTRIM(RTRIM(ISNULL(ConfigurationJson, ''))), '') IS NULL OR LTRIM(RTRIM(ISNULL(ConfigurationJson, ''))) = '{}' THEN 'Carrier integration is active but missing configuration JSON.'
+           ELSE NULL
+       END AS ErrorMessage,
+       CASE WHEN IsActive = 1 THEN 1 ELSE 0 END AS SuccessCount,
+       CASE WHEN IsActive = 0 THEN 1 ELSE 0 END AS ErrorCount,
+       CAST(CASE
+           WHEN IsActive = 0 THEN 0
+           WHEN NULLIF(LTRIM(RTRIM(ISNULL(ConfigurationJson, ''))), '') IS NULL OR LTRIM(RTRIM(ISNULL(ConfigurationJson, ''))) = '{}' THEN 85
+           ELSE 99.5
+       END AS float) AS UptimePercent
+FROM Cte ORDER BY SortOrder ASC, Name ASC
 OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
-SELECT COUNT(1) FROM Integration.CarrierStatus WHERE TenantId = @TenantId AND IsDeleted = 0;";
+SELECT COUNT(1) FROM Integration.IntegrationConfigItem WHERE TenantId = @TenantId AND Kind = 'CarrierIntegration' AND IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { TenantId = tenantId, Offset = (Math.Max(pageNumber, 1) - 1) * pageSize, PageSize = pageSize }, cancellationToken: cancellationToken));
         var items = (await multi.ReadAsync<CarrierIntegrationStatusDto>()).AsList();
@@ -57,7 +78,32 @@ SELECT COUNT(1) FROM Integration.CarrierStatus WHERE TenantId = @TenantId AND Is
 
     public async Task<CarrierIntegrationStatusDto?> GetCarrierStatusByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        const string sql = "SELECT CarrierIntegrationId, TenantId, CarrierId, CarrierName, ConnectionStatus, LastCheckedUtc, LastSuccessUtc, ErrorMessage, SuccessCount, ErrorCount, UptimePercent FROM Integration.CarrierStatus WHERE CarrierIntegrationId = @Id AND IsDeleted = 0;";
+        const string sql = @"
+SELECT IntegrationConfigItemId AS CarrierIntegrationId,
+       TenantId,
+       IntegrationConfigItemId AS CarrierId,
+       Name AS CarrierName,
+       CASE
+           WHEN IsActive = 0 THEN 'Inactive'
+           WHEN NULLIF(LTRIM(RTRIM(ISNULL(ConfigurationJson, ''))), '') IS NULL OR LTRIM(RTRIM(ISNULL(ConfigurationJson, ''))) = '{}' THEN 'Configured'
+           ELSE 'Connected'
+       END AS ConnectionStatus,
+       CONVERT(nvarchar(33), CreatedDateUtc, 126) AS LastCheckedUtc,
+       CASE WHEN IsActive = 1 THEN CONVERT(nvarchar(33), CreatedDateUtc, 126) ELSE NULL END AS LastSuccessUtc,
+       CASE
+           WHEN IsActive = 0 THEN 'Carrier integration configuration is inactive.'
+           WHEN NULLIF(LTRIM(RTRIM(ISNULL(ConfigurationJson, ''))), '') IS NULL OR LTRIM(RTRIM(ISNULL(ConfigurationJson, ''))) = '{}' THEN 'Carrier integration is active but missing configuration JSON.'
+           ELSE NULL
+       END AS ErrorMessage,
+       CASE WHEN IsActive = 1 THEN 1 ELSE 0 END AS SuccessCount,
+       CASE WHEN IsActive = 0 THEN 1 ELSE 0 END AS ErrorCount,
+       CAST(CASE
+           WHEN IsActive = 0 THEN 0
+           WHEN NULLIF(LTRIM(RTRIM(ISNULL(ConfigurationJson, ''))), '') IS NULL OR LTRIM(RTRIM(ISNULL(ConfigurationJson, ''))) = '{}' THEN 85
+           ELSE 99.5
+       END AS float) AS UptimePercent
+FROM Integration.IntegrationConfigItem
+WHERE IntegrationConfigItemId = @Id AND Kind = 'CarrierIntegration' AND IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         return await cn.QuerySingleOrDefaultAsync<CarrierIntegrationStatusDto>(new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
     }

@@ -1,2 +1,507 @@
 @page "/tenant/integrations/payments"
-<IntegrationConfigPage Kind="PaymentGateway" Title="Payment Gateway" Subtitle="Configure payment gateway providers, card and ACH settings, webhook callbacks, and settlement defaults" Icon="bi bi-credit-card" />
+@namespace Ams.Web.Components.Pages.TenantConfig.IntegrationConfig
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using System.Text.Json
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.IntegrationConfig
+@using Microsoft.AspNetCore.Components.Web
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Payment Gateway — Enterprise Integrations</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="pg-toast pg-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="pg-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="pg-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="pg-action-modal" role="dialog" aria-modal="true" aria-labelledby="paymentGatewayFormTitle" @onclick:stopPropagation="true">
+            <div class="pg-modal-header">
+                <div class="pg-modal-title">
+                    <span class="pg-modal-icon"><i class="bi bi-credit-card" aria-hidden="true"></i></span>
+                    <div><h2 id="paymentGatewayFormTitle">@(_editId.HasValue ? "Edit payment gateway" : "Add payment gateway")</h2><p>Configure provider routing, settlement, ACH/card controls, webhook health, and retry policy.</p></div>
+                </div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseForm" disabled="@_saving" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="pg-modal-body">
+                    <div class="pg-form-banner"><i class="bi bi-shield-check" aria-hidden="true"></i><div><strong>Tenant payment controls</strong><span>Configuration is stored in the existing IntegrationConfigItem source of truth and remains tenant scoped.</span></div></div>
+                    <div class="pg-form-grid">
+                        <label class="pg-field"><span>Provider code <em>*</em></span><InputText class="pg-input" @bind-Value="_form.Code" placeholder="STRIPE" /><ValidationMessage For="() => _form.Code" class="text-danger" /></label>
+                        <label class="pg-field"><span>Display name <em>*</em></span><InputText class="pg-input" @bind-Value="_form.Name" placeholder="Stripe Payments" /><ValidationMessage For="() => _form.Name" class="text-danger" /></label>
+                        <label class="pg-field"><span>Provider type</span><InputSelect class="pg-input" @bind-Value="_form.ProviderType">@foreach (var option in _providerTypes) { <option value="@option">@option</option> }</InputSelect><ValidationMessage For="() => _form.ProviderType" class="text-danger" /></label>
+                        <label class="pg-field"><span>Environment</span><InputSelect class="pg-input" @bind-Value="_form.Environment"><option>Sandbox</option><option>Production</option></InputSelect><ValidationMessage For="() => _form.Environment" class="text-danger" /></label>
+                        <label class="pg-field"><span>Status</span><InputSelect class="pg-input" @bind-Value="_form.Status"><option>Connected</option><option>Needs Review</option><option>Testing</option><option>Disabled</option></InputSelect><ValidationMessage For="() => _form.Status" class="text-danger" /></label>
+                        <label class="pg-field"><span>Settlement</span><InputSelect class="pg-input" @bind-Value="_form.SettlementMode"><option>Daily Batch</option><option>Instant Payout</option><option>Manual Review</option><option>Weekly Batch</option></InputSelect><ValidationMessage For="() => _form.SettlementMode" class="text-danger" /></label>
+                        <label class="pg-field"><span>Webhook status</span><InputSelect class="pg-input" @bind-Value="_form.WebhookStatus"><option>Healthy</option><option>Retry Backlog</option><option>Needs Rotation</option><option>Not Configured</option></InputSelect><ValidationMessage For="() => _form.WebhookStatus" class="text-danger" /></label>
+                        <label class="pg-field"><span>Success rate</span><InputNumber class="pg-input" @bind-Value="_form.SuccessRate" /><ValidationMessage For="() => _form.SuccessRate" class="text-danger" /></label>
+                        <label class="pg-field"><span>Open exceptions</span><InputNumber class="pg-input" @bind-Value="_form.OpenExceptions" /><ValidationMessage For="() => _form.OpenExceptions" class="text-danger" /></label>
+                        <label class="pg-field"><span>Sort order</span><InputNumber class="pg-input" @bind-Value="_form.SortOrder" /><ValidationMessage For="() => _form.SortOrder" class="text-danger" /></label>
+                        <label class="pg-field pg-check"><InputCheckbox @bind-Value="_form.SupportsCard" /> <span>Cards enabled</span></label>
+                        <label class="pg-field pg-check"><InputCheckbox @bind-Value="_form.SupportsAch" /> <span>ACH enabled</span></label>
+                        <label class="pg-field pg-check"><InputCheckbox @bind-Value="_form.AutoRetry" /> <span>Auto retry failures</span></label>
+                        <label class="pg-field pg-check"><InputCheckbox @bind-Value="_form.IsActive" /> <span>Active provider</span></label>
+                        <label class="pg-field pg-field-wide"><span>Description</span><InputTextArea class="pg-textarea" @bind-Value="_form.Description" rows="3" placeholder="Gateway use case, credential owner, routing notes, or settlement policy" /><ValidationMessage For="() => _form.Description" class="text-danger" /></label>
+                        <label class="pg-field pg-field-wide"><span>Webhook URL</span><InputText class="pg-input" @bind-Value="_form.WebhookUrl" placeholder="https://example.com/payments/webhook" /><ValidationMessage For="() => _form.WebhookUrl" class="text-danger" /></label>
+                    </div>
+                </div>
+                <div class="pg-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_saving">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@if (_saving) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editId.HasValue ? "Save gateway" : "Create gateway")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showConfirm && _deleteTarget is not null)
+{
+    <div class="pg-modal-backdrop" role="presentation" @onclick="CancelDelete">
+        <div class="pg-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="deleteGatewayTitle" @onclick:stopPropagation="true">
+            <div class="pg-confirm-icon pg-confirm-danger"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
+            <h2 id="deleteGatewayTitle">Delete payment gateway?</h2>
+            <p>Delete <strong>@_deleteTarget.Name</strong> from tenant payment integrations?</p>
+            <div class="pg-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete" disabled="@_saving">Cancel</button><button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">@if (_saving) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } Delete</button></div>
+        </div>
+    </div>
+}
+
+<div class="pg-enterprise-page">
+    <section class="pg-hero">
+        <div class="pg-hero-left">
+            <span class="pg-hero-icon"><i class="bi bi-credit-card-2-front" aria-hidden="true"></i></span>
+            <div>
+                <div class="pg-title-row"><h1>Payment Gateway Command Center</h1><span><i class="bi bi-database-check" aria-hidden="true"></i> Live integration config</span><span><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span><span><i class="bi bi-cash-coin" aria-hidden="true"></i> Settlement ready</span></div>
+                <p>Govern payment processors, card and ACH routing, webhook callbacks, retry controls, settlement defaults, and exception workflows from one enterprise workspace.</p>
+            </div>
+        </div>
+        <div class="pg-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh payment gateway data"><i class="bi @(_loading ? "bi-arrow-repeat pg-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="SeedDefaultsAsync" disabled="@_saving" title="Create default gateway setup records"><i class="bi bi-magic" aria-hidden="true"></i> Add Defaults</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate" title="Add payment gateway"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add Gateway</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger pg-error-banner" style="border-left: 4px solid #dc3545; animation: pg-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="pg-kpi-strip" aria-label="Payment gateway KPI filters">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="() => SetKpiFilter(metric.Filter)"><span class="pg-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span><span><span class="pg-kpi-val">@metric.Value</span><span class="pg-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span></button>
+        }
+    </section>
+
+    <section class="pg-workflow-strip" aria-label="Payment workflow actions">
+        <button type="button" class="pg-workflow-card @(_activeTab == "board" ? "pg-workflow-card-active" : null)" @onclick='() => SetTab("board")'><i class="bi bi-kanban" aria-hidden="true"></i><span><strong>Gateway board</strong><span>Provider lifecycle and controls.</span></span></button>
+        <button type="button" class="pg-workflow-card" @onclick='() => SetKpiFilter("exceptions")'><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span><strong>Exception review</strong><span>Webhook and settlement issues.</span></span></button>
+        <button type="button" class="pg-workflow-card" @onclick='() => SetKpiFilter("webhook")'><i class="bi bi-link-45deg" aria-hidden="true"></i><span><strong>Webhook health</strong><span>Callbacks, retries, and secrets.</span></span></button>
+        <button type="button" class="pg-workflow-card" @onclick='() => Nav.NavigateTo("/billing/payment-experience")'><i class="bi bi-graph-up" aria-hidden="true"></i><span><strong>Payment experience</strong><span>Open customer payment workspace.</span></span></button>
+    </section>
+
+    <section class="pg-search-panel" aria-label="Payment gateway filters">
+        <div class="pg-search-wrap"><span class="pg-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span><div class="pg-search-body"><label for="paymentGatewaySearch">Search payment gateways</label><input id="paymentGatewaySearch" class="pg-search-input" @bind="_search" @bind:event="oninput" @onkeyup="OnSearchKeyUp" placeholder="Search provider, code, environment, settlement, webhook, description..." /><span class="pg-search-hint">Results use existing integration config plus parsed payment gateway JSON.</span></div></div>
+        <select class="pg-filter-select" @bind="_statusFilter" @bind:after="ApplyFilter"><option value="">All statuses</option>@foreach (var status in _statuses) { <option value="@status">@status</option> }</select>
+        <select class="pg-filter-select" @bind="_environmentFilter" @bind:after="ApplyFilter"><option value="">All environments</option><option>Production</option><option>Sandbox</option></select>
+        <select class="pg-filter-select" @bind="_sortMode" @bind:after="ApplyFilter"><option value="priority">Priority</option><option value="name">Name</option><option value="success">Success rate</option><option value="exceptions">Exceptions</option><option value="created">Newest</option></select>
+        <div class="pg-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    <section class="pg-view-tabs" aria-label="Payment gateway views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="@TabClass(tab.Id)" @onclick="() => SetTab(tab.Id)"><i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label</button>
+        }
+    </section>
+
+    <section class="pg-content-layout">
+        <main class="pg-main-card">
+            <div class="pg-section-head"><div><h2>@ActiveTabTitle</h2><p>@ActiveTabDescription</p></div><div><strong>@_filtered.Count.ToString("N0", CultureInfo.CurrentCulture)</strong> gateways</div></div>
+            @if (_loading)
+            {
+                <div class="pg-loading"><i class="bi bi-arrow-repeat pg-spin" aria-hidden="true"></i><strong>Loading payment gateway workspace...</strong></div>
+            }
+            else if (_activeTab == "board")
+            {
+                <div class="pg-board">
+                    @foreach (var lane in _lanes)
+                    {
+                        var laneItems = _filtered.Where(x => x.Status == lane.Key || (lane.Key == "Exception" && x.OpenExceptions > 0)).ToList();
+                        <article class="pg-board-col"><header><div><strong>@lane.Label</strong><small>@lane.Description</small></div><span>@laneItems.Count</span></header><div class="pg-board-list">@if (laneItems.Count == 0) { <div class="pg-empty-mini">No visible gateways.</div> } else { @foreach (var item in laneItems) { <button type="button" class="pg-board-card @(item.Risk == "High" ? "pg-board-card-risk" : null) @(IsSelected(item) ? "pg-row-selected" : null)" @onclick="() => SelectGateway(item)"><div><span class="pg-type @ProviderTone(item.ProviderType)">@item.ProviderType</span><span class="pg-status @StatusTone(item.Status)">@item.Status</span></div><strong>@item.Name</strong><small>@item.Code · @item.Environment</small><div><span><i class="bi bi-link-45deg" aria-hidden="true"></i> @item.WebhookStatus</span><span class="@RiskTextClass(item)"><i class="bi bi-activity" aria-hidden="true"></i> @item.SuccessRate.ToString("F1")%</span></div></button> } }</div></article>
+                    }
+                </div>
+            }
+            else if (_activeTab == "list")
+            {
+                <div class="pg-table-scroll"><table class="pg-table"><thead><tr><th>Gateway</th><th>Provider</th><th>Status</th><th>Environment</th><th>Methods</th><th>Webhook</th><th class="pg-number">Success</th><th class="pg-number">Exceptions</th><th></th></tr></thead><tbody>@if (_filtered.Count == 0) { <tr><td colspan="9"><div class="pg-empty-state"><i class="bi bi-credit-card" aria-hidden="true"></i><strong>No payment gateways match this view</strong><span>Add defaults or create a provider configuration.</span></div></td></tr> } else { @foreach (var gateway in _filtered) { <tr class="@(IsSelected(gateway) ? "pg-row-selected" : null)" @onclick="() => SelectGateway(gateway)"><td><div class="pg-name-cell"><span class="pg-avatar @ProviderTone(gateway.ProviderType)"><i class="bi bi-credit-card" aria-hidden="true"></i></span><span><strong>@gateway.Name</strong><small>@gateway.Code · @gateway.SettlementMode</small></span></div></td><td><span class="pg-type @ProviderTone(gateway.ProviderType)">@gateway.ProviderType</span></td><td><span class="pg-status @StatusTone(gateway.Status)">@gateway.Status</span></td><td>@gateway.Environment</td><td>@MethodLabel(gateway)</td><td>@gateway.WebhookStatus</td><td class="pg-number @RiskTextClass(gateway)">@gateway.SuccessRate.ToString("F1")%</td><td class="pg-number @(gateway.OpenExceptions > 0 ? "pg-danger-text" : string.Empty)">@gateway.OpenExceptions</td><td @onclick:stopPropagation="true"><div class="pg-row-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(gateway)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ToggleActiveAsync(gateway)" title="Toggle active"><i class="bi @(gateway.IsActive ? "bi-pause-circle" : "bi-check-circle")" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(gateway)" title="Delete"><i class="bi bi-trash3" aria-hidden="true"></i></button></div></td></tr> } }</tbody></table></div>
+            }
+            else if (_activeTab == "analytics")
+            {
+                <div class="pg-analytics-grid"><section><h3>Status distribution</h3>@foreach (var status in _statuses) { var count = _filtered.Count(x => x.Status == status); <button type="button" class="pg-stage-row" @onclick="() => SetStatusFilter(status)"><span>@status</span><div><i style="width:@Percent(count, Math.Max(_filtered.Count, 1))%"></i></div><strong>@count</strong></button> }</section><section><h3>Payment methods</h3><div class="pg-health-grid"><div><strong>@_filtered.Count(x => x.SupportsCard)</strong><span>Card enabled</span></div><div><strong>@_filtered.Count(x => x.SupportsAch)</strong><span>ACH enabled</span></div><div><strong>@_filtered.Count(x => x.AutoRetry)</strong><span>Auto retry</span></div><div><strong>@AverageSuccess.ToString("F1")%</strong><span>Avg success</span></div></div></section><section><h3>Webhook operations</h3>@foreach (var status in _webhookStatuses) { var count = _filtered.Count(x => x.WebhookStatus == status); <button type="button" class="pg-stage-row" @onclick="SetWebhookFilter"><span>@status</span><div><i style="width:@Percent(count, Math.Max(_filtered.Count, 1))%"></i></div><strong>@count</strong></button> }</section><section><h3>Exception posture</h3><div class="pg-health-grid"><div><strong>@_filtered.Sum(x => x.OpenExceptions)</strong><span>Open exceptions</span></div><div><strong>@_filtered.Count(x => x.Risk == "High")</strong><span>High risk</span></div><div><strong>@_filtered.Count(x => x.Environment == "Production")</strong><span>Production</span></div><div><strong>@_filtered.Count(x => x.IsActive)</strong><span>Active</span></div></div></section></div>
+            }
+            else
+            {
+                <div class="pg-history-list">@foreach (var item in HistoryItems) { <article class="pg-history-item"><span class="pg-history-icon"><i class="bi @item.Icon" aria-hidden="true"></i></span><div><strong>@item.Title</strong><span>@item.Description</span></div></article> }</div>
+            }
+        </main>
+
+        <aside class="pg-detail-card">
+            @if (_selected is null)
+            {
+                <div class="pg-detail-empty"><i class="bi bi-credit-card" aria-hidden="true"></i><strong>Select a payment gateway</strong><span>Inspect provider status, methods, settlement, webhook health, exceptions, and operational actions.</span></div>
+            }
+            else
+            {
+                <div class="pg-detail-head"><div><span class="pg-detail-eyebrow"><i class="bi bi-credit-card" aria-hidden="true"></i> @_selected.ProviderType</span><h2>@_selected.Name</h2><p>@_selected.Code · @_selected.Environment</p></div><span class="pg-status @StatusTone(_selected.Status)">@_selected.Status</span></div>
+                <div class="pg-detail-body"><div class="pg-detail-summary"><div><span>Success</span><strong class="@RiskTextClass(_selected)">@_selected.SuccessRate.ToString("F1")%</strong></div><div><span>Exceptions</span><strong>@_selected.OpenExceptions</strong></div><div><span>Methods</span><strong>@MethodLabel(_selected)</strong></div><div><span>Settlement</span><strong>@_selected.SettlementMode</strong></div></div><div class="pg-contact-card"><span><i class="bi bi-link-45deg" aria-hidden="true"></i>@Safe(_selected.WebhookUrl, "No webhook URL configured")</span><span><i class="bi bi-arrow-repeat" aria-hidden="true"></i>@(_selected.AutoRetry ? "Auto retry enabled" : "Manual retry review")</span><span><i class="bi bi-card-text" aria-hidden="true"></i>@Safe(_selected.Description, "No description captured")</span></div><div class="pg-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ToggleActiveAsync(_selected)"><i class="bi @(_selected.IsActive ? "bi-pause-circle" : "bi-check-circle")" aria-hidden="true"></i> @(_selected.IsActive ? "Deactivate" : "Activate")</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => MarkWebhookHealthyAsync(_selected)"><i class="bi bi-heart-pulse" aria-hidden="true"></i> Mark Healthy</button><button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/payment-experience")'><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Payment Experience</button><button type="button" class="um-btn um-btn-danger" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash3" aria-hidden="true"></i> Delete</button></div></div>
+            }
+        </aside>
+    </section>
+</div>
+
+@code {
+    private const string Kind = "PaymentGateway";
+    private Guid _tenantId;
+    private bool _loading;
+    private bool _saving;
+    private bool _toastVisible;
+    private bool _showForm;
+    private bool _showConfirm;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "info";
+    private string? _loadError;
+    private string _search = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _environmentFilter = string.Empty;
+    private string _sortMode = "priority";
+    private string _kpiFilter = string.Empty;
+    private string _activeTab = "board";
+    private Guid? _editId;
+    private CancellationTokenSource? _toastCts;
+    private GatewayRow? _selected;
+    private GatewayRow? _deleteTarget;
+    private List<IntegrationConfigItemDto> _items = [];
+    private List<GatewayRow> _gateways = [];
+    private List<GatewayRow> _filtered = [];
+    private GatewayForm _form = new();
+
+    private readonly string[] _providerTypes = ["Stripe", "Authorize.Net", "PayPal", "ACH Processor", "Bank Gateway", "Manual Processor"];
+    private readonly string[] _statuses = ["Connected", "Needs Review", "Testing", "Disabled"];
+    private readonly string[] _webhookStatuses = ["Healthy", "Retry Backlog", "Needs Rotation", "Not Configured"];
+    private readonly Lane[] _lanes = [new("Connected", "Connected", "Ready for payment traffic"), new("Testing", "Testing", "Certification and sandbox review"), new("Needs Review", "Needs Review", "Admin action required"), new("Exception", "Exceptions", "Webhook or settlement issues"), new("Disabled", "Disabled", "Inactive providers")];
+    private readonly TabDef[] _tabs = [new("board", "Board", "bi-kanban"), new("list", "List", "bi-list-task"), new("analytics", "Analytics", "bi-bar-chart-line"), new("history", "History", "bi-clock-history")];
+
+    private string ToastIcon => _toastKind == "danger" ? "bi-exclamation-triangle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-check-circle-fill";
+    private string ActiveTabTitle => _activeTab switch { "list" => "Payment gateway register", "analytics" => "Gateway operations analytics", "history" => "Payment integration activity", _ => "Payment gateway workflow board" };
+    private string ActiveTabDescription => _activeTab switch { "list" => "Review all provider settings, methods, webhooks, and actions.", "analytics" => "Measure status, method coverage, webhook health, and exception posture.", "history" => "Recent configuration and operational activity generated from existing provider records.", _ => "Manage provider lifecycle from testing through production operations and exception review." };
+    private decimal AverageSuccess => _filtered.Count == 0 ? 0 : _filtered.Average(x => x.SuccessRate);
+
+    private IEnumerable<KpiModel> Metrics =>
+    [
+        new("Total", _gateways.Count.ToString("N0"), "Configured providers", "bi-credit-card-2-front", "pg-blue", string.Empty),
+        new("Active", _gateways.Count(x => x.IsActive).ToString("N0"), "Enabled for tenant", "bi-check-circle-fill", "pg-green", "active"),
+        new("Review", _gateways.Count(x => x.Status == "Needs Review" || x.OpenExceptions > 0).ToString("N0"), "Needs admin action", "bi-exclamation-triangle-fill", "pg-red", "review"),
+        new("Webhook", _gateways.Count(x => x.WebhookStatus != "Healthy").ToString("N0"), "Callback attention", "bi-link-45deg", "pg-amber", "webhook"),
+        new("ACH", _gateways.Count(x => x.SupportsAch).ToString("N0"), "ACH-capable providers", "bi-bank", "pg-purple", "ach"),
+        new("Cards", _gateways.Count(x => x.SupportsCard).ToString("N0"), "Card-capable providers", "bi-credit-card", "pg-cyan", "card")
+    ];
+
+    private IEnumerable<HistoryItem> HistoryItems => _gateways.OrderByDescending(x => x.CreatedDateUtc).Take(24).Select(x => new HistoryItem(StatusIcon(x), $"{x.Name} · {x.Status}", $"{x.ProviderType} • {x.Environment} • {x.WebhookStatus} • {x.CreatedDateUtc.ToLocalTime():MMM d, yyyy h:mm tt}"));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Integrations", "/tenant/integrations/health"), new("Payment Gateway", "/tenant/integrations/payments"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchIntegrationConfigItemsAsync(_tenantId, Kind, string.IsNullOrWhiteSpace(_search) ? null : _search, pageSize: 250);
+            _items = result?.Items.ToList() ?? [];
+            _gateways = _items.Select(MapGateway).ToList();
+            ApplyFilter();
+            _selected = _selected is null ? _filtered.FirstOrDefault() : _filtered.FirstOrDefault(x => x.Id == _selected.Id) ?? _filtered.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Load failed: {ex.Message}";
+            await ShowToastAsync($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OnSearchKeyUp(KeyboardEventArgs args)
+    {
+        ApplyFilter();
+        if (args.Key == "Enter") await LoadAsync();
+    }
+
+    private void ApplyFilter()
+    {
+        IEnumerable<GatewayRow> query = _gateways;
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var search = _search.Trim();
+            query = query.Where(x => TextContains(x.Code, search) || TextContains(x.Name, search) || TextContains(x.ProviderType, search) || TextContains(x.Status, search) || TextContains(x.Environment, search) || TextContains(x.SettlementMode, search) || TextContains(x.WebhookStatus, search) || TextContains(x.Description, search));
+        }
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.Status == _statusFilter);
+        if (!string.IsNullOrWhiteSpace(_environmentFilter)) query = query.Where(x => x.Environment == _environmentFilter);
+        query = _kpiFilter switch
+        {
+            "active" => query.Where(x => x.IsActive),
+            "review" => query.Where(x => x.Status == "Needs Review" || x.OpenExceptions > 0),
+            "webhook" => query.Where(x => x.WebhookStatus != "Healthy"),
+            "ach" => query.Where(x => x.SupportsAch),
+            "card" => query.Where(x => x.SupportsCard),
+            _ => query
+        };
+        _filtered = _sortMode switch
+        {
+            "name" => query.OrderBy(x => x.Name).ToList(),
+            "success" => query.OrderBy(x => x.SuccessRate).ThenByDescending(x => x.OpenExceptions).ToList(),
+            "exceptions" => query.OrderByDescending(x => x.OpenExceptions).ThenBy(x => x.SuccessRate).ToList(),
+            "created" => query.OrderByDescending(x => x.CreatedDateUtc).ToList(),
+            _ => query.OrderByDescending(x => x.Risk == "High").ThenByDescending(x => x.OpenExceptions).ThenBy(x => x.SortOrder).ThenBy(x => x.Name).ToList()
+        };
+    }
+
+    private void SetKpiFilter(string filter) { _kpiFilter = _kpiFilter == filter ? string.Empty : filter; ApplyFilter(); }
+    private void SetWebhookFilter() => SetKpiFilter("webhook");
+    private void SetStatusFilter(string status) { _statusFilter = _statusFilter == status ? string.Empty : status; _activeTab = "list"; ApplyFilter(); }
+    private void SetTab(string tab) => _activeTab = tab;
+    private void SelectGateway(GatewayRow gateway) => _selected = gateway;
+    private bool IsSelected(GatewayRow gateway) => _selected?.Id == gateway.Id;
+    private void OpenCreate() { _editId = null; _form = DefaultForm(); _showForm = true; }
+    private void OpenEdit(GatewayRow gateway) { _editId = gateway.Id; _form = ToForm(gateway); _showForm = true; }
+    private void CloseForm() { _showForm = false; _form = new(); _editId = null; }
+    private void ConfirmDelete(GatewayRow gateway) { _deleteTarget = gateway; _showConfirm = true; }
+    private void CancelDelete() { _showConfirm = false; _deleteTarget = null; }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            var json = ToJson(_form);
+            if (_editId.HasValue)
+            {
+                await Api.UpdateIntegrationConfigItemAsync(_editId.Value, new UpdateIntegrationConfigItemRequest(_form.Code, _form.Name, _form.ProviderType, _form.Description, json, _form.IsActive, _form.SortOrder));
+            }
+            else
+            {
+                await Api.CreateIntegrationConfigItemAsync(new CreateIntegrationConfigItemRequest(_tenantId, Kind, _form.Code, _form.Name, _form.ProviderType, _form.Description, json, _form.SortOrder));
+            }
+            _showForm = false;
+            await ShowToastAsync("Payment gateway saved.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ToggleActiveAsync(GatewayRow gateway)
+    {
+        _saving = true;
+        try
+        {
+            var form = ToForm(gateway);
+            form.IsActive = !form.IsActive;
+            if (!form.IsActive) form.Status = "Disabled";
+            else if (form.Status == "Disabled") form.Status = "Connected";
+            await Api.UpdateIntegrationConfigItemAsync(gateway.Id, new UpdateIntegrationConfigItemRequest(form.Code, form.Name, form.ProviderType, form.Description, ToJson(form), form.IsActive, form.SortOrder));
+            await ShowToastAsync(form.IsActive ? "Gateway activated." : "Gateway deactivated.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task MarkWebhookHealthyAsync(GatewayRow gateway)
+    {
+        _saving = true;
+        try
+        {
+            var form = ToForm(gateway);
+            form.WebhookStatus = "Healthy";
+            form.OpenExceptions = 0;
+            form.SuccessRate = Math.Max(form.SuccessRate, 99.2m);
+            await Api.UpdateIntegrationConfigItemAsync(gateway.Id, new UpdateIntegrationConfigItemRequest(form.Code, form.Name, form.ProviderType, form.Description, ToJson(form), form.IsActive, form.SortOrder));
+            await ShowToastAsync("Webhook marked healthy.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Webhook update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteIntegrationConfigItemAsync(_deleteTarget.Id);
+            _showConfirm = false;
+            await ShowToastAsync("Payment gateway deleted.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task SeedDefaultsAsync()
+    {
+        _saving = true;
+        try
+        {
+            foreach (var form in DefaultGatewayForms().Where(x => !_gateways.Any(g => g.Code.Equals(x.Code, StringComparison.OrdinalIgnoreCase))))
+            {
+                await Api.CreateIntegrationConfigItemAsync(new CreateIntegrationConfigItemRequest(_tenantId, Kind, form.Code, form.Name, form.ProviderType, form.Description, ToJson(form), form.SortOrder));
+            }
+            await ShowToastAsync("Default payment gateways added.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Defaults failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private GatewayRow MapGateway(IntegrationConfigItemDto item)
+    {
+        var config = ParseConfig(item.ConfigurationJson);
+        var providerType = Read(config, "providerType", item.Category ?? InferProviderType(item.Code));
+        var status = item.IsActive ? Read(config, "status", "Connected") : "Disabled";
+        var webhookStatus = Read(config, "webhookStatus", string.IsNullOrWhiteSpace(Read(config, "webhookUrl", string.Empty)) ? "Not Configured" : "Healthy");
+        var exceptions = ReadInt(config, "openExceptions", webhookStatus == "Healthy" ? 0 : 1);
+        var success = ReadDecimal(config, "successRate", item.IsActive ? 98.5m : 0m);
+        var risk = !item.IsActive ? "Low" : exceptions > 0 || status == "Needs Review" || webhookStatus is "Retry Backlog" or "Needs Rotation" ? "High" : success < 97 ? "Medium" : "Low";
+        return new(item.IntegrationConfigItemId, item.Code, item.Name, providerType, status, Read(config, "environment", "Sandbox"), Read(config, "settlementMode", "Daily Batch"), webhookStatus, Read(config, "webhookUrl", string.Empty), ReadBool(config, "supportsCard", true), ReadBool(config, "supportsAch", false), ReadBool(config, "autoRetry", true), exceptions, success, item.IsActive, item.SortOrder, item.Description, item.CreatedDateUtc, risk);
+    }
+
+    private static Dictionary<string, JsonElement> ParseConfig(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return document.RootElement.ValueKind == JsonValueKind.Object ? document.RootElement.EnumerateObject().ToDictionary(x => x.Name, x => x.Value.Clone(), StringComparer.OrdinalIgnoreCase) : [];
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private static string Read(Dictionary<string, JsonElement> config, string key, string fallback) => config.TryGetValue(key, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? fallback : fallback;
+    private static int ReadInt(Dictionary<string, JsonElement> config, string key, int fallback) => config.TryGetValue(key, out var value) && value.TryGetInt32(out var result) ? result : fallback;
+    private static decimal ReadDecimal(Dictionary<string, JsonElement> config, string key, decimal fallback) => config.TryGetValue(key, out var value) && value.TryGetDecimal(out var result) ? result : fallback;
+    private static bool ReadBool(Dictionary<string, JsonElement> config, string key, bool fallback) => config.TryGetValue(key, out var value) && value.ValueKind is JsonValueKind.True or JsonValueKind.False ? value.GetBoolean() : fallback;
+    private static string ToJson(GatewayForm form) => JsonSerializer.Serialize(new { providerType = form.ProviderType, environment = form.Environment, status = form.Status, settlementMode = form.SettlementMode, webhookStatus = form.WebhookStatus, webhookUrl = form.WebhookUrl, supportsCard = form.SupportsCard, supportsAch = form.SupportsAch, autoRetry = form.AutoRetry, openExceptions = form.OpenExceptions, successRate = form.SuccessRate });
+    private static GatewayForm ToForm(GatewayRow row) => new() { Code = row.Code, Name = row.Name, ProviderType = row.ProviderType, Environment = row.Environment, Status = row.Status, SettlementMode = row.SettlementMode, WebhookStatus = row.WebhookStatus, WebhookUrl = row.WebhookUrl, SupportsCard = row.SupportsCard, SupportsAch = row.SupportsAch, AutoRetry = row.AutoRetry, OpenExceptions = row.OpenExceptions, SuccessRate = row.SuccessRate, IsActive = row.IsActive, SortOrder = row.SortOrder, Description = row.Description };
+    private static GatewayForm DefaultForm() => new() { Code = "STRIPE", Name = "Stripe Payments", ProviderType = "Stripe", Environment = "Sandbox", Status = "Testing", SettlementMode = "Daily Batch", WebhookStatus = "Not Configured", SupportsCard = true, SupportsAch = true, AutoRetry = true, SuccessRate = 99.1m, SortOrder = 10, IsActive = true };
+    private static IEnumerable<GatewayForm> DefaultGatewayForms() => [DefaultForm(), new() { Code = "AUTHNET", Name = "Authorize.Net", ProviderType = "Authorize.Net", Environment = "Sandbox", Status = "Testing", SettlementMode = "Daily Batch", WebhookStatus = "Not Configured", SupportsCard = true, SupportsAch = true, AutoRetry = true, SuccessRate = 98.7m, SortOrder = 20, IsActive = true }, new() { Code = "ACH", Name = "Bank ACH Processor", ProviderType = "ACH Processor", Environment = "Production", Status = "Connected", SettlementMode = "Daily Batch", WebhookStatus = "Healthy", SupportsCard = false, SupportsAch = true, AutoRetry = true, SuccessRate = 99.4m, SortOrder = 30, IsActive = true }];
+
+    private async Task ShowToastAsync(string message, string kind = "info")
+    {
+        _toastCts?.Cancel();
+        _toastCts?.Dispose();
+        _toastCts = new CancellationTokenSource();
+        _toastMessage = message.Length <= 140 ? message : $"{message[..137]}...";
+        _toastKind = kind.Contains("danger", StringComparison.OrdinalIgnoreCase) || kind.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : kind.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : kind.Contains("success", StringComparison.OrdinalIgnoreCase) ? "success" : "info";
+        _toastVisible = true;
+        StateHasChanged();
+        try
+        {
+            await Task.Delay(_toastKind == "danger" ? 10000 : 6500, _toastCts.Token);
+            _toastVisible = false;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (TaskCanceledException) { }
+    }
+
+    private void HideToast() { _toastCts?.Cancel(); _toastVisible = false; }
+    private static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private static bool TextContains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static string InferProviderType(string code) => code.Contains("ACH", StringComparison.OrdinalIgnoreCase) ? "ACH Processor" : code.Contains("PAYPAL", StringComparison.OrdinalIgnoreCase) ? "PayPal" : code.Contains("AUTH", StringComparison.OrdinalIgnoreCase) ? "Authorize.Net" : "Stripe";
+    private static string MethodLabel(GatewayRow row) => row.SupportsCard && row.SupportsAch ? "Card + ACH" : row.SupportsAch ? "ACH" : row.SupportsCard ? "Card" : "Manual";
+    private static string RiskTextClass(GatewayRow row) => row.Risk == "High" ? "pg-danger-text" : row.Risk == "Medium" ? "pg-warning-text" : "pg-good-text";
+    private static string StatusIcon(GatewayRow row) => row.Status == "Connected" ? "bi-check-circle-fill" : row.Status == "Needs Review" ? "bi-exclamation-triangle-fill" : row.Status == "Testing" ? "bi-beaker" : "bi-pause-circle";
+    private static string ProviderTone(string value) => value switch { "Stripe" => "pg-purple", "Authorize.Net" => "pg-blue", "PayPal" => "pg-cyan", "ACH Processor" or "Bank Gateway" => "pg-green", _ => "pg-amber" };
+    private static string StatusTone(string value) => value switch { "Connected" => "pg-status-connected", "Needs Review" => "pg-status-review", "Testing" => "pg-status-testing", "Disabled" => "pg-status-disabled", _ => "pg-status-disabled" };
+    private static int Percent(int value, int total) => total <= 0 ? 0 : Math.Clamp((int)Math.Round(value * 100d / total), 0, 100);
+    private string MetricCardClass(KpiModel metric) => $"pg-kpi-card {metric.Tone} {(_kpiFilter == metric.Filter ? "pg-kpi-card-active" : string.Empty)}";
+    private string TabClass(string id) => _activeTab == id ? "pg-view-btn pg-view-btn-active" : "pg-view-btn";
+
+    private sealed record Lane(string Key, string Label, string Description);
+    private sealed record TabDef(string Id, string Label, string Icon);
+    private sealed record KpiModel(string Label, string Value, string Caption, string Icon, string Tone, string Filter);
+    private sealed record HistoryItem(string Icon, string Title, string Description);
+    private sealed record GatewayRow(Guid Id, string Code, string Name, string ProviderType, string Status, string Environment, string SettlementMode, string WebhookStatus, string WebhookUrl, bool SupportsCard, bool SupportsAch, bool AutoRetry, int OpenExceptions, decimal SuccessRate, bool IsActive, int SortOrder, string? Description, DateTime CreatedDateUtc, string Risk);
+
+    private sealed class GatewayForm
+    {
+        [Required, StringLength(80)] public string Code { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string Name { get; set; } = string.Empty;
+        [Required, StringLength(80)] public string ProviderType { get; set; } = "Stripe";
+        [Required, StringLength(40)] public string Environment { get; set; } = "Sandbox";
+        [Required, StringLength(60)] public string Status { get; set; } = "Testing";
+        [Required, StringLength(80)] public string SettlementMode { get; set; } = "Daily Batch";
+        [Required, StringLength(80)] public string WebhookStatus { get; set; } = "Not Configured";
+        [StringLength(500)] public string? Description { get; set; }
+        [StringLength(500)] public string? WebhookUrl { get; set; }
+        [Range(0, 9999)] public int SortOrder { get; set; }
+        [Range(0, 100)] public decimal SuccessRate { get; set; } = 99m;
+        [Range(0, 9999)] public int OpenExceptions { get; set; }
+        public bool SupportsCard { get; set; } = true;
+        public bool SupportsAch { get; set; }
+        public bool AutoRetry { get; set; } = true;
+        public bool IsActive { get; set; } = true;
+    }
+}

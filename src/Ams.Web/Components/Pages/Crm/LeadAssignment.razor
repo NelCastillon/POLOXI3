@@ -1,0 +1,679 @@
+@page "/crm/leads/assignment"
+@namespace Ams.Web.Components.Pages.Crm
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.CrmConfig
+@using Ams.Application.Features.Leads
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Lead Assignment Command Center</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="la-toast la-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="la-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showAssign)
+{
+    <div class="la-modal-backdrop" role="presentation" @onclick="CloseAssign">
+        <div class="la-action-modal" role="dialog" aria-modal="true" aria-labelledby="assignTitle" @onclick:stopPropagation="true">
+            <div class="la-modal-header">
+                <div class="la-modal-title">
+                    <span class="la-modal-icon"><i class="bi bi-person-check" aria-hidden="true"></i></span>
+                    <div><h2 id="assignTitle">Assign selected leads</h2><p>Route @_selectedLeads.Count lead(s) and sync existing CRM ownership.</p></div>
+                </div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseAssign" disabled="@_busy" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_assignForm" OnValidSubmit="ConfirmAssign">
+                <DataAnnotationsValidator />
+                <div class="la-modal-body">
+                    <div class="la-form-banner"><i class="bi bi-shield-check" aria-hidden="true"></i><div><strong>Workflow sync enabled</strong><span>Assignment updates Lead.AssignedToUserId and can log a workflow communication event.</span></div></div>
+                    <div class="la-form-grid">
+                        <label class="la-field"><span>Assign to producer <em>*</em></span><InputSelect class="la-input" @bind-Value="_assignForm.OwnerId"><option value="">Select owner</option>@foreach (var owner in _ownerOptions) { <option value="@owner.Value">@owner.Label</option> }</InputSelect><ValidationMessage For="() => _assignForm.OwnerId" class="text-danger" /></label>
+                        <label class="la-field"><span>Move to stage</span><InputSelect class="la-input" @bind-Value="_assignForm.Stage">@foreach (var stage in _stageOptions) { <option value="@stage.Value">@stage.Label</option> }</InputSelect><ValidationMessage For="() => _assignForm.Stage" class="text-danger" /></label>
+                        <label class="la-field la-field-wide"><span>Assignment note</span><InputTextArea class="la-textarea" @bind-Value="_assignForm.Note" rows="3" placeholder="Reason, routing context, or next action" /><ValidationMessage For="() => _assignForm.Note" class="text-danger" /></label>
+                        <label class="la-field la-check"><InputCheckbox @bind-Value="_assignForm.LogWorkflow" /> <span>Log workflow activity on each lead</span></label>
+                    </div>
+                </div>
+                <div class="la-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseAssign" disabled="@_busy">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } Assign leads</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showRuleForm)
+{
+    <div class="la-modal-backdrop" role="presentation" @onclick="CloseRuleForm">
+        <div class="la-action-modal" role="dialog" aria-modal="true" aria-labelledby="ruleFormTitle" @onclick:stopPropagation="true">
+            <div class="la-modal-header">
+                <div class="la-modal-title">
+                    <span class="la-modal-icon"><i class="bi @(_ruleEditId.HasValue ? "bi-pencil-square" : "bi-diagram-3")" aria-hidden="true"></i></span>
+                    <div><h2 id="ruleFormTitle">@(_ruleEditId.HasValue ? "Edit routing rule" : "Create routing rule")</h2><p>Configure assignment criteria, method, target, and priority.</p></div>
+                </div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseRuleForm" disabled="@_busy" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_ruleForm" OnValidSubmit="SaveRuleAsync">
+                <DataAnnotationsValidator />
+                <div class="la-modal-body">
+                    <div class="la-form-banner"><i class="bi bi-sliders" aria-hidden="true"></i><div><strong>Enterprise routing criteria</strong><span>Criteria is matched against source, stage, priority, score, premium, company, and service text.</span></div></div>
+                    <div class="la-form-grid">
+                        <label class="la-field"><span>Rule name <em>*</em></span><InputText class="la-input" @bind-Value="_ruleForm.RuleName" /><ValidationMessage For="() => _ruleForm.RuleName" class="text-danger" /></label>
+                        <label class="la-field"><span>Entity <em>*</em></span><InputSelect class="la-input" @bind-Value="_ruleForm.EntityType"><option value="Lead">Lead</option><option value="Opportunity">Opportunity</option><option value="Submission">Submission</option></InputSelect><ValidationMessage For="() => _ruleForm.EntityType" class="text-danger" /></label>
+                        <label class="la-field"><span>Method <em>*</em></span><InputSelect class="la-input" @bind-Value="_ruleForm.AssignmentMethod">@foreach (var method in _methodOptions) { <option value="@method">@method</option> }</InputSelect><ValidationMessage For="() => _ruleForm.AssignmentMethod" class="text-danger" /></label>
+                        <label class="la-field"><span>Priority</span><InputNumber class="la-input" @bind-Value="_ruleForm.Priority" /><ValidationMessage For="() => _ruleForm.Priority" class="text-danger" /></label>
+                        <label class="la-field"><span>Assign to user</span><InputSelect class="la-input" @bind-Value="_ruleForm.AssignToUserId"><option value="">No direct user</option>@foreach (var owner in _ownerOptions) { <option value="@owner.Value">@owner.Label</option> }</InputSelect><ValidationMessage For="() => _ruleForm.AssignToUserId" class="text-danger" /></label>
+                        <label class="la-field"><span>Assign to team</span><InputText class="la-input" @bind-Value="_ruleForm.AssignToTeam" placeholder="Commercial producers" /><ValidationMessage For="() => _ruleForm.AssignToTeam" class="text-danger" /></label>
+                        <label class="la-field la-field-wide"><span>Criteria</span><InputTextArea class="la-textarea" @bind-Value="_ruleForm.Criteria" rows="3" placeholder="Source = Referral AND Score >= 80" /><ValidationMessage For="() => _ruleForm.Criteria" class="text-danger" /></label>
+                        <label class="la-field la-field-wide"><span>Description</span><InputTextArea class="la-textarea" @bind-Value="_ruleForm.Description" rows="3" /><ValidationMessage For="() => _ruleForm.Description" class="text-danger" /></label>
+                        <label class="la-field la-check"><InputCheckbox @bind-Value="_ruleForm.IsActive" /> <span>Active rule</span></label>
+                    </div>
+                </div>
+                <div class="la-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseRuleForm" disabled="@_busy">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_ruleEditId.HasValue ? "Save rule" : "Create rule")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showConfirm && _confirmAction is not null)
+{
+    <div class="la-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="la-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" @onclick:stopPropagation="true">
+            <div class="la-confirm-icon la-confirm-@_confirmAction.Kind"><i class="bi @_confirmAction.Icon" aria-hidden="true"></i></div>
+            <h2 id="confirmTitle">@_confirmAction.Title</h2>
+            <p>@_confirmAction.Message</p>
+            <div class="la-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_busy">Cancel</button><button type="button" class="um-btn @_confirmAction.ButtonClass" @onclick="ExecuteConfirmedAsync" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @_confirmAction.ButtonText</button></div>
+        </div>
+    </div>
+}
+
+<div class="la-enterprise-page">
+    <section class="la-hero">
+        <div class="la-hero-left">
+            <span class="la-hero-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span>
+            <div>
+                <div class="la-title-row"><h1>Lead Assignment Command Center</h1><span><i class="bi bi-database-check" aria-hidden="true"></i> Live CRM data</span><span><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span></div>
+                <p>Prioritize unassigned and high-value leads, balance producer workload, simulate routing rules, and synchronize assignment workflow with the CRM lead pipeline.</p>
+            </div>
+        </div>
+        <div class="la-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh lead assignment data"><i class="bi @(_loading ? "bi-arrow-repeat la-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="AutoBalanceSelected" disabled="@(!_selectedLeads.Any())" title="Assign selected leads to the lowest workload producers"><i class="bi bi-shuffle" aria-hidden="true"></i> Auto-balance</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreateRule" title="Create assignment rule"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Rule</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger la-error-banner" style="border-left: 4px solid #dc3545; animation: la-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="la-kpi-strip" aria-label="Assignment KPI filters">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="() => SetKpiFilter(metric.Filter)"><span class="la-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span><span><span class="la-kpi-val">@metric.Value</span><span class="la-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span></button>
+        }
+    </section>
+
+    <section class="la-workflow-strip" aria-label="Assignment workflow actions">
+        <button type="button" class="la-workflow-card" @onclick="ShowQueue"><i class="bi bi-list-stars" aria-hidden="true"></i><span><strong>Priority queue</strong><span>Rank by importance and SLA risk.</span></span></button>
+        <button type="button" class="la-workflow-card" @onclick="ShowUnassigned"><i class="bi bi-person-x" aria-hidden="true"></i><span><strong>Unassigned leads</strong><span>Find records without an owner.</span></span></button>
+        <button type="button" class="la-workflow-card" @onclick="ShowWorkload"><i class="bi bi-speedometer2" aria-hidden="true"></i><span><strong>Producer capacity</strong><span>Balance open pipeline workload.</span></span></button>
+        <button type="button" class="la-workflow-card" @onclick="ShowRules"><i class="bi bi-diagram-2" aria-hidden="true"></i><span><strong>Routing rules</strong><span>Simulate and maintain rules.</span></span></button>
+    </section>
+
+    <section class="la-search-panel" aria-label="Lead assignment filters">
+        <div class="la-search-wrap"><span class="la-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span><div class="la-search-body"><label for="assignmentSearch">Search assignment queue</label><input id="assignmentSearch" class="la-search-input" value="@_search" @oninput="OnSearchChanged" placeholder="Search lead, company, source, stage, owner, rule, email, or phone..." /><span class="la-search-hint">Results are ranked by importance: unassigned, hot, stale, high score, high premium, and active rule match.</span></div></div>
+        <select class="la-filter-select" value="@_stageFilter" @onchange="OnStageChanged"><option value="">All stages</option>@foreach (var stage in _stageOptions) { <option value="@stage.Value">@stage.Label</option> }</select>
+        <select class="la-filter-select" value="@_ownerFilter" @onchange="OnOwnerChanged"><option value="">All owners</option><option value="unassigned">Unassigned</option>@foreach (var owner in _ownerOptions) { <option value="@owner.Value">@owner.Label</option> }</select>
+        <select class="la-filter-select" value="@_sortMode" @onchange="OnSortChanged"><option value="importance">Importance</option><option value="score">Score</option><option value="premium">Premium</option><option value="stale">Stale first</option><option value="created">Newest</option></select>
+        <div class="la-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (_selectedLeads.Count > 0)
+    {
+        <section class="la-bulk-bar"><span>@_selectedLeads.Count selected • @_selectedLeads.Sum(x => x.EstPremium).ToString("C0", CultureInfo.CurrentCulture) open premium</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenAssign"><i class="bi bi-person-check" aria-hidden="true"></i> Assign</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="AutoBalanceSelected"><i class="bi bi-shuffle" aria-hidden="true"></i> Auto-balance</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="MarkSelectedContacted"><i class="bi bi-telephone-outbound" aria-hidden="true"></i> Mark Contacted</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearSelection"><i class="bi bi-x-lg" aria-hidden="true"></i></button></section>
+    }
+
+    <section class="la-view-tabs" aria-label="Assignment views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="@TabClass(tab.Id)" @onclick="() => SetTab(tab.Id)"><i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label</button>
+        }
+    </section>
+
+    <section class="la-content-layout">
+        <main class="la-main-card">
+            <div class="la-section-head"><div><h2>@ActiveTabTitle</h2><p>@ActiveTabDescription</p></div><div><strong>@_filtered.Count.ToString("N0", CultureInfo.CurrentCulture)</strong> leads</div></div>
+            @if (_loading)
+            {
+                <div class="la-loading"><i class="bi bi-arrow-repeat la-spin" aria-hidden="true"></i><strong>Loading lead assignment workspace...</strong></div>
+            }
+            else if (_activeTab == "workload")
+            {
+                <div class="la-workload-grid">
+                    @foreach (var workload in _workloads)
+                    {
+                        <article class="la-workload-card" @onclick="() => FilterByOwner(workload.OwnerId)">
+                            <div class="la-workload-hdr"><div><strong>@workload.OwnerName</strong><span>@workload.OpenCount open leads • @workload.OpenPremium.ToString("C0", CultureInfo.CurrentCulture)</span></div><span class="la-workload-status @WorkloadTone(workload)">@workload.Status</span></div>
+                            <div class="la-workload-bar"><span class="la-workload-fill @WorkloadTone(workload)" style="width:@workload.WidthPercent%"></span></div>
+                            <div class="la-workload-stats"><div><span>@workload.HotCount</span><small>Hot</small></div><div><span>@workload.StaleCount</span><small>Stale</small></div><div><span>@workload.CapacityPercent.ToString("F0")%</span><small>Capacity</small></div></div>
+                            <div class="la-card-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenAssignTo(workload.OwnerId)"><i class="bi bi-person-plus" aria-hidden="true"></i> Assign here</button></div>
+                        </article>
+                    }
+                </div>
+            }
+            else if (_activeTab == "rules")
+            {
+                <div class="la-rules-grid">
+                    @foreach (var rule in FilteredRules)
+                    {
+                        <article class="la-rule-card" @onclick="() => SelectRule(rule)">
+                            <div class="la-rule-hdr"><div><strong>@rule.RuleName</strong><span>@Safe(rule.Description, "No description")</span></div><span class="la-status-pill @(rule.IsActive ? "la-status-active" : "la-status-inactive")">@(rule.IsActive ? "Active" : "Inactive")</span></div>
+                            <div class="la-rule-meta"><span class="la-status-pill la-order-pill">@rule.EntityType</span><span class="la-status-pill la-order-pill">@Safe(rule.AssignmentMethod, "Manual")</span><span class="la-status-pill la-order-pill">Priority @rule.Priority</span></div>
+                            <div class="la-rule-cond"><span>Criteria</span><strong>@Safe(rule.Criteria, "Always eligible")</strong></div>
+                            <div class="la-rule-footer"><span>@RuleTarget(rule)</span><span>@RuleMatchCount(rule) matching leads</span></div>
+                            <div class="la-card-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => SimulateRule(rule)"><i class="bi bi-play-circle" aria-hidden="true"></i> Simulate</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEditRule(rule)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ConfirmToggleRule(rule)"><i class="bi @(rule.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-danger um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ConfirmDeleteRule(rule)"><i class="bi bi-trash3" aria-hidden="true"></i></button></div>
+                        </article>
+                    }
+                </div>
+            }
+            else if (_activeTab == "history")
+            {
+                <div class="la-history-list">@foreach (var item in HistoryItems) { <article class="la-history-item"><span class="la-history-icon"><i class="bi @item.Icon" aria-hidden="true"></i></span><div><strong>@item.Title</strong><span>@item.Description</span></div></article> }</div>
+            }
+            else if (_filtered.Count == 0)
+            {
+                <div class="la-empty-state"><i class="bi bi-person-check" aria-hidden="true"></i><strong>No assignment records match this view</strong><span>Adjust filters or refresh lead data.</span></div>
+            }
+            else
+            {
+                <div class="la-table-scroll">
+                    <table class="la-table">
+                        <thead><tr><th><input type="checkbox" checked="@AllPageSelected" @onchange="TogglePageSelection" aria-label="Select all leads on page" /></th><th>Importance</th><th>Lead</th><th>Stage</th><th>Source</th><th>Owner</th><th class="la-number">Score</th><th class="la-number">Premium</th><th>Best rule</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var lead in _paged)
+                            {
+                                <tr class="@LeadRowClass(lead)" @onclick="() => SelectLead(lead)">
+                                    <td @onclick:stopPropagation="true"><input type="checkbox" checked="@IsSelected(lead)" @onchange="() => ToggleLead(lead)" aria-label="Select lead" /></td>
+                                    <td><span class="la-score-pill @ImportanceTone(lead)">@ImportanceScore(lead)</span></td>
+                                    <td><div class="la-name-cell"><span class="la-avatar @AvatarColor(lead.FullName)">@Initials(lead.FullName)</span><span><strong>@lead.FullName</strong><small>@lead.CompanyName · @lead.Email</small></span></div></td>
+                                    <td><span class="la-status-pill @StageTone(lead.Stage)">@lead.Stage</span></td>
+                                    <td><span class="la-source-badge"><i class="bi @SourceIcon(lead.Source)" aria-hidden="true"></i>@lead.Source</span></td>
+                                    <td>@lead.OwnerName</td>
+                                    <td class="la-number"><span class="la-score-pill @ScoreTone(lead.Score)">@lead.Score</span></td>
+                                    <td class="la-number">@lead.EstPremium.ToString("C0", CultureInfo.CurrentCulture)</td>
+                                    <td>@BestRuleName(lead)</td>
+                                    <td @onclick:stopPropagation="true"><div class="la-row-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenLeadAssign(lead)" title="Assign lead"><i class="bi bi-person-check" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => MarkLeadContacted(lead)" title="Mark contacted"><i class="bi bi-telephone-outbound" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => NavigateToLead(lead)" title="Open lead"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="la-rule-footer"><span>@PageSummary</span><span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i></button> Page @_page of @TotalPages <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)"><i class="bi bi-chevron-right" aria-hidden="true"></i></button></span></div>
+            }
+        </main>
+
+        <aside class="la-detail-card">
+            @if (_selectedLead is null && _selectedRule is null)
+            {
+                <div class="la-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a lead or rule</strong><span>Inspect assignment importance, rule matches, workload impact, and next best action.</span></div>
+            }
+            else if (_selectedRule is not null && _activeTab == "rules")
+            {
+                <div class="la-detail-head"><div><span class="la-detail-eyebrow"><i class="bi bi-diagram-2" aria-hidden="true"></i> Routing rule</span><h2>@_selectedRule.RuleName</h2><p>@RuleTarget(_selectedRule)</p></div><span class="la-status-pill @(_selectedRule.IsActive ? "la-status-active" : "la-status-inactive")">@(_selectedRule.IsActive ? "Active" : "Inactive")</span></div>
+                <div class="la-detail-body"><div class="la-detail-summary"><div><span>Matches</span><strong>@RuleMatchCount(_selectedRule)</strong></div><div><span>Priority</span><strong>@_selectedRule.Priority</strong></div><div><span>Method</span><strong>@Safe(_selectedRule.AssignmentMethod, "Manual")</strong></div><div><span>Entity</span><strong>@_selectedRule.EntityType</strong></div></div><div class="la-contact-card"><span><i class="bi bi-funnel" aria-hidden="true"></i>@Safe(_selectedRule.Criteria, "Always eligible")</span><span><i class="bi bi-card-text" aria-hidden="true"></i>@Safe(_selectedRule.Description, "No description")</span></div><div class="la-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="() => SimulateRule(_selectedRule)"><i class="bi bi-play-circle" aria-hidden="true"></i> Simulate</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => OpenEditRule(_selectedRule)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div></div>
+            }
+            else if (_selectedLead is not null)
+            {
+                <div class="la-detail-head"><div><span class="la-detail-eyebrow"><i class="bi @SourceIcon(_selectedLead.Source)" aria-hidden="true"></i> @_selectedLead.Source</span><h2>@_selectedLead.FullName</h2><p>@_selectedLead.CompanyName</p></div><span class="la-score-pill @ImportanceTone(_selectedLead)">@ImportanceScore(_selectedLead)</span></div>
+                <div class="la-detail-body"><div class="la-detail-summary"><div><span>Owner</span><strong>@_selectedLead.OwnerName</strong></div><div><span>Stage</span><strong>@_selectedLead.Stage</strong></div><div><span>Score</span><strong>@_selectedLead.Score</strong></div><div><span>Premium</span><strong>@_selectedLead.EstPremium.ToString("C0", CultureInfo.CurrentCulture)</strong></div></div><div class="la-contact-card"><span><i class="bi bi-envelope" aria-hidden="true"></i>@Safe(_selectedLead.Email, "No email")</span><span><i class="bi bi-telephone" aria-hidden="true"></i>@Safe(_selectedLead.Phone, "No phone")</span><span><i class="bi bi-diagram-2" aria-hidden="true"></i>Best rule: @BestRuleName(_selectedLead)</span><span><i class="bi bi-card-text" aria-hidden="true"></i>@Safe(_selectedLead.Notes, "No notes captured")</span></div><div class="la-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="() => OpenLeadAssign(_selectedLead)"><i class="bi bi-person-check" aria-hidden="true"></i> Assign</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => MarkLeadContacted(_selectedLead)"><i class="bi bi-telephone-outbound" aria-hidden="true"></i> Contacted</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => NavigateToLead(_selectedLead)"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open lead</button></div></div>
+            }
+        </aside>
+    </section>
+</div>
+
+@code {
+    private Guid _tenantId;
+    private Guid _currentUserId;
+    private bool _loading;
+    private bool _busy;
+    private bool _toastVisible;
+    private bool _showAssign;
+    private bool _showRuleForm;
+    private bool _showConfirm;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "info";
+    private string? _loadError;
+    private string _search = string.Empty;
+    private string _stageFilter = string.Empty;
+    private string _ownerFilter = string.Empty;
+    private string _sortMode = "importance";
+    private string _kpiFilter = string.Empty;
+    private string _activeTab = "queue";
+    private int _page = 1;
+    private const int PageSize = 12;
+    private Guid? _ruleEditId;
+    private ConfirmAction? _confirmAction;
+    private CancellationTokenSource? _toastCts;
+    private LeadAssignmentRow? _selectedLead;
+    private AssignmentRuleDto? _selectedRule;
+    private AssignFormModel _assignForm = new();
+    private RuleFormModel _ruleForm = new();
+    private List<LeadAssignmentRow> _leads = [];
+    private List<LeadAssignmentRow> _filtered = [];
+    private List<LeadAssignmentRow> _paged = [];
+    private List<LeadAssignmentRow> _selectedLeads = [];
+    private List<AssignmentRuleDto> _rules = [];
+    private List<UserDto> _users = [];
+    private List<OwnerOption> _ownerOptions = [];
+    private List<WorkloadRow> _workloads = [];
+
+    private static readonly List<TabDef> _tabs = [new("queue", "Queue", "bi-list-stars"), new("workload", "Workload", "bi-speedometer2"), new("rules", "Rules", "bi-diagram-2"), new("history", "History", "bi-clock-history")];
+    private static readonly List<LabelValue> _stageOptions = [new("New", "New"), new("Contacted", "Contacted"), new("Qualified", "Qualified"), new("Proposal", "Proposal"), new("Negotiation", "Negotiation"), new("Converted", "Converted"), new("Lost", "Lost")];
+    private static readonly string[] _methodOptions = ["Round Robin", "Least Loaded", "Territory", "Source", "Producer", "Team", "Manual"];
+
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private bool AllPageSelected => _paged.Count > 0 && _paged.All(IsSelected);
+    private string PageSummary => _filtered.Count == 0 ? "No assignment leads" : $"Showing {((_page - 1) * PageSize) + 1}-{Math.Min(_page * PageSize, _filtered.Count)} of {_filtered.Count}";
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-octagon", "warning" => "bi-exclamation-triangle", "success" => "bi-check2-circle", _ => "bi-info-circle" };
+    private IEnumerable<AssignmentRuleDto> FilteredRules => _rules.Where(r => string.IsNullOrWhiteSpace(_search) || TextContains(r.RuleName, _search) || TextContains(r.EntityType, _search) || TextContains(r.AssignmentMethod, _search) || TextContains(r.Criteria, _search) || TextContains(r.AssignToTeam, _search) || TextContains(RuleTarget(r), _search)).OrderByDescending(r => r.IsActive).ThenByDescending(r => r.Priority).ThenBy(r => r.RuleName);
+    private string ActiveTabTitle => _activeTab switch { "workload" => "Producer workload", "rules" => "Routing rules", "history" => "Assignment workflow history", _ => "Priority assignment queue" };
+    private string ActiveTabDescription => _activeTab switch { "workload" => "Balance lead volume, hot lead count, stale items, and open premium by producer.", "rules" => "Maintain existing CRM assignment rules and simulate rule impact against live lead data.", "history" => "Recent assignment-sensitive lead changes derived from current CRM data.", _ => "Leads ranked by assignment importance using owner, score, premium, stage, age, and rule match signals." };
+
+    private IEnumerable<KpiModel> Metrics =>
+    [
+        new("Unassigned", _leads.Count(x => !x.AssignedToUserId.HasValue).ToString("N0", CultureInfo.CurrentCulture), "Needs producer ownership", "bi-person-x", "la-red", "unassigned"),
+        new("Hot", _leads.Count(x => x.Rating == "Hot" && x.IsOpen).ToString("N0", CultureInfo.CurrentCulture), "High score open leads", "bi-fire", "la-blue", "hot"),
+        new("Stale", _leads.Count(x => x.DaysSinceActivity > 14 && x.IsOpen).ToString("N0", CultureInfo.CurrentCulture), "No recent assignment movement", "bi-calendar-x", "la-purple", "stale"),
+        new("Open Premium", _leads.Where(x => x.IsOpen).Sum(x => x.EstPremium).ToString("C0", CultureInfo.CurrentCulture), "Pipeline needing coverage", "bi-cash-coin", "la-green", "pipeline"),
+        new("Active Rules", _rules.Count(x => x.IsActive).ToString("N0", CultureInfo.CurrentCulture), "Rules available for routing", "bi-diagram-2", "la-cyan", "rules")
+    ];
+
+    private IEnumerable<HistoryItem> HistoryItems => _leads.OrderByDescending(x => x.ModifiedDateUtc ?? x.CreatedDateUtc).Take(18).Select(x => new HistoryItem(x.AssignedToUserId.HasValue ? "bi-person-check" : "bi-person-x", x.AssignedToUserId.HasValue ? $"{x.FullName} assigned to {x.OwnerName}" : $"{x.FullName} is unassigned", $"{x.Stage} • {x.Source} • {(x.ModifiedDateUtc ?? x.CreatedDateUtc).ToLocalTime():MMM d, yyyy h:mm tt}"));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _currentUserId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Lead Assignment", "/crm/leads/assignment"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var leadsTask = Api.SearchLeadsAsync(_tenantId);
+            var usersTask = Api.SearchUsersAsync(_tenantId, pageSize: 250);
+            var rulesTask = Api.SearchAssignmentRulesAsync(_tenantId, pageSize: 250);
+            await Task.WhenAll(leadsTask, usersTask, rulesTask);
+
+            _users = usersTask.Result?.Items?.ToList() ?? [];
+            _ownerOptions = _users.Where(u => string.Equals(u.StatusCode, "Active", StringComparison.OrdinalIgnoreCase)).Select(u => new OwnerOption(u.UserId, DisplayUser(u))).Where(o => !string.IsNullOrWhiteSpace(o.Label)).OrderBy(o => o.Label).ToList();
+            var ownerLookup = _users.ToDictionary(u => u.UserId, DisplayUser);
+            _rules = rulesTask.Result?.Items?.ToList() ?? [];
+            _leads = leadsTask.Result?.Items?.Select(l => MapLead(l, ownerLookup)).ToList() ?? [];
+            _selectedLeads.RemoveAll(s => _leads.All(l => l.LeadId != s.LeadId));
+            _selectedLead = _selectedLead is null ? _leads.OrderByDescending(ImportanceScore).FirstOrDefault() : _leads.FirstOrDefault(x => x.LeadId == _selectedLead.LeadId) ?? _leads.OrderByDescending(ImportanceScore).FirstOrDefault();
+            RebuildWorkloads();
+            ApplyFilters(false);
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+            _leads = [];
+            _rules = [];
+            _workloads = [];
+            ApplyFilters(false);
+            await ShowToastAsync($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private LeadAssignmentRow MapLead(LeadDto dto, IReadOnlyDictionary<Guid, string> ownerLookup)
+    {
+        var score = Math.Clamp(dto.Score ?? 0, 0, 100);
+        var stage = NormalizeStage(dto.NurturingStageCode, dto.StatusCode);
+        return new LeadAssignmentRow
+        {
+            LeadId = dto.LeadId,
+            AssignedToUserId = dto.AssignedToUserId,
+            AccountId = dto.AccountId,
+            FirstName = dto.FirstName,
+            LastName = dto.LastName,
+            FullName = $"{dto.FirstName} {dto.LastName}".Trim(),
+            CompanyName = dto.AccountName ?? string.Empty,
+            Email = dto.Email ?? string.Empty,
+            Phone = dto.Phone ?? string.Empty,
+            Source = string.IsNullOrWhiteSpace(dto.SourceCode) ? "Inbound" : dto.SourceCode,
+            Stage = stage,
+            Rating = ScoreToRating(score, dto.PriorityCode),
+            Score = score,
+            EstPremium = dto.AnnualRevenue ?? 0,
+            OwnerName = dto.AssignedToUserId.HasValue && ownerLookup.TryGetValue(dto.AssignedToUserId.Value, out var owner) ? owner : "Unassigned",
+            Notes = dto.InterestedService,
+            CreatedDateUtc = dto.CreatedDateUtc,
+            ModifiedDateUtc = dto.ModifiedDateUtc,
+            QualifiedDate = dto.QualifiedDate
+        };
+    }
+
+    private void RebuildWorkloads()
+    {
+        var maxPremium = Math.Max(1, _leads.Where(l => l.IsOpen).GroupBy(l => l.AssignedToUserId ?? Guid.Empty).Select(g => g.Sum(l => l.EstPremium)).DefaultIfEmpty(1).Max());
+        _workloads = _ownerOptions.Select(o =>
+        {
+            var rows = _leads.Where(l => l.IsOpen && l.AssignedToUserId == o.UserId).ToList();
+            var premium = rows.Sum(l => l.EstPremium);
+            var capacity = Math.Min(100, rows.Count * 7 + rows.Count(l => l.Rating == "Hot") * 8 + (double)(premium / maxPremium) * 35);
+            return new WorkloadRow(o.UserId, o.Label, rows.Count, rows.Count(l => l.Rating == "Hot"), rows.Count(l => l.DaysSinceActivity > 14), premium, capacity, maxPremium == 0 ? 0 : (double)(premium / maxPremium) * 100);
+        }).OrderByDescending(w => w.OpenPremium).ThenByDescending(w => w.OpenCount).ToList();
+    }
+
+    private void ApplyFilters(bool resetPage = true)
+    {
+        IEnumerable<LeadAssignmentRow> query = _leads.Where(x => x.IsOpen || _kpiFilter == "rules");
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var term = _search.Trim();
+            query = query.Where(x => TextContains(x.FullName, term) || TextContains(x.CompanyName, term) || TextContains(x.Email, term) || TextContains(x.Phone, term) || TextContains(x.Source, term) || TextContains(x.Stage, term) || TextContains(x.OwnerName, term) || TextContains(x.Notes, term) || TextContains(BestRuleName(x), term));
+        }
+        if (!string.IsNullOrWhiteSpace(_stageFilter)) query = query.Where(x => x.Stage == _stageFilter);
+        if (_ownerFilter == "unassigned") query = query.Where(x => !x.AssignedToUserId.HasValue);
+        else if (Guid.TryParse(_ownerFilter, out var ownerId)) query = query.Where(x => x.AssignedToUserId == ownerId);
+        query = _kpiFilter switch { "unassigned" => query.Where(x => !x.AssignedToUserId.HasValue), "hot" => query.Where(x => x.Rating == "Hot"), "stale" => query.Where(x => x.DaysSinceActivity > 14), "pipeline" => query.Where(x => x.EstPremium > 0), _ => query };
+        query = _sortMode switch { "score" => query.OrderByDescending(x => x.Score), "premium" => query.OrderByDescending(x => x.EstPremium), "stale" => query.OrderByDescending(x => x.DaysSinceActivity), "created" => query.OrderByDescending(x => x.CreatedDateUtc), _ => query.OrderByDescending(ImportanceScore).ThenByDescending(x => x.Score).ThenByDescending(x => x.EstPremium) };
+        _filtered = query.ToList();
+        if (resetPage) _page = 1;
+        _page = Math.Clamp(_page, 1, TotalPages);
+        _paged = _filtered.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+    }
+
+    private void SetKpiFilter(string filter) { _kpiFilter = _kpiFilter == filter ? string.Empty : filter; if (filter == "rules") _activeTab = "rules"; ApplyFilters(); }
+    private void SetTab(string tab) { _activeTab = tab; _selectedRule = null; }
+    private void ShowQueue() => SetTab("queue");
+    private void ShowWorkload() => SetTab("workload");
+    private void ShowRules() => SetTab("rules");
+    private void ShowUnassigned() { _activeTab = "queue"; _kpiFilter = "unassigned"; ApplyFilters(); }
+    private void OnSearchChanged(BlazorChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; ApplyFilters(); }
+    private void OnStageChanged(BlazorChangeEventArgs e) { _stageFilter = e.Value?.ToString() ?? string.Empty; ApplyFilters(); }
+    private void OnOwnerChanged(BlazorChangeEventArgs e) { _ownerFilter = e.Value?.ToString() ?? string.Empty; ApplyFilters(); }
+    private void OnSortChanged(BlazorChangeEventArgs e) { _sortMode = e.Value?.ToString() ?? "importance"; ApplyFilters(); }
+    private void PreviousPage() { if (_page > 1) { _page--; ApplyFilters(false); } }
+    private void NextPage() { if (_page < TotalPages) { _page++; ApplyFilters(false); } }
+    private void SelectLead(LeadAssignmentRow lead) { _selectedLead = lead; _selectedRule = null; }
+    private void SelectRule(AssignmentRuleDto rule) { _selectedRule = rule; _selectedLead = null; }
+    private void FilterByOwner(Guid ownerId) { _activeTab = "queue"; _ownerFilter = ownerId.ToString(); ApplyFilters(); }
+    private bool IsSelected(LeadAssignmentRow lead) => _selectedLeads.Any(x => x.LeadId == lead.LeadId);
+    private void ToggleLead(LeadAssignmentRow lead) { if (IsSelected(lead)) _selectedLeads.RemoveAll(x => x.LeadId == lead.LeadId); else _selectedLeads.Add(lead); }
+    private void TogglePageSelection(BlazorChangeEventArgs e) { var selected = string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase); if (selected) { foreach (var lead in _paged.Where(x => !IsSelected(x))) _selectedLeads.Add(lead); } else { _selectedLeads.RemoveAll(x => _paged.Any(p => p.LeadId == x.LeadId)); } }
+    private void ClearSelection() => _selectedLeads.Clear();
+    private void NavigateToLead(LeadAssignmentRow lead) => Nav.NavigateTo($"/crm/leads/{lead.LeadId}");
+
+    private void OpenAssign()
+    {
+        _assignForm = new AssignFormModel { Stage = "Contacted", LogWorkflow = true, OwnerId = _ownerOptions.FirstOrDefault()?.Value ?? string.Empty, Note = "Assigned from Lead Assignment Command Center." };
+        _showAssign = true;
+    }
+
+    private void OpenAssignTo(Guid ownerId)
+    {
+        if (_selectedLeads.Count == 0)
+        {
+            _selectedLeads = _filtered.Where(x => !x.AssignedToUserId.HasValue).Take(5).ToList();
+        }
+        _assignForm = new AssignFormModel { Stage = "Contacted", LogWorkflow = true, OwnerId = ownerId.ToString(), Note = "Assigned based on producer workload capacity." };
+        _showAssign = true;
+    }
+
+    private void OpenLeadAssign(LeadAssignmentRow lead) { _selectedLeads = [lead]; OpenAssign(); }
+    private void CloseAssign() => _showAssign = false;
+    private void OpenCreateRule() { _ruleEditId = null; _ruleForm = new RuleFormModel { EntityType = "Lead", AssignmentMethod = "Least Loaded", Priority = 100, IsActive = true }; _showRuleForm = true; }
+    private void OpenEditRule(AssignmentRuleDto rule) { _ruleEditId = rule.AssignmentRuleId; _ruleForm = new RuleFormModel { RuleName = rule.RuleName, EntityType = rule.EntityType, AssignmentMethod = rule.AssignmentMethod ?? "Manual", Criteria = rule.Criteria ?? string.Empty, AssignToUserId = rule.AssignToUserId?.ToString() ?? string.Empty, AssignToTeam = rule.AssignToTeam ?? string.Empty, Priority = rule.Priority, Description = rule.Description ?? string.Empty, IsActive = rule.IsActive }; _showRuleForm = true; }
+    private void CloseRuleForm() => _showRuleForm = false;
+
+    private void ConfirmAssign() => OpenConfirm(new("Assign leads", $"Assign {_selectedLeads.Count} selected lead(s)?", "Assign", "um-btn-primary", "bi-person-check", "warning", AssignSelectedAsync));
+    private void MarkSelectedContacted() => OpenConfirm(new("Mark contacted", $"Move {_selectedLeads.Count} selected lead(s) to Contacted?", "Mark Contacted", "um-btn-primary", "bi-telephone-outbound", "warning", async () => { foreach (var lead in _selectedLeads.ToList()) await UpdateLeadAssignmentAsync(lead, lead.AssignedToUserId, "Contacted", lead.Notes); _selectedLeads.Clear(); await LoadAsync(); await ShowToastAsync("Selected leads marked contacted.", "success"); }));
+    private void MarkLeadContacted(LeadAssignmentRow lead) => OpenConfirm(new("Mark contacted", $"Move {lead.FullName} to Contacted?", "Mark Contacted", "um-btn-primary", "bi-telephone-outbound", "warning", async () => { await UpdateLeadAssignmentAsync(lead, lead.AssignedToUserId, "Contacted", lead.Notes); await LoadAsync(); await ShowToastAsync("Lead marked contacted.", "success"); }));
+    private void ConfirmToggleRule(AssignmentRuleDto rule) => OpenConfirm(new(rule.IsActive ? "Deactivate rule" : "Activate rule", $"{(rule.IsActive ? "Deactivate" : "Activate")} {rule.RuleName}?", rule.IsActive ? "Deactivate" : "Activate", "um-btn-primary", rule.IsActive ? "bi-slash-circle" : "bi-check-circle", "warning", () => ToggleRuleAsync(rule)));
+    private void ConfirmDeleteRule(AssignmentRuleDto rule) => OpenConfirm(new("Remove assignment rule", $"Remove {rule.RuleName}?", "Remove", "um-btn-danger", "bi-trash3", "danger", async () => { await Api.DeleteAssignmentRuleAsync(rule.AssignmentRuleId); await LoadAsync(); await ShowToastAsync("Assignment rule removed.", "success"); }));
+
+    private async Task AssignSelectedAsync()
+    {
+        if (!Guid.TryParse(_assignForm.OwnerId, out var ownerId)) { await ShowToastAsync("Select an owner.", "warning"); return; }
+        foreach (var lead in _selectedLeads.ToList())
+        {
+            var notes = string.IsNullOrWhiteSpace(_assignForm.Note) ? lead.Notes : $"{_assignForm.Note} {lead.Notes}".Trim();
+            await UpdateLeadAssignmentAsync(lead, ownerId, _assignForm.Stage, notes);
+            if (_assignForm.LogWorkflow)
+            {
+                await Api.CreateLeadCommunicationAsync(lead.LeadId, new CreateLeadCommunicationRequest { TenantId = _tenantId, LeadId = lead.LeadId, Channel = "Workflow", Subject = "Lead assigned", Preview = $"Lead assigned to {OwnerName(ownerId)} from Assignment Command Center.", SentByUserId = _currentUserId, SentAt = DateTime.UtcNow, Opened = true, Clicked = false });
+            }
+        }
+        _showAssign = false;
+        _selectedLeads.Clear();
+        await LoadAsync();
+        await ShowToastAsync("Lead assignment completed.", "success");
+    }
+
+    private void AutoBalanceSelected()
+    {
+        if (_selectedLeads.Count == 0) { _ = ShowToastAsync("Select leads to auto-balance.", "warning"); return; }
+        OpenConfirm(new("Auto-balance leads", $"Assign {_selectedLeads.Count} lead(s) to lowest workload producers?", "Auto-balance", "um-btn-primary", "bi-shuffle", "warning", AutoBalanceSelectedAsync));
+    }
+
+    private async Task AutoBalanceSelectedAsync()
+    {
+        var owners = _workloads.OrderBy(w => w.CapacityPercent).ThenBy(w => w.OpenPremium).Where(w => w.OwnerId != Guid.Empty).ToList();
+        if (owners.Count == 0) { await ShowToastAsync("No active owners available.", "warning"); return; }
+        var index = 0;
+        foreach (var lead in _selectedLeads.ToList())
+        {
+            var owner = owners[index % owners.Count];
+            await UpdateLeadAssignmentAsync(lead, owner.OwnerId, lead.Stage == "New" ? "Contacted" : lead.Stage, $"Auto-balanced to {owner.OwnerName}. {lead.Notes}".Trim());
+            index++;
+        }
+        _selectedLeads.Clear();
+        await LoadAsync();
+        await ShowToastAsync("Auto-balance completed.", "success");
+    }
+
+    private async Task UpdateLeadAssignmentAsync(LeadAssignmentRow lead, Guid? ownerId, string stage, string? notes)
+    {
+        await Api.UpdateLeadAsync(lead.LeadId, new UpdateLeadRequest { LeadId = lead.LeadId, AccountName = lead.CompanyName, FirstName = lead.FirstName, LastName = lead.LastName, Email = lead.Email, Phone = lead.Phone, InterestedService = notes, AnnualRevenue = lead.EstPremium, Score = lead.Score, PriorityCode = lead.Rating, SourceCode = lead.Source, NurturingStageCode = stage, StatusCode = StageToStatusCode(stage), QualifiedDate = stage == "Qualified" ? DateTime.UtcNow : lead.QualifiedDate, AccountId = lead.AccountId, AssignedToUserId = ownerId, UpdatedByUserId = _currentUserId });
+    }
+
+    private async Task SaveRuleAsync()
+    {
+        _busy = true;
+        try
+        {
+            var userId = Guid.TryParse(_ruleForm.AssignToUserId, out var parsedUserId) ? parsedUserId : (Guid?)null;
+            if (_ruleEditId.HasValue)
+            {
+                await Api.UpdateAssignmentRuleAsync(_ruleEditId.Value, new UpdateAssignmentRuleRequest(_ruleForm.RuleName.Trim(), _ruleForm.EntityType.Trim(), _ruleForm.AssignmentMethod, _ruleForm.Criteria, userId, _ruleForm.AssignToTeam, _ruleForm.Priority, _ruleForm.Description, _ruleForm.IsActive));
+                await ShowToastAsync("Assignment rule saved.", "success");
+            }
+            else
+            {
+                await Api.CreateAssignmentRuleAsync(new CreateAssignmentRuleRequest(_tenantId, _ruleForm.RuleName.Trim(), _ruleForm.EntityType.Trim(), _ruleForm.AssignmentMethod, _ruleForm.Criteria, userId, _ruleForm.AssignToTeam, _ruleForm.Priority, _ruleForm.Description));
+                await ShowToastAsync("Assignment rule created.", "success");
+            }
+            _showRuleForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Save failed: {ex.Message}", "danger");
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task ToggleRuleAsync(AssignmentRuleDto rule)
+    {
+        await Api.UpdateAssignmentRuleAsync(rule.AssignmentRuleId, new UpdateAssignmentRuleRequest(rule.RuleName, rule.EntityType, rule.AssignmentMethod, rule.Criteria, rule.AssignToUserId, rule.AssignToTeam, rule.Priority, rule.Description, !rule.IsActive));
+        await LoadAsync();
+        await ShowToastAsync(rule.IsActive ? "Assignment rule deactivated." : "Assignment rule activated.", "success");
+    }
+
+    private void SimulateRule(AssignmentRuleDto rule)
+    {
+        _activeTab = "queue";
+        _kpiFilter = string.Empty;
+        var matches = _leads.Where(l => RuleMatchesLead(rule, l)).ToList();
+        _filtered = matches.OrderByDescending(ImportanceScore).ToList();
+        _page = 1;
+        _paged = _filtered.Take(PageSize).ToList();
+        _selectedRule = rule;
+        _ = ShowToastAsync($"{matches.Count} lead(s) match {rule.RuleName}.", "info");
+    }
+
+    private void OpenConfirm(ConfirmAction action) { _confirmAction = action; _showConfirm = true; }
+    private void CancelConfirm() { if (!_busy) { _showConfirm = false; _confirmAction = null; } }
+    private async Task ExecuteConfirmedAsync()
+    {
+        if (_confirmAction is null) return;
+        _busy = true;
+        try { var action = _confirmAction; await action.ExecuteAsync(); _showConfirm = false; _confirmAction = null; }
+        catch (Exception ex) { await ShowToastAsync($"Action failed: {ex.Message}", "danger"); }
+        finally { _busy = false; }
+    }
+
+    private int ImportanceScore(LeadAssignmentRow lead)
+    {
+        var score = 0;
+        if (!lead.AssignedToUserId.HasValue) score += 35;
+        if (lead.Rating == "Hot") score += 25;
+        if (lead.Score >= 80) score += 15;
+        if (lead.EstPremium >= 25000) score += 12;
+        if (lead.DaysSinceActivity > 14) score += 10;
+        if (_rules.Any(r => r.IsActive && RuleMatchesLead(r, lead))) score += 8;
+        if (lead.Stage == "New") score += 5;
+        return Math.Min(score, 100);
+    }
+
+    private bool RuleMatchesLead(AssignmentRuleDto rule, LeadAssignmentRow lead)
+    {
+        if (!rule.IsActive || !string.Equals(rule.EntityType, "Lead", StringComparison.OrdinalIgnoreCase)) return false;
+        if (string.IsNullOrWhiteSpace(rule.Criteria)) return true;
+        var criteria = rule.Criteria;
+        return TextContains(criteria, lead.Source) || TextContains(criteria, lead.Stage) || TextContains(criteria, lead.Rating) || TextContains(criteria, lead.CompanyName) || TextContains(criteria, lead.Notes) || (lead.Score >= 80 && TextContains(criteria, "score")) || (lead.EstPremium >= 25000 && (TextContains(criteria, "premium") || TextContains(criteria, "revenue")));
+    }
+
+    private string BestRuleName(LeadAssignmentRow lead) => _rules.Where(r => RuleMatchesLead(r, lead)).OrderByDescending(r => r.Priority).Select(r => r.RuleName).FirstOrDefault() ?? "Manual review";
+    private int RuleMatchCount(AssignmentRuleDto rule) => _leads.Count(l => l.IsOpen && RuleMatchesLead(rule, l));
+    private string RuleTarget(AssignmentRuleDto rule) => rule.AssignToUserId.HasValue ? OwnerName(rule.AssignToUserId.Value) : Safe(rule.AssignToTeam, "Manual queue");
+    private string OwnerName(Guid userId) => _ownerOptions.FirstOrDefault(x => x.UserId == userId)?.Label ?? "Selected owner";
+    private static string DisplayUser(UserDto user) => string.IsNullOrWhiteSpace(user.DisplayName) ? (string.IsNullOrWhiteSpace(user.FullName) ? user.UserName : user.FullName) : user.DisplayName;
+    private static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private static bool TextContains(string? value, string? term) => !string.IsNullOrWhiteSpace(value) && !string.IsNullOrWhiteSpace(term) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static string NormalizeStage(string? stage, int statusCode) => !string.IsNullOrWhiteSpace(stage) ? stage.Trim() switch { "Closed" => "Lost", "Won" => "Converted", var s => s } : statusCode switch { 2 => "Contacted", 3 => "Qualified", 4 => "Converted", 5 => "Lost", _ => "New" };
+    private static string ScoreToRating(int score, string? priority = null) => string.Equals(priority, "Hot", StringComparison.OrdinalIgnoreCase) || score >= 80 ? "Hot" : score >= 50 ? "Warm" : "Cold";
+    private static int StageToStatusCode(string stage) => stage switch { "Contacted" => 2, "Qualified" => 3, "Converted" => 4, "Lost" => 5, _ => 1 };
+    private string MetricCardClass(KpiModel metric) => $"la-kpi-card {metric.Tone} {(_kpiFilter == metric.Filter ? "la-kpi-card-active" : string.Empty)}";
+    private string TabClass(string id) => _activeTab == id ? "la-view-btn la-view-btn-active" : "la-view-btn";
+    private string LeadRowClass(LeadAssignmentRow lead) => lead.LeadId == _selectedLead?.LeadId ? "la-row-selected" : string.Empty;
+    private static string SourceIcon(string source) => source switch { "Referral" => "bi-share-fill", "Website" => "bi-globe", "Cold Call" => "bi-telephone-fill", "Social" => "bi-instagram", "Email" => "bi-envelope-fill", "Event" => "bi-calendar-event-fill", "Partner" => "bi-handshake-fill", _ => "bi-inbox-fill" };
+    private static string ScoreTone(int score) => score >= 80 ? "la-score-hot" : score >= 50 ? "la-score-warm" : "la-score-cold";
+    private static string ImportanceTone(LeadAssignmentRow lead) => !lead.AssignedToUserId.HasValue || lead.Score >= 80 ? "la-score-hot" : lead.DaysSinceActivity > 14 ? "la-score-warm" : "la-score-cold";
+    private static string StageTone(string stage) => stage is "Converted" ? "la-status-active" : stage is "Lost" ? "la-status-inactive" : "la-order-pill";
+    private static string WorkloadTone(WorkloadRow row) => row.CapacityPercent >= 95 ? "la-workload-over" : row.CapacityPercent >= 75 ? "la-workload-high" : row.CapacityPercent >= 45 ? "la-workload-med" : "la-workload-low";
+    private static string AvatarColor(string name) { var colors = new[] { "la-av1", "la-av2", "la-av3", "la-av4", "la-av5", "la-av6" }; return colors[Math.Abs(name.GetHashCode()) % colors.Length]; }
+    private static string Initials(string name) { var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length > 0 ? name[..1] : "?"; }
+    private async Task ShowToastAsync(string message, string kind = "info") { _toastCts?.Cancel(); _toastCts?.Dispose(); _toastCts = new CancellationTokenSource(); _toastMessage = message.Length <= 110 ? message : $"{message[..107]}..."; _toastKind = kind.Contains("danger", StringComparison.OrdinalIgnoreCase) || kind.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : kind.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : kind.Contains("success", StringComparison.OrdinalIgnoreCase) ? "success" : "info"; _toastVisible = true; StateHasChanged(); try { await Task.Delay(_toastKind == "danger" ? 10000 : 6500, _toastCts.Token); _toastVisible = false; await InvokeAsync(StateHasChanged); } catch (TaskCanceledException) { } }
+    private void HideToast() { _toastCts?.Cancel(); _toastVisible = false; }
+
+    private sealed record TabDef(string Id, string Label, string Icon);
+    private sealed record LabelValue(string Value, string Label);
+    private sealed record OwnerOption(Guid UserId, string Label) { public string Value => UserId.ToString(); }
+    private sealed record KpiModel(string Label, string Value, string Caption, string Icon, string Tone, string Filter);
+    private sealed record ConfirmAction(string Title, string Message, string ButtonText, string ButtonClass, string Icon, string Kind, Func<Task> ExecuteAsync);
+    private sealed record HistoryItem(string Icon, string Title, string Description);
+    private sealed record WorkloadRow(Guid OwnerId, string OwnerName, int OpenCount, int HotCount, int StaleCount, decimal OpenPremium, double CapacityPercent, double WidthPercent)
+    {
+        public string Status => CapacityPercent >= 95 ? "Overloaded" : CapacityPercent >= 75 ? "High" : CapacityPercent >= 45 ? "Balanced" : "Available";
+    }
+
+    private sealed class LeadAssignmentRow
+    {
+        public Guid LeadId { get; set; }
+        public Guid? AssignedToUserId { get; set; }
+        public Guid? AccountId { get; set; }
+        public string FirstName { get; set; } = string.Empty;
+        public string LastName { get; set; } = string.Empty;
+        public string FullName { get; set; } = string.Empty;
+        public string CompanyName { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+        public string Phone { get; set; } = string.Empty;
+        public string Source { get; set; } = string.Empty;
+        public string Stage { get; set; } = "New";
+        public string Rating { get; set; } = "Warm";
+        public int Score { get; set; }
+        public decimal EstPremium { get; set; }
+        public string OwnerName { get; set; } = "Unassigned";
+        public string? Notes { get; set; }
+        public DateTime CreatedDateUtc { get; set; }
+        public DateTime? ModifiedDateUtc { get; set; }
+        public DateTime? QualifiedDate { get; set; }
+        public bool IsOpen => Stage is not "Converted" and not "Lost";
+        public int DaysSinceActivity => (int)(DateTime.UtcNow - (ModifiedDateUtc ?? CreatedDateUtc)).TotalDays;
+    }
+
+    private sealed class AssignFormModel
+    {
+        [Required]
+        public string OwnerId { get; set; } = string.Empty;
+
+        [Required, StringLength(50)]
+        public string Stage { get; set; } = "Contacted";
+
+        [StringLength(1000)]
+        public string Note { get; set; } = string.Empty;
+
+        public bool LogWorkflow { get; set; } = true;
+    }
+
+    private sealed class RuleFormModel
+    {
+        [Required, StringLength(200)]
+        public string RuleName { get; set; } = string.Empty;
+
+        [Required, StringLength(80)]
+        public string EntityType { get; set; } = "Lead";
+
+        [Required, StringLength(80)]
+        public string AssignmentMethod { get; set; } = "Least Loaded";
+
+        [StringLength(1000)]
+        public string? Criteria { get; set; }
+
+        [StringLength(100)]
+        public string AssignToUserId { get; set; } = string.Empty;
+
+        [StringLength(200)]
+        public string? AssignToTeam { get; set; }
+
+        [Range(0, int.MaxValue)]
+        public int Priority { get; set; } = 100;
+
+        [StringLength(500)]
+        public string? Description { get; set; }
+
+        public bool IsActive { get; set; } = true;
+    }
+}

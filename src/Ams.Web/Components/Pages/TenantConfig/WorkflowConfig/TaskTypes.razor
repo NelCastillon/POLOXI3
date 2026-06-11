@@ -1,32 +1,785 @@
-﻿@page "/tenant/workflows/task-types"
+@page "/tenant/workflows/task-types"
+@using System.ComponentModel.DataAnnotations
+@using Microsoft.AspNetCore.Components.Forms
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Operations
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
-@using Ams.Application.Common.Dtos
-@using Ams.Application.Features.Operations
 
-<PageTitle>Task Types â€” Workflow & SLA</PageTitle>
-<AppPageHeader Title="Task Types" Subtitle="Configure tenant task types used by the Task Board and workflow operations" Icon="bi-tags"><Actions><button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> New Task Type</button><button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button></Actions></AppPageHeader>
-<div class="pc-kpi-strip"><div class="pc-kpi-card @(_activeFilter is null ? "pc-kpi-card--active" : "")" @onclick="() => SetFilter(null)" title="Show all task types"><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-tags-fill"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total</div></div></div><div class="pc-kpi-card @(_activeFilter == "Active" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Active")' title="Show active task types"><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsActive)</div><div class="pc-kpi-label">Active</div></div></div><div class="pc-kpi-card @(_activeFilter == "Inactive" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Inactive")' title="Show inactive task types"><span class="pc-kpi-icon pc-kpi-icon--warning"><i class="bi bi-pause-circle-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x => !x.IsActive)</div><div class="pc-kpi-label">Inactive</div></div></div></div>
-<AppFilterPanel @bind-SearchValue="_searchTerm" OnSearch="OnSearchAsync" SearchPlaceholder="Search task types..." />
-@if (_loadError is not null) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError</div> }
-<div class="um-grid-card">@if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loadingâ€¦</span></div> }<SfGrid TValue="TaskTypeDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52"><GridEvents TValue="TaskTypeDto" RowSelected="OnRowSelected" /><GridPageSettings PageSize="25" PageSizes="@(new[] { 25, 50, 100 })" /><GridColumns><GridColumn Field="TaskTypeCode" HeaderText="Code" Width="160" /><GridColumn Field="TaskTypeName" HeaderText="Task Type" Width="240" /><GridColumn Field="Description" HeaderText="Description" Width="320" /><GridColumn Field="SortOrder" HeaderText="Sort" Width="100" TextAlign="TextAlign.Right" /><GridColumn Field="IsActive" HeaderText="Active" Width="100" DisplayAsCheckBox="true" /><GridColumn HeaderText="Actions" Width="120" TextAlign="TextAlign.Center"><Template>@{ var item = (TaskTypeDto)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(item)" @onclick:stopPropagation="true" title="Edit"><i class="bi bi-pencil"></i></button><button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(item)" @onclick:stopPropagation="true" title="Delete"><i class="bi bi-trash"></i></button></Template></GridColumn></GridColumns></SfGrid></div>
-<SfDialog @bind-Visible="_showForm" Width="560px" IsModal="true" ShowCloseIcon="false"><DialogEvents Closed="ResetForm" /><DialogContent><div class="um-modal-header"><i class="bi bi-tags"></i><span>@(_editId.HasValue ? "Edit Task Type" : "New Task Type")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button></div><EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator /><div class="um-modal-body"><div class="um-form-grid"><div class="um-field"><label>Code <span class="text-danger">*</span></label><InputText @bind-Value="_form.TaskTypeCode" class="um-input" /></div><div class="um-field"><label>Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.TaskTypeName" class="um-input" /></div><div class="um-field"><label>Sort Order</label><InputNumber @bind-Value="_form.SortOrder" class="um-input" /></div><div class="um-field"><label>Active</label><InputCheckbox @bind-Value="_form.IsActive" /></div><div class="um-field um-field--full"><label>Description</label><InputTextArea @bind-Value="_form.Description" class="um-input" rows="3" /></div></div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button></div></EditForm></DialogContent></SfDialog>
-@if (_showDelete && _deleteTarget is not null) { <div class="mt-modal-backdrop" @onclick="() => _showDelete = false"><div class="um-confirm-dialog mt-confirm" @onclick:stopPropagation="true"><div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div><div class="um-confirm-title">Delete task type?</div><div class="um-confirm-text">This will remove <strong>@_deleteTarget.TaskTypeName</strong>.</div><div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div></div></div> }
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" /><style>@@keyframes um-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }</style>
+<PageTitle>Task Type Command Center — Workflow & SLA</PageTitle>
+
+<div class="tt-page">
+    <section class="tt-hero">
+        <div class="tt-hero__content">
+            <div class="tt-hero-left">
+                <span class="tt-hero-icon"><i class="bi bi-tags" aria-hidden="true"></i></span>
+                <div class="tt-hero-title">
+                    <div class="tt-hero__eyebrow">Enterprise workflow configuration</div>
+                    <div class="tt-title-row">
+                        <h1>Task Type Command Center</h1>
+                        <div class="tt-hero__meta">
+                            <span><i class="bi bi-tags" aria-hidden="true"></i>@_items.Count types</span>
+                            <span><i class="bi bi-check-circle" aria-hidden="true"></i>@_items.Count(x => x.IsActive) active</span>
+                            <span><i class="bi bi-exclamation-octagon" aria-hidden="true"></i>@_items.Count(NeedsGovernance) needs review</span>
+                            <span><i class="bi bi-diagram-3" aria-hidden="true"></i>@_items.Count(IsWorkflowReady) workflow ready</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <p>Manage the task taxonomy that powers service operations, workflow routing, task boards, SLA reporting, and automation readiness.</p>
+        </div>
+        <div class="tt-hero__actions">
+            <button type="button" class="tt-btn tt-btn--light" @onclick="RefreshAsync" disabled="@_loading">
+                <i class="bi bi-arrow-clockwise @(_loading ? "tt-spin" : null)" aria-hidden="true"></i> Refresh
+            </button>
+            <button type="button" class="tt-btn tt-btn--primary" @onclick="OpenCreate">
+                <i class="bi bi-plus-circle" aria-hidden="true"></i> New Task Type
+            </button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger tt-alert" style="border-left: 4px solid #dc3545; animation: tt-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span>@_loadError</span>
+        </div>
+    }
+
+    <section class="tt-kpi-strip" aria-label="Task type KPIs">
+        @KpiCard("all", "Total Types", _items.Count.ToString(), "All configured task types", "bi-tags", "blue")
+        @KpiCard("active", "Active", _items.Count(x => x.IsActive).ToString(), "Available for workflow use", "bi-check-circle", "green")
+        @KpiCard("review", "Needs Review", _items.Count(NeedsGovernance).ToString(), "Missing description, inactive, or duplicate sort priority", "bi-exclamation-octagon", "red")
+        @KpiCard("inactive", "Inactive", _items.Count(x => !x.IsActive).ToString(), "Retired or disabled task types", "bi-pause-circle", "amber")
+        @KpiCard("ready", "Workflow Ready", _items.Count(IsWorkflowReady).ToString(), "Active with clear description and ordered priority", "bi-diagram-3", "purple")
+        @KpiCard("recent", "Recently Updated", _items.Count(IsRecentlyTouched).ToString(), "Created or changed in the last 30 days", "bi-clock-history", "cyan")
+    </section>
+
+    <section class="tt-workflows" aria-label="Task type workflows">
+        @WorkflowButton("Governance review", "Prioritize incomplete or inactive task taxonomy", "bi-shield-exclamation", async () => { SetDashboardFocus("review", "importance"); await Task.CompletedTask; })
+        @WorkflowButton("Routing readiness", "Show active task types ready for workflow rules", "bi-diagram-3", async () => { SetDashboardFocus("ready", "priority"); await Task.CompletedTask; })
+        @WorkflowButton("Sort order audit", "Find duplicates and gaps in execution order", "bi-sort-numeric-down", async () => { SetDashboardFocus("sort", "sort"); await Task.CompletedTask; })
+        @WorkflowButton("Retirement queue", "Review inactive task types before cleanup", "bi-archive", async () => { SetDashboardFocus("inactive", "updated"); await Task.CompletedTask; })
+        @WorkflowButton("Configuration sync", "Reload task types from the API source of truth", "bi-arrow-repeat", RefreshAsync)
+    </section>
+
+    <section class="tt-filter-panel" aria-label="Task type filters">
+        <div class="tt-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input type="search"
+                   placeholder="Search code, task type, description, readiness, or status…"
+                   aria-label="Search task types"
+                   value="@_searchTerm"
+                   @oninput="@(e => OnSearchInput(e.Value?.ToString()))" />
+        </div>
+        <div class="tt-filter-grid">
+            <label>
+                <span>Status</span>
+                <select class="form-select" @bind="_statusFilter" @bind:after="ApplyFilters">
+                    <option value="">All statuses</option>
+                    <option value="Active">Active</option>
+                    <option value="Inactive">Inactive</option>
+                </select>
+            </label>
+            <label>
+                <span>Readiness</span>
+                <select class="form-select" @bind="_readinessFilter" @bind:after="ApplyFilters">
+                    <option value="">All readiness</option>
+                    <option value="Ready">Ready</option>
+                    <option value="Needs Review">Needs Review</option>
+                    <option value="Inactive">Inactive</option>
+                </select>
+            </label>
+            <label>
+                <span>Priority Band</span>
+                <select class="form-select" @bind="_priorityFilter" @bind:after="ApplyFilters">
+                    <option value="">All priorities</option>
+                    <option value="Primary">Primary</option>
+                    <option value="Standard">Standard</option>
+                    <option value="Backlog">Backlog</option>
+                </select>
+            </label>
+            <label>
+                <span>Sort</span>
+                <select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters">
+                    <option value="importance">Importance</option>
+                    <option value="priority">Sort priority</option>
+                    <option value="name">Name</option>
+                    <option value="updated">Recently updated</option>
+                    <option value="created">Newest</option>
+                </select>
+            </label>
+        </div>
+        <button type="button" class="tt-btn tt-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)">
+            <i class="bi bi-x-lg" aria-hidden="true"></i> Reset
+        </button>
+    </section>
+
+    <nav class="tt-tabs" aria-label="Task type views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="tt-tab @(_activeTab == tab.Key ? "tt-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </nav>
+
+    <main class="tt-dashboard">
+        <section class="tt-main-card">
+            <div class="tt-card-header">
+                <div>
+                    <span class="tt-section-kicker">@ActiveViewTitle</span>
+                    <h2>@FilteredTaskTypes.Count() task types</h2>
+                    <p>Ranked by enterprise importance: active status, workflow readiness, description quality, duplicate sort order, and recency.</p>
+                </div>
+                <div class="tt-card-actions">
+                    @if (_selectedTaskTypes.Count > 0)
+                    {
+                        <span class="tt-sel-count">@_selectedTaskTypes.Count selected</span>
+                        <button type="button" class="tt-btn tt-btn--ghost" @onclick="() => ConfirmBulkStatus(true)"><i class="bi bi-check-circle" aria-hidden="true"></i> Activate</button>
+                        <button type="button" class="tt-btn tt-btn--ghost" @onclick="() => ConfirmBulkStatus(false)"><i class="bi bi-pause-circle" aria-hidden="true"></i> Deactivate</button>
+                        <button type="button" class="tt-btn tt-btn--danger-ghost" @onclick="ConfirmBulkDelete"><i class="bi bi-trash3" aria-hidden="true"></i> Remove</button>
+                    }
+                    <button type="button" class="tt-btn tt-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Prev</button>
+                    <span class="tt-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="tt-btn tt-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="tt-loading"><span class="tt-spinner"></span> Loading task types…</div>
+            }
+            else if (!FilteredTaskTypes.Any())
+            {
+                <div class="tt-empty">
+                    <i class="bi bi-tags" aria-hidden="true"></i>
+                    <strong>No task types found</strong>
+                    <span>Adjust the active tab, KPI, search, or filters.</span>
+                </div>
+            }
+            else if (_activeTab == "matrix")
+            {
+                <div class="tt-matrix-grid">
+                    @foreach (var group in PriorityGroups)
+                    {
+                        <article class="tt-matrix-card">
+                            <div class="tt-matrix-icon"><i class="bi @group.Icon" aria-hidden="true"></i></div>
+                            <div class="tt-matrix-meta">
+                                <h3>@group.Name</h3>
+                                <p>@group.Count types • @group.Active active • @group.NeedsReview need review</p>
+                                <div class="tt-mini-bar"><span style="width:@group.Percent%"></span></div>
+                            </div>
+                            <button type="button" class="tt-btn tt-btn--ghost" @onclick="() => FilterByPriority(group.Name)">Open</button>
+                        </article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="tt-table-wrap">
+                    <table class="tt-table">
+                        <thead>
+                            <tr>
+                                <th class="tt-check-col"><input type="checkbox" checked="@AllPageSelected" @onchange="ToggleSelectAllPage" aria-label="Select all task types on page" /></th>
+                                <th>Importance</th>
+                                <th>Task Type</th>
+                                <th>Status</th>
+                                <th>Readiness</th>
+                                <th>Priority</th>
+                                <th>Sort</th>
+                                <th>Updated</th>
+                                <th class="tt-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in PagedTaskTypes)
+                            {
+                                <tr class="@(_selected?.TaskTypeId == item.TaskTypeId ? "tt-row tt-row--selected" : "tt-row")" @onclick="() => SelectRow(item)">
+                                    <td class="tt-check-col" @onclick:stopPropagation="true">
+                                        <input type="checkbox" checked="@IsSelected(item)" @onchange="() => ToggleSelect(item)" aria-label="Select task type" />
+                                    </td>
+                                    <td>@ImportanceBadge(item)</td>
+                                    <td>
+                                        <div class="tt-type-cell">
+                                            <div class="tt-avatar" style="@AvatarStyle(item.TaskTypeName)" aria-hidden="true">@Initials(item.TaskTypeName)</div>
+                                            <div class="tt-type-meta">
+                                                <button type="button" class="tt-link-button" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)">@item.TaskTypeName</button>
+                                                <small>@item.TaskTypeCode • @Safe(item.Description, "No description")</small>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>@StatusBadge(item)</td>
+                                    <td>@ReadinessBadge(item)</td>
+                                    <td><span class="tt-pill @PriorityBadgeClass(item)">@PriorityBand(item)</span></td>
+                                    <td><span class="tt-date">@item.SortOrder</span></td>
+                                    <td><span class="tt-date" title="@TouchedDate(item).ToString("f")">@FormatRelative(TouchedDate(item))</span></td>
+                                    <td class="tt-actions-col">
+                                        <button type="button" class="tt-icon-btn" title="Open action menu" @onclick:stopPropagation="true" @onclick="() => ToggleActionMenu(item)"><i class="bi bi-three-dots-vertical" aria-hidden="true"></i></button>
+                                        @if (_openActionMenuFor == item.TaskTypeId)
+                                        {
+                                            <div class="tt-menu" role="menu" @onclick:stopPropagation="true">
+                                                <div class="tt-menu__summary"><strong>@item.TaskTypeName</strong><span>@item.TaskTypeCode</span></div>
+                                                <button type="button" class="tt-menu-item" role="menuitem" @onclick="() => SelectRow(item)"><i class="bi bi-eye" aria-hidden="true"></i><span>View details</span></button>
+                                                <button type="button" class="tt-menu-item" role="menuitem" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i><span>Edit task type</span></button>
+                                                <button type="button" class="tt-menu-item" role="menuitem" @onclick="() => ConfirmToggleStatus(item)"><i class="bi @(item.IsActive ? "bi-pause-circle" : "bi-check-circle")" aria-hidden="true"></i><span>@(item.IsActive ? "Deactivate" : "Activate")</span></button>
+                                                <button type="button" class="tt-menu-item tt-menu-item--danger" role="menuitem" @onclick="() => ConfirmDelete(item)"><i class="bi bi-trash3" aria-hidden="true"></i><span>Remove type</span></button>
+                                            </div>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="tt-side-panel">
+            <section class="tt-panel-card">
+                <span class="tt-section-kicker">Selected task type</span>
+                @if (_selected is null)
+                {
+                    <div class="tt-empty tt-empty--compact"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a row</strong><span>Choose a task type to inspect workflow readiness and actions.</span></div>
+                }
+                else
+                {
+                    <div class="tt-selected">
+                        <div class="tt-selected__title">
+                            <div class="tt-avatar tt-avatar--lg" style="@AvatarStyle(_selected.TaskTypeName)">@Initials(_selected.TaskTypeName)</div>
+                            <div><h3>@_selected.TaskTypeName</h3><span>@_selected.TaskTypeCode</span></div>
+                        </div>
+                        <div class="tt-score-card tt-score-card--@ImportanceTone(_selected)"><span>Configuration importance</span><strong>@ImportanceScore(_selected)</strong><small>@ImportanceLevel(_selected)</small></div>
+                        <dl class="tt-detail-list">
+                            <div><dt>Status</dt><dd>@(_selected.IsActive ? "Active" : "Inactive")</dd></div>
+                            <div><dt>Readiness</dt><dd>@Readiness(_selected)</dd></div>
+                            <div><dt>Priority band</dt><dd>@PriorityBand(_selected)</dd></div>
+                            <div><dt>Sort order</dt><dd>@_selected.SortOrder</dd></div>
+                            <div><dt>Description</dt><dd>@Safe(_selected.Description, "Missing")</dd></div>
+                            <div><dt>Created</dt><dd>@_selected.CreatedDateUtc.ToString("MMM d, yyyy")</dd></div>
+                            <div><dt>Updated</dt><dd>@FormatRelative(TouchedDate(_selected))</dd></div>
+                        </dl>
+                        <div class="tt-selected-actions">
+                            <button type="button" class="tt-btn tt-btn--primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                            <button type="button" class="tt-btn tt-btn--ghost" @onclick="() => ConfirmToggleStatus(_selected)"><i class="bi @(_selected.IsActive ? "bi-pause-circle" : "bi-check-circle")" aria-hidden="true"></i> @(_selected.IsActive ? "Deactivate" : "Activate")</button>
+                            <button type="button" class="tt-btn tt-btn--danger-ghost" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash3" aria-hidden="true"></i> Remove</button>
+                        </div>
+                    </div>
+                }
+            </section>
+
+            <section class="tt-panel-card">
+                <span class="tt-section-kicker">Workflow intelligence</span>
+                <div class="tt-insight-list">
+                    @foreach (var insight in Insights)
+                    {
+                        <div class="tt-insight"><i class="bi @insight.Icon" aria-hidden="true"></i><div><strong>@insight.Title</strong><span>@insight.Description</span></div></div>
+                    }
+                </div>
+            </section>
+        </aside>
+    </main>
+</div>
+
+@if (_showForm)
+{
+    <div class="tt-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="tt-modal" role="dialog" aria-modal="true" aria-labelledby="tt-form-title" @onclick:stopPropagation="true">
+            <div class="tt-modal__header"><i class="bi @(_editItem is null ? "bi-plus-circle" : "bi-pencil-square")" aria-hidden="true"></i><span id="tt-form-title">@(_editItem is null ? "Create Task Type" : $"Edit: {_editItem.TaskTypeName}")</span><button type="button" class="tt-icon-btn tt-icon-btn--light ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm EditContext="@_editContext" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="tt-modal__body">
+                    <div class="tt-validation-note">
+                        <i class="bi bi-shield-check" aria-hidden="true"></i>
+                        <div>
+                            <strong>Enterprise validations enabled</strong>
+                            <span>Code, name, description length, sort priority, and workflow active-state checks are enforced before save.</span>
+                        </div>
+                    </div>
+                    <div class="tt-form-grid">
+                        <label class="tt-field"><span>Task Type Code <em>*</em></span><InputText @bind-Value="_form.TaskTypeCode" class="form-control" placeholder="FOLLOW_UP" /><ValidationMessage For="() => _form.TaskTypeCode" class="text-danger" /></label>
+                        <label class="tt-field"><span>Task Type Name <em>*</em></span><InputText @bind-Value="_form.TaskTypeName" class="form-control" placeholder="Follow Up" /><ValidationMessage For="() => _form.TaskTypeName" class="text-danger" /></label>
+                        <label class="tt-field"><span>Sort Order <em>*</em></span><InputNumber @bind-Value="_form.SortOrder" class="form-control" /><ValidationMessage For="() => _form.SortOrder" class="text-danger" /></label>
+                        <label class="tt-field tt-check-field"><span>Active</span><div class="tt-switch-row"><InputCheckbox @bind-Value="_form.IsActive" class="form-check-input" /><span>Available to workflow and task board users</span></div><ValidationMessage For="() => _form.IsActive" class="text-danger" /></label>
+                        <label class="tt-field tt-field--full"><span>Description</span><InputTextArea @bind-Value="_form.Description" class="form-control" rows="4" placeholder="Describe when this task type should be used and how it supports routing or SLA reporting." /><ValidationMessage For="() => _form.Description" class="text-danger" /></label>
+                    </div>
+                    @if (!string.IsNullOrEmpty(_formError))
+                    {
+                        <div class="alert alert-danger tt-form-alert" style="border-left: 4px solid #dc3545; animation: tt-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_formError</div>
+                    }
+                </div>
+                <div class="tt-modal__footer"><button type="button" class="tt-btn tt-btn--ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="tt-btn tt-btn--primary" disabled="@_saving">@if (_saving) { <span class="tt-spin-sm" aria-hidden="true"></span> } @(_editItem is null ? "Create Task Type" : "Save Changes")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showConfirm)
+{
+    <div class="tt-modal-backdrop" role="presentation" @onclick="CloseConfirm">
+        <div class="tt-confirm" role="dialog" aria-modal="true" aria-labelledby="tt-confirm-title" @onclick:stopPropagation="true">
+            <div class="tt-modal__header"><i class="bi @_confirmIcon" aria-hidden="true"></i><span>Confirm action</span><button type="button" class="tt-icon-btn tt-icon-btn--light ms-auto" @onclick="CloseConfirm" disabled="@_saving"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <div class="tt-confirm__body"><div class="@(_confirmDanger ? "tt-confirm-icon tt-confirm-icon--danger" : "tt-confirm-icon")"><i class="bi @_confirmIcon" aria-hidden="true"></i></div><div><h3 id="tt-confirm-title">@_confirmTitle</h3><p>@_confirmMessage</p></div></div>
+            <div class="tt-modal__footer"><button type="button" class="tt-btn tt-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button><button type="button" class="@(_confirmDanger ? "tt-btn tt-btn--danger" : "tt-btn tt-btn--primary")" @onclick="ExecuteConfirmedActionAsync" disabled="@_saving">@if (_saving) { <span class="tt-spin-sm" aria-hidden="true"></span> } Confirm</button></div>
+        </div>
+    </div>
+}
+
+<div class="tt-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="tt-toast @toast.CssClass"><i class="bi @(toast.CssClass.Contains("danger") ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i><span>@toast.Message</span><button type="button" @onclick="() => DismissToast(toast.Id)"><i class="bi bi-x" aria-hidden="true"></i></button></div>
+    }
+</div>
+
 @code {
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
     private Guid _tenantId;
-    private Guid _tenantAdminUserId; Guid TenantId { get; set; } Guid TenantAdminUserId { get; set; } string? _searchTerm, _loadError, _activeFilter; bool _loading, _saving, _showForm, _showDelete; Guid? _editId; List<TaskTypeDto> _items = [], _filtered = []; TaskTypeDto? _deleteTarget; TaskTypeForm _form = new(); SfToast _toast = default!; protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Workflow & SLA", null), new("Task Types", null)); await LoadAsync(); } async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchTaskTypesAsync(TenantId, _searchTerm); _items = result?.Items.ToList() ?? []; ApplyFilter(); } catch (Exception ex) { _loadError = $"Failed to load task types: {ex.Message}"; } finally { _loading = false; } } Task OnSearchAsync() => LoadAsync(); void ApplyFilter() => _filtered = _activeFilter switch { "Active" => _items.Where(x => x.IsActive).ToList(), "Inactive" => _items.Where(x => !x.IsActive).ToList(), _ => [.. _items] }; void SetFilter(string? filter) { _activeFilter = filter; ApplyFilter(); } void OnRowSelected(RowSelectEventArgs<TaskTypeDto> args) => OpenEdit(args.Data); void OpenCreate() { _editId = null; _form = new(); _showForm = true; } void OpenEdit(TaskTypeDto item) { _editId = item.TaskTypeId; _form = new() { TaskTypeCode = item.TaskTypeCode, TaskTypeName = item.TaskTypeName, Description = item.Description, SortOrder = item.SortOrder, IsActive = item.IsActive }; _showForm = true; } void ConfirmDelete(TaskTypeDto item) { _deleteTarget = item; _showDelete = true; } async Task SaveAsync() { _saving = true; try { if (_editId.HasValue) await Api.UpdateTaskTypeAsync(_editId.Value, new() { TaskTypeCode = _form.TaskTypeCode, TaskTypeName = _form.TaskTypeName, Description = _form.Description, SortOrder = _form.SortOrder, IsActive = _form.IsActive, ModifiedByUserId = TenantAdminUserId }); else await Api.CreateTaskTypeAsync(new() { TenantId = TenantId, TaskTypeCode = _form.TaskTypeCode, TaskTypeName = _form.TaskTypeName, Description = _form.Description, SortOrder = _form.SortOrder, IsActive = _form.IsActive, CreatedByUserId = TenantAdminUserId }); _showForm = false; await _toast.ShowAsync(new() { Content = _editId.HasValue ? "Task type updated" : "Task type created", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } } async Task ExecuteDeleteAsync() { if (_deleteTarget is null) return; _saving = true; try { await Api.DeleteTaskTypeAsync(_deleteTarget.TaskTypeId, TenantAdminUserId); _showDelete = false; await _toast.ShowAsync(new() { Content = "Task type deleted", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } } void ResetForm() { _form = new(); _editId = null; } sealed class TaskTypeForm { [Required, StringLength(50)] public string TaskTypeCode { get; set; } = string.Empty; [Required, StringLength(100)] public string TaskTypeName { get; set; } = string.Empty; [StringLength(500)] public string? Description { get; set; } [Range(0, 9999)] public int SortOrder { get; set; } = 100; public bool IsActive { get; set; } = true; } 
-    async Task ResolveCurrentUserContextAsync()
+    private Guid _currentUserId;
+
+    private readonly TabDef[] _tabs = [new("all", "All", "bi-tags"), new("review", "Needs Review", "bi-exclamation-octagon"), new("ready", "Workflow Ready", "bi-diagram-3"), new("inactive", "Inactive", "bi-pause-circle"), new("sort", "Sort Audit", "bi-sort-numeric-down"), new("matrix", "Priority Matrix", "bi-grid-3x3-gap")];
+    private readonly InsightDef[] _baselineInsights = [new("Task taxonomy", "Keep codes stable because downstream workflow rules and reports depend on them.", "bi-tags"), new("Workflow routing", "Active, well-described task types improve queue assignment and SLA transparency.", "bi-diagram-3"), new("Operational governance", "Retire unused types only after reviewing workflow dependencies.", "bi-shield-lock")];
+
+    private List<TaskTypeDto> _items = [];
+    private readonly List<TaskTypeDto> _selectedTaskTypes = [];
+    private TaskTypeDto? _selected;
+    private bool _loading = true;
+    private string? _loadError;
+    private CancellationTokenSource _cts = new();
+
+    private string _activeTab = "all";
+    private string _activeKpi = "all";
+    private string _searchTerm = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _readinessFilter = string.Empty;
+    private string _priorityFilter = string.Empty;
+    private string _sortMode = "importance";
+    private int _page = 1;
+    private const int PageSize = 12;
+    private Guid? _openActionMenuFor;
+
+    private bool _showForm;
+    private bool _saving;
+    private string _formError = string.Empty;
+    private TaskTypeDto? _editItem;
+    private TaskTypeForm _form = new();
+    private EditContext _editContext = default!;
+
+    private bool _showConfirm;
+    private bool _confirmDanger;
+    private string _confirmTitle = string.Empty;
+    private string _confirmMessage = string.Empty;
+    private string _confirmIcon = "bi-question-circle";
+    private Func<Task>? _confirmedAction;
+    private readonly List<ToastMessage> _toasts = [];
+
+    protected override async Task OnInitializedAsync()
     {
         var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
         _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        _currentUserId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Workflow & SLA", null), new("Task Types", null));
+        _editContext = new(_form);
+        await LoadAsync();
     }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        StateHasChanged();
+        try
+        {
+            await _cts.CancelAsync();
+            _cts = new CancellationTokenSource();
+            var result = await Api.SearchTaskTypesAsync(_tenantId, _searchTerm.Trim(), 1, 500, _cts.Token);
+            _items = result?.Items.ToList() ?? [];
+            _selected = _selected is null ? _items.FirstOrDefault() : _items.FirstOrDefault(x => x.TaskTypeId == _selected.TaskTypeId) ?? _items.FirstOrDefault();
+            _selectedTaskTypes.RemoveAll(selected => _items.All(x => x.TaskTypeId != selected.TaskTypeId));
+            _page = 1;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { _loadError = $"Failed to load task types: {ex.Message}"; }
+        finally { _loading = false; StateHasChanged(); }
+    }
+
+    private Task RefreshAsync() => LoadAsync();
+
+    private System.Timers.Timer? _debounce;
+    private async Task OnSearchInput(string? value)
+    {
+        _searchTerm = value ?? string.Empty;
+        _debounce?.Dispose();
+        _debounce = new System.Timers.Timer(360) { AutoReset = false };
+        _debounce.Elapsed += async (_, _) => { _debounce?.Dispose(); _debounce = null; await InvokeAsync(LoadAsync); };
+        _debounce.Start();
+        await Task.CompletedTask;
+    }
+
+    private void SetActiveKpi(string key)
+    {
+        _activeKpi = _activeKpi == key ? "all" : key;
+        _activeTab = _activeKpi switch { "review" => "review", "inactive" => "inactive", "ready" => "ready", "recent" => "all", _ => "all" };
+        _page = 1;
+    }
+
+    private void SetActiveTab(string key)
+    {
+        _activeTab = key;
+        _activeKpi = key is "review" or "inactive" or "ready" ? key : "all";
+        _page = 1;
+    }
+
+    private void SetDashboardFocus(string tab, string sortMode)
+    {
+        _activeTab = tab;
+        _activeKpi = tab is "review" or "inactive" or "ready" ? tab : "all";
+        _sortMode = sortMode;
+        _page = 1;
+    }
+
+    private void ApplyFilters() => _page = 1;
+
+    private void ClearFilters()
+    {
+        _statusFilter = string.Empty;
+        _readinessFilter = string.Empty;
+        _priorityFilter = string.Empty;
+        _sortMode = "importance";
+        _activeTab = "all";
+        _activeKpi = "all";
+        _page = 1;
+    }
+
+    private bool HasFilters => !string.IsNullOrEmpty(_statusFilter) || !string.IsNullOrEmpty(_readinessFilter) || !string.IsNullOrEmpty(_priorityFilter) || _sortMode != "importance" || _activeTab != "all" || _activeKpi != "all";
+
+    private void FilterByPriority(string priority)
+    {
+        _priorityFilter = priority;
+        _activeTab = "all";
+        _activeKpi = "all";
+        _page = 1;
+    }
+
+    private IEnumerable<TaskTypeDto> TabFiltered => _activeTab switch
+    {
+        "review" => _items.Where(NeedsGovernance),
+        "ready" => _items.Where(IsWorkflowReady),
+        "inactive" => _items.Where(x => !x.IsActive),
+        "sort" => _items.Where(HasDuplicateSortOrder),
+        _ => _activeKpi switch
+        {
+            "active" => _items.Where(x => x.IsActive),
+            "review" => _items.Where(NeedsGovernance),
+            "inactive" => _items.Where(x => !x.IsActive),
+            "ready" => _items.Where(IsWorkflowReady),
+            "recent" => _items.Where(IsRecentlyTouched),
+            _ => _items,
+        }
+    };
+
+    private IEnumerable<TaskTypeDto> FilteredTaskTypes
+    {
+        get
+        {
+            var query = TabFiltered;
+            if (!string.IsNullOrEmpty(_statusFilter)) query = query.Where(x => string.Equals(_statusFilter, x.IsActive ? "Active" : "Inactive", StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrEmpty(_readinessFilter)) query = query.Where(x => string.Equals(Readiness(x), _readinessFilter, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrEmpty(_priorityFilter)) query = query.Where(x => string.Equals(PriorityBand(x), _priorityFilter, StringComparison.OrdinalIgnoreCase));
+            return _sortMode switch
+            {
+                "priority" => query.OrderBy(x => x.SortOrder).ThenBy(x => x.TaskTypeName),
+                "name" => query.OrderBy(x => x.TaskTypeName),
+                "updated" => query.OrderByDescending(TouchedDate).ThenBy(x => x.TaskTypeName),
+                "created" => query.OrderByDescending(x => x.CreatedDateUtc).ThenBy(x => x.TaskTypeName),
+                "sort" => query.OrderByDescending(x => _items.Count(y => y.SortOrder == x.SortOrder)).ThenBy(x => x.SortOrder).ThenBy(x => x.TaskTypeName),
+                _ => query.OrderByDescending(ImportanceScore).ThenBy(x => x.SortOrder).ThenBy(x => x.TaskTypeName),
+            };
+        }
+    }
+
+    private IEnumerable<TaskTypeDto> PagedTaskTypes => FilteredTaskTypes.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredTaskTypes.Count() / (double)PageSize));
+    private void PreviousPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private string ActiveViewTitle => _tabs.FirstOrDefault(t => t.Key == _activeTab)?.Label ?? "Task Types";
+
+    private int TabCount(string key) => key switch
+    {
+        "review" => _items.Count(NeedsGovernance),
+        "ready" => _items.Count(IsWorkflowReady),
+        "inactive" => _items.Count(x => !x.IsActive),
+        "sort" => _items.Count(HasDuplicateSortOrder),
+        "matrix" => PriorityGroups.Count,
+        _ => _items.Count,
+    };
+
+    private List<PriorityGroup> PriorityGroups
+    {
+        get
+        {
+            var groups = _items.GroupBy(PriorityBand).ToList();
+            var max = Math.Max(1, groups.Count == 0 ? 1 : groups.Max(g => g.Count()));
+            return groups.Select(g => new PriorityGroup(g.Key, g.Count(), g.Count(x => x.IsActive), g.Count(NeedsGovernance), (int)Math.Round(g.Count() * 100.0 / max), g.Key switch { "Primary" => "bi-lightning-charge", "Standard" => "bi-list-check", _ => "bi-inboxes" })).OrderBy(g => g.Name switch { "Primary" => 0, "Standard" => 1, _ => 2 }).ToList();
+        }
+    }
+
+    private void SelectRow(TaskTypeDto item) { _selected = item; _openActionMenuFor = null; }
+    private bool IsSelected(TaskTypeDto item) => _selectedTaskTypes.Any(x => x.TaskTypeId == item.TaskTypeId);
+    private void ToggleSelect(TaskTypeDto item) { if (IsSelected(item)) _selectedTaskTypes.RemoveAll(x => x.TaskTypeId == item.TaskTypeId); else _selectedTaskTypes.Add(item); }
+    private bool AllPageSelected => PagedTaskTypes.Any() && PagedTaskTypes.All(IsSelected);
+    private void ToggleSelectAllPage()
+    {
+        var page = PagedTaskTypes.ToList();
+        if (page.All(IsSelected)) foreach (var item in page) _selectedTaskTypes.RemoveAll(x => x.TaskTypeId == item.TaskTypeId);
+        else foreach (var item in page.Where(item => !IsSelected(item))) _selectedTaskTypes.Add(item);
+    }
+
+    private void ToggleActionMenu(TaskTypeDto item) => _openActionMenuFor = _openActionMenuFor == item.TaskTypeId ? null : item.TaskTypeId;
+
+    private void OpenCreate()
+    {
+        _editItem = null;
+        _form = new TaskTypeForm { SortOrder = NextSortOrder() };
+        _editContext = new(_form);
+        _formError = string.Empty;
+        _showForm = true;
+        _openActionMenuFor = null;
+    }
+
+    private void OpenEdit(TaskTypeDto item)
+    {
+        _editItem = item;
+        _form = new TaskTypeForm { TaskTypeCode = item.TaskTypeCode, TaskTypeName = item.TaskTypeName, Description = item.Description, SortOrder = item.SortOrder, IsActive = item.IsActive };
+        _editContext = new(_form);
+        _formError = string.Empty;
+        _showForm = true;
+        _openActionMenuFor = null;
+    }
+
+    private void CloseForm() { _showForm = false; _formError = string.Empty; }
+
+    private async Task SaveAsync()
+    {
+        if (_saving) return;
+        _formError = string.Empty;
+        _saving = true;
+        try
+        {
+            var code = NormalizeCode(_form.TaskTypeCode);
+            var name = _form.TaskTypeName.Trim();
+            if (_items.Any(x => x.TaskTypeId != _editItem?.TaskTypeId && x.TaskTypeCode.Equals(code, StringComparison.OrdinalIgnoreCase)))
+            {
+                _formError = $"Save failed: Task type code '{code}' already exists.";
+                return;
+            }
+
+            if (_editItem is null)
+            {
+                var req = new CreateTaskTypeRequest { TenantId = _tenantId, TaskTypeCode = code, TaskTypeName = name, Description = CleanOptional(_form.Description), SortOrder = _form.SortOrder, IsActive = _form.IsActive, CreatedByUserId = _currentUserId };
+                await Api.CreateTaskTypeAsync(req);
+                CloseForm();
+                ShowToast($"Task type '{req.TaskTypeName}' created.", "tt-toast--success");
+            }
+            else
+            {
+                var req = new UpdateTaskTypeRequest { TaskTypeCode = code, TaskTypeName = name, Description = CleanOptional(_form.Description), SortOrder = _form.SortOrder, IsActive = _form.IsActive, ModifiedByUserId = _currentUserId };
+                await Api.UpdateTaskTypeAsync(_editItem.TaskTypeId, req);
+                CloseForm();
+                ShowToast($"Task type '{req.TaskTypeName}' updated.", "tt-toast--success");
+            }
+            await LoadAsync();
+        }
+        catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; ShowToast($"Save failed: {ex.Message}", "tt-toast--danger"); }
+        finally { _saving = false; }
+    }
+
+    private void OpenConfirm(string title, string message, string icon, bool danger, Func<Task> action)
+    {
+        _confirmTitle = title;
+        _confirmMessage = message;
+        _confirmIcon = icon;
+        _confirmDanger = danger;
+        _confirmedAction = action;
+        _showConfirm = true;
+        _openActionMenuFor = null;
+    }
+
+    private void CloseConfirm() { _showConfirm = false; _confirmedAction = null; }
+
+    private async Task ExecuteConfirmedActionAsync()
+    {
+        if (_confirmedAction is null) return;
+        _saving = true;
+        try { await _confirmedAction.Invoke(); }
+        finally { _saving = false; }
+    }
+
+    private void ConfirmToggleStatus(TaskTypeDto item)
+    {
+        var activate = !item.IsActive;
+        OpenConfirm(activate ? "Activate task type?" : "Deactivate task type?", $"{(activate ? "Activate" : "Deactivate")} '{item.TaskTypeName}' for workflow and task board use?", activate ? "bi-check-circle" : "bi-pause-circle", !activate, () => ToggleStatusAsync(item, activate));
+    }
+
+    private async Task ToggleStatusAsync(TaskTypeDto item, bool activate)
+    {
+        try
+        {
+            await Api.UpdateTaskTypeAsync(item.TaskTypeId, new UpdateTaskTypeRequest { TaskTypeCode = item.TaskTypeCode, TaskTypeName = item.TaskTypeName, Description = item.Description, SortOrder = item.SortOrder, IsActive = activate, ModifiedByUserId = _currentUserId });
+            CloseConfirm();
+            ShowToast($"Task type '{item.TaskTypeName}' {(activate ? "activated" : "deactivated")}.", "tt-toast--success");
+            await LoadAsync();
+        }
+        catch (Exception ex) { CloseConfirm(); ShowToast($"Status update failed: {ex.Message}", "tt-toast--danger"); }
+    }
+
+    private void ConfirmDelete(TaskTypeDto item) => OpenConfirm("Remove task type?", $"Remove '{item.TaskTypeName}' from workflow configuration? This action is soft-deleted and can affect task creation lists.", "bi-trash3", true, () => DeleteAsync(item));
+
+    private async Task DeleteAsync(TaskTypeDto item)
+    {
+        try
+        {
+            await Api.DeleteTaskTypeAsync(item.TaskTypeId, _currentUserId);
+            CloseConfirm();
+            _selectedTaskTypes.RemoveAll(x => x.TaskTypeId == item.TaskTypeId);
+            ShowToast($"Task type '{item.TaskTypeName}' removed.", "tt-toast--success");
+            await LoadAsync();
+        }
+        catch (Exception ex) { CloseConfirm(); ShowToast($"Remove failed: {ex.Message}", "tt-toast--danger"); }
+    }
+
+    private void ConfirmBulkStatus(bool activate) => OpenConfirm(activate ? "Activate selected task types?" : "Deactivate selected task types?", $"{(activate ? "Activate" : "Deactivate")} {_selectedTaskTypes.Count} selected task type(s)?", activate ? "bi-check-circle" : "bi-pause-circle", !activate, () => BulkStatusAsync(activate));
+
+    private async Task BulkStatusAsync(bool activate)
+    {
+        var targets = _selectedTaskTypes.ToList();
+        var failures = 0;
+        foreach (var item in targets)
+        {
+            try { await Api.UpdateTaskTypeAsync(item.TaskTypeId, new UpdateTaskTypeRequest { TaskTypeCode = item.TaskTypeCode, TaskTypeName = item.TaskTypeName, Description = item.Description, SortOrder = item.SortOrder, IsActive = activate, ModifiedByUserId = _currentUserId }); }
+            catch { failures++; }
+        }
+        _selectedTaskTypes.Clear();
+        CloseConfirm();
+        ShowToast($"{(activate ? "Activated" : "Deactivated")} {targets.Count - failures} task type(s)." + (failures > 0 ? $" {failures} failed." : string.Empty), failures > 0 ? "tt-toast--danger" : "tt-toast--success");
+        await LoadAsync();
+    }
+
+    private void ConfirmBulkDelete() => OpenConfirm("Remove selected task types?", $"Remove {_selectedTaskTypes.Count} selected task type(s) from workflow configuration?", "bi-trash3", true, BulkDeleteAsync);
+
+    private async Task BulkDeleteAsync()
+    {
+        var targets = _selectedTaskTypes.ToList();
+        var failures = 0;
+        foreach (var item in targets) try { await Api.DeleteTaskTypeAsync(item.TaskTypeId, _currentUserId); } catch { failures++; }
+        _selectedTaskTypes.Clear();
+        CloseConfirm();
+        ShowToast($"Removed {targets.Count - failures} task type(s)." + (failures > 0 ? $" {failures} failed." : string.Empty), failures > 0 ? "tt-toast--danger" : "tt-toast--success");
+        await LoadAsync();
+    }
+
+    private void ShowToast(string message, string cssClass)
+    {
+        var toast = new ToastMessage(Guid.NewGuid(), message, cssClass);
+        _toasts.Add(toast);
+        _ = Task.Run(async () => { await Task.Delay(5000); await InvokeAsync(() => DismissToast(toast.Id)); });
+    }
+
+    private void DismissToast(Guid id) { _toasts.RemoveAll(t => t.Id == id); StateHasChanged(); }
+
+    private bool HasDuplicateSortOrder(TaskTypeDto item) => _items.Count(x => x.SortOrder == item.SortOrder) > 1;
+    private static bool IsRecentlyTouched(TaskTypeDto item) => (DateTime.UtcNow - TouchedDate(item)).TotalDays <= 30;
+    private static bool IsWorkflowReady(TaskTypeDto item) => item.IsActive && !string.IsNullOrWhiteSpace(item.Description) && item.SortOrder is >= 0 and <= 9999;
+    private bool NeedsGovernance(TaskTypeDto item) => !item.IsActive || string.IsNullOrWhiteSpace(item.Description) || HasDuplicateSortOrder(item) || item.SortOrder > 9999;
+    private static DateTime TouchedDate(TaskTypeDto item) => item.ModifiedDateUtc ?? item.CreatedDateUtc;
+    private static string Readiness(TaskTypeDto item) => !item.IsActive ? "Inactive" : IsWorkflowReady(item) ? "Ready" : "Needs Review";
+    private static string PriorityBand(TaskTypeDto item) => item.SortOrder switch { <= 99 => "Primary", <= 499 => "Standard", _ => "Backlog" };
+
+    private int ImportanceScore(TaskTypeDto item)
+    {
+        var score = 20;
+        if (!item.IsActive) score += 35;
+        if (string.IsNullOrWhiteSpace(item.Description)) score += 25;
+        if (HasDuplicateSortOrder(item)) score += 20;
+        if (item.SortOrder <= 99) score += 10;
+        if (IsRecentlyTouched(item)) score += 5;
+        return Math.Min(100, score);
+    }
+
+    private string ImportanceLevel(TaskTypeDto item) => ImportanceScore(item) switch { >= 75 => "Critical", >= 55 => "High", >= 35 => "Medium", _ => "Low" };
+    private string ImportanceTone(TaskTypeDto item) => ImportanceLevel(item) switch { "Critical" => "red", "High" => "amber", "Medium" => "cyan", _ => "green" };
+
+    private IEnumerable<InsightDef> Insights
+    {
+        get
+        {
+            var list = new List<InsightDef>();
+            var missingDescription = _items.Count(x => string.IsNullOrWhiteSpace(x.Description));
+            if (missingDescription > 0) list.Add(new("Description gaps", $"{missingDescription} task type(s) need usage guidance for enterprise operators.", "bi-card-text"));
+            var duplicateSort = _items.Count(HasDuplicateSortOrder);
+            if (duplicateSort > 0) list.Add(new("Sort order conflicts", $"{duplicateSort} task type(s) share an execution priority with another type.", "bi-sort-numeric-down"));
+            var inactive = _items.Count(x => !x.IsActive);
+            if (inactive > 0) list.Add(new("Retirement queue", $"{inactive} inactive task type(s) should be reviewed before cleanup.", "bi-archive"));
+            var ready = _items.Count(IsWorkflowReady);
+            list.Add(new("Workflow ready", $"{ready} active task type(s) have enough metadata for routing and task board use.", "bi-diagram-3"));
+            list.AddRange(_baselineInsights);
+            return list.Take(5);
+        }
+    }
+
+    private int NextSortOrder() => _items.Count == 0 ? 100 : Math.Min(9999, ((_items.Max(x => x.SortOrder) / 10) + 1) * 10);
+    private static string NormalizeCode(string value) => value.Trim().Replace(' ', '_').ToUpperInvariant();
+    private static string? CleanOptional(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string Initials(string? name) => string.IsNullOrWhiteSpace(name) ? "?" : string.Concat(name.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(w => char.ToUpperInvariant(w[0])));
+    private static readonly string[] _avatarColors = ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#06b6d4", "#6366f1", "#ec4899"];
+    private static string AvatarStyle(string? name) => $"background:{_avatarColors[Math.Abs((name ?? string.Empty).GetHashCode()) % _avatarColors.Length]}";
+    private static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private static string PriorityBadgeClass(TaskTypeDto item) => PriorityBand(item) switch { "Primary" => "tt-pill--purple", "Standard" => "tt-pill--blue", _ => "tt-pill--neutral" };
+
+    private static string FormatRelative(DateTime dt) => (DateTime.UtcNow - dt) switch
+    {
+        var d when d.TotalMinutes < 1 => "Just now",
+        var d when d.TotalHours < 1 => $"{(int)d.TotalMinutes}m ago",
+        var d when d.TotalDays < 1 => $"{(int)d.TotalHours}h ago",
+        var d when d.TotalDays < 7 => $"{(int)d.TotalDays}d ago",
+        var d when d.TotalDays < 30 => $"{(int)(d.TotalDays / 7)}w ago",
+        _ => dt.ToString("MMM d, yyyy"),
+    };
+
+    private RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string tone) => @<button type="button" class="tt-kpi-card tt-kpi-card--@tone @(_activeKpi == key ? "tt-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveKpi(key)"><div class="tt-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></div><div class="tt-kpi-body"><span class="tt-kpi-label">@label</span><strong class="tt-kpi-value">@value</strong><span class="tt-kpi-sub">@subtitle</span></div></button>;
+    private RenderFragment WorkflowButton(string title, string description, string icon, Func<Task> onClick) => @<button type="button" class="tt-workflow" @onclick="onClick"><div class="tt-workflow-icon"><i class="bi @icon" aria-hidden="true"></i></div><div class="tt-workflow-meta"><strong>@title</strong><span>@description</span></div></button>;
+    private RenderFragment ImportanceBadge(TaskTypeDto item) => @<span class="tt-risk-badge tt-risk-badge--@ImportanceTone(item)" title="Configuration importance score: @ImportanceScore(item)/100"><i class="bi bi-shield-fill" aria-hidden="true"></i> @ImportanceLevel(item)</span>;
+    private static RenderFragment StatusBadge(TaskTypeDto item) => item.IsActive ? @<span class="tt-pill tt-pill--green"><i class="bi bi-check-circle-fill" aria-hidden="true"></i> Active</span> : @<span class="tt-pill tt-pill--amber"><i class="bi bi-pause-circle-fill" aria-hidden="true"></i> Inactive</span>;
+    private static RenderFragment ReadinessBadge(TaskTypeDto item) => Readiness(item) switch
+    {
+        "Ready" => @<span class="tt-pill tt-pill--green"><i class="bi bi-diagram-3" aria-hidden="true"></i> Ready</span>,
+        "Inactive" => @<span class="tt-pill tt-pill--amber"><i class="bi bi-pause-circle" aria-hidden="true"></i> Inactive</span>,
+        _ => @<span class="tt-pill tt-pill--red"><i class="bi bi-exclamation-circle" aria-hidden="true"></i> Needs Review</span>,
+    };
+
+    private sealed class TaskTypeForm
+    {
+        [Required(ErrorMessage = "Task type code is required.")]
+        [StringLength(50, ErrorMessage = "Task type code cannot exceed 50 characters.")]
+        public string TaskTypeCode { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Task type name is required.")]
+        [StringLength(100, ErrorMessage = "Task type name cannot exceed 100 characters.")]
+        public string TaskTypeName { get; set; } = string.Empty;
+
+        [StringLength(500, ErrorMessage = "Description cannot exceed 500 characters.")]
+        public string? Description { get; set; }
+
+        [Range(0, 9999, ErrorMessage = "Sort order must be between 0 and 9999.")]
+        public int SortOrder { get; set; } = 100;
+
+        public bool IsActive { get; set; } = true;
+    }
+
+    private sealed record TabDef(string Key, string Label, string Icon);
+    private sealed record InsightDef(string Title, string Description, string Icon);
+    private sealed record ToastMessage(Guid Id, string Message, string CssClass);
+    private sealed record PriorityGroup(string Name, int Count, int Active, int NeedsReview, int Percent, string Icon);
 }

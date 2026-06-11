@@ -1,2 +1,388 @@
 @page "/tenant/integrations/rater"
-<IntegrationConfigPage Kind="ComparativeRater" Title="Comparative Rater" Subtitle="Configure comparative rating providers, appetite, quote submission, and rating defaults" Icon="bi bi-calculator" />
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.IntegrationConfig
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Comparative Rater — AMS</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="cr-toast cr-toast--@_toastKind" role="status" aria-live="polite">
+        <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showDelete && _deleteTarget is not null)
+{
+    <div class="cr-modal-backdrop" role="presentation" @onclick="CancelDelete">
+        <div class="cr-confirm" role="dialog" aria-modal="true" aria-labelledby="crDeleteTitle" @onclick:stopPropagation="true">
+            <div class="cr-confirm__body">
+                <span class="cr-confirm-icon cr-confirm-icon--danger"><i class="bi bi-trash3-fill" aria-hidden="true"></i></span>
+                <div>
+                    <h3 id="crDeleteTitle">Delete rater provider</h3>
+                    <p>Delete <strong>@_deleteTarget.Name</strong>? This removes the comparative rater configuration after confirmation.</p>
+                </div>
+            </div>
+            <div class="cr-modal-footer">
+                <button type="button" class="cr-btn cr-btn--ghost" @onclick="CancelDelete" disabled="@_saving">Cancel</button>
+                <button type="button" class="cr-btn cr-btn--danger" @onclick="ExecuteDeleteAsync" disabled="@_saving"><i class="bi bi-trash3" aria-hidden="true"></i> Delete</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="cr-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="cr-modal" role="dialog" aria-modal="true" aria-labelledby="crFormTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="HandleInvalidSubmit">
+                <DataAnnotationsValidator />
+                <div class="cr-modal-header">
+                    <i class="bi bi-calculator" aria-hidden="true"></i>
+                    <span id="crFormTitle">@(_editId.HasValue ? "Edit comparative rater" : "Add comparative rater")</span>
+                    <button type="button" class="cr-btn cr-btn--ghost cr-btn--sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                </div>
+                <div class="cr-modal-body">
+                    <div class="cr-form-grid">
+                        <div class="cr-field"><label>Code <span class="text-danger">*</span></label><InputText class="cr-input" @bind-Value="_form.Code" /><ValidationMessage For="() => _form.Code" class="text-danger" /></div>
+                        <div class="cr-field"><label>Provider name <span class="text-danger">*</span></label><InputText class="cr-input" @bind-Value="_form.Name" /><ValidationMessage For="() => _form.Name" class="text-danger" /></div>
+                        <div class="cr-field"><label>Capability category</label><InputText class="cr-input" @bind-Value="_form.Category" placeholder="Rating, Appetite, Submission, Defaults" /><ValidationMessage For="() => _form.Category" class="text-danger" /></div>
+                        <div class="cr-field"><label>Sort order</label><InputNumber class="cr-input" @bind-Value="_form.SortOrder" /><ValidationMessage For="() => _form.SortOrder" class="text-danger" /></div>
+                        <div class="cr-field cr-field--full"><label>Description</label><InputTextArea class="cr-input" rows="3" @bind-Value="_form.Description" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
+                        <div class="cr-field cr-field--full"><label>Configuration JSON</label><InputTextArea class="cr-input cr-input--code" rows="5" @bind-Value="_form.ConfigurationJson" /><ValidationMessage For="() => _form.ConfigurationJson" class="text-danger" /></div>
+                        <label class="cr-check"><InputCheckbox @bind-Value="_form.IsActive" /> Active comparative rater provider</label>
+                    </div>
+                </div>
+                <div class="cr-modal-footer">
+                    <button type="button" class="cr-btn cr-btn--ghost" @onclick="CloseForm" disabled="@_saving">Cancel</button>
+                    <button type="submit" class="cr-btn cr-btn--primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_editId.HasValue ? "Save changes" : "Create provider")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="cr-page">
+    <section class="cr-hero">
+        <div class="cr-hero-left">
+            <span class="cr-hero-icon"><i class="bi bi-calculator" aria-hidden="true"></i></span>
+            <div class="cr-hero-title">
+                <span class="cr-hero__eyebrow"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i> Comparative rating command center</span>
+                <div class="cr-title-row"><h1>Comparative Rater</h1></div>
+                <p>Configure rating providers, appetite checks, quote submission defaults, and value-scoring readiness using existing tenant integration configuration records.</p>
+                <div class="cr-hero__meta">
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> @_items.Count.ToString("N0") providers</span>
+                    <span><i class="bi bi-check-circle" aria-hidden="true"></i> @ActiveCount.ToString("N0") active</span>
+                    <span><i class="bi bi-stars" aria-hidden="true"></i> @ReadyCount.ToString("N0") ready</span>
+                    <span><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @AttentionCount.ToString("N0") need attention</span>
+                </div>
+            </div>
+        </div>
+        <div class="cr-hero__actions">
+            <button type="button" class="cr-btn cr-btn--light" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "cr-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="cr-btn cr-btn--light" @onclick='() => SetKpi("attention")'><i class="bi bi-exclamation-octagon" aria-hidden="true"></i> Attention</button>
+            <button type="button" class="cr-btn cr-btn--light" @onclick='() => Nav.NavigateTo("/quotes/rating-results")'><i class="bi bi-bar-chart" aria-hidden="true"></i> Results</button>
+            <button type="button" class="cr-btn cr-btn--primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add provider</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger cr-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    <section class="cr-kpi-strip" aria-label="Comparative rater KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="cr-kpi @kpi.Css @(_activeKpi == kpi.Key ? "cr-kpi--active" : null)" title="@kpi.Tooltip" @onclick="() => SetKpi(kpi.Key)">
+                <span><i class="bi @kpi.Icon" aria-hidden="true"></i>@kpi.Label</span>
+                <strong>@kpi.Value</strong>
+                <small>@kpi.Detail</small>
+            </button>
+        }
+    </section>
+
+    <section class="cr-workflows" aria-label="Comparative rater workflows">
+        <button type="button" class="cr-workflow" @onclick='() => SetKpi("attention")'><i class="bi bi-exclamation-octagon" aria-hidden="true"></i><span><strong>Fix readiness gaps</strong><small>Find inactive or incomplete rater setup.</small></span></button>
+        <button type="button" class="cr-workflow" @onclick='() => SetTab("providers")'><i class="bi bi-building" aria-hidden="true"></i><span><strong>Provider setup</strong><small>Manage rating provider configuration.</small></span></button>
+        <button type="button" class="cr-workflow" @onclick='() => SetTab("appetite")'><i class="bi bi-bullseye" aria-hidden="true"></i><span><strong>Appetite checks</strong><small>Review appetite and market fit capabilities.</small></span></button>
+        <button type="button" class="cr-workflow" @onclick='() => SetTab("defaults")'><i class="bi bi-sliders" aria-hidden="true"></i><span><strong>Rating defaults</strong><small>Maintain default quote submission settings.</small></span></button>
+        <button type="button" class="cr-workflow" @onclick='() => Nav.NavigateTo("/quotes/rating-results")'><i class="bi bi-graph-up" aria-hidden="true"></i><span><strong>Quote results</strong><small>Open comparative rating results workflow.</small></span></button>
+    </section>
+
+    <section class="cr-filter-panel">
+        <div class="cr-search"><i class="bi bi-search" aria-hidden="true"></i><input placeholder="Search provider, code, category, description, or JSON..." @bind="_search" @bind:event="oninput" @onkeyup="ApplyFilters" /></div>
+        <div class="cr-filter-actions">
+            <select class="cr-select" @bind="_categoryFilter" @bind:after="ApplyFilters"><option value="">All categories</option>@foreach (var category in CategoryOptions){<option value="@category">@category</option>}</select>
+            <select class="cr-select" @bind="_sort" @bind:after="ApplyFilters"><option value="importance">Importance</option><option value="name">Provider name</option><option value="readiness">Readiness</option><option value="order">Sort order</option></select>
+            <button type="button" class="cr-btn cr-btn--ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+            <span><strong>@_filtered.Count.ToString("N0")</strong> shown</span>
+        </div>
+    </section>
+
+    <section class="cr-tabs" aria-label="Comparative rater views">
+        @foreach (var tab in Tabs)
+        {
+            <button type="button" class="cr-tab @(_activeTab == tab.Key ? "cr-tab--active" : null)" @onclick="() => SetTab(tab.Key)"><i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label <strong>@TabCount(tab.Key)</strong></button>
+        }
+    </section>
+
+    @if (_loading)
+    {
+        <section class="cr-loading"><span class="cr-spinner"></span><strong>Loading comparative rater setup...</strong><span>Syncing existing integration configuration records.</span></section>
+    }
+    else
+    {
+        <section class="cr-dashboard">
+            <main class="cr-main-card">
+                <div class="cr-card-header">
+                    <div><span class="cr-section-kicker"><i class="bi bi-stars" aria-hidden="true"></i> Importance-ranked rater setup</span><h2>@ActiveTitle</h2><p>@_filtered.Count.ToString("N0") rater provider records sorted by readiness and business importance.</p></div>
+                    <div class="cr-card-actions"><button type="button" class="cr-btn cr-btn--ghost" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add</button><button type="button" class="cr-btn cr-btn--ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Sync</button></div>
+                </div>
+                @if (!_filtered.Any())
+                {
+                    <div class="cr-empty"><i class="bi bi-calculator" aria-hidden="true"></i><strong>No comparative rater providers match this view</strong><span>Adjust filters or add a provider configuration.</span><button type="button" class="cr-btn cr-btn--primary" @onclick="OpenCreate">Add provider</button></div>
+                }
+                else
+                {
+                    <div class="cr-table-scroll">
+                        <table class="cr-table">
+                            <thead><tr><th>Provider</th><th>Capability</th><th>Status</th><th>Readiness</th><th>Business importance</th><th>Configuration</th><th class="cr-actions-col">Actions</th></tr></thead>
+                            <tbody>
+                                @foreach (var item in _filtered)
+                                {
+                                    <tr class="cr-table-row @(_selected?.IntegrationConfigItemId == item.IntegrationConfigItemId ? "cr-table-row--selected" : null)" @onclick="() => SelectItem(item)">
+                                        <td><div class="cr-provider-cell"><span class="cr-provider-icon @ProviderTone(item)"><i class="bi @ProviderIcon(item)" aria-hidden="true"></i></span><span><strong>@item.Name</strong><small>@item.Code</small></span></div></td>
+                                        <td><span class="cr-cat @CategoryClass(item)">@Category(item)</span></td>
+                                        <td><span class="cr-status @(item.IsActive ? "cr-status--active" : "cr-status--inactive")">@(item.IsActive ? "Active" : "Inactive")</span></td>
+                                        <td><strong>@ReadinessScore(item)%</strong><small>@ReadinessLabel(item)</small></td>
+                                        <td><span class="cr-priority @PriorityClass(item)">@ImportanceScore(item)</span></td>
+                                        <td><span class="cr-flag @(HasConfig(item) ? "cr-flag--on" : "cr-flag--off")">@(HasConfig(item) ? "Configured" : "Missing JSON")</span></td>
+                                        <td class="cr-actions-col"><div class="cr-row-actions" @onclick:stopPropagation="true"><button type="button" class="cr-icon-btn" title="Inspect" @onclick="() => SelectItem(item)"><i class="bi bi-eye" aria-hidden="true"></i></button><button type="button" class="cr-icon-btn" title="Edit" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="cr-icon-btn cr-icon-btn--danger" title="Delete" @onclick="() => ConfirmDelete(item)"><i class="bi bi-trash3" aria-hidden="true"></i></button></div></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </main>
+
+            <aside class="cr-side-panel">
+                <section class="cr-panel-card">
+                    <span class="cr-section-kicker"><i class="bi bi-speedometer2" aria-hidden="true"></i> Rating readiness</span>
+                    <div class="cr-score-card"><span>Enterprise score</span><small>provider + readiness posture</small><strong>@OverallReadiness</strong></div>
+                    <div class="cr-readiness"><span style="width:@OverallReadiness%"></span></div>
+                    <div class="cr-importance-list">
+                        @foreach (var signal in ImportanceSignals)
+                        {
+                            <div><i class="bi @signal.Icon" aria-hidden="true"></i><span>@signal.Text</span></div>
+                        }
+                    </div>
+                </section>
+
+                <section class="cr-panel-card">
+                    <span class="cr-section-kicker"><i class="bi bi-info-circle" aria-hidden="true"></i> Selected provider</span>
+                    @if (_selected is null)
+                    {
+                        <div class="cr-empty cr-empty--compact"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a provider</strong><span>Inspect setup and recommended actions.</span></div>
+                    }
+                    else
+                    {
+                        <div class="cr-selected-head"><span class="cr-provider-icon @ProviderTone(_selected)"><i class="bi @ProviderIcon(_selected)" aria-hidden="true"></i></span><span><strong>@_selected.Name</strong><small>@Category(_selected)</small></span></div>
+                        <p class="cr-selected-desc">@(_selected.Description ?? "No provider description recorded.")</p>
+                        <div class="cr-detail-list">
+                            <div><span>Status</span><strong>@(_selected.IsActive ? "Active" : "Inactive")</strong></div>
+                            <div><span>Readiness</span><strong>@ReadinessScore(_selected)%</strong></div>
+                            <div><span>Sort order</span><strong>@_selected.SortOrder</strong></div>
+                            <div><span>Configuration</span><strong>@(HasConfig(_selected) ? "Present" : "Missing")</strong></div>
+                            <div><span>Recommended action</span><strong>@RecommendedAction(_selected)</strong></div>
+                        </div>
+                        <div class="cr-selected-actions"><button type="button" class="cr-btn cr-btn--primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="cr-btn cr-btn--danger" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash3" aria-hidden="true"></i> Delete</button></div>
+                    }
+                </section>
+            </aside>
+        </section>
+    }
+</div>
+
+@code {
+    private const string Kind = "ComparativeRater";
+    private Guid _tenantId;
+    private bool _loading = true;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private bool _toastVisible;
+    private string _toastKind = "success";
+    private string _toastMessage = string.Empty;
+    private string? _loadError;
+    private string _search = string.Empty;
+    private string _categoryFilter = string.Empty;
+    private string _sort = "importance";
+    private string _activeKpi = "all";
+    private string _activeTab = "overview";
+    private Guid? _editId;
+    private IntegrationConfigItemDto? _deleteTarget;
+    private IntegrationConfigItemDto? _selected;
+    private RaterForm _form = new();
+    private readonly List<IntegrationConfigItemDto> _items = [];
+    private readonly List<IntegrationConfigItemDto> _filtered = [];
+
+    private IReadOnlyList<TabDef> Tabs => [new("overview", "Overview", "bi-speedometer2"), new("providers", "Providers", "bi-building"), new("appetite", "Appetite", "bi-bullseye"), new("defaults", "Defaults", "bi-sliders"), new("attention", "Attention", "bi-exclamation-octagon")];
+    private IReadOnlyList<KpiDef> Kpis => [new("all", "Total", _items.Count.ToString("N0"), "All rater records", "bi-calculator", "cr-kpi--blue", "Show all rater providers."), new("active", "Active", ActiveCount.ToString("N0"), "Enabled providers", "bi-check-circle", "cr-kpi--green", "Show active providers."), new("ready", "Ready", ReadyCount.ToString("N0"), "Configured and active", "bi-stars", "cr-kpi--cyan", "Show ready providers."), new("attention", "Attention", AttentionCount.ToString("N0"), "Inactive or incomplete", "bi-exclamation-octagon", "cr-kpi--red", "Show items needing attention."), new("appetite", "Appetite", AppetiteCount.ToString("N0"), "Appetite capabilities", "bi-bullseye", "cr-kpi--amber", "Show appetite-related setup."), new("defaults", "Defaults", DefaultsCount.ToString("N0"), "Rating defaults", "bi-sliders", "cr-kpi--purple", "Show default-setting records.")];
+    private IEnumerable<string> CategoryOptions => _items.Select(Category).Where(c => !string.IsNullOrWhiteSpace(c)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(c => c);
+    private int ActiveCount => _items.Count(i => i.IsActive);
+    private int ReadyCount => _items.Count(i => i.IsActive && HasConfig(i));
+    private int AttentionCount => _items.Count(i => !i.IsActive || !HasConfig(i));
+    private int AppetiteCount => _items.Count(IsAppetite);
+    private int DefaultsCount => _items.Count(IsDefaults);
+    private int OverallReadiness => Math.Clamp(35 + ReadyCount * 12 + ActiveCount * 5 - AttentionCount * 9, 0, 100);
+    private string ActiveTitle => _activeTab switch { "providers" => "Comparative rating providers", "appetite" => "Appetite and market-fit setup", "defaults" => "Rating defaults and submission settings", "attention" => "Rater readiness attention queue", _ => "Comparative rater command queue" };
+    private IEnumerable<Signal> ImportanceSignals => [new("bi-check-circle", $"{ActiveCount:N0} active provider configuration(s)."), new("bi-stars", $"{ReadyCount:N0} provider(s) are active with configuration JSON."), new("bi-exclamation-triangle", $"{AttentionCount:N0} setup record(s) need readiness review."), new("bi-bullseye", $"{AppetiteCount:N0} appetite-related configuration(s).")];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        Breadcrumbs.SetCrumbs(new("Tenant Integrations", "/tenant/integrations/health"), new("Comparative Rater", "/tenant/integrations/rater"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchIntegrationConfigItemsAsync(_tenantId, Kind, _search, pageSize: 250);
+            _items.Clear();
+            _items.AddRange(result?.Items ?? []);
+            ApplyFilters();
+            _selected = _selected is null ? _filtered.FirstOrDefault() : _filtered.FirstOrDefault(i => i.IntegrationConfigItemId == _selected.IntegrationConfigItemId) ?? _filtered.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Unable to load comparative rater setup: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilters()
+    {
+        IEnumerable<IntegrationConfigItemDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_search)) query = query.Where(i => Contains(i.Name, _search) || Contains(i.Code, _search) || Contains(i.Category, _search) || Contains(i.Description, _search) || Contains(i.ConfigurationJson, _search));
+        if (!string.IsNullOrWhiteSpace(_categoryFilter)) query = query.Where(i => Category(i).Equals(_categoryFilter, StringComparison.OrdinalIgnoreCase));
+        query = _activeKpi switch { "active" => query.Where(i => i.IsActive), "ready" => query.Where(i => i.IsActive && HasConfig(i)), "attention" => query.Where(i => !i.IsActive || !HasConfig(i)), "appetite" => query.Where(IsAppetite), "defaults" => query.Where(IsDefaults), _ => query };
+        query = _activeTab switch { "providers" => query.Where(i => IsProvider(i) || !IsAppetite(i) && !IsDefaults(i)), "appetite" => query.Where(IsAppetite), "defaults" => query.Where(IsDefaults), "attention" => query.Where(i => !i.IsActive || !HasConfig(i)), _ => query };
+        query = _sort switch { "name" => query.OrderBy(i => i.Name), "readiness" => query.OrderByDescending(ReadinessScore).ThenBy(i => i.Name), "order" => query.OrderBy(i => i.SortOrder).ThenBy(i => i.Name), _ => query.OrderByDescending(ImportanceScore).ThenBy(i => i.Name) };
+        _filtered.Clear();
+        _filtered.AddRange(query);
+        if (_selected is null || !_filtered.Any(i => i.IntegrationConfigItemId == _selected.IntegrationConfigItemId)) _selected = _filtered.FirstOrDefault();
+    }
+
+    private void SetKpi(string key) { _activeKpi = _activeKpi == key && key != "all" ? "all" : key; if (key is "attention") _activeTab = "attention"; else if (key is "appetite") _activeTab = "appetite"; else if (key is "defaults") _activeTab = "defaults"; else if (key is "active" or "ready") _activeTab = "providers"; ApplyFilters(); }
+    private void SetTab(string key) { _activeTab = key; ApplyFilters(); }
+    private void ResetFilters() { _search = string.Empty; _categoryFilter = string.Empty; _sort = "importance"; _activeKpi = "all"; _activeTab = "overview"; ApplyFilters(); }
+    private void SelectItem(IntegrationConfigItemDto item) => _selected = item;
+    private int TabCount(string key) => key switch { "providers" => _items.Count(i => IsProvider(i) || !IsAppetite(i) && !IsDefaults(i)), "appetite" => AppetiteCount, "defaults" => DefaultsCount, "attention" => AttentionCount, _ => _items.Count };
+
+    private void OpenCreate() { _editId = null; _form = new() { ConfigurationJson = "{}", IsActive = true, Category = "Rating Provider" }; _showForm = true; }
+    private void OpenEdit(IntegrationConfigItemDto item) { _editId = item.IntegrationConfigItemId; _form = new() { Code = item.Code, Name = item.Name, Category = item.Category, Description = item.Description, ConfigurationJson = item.ConfigurationJson, SortOrder = item.SortOrder, IsActive = item.IsActive }; _showForm = true; }
+    private void CloseForm() { if (!_saving) _showForm = false; }
+    private void ConfirmDelete(IntegrationConfigItemDto item) { _deleteTarget = item; _showDelete = true; }
+    private void CancelDelete() { if (!_saving) { _showDelete = false; _deleteTarget = null; } }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (_editId.HasValue)
+            {
+                await Api.UpdateIntegrationConfigItemAsync(_editId.Value, new(_form.Code.Trim(), _form.Name.Trim(), _form.Category, _form.Description, _form.ConfigurationJson, _form.IsActive, _form.SortOrder));
+            }
+            else
+            {
+                var created = await Api.CreateIntegrationConfigItemAsync(new(_tenantId, Kind, _form.Code.Trim(), _form.Name.Trim(), _form.Category, _form.Description, _form.ConfigurationJson, _form.SortOrder));
+                if (!_form.IsActive) await Api.UpdateIntegrationConfigItemAsync(created, new(_form.Code.Trim(), _form.Name.Trim(), _form.Category, _form.Description, _form.ConfigurationJson, false, _form.SortOrder));
+            }
+            _showForm = false;
+            ShowToast("Comparative rater provider saved.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteIntegrationConfigItemAsync(_deleteTarget.IntegrationConfigItemId);
+            _showDelete = false;
+            _deleteTarget = null;
+            ShowToast("Comparative rater provider deleted.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void HandleInvalidSubmit(EditContext _) => ShowToast("Please fix validation errors before saving.", "danger");
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static string Category(IntegrationConfigItemDto item) => string.IsNullOrWhiteSpace(item.Category) ? "Rating Provider" : item.Category!;
+    private static bool HasConfig(IntegrationConfigItemDto item) => !string.IsNullOrWhiteSpace(item.ConfigurationJson) && item.ConfigurationJson.Trim() != "{}";
+    private static bool IsProvider(IntegrationConfigItemDto item) => Category(item).Contains("provider", StringComparison.OrdinalIgnoreCase) || Category(item).Contains("rating", StringComparison.OrdinalIgnoreCase);
+    private static bool IsAppetite(IntegrationConfigItemDto item) => Category(item).Contains("appetite", StringComparison.OrdinalIgnoreCase) || item.Name.Contains("appetite", StringComparison.OrdinalIgnoreCase) || (item.Description?.Contains("appetite", StringComparison.OrdinalIgnoreCase) ?? false);
+    private static bool IsDefaults(IntegrationConfigItemDto item) => Category(item).Contains("default", StringComparison.OrdinalIgnoreCase) || item.Name.Contains("default", StringComparison.OrdinalIgnoreCase) || item.Name.Contains("submission", StringComparison.OrdinalIgnoreCase);
+    private static int ReadinessScore(IntegrationConfigItemDto item) => Math.Clamp((item.IsActive ? 45 : 10) + (HasConfig(item) ? 30 : 0) + (!string.IsNullOrWhiteSpace(item.Description) ? 10 : 0) + (!string.IsNullOrWhiteSpace(item.Category) ? 10 : 0) + (item.SortOrder > 0 ? 5 : 0), 0, 100);
+    private static int ImportanceScore(IntegrationConfigItemDto item) => (!item.IsActive || !HasConfig(item) ? 1000 : 0) + (IsProvider(item) ? 120 : 0) + (IsAppetite(item) ? 90 : 0) + (IsDefaults(item) ? 70 : 0) + (100 - ReadinessScore(item)) + item.SortOrder;
+    private static string ReadinessLabel(IntegrationConfigItemDto item) => ReadinessScore(item) >= 85 ? "Ready for production" : ReadinessScore(item) >= 60 ? "Needs setup review" : "Incomplete setup";
+    private static string RecommendedAction(IntegrationConfigItemDto item) => !item.IsActive ? "Activate or retire provider" : !HasConfig(item) ? "Add configuration JSON" : ReadinessScore(item) < 85 ? "Complete metadata" : "Monitor quote workflow";
+    private static string ProviderIcon(IntegrationConfigItemDto item) => IsAppetite(item) ? "bi-bullseye" : IsDefaults(item) ? "bi-sliders" : "bi-calculator";
+    private static string ProviderTone(IntegrationConfigItemDto item) => !item.IsActive || !HasConfig(item) ? "cr-tone-red" : IsAppetite(item) ? "cr-tone-amber" : IsDefaults(item) ? "cr-tone-purple" : "cr-tone-blue";
+    private static string CategoryClass(IntegrationConfigItemDto item) => IsAppetite(item) ? "cr-cat--appetite" : IsDefaults(item) ? "cr-cat--defaults" : "cr-cat--provider";
+    private static string PriorityClass(IntegrationConfigItemDto item) => ImportanceScore(item) >= 1000 ? "cr-priority--high" : ReadinessScore(item) < 85 ? "cr-priority--medium" : "cr-priority--normal";
+
+    private sealed record TabDef(string Key, string Label, string Icon);
+    private sealed record KpiDef(string Key, string Label, string Value, string Detail, string Icon, string Css, string Tooltip);
+    private sealed record Signal(string Icon, string Text);
+    private sealed class RaterForm
+    {
+        [Required, StringLength(80)] public string Code { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string Name { get; set; } = string.Empty;
+        [StringLength(120)] public string? Category { get; set; }
+        [StringLength(500)] public string? Description { get; set; }
+        [StringLength(4000)] public string? ConfigurationJson { get; set; } = "{}";
+        [Range(0, 9999)] public int SortOrder { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+}

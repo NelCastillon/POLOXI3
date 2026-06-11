@@ -1,36 +1,315 @@
-﻿@page "/tenant/carriers/download"
+@page "/tenant/carriers/download"
 @using System.ComponentModel.DataAnnotations
 @using Ams.Application.Features.CarrierRules
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
-<PageTitle>Carrier Download Mapping â€” Carrier Configuration</PageTitle>
-<AppPageHeader Title="Carrier Download Mapping" Subtitle="Map carrier download source fields to AMS target fields and transforms" Icon="bi-arrow-down-circle"><Actions><button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Add Mapping</button><button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button></Actions></AppPageHeader>
-<div class="pc-kpi-strip"><div class="pc-kpi-card @(_activeFilter==""?"pc-kpi-card--active":"")" @onclick='()=>SetFilter("")' title="Show all appointments" style="cursor:pointer"><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-arrow-down-circle"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total</div></div></div><div class="pc-kpi-card @(_activeFilter=="active"?"pc-kpi-card--active":"")" @onclick='()=>SetFilter("active")' title="Filter active appointments" style="cursor:pointer"><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x=>x.IsActive)</div><div class="pc-kpi-label">Active</div></div></div><div class="pc-kpi-card @(_activeFilter=="active"?"pc-kpi-card--active":"")" @onclick='()=>SetFilter("active")' title="Filter active mappings" style="cursor:pointer"><span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-lock"></i></span><div><div class="pc-kpi-value">@_items.Count(x=>x.IsActive)</div><div class="pc-kpi-label">Active</div></div></div></div>
-@if(_loadError is not null){<div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError</div>}
-<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search mapping, transaction, or source field..." />
-<div class="um-grid-card">@if(_loading){<div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading...</span></div>}<SfGrid TValue="CarrierDownloadMappingDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52"><GridEvents TValue="CarrierDownloadMappingDto" RowSelected="OnRowSelected"/><GridPageSettings PageSize="25"/><GridColumns><GridColumn Field="MappingCode" HeaderText="Mapping" Width="160"/><GridColumn Field="TransactionType" HeaderText="Transaction" Width="140"/><GridColumn Field="SourceField" HeaderText="Source Field" Width="170"/><GridColumn Field="TargetField" HeaderText="Target Field" Width="170"/><GridColumn Field="SortOrder" HeaderText="Order" Width="90" TextAlign="TextAlign.Center"/><GridColumn Field="IsActive" HeaderText="Status" Width="100" TextAlign="TextAlign.Center"><Template>@{var r=(CarrierDownloadMappingDto)context;}<span class="um-badge @(r.IsActive?"um-badge-success":"um-badge-neutral")">@(r.IsActive?"Active":"Inactive")</span></Template></GridColumn><GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Center"><Template>@{var r=(CarrierDownloadMappingDto)context;}<button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="()=>OpenEdit(r)"><i class="bi bi-pencil"></i></button></Template></GridColumn></GridColumns></SfGrid></div>
-<SfDialog @bind-Visible="_showForm" Width="580px" IsModal="true" ShowCloseIcon="false"><DialogEvents Closed="ResetForm"/><DialogContent><div class="um-modal-header"><i class="bi bi-arrow-down-circle"></i><span>@(_editId.HasValue?"Edit Appointment":"Add Mapping")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="()=>_showForm=false"><i class="bi bi-x-lg"></i></button></div><EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator/><div class="um-modal-body"><div class="um-form-grid"><div class="um-field"><label>Mapping Code <span class="text-danger">*</span></label><InputText @bind-Value="_form.MappingCode" class="um-input"/></div><div class="um-field"><label>Transaction <span class="text-danger">*</span></label><InputText @bind-Value="_form.TransactionType" class="um-input"/></div><div class="um-field"><label>Source Field</label><InputText @bind-Value="_form.SourceField" class="um-input"/></div><div class="um-field"><label>Appointment Date</label><InputText @bind-Value="_form.TargetField" class="um-input"/></div><div class="um-field"><label>Expiration Date</label><InputTextArea @bind-Value="_form.TransformRule" class="um-input" rows="2"/></div><div class="um-field"><label>SortOrder</label><InputNumber @bind-Value="_form.SortOrder" class="um-input"/></div><div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsActive"/> Active</label></div></div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="()=>_showForm=false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue?"Save Changes":"Create")</button></div></EditForm></DialogContent></SfDialog>
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true"><ToastPosition X="Right" Y="Bottom"/></SfToast><style>.validation-message{display:flex;align-items:center;gap:.45rem;margin-top:.55rem;color:#dc3545!important;font-size:.875rem;font-weight:700}.validation-message::before{content:"!";display:inline-flex;align-items:center;justify-content:center;width:1rem;height:1rem;min-width:1rem;flex-shrink:0;border-radius:999px;color:#fff;background:linear-gradient(135deg,#ef4444,#b91c1c);font-size:.7rem;font-weight:800}</style>
-@code {
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantId;
-    private Guid _tenantAdminUserId;Guid TenantId { get; set; }List<CarrierDownloadMappingDto> _items=[];List<CarrierDownloadMappingDto> _filtered=[];string _activeFilter="";bool _loading,_saving,_showForm;string _search=string.Empty;string? _loadError;Guid? _editId;SfToast _toast=default!;MappingForm _form=new();protected override async Task OnInitializedAsync()
+
+<PageTitle>Carrier Download Command Center — Carrier Configuration</PageTitle>
+
+<div class="cdm-page">
+    <section class="cdm-hero">
+        <div class="cdm-hero__content">
+            <div class="cdm-hero-left">
+                <span class="cdm-hero-icon"><i class="bi bi-arrow-down-circle" aria-hidden="true"></i></span>
+                <div class="cdm-hero-title">
+                    <div class="cdm-hero__eyebrow">Enterprise download operations</div>
+                    <div class="cdm-title-row">
+                        <h1>Carrier Download Command Center</h1>
+                        <div class="cdm-hero__meta">
+                            <span><i class="bi bi-diagram-3" aria-hidden="true"></i>@_items.Count mappings</span>
+                            <span><i class="bi bi-check-circle" aria-hidden="true"></i>@_items.Count(x => x.IsActive) active</span>
+                            <span><i class="bi bi-exclamation-octagon" aria-hidden="true"></i>@_items.Count(IsNeedsAttention) need review</span>
+                            <span><i class="bi bi-stars" aria-hidden="true"></i>@_items.Count(IsTransformed) transformed</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <p>Normalize carrier download feeds by transaction, source field, AMS target, transform rule, and enterprise processing priority.</p>
+        </div>
+        <div class="cdm-hero__actions">
+            <button type="button" class="cdm-btn cdm-btn--light" @onclick="RefreshAsync" disabled="@_loading">
+                <i class="bi bi-arrow-clockwise @(_loading ? "cdm-spin" : null)" aria-hidden="true"></i> Refresh
+            </button>
+            <button type="button" class="cdm-btn cdm-btn--primary" @onclick="OpenCreate">
+                <i class="bi bi-plus-circle" aria-hidden="true"></i> Add Mapping
+            </button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
     {
-        await ResolveCurrentUserContextAsync();Breadcrumbs.SetCrumbs(new("Home","/"),new("Carrier Config",null),new("Carrier Download Mapping",null));await LoadAsync();}async Task LoadAsync(){_loading=true;_loadError=null;try{var r=await Api.SearchCarrierDownloadMappingsAsync(TenantId,_search,pageSize:200);_items=r?.Items.ToList()??[];ApplyFilter();}catch(Exception ex){_loadError=ex.Message;}finally{_loading=false;}}void SetFilter(string f){_activeFilter=f;ApplyFilter();}void ApplyFilter()=>_filtered=_activeFilter switch{"active"=>_items.Where(x=>x.IsActive).ToList(),"restricted"=>_items.Where(x=>x.TargetField=="Active"||x.TargetField=="Closed").ToList(),_=>[.._items]};Task OnSearchAsync()=>LoadAsync();void OnRowSelected(RowSelectEventArgs<CarrierDownloadMappingDto> args)=>OpenEdit(args.Data);void OpenCreate(){_editId=null;_form=new();_showForm=true;}void OpenEdit(CarrierDownloadMappingDto i){_editId=i.DownloadMappingId;_form=new(){CarrierNaic=i.CarrierNaic,MappingCode=i.MappingCode,TransactionType=i.TransactionType,SourceField=i.SourceField,TargetField=i.TargetField,TransformRule=i.TransformRule,SortOrder=i.SortOrder,IsActive=i.IsActive};_showForm=true;}async Task SaveAsync(){_saving=true;try{if(_editId.HasValue)await Api.UpdateCarrierDownloadMappingAsync(_editId.Value,new(_form.MappingCode,_form.CarrierNaic,_form.TransactionType,_form.SourceField,_form.TargetField,_form.TransformRule,_form.IsActive,_form.SortOrder));else await Api.CreateCarrierDownloadMappingAsync(new(TenantId,_form.MappingCode,_form.CarrierNaic,_form.TransactionType,_form.SourceField,_form.TargetField,_form.TransformRule,_form.SortOrder));_showForm=false;await _toast.ShowAsync(new(){Content="Saved successfully",CssClass="e-toast-success"});await LoadAsync();}catch(Exception ex){await _toast.ShowAsync(new(){Content=$"Save failed: {ex.Message}",CssClass="e-toast-danger"});}finally{_saving=false;}}void ResetForm(){_form=new();_editId=null;}sealed class MappingForm{[Required,StringLength(80)]public string MappingCode{get;set;}=string.Empty;[StringLength(20)]public string? CarrierNaic{get;set;}[StringLength(80)]public string? TransactionType{get;set;}[StringLength(120)]public string? SourceField{get;set;}[StringLength(120)]public string? TargetField{get;set;}[StringLength(500)]public string? TransformRule{get;set;}[Range(0,9999)]public int SortOrder{get;set;}=100;public bool IsActive{get;set;}=true;}
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        <div class="alert alert-danger cdm-alert" style="border-left: 4px solid #dc3545; animation: cdm-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span>@_loadError</span>
+        </div>
     }
+
+    <section class="cdm-kpi-strip" aria-label="Carrier download KPIs">
+        @KpiCard("all", "Total Mappings", _items.Count.ToString(), "All carrier download fields", "bi-diagram-3", "blue")
+        @KpiCard("review", "Needs Review", _items.Count(IsNeedsAttention).ToString(), "Inactive, incomplete, or low-priority mappings", "bi-exclamation-octagon", "red")
+        @KpiCard("policy", "Policy Critical", _items.Count(IsPolicyCritical).ToString(), "Policy and insured identity fields", "bi-shield-check", "green")
+        @KpiCard("claim", "Claims", _items.Count(x => IsTransaction(x, "Claim")).ToString(), "Claim download mappings", "bi-exclamation-circle", "amber")
+        @KpiCard("billing", "Billing", _items.Count(x => IsTransaction(x, "Billing")).ToString(), "Premium, commission, and invoice fields", "bi-receipt", "purple")
+        @KpiCard("transform", "Transformed", _items.Count(IsTransformed).ToString(), "Mappings with transform logic", "bi-stars", "cyan")
+    </section>
+
+    <section class="cdm-workflows" aria-label="Carrier download workflows">
+        @WorkflowButton("Review gaps", "Find incomplete or inactive mappings", "bi-clipboard-check", () => SetDashboardFocus("review", "importance"))
+        @WorkflowButton("Policy feed", "Prioritize policy and insured data", "bi-shield-check", () => SetDashboardFocus("policy", "importance"))
+        @WorkflowButton("Claims feed", "Inspect loss and claim transactions", "bi-exclamation-circle", () => SetDashboardFocus("claim", "transaction"))
+        @WorkflowButton("Billing feed", "Validate premium and commission mappings", "bi-receipt", () => SetDashboardFocus("billing", "transaction"))
+        @WorkflowButton("Transform audit", "Review rules that mutate carrier data", "bi-stars", () => SetDashboardFocus("transform", "target"))
+    </section>
+
+    <section class="cdm-filter-panel" aria-label="Carrier download filters">
+        <div class="cdm-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input type="search"
+                   placeholder="Search mapping code, NAIC, transaction, source, target, or transform…"
+                   aria-label="Search carrier download mappings"
+                   value="@_searchTerm"
+                   @oninput="@(async (Microsoft.AspNetCore.Components.ChangeEventArgs e) => await OnSearchInput(e))" />
+        </div>
+        <div class="cdm-filter-grid">
+            <label><span>Status</span><select class="form-select" @bind="_statusFilter" @bind:after="ApplyFilters"><option value="">All statuses</option><option value="Active">Active</option><option value="Inactive">Inactive</option></select></label>
+            <label><span>Transaction</span><select class="form-select" @bind="_transactionFilter" @bind:after="ApplyFilters"><option value="">All transactions</option>@foreach (var transaction in TransactionOptions) { <option value="@transaction">@transaction</option> }</select></label>
+            <label><span>Importance</span><select class="form-select" @bind="_importanceFilter" @bind:after="ApplyFilters"><option value="">All importance</option><option value="Critical">Critical</option><option value="High">High</option><option value="Medium">Medium</option><option value="Low">Low</option></select></label>
+            <label><span>Sort</span><select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters"><option value="importance">Importance / order</option><option value="transaction">Transaction</option><option value="target">Target field</option><option value="created">Newest</option><option value="code">Mapping code</option></select></label>
+        </div>
+        <button type="button" class="cdm-btn cdm-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+    </section>
+
+    <nav class="cdm-tabs" aria-label="Carrier download views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="cdm-tab @(_activeTab == tab.Key ? "cdm-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)"><i class="bi @tab.Icon" aria-hidden="true"></i><span>@tab.Label</span><strong>@TabCount(tab.Key)</strong></button>
+        }
+    </nav>
+
+    <main class="cdm-dashboard">
+        <section class="cdm-main-card">
+            <div class="cdm-card-header">
+                <div><span class="cdm-section-kicker">@ActiveViewTitle</span><h2>@FilteredMappings.Count() mappings</h2><p>Ranked by enterprise importance: policy identity, billing impact, claims support, transform complexity, active state, completeness, and processing order.</p></div>
+                <div class="cdm-card-actions">
+                    @if (_selectedMappings.Count > 0)
+                    {
+                        <span class="cdm-sel-count">@_selectedMappings.Count selected</span>
+                        <button type="button" class="cdm-btn cdm-btn--ghost" @onclick="() => ConfirmBulkStatus(true)"><i class="bi bi-check-circle" aria-hidden="true"></i> Activate</button>
+                        <button type="button" class="cdm-btn cdm-btn--ghost" @onclick="() => ConfirmBulkStatus(false)"><i class="bi bi-slash-circle" aria-hidden="true"></i> Deactivate</button>
+                        <button type="button" class="cdm-btn cdm-btn--danger-ghost" @onclick="ConfirmBulkDelete"><i class="bi bi-trash3" aria-hidden="true"></i> Remove</button>
+                    }
+                    <button type="button" class="cdm-btn cdm-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Prev</button>
+                    <span class="cdm-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="cdm-btn cdm-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="cdm-loading"><span class="cdm-spinner"></span> Loading carrier download mappings…</div>
+            }
+            else if (!FilteredMappings.Any())
+            {
+                <div class="cdm-empty"><i class="bi bi-arrow-down-circle" aria-hidden="true"></i><strong>No mappings found</strong><span>Adjust the active tab, KPI, search, or filters.</span></div>
+            }
+            else if (_activeTab == "transaction")
+            {
+                <div class="cdm-transaction-grid">
+                    @foreach (var group in TransactionGroups)
+                    {
+                        <article class="cdm-transaction-card"><div class="cdm-transaction-icon"><i class="bi @TransactionIcon(group.Name)" aria-hidden="true"></i></div><div class="cdm-transaction-meta"><h3>@group.Name</h3><p>@group.Count mappings • @group.Review review • @group.Transformed transformed</p><div class="cdm-mini-bar"><span style="width:@group.Percent%"></span></div></div><button type="button" class="cdm-btn cdm-btn--ghost" @onclick="() => FilterByTransaction(group.Name)">Open</button></article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="cdm-table-wrap"><table class="cdm-table"><thead><tr><th class="cdm-check-col"><input type="checkbox" checked="@AllPageSelected" @onchange="ToggleSelectAllPage" aria-label="Select all mappings on page" /></th><th>Importance</th><th>Mapping</th><th>Transaction</th><th>Source</th><th>AMS Target</th><th>Transform</th><th>Status</th><th>Order</th><th class="cdm-actions-col">Actions</th></tr></thead><tbody>
+                    @foreach (var item in PagedMappings)
+                    {
+                        <tr class="@(_selected?.DownloadMappingId == item.DownloadMappingId ? "cdm-row cdm-row--selected" : "cdm-row")" @onclick="() => SelectRow(item)">
+                            <td class="cdm-check-col" @onclick:stopPropagation="true"><input type="checkbox" checked="@IsSelected(item)" @onchange="() => ToggleSelect(item)" aria-label="Select mapping" /></td>
+                            <td>@ImportanceBadge(item)</td>
+                            <td><div class="cdm-map-cell"><div class="cdm-map-icon" aria-hidden="true"><i class="bi @TransactionIcon(item.TransactionType)"></i></div><div class="cdm-map-meta"><button type="button" class="cdm-link-button" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)">@item.MappingCode</button><small>@Safe(item.CarrierNaic, "All carriers")</small></div></div></td>
+                            <td><span class="cdm-pill @TransactionBadgeClass(item.TransactionType)">@Safe(item.TransactionType, "Unassigned")</span></td>
+                            <td><span class="cdm-field" title="@item.SourceField">@Safe(item.SourceField, "Not mapped")</span></td>
+                            <td><span class="cdm-field" title="@item.TargetField">@Safe(item.TargetField, "Not mapped")</span></td>
+                            <td class="cdm-center"><i class="bi @(IsTransformed(item) ? "bi-stars cdm-transform-on" : "bi-dash-circle cdm-transform-off")" title="@(IsTransformed(item) ? item.TransformRule : "No transform rule")" aria-hidden="true"></i></td>
+                            <td>@StatusBadge(item)</td>
+                            <td><span class="cdm-date">@item.SortOrder</span></td>
+                            <td class="cdm-actions-col"><button type="button" class="cdm-icon-btn" title="Open action menu" @onclick:stopPropagation="true" @onclick="() => ToggleActionMenu(item)"><i class="bi bi-three-dots-vertical" aria-hidden="true"></i></button>@if (_openActionMenuFor == item.DownloadMappingId) { <div class="cdm-menu" role="menu" @onclick:stopPropagation="true"><div class="cdm-menu__summary"><strong>@item.MappingCode</strong><span>@Safe(item.TargetField, "No target field")</span></div><button type="button" class="cdm-menu-item" role="menuitem" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i><span>Edit mapping</span></button><button type="button" class="cdm-menu-item" role="menuitem" @onclick="() => DuplicateMapping(item)"><i class="bi bi-copy" aria-hidden="true"></i><span>Duplicate</span></button><button type="button" class="cdm-menu-item" role="menuitem" @onclick="() => ConfirmToggleStatus(item)"><i class="bi @(item.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i><span>@(item.IsActive ? "Deactivate" : "Activate")</span></button><button type="button" class="cdm-menu-item cdm-menu-item--danger" role="menuitem" @onclick="() => ConfirmDelete(item)"><i class="bi bi-trash3" aria-hidden="true"></i><span>Remove mapping</span></button></div> }</td>
+                        </tr>
+                    }
+                </tbody></table></div>
+            }
+        </section>
+
+        <aside class="cdm-side-panel">
+            <section class="cdm-panel-card"><span class="cdm-section-kicker">Selected mapping</span>
+                @if (_selected is null)
+                {
+                    <div class="cdm-empty cdm-empty--compact"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a row</strong><span>Choose a mapping to inspect importance, completeness, and actions.</span></div>
+                }
+                else
+                {
+                    <div class="cdm-selected"><div class="cdm-selected__title"><div class="cdm-map-icon cdm-map-icon--lg"><i class="bi @TransactionIcon(_selected.TransactionType)" aria-hidden="true"></i></div><div><h3>@_selected.MappingCode</h3><span>@Safe(_selected.TransactionType, "Unassigned transaction")</span></div></div><div class="cdm-score-card cdm-score-card--@ImportanceTone(_selected)"><span>Mapping importance</span><strong>@ImportanceScore(_selected)</strong><small>@ImportanceLevel(_selected)</small></div><dl class="cdm-detail-list"><div><dt>Carrier NAIC</dt><dd>@Safe(_selected.CarrierNaic, "All")</dd></div><div><dt>Source field</dt><dd>@Safe(_selected.SourceField, "—")</dd></div><div><dt>AMS target</dt><dd>@Safe(_selected.TargetField, "—")</dd></div><div><dt>Transform</dt><dd>@(IsTransformed(_selected) ? "Enabled" : "None")</dd></div><div><dt>Status</dt><dd>@(_selected.IsActive ? "Active" : "Inactive")</dd></div><div><dt>Sort order</dt><dd>@_selected.SortOrder</dd></div><div><dt>Created</dt><dd>@_selected.CreatedDateUtc.ToString("MMM d, yyyy")</dd></div></dl>@if (!string.IsNullOrWhiteSpace(_selected.TransformRule)) { <div class="cdm-rule-box"><strong>Transform rule</strong><span>@_selected.TransformRule</span></div> }<div class="cdm-selected-actions"><button type="button" class="cdm-btn cdm-btn--primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="cdm-btn cdm-btn--ghost" @onclick="() => DuplicateMapping(_selected)"><i class="bi bi-copy" aria-hidden="true"></i> Duplicate</button><button type="button" class="cdm-btn cdm-btn--ghost" @onclick="() => ConfirmToggleStatus(_selected)"><i class="bi @(_selected.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i> @(_selected.IsActive ? "Deactivate" : "Activate")</button></div></div>
+                }
+            </section>
+            <section class="cdm-panel-card"><span class="cdm-section-kicker">Download intelligence</span><div class="cdm-insight-list">@foreach (var insight in Insights) { <div class="cdm-insight"><i class="bi @insight.Icon" aria-hidden="true"></i><div><strong>@insight.Title</strong><span>@insight.Description</span></div></div> }</div></section>
+        </aside>
+    </main>
+</div>
+
+@if (_showForm)
+{
+    <div class="cdm-modal-backdrop" role="presentation" @onclick="CloseForm"><div class="cdm-modal" role="dialog" aria-modal="true" aria-labelledby="cdm-form-title" @onclick:stopPropagation="true"><div class="cdm-modal__header"><i class="bi @(_editId.HasValue ? "bi-pencil-square" : "bi-plus-circle")" aria-hidden="true"></i><span id="cdm-form-title">@(_editId.HasValue ? $"Edit: {_form.MappingCode}" : "Add Carrier Download Mapping")</span><button type="button" class="cdm-icon-btn cdm-icon-btn--light ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div><EditForm EditContext="@_editContext" OnValidSubmit="SaveAsync"><DataAnnotationsValidator /><div class="cdm-modal__body"><div class="cdm-validation-note"><i class="bi bi-shield-check" aria-hidden="true"></i><div><strong>Enterprise validations enabled</strong><span>Mapping code, transaction, field lengths, transform rule, and processing order are validated before save.</span></div></div><div class="cdm-form-grid"><label class="cdm-field-input"><span>Mapping Code <em>*</em></span><InputText @bind-Value="_form.MappingCode" class="form-control" placeholder="POLICY-NUMBER" /><ValidationMessage For="() => _form.MappingCode" class="text-danger" /></label><label class="cdm-field-input"><span>Carrier NAIC</span><InputText @bind-Value="_form.CarrierNaic" class="form-control" placeholder="19682" /><ValidationMessage For="() => _form.CarrierNaic" class="text-danger" /></label><label class="cdm-field-input"><span>Transaction <em>*</em></span><InputText @bind-Value="_form.TransactionType" class="form-control" placeholder="Policy" /><ValidationMessage For="() => _form.TransactionType" class="text-danger" /></label><label class="cdm-field-input"><span>Source Field</span><InputText @bind-Value="_form.SourceField" class="form-control" placeholder="AL3.2TRG.POLNO" /><ValidationMessage For="() => _form.SourceField" class="text-danger" /></label><label class="cdm-field-input"><span>AMS Target Field</span><InputText @bind-Value="_form.TargetField" class="form-control" placeholder="PolicyNumber" /><ValidationMessage For="() => _form.TargetField" class="text-danger" /></label><label class="cdm-field-input"><span>Sort Order</span><InputNumber @bind-Value="_form.SortOrder" class="form-control" /><ValidationMessage For="() => _form.SortOrder" class="text-danger" /></label><label class="cdm-field-input cdm-field-input--wide"><span>Transform Rule</span><InputTextArea @bind-Value="_form.TransformRule" class="form-control" rows="3" placeholder="Trim, uppercase, date normalization, code lookup…" /><ValidationMessage For="() => _form.TransformRule" class="text-danger" /></label><label class="cdm-check-field"><InputCheckbox @bind-Value="_form.IsActive" /> <span>Active mapping</span></label></div>@if (!string.IsNullOrEmpty(_formError)) { <div class="alert alert-danger cdm-form-alert" style="border-left: 4px solid #dc3545; animation: cdm-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_formError</div> }</div><div class="cdm-modal__footer"><button type="button" class="cdm-btn cdm-btn--ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="cdm-btn cdm-btn--primary" disabled="@_saving">@if (_saving) { <span class="cdm-spin-sm" aria-hidden="true"></span> } @(_editId.HasValue ? "Save Changes" : "Create Mapping")</button></div></EditForm></div></div>
 }
 
+@if (_showConfirm)
+{
+    <div class="cdm-modal-backdrop" role="presentation" @onclick="CloseConfirm"><div class="cdm-confirm" role="dialog" aria-modal="true" aria-labelledby="cdm-confirm-title" @onclick:stopPropagation="true"><div class="cdm-modal__header"><i class="bi @_confirmIcon" aria-hidden="true"></i><span>Confirm action</span><button type="button" class="cdm-icon-btn cdm-icon-btn--light ms-auto" @onclick="CloseConfirm" disabled="@_saving"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div><div class="cdm-confirm__body"><div class="@(_confirmDanger ? "cdm-confirm-icon cdm-confirm-icon--danger" : "cdm-confirm-icon")"><i class="bi @_confirmIcon" aria-hidden="true"></i></div><div><h3 id="cdm-confirm-title">@_confirmTitle</h3><p>@_confirmMessage</p></div></div><div class="cdm-modal__footer"><button type="button" class="cdm-btn cdm-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button><button type="button" class="@(_confirmDanger ? "cdm-btn cdm-btn--danger" : "cdm-btn cdm-btn--primary")" @onclick="ExecuteConfirmedActionAsync" disabled="@_saving">@if (_saving) { <span class="cdm-spin-sm" aria-hidden="true"></span> } Confirm</button></div></div></div>
+}
 
+<div class="cdm-toast-stack" aria-live="polite" aria-atomic="true">@foreach (var toast in _toasts) { <div class="cdm-toast @toast.CssClass"><i class="bi @(toast.CssClass.Contains("danger") ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i><span>@toast.Message</span><button type="button" @onclick="() => DismissToast(toast.Id)"><i class="bi bi-x" aria-hidden="true"></i></button></div> }</div>
 
+@code {
+    private Guid _tenantId;
+    private readonly TabDef[] _tabs = [new("all", "All", "bi-diagram-3"), new("review", "Needs Review", "bi-exclamation-octagon"), new("policy", "Policy", "bi-shield-check"), new("claim", "Claims", "bi-exclamation-circle"), new("billing", "Billing", "bi-receipt"), new("transform", "Transforms", "bi-stars"), new("transaction", "By Transaction", "bi-grid-3x3-gap")];
+    private readonly InsightDef[] _baselineInsights = [new("Policy identity first", "Policy number, insured, effective dates, and status drive downstream servicing accuracy.", "bi-shield-check"), new("Transform governance", "Keep transform rules explicit so carrier feed changes can be audited quickly.", "bi-stars"), new("Order matters", "Low sort values run first and should be reserved for identity and control fields.", "bi-sort-numeric-down")];
+    private List<CarrierDownloadMappingDto> _items = [];
+    private readonly List<CarrierDownloadMappingDto> _selectedMappings = [];
+    private CarrierDownloadMappingDto? _selected;
+    private bool _loading = true;
+    private string? _loadError;
+    private CancellationTokenSource _cts = new();
+    private string _activeTab = "all";
+    private string _activeKpi = "all";
+    private string _searchTerm = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _transactionFilter = string.Empty;
+    private string _importanceFilter = string.Empty;
+    private string _sortMode = "importance";
+    private int _page = 1;
+    private const int PageSize = 12;
+    private Guid? _openActionMenuFor;
+    private bool _showForm;
+    private bool _saving;
+    private string _formError = string.Empty;
+    private Guid? _editId;
+    private MappingForm _form = new();
+    private EditContext _editContext = default!;
+    private bool _showConfirm;
+    private bool _confirmDanger;
+    private string _confirmTitle = string.Empty;
+    private string _confirmMessage = string.Empty;
+    private string _confirmIcon = "bi-question-circle";
+    private Func<Task>? _confirmedAction;
+    private readonly List<ToastMessage> _toasts = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Carriers & Markets", null), new("Carrier Download Mapping", null));
+        _editContext = new(_form);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        StateHasChanged();
+        try
+        {
+            await _cts.CancelAsync();
+            _cts = new CancellationTokenSource();
+            var result = await Api.SearchCarrierDownloadMappingsAsync(_tenantId, _searchTerm.Trim(), 1, 500, _cts.Token);
+            _items = result?.Items.ToList() ?? [];
+            _selected = _selected is null ? ImportantMappings.FirstOrDefault() : _items.FirstOrDefault(x => x.DownloadMappingId == _selected.DownloadMappingId) ?? ImportantMappings.FirstOrDefault();
+            _selectedMappings.RemoveAll(selected => _items.All(x => x.DownloadMappingId != selected.DownloadMappingId));
+            _page = 1;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { _loadError = $"Failed to load carrier download mappings: {ex.Message}"; }
+        finally { _loading = false; StateHasChanged(); }
+    }
+
+    private Task RefreshAsync() => LoadAsync();
+    private System.Timers.Timer? _debounce;
+    private async Task OnSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _searchTerm = e.Value?.ToString() ?? string.Empty;
+        _debounce?.Dispose();
+        _debounce = new System.Timers.Timer(360) { AutoReset = false };
+        _debounce.Elapsed += async (_, _) => { _debounce?.Dispose(); _debounce = null; await InvokeAsync(LoadAsync); };
+        _debounce.Start();
+        await Task.CompletedTask;
+    }
+
+    private void SetActiveKpi(string key) { _activeKpi = _activeKpi == key ? "all" : key; _activeTab = _activeKpi switch { "review" => "review", "policy" => "policy", "claim" => "claim", "billing" => "billing", "transform" => "transform", _ => "all" }; _page = 1; }
+    private void SetActiveTab(string key) { _activeTab = key; _activeKpi = key is "review" or "policy" or "claim" or "billing" or "transform" ? key : "all"; _page = 1; }
+    private void SetDashboardFocus(string tab, string sortMode) { _activeTab = tab; _activeKpi = tab is "review" or "policy" or "claim" or "billing" or "transform" ? tab : "all"; _sortMode = sortMode; _page = 1; }
+    private void ApplyFilters() => _page = 1;
+    private void ClearFilters() { _statusFilter = string.Empty; _transactionFilter = string.Empty; _importanceFilter = string.Empty; _sortMode = "importance"; _activeTab = "all"; _activeKpi = "all"; _page = 1; }
+    private bool HasFilters => !string.IsNullOrEmpty(_statusFilter) || !string.IsNullOrEmpty(_transactionFilter) || !string.IsNullOrEmpty(_importanceFilter) || _sortMode != "importance" || _activeTab != "all";
+    private IEnumerable<CarrierDownloadMappingDto> ImportantMappings => _items.OrderByDescending(ImportanceScore).ThenBy(x => x.SortOrder).ThenBy(x => x.MappingCode);
+    private IEnumerable<CarrierDownloadMappingDto> TabFiltered => _activeTab switch { "review" => _items.Where(IsNeedsAttention), "policy" => _items.Where(IsPolicyCritical), "claim" => _items.Where(x => IsTransaction(x, "Claim")), "billing" => _items.Where(x => IsTransaction(x, "Billing")), "transform" => _items.Where(IsTransformed), _ => _items };
+    private IEnumerable<CarrierDownloadMappingDto> FilteredMappings { get { var query = TabFiltered; if (!string.IsNullOrEmpty(_statusFilter)) query = query.Where(x => _statusFilter == "Active" ? x.IsActive : !x.IsActive); if (!string.IsNullOrEmpty(_transactionFilter)) query = query.Where(x => string.Equals(NormalizedTransaction(x.TransactionType), _transactionFilter, StringComparison.OrdinalIgnoreCase)); if (!string.IsNullOrEmpty(_importanceFilter)) query = query.Where(x => ImportanceLevel(x) == _importanceFilter); return _sortMode switch { "transaction" => query.OrderBy(x => NormalizedTransaction(x.TransactionType)).ThenBy(x => x.SortOrder).ThenBy(x => x.MappingCode), "target" => query.OrderBy(x => x.TargetField).ThenBy(x => x.MappingCode), "created" => query.OrderByDescending(x => x.CreatedDateUtc), "code" => query.OrderBy(x => x.MappingCode), _ => query.OrderByDescending(ImportanceScore).ThenBy(x => x.SortOrder).ThenBy(x => x.MappingCode) }; } }
+    private IEnumerable<CarrierDownloadMappingDto> PagedMappings => FilteredMappings.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredMappings.Count() / (double)PageSize));
+    private void PreviousPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private string ActiveViewTitle => _tabs.FirstOrDefault(t => t.Key == _activeTab)?.Label ?? "Mappings";
+    private int TabCount(string key) => key switch { "review" => _items.Count(IsNeedsAttention), "policy" => _items.Count(IsPolicyCritical), "claim" => _items.Count(x => IsTransaction(x, "Claim")), "billing" => _items.Count(x => IsTransaction(x, "Billing")), "transform" => _items.Count(IsTransformed), "transaction" => TransactionGroups.Count, _ => _items.Count };
+    private IEnumerable<string> TransactionOptions => _items.Select(x => NormalizedTransaction(x.TransactionType)).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private List<TransactionGroup> TransactionGroups { get { var groups = _items.GroupBy(x => NormalizedTransaction(x.TransactionType)).ToList(); var max = Math.Max(1, groups.Count == 0 ? 1 : groups.Max(g => g.Count())); return groups.Select(g => new TransactionGroup(g.Key, g.Count(), g.Count(IsNeedsAttention), g.Count(IsTransformed), (int)Math.Round(g.Count() * 100.0 / max))).OrderByDescending(g => g.Review).ThenByDescending(g => g.Count).ThenBy(g => g.Name).ToList(); } }
+    private void FilterByTransaction(string transaction) { _transactionFilter = transaction == "Unassigned" ? string.Empty : transaction; _activeTab = "all"; _activeKpi = "all"; _page = 1; }
+    private void SelectRow(CarrierDownloadMappingDto item) { _selected = item; _openActionMenuFor = null; }
+    private bool IsSelected(CarrierDownloadMappingDto item) => _selectedMappings.Any(x => x.DownloadMappingId == item.DownloadMappingId);
+    private void ToggleSelect(CarrierDownloadMappingDto item) { if (IsSelected(item)) _selectedMappings.RemoveAll(x => x.DownloadMappingId == item.DownloadMappingId); else _selectedMappings.Add(item); }
+    private bool AllPageSelected => PagedMappings.Any() && PagedMappings.All(IsSelected);
+    private void ToggleSelectAllPage() { var page = PagedMappings.ToList(); if (page.All(IsSelected)) foreach (var item in page) _selectedMappings.RemoveAll(x => x.DownloadMappingId == item.DownloadMappingId); else foreach (var item in page.Where(item => !IsSelected(item))) _selectedMappings.Add(item); }
+    private void ToggleActionMenu(CarrierDownloadMappingDto item) => _openActionMenuFor = _openActionMenuFor == item.DownloadMappingId ? null : item.DownloadMappingId;
+    private void OpenCreate() { _editId = null; _form = new MappingForm(); _editContext = new(_form); _formError = string.Empty; _showForm = true; _openActionMenuFor = null; }
+    private void OpenEdit(CarrierDownloadMappingDto item) { _editId = item.DownloadMappingId; _form = new MappingForm { CarrierNaic = item.CarrierNaic, MappingCode = item.MappingCode, TransactionType = item.TransactionType ?? string.Empty, SourceField = item.SourceField, TargetField = item.TargetField, TransformRule = item.TransformRule, SortOrder = item.SortOrder, IsActive = item.IsActive }; _editContext = new(_form); _formError = string.Empty; _showForm = true; _openActionMenuFor = null; }
+    private void DuplicateMapping(CarrierDownloadMappingDto item) { _editId = null; _form = new MappingForm { CarrierNaic = item.CarrierNaic, MappingCode = $"{item.MappingCode}-COPY", TransactionType = item.TransactionType ?? string.Empty, SourceField = item.SourceField, TargetField = item.TargetField, TransformRule = item.TransformRule, SortOrder = item.SortOrder + 10, IsActive = true }; _editContext = new(_form); _formError = string.Empty; _showForm = true; _openActionMenuFor = null; }
+    private void CloseForm() { _showForm = false; _formError = string.Empty; }
+    private async Task SaveAsync() { if (_saving) return; _formError = string.Empty; _saving = true; try { if (_editId.HasValue) { await Api.UpdateCarrierDownloadMappingAsync(_editId.Value, new(_form.MappingCode.Trim(), NormalizeNull(_form.CarrierNaic), _form.TransactionType.Trim(), NormalizeNull(_form.SourceField), NormalizeNull(_form.TargetField), NormalizeNull(_form.TransformRule), _form.IsActive, _form.SortOrder)); ShowToast($"Mapping '{_form.MappingCode}' updated.", "cdm-toast--success"); } else { await Api.CreateCarrierDownloadMappingAsync(new(_tenantId, _form.MappingCode.Trim(), NormalizeNull(_form.CarrierNaic), _form.TransactionType.Trim(), NormalizeNull(_form.SourceField), NormalizeNull(_form.TargetField), NormalizeNull(_form.TransformRule), _form.SortOrder)); ShowToast($"Mapping '{_form.MappingCode}' created.", "cdm-toast--success"); } CloseForm(); await LoadAsync(); } catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; ShowToast($"Save failed: {ex.Message}", "cdm-toast--danger"); } finally { _saving = false; } }
+    private void OpenConfirm(string title, string message, string icon, bool danger, Func<Task> action) { _confirmTitle = title; _confirmMessage = message; _confirmIcon = icon; _confirmDanger = danger; _confirmedAction = action; _showConfirm = true; _openActionMenuFor = null; }
+    private void CloseConfirm() { _showConfirm = false; _confirmedAction = null; }
+    private async Task ExecuteConfirmedActionAsync() { if (_confirmedAction is null) return; _saving = true; try { await _confirmedAction.Invoke(); } finally { _saving = false; } }
+    private void ConfirmToggleStatus(CarrierDownloadMappingDto item) { var activate = !item.IsActive; OpenConfirm(activate ? "Activate mapping?" : "Deactivate mapping?", $"{(activate ? "Activate" : "Deactivate")} '{item.MappingCode}' for carrier download processing?", activate ? "bi-check-circle" : "bi-slash-circle", !activate, () => ToggleStatusAsync(item, activate)); }
+    private async Task ToggleStatusAsync(CarrierDownloadMappingDto item, bool activate) { try { await Api.UpdateCarrierDownloadMappingAsync(item.DownloadMappingId, new(item.MappingCode, item.CarrierNaic, item.TransactionType, item.SourceField, item.TargetField, item.TransformRule, activate, item.SortOrder)); CloseConfirm(); ShowToast($"Mapping '{item.MappingCode}' {(activate ? "activated" : "deactivated")}.", "cdm-toast--success"); await LoadAsync(); } catch (Exception ex) { CloseConfirm(); ShowToast($"Status update failed: {ex.Message}", "cdm-toast--danger"); } }
+    private void ConfirmDelete(CarrierDownloadMappingDto item) => OpenConfirm("Remove mapping?", $"Remove '{item.MappingCode}' from carrier download processing?", "bi-trash3", true, () => DeleteAsync(item));
+    private async Task DeleteAsync(CarrierDownloadMappingDto item) { try { await Api.DeleteCarrierDownloadMappingAsync(item.DownloadMappingId); CloseConfirm(); ShowToast($"Mapping '{item.MappingCode}' removed.", "cdm-toast--success"); await LoadAsync(); } catch (Exception ex) { CloseConfirm(); ShowToast($"Remove failed: {ex.Message}", "cdm-toast--danger"); } }
+    private void ConfirmBulkStatus(bool activate) => OpenConfirm(activate ? "Activate selected mappings?" : "Deactivate selected mappings?", $"{(activate ? "Activate" : "Deactivate")} {_selectedMappings.Count} selected mapping(s)?", activate ? "bi-check-circle" : "bi-slash-circle", !activate, () => BulkStatusAsync(activate));
+    private async Task BulkStatusAsync(bool activate) { var targets = _selectedMappings.ToList(); var failures = 0; foreach (var item in targets) { try { await Api.UpdateCarrierDownloadMappingAsync(item.DownloadMappingId, new(item.MappingCode, item.CarrierNaic, item.TransactionType, item.SourceField, item.TargetField, item.TransformRule, activate, item.SortOrder)); } catch { failures++; } } _selectedMappings.Clear(); CloseConfirm(); ShowToast($"{(activate ? "Activated" : "Deactivated")} {targets.Count - failures} mapping(s)." + (failures > 0 ? $" {failures} failed." : string.Empty), failures > 0 ? "cdm-toast--danger" : "cdm-toast--success"); await LoadAsync(); }
+    private void ConfirmBulkDelete() => OpenConfirm("Remove selected mappings?", $"Remove {_selectedMappings.Count} selected mapping(s) from carrier download processing?", "bi-trash3", true, BulkDeleteAsync);
+    private async Task BulkDeleteAsync() { var targets = _selectedMappings.ToList(); var failures = 0; foreach (var item in targets) try { await Api.DeleteCarrierDownloadMappingAsync(item.DownloadMappingId); } catch { failures++; } _selectedMappings.Clear(); CloseConfirm(); ShowToast($"Removed {targets.Count - failures} mapping(s)." + (failures > 0 ? $" {failures} failed." : string.Empty), failures > 0 ? "cdm-toast--danger" : "cdm-toast--success"); await LoadAsync(); }
+    private void ShowToast(string message, string cssClass) { var toast = new ToastMessage(Guid.NewGuid(), message, cssClass); _toasts.Add(toast); _ = Task.Run(async () => { await Task.Delay(5000); await InvokeAsync(() => DismissToast(toast.Id)); }); }
+    private void DismissToast(Guid id) { _toasts.RemoveAll(t => t.Id == id); StateHasChanged(); }
+    private static bool IsTransformed(CarrierDownloadMappingDto item) => !string.IsNullOrWhiteSpace(item.TransformRule);
+    private static bool IsTransaction(CarrierDownloadMappingDto item, string transaction) => NormalizedTransaction(item.TransactionType).Contains(transaction, StringComparison.OrdinalIgnoreCase);
+    private static bool IsPolicyCritical(CarrierDownloadMappingDto item) => ContainsAny(item.TargetField, "Policy", "Insured", "Effective", "Expiration", "Status", "LOB", "Premium") || ContainsAny(item.SourceField, "POL", "INS", "EFF", "EXP", "STS", "PREM");
+    private static bool IsNeedsAttention(CarrierDownloadMappingDto item) => !item.IsActive || string.IsNullOrWhiteSpace(item.SourceField) || string.IsNullOrWhiteSpace(item.TargetField) || item.SortOrder >= 900;
+    private static int ImportanceScore(CarrierDownloadMappingDto item) { var score = 20; if (item.IsActive) score += 8; if (IsPolicyCritical(item)) score += 30; if (IsTransaction(item, "Billing")) score += 18; if (IsTransaction(item, "Claim")) score += 16; if (IsTransformed(item)) score += 10; if (string.IsNullOrWhiteSpace(item.SourceField) || string.IsNullOrWhiteSpace(item.TargetField)) score -= 20; if (!item.IsActive) score -= 15; score += item.SortOrder switch { <= 25 => 12, <= 75 => 8, <= 150 => 4, >= 900 => -12, _ => 0 }; return Math.Clamp(score, 0, 100); }
+    private static string ImportanceLevel(CarrierDownloadMappingDto item) => ImportanceScore(item) switch { >= 70 => "Critical", >= 50 => "High", >= 30 => "Medium", _ => "Low" };
+    private static string ImportanceTone(CarrierDownloadMappingDto item) => ImportanceLevel(item) switch { "Critical" => "red", "High" => "amber", "Medium" => "cyan", _ => "green" };
+    private static bool ContainsAny(string? value, params string[] needles) => !string.IsNullOrWhiteSpace(value) && needles.Any(needle => value.Contains(needle, StringComparison.OrdinalIgnoreCase));
+    private static string NormalizedTransaction(string? value) => string.IsNullOrWhiteSpace(value) ? "Unassigned" : value.Trim();
+    private static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private static string? NormalizeNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private IEnumerable<InsightDef> Insights { get { var list = new List<InsightDef>(); var review = _items.Count(IsNeedsAttention); if (review > 0) list.Add(new("Mapping gaps", $"{review} mapping(s) need completion or activation review.", "bi-exclamation-octagon")); var inactive = _items.Count(x => !x.IsActive); if (inactive > 0) list.Add(new("Inactive feed fields", $"{inactive} mapping(s) are excluded from processing.", "bi-slash-circle")); var transforms = _items.Count(IsTransformed); if (transforms > 0) list.Add(new("Transform coverage", $"{transforms} mapping(s) normalize carrier values before persistence.", "bi-stars")); list.AddRange(_baselineInsights); return list.Take(5); } }
+    private static string TransactionIcon(string? transaction) => NormalizedTransaction(transaction).ToLowerInvariant() switch { var x when x.Contains("claim") => "bi-exclamation-circle", var x when x.Contains("billing") || x.Contains("premium") || x.Contains("commission") => "bi-receipt", var x when x.Contains("policy") => "bi-shield-check", var x when x.Contains("account") || x.Contains("insured") => "bi-building", _ => "bi-arrow-down-circle" };
+    private static string TransactionBadgeClass(string? transaction) => NormalizedTransaction(transaction).ToLowerInvariant() switch { var x when x.Contains("claim") => "cdm-pill--amber", var x when x.Contains("billing") || x.Contains("premium") || x.Contains("commission") => "cdm-pill--purple", var x when x.Contains("policy") => "cdm-pill--green", var x when x.Contains("account") || x.Contains("insured") => "cdm-pill--blue", _ => "cdm-pill--neutral" };
+    private RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string tone) => @<button type="button" class="cdm-kpi-card cdm-kpi-card--@tone @(_activeKpi == key ? "cdm-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveKpi(key)"><div class="cdm-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></div><div class="cdm-kpi-body"><span class="cdm-kpi-label">@label</span><strong class="cdm-kpi-value">@value</strong><span class="cdm-kpi-sub">@subtitle</span></div></button>;
+    private RenderFragment WorkflowButton(string title, string description, string icon, System.Action onClick) => @<button type="button" class="cdm-workflow" @onclick="() => onClick()"><div class="cdm-workflow-icon"><i class="bi @icon" aria-hidden="true"></i></div><div class="cdm-workflow-meta"><strong>@title</strong><span>@description</span></div></button>;
+    private RenderFragment ImportanceBadge(CarrierDownloadMappingDto item) => @<span class="cdm-risk-badge cdm-risk-badge--@ImportanceTone(item)" title="Mapping importance score: @ImportanceScore(item)/100"><i class="bi bi-shield-fill" aria-hidden="true"></i> @ImportanceLevel(item)</span>;
+    private RenderFragment StatusBadge(CarrierDownloadMappingDto item) => item.IsActive ? @<span class="cdm-pill cdm-pill--green"><i class="bi bi-check-circle" aria-hidden="true"></i> Active</span> : @<span class="cdm-pill cdm-pill--neutral"><i class="bi bi-slash-circle" aria-hidden="true"></i> Inactive</span>;
+    private sealed class MappingForm { [Required(ErrorMessage = "Mapping Code is required.")][StringLength(80)] public string MappingCode { get; set; } = string.Empty; [StringLength(20)] public string? CarrierNaic { get; set; } [Required(ErrorMessage = "Transaction is required.")][StringLength(80)] public string TransactionType { get; set; } = string.Empty; [StringLength(120)] public string? SourceField { get; set; } [StringLength(120)] public string? TargetField { get; set; } [StringLength(500)] public string? TransformRule { get; set; } [Range(0, 9999)] public int SortOrder { get; set; } = 100; public bool IsActive { get; set; } = true; }
+    private sealed record TabDef(string Key, string Label, string Icon);
+    private sealed record InsightDef(string Title, string Description, string Icon);
+    private sealed record ToastMessage(Guid Id, string Message, string CssClass);
+    private sealed record TransactionGroup(string Name, int Count, int Review, int Transformed, int Percent);
+}

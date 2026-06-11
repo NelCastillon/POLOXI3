@@ -63,4 +63,61 @@ WHERE TenantId = @TenantId
             PageSize = pageSize
         };
     }
+
+    public async Task<Guid> CreateAsync(Guid tenantId, string targetEntityName, Guid targetEntityId, Guid? workflowDefinitionId, Guid? userId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+DECLARE @Id UNIQUEIDENTIFIER = NEWID();
+INSERT INTO Workflow.WorkflowInstance (WorkflowInstanceId, TenantId, TargetEntityName, TargetEntityId, StatusCodeId, SubmittedDateUtc, CreatedDateUtc, CreatedByUserId, WorkflowDefinitionId, IsDeleted)
+VALUES (@Id, @TenantId, @TargetEntityName, @TargetEntityId, 1, SYSUTCDATETIME(), SYSUTCDATETIME(), @UserId, @WorkflowDefinitionId, 0);
+SELECT @Id;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new
+        {
+            TenantId = tenantId,
+            TargetEntityName = targetEntityName,
+            TargetEntityId = targetEntityId,
+            WorkflowDefinitionId = workflowDefinitionId,
+            UserId = userId
+        }, cancellationToken: cancellationToken));
+    }
+
+    public async Task UpdateStatusAsync(Guid workflowInstanceId, int statusCode, Guid? userId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE Workflow.WorkflowInstance
+SET StatusCodeId = @StatusCode,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @UserId
+WHERE WorkflowInstanceId = @WorkflowInstanceId
+  AND (COL_LENGTH('Workflow.WorkflowInstance', 'IsDeleted') IS NULL OR IsDeleted = 0);";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            WorkflowInstanceId = workflowInstanceId,
+            StatusCode = statusCode,
+            UserId = userId
+        }, cancellationToken: cancellationToken));
+    }
+
+    public async Task LogHistoryAsync(Guid tenantId, Guid workflowInstanceId, Guid? actorUserId, string actionCode, string? notes, string? previousStatusCode, string? newStatusCode, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+INSERT INTO Audit.WorkflowApprovalHistory (Id, TenantId, WorkflowInstanceId, ActorUserId, ActionCode, Notes, PreviousStatusCode, NewStatusCode, IsDelegated, ActionDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES (NEWID(), @TenantId, @WorkflowInstanceId, @ActorUserId, @ActionCode, @Notes, @PreviousStatusCode, @NewStatusCode, 0, SYSUTCDATETIME(), SYSUTCDATETIME(), @ActorUserId, 0);";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            TenantId = tenantId,
+            WorkflowInstanceId = workflowInstanceId,
+            ActorUserId = actorUserId,
+            ActionCode = actionCode,
+            Notes = notes,
+            PreviousStatusCode = previousStatusCode,
+            NewStatusCode = newStatusCode
+        }, cancellationToken: cancellationToken));
+    }
 }

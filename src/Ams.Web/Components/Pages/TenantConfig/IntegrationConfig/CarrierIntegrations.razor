@@ -1,2 +1,438 @@
 @page "/tenant/integrations/carriers"
-<IntegrationConfigPage Kind="CarrierIntegration" Title="Carrier Integrations" Subtitle="Configure carrier connectivity, download, quote, policy, and claims integration settings" Icon="bi bi-broadcast" />
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.IntegrationConfig
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Carrier Integrations — AMS</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="ci-toast ci-toast--@_toastKind" role="status" aria-live="polite">
+        <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showDelete && _deleteTarget is not null)
+{
+    <div class="ci-modal-backdrop" role="presentation" @onclick="CancelDelete">
+        <div class="ci-confirm" role="dialog" aria-modal="true" aria-labelledby="ciDeleteTitle" @onclick:stopPropagation="true">
+            <div class="ci-confirm__body">
+                <span class="ci-confirm-icon ci-confirm-icon--danger"><i class="bi bi-trash3-fill" aria-hidden="true"></i></span>
+                <div>
+                    <h3 id="ciDeleteTitle">Delete carrier integration</h3>
+                    <p>Delete <strong>@_deleteTarget.Name</strong>? This removes the configuration record but keeps carrier status history intact.</p>
+                </div>
+            </div>
+            <div class="ci-modal-footer">
+                <button type="button" class="ci-btn ci-btn--ghost" @onclick="CancelDelete" disabled="@_saving">Cancel</button>
+                <button type="button" class="ci-btn ci-btn--danger" @onclick="ExecuteDeleteAsync" disabled="@_saving"><i class="bi bi-trash3" aria-hidden="true"></i> Delete</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="ci-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="ci-modal" role="dialog" aria-modal="true" aria-labelledby="ciFormTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="HandleInvalidSubmit">
+                <DataAnnotationsValidator />
+                <div class="ci-modal-header">
+                    <i class="bi bi-broadcast" aria-hidden="true"></i>
+                    <span id="ciFormTitle">@(_editId.HasValue ? "Edit carrier integration" : "Add carrier integration")</span>
+                    <button type="button" class="ci-btn ci-btn--ghost ci-btn--sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                </div>
+                <div class="ci-modal-body">
+                    <div class="ci-form-grid">
+                        <div class="ci-field"><label>Code <span class="text-danger">*</span></label><InputText class="ci-input" @bind-Value="_form.Code" /><ValidationMessage For="() => _form.Code" class="text-danger" /></div>
+                        <div class="ci-field"><label>Name <span class="text-danger">*</span></label><InputText class="ci-input" @bind-Value="_form.Name" /><ValidationMessage For="() => _form.Name" class="text-danger" /></div>
+                        <div class="ci-field"><label>Category</label><InputText class="ci-input" @bind-Value="_form.Category" /><ValidationMessage For="() => _form.Category" class="text-danger" /></div>
+                        <div class="ci-field"><label>Sort order</label><InputNumber class="ci-input" @bind-Value="_form.SortOrder" /><ValidationMessage For="() => _form.SortOrder" class="text-danger" /></div>
+                        <div class="ci-field ci-field--full"><label>Description</label><InputTextArea class="ci-input" rows="3" @bind-Value="_form.Description" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
+                        <div class="ci-field ci-field--full"><label>Configuration JSON</label><InputTextArea class="ci-input ci-input--code" rows="5" @bind-Value="_form.ConfigurationJson" /><ValidationMessage For="() => _form.ConfigurationJson" class="text-danger" /></div>
+                        <label class="ci-check"><InputCheckbox @bind-Value="_form.IsActive" /> Active carrier integration</label>
+                    </div>
+                </div>
+                <div class="ci-modal-footer">
+                    <button type="button" class="ci-btn ci-btn--ghost" @onclick="CloseForm" disabled="@_saving">Cancel</button>
+                    <button type="submit" class="ci-btn ci-btn--primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_editId.HasValue ? "Save changes" : "Create integration")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="ci-page">
+    <section class="ci-hero">
+        <div class="ci-hero-left">
+            <span class="ci-hero-icon"><i class="bi bi-broadcast" aria-hidden="true"></i></span>
+            <div class="ci-hero-title">
+                <span class="ci-hero__eyebrow"><i class="bi bi-plug" aria-hidden="true"></i> Carrier connectivity command center</span>
+                <div class="ci-title-row"><h1>Carrier Integrations</h1></div>
+                <p>Prioritize carrier connectivity, download health, quote and policy workflow readiness, error concentration, and configuration coverage using existing integration records and live carrier status data.</p>
+                <div class="ci-hero__meta">
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> @_configs.Count.ToString("N0") configs</span>
+                    <span><i class="bi bi-heart-pulse" aria-hidden="true"></i> @_statuses.Count.ToString("N0") status checks</span>
+                    <span><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @AttentionCount.ToString("N0") need attention</span>
+                    <span><i class="bi bi-graph-up-arrow" aria-hidden="true"></i> @AverageUptimeLabel uptime</span>
+                </div>
+            </div>
+        </div>
+        <div class="ci-hero__actions">
+            <button type="button" class="ci-btn ci-btn--light" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "ci-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="ci-btn ci-btn--light" @onclick='() => SetKpi("attention")'><i class="bi bi-exclamation-octagon" aria-hidden="true"></i> Attention</button>
+            <button type="button" class="ci-btn ci-btn--light" @onclick='() => SetTab("health")'><i class="bi bi-heart-pulse" aria-hidden="true"></i> Health</button>
+            <button type="button" class="ci-btn ci-btn--primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add carrier</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger ci-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    <section class="ci-kpi-strip" aria-label="Carrier integration KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="ci-kpi @kpi.Css @(_activeKpi == kpi.Key ? "ci-kpi--active" : null)" title="@kpi.Tooltip" @onclick="() => SetKpi(kpi.Key)">
+                <span><i class="bi @kpi.Icon" aria-hidden="true"></i>@kpi.Label</span>
+                <strong>@kpi.Value</strong>
+                <small>@kpi.Detail</small>
+            </button>
+        }
+    </section>
+
+    <section class="ci-workflows" aria-label="Carrier integration workflows">
+        <button type="button" class="ci-workflow" @onclick='() => SetKpi("attention")'><i class="bi bi-exclamation-octagon" aria-hidden="true"></i><span><strong>Work exceptions</strong><small>Focus disconnected, unhealthy, and error-heavy carriers.</small></span></button>
+        <button type="button" class="ci-workflow" @onclick='() => SetKpi("unconfigured")'><i class="bi bi-plug" aria-hidden="true"></i><span><strong>Close config gaps</strong><small>Find status-only carriers that need configuration records.</small></span></button>
+        <button type="button" class="ci-workflow" @onclick='() => SetTab("settings")'><i class="bi bi-sliders" aria-hidden="true"></i><span><strong>Manage settings</strong><small>Create, edit, deactivate, or delete integration setup.</small></span></button>
+        <button type="button" class="ci-workflow" @onclick='() => SetTab("health")'><i class="bi bi-heart-pulse" aria-hidden="true"></i><span><strong>Review health</strong><small>Inspect uptime, success counts, and last status checks.</small></span></button>
+        <button type="button" class="ci-workflow" @onclick='() => SetKpi("connected")'><i class="bi bi-check2-circle" aria-hidden="true"></i><span><strong>Connected carriers</strong><small>Validate high-performing carrier connectivity.</small></span></button>
+    </section>
+
+    <section class="ci-filter-panel">
+        <div class="ci-search"><i class="bi bi-search" aria-hidden="true"></i><input placeholder="Search carrier, code, category, description, status, or error..." @bind="_search" @bind:event="oninput" @onkeyup="ApplyFilters" /></div>
+        <div class="ci-filter-actions">
+            <select class="ci-select" @bind="_statusFilter" @bind:after="ApplyFilters">
+                <option value="">All statuses</option>
+                @foreach (var status in StatusOptions)
+                {
+                    <option value="@status">@status</option>
+                }
+            </select>
+            <select class="ci-select" @bind="_sort" @bind:after="ApplyFilters">
+                <option value="importance">Importance</option>
+                <option value="name">Carrier name</option>
+                <option value="uptime">Uptime</option>
+                <option value="errors">Errors</option>
+            </select>
+            <button type="button" class="ci-btn ci-btn--ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+            <span><strong>@_filtered.Count.ToString("N0")</strong> shown</span>
+        </div>
+    </section>
+
+    <section class="ci-tabs" aria-label="Carrier integration views">
+        @foreach (var tab in Tabs)
+        {
+            <button type="button" class="ci-tab @(_activeTab == tab.Key ? "ci-tab--active" : null)" @onclick="() => SetTab(tab.Key)"><i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label <strong>@TabCount(tab.Key)</strong></button>
+        }
+    </section>
+
+    @if (_loading)
+    {
+        <section class="ci-loading"><span class="ci-spinner"></span><strong>Loading carrier integrations...</strong><span>Syncing configuration records and carrier health status.</span></section>
+    }
+    else
+    {
+        <section class="ci-dashboard">
+            <main class="ci-main-card">
+                <div class="ci-card-header">
+                    <div><span class="ci-section-kicker"><i class="bi bi-stars" aria-hidden="true"></i> Importance-ranked carriers</span><h2>@ActiveTitle</h2><p>@_filtered.Count.ToString("N0") carrier integration rows sorted by operational importance.</p></div>
+                    <div class="ci-card-actions"><button type="button" class="ci-btn ci-btn--ghost" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add</button><button type="button" class="ci-btn ci-btn--ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Sync</button></div>
+                </div>
+                @if (!_filtered.Any())
+                {
+                    <div class="ci-empty"><i class="bi bi-broadcast" aria-hidden="true"></i><strong>No carrier integrations match this view</strong><span>Adjust filters, sync status, or add a carrier integration configuration.</span><button type="button" class="ci-btn ci-btn--primary" @onclick="OpenCreate">Add carrier integration</button></div>
+                }
+                else
+                {
+                    <div class="ci-table-scroll">
+                        <table class="ci-table">
+                            <thead><tr><th>Carrier</th><th>Status</th><th>Uptime</th><th>Errors</th><th>Last success</th><th>Configuration</th><th class="ci-actions-col">Actions</th></tr></thead>
+                            <tbody>
+                                @foreach (var row in _filtered)
+                                {
+                                    <tr class="ci-table-row @(IsSelectedInstance(row) ? "ci-table-row--selected" : null)" @onclick="() => SelectRow(row)">
+                                        <td><div class="ci-carrier-cell"><span class="ci-carrier-icon @StatusTone(row)"><i class="bi bi-broadcast" aria-hidden="true"></i></span><span><strong>@CarrierName(row)</strong><small>@CarrierSubtext(row)</small></span></div></td>
+                                        <td><span class="ci-status @StatusClass(row)">@ConnectionStatus(row)</span></td>
+                                        <td><strong>@UptimeLabel(row)</strong><small>@SuccessErrorLabel(row)</small></td>
+                                        <td><span class="ci-priority @PriorityClass(row)">@ErrorCount(row).ToString("N0")</span></td>
+                                        <td>@LastSuccessLabel(row)<small>@LastCheckedLabel(row)</small></td>
+                                        <td><span class="ci-flag @(row.Config is null ? "ci-flag--off" : "ci-flag--on")">@(row.Config is null ? "Status only" : row.Config.IsActive ? "Active config" : "Inactive config")</span></td>
+                                        <td class="ci-actions-col"><div class="ci-row-actions" @onclick:stopPropagation="true"><button type="button" class="ci-icon-btn" title="Inspect" @onclick="() => SelectRow(row)"><i class="bi bi-eye" aria-hidden="true"></i></button><button type="button" class="ci-icon-btn" title="Configure" @onclick="() => OpenConfigure(row)"><i class="bi bi-pencil" aria-hidden="true"></i></button>@if (row.Config is not null){<button type="button" class="ci-icon-btn ci-icon-btn--danger" title="Delete" @onclick="() => ConfirmDelete(row.Config)"><i class="bi bi-trash3" aria-hidden="true"></i></button>}</div></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </main>
+
+            <aside class="ci-side-panel">
+                <section class="ci-panel-card">
+                    <span class="ci-section-kicker"><i class="bi bi-speedometer2" aria-hidden="true"></i> Connectivity readiness</span>
+                    <div class="ci-score-card"><span>Enterprise score</span><small>config + health posture</small><strong>@ReadinessScore</strong></div>
+                    <div class="ci-readiness"><span style="width:@ReadinessScore%"></span></div>
+                    <div class="ci-importance-list">
+                        @foreach (var signal in ImportanceSignals)
+                        {
+                            <div><i class="bi @signal.Icon" aria-hidden="true"></i><span>@signal.Text</span></div>
+                        }
+                    </div>
+                </section>
+
+                <section class="ci-panel-card">
+                    <span class="ci-section-kicker"><i class="bi bi-info-circle" aria-hidden="true"></i> Selected carrier</span>
+                    @if (_selected is null)
+                    {
+                        <div class="ci-empty ci-empty--compact"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a carrier</strong><span>Inspect configuration and status details.</span></div>
+                    }
+                    else
+                    {
+                        <div class="ci-selected-head"><span class="ci-carrier-icon @StatusTone(_selected)"><i class="bi bi-broadcast" aria-hidden="true"></i></span><span><strong>@CarrierName(_selected)</strong><small>@ConnectionStatus(_selected)</small></span></div>
+                        <p class="ci-selected-desc">@Description(_selected)</p>
+                        <div class="ci-detail-list">
+                            <div><span>Category</span><strong>@Category(_selected)</strong></div>
+                            <div><span>Uptime</span><strong>@UptimeLabel(_selected)</strong></div>
+                            <div><span>Success / Error</span><strong>@SuccessCount(_selected).ToString("N0") / @ErrorCount(_selected).ToString("N0")</strong></div>
+                            <div><span>Last checked</span><strong>@LastCheckedLabel(_selected)</strong></div>
+                            <div><span>Configuration</span><strong>@(_selected.Config is null ? "Missing" : _selected.Config.IsActive ? "Active" : "Inactive")</strong></div>
+                        </div>
+                        <div class="ci-selected-actions"><button type="button" class="ci-btn ci-btn--primary" @onclick="() => OpenConfigure(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Configure</button>@if (_selected.Config is not null){<button type="button" class="ci-btn ci-btn--danger" @onclick="() => ConfirmDelete(_selected.Config)"><i class="bi bi-trash3" aria-hidden="true"></i> Delete</button>}</div>
+                    }
+                </section>
+            </aside>
+        </section>
+    }
+</div>
+
+@code {
+    private const string Kind = "CarrierIntegration";
+    private Guid _tenantId;
+    private bool _loading = true;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private bool _toastVisible;
+    private string _toastKind = "success";
+    private string _toastMessage = string.Empty;
+    private string? _loadError;
+    private string _search = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _sort = "importance";
+    private string _activeKpi = "all";
+    private string _activeTab = "overview";
+    private Guid? _editId;
+    private IntegrationConfigItemDto? _deleteTarget;
+    private CarrierRow? _selected;
+    private CarrierForm _form = new();
+    private readonly List<IntegrationConfigItemDto> _configs = [];
+    private readonly List<CarrierIntegrationStatusDto> _statuses = [];
+    private readonly List<CarrierRow> _rows = [];
+    private readonly List<CarrierRow> _filtered = [];
+
+    private IReadOnlyList<TabDef> Tabs => [new("overview", "Overview", "bi-speedometer2"), new("active", "Active", "bi-check2-circle"), new("attention", "Attention", "bi-exclamation-octagon"), new("health", "Health", "bi-heart-pulse"), new("settings", "Settings", "bi-sliders")];
+    private IReadOnlyList<KpiDef> Kpis => [new("all", "Total", _rows.Count.ToString("N0"), "All carrier rows", "bi-broadcast", "ci-kpi--blue", "Show all carrier integrations."), new("active", "Active", ActiveCount.ToString("N0"), "Enabled configurations", "bi-check-circle", "ci-kpi--green", "Show active configurations."), new("connected", "Connected", ConnectedCount.ToString("N0"), "Healthy carrier links", "bi-wifi", "ci-kpi--cyan", "Show connected carriers."), new("attention", "Attention", AttentionCount.ToString("N0"), "Errors or disconnected", "bi-exclamation-octagon", "ci-kpi--red", "Show carriers needing attention."), new("unconfigured", "Config gaps", UnconfiguredCount.ToString("N0"), "Status without config", "bi-plug", "ci-kpi--amber", "Show carriers missing configuration."), new("errors", "Errors", TotalErrors.ToString("N0"), "Carrier error count", "bi-bug", "ci-kpi--purple", "Show carriers with errors.")];
+    private IEnumerable<string> StatusOptions => _rows.Select(ConnectionStatus).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
+    private int ActiveCount => _rows.Count(r => r.Config?.IsActive == true);
+    private int ConnectedCount => _rows.Count(IsConnected);
+    private int AttentionCount => _rows.Count(NeedsAttention);
+    private int UnconfiguredCount => _rows.Count(r => r.Config is null);
+    private int TotalErrors => _rows.Sum(ErrorCount);
+    private string AverageUptimeLabel => _statuses.Count == 0 ? "—" : _statuses.Average(s => s.UptimePercent).ToString("F1", CultureInfo.CurrentCulture) + "%";
+    private int ReadinessScore => Math.Clamp(35 + ActiveCount * 7 + ConnectedCount * 8 - AttentionCount * 10 - UnconfiguredCount * 6, 0, 100);
+    private string ActiveTitle => _activeTab switch { "active" => "Active carrier configurations", "attention" => "Carrier integration attention queue", "health" => "Carrier connectivity health", "settings" => "Carrier integration settings", _ => "Carrier integration command queue" };
+    private IEnumerable<Signal> ImportanceSignals => [new("bi-check-circle", $"{ActiveCount:N0} active carrier configuration(s)."), new("bi-heart-pulse", $"{ConnectedCount:N0} carrier connection(s) are healthy."), new("bi-exclamation-triangle", $"{AttentionCount:N0} carrier row(s) need operational attention."), new("bi-plug", $"{UnconfiguredCount:N0} status record(s) do not have configuration coverage.")];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        Breadcrumbs.SetCrumbs(new("Tenant Integrations", "/tenant/integrations/health"), new("Carrier Integrations", "/tenant/integrations/carriers"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var configs = await Api.SearchIntegrationConfigItemsAsync(_tenantId, Kind, _search, pageSize: 250);
+            var statuses = await Api.SearchCarrierIntegrationStatusesAsync(_tenantId, pageSize: 250);
+            _configs.Clear();
+            _configs.AddRange(configs?.Items ?? []);
+            _statuses.Clear();
+            _statuses.AddRange(statuses?.Items ?? []);
+            BuildRows();
+            ApplyFilters();
+            _selected = _selected is null ? _filtered.FirstOrDefault() : _filtered.FirstOrDefault(r => r.Key == _selected.Key) ?? _filtered.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Unable to load carrier integrations: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void BuildRows()
+    {
+        _rows.Clear();
+        var matched = new HashSet<Guid>();
+        foreach (var config in _configs.OrderBy(c => c.SortOrder).ThenBy(c => c.Name))
+        {
+            var status = _statuses.FirstOrDefault(s => !matched.Contains(s.CarrierIntegrationId) && IsStatusMatch(config, s));
+            if (status is not null) matched.Add(status.CarrierIntegrationId);
+            _rows.Add(new($"cfg-{config.IntegrationConfigItemId}", config, status));
+        }
+        foreach (var status in _statuses.Where(s => !matched.Contains(s.CarrierIntegrationId)).OrderBy(s => s.CarrierName))
+        {
+            _rows.Add(new($"sts-{status.CarrierIntegrationId}", null, status));
+        }
+    }
+
+    private void ApplyFilters()
+    {
+        IEnumerable<CarrierRow> query = _rows;
+        if (!string.IsNullOrWhiteSpace(_search)) query = query.Where(r => Contains(CarrierName(r), _search) || Contains(CarrierSubtext(r), _search) || Contains(Category(r), _search) || Contains(Description(r), _search) || Contains(ConnectionStatus(r), _search) || Contains(r.Status?.ErrorMessage, _search));
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(r => ConnectionStatus(r).Equals(_statusFilter, StringComparison.OrdinalIgnoreCase));
+        query = _activeKpi switch { "active" => query.Where(r => r.Config?.IsActive == true), "connected" => query.Where(IsConnected), "attention" => query.Where(NeedsAttention), "unconfigured" => query.Where(r => r.Config is null), "errors" => query.Where(r => ErrorCount(r) > 0), _ => query };
+        query = _activeTab switch { "active" => query.Where(r => r.Config?.IsActive == true), "attention" => query.Where(NeedsAttention), "health" => query.Where(r => r.Status is not null), "settings" => query.Where(r => r.Config is not null), _ => query };
+        query = _sort switch { "name" => query.OrderBy(CarrierName), "uptime" => query.OrderByDescending(Uptime), "errors" => query.OrderByDescending(ErrorCount), _ => query.OrderByDescending(ImportanceScore).ThenBy(CarrierName) };
+        _filtered.Clear();
+        _filtered.AddRange(query);
+        if (_selected is null || !_filtered.Any(r => r.Key == _selected.Key)) _selected = _filtered.FirstOrDefault();
+    }
+
+    private void SetKpi(string key) { _activeKpi = _activeKpi == key && key != "all" ? "all" : key; if (key is "attention") _activeTab = "attention"; else if (key is "active") _activeTab = "active"; else if (key is "connected" or "errors") _activeTab = "health"; else if (key is "unconfigured") _activeTab = "overview"; ApplyFilters(); }
+    private void SetTab(string key) { _activeTab = key; ApplyFilters(); }
+    private void ResetFilters() { _search = string.Empty; _statusFilter = string.Empty; _sort = "importance"; _activeKpi = "all"; _activeTab = "overview"; ApplyFilters(); }
+    private void SelectRow(CarrierRow row) => _selected = row;
+    private int TabCount(string key) => key switch { "active" => _rows.Count(r => r.Config?.IsActive == true), "attention" => _rows.Count(NeedsAttention), "health" => _rows.Count(r => r.Status is not null), "settings" => _rows.Count(r => r.Config is not null), _ => _rows.Count };
+
+    private void OpenCreate() { _editId = null; _form = new() { ConfigurationJson = "{}", IsActive = true }; _showForm = true; }
+    private void OpenConfigure(CarrierRow row)
+    {
+        if (row.Config is not null) { OpenEdit(row.Config); return; }
+        _editId = null;
+        _form = new() { Code = Slug(row.Status?.CarrierName ?? string.Empty), Name = row.Status?.CarrierName ?? string.Empty, Category = "Carrier Connectivity", Description = row.Status?.ErrorMessage, ConfigurationJson = "{}", SortOrder = _configs.Count + 1, IsActive = true };
+        _showForm = true;
+    }
+    private void OpenEdit(IntegrationConfigItemDto item) { _editId = item.IntegrationConfigItemId; _form = new() { Code = item.Code, Name = item.Name, Category = item.Category, Description = item.Description, ConfigurationJson = item.ConfigurationJson, SortOrder = item.SortOrder, IsActive = item.IsActive }; _showForm = true; }
+    private void CloseForm() { if (!_saving) _showForm = false; }
+    private void ConfirmDelete(IntegrationConfigItemDto item) { _deleteTarget = item; _showDelete = true; }
+    private void CancelDelete() { if (!_saving) { _showDelete = false; _deleteTarget = null; } }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (_editId.HasValue)
+            {
+                await Api.UpdateIntegrationConfigItemAsync(_editId.Value, new(_form.Code.Trim(), _form.Name.Trim(), _form.Category, _form.Description, _form.ConfigurationJson, _form.IsActive, _form.SortOrder));
+            }
+            else
+            {
+                var created = await Api.CreateIntegrationConfigItemAsync(new(_tenantId, Kind, _form.Code.Trim(), _form.Name.Trim(), _form.Category, _form.Description, _form.ConfigurationJson, _form.SortOrder));
+                if (!_form.IsActive) await Api.UpdateIntegrationConfigItemAsync(created, new(_form.Code.Trim(), _form.Name.Trim(), _form.Category, _form.Description, _form.ConfigurationJson, false, _form.SortOrder));
+            }
+            _showForm = false;
+            ShowToast("Carrier integration saved.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteIntegrationConfigItemAsync(_deleteTarget.IntegrationConfigItemId);
+            _showDelete = false;
+            _deleteTarget = null;
+            ShowToast("Carrier integration deleted.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void HandleInvalidSubmit(EditContext _) => ShowToast("Please fix validation errors before saving.", "danger");
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+
+    private static bool IsStatusMatch(IntegrationConfigItemDto config, CarrierIntegrationStatusDto status) => Normalize(config.Name) == Normalize(status.CarrierName) || Normalize(config.Code) == Normalize(status.CarrierName) || Normalize(status.CarrierName).Contains(Normalize(config.Name), StringComparison.OrdinalIgnoreCase) || Normalize(config.Name).Contains(Normalize(status.CarrierName), StringComparison.OrdinalIgnoreCase);
+    private static string Normalize(string? value) => new((value ?? string.Empty).Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+    private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static string CarrierName(CarrierRow row) => row.Config?.Name ?? row.Status?.CarrierName ?? "Carrier integration";
+    private static string CarrierSubtext(CarrierRow row) => row.Config?.Code ?? row.Status?.CarrierId.ToString() ?? "No code";
+    private static string Category(CarrierRow row) => row.Config?.Category ?? "Carrier Status";
+    private static string Description(CarrierRow row) => row.Config?.Description ?? row.Status?.ErrorMessage ?? "No description recorded.";
+    private static string ConnectionStatus(CarrierRow row) => string.IsNullOrWhiteSpace(row.Status?.ConnectionStatus) ? row.Config is null ? "Unconfigured" : row.Config.IsActive ? "Configured" : "Inactive" : row.Status.ConnectionStatus;
+    private static double Uptime(CarrierRow row) => row.Status?.UptimePercent ?? 0;
+    private static int ErrorCount(CarrierRow row) => row.Status?.ErrorCount ?? 0;
+    private static int SuccessCount(CarrierRow row) => row.Status?.SuccessCount ?? 0;
+    private static bool IsConnected(CarrierRow row) => ConnectionStatus(row).Equals("Connected", StringComparison.OrdinalIgnoreCase) || ConnectionStatus(row).Equals("Healthy", StringComparison.OrdinalIgnoreCase) || ConnectionStatus(row).Equals("Online", StringComparison.OrdinalIgnoreCase) || Uptime(row) >= 99;
+    private static bool NeedsAttention(CarrierRow row) => row.Config?.IsActive == false || row.Config is null || ErrorCount(row) > 0 || (!IsConnected(row) && row.Status is not null);
+    private static int ImportanceScore(CarrierRow row) => (NeedsAttention(row) ? 1000 : 0) + ErrorCount(row) * 20 + (row.Config is null ? 120 : 0) + (row.Config?.IsActive == false ? 90 : 0) + (int)Math.Max(0, 100 - Uptime(row)) + (row.Config?.SortOrder ?? 0);
+    private static string UptimeLabel(CarrierRow row) => row.Status is null ? "—" : Uptime(row).ToString("F1", CultureInfo.CurrentCulture) + "%";
+    private static string SuccessErrorLabel(CarrierRow row) => row.Status is null ? "No status check" : $"{SuccessCount(row):N0} success / {ErrorCount(row):N0} errors";
+    private static string LastCheckedLabel(CarrierRow row) => string.IsNullOrWhiteSpace(row.Status?.LastCheckedUtc) ? "Not checked" : row.Status.LastCheckedUtc!;
+    private static string LastSuccessLabel(CarrierRow row) => string.IsNullOrWhiteSpace(row.Status?.LastSuccessUtc) ? "No success" : row.Status.LastSuccessUtc!;
+    private static string StatusTone(CarrierRow row) => NeedsAttention(row) ? "ci-tone-red" : IsConnected(row) ? "ci-tone-green" : "ci-tone-blue";
+    private static string StatusClass(CarrierRow row) => NeedsAttention(row) ? "ci-status--attention" : IsConnected(row) ? "ci-status--connected" : "ci-status--configured";
+    private static string PriorityClass(CarrierRow row) => ErrorCount(row) > 0 ? "ci-priority--high" : NeedsAttention(row) ? "ci-priority--medium" : "ci-priority--normal";
+    private bool IsSelectedInstance(CarrierRow row) => _selected?.Key == row.Key;
+    private static string Slug(string value) => string.Join('-', value.Trim().ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries));
+
+    private sealed record CarrierRow(string Key, IntegrationConfigItemDto? Config, CarrierIntegrationStatusDto? Status);
+    private sealed record TabDef(string Key, string Label, string Icon);
+    private sealed record KpiDef(string Key, string Label, string Value, string Detail, string Icon, string Css, string Tooltip);
+    private sealed record Signal(string Icon, string Text);
+    private sealed class CarrierForm
+    {
+        [Required, StringLength(80)] public string Code { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string Name { get; set; } = string.Empty;
+        [StringLength(120)] public string? Category { get; set; }
+        [StringLength(500)] public string? Description { get; set; }
+        [StringLength(4000)] public string? ConfigurationJson { get; set; } = "{}";
+        [Range(0, 9999)] public int SortOrder { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+}

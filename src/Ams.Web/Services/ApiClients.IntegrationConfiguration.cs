@@ -7,6 +7,12 @@ namespace Ams.Web.Services;
 
 public sealed partial class ApiClient
 {
+    public Task<PagedResult<CarrierIntegrationStatusDto>?> SearchCarrierIntegrationStatusesAsync(Guid tenantId, int pageNumber = 1, int pageSize = 100, CancellationToken ct = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<CarrierIntegrationStatusDto>?>($"api/integrations/carriers?tenantId={tenantId}&pageNumber={pageNumber}&pageSize={pageSize}", ct);
+
+    public Task<CarrierIntegrationStatusDto?> GetCarrierIntegrationStatusByIdAsync(Guid id, CancellationToken ct = default)
+        => _httpClient.GetFromJsonAsync<CarrierIntegrationStatusDto?>($"api/integrations/carriers/{id}", ct);
+
     public Task<PagedResult<IntegrationConfigItemDto>?> SearchIntegrationConfigItemsAsync(Guid tenantId, string kind, string? searchTerm = null, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default)
         => _httpClient.GetFromJsonAsync<PagedResult<IntegrationConfigItemDto>>($"api/integration-config?tenantId={tenantId}&kind={Uri.EscapeDataString(kind)}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", ct);
 

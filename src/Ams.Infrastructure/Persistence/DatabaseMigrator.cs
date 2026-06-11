@@ -180,6 +180,8 @@ public sealed class DatabaseMigrator
         new("0147_Portal_ApiUsage_CreateSeed", Migration0147_PortalApiUsageCreateSeed),
         new("0148_Submissions_SubmissionIntake_Create", Migration0148_SubmissionsSubmissionIntakeCreate),
         new("0149_Submissions_SubmissionIntake_Seed", Migration0149_SubmissionsSubmissionIntakeSeed),
+        new("0150_CarrierDownloadMapping_SchemaSync_Seed", Migration0150_CarrierDownloadMappingSchemaSyncSeed),
+        new("0151_WorkflowTaskTemplates_SchemaSync_Seed", Migration0151_WorkflowTaskTemplatesSchemaSyncSeed),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -8174,5 +8176,230 @@ WHERE NOT EXISTS
       AND i.IntakeNumber = s.IntakeNumber
       AND i.IsDeleted = 0
 );
+";
+
+    private const string Migration0150_CarrierDownloadMappingSchemaSyncSeed = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Agency') EXEC(N'CREATE SCHEMA Agency');
+
+IF OBJECT_ID(N'Agency.CarrierDownloadMapping', N'U') IS NULL
+BEGIN
+    CREATE TABLE Agency.CarrierDownloadMapping
+    (
+        DownloadMappingId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Agency_CarrierDownloadMapping PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        MappingCode NVARCHAR(80) NOT NULL,
+        CarrierNaic NVARCHAR(20) NULL,
+        TransactionType NVARCHAR(80) NULL,
+        SourceField NVARCHAR(120) NULL,
+        TargetField NVARCHAR(120) NULL,
+        TransformRule NVARCHAR(500) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_CarrierDownloadMapping_IsActive_0150 DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_CarrierDownloadMapping_SortOrder_0150 DEFAULT 100,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierDownloadMapping_Created_0150 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierDownloadMapping_IsDeleted_0150 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Agency.CarrierDownloadMapping', N'CreatedByUserId') IS NULL ALTER TABLE Agency.CarrierDownloadMapping ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Agency.CarrierDownloadMapping', N'ModifiedDateUtc') IS NULL ALTER TABLE Agency.CarrierDownloadMapping ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Agency.CarrierDownloadMapping', N'ModifiedByUserId') IS NULL ALTER TABLE Agency.CarrierDownloadMapping ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Agency.CarrierDownloadMapping', N'IsDeleted') IS NULL ALTER TABLE Agency.CarrierDownloadMapping ADD IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierDownloadMapping_IsDeleted_0150b DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Agency.CarrierDownloadMapping') AND name = N'IX_CarrierDownloadMapping_Tenant_Search')
+    CREATE INDEX IX_CarrierDownloadMapping_Tenant_Search ON Agency.CarrierDownloadMapping(TenantId, IsDeleted, TransactionType, SortOrder, MappingCode);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Agency.CarrierDownloadMapping') AND name = N'UX_CarrierDownloadMapping_Tenant_Code')
+    CREATE UNIQUE INDEX UX_CarrierDownloadMapping_Tenant_Code ON Agency.CarrierDownloadMapping(TenantId, MappingCode, CarrierNaic) WHERE IsDeleted = 0;
+
+IF OBJECT_ID(N'Agency.MarketAccessRule', N'U') IS NULL
+BEGIN
+    CREATE TABLE Agency.MarketAccessRule
+    (
+        MarketAccessRuleId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Agency_MarketAccessRule PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        RuleName NVARCHAR(200) NOT NULL,
+        CarrierNaic NVARCHAR(20) NULL,
+        StateCode NVARCHAR(10) NULL,
+        LobCode NVARCHAR(50) NULL,
+        AccessLevel NVARCHAR(80) NULL,
+        Requirements NVARCHAR(1000) NULL,
+        Priority INT NOT NULL CONSTRAINT DF_MarketAccessRule_Priority_0150 DEFAULT 100,
+        IsActive BIT NOT NULL CONSTRAINT DF_MarketAccessRule_IsActive_0150 DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_MarketAccessRule_Created_0150 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_MarketAccessRule_IsDeleted_0150 DEFAULT 0
+    );
+END;
+
+DECLARE @CarrierDownloadTenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+DECLARE @CarrierDownloadAdminUserId UNIQUEIDENTIFIER = NULL;
+
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    SELECT TOP 1 @CarrierDownloadTenantId = TenantId FROM Core.Tenant ORDER BY TenantId;
+END;
+
+IF OBJECT_ID(N'IAM.[User]', N'U') IS NOT NULL
+BEGIN
+    SELECT TOP 1 @CarrierDownloadAdminUserId = UserId FROM IAM.[User] WHERE TenantId = @CarrierDownloadTenantId ORDER BY UserId;
+END;
+
+IF OBJECT_ID(N'tempdb..#CarrierDownloadSeed') IS NOT NULL DROP TABLE #CarrierDownloadSeed;
+CREATE TABLE #CarrierDownloadSeed
+(
+    MappingCode NVARCHAR(80),
+    CarrierNaic NVARCHAR(20),
+    TransactionType NVARCHAR(80),
+    SourceField NVARCHAR(120),
+    TargetField NVARCHAR(120),
+    TransformRule NVARCHAR(500),
+    SortOrder INT
+);
+
+INSERT INTO #CarrierDownloadSeed VALUES
+(N'POLICY-NUMBER', NULL, N'Policy', N'AL3.2TRG.POLNO', N'PolicyNumber', N'Trim; uppercase; preserve carrier suffix', 10),
+(N'INSURED-NAME', NULL, N'Policy', N'AL3.5BPI.NAM', N'InsuredName', N'Trim; normalize whitespace; title case', 20),
+(N'EFFECTIVE-DATE', NULL, N'Policy', N'AL3.2TRG.EFFDT', N'EffectiveDate', N'Parse carrier date as yyyyMMdd', 30),
+(N'EXPIRATION-DATE', NULL, N'Policy', N'AL3.2TRG.EXPDT', N'ExpirationDate', N'Parse carrier date as yyyyMMdd', 40),
+(N'POLICY-STATUS', NULL, N'Policy', N'AL3.2TRG.STSCD', N'PolicyStatus', N'Lookup carrier status to AMS policy status', 50),
+(N'LINE-OF-BUSINESS', NULL, N'Policy', N'AL3.5BPI.LOBCD', N'LineOfBusiness', N'Lookup LOB code; fallback to carrier description', 60),
+(N'WRITTEN-PREMIUM', NULL, N'Billing', N'AL3.5PIG.PREM', N'WrittenPremium', N'Parse decimal; currency USD', 70),
+(N'COMMISSION-AMOUNT', NULL, N'Billing', N'AL3.6CVA.COMM', N'CommissionAmount', N'Parse decimal; round to cents', 80),
+(N'INSTALLMENT-DUE-DATE', NULL, N'Billing', N'AL3.6PIF.DUEDT', N'InvoiceDueDate', N'Parse carrier date as yyyyMMdd', 90),
+(N'CLAIM-NUMBER', NULL, N'Claim', N'AL3.CLM.CLMNO', N'ClaimNumber', N'Trim; uppercase', 100),
+(N'CLAIM-LOSS-DATE', NULL, N'Claim', N'AL3.CLM.LOSSDT', N'LossDate', N'Parse carrier date as yyyyMMdd', 110),
+(N'CLAIM-STATUS', NULL, N'Claim', N'AL3.CLM.STSCD', N'ClaimStatus', N'Lookup carrier claim status to AMS status', 120),
+(N'VEHICLE-VIN', NULL, N'Policy', N'AL3.AUT.VIN', N'VehicleVin', N'Trim; uppercase; remove spaces', 130),
+(N'LOCATION-ADDRESS', NULL, N'Policy', N'AL3.LOC.ADDR1', N'LocationAddress', N'Trim; normalize street abbreviations', 140),
+(N'UNMAPPED-REVIEW-QUEUE', NULL, N'Operations', N'AL3.UNKNOWN', NULL, N'Route to download exception queue', 900);
+
+EXEC sp_executesql N'
+INSERT INTO Agency.CarrierDownloadMapping
+(DownloadMappingId, TenantId, MappingCode, CarrierNaic, TransactionType, SourceField, TargetField, TransformRule, SortOrder, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @TenantId, s.MappingCode, s.CarrierNaic, s.TransactionType, s.SourceField, s.TargetField, s.TransformRule, s.SortOrder, 1, SYSUTCDATETIME(), @AdminUserId, 0
+FROM #CarrierDownloadSeed s
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Agency.CarrierDownloadMapping m
+    WHERE m.TenantId = @TenantId
+      AND m.MappingCode = s.MappingCode
+      AND ISNULL(m.CarrierNaic, N'''') = ISNULL(s.CarrierNaic, N'''')
+      AND m.IsDeleted = 0
+);',
+N'@TenantId UNIQUEIDENTIFIER, @AdminUserId UNIQUEIDENTIFIER',
+@CarrierDownloadTenantId, @CarrierDownloadAdminUserId;
+
+DROP TABLE #CarrierDownloadSeed;
+";
+
+    private const string Migration0151_WorkflowTaskTemplatesSchemaSyncSeed = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Operations')
+    EXEC(N'CREATE SCHEMA Operations');
+
+IF OBJECT_ID(N'Operations.WorkflowConfigItem', N'U') IS NULL
+BEGIN
+    CREATE TABLE Operations.WorkflowConfigItem
+    (
+        WorkflowConfigItemId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_WorkflowConfigItem PRIMARY KEY,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        Kind NVARCHAR(80) NOT NULL,
+        Code NVARCHAR(80) NOT NULL,
+        Name NVARCHAR(200) NOT NULL,
+        Category NVARCHAR(120) NULL,
+        Description NVARCHAR(500) NULL,
+        ConfigurationJson NVARCHAR(MAX) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_WorkflowConfigItem_IsActive_0151 DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_WorkflowConfigItem_SortOrder_0151 DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_WorkflowConfigItem_Created_0151 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_WorkflowConfigItem_IsDeleted_0151 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Operations.WorkflowConfigItem', N'CreatedByUserId') IS NULL
+    ALTER TABLE Operations.WorkflowConfigItem ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Operations.WorkflowConfigItem', N'ModifiedDateUtc') IS NULL
+    ALTER TABLE Operations.WorkflowConfigItem ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Operations.WorkflowConfigItem', N'ModifiedByUserId') IS NULL
+    ALTER TABLE Operations.WorkflowConfigItem ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Operations.WorkflowConfigItem', N'IsDeleted') IS NULL
+    ALTER TABLE Operations.WorkflowConfigItem ADD IsDeleted BIT NOT NULL CONSTRAINT DF_WorkflowConfigItem_IsDeleted_0151b DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_WorkflowConfigItem_TenantKindCode_Active' AND object_id = OBJECT_ID(N'Operations.WorkflowConfigItem'))
+    CREATE UNIQUE INDEX UX_WorkflowConfigItem_TenantKindCode_Active ON Operations.WorkflowConfigItem(TenantId, Kind, Code) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_WorkflowConfigItem_TenantKindSort' AND object_id = OBJECT_ID(N'Operations.WorkflowConfigItem'))
+    CREATE INDEX IX_WorkflowConfigItem_TenantKindSort ON Operations.WorkflowConfigItem(TenantId, Kind, SortOrder, Name) INCLUDE (IsActive, Category);
+
+DECLARE @WorkflowTaskTenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+DECLARE @WorkflowTaskAdminUserId UNIQUEIDENTIFIER = NULL;
+
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    SELECT TOP 1 @WorkflowTaskTenantId = TenantId FROM Core.Tenant ORDER BY TenantId;
+END;
+
+IF OBJECT_ID(N'IAM.[User]', N'U') IS NOT NULL
+BEGIN
+    SELECT TOP 1 @WorkflowTaskAdminUserId = UserId FROM IAM.[User] WHERE TenantId = @WorkflowTaskTenantId ORDER BY UserId;
+END;
+
+IF OBJECT_ID(N'tempdb..#WorkflowTaskSeed') IS NOT NULL DROP TABLE #WorkflowTaskSeed;
+CREATE TABLE #WorkflowTaskSeed
+(
+    Code NVARCHAR(80),
+    Name NVARCHAR(200),
+    Category NVARCHAR(120),
+    Description NVARCHAR(500),
+    OwnerTeam NVARCHAR(120),
+    SlaHours INT,
+    Automation NVARCHAR(40),
+    TriggerName NVARCHAR(200),
+    Importance INT,
+    SortOrder INT
+);
+
+INSERT INTO #WorkflowTaskSeed VALUES
+(N'CLAIM-FNOL-FOLLOWUP', N'Claim FNOL Follow-Up', N'Claims', N'Contact claimant, validate loss details, and assign advocacy owner after first notice of loss.', N'Claims Advocacy', 4, N'Trigger', N'Claim FNOL created', 96, 10),
+(N'RENEWAL-RISK-REVIEW', N'Renewal Risk Review', N'Renewals', N'Review renewal risk, carrier appetite, and retention actions before renewal marketing begins.', N'Renewal Desk', 72, N'Scheduled', N'90 days before expiration', 92, 20),
+(N'SUBMISSION-MARKET-CHECK', N'Submission Market Readiness Check', N'Submissions', N'Validate application completeness, documents, target markets, and missing underwriting data.', N'Placement Team', 24, N'Rule', N'Submission created or updated', 88, 30),
+(N'BINDER-DELIVERY', N'Binder Delivery Confirmation', N'Sales', N'Confirm binder delivery, premium, effective dates, and client acceptance after quote bind.', N'Producer Team', 8, N'Trigger', N'Quote bound', 86, 40),
+(N'COMPLIANCE-EVIDENCE', N'Compliance Evidence Request', N'Compliance', N'Collect required certificates, signed forms, acknowledgements, or audit artifacts.', N'Compliance Office', 48, N'Rule', N'Compliance requirement opened', 84, 50),
+(N'CLIENT-SERVICE-FOLLOWUP', N'Client Service Follow-Up', N'Service', N'Follow up on client service requests and document resolution notes.', N'Service Operations', 24, N'Manual', N'Manual assignment', 74, 60),
+(N'PAYMENT-EXCEPTION-REVIEW', N'Payment Exception Review', N'Accounting', N'Review failed payment, unapplied cash, billing discrepancy, or collection exception.', N'Accounting Team', 24, N'Trigger', N'Billing exception detected', 72, 70),
+(N'POLICY-DOCUMENT-QA', N'Policy Document Quality Review', N'Operations', N'Validate downloaded policy document metadata, storage category, and client visibility.', N'Operations Team', 48, N'Rule', N'Document indexed', 68, 80),
+(N'LEAD-QUALIFICATION', N'Lead Qualification Task', N'Sales', N'Validate lead source, contact details, appetite fit, and next best action.', N'Producer Team', 24, N'Trigger', N'New lead assigned', 66, 90),
+(N'CERTIFICATE-REQUEST', N'Certificate Request Fulfillment', N'Service', N'Prepare certificate request, validate holder details, and deliver approved certificate.', N'Service Operations', 8, N'Trigger', N'Certificate request submitted', 80, 100),
+(N'ENDORSEMENT-FOLLOWUP', N'Endorsement Follow-Up', N'Service', N'Track endorsement submission, carrier response, client confirmation, and billing impact.', N'Service Operations', 48, N'Manual', N'Manual assignment', 70, 110),
+(N'AUDIT-RESPONSE', N'Premium Audit Response', N'Compliance', N'Coordinate audit request, gather payroll/sales data, and track carrier submission.', N'Compliance Office', 72, N'Scheduled', N'Audit notice received', 82, 120);
+
+EXEC sp_executesql N'
+INSERT INTO Operations.WorkflowConfigItem
+(WorkflowConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @TenantId, N''TaskTemplate'', s.Code, s.Name, s.Category, s.Description,
+       N''{""category"":""'' + STRING_ESCAPE(s.Category, ''json'') + N''"",""ownerTeam"":""'' + STRING_ESCAPE(s.OwnerTeam, ''json'') + N''"",""slaHours"":'' + CONVERT(NVARCHAR(20), s.SlaHours) + N'',""automation"":""'' + STRING_ESCAPE(s.Automation, ''json'') + N''"",""trigger"":""'' + STRING_ESCAPE(s.TriggerName, ''json'') + N''"",""importance"":'' + CONVERT(NVARCHAR(20), s.Importance) + N'',""description"":""'' + STRING_ESCAPE(s.Description, ''json'') + N''""}'',
+       1, s.SortOrder, SYSUTCDATETIME(), @AdminUserId, 0
+FROM #WorkflowTaskSeed s
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Operations.WorkflowConfigItem i
+    WHERE i.TenantId = @TenantId
+      AND i.Kind = N''TaskTemplate''
+      AND i.Code = s.Code
+      AND i.IsDeleted = 0
+);',
+N'@TenantId UNIQUEIDENTIFIER, @AdminUserId UNIQUEIDENTIFIER',
+@WorkflowTaskTenantId, @WorkflowTaskAdminUserId;
+
+DROP TABLE #WorkflowTaskSeed;
 ";
 }

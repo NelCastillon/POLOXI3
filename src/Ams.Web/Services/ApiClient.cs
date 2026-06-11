@@ -2440,8 +2440,11 @@ public sealed partial class ApiClient
     }
 
     public async Task<Guid> InitiateWorkflowForSubmissionAsync(Guid submissionId, Guid tenantId, Guid? workflowDefinitionId = null, CancellationToken cancellationToken = default)
+        => await InitiateWorkflowAsync(tenantId, "Submission", submissionId, workflowDefinitionId, cancellationToken: cancellationToken);
+
+    public async Task<Guid> InitiateWorkflowAsync(Guid tenantId, string targetEntityName, Guid targetEntityId, Guid? workflowDefinitionId = null, Guid? userId = null, string? notes = null, CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsJsonAsync("api/workflow/initiate", new { TenantId = tenantId, TargetEntityName = "Submission", TargetEntityId = submissionId, WorkflowDefinitionId = workflowDefinitionId }, cancellationToken);
+        var response = await _httpClient.PostAsJsonAsync("api/workflow/initiate", new { TenantId = tenantId, TargetEntityName = targetEntityName, TargetEntityId = targetEntityId, WorkflowDefinitionId = workflowDefinitionId, UserId = userId, Notes = notes }, cancellationToken);
         response.EnsureSuccessStatusCode();
         var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
         return result!.Id;

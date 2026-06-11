@@ -1,0 +1,286 @@
+@page "/tenant/communications/dashboard"
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.CommunicationConfig
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Communications Command Center — AMS</PageTitle>
+
+<div class="cd-page" @onclick="CloseActionMenu">
+    <section class="cd-hero">
+        <div class="cd-hero__content">
+            <div class="cd-hero-left">
+                <span class="cd-hero-icon"><i class="bi bi-chat-square-dots-fill" aria-hidden="true"></i></span>
+                <div class="cd-hero-title">
+                    <div class="cd-hero__eyebrow">Enterprise communications command center</div>
+                    <div class="cd-title-row">
+                        <h1>Communications Dashboard</h1>
+                        <div class="cd-hero__meta">
+                            <span><i class="bi bi-layers" aria-hidden="true"></i>@_items.Count controls</span>
+                            <span><i class="bi bi-check-circle" aria-hidden="true"></i>@_items.Count(i => i.IsActive) active</span>
+                            <span><i class="bi bi-exclamation-octagon" aria-hidden="true"></i>@_items.Count(IsHighImportance) high importance</span>
+                            <span><i class="bi bi-code-slash" aria-hidden="true"></i>@_items.Count(HasConfiguration) configured</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <p>Govern email, SMS, templates, notifications, appointments, consent, sender identities, and communication audit controls from one enterprise command center.</p>
+        </div>
+        <div class="cd-hero__actions">
+            <button type="button" class="cd-btn cd-btn--light" @onclick="RefreshAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "cd-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="cd-btn cd-btn--light" @onclick="ExportAsync"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="cd-btn cd-btn--primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Control</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger cd-alert" style="border-left: 4px solid #dc3545; animation: cd-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span>@_loadError</span>
+        </div>
+    }
+
+    <section class="cd-kpi-strip" aria-label="Communications KPIs">
+        @KpiCard("all", "Total Controls", _items.Count.ToString(), "All communication configuration controls", "bi-layers", "blue")
+        @KpiCard("active", "Active", _items.Count(i => i.IsActive).ToString(), "Controls currently enabled", "bi-check-circle", "green")
+        @KpiCard("importance", "Important", _items.Count(IsHighImportance).ToString(), "High-impact communication controls", "bi-exclamation-octagon", "red")
+        @KpiCard("needsconfig", "Needs Config", _items.Count(NeedsConfiguration).ToString(), "Active controls missing JSON configuration", "bi-braces", "amber")
+        @KpiCard("templates", "Templates", _items.Count(i => i.Kind == "MessageTemplate").ToString(), "Reusable message templates", "bi-layout-text-sidebar", "purple")
+        @KpiCard("audit", "Audit", _items.Count(i => i.Kind == "CommunicationAudit").ToString(), "Audit and evidence controls", "bi-journal-text", "cyan")
+    </section>
+
+    <section class="cd-workflows" aria-label="Communications shortcuts">
+        @WorkflowButton("Delivery health", "Review email and SMS controls", "bi-envelope-check", () => SetDashboardFocus("delivery", "importance"))
+        @WorkflowButton("Template governance", "Review reusable templates", "bi-layout-text-sidebar", () => SetDashboardFocus("templates", "importance"))
+        @WorkflowButton("Consent gaps", "Find active controls missing configuration", "bi-toggle-on", () => SetDashboardFocus("needsconfig", "importance"))
+        @WorkflowButton("Sender readiness", "Open sender profile controls", "bi-person-check", () => SetDashboardFocus("senders", "name"))
+        @WorkflowButton("Audit evidence", "Review audit configuration", "bi-journal-text", () => SetDashboardFocus("audit", "created"))
+    </section>
+
+    <section class="cd-filter-panel" aria-label="Communications filters">
+        <div class="cd-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input type="search" placeholder="Search kind, code, name, channel, category, description, or configuration…" aria-label="Search communications dashboard" value="@_searchTerm" @oninput="OnSearchInput" />
+        </div>
+        <div class="cd-filter-grid">
+            <label><span>Status</span><select class="form-select" @bind="_statusFilter" @bind:after="ApplyFilters"><option value="">All statuses</option><option value="Active">Active</option><option value="Inactive">Inactive</option></select></label>
+            <label><span>Kind</span><select class="form-select" @bind="_kindFilter" @bind:after="ApplyFilters"><option value="">All kinds</option>@foreach (var kind in KindOptions) { <option value="@kind.Kind">@kind.Label</option> }</select></label>
+            <label><span>Channel</span><select class="form-select" @bind="_channelFilter" @bind:after="ApplyFilters"><option value="">All channels</option>@foreach (var channel in ChannelOptions) { <option value="@channel">@channel</option> }</select></label>
+            <label><span>Sort</span><select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters"><option value="importance">Importance</option><option value="name">Name</option><option value="kind">Kind</option><option value="channel">Channel</option><option value="created">Newest</option></select></label>
+        </div>
+        <button type="button" class="cd-btn cd-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+    </section>
+
+    <nav class="cd-tabs" aria-label="Communications dashboard views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="cd-tab @(_activeTab == tab.Key ? "cd-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i><span>@tab.Label</span><strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </nav>
+
+    <main class="cd-dashboard">
+        <section class="cd-main-card">
+            <div class="cd-card-header">
+                <div><span class="cd-section-kicker">@ActiveViewTitle</span><h2>@FilteredItems.Count() controls</h2><p>Ranked by enterprise importance: active delivery impact, missing configuration, channel reach, audit exposure, template governance, and execution order.</p></div>
+                <div class="cd-card-actions">
+                    <button type="button" class="cd-btn cd-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Prev</button>
+                    <span class="cd-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="cd-btn cd-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="cd-loading"><span class="cd-spinner"></span> Loading communications controls…</div>
+            }
+            else if (!FilteredItems.Any())
+            {
+                <div class="cd-empty"><i class="bi bi-chat-square-dots-fill" aria-hidden="true"></i><strong>No communication controls found</strong><span>Adjust the active tab, KPI, search, or filters.</span></div>
+            }
+            else
+            {
+                <div class="cd-table-wrap">
+                    <table class="cd-table" aria-label="Communications controls">
+                        <thead><tr><th>Importance</th><th>Control</th><th>Kind</th><th>Channel</th><th>Status</th><th>Configuration</th><th>Order</th><th class="cd-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var item in PagedItems)
+                            {
+                                <tr class="@(_selected?.CommunicationConfigItemId == item.CommunicationConfigItemId ? "cd-row cd-row--selected" : "cd-row")" @onclick="() => SelectRow(item)">
+                                    <td>@ImportanceBadge(item)</td>
+                                    <td><div class="cd-rule-cell"><div class="cd-rule-icon"><i class="bi @KindIcon(item.Kind)" aria-hidden="true"></i></div><div class="cd-rule-meta"><button type="button" class="cd-link-button" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)">@item.Name</button><small>@item.Code</small></div></div></td>
+                                    <td><span class="cd-pill cd-pill--blue">@KindLabel(item.Kind)</span></td>
+                                    <td><span class="cd-pill cd-pill--purple">@Safe(item.Channel, DefaultChannel(item.Kind))</span></td>
+                                    <td>@StatusBadge(item)</td>
+                                    <td>@ConfigurationBadge(item)</td>
+                                    <td><span class="cd-count-pill">@item.SortOrder</span></td>
+                                    <td class="cd-actions-col"><button type="button" class="cd-icon-btn" title="Open action menu" @onclick:stopPropagation="true" @onclick="() => ToggleActionMenu(item)"><i class="bi bi-three-dots-vertical" aria-hidden="true"></i></button>@if (_openActionMenuFor == item.CommunicationConfigItemId) { <div class="cd-menu" role="menu" @onclick:stopPropagation="true"><div class="cd-menu__summary"><strong>@item.Name</strong><span>@KindLabel(item.Kind)</span></div><button type="button" class="cd-menu-item" role="menuitem" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i><span>Edit control</span></button><button type="button" class="cd-menu-item" role="menuitem" @onclick="() => OpenClone(item)"><i class="bi bi-copy" aria-hidden="true"></i><span>Clone control</span></button><button type="button" class="cd-menu-item" role="menuitem" @onclick="() => NavigateToModule(item)"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i><span>Open module</span></button><button type="button" class="cd-menu-item" role="menuitem" @onclick="() => ConfirmToggleActive(item)"><i class="bi @(item.IsActive ? "bi-pause-circle" : "bi-play-circle")" aria-hidden="true"></i><span>@(item.IsActive ? "Pause" : "Activate")</span></button><button type="button" class="cd-menu-item cd-menu-item--danger" role="menuitem" @onclick="() => ConfirmDelete(item)"><i class="bi bi-trash3" aria-hidden="true"></i><span>Delete control</span></button></div> }</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="cd-side-panel">
+            <section class="cd-panel-card">
+                <span class="cd-section-kicker">Selected control</span>
+                @if (_selected is null)
+                {
+                    <div class="cd-empty cd-empty--compact"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a control</strong><span>Choose a communication control to inspect enterprise importance and actions.</span></div>
+                }
+                else
+                {
+                    <div class="cd-selected"><div class="cd-selected__title"><div class="cd-rule-icon cd-rule-icon--lg"><i class="bi @KindIcon(_selected.Kind)"></i></div><div><h3>@_selected.Name</h3><span>@_selected.Code</span></div></div><div class="cd-score-card cd-score-card--@ImportanceTone(_selected)"><span>Control importance score</span><strong>@ImportanceScore(_selected)</strong><small>@ImportanceLevel(_selected)</small></div><dl class="cd-detail-list"><div><dt>Kind</dt><dd>@KindLabel(_selected.Kind)</dd></div><div><dt>Channel</dt><dd>@Safe(_selected.Channel, DefaultChannel(_selected.Kind))</dd></div><div><dt>Status</dt><dd>@(_selected.IsActive ? "Active" : "Inactive")</dd></div><div><dt>Configuration</dt><dd>@ConfigurationText(_selected)</dd></div><div><dt>Created</dt><dd>@_selected.CreatedDateUtc.ToString("MMM d, yyyy")</dd></div></dl>@if (!string.IsNullOrWhiteSpace(_selected.Description)) { <p class="cd-selected-desc">@_selected.Description</p> }<div class="cd-selected-actions"><button type="button" class="cd-btn cd-btn--primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="cd-btn cd-btn--ghost" @onclick="() => OpenClone(_selected)"><i class="bi bi-copy" aria-hidden="true"></i> Clone</button><button type="button" class="cd-btn cd-btn--ghost" @onclick="() => NavigateToModule(_selected)"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Module</button></div></div>
+                }
+            </section>
+            <section class="cd-panel-card"><span class="cd-section-kicker">Communication intelligence</span><div class="cd-insight-list">@foreach (var insight in Insights) { <div class="cd-insight"><i class="bi @insight.Icon" aria-hidden="true"></i><div><strong>@insight.Title</strong><span>@insight.Description</span></div></div> }</div></section>
+        </aside>
+    </main>
+</div>
+
+@if (_showForm)
+{
+    <div class="cd-modal-backdrop" role="presentation" @onclick="CloseForm"><div class="cd-modal" role="dialog" aria-modal="true" aria-labelledby="cd-form-title" @onclick:stopPropagation="true"><div class="cd-modal__header"><i class="bi @(_editId.HasValue ? "bi-pencil-square" : "bi-plus-circle")" aria-hidden="true"></i><span id="cd-form-title">@(_editId.HasValue ? "Edit Communication Control" : _isClone ? "Clone Communication Control" : "Add Communication Control")</span><button type="button" class="cd-icon-btn cd-icon-btn--light ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div><EditForm EditContext="@_editContext" OnValidSubmit="SaveAsync"><DataAnnotationsValidator /><div class="cd-modal__body"><div class="cd-validation-note"><i class="bi bi-shield-check" aria-hidden="true"></i><div><strong>Enterprise communication validations enabled</strong><span>Required kind/code/name, JSON length, channel metadata, and sort order checks are enforced before save.</span></div></div><div class="cd-form-grid"><label class="cd-field"><span>Kind <em>*</em></span><InputSelect @bind-Value="_form.Kind" class="form-select">@foreach (var kind in KindOptions) { <option value="@kind.Kind">@kind.Label</option> }</InputSelect><ValidationMessage For="() => _form.Kind" class="text-danger" /></label><label class="cd-field"><span>Code <em>*</em></span><InputText @bind-Value="_form.Code" class="form-control" /><ValidationMessage For="() => _form.Code" class="text-danger" /></label><label class="cd-field"><span>Name <em>*</em></span><InputText @bind-Value="_form.Name" class="form-control" /><ValidationMessage For="() => _form.Name" class="text-danger" /></label><label class="cd-field"><span>Channel</span><InputText @bind-Value="_form.Channel" class="form-control" /><ValidationMessage For="() => _form.Channel" class="text-danger" /></label><label class="cd-field"><span>Category</span><InputText @bind-Value="_form.Category" class="form-control" /><ValidationMessage For="() => _form.Category" class="text-danger" /></label><label class="cd-field"><span>Sort Order</span><InputNumber @bind-Value="_form.SortOrder" class="form-control" /><ValidationMessage For="() => _form.SortOrder" class="text-danger" /></label><label class="cd-field cd-field--full"><span>Description</span><InputTextArea @bind-Value="_form.Description" class="form-control" rows="3" /><ValidationMessage For="() => _form.Description" class="text-danger" /></label><label class="cd-field cd-field--full"><span>Configuration JSON</span><InputTextArea @bind-Value="_form.ConfigurationJson" class="form-control cd-json" rows="6" /><ValidationMessage For="() => _form.ConfigurationJson" class="text-danger" /></label><label class="cd-check-row"><InputCheckbox @bind-Value="_form.IsActive" /><span>Active</span></label></div>@if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger cd-form-alert" style="border-left: 4px solid #dc3545; animation: cd-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_formError</div> }</div><div class="cd-modal__footer"><button type="button" class="cd-btn cd-btn--ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="cd-btn cd-btn--primary" disabled="@_saving">@if (_saving) { <span class="cd-spin-sm" aria-hidden="true"></span> } @(_editId.HasValue ? "Save Changes" : _isClone ? "Clone Control" : "Create Control")</button></div></EditForm></div></div>
+}
+
+@if (_showConfirm)
+{
+    <div class="cd-modal-backdrop" role="presentation" @onclick="CloseConfirm"><div class="cd-confirm" role="dialog" aria-modal="true" aria-labelledby="cd-confirm-title" @onclick:stopPropagation="true"><div class="cd-modal__header"><i class="bi @_confirmIcon" aria-hidden="true"></i><span>Confirm action</span><button type="button" class="cd-icon-btn cd-icon-btn--light ms-auto" @onclick="CloseConfirm" disabled="@_saving"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div><div class="cd-confirm__body"><div class="@(_confirmDanger ? "cd-confirm-icon cd-confirm-icon--danger" : "cd-confirm-icon")"><i class="bi @_confirmIcon" aria-hidden="true"></i></div><div><h3 id="cd-confirm-title">@_confirmTitle</h3><p>@_confirmMessage</p></div></div><div class="cd-modal__footer"><button type="button" class="cd-btn cd-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button><button type="button" class="@(_confirmDanger ? "cd-btn cd-btn--danger" : "cd-btn cd-btn--primary")" @onclick="ExecuteConfirmedActionAsync" disabled="@_saving">@if (_saving) { <span class="cd-spin-sm" aria-hidden="true"></span> } Confirm</button></div></div></div>
+}
+
+<div class="cd-toast-stack" aria-live="polite" aria-atomic="true">@foreach (var toast in _toasts) { <div class="cd-toast @toast.CssClass"><i class="bi @(toast.CssClass.Contains("danger") ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i><span>@toast.Message</span><button type="button" @onclick="() => DismissToast(toast.Id)"><i class="bi bi-x" aria-hidden="true"></i></button></div> }</div>
+
+@code {
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private readonly KindDef[] _kinds = [new("EmailSetting", "Email Settings", "Email", "bi-envelope-gear", "/tenant/communications/email"), new("SmsSetting", "SMS Settings", "SMS", "bi-phone-vibrate", "/tenant/communications/sms"), new("MessageTemplate", "Message Templates", "Templates", "bi-layout-text-sidebar", "/tenant/communications/templates"), new("NotificationRule", "Notification Rules", "Notifications", "bi-bell-gear", "/tenant/communications/rules"), new("AppointmentSetting", "Appointment Settings", "Appointments", "bi-calendar-event", "/tenant/communications/appts"), new("ConsentSetting", "Opt-In / Opt-Out", "Consent", "bi-toggle-on", "/tenant/communications/consent"), new("SenderProfile", "Sender Profiles", "Senders", "bi-person-check", "/tenant/communications/senders"), new("CommunicationAudit", "Communication Audit", "Audit", "bi-journal-text", "/tenant/communications/audit")];
+    private readonly TabDef[] _tabs = [new("all", "All", "bi-layers"), new("delivery", "Delivery", "bi-envelope-check"), new("templates", "Templates", "bi-layout-text-sidebar"), new("needsconfig", "Needs Config", "bi-braces"), new("senders", "Senders", "bi-person-check"), new("audit", "Audit", "bi-journal-text"), new("inactive", "Inactive", "bi-pause-circle")];
+    private readonly InsightDef[] _baselineInsights = [new("Channel readiness", "Keep email, SMS, sender, and notification controls active and configured.", "bi-broadcast"), new("Consent governance", "Consent and opt-out controls should stay auditable before campaign delivery.", "bi-toggle-on"), new("Template discipline", "Templates should be categorized, approved, and versioned before reuse.", "bi-layout-text-sidebar")];
+    private List<CommunicationConfigItemDto> _items = [];
+    private CommunicationConfigItemDto? _selected;
+    private bool _loading = true;
+    private string? _loadError;
+    private CancellationTokenSource _cts = new();
+    private string _activeTab = "all";
+    private string _activeKpi = "all";
+    private string _searchTerm = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _kindFilter = string.Empty;
+    private string _channelFilter = string.Empty;
+    private string _sortMode = "importance";
+    private int _page = 1;
+    private const int PageSize = 12;
+    private Guid? _openActionMenuFor;
+    private bool _showForm;
+    private bool _saving;
+    private string _formError = string.Empty;
+    private Guid? _editId;
+    private bool _isClone;
+    private FormModel _form = new();
+    private EditContext _editContext = default!;
+    private bool _showConfirm;
+    private bool _confirmDanger;
+    private string _confirmTitle = string.Empty;
+    private string _confirmMessage = string.Empty;
+    private string _confirmIcon = "bi-question-circle";
+    private Func<Task>? _confirmedAction;
+    private readonly List<ToastMessage> _toasts = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Communications Setup", null), new("Communications Dashboard", null));
+        _editContext = new(_form);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        StateHasChanged();
+        try
+        {
+            await _cts.CancelAsync();
+            _cts = new CancellationTokenSource();
+            var tasks = _kinds.Select(k => Api.SearchCommunicationConfigItemsAsync(_tenantId, k.Kind, _searchTerm.Trim(), 1, 500, _cts.Token)).ToArray();
+            var results = await Task.WhenAll(tasks);
+            _items = results.Where(r => r is not null).SelectMany(r => r!.Items).ToList();
+            _selected = _selected is null ? _items.OrderByDescending(ImportanceScore).FirstOrDefault() : _items.FirstOrDefault(i => i.CommunicationConfigItemId == _selected.CommunicationConfigItemId) ?? _items.OrderByDescending(ImportanceScore).FirstOrDefault();
+            _page = 1;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { _loadError = $"Failed to load communications dashboard: {ex.Message}"; ShowToast($"Load failed: {ex.Message}", "cd-toast--danger"); }
+        finally { _loading = false; StateHasChanged(); }
+    }
+
+    private Task RefreshAsync() => LoadAsync();
+    private System.Timers.Timer? _debounce;
+    private async Task OnSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _searchTerm = e.Value?.ToString() ?? string.Empty; _debounce?.Dispose(); _debounce = new System.Timers.Timer(360) { AutoReset = false }; _debounce.Elapsed += async (_, _) => { _debounce?.Dispose(); _debounce = null; await InvokeAsync(LoadAsync); }; _debounce.Start(); await Task.CompletedTask; }
+    private void SetActiveKpi(string key) { _activeKpi = _activeKpi == key ? "all" : key; _activeTab = _activeKpi switch { "importance" => "all", "active" => "all", "needsconfig" => "needsconfig", "templates" => "templates", "audit" => "audit", _ => "all" }; _page = 1; }
+    private void SetActiveTab(string key) { _activeTab = key; _activeKpi = key is "needsconfig" or "templates" or "audit" ? key : "all"; _page = 1; }
+    private void SetDashboardFocus(string tab, string sortMode) { _activeTab = tab; _activeKpi = tab is "needsconfig" or "templates" or "audit" ? tab : "all"; _sortMode = sortMode; _page = 1; }
+    private void ApplyFilters() => _page = 1;
+    private void ClearFilters() { _searchTerm = string.Empty; _statusFilter = string.Empty; _kindFilter = string.Empty; _channelFilter = string.Empty; _sortMode = "importance"; _activeTab = "all"; _activeKpi = "all"; _page = 1; _ = LoadAsync(); }
+    private bool HasFilters => !string.IsNullOrEmpty(_searchTerm) || !string.IsNullOrEmpty(_statusFilter) || !string.IsNullOrEmpty(_kindFilter) || !string.IsNullOrEmpty(_channelFilter) || _sortMode != "importance" || _activeTab != "all";
+    private IEnumerable<CommunicationConfigItemDto> TabFiltered => _activeTab switch { "delivery" => _items.Where(i => i.Kind is "EmailSetting" or "SmsSetting" or "NotificationRule"), "templates" => _items.Where(i => i.Kind == "MessageTemplate"), "needsconfig" => _items.Where(NeedsConfiguration), "senders" => _items.Where(i => i.Kind == "SenderProfile"), "audit" => _items.Where(i => i.Kind == "CommunicationAudit"), "inactive" => _items.Where(i => !i.IsActive), _ => _items };
+    private IEnumerable<CommunicationConfigItemDto> FilteredItems { get { var query = TabFiltered; if (_activeKpi == "active") query = query.Where(i => i.IsActive); if (_activeKpi == "importance") query = query.Where(IsHighImportance); if (!string.IsNullOrEmpty(_statusFilter)) query = query.Where(i => string.Equals(_statusFilter, "Active", StringComparison.OrdinalIgnoreCase) ? i.IsActive : !i.IsActive); if (!string.IsNullOrEmpty(_kindFilter)) query = query.Where(i => i.Kind == _kindFilter); if (!string.IsNullOrEmpty(_channelFilter)) query = query.Where(i => string.Equals(Safe(i.Channel, DefaultChannel(i.Kind)), _channelFilter, StringComparison.OrdinalIgnoreCase)); return _sortMode switch { "name" => query.OrderBy(i => i.Name), "kind" => query.OrderBy(i => KindLabel(i.Kind)).ThenBy(i => i.Name), "channel" => query.OrderBy(i => Safe(i.Channel, DefaultChannel(i.Kind))).ThenBy(i => i.Name), "created" => query.OrderByDescending(i => i.CreatedDateUtc), _ => query.OrderByDescending(ImportanceScore).ThenBy(i => i.SortOrder).ThenBy(i => i.Name) }; } }
+    private IEnumerable<CommunicationConfigItemDto> PagedItems => FilteredItems.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredItems.Count() / (double)PageSize));
+    private void PreviousPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private string ActiveViewTitle => _tabs.FirstOrDefault(t => t.Key == _activeTab)?.Label ?? "Communications";
+    private int TabCount(string key) => key switch { "delivery" => _items.Count(i => i.Kind is "EmailSetting" or "SmsSetting" or "NotificationRule"), "templates" => _items.Count(i => i.Kind == "MessageTemplate"), "needsconfig" => _items.Count(NeedsConfiguration), "senders" => _items.Count(i => i.Kind == "SenderProfile"), "audit" => _items.Count(i => i.Kind == "CommunicationAudit"), "inactive" => _items.Count(i => !i.IsActive), _ => _items.Count };
+    private IEnumerable<KindDef> KindOptions => _kinds;
+    private IEnumerable<string> ChannelOptions => _items.Select(i => Safe(i.Channel, DefaultChannel(i.Kind))).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(c => c);
+    private void SelectRow(CommunicationConfigItemDto item) { _selected = item; _openActionMenuFor = null; }
+    private void ToggleActionMenu(CommunicationConfigItemDto item) { _selected = item; _openActionMenuFor = _openActionMenuFor == item.CommunicationConfigItemId ? null : item.CommunicationConfigItemId; }
+    private void CloseActionMenu() { if (!_saving) _openActionMenuFor = null; }
+    private void NavigateToModule(CommunicationConfigItemDto item) => Nav.NavigateTo(_kinds.FirstOrDefault(k => k.Kind == item.Kind)?.Url ?? "/tenant/communications/dashboard");
+    private void OpenCreate() { _editId = null; _isClone = false; _form = new() { Kind = _kindFilter.Length > 0 ? _kindFilter : "EmailSetting", Channel = _channelFilter, ConfigurationJson = "{}", IsActive = true }; _editContext = new(_form); _formError = string.Empty; _showForm = true; _openActionMenuFor = null; }
+    private void OpenEdit(CommunicationConfigItemDto item) { _editId = item.CommunicationConfigItemId; _isClone = false; _form = new() { Kind = item.Kind, Code = item.Code, Name = item.Name, Channel = item.Channel, Category = item.Category, Description = item.Description, ConfigurationJson = item.ConfigurationJson, SortOrder = item.SortOrder, IsActive = item.IsActive }; _editContext = new(_form); _formError = string.Empty; _showForm = true; _openActionMenuFor = null; }
+    private void OpenClone(CommunicationConfigItemDto item) { _editId = null; _isClone = true; _form = new() { Kind = item.Kind, Code = $"{item.Code}_COPY", Name = $"{item.Name} (Copy)", Channel = item.Channel, Category = item.Category, Description = item.Description, ConfigurationJson = item.ConfigurationJson, SortOrder = item.SortOrder, IsActive = item.IsActive }; _editContext = new(_form); _formError = string.Empty; _showForm = true; _openActionMenuFor = null; }
+    private void CloseForm() { if (!_saving) { _showForm = false; _formError = string.Empty; } }
+    private async Task SaveAsync() { if (_saving) return; _formError = string.Empty; _saving = true; try { if (_editId.HasValue) { await Api.UpdateCommunicationConfigItemAsync(_editId.Value, new(_form.Code.Trim(), _form.Name.Trim(), _form.Channel?.Trim(), _form.Category?.Trim(), _form.Description?.Trim(), _form.ConfigurationJson?.Trim(), _form.IsActive, _form.SortOrder)); ShowToast($"Communication control '{_form.Name}' updated.", "cd-toast--success"); } else { await Api.CreateCommunicationConfigItemAsync(new(_tenantId, _form.Kind, _form.Code.Trim(), _form.Name.Trim(), _form.Channel?.Trim(), _form.Category?.Trim(), _form.Description?.Trim(), _form.ConfigurationJson?.Trim(), _form.SortOrder)); ShowToast($"Communication control '{_form.Name}' {(_isClone ? "cloned" : "created") }.", "cd-toast--success"); } _showForm = false; await LoadAsync(); } catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; ShowToast($"Save failed: {ex.Message}", "cd-toast--danger"); } finally { _saving = false; } }
+    private void ConfirmToggleActive(CommunicationConfigItemDto item) { OpenConfirm(item.IsActive ? "Pause communication control?" : "Activate communication control?", $"{(item.IsActive ? "Pause" : "Activate")} {item.Name}?", item.IsActive ? "bi-pause-circle" : "bi-play-circle", item.IsActive, () => ToggleActiveAsync(item)); }
+    private async Task ToggleActiveAsync(CommunicationConfigItemDto item) { try { await Api.UpdateCommunicationConfigItemAsync(item.CommunicationConfigItemId, new(item.Code, item.Name, item.Channel, item.Category, item.Description, item.ConfigurationJson, !item.IsActive, item.SortOrder)); CloseConfirm(); ShowToast($"Communication control '{item.Name}' {(!item.IsActive ? "activated" : "paused") }.", "cd-toast--success"); await LoadAsync(); } catch (Exception ex) { CloseConfirm(); ShowToast($"Status update failed: {ex.Message}", "cd-toast--danger"); } }
+    private void ConfirmDelete(CommunicationConfigItemDto item) => OpenConfirm("Delete communication control?", $"Delete {item.Name}? This cannot be undone.", "bi-trash3", true, () => DeleteAsync(item));
+    private async Task DeleteAsync(CommunicationConfigItemDto item) { try { await Api.DeleteCommunicationConfigItemAsync(item.CommunicationConfigItemId); CloseConfirm(); ShowToast($"Communication control '{item.Name}' deleted.", "cd-toast--success"); await LoadAsync(); } catch (Exception ex) { CloseConfirm(); ShowToast($"Delete failed: {ex.Message}", "cd-toast--danger"); } }
+    private void OpenConfirm(string title, string message, string icon, bool danger, Func<Task> action) { _confirmTitle = title; _confirmMessage = message; _confirmIcon = icon; _confirmDanger = danger; _confirmedAction = action; _showConfirm = true; _openActionMenuFor = null; }
+    private void CloseConfirm() { if (!_saving) { _showConfirm = false; _confirmedAction = null; } }
+    private async Task ExecuteConfirmedActionAsync() { if (_confirmedAction is null) return; _saving = true; try { await _confirmedAction.Invoke(); } finally { _saving = false; } }
+    private Task ExportAsync() { ShowToast("Communications dashboard export prepared from the current view.", "cd-toast--success"); return Task.CompletedTask; }
+    private void ShowToast(string message, string cssClass) { var toast = new ToastMessage(Guid.NewGuid(), message, cssClass); _toasts.Add(toast); _ = Task.Run(async () => { await Task.Delay(5000); await InvokeAsync(() => DismissToast(toast.Id)); }); }
+    private void DismissToast(Guid id) { _toasts.RemoveAll(t => t.Id == id); StateHasChanged(); }
+    private static bool HasConfiguration(CommunicationConfigItemDto item) => !string.IsNullOrWhiteSpace(item.ConfigurationJson) && item.ConfigurationJson.Trim() != "{}";
+    private static bool NeedsConfiguration(CommunicationConfigItemDto item) => item.IsActive && !HasConfiguration(item);
+    private static bool IsHighImportance(CommunicationConfigItemDto item) => ImportanceScore(item) >= 45;
+    private static int ImportanceScore(CommunicationConfigItemDto item) { var score = 0; if (item.IsActive) score += 18; if (NeedsConfiguration(item)) score += 35; if (HasConfiguration(item)) score += 12; if (item.Kind is "EmailSetting" or "SmsSetting" or "ConsentSetting" or "CommunicationAudit") score += 18; if (item.Kind == "MessageTemplate") score += 12; if (!string.IsNullOrWhiteSpace(item.Channel)) score += 8; if (item.SortOrder <= 10) score += 7; if ((DateTime.UtcNow - item.CreatedDateUtc).TotalDays <= 14) score += 6; return Math.Clamp(score, 0, 100); }
+    private static string ImportanceLevel(CommunicationConfigItemDto item) => ImportanceScore(item) switch { >= 75 => "Critical", >= 45 => "High", >= 25 => "Medium", _ => "Low" };
+    private static string ImportanceTone(CommunicationConfigItemDto item) => ImportanceLevel(item) switch { "Critical" => "red", "High" => "amber", "Medium" => "cyan", _ => "green" };
+    private IEnumerable<InsightDef> Insights { get { var list = new List<InsightDef>(); var gaps = _items.Count(NeedsConfiguration); if (gaps > 0) list.Add(new("Configuration gaps", $"{gaps} active communication control(s) need JSON configuration.", "bi-braces")); var consent = _items.Count(i => i.Kind == "ConsentSetting" && IsHighImportance(i)); if (consent > 0) list.Add(new("Consent priority", $"{consent} consent control(s) need priority review.", "bi-toggle-on")); var inactive = _items.Count(i => !i.IsActive); if (inactive > 0) list.Add(new("Paused controls", $"{inactive} communication control(s) are inactive.", "bi-pause-circle")); list.AddRange(_baselineInsights); return list.Take(5); } }
+    private string KindLabel(string kind) => _kinds.FirstOrDefault(k => k.Kind == kind)?.Label ?? kind;
+    private string KindIcon(string kind) => _kinds.FirstOrDefault(k => k.Kind == kind)?.Icon ?? "bi-chat-square-dots";
+    private string DefaultChannel(string kind) => _kinds.FirstOrDefault(k => k.Kind == kind)?.Channel ?? "General";
+    private static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private static string ConfigurationText(CommunicationConfigItemDto item) => HasConfiguration(item) ? "Configured" : "Missing";
+    private RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string tone) { var cardClass = $"cd-kpi-card cd-kpi-card--{tone} {(_activeKpi == key ? "cd-kpi-card--active" : string.Empty)}"; return @<button type="button" class="@cardClass" title="@subtitle" @onclick="() => SetActiveKpi(key)"><div class="cd-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></div><div class="cd-kpi-body"><span class="cd-kpi-label">@label</span><strong class="cd-kpi-value">@value</strong><span class="cd-kpi-sub">@subtitle</span></div></button>; }
+    private RenderFragment WorkflowButton(string title, string description, string icon, System.Action onClick) => @<button type="button" class="cd-workflow" @onclick="onClick"><div class="cd-workflow-icon"><i class="bi @icon" aria-hidden="true"></i></div><div class="cd-workflow-meta"><strong>@title</strong><span>@description</span></div></button>;
+    private RenderFragment ImportanceBadge(CommunicationConfigItemDto item) { var badgeClass = $"cd-risk-badge cd-risk-badge--{ImportanceTone(item)}"; return @<span class="@badgeClass" title="Communication importance score: @ImportanceScore(item)/100"><i class="bi bi-shield-fill" aria-hidden="true"></i> @ImportanceLevel(item)</span>; }
+    private RenderFragment StatusBadge(CommunicationConfigItemDto item) { var badgeClass = $"cd-pill {(item.IsActive ? "cd-pill--green" : "cd-pill--neutral")}"; var icon = item.IsActive ? "bi-check-circle-fill" : "bi-pause-circle"; var text = item.IsActive ? "Active" : "Inactive"; return @<span class="@badgeClass"><i class="bi @icon" aria-hidden="true"></i>@text</span>; }
+    private RenderFragment ConfigurationBadge(CommunicationConfigItemDto item) { var badgeClass = $"cd-pill {(HasConfiguration(item) ? "cd-pill--purple" : "cd-pill--amber")}"; var icon = HasConfiguration(item) ? "bi-code-slash" : "bi-braces"; return @<span class="@badgeClass"><i class="bi @icon" aria-hidden="true"></i>@ConfigurationText(item)</span>; }
+    private sealed class FormModel { [Required(ErrorMessage = "Kind is required.")] public string Kind { get; set; } = "EmailSetting"; [Required(ErrorMessage = "Code is required.")][StringLength(80)] public string Code { get; set; } = string.Empty; [Required(ErrorMessage = "Name is required.")][StringLength(200)] public string Name { get; set; } = string.Empty; [StringLength(80)] public string? Channel { get; set; } [StringLength(120)] public string? Category { get; set; } [StringLength(500)] public string? Description { get; set; } [StringLength(4000)] public string? ConfigurationJson { get; set; } [Range(0, 9999)] public int SortOrder { get; set; } public bool IsActive { get; set; } = true; }
+    private sealed record KindDef(string Kind, string Label, string Channel, string Icon, string Url);
+    private sealed record TabDef(string Key, string Label, string Icon);
+    private sealed record InsightDef(string Title, string Description, string Icon);
+    private sealed record ToastMessage(Guid Id, string Message, string CssClass);
+}
