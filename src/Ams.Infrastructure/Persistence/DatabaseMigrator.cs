@@ -182,6 +182,18 @@ public sealed class DatabaseMigrator
         new("0149_Submissions_SubmissionIntake_Seed", Migration0149_SubmissionsSubmissionIntakeSeed),
         new("0150_CarrierDownloadMapping_SchemaSync_Seed", Migration0150_CarrierDownloadMappingSchemaSyncSeed),
         new("0151_WorkflowTaskTemplates_SchemaSync_Seed", Migration0151_WorkflowTaskTemplatesSchemaSyncSeed),
+        new("0152_Submissions_EnterpriseRegister_DiverseSeedSync", Migration0152_SubmissionsEnterpriseRegisterDiverseSeedSync),
+        new("0153_LeadWorkflow_DataSync", Migration0153_LeadWorkflowDataSync),
+        new("0154_TenantPreferences_EnterpriseSeedSync", Migration0154_TenantPreferencesEnterpriseSeedSync),
+        new("0155_TenantNotifications_EnterpriseSeedSync", Migration0155_TenantNotificationsEnterpriseSeedSync),
+        new("0156_TenantBranding_EnterpriseSeedSync", Migration0156_TenantBrandingEnterpriseSeedSync),
+        new("0157_TenantSupport_EnterpriseSeedSync", Migration0157_TenantSupportEnterpriseSeedSync),
+        new("0158_TenantBranding_CoreSeedSync", Migration0158_TenantBrandingCoreSeedSync),
+        new("0159_PolicyEndorsements_TenantSeedSync", Migration0159_PolicyEndorsementsTenantSeedSync),
+        new("0160_PolicyCancellations_TenantSeedSync", Migration0160_PolicyCancellationsTenantSeedSync),
+        new("0161_PolicyDocuments_TenantSeedSync", Migration0161_PolicyDocumentsTenantSeedSync),
+        new("0162_CompliancePolicies_TenantSeedSync", Migration0162_CompliancePoliciesTenantSeedSync),
+        new("0163_ComplianceAcknowledgements_TenantSeedSync", Migration0163_ComplianceAcknowledgementsTenantSeedSync),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -886,6 +898,48 @@ BEGIN
         QuoteCount = (SELECT COUNT(1) FROM Submissions.Quote q WHERE q.SubmissionId = s.SubmissionId AND q.IsDeleted = 0)
     FROM Submissions.Submission s
     WHERE s.TenantId = @TenantId AND s.SubmissionId IN ('e1000000-0000-0000-0000-000000000001', 'e1000000-0000-0000-0000-000000000002', 'e1000000-0000-0000-0000-000000000003');
+END
+
+IF (SELECT COUNT(1) FROM Submissions.BoundPolicy WHERE TenantId = @TenantId AND IsDeleted = 0) < 6
+BEGIN
+    DECLARE @PolicyCarrier1 UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 CarrierId FROM Core.Carrier WHERE TenantId = @TenantId AND CarrierName = N'Travelers' AND IsDeleted = 0), 'd1000000-0000-0000-0000-000000000001');
+    DECLARE @PolicyCarrier2 UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 CarrierId FROM Core.Carrier WHERE TenantId = @TenantId AND CarrierName = N'Chubb' AND IsDeleted = 0), @PolicyCarrier1);
+    DECLARE @PolicyCarrier3 UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 CarrierId FROM Core.Carrier WHERE TenantId = @TenantId AND CarrierName = N'Hartford' AND IsDeleted = 0), @PolicyCarrier1);
+
+    ;WITH AccountPool AS
+    (
+        SELECT TOP (6) AccountId, ROW_NUMBER() OVER (ORDER BY CreatedDateUtc, AccountName) AS RowNum
+        FROM Client.Account
+        WHERE TenantId = @TenantId AND IsDeleted = 0
+        ORDER BY CreatedDateUtc, AccountName
+    ),
+    SeedPolicies AS
+    (
+        SELECT * FROM (VALUES
+            (CAST('e1900000-0000-0000-0000-000000000001' AS UNIQUEIDENTIFIER), CAST('e2900000-0000-0000-0000-000000000001' AS UNIQUEIDENTIFIER), CAST('e3900000-0000-0000-0000-000000000001' AS UNIQUEIDENTIFIER), 1, @PolicyCarrier1, N'POL-2025-10482', N'Bound', N'General Liability', N'High', 42500.00, DATEADD(day, -315, SYSUTCDATETIME()), DATEADD(day, 50, SYSUTCDATETIME()), DATEADD(day, -310, SYSUTCDATETIME())),
+            (CAST('e1900000-0000-0000-0000-000000000002' AS UNIQUEIDENTIFIER), CAST('e2900000-0000-0000-0000-000000000002' AS UNIQUEIDENTIFIER), CAST('e3900000-0000-0000-0000-000000000002' AS UNIQUEIDENTIFIER), 2, @PolicyCarrier3, N'POL-2025-11877', N'Bound', N'Professional Liability', N'Normal', 118000.00, DATEADD(day, -250, SYSUTCDATETIME()), DATEADD(day, 115, SYSUTCDATETIME()), DATEADD(day, -245, SYSUTCDATETIME())),
+            (CAST('e1900000-0000-0000-0000-000000000003' AS UNIQUEIDENTIFIER), CAST('e2900000-0000-0000-0000-000000000003' AS UNIQUEIDENTIFIER), CAST('e3900000-0000-0000-0000-000000000003' AS UNIQUEIDENTIFIER), 3, @PolicyCarrier1, N'POL-2025-13209', N'Bound', N'Commercial Auto', N'High', 184500.00, DATEADD(day, -210, SYSUTCDATETIME()), DATEADD(day, 20, SYSUTCDATETIME()), DATEADD(day, -205, SYSUTCDATETIME())),
+            (CAST('e1900000-0000-0000-0000-000000000004' AS UNIQUEIDENTIFIER), CAST('e2900000-0000-0000-0000-000000000004' AS UNIQUEIDENTIFIER), CAST('e3900000-0000-0000-0000-000000000004' AS UNIQUEIDENTIFIER), 4, @PolicyCarrier2, N'POL-2025-14211', N'Bound', N'Commercial Property', N'Critical', 239000.00, DATEADD(day, -385, SYSUTCDATETIME()), DATEADD(day, -20, SYSUTCDATETIME()), DATEADD(day, -380, SYSUTCDATETIME())),
+            (CAST('e1900000-0000-0000-0000-000000000005' AS UNIQUEIDENTIFIER), CAST('e2900000-0000-0000-0000-000000000005' AS UNIQUEIDENTIFIER), CAST('e3900000-0000-0000-0000-000000000005' AS UNIQUEIDENTIFIER), 5, @PolicyCarrier2, N'POL-2025-16540', N'Bound', N'Cyber', N'Normal', 73500.00, DATEADD(day, -125, SYSUTCDATETIME()), DATEADD(day, 240, SYSUTCDATETIME()), DATEADD(day, -120, SYSUTCDATETIME())),
+            (CAST('e1900000-0000-0000-0000-000000000006' AS UNIQUEIDENTIFIER), CAST('e2900000-0000-0000-0000-000000000006' AS UNIQUEIDENTIFIER), CAST('e3900000-0000-0000-0000-000000000006' AS UNIQUEIDENTIFIER), 6, @PolicyCarrier3, N'POL-2025-17892', N'Bound', N'Workers Comp', N'Low', 90600.00, DATEADD(day, -35, SYSUTCDATETIME()), DATEADD(day, 330, SYSUTCDATETIME()), DATEADD(day, -30, SYSUTCDATETIME()))
+        ) AS v(SubmissionId, QuoteId, PolicyId, AccountRow, CarrierId, PolicyNumber, Status, LineOfBusiness, Priority, AnnualPremium, EffectiveDate, ExpirationDate, BoundDateUtc)
+    )
+    INSERT INTO Submissions.Submission (SubmissionId, TenantId, AccountId, OpportunityId, SubmissionNumber, LineOfBusiness, Status, Priority, AssignedToUserId, EffectiveDate, ExpirationDate, TargetPremium, MarketCount, QuoteCount, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT sp.SubmissionId, @TenantId, ap.AccountId, @OpportunityId, CONCAT(N'SUB-POL-', RIGHT(sp.PolicyNumber, 5)), sp.LineOfBusiness, N'Bound', sp.Priority, @AdminUserId, sp.EffectiveDate, sp.ExpirationDate, sp.AnnualPremium, 1, 1, sp.BoundDateUtc, @AdminUserId, 0
+    FROM SeedPolicies sp
+    JOIN AccountPool ap ON ap.RowNum = sp.AccountRow
+    WHERE NOT EXISTS (SELECT 1 FROM Submissions.Submission s WHERE s.SubmissionId = sp.SubmissionId);
+
+    INSERT INTO Submissions.Quote (QuoteId, SubmissionId, CarrierId, QuoteNumber, Status, AnnualPremium, Deductible, [Limit], CoverageNotes, QuotedDateUtc, ExpiresDateUtc, CreatedDateUtc, IsDeleted)
+    SELECT sp.QuoteId, sp.SubmissionId, sp.CarrierId, CONCAT(N'QT-', RIGHT(sp.PolicyNumber, 5)), N'Accepted', sp.AnnualPremium, 5000, 2000000, N'Seeded enterprise policy quote for policy register dashboard.', DATEADD(day, -5, sp.BoundDateUtc), DATEADD(day, 30, sp.BoundDateUtc), sp.BoundDateUtc, 0
+    FROM SeedPolicies sp
+    WHERE NOT EXISTS (SELECT 1 FROM Submissions.Quote q WHERE q.QuoteId = sp.QuoteId);
+
+    INSERT INTO Submissions.BoundPolicy (PolicyId, SubmissionId, QuoteId, TenantId, AccountId, CarrierId, PolicyNumber, Status, AnnualPremium, EffectiveDate, ExpirationDate, BoundDateUtc, IsDeleted)
+    SELECT sp.PolicyId, sp.SubmissionId, sp.QuoteId, @TenantId, ap.AccountId, sp.CarrierId, sp.PolicyNumber, sp.Status, sp.AnnualPremium, sp.EffectiveDate, sp.ExpirationDate, sp.BoundDateUtc, 0
+    FROM SeedPolicies sp
+    JOIN AccountPool ap ON ap.RowNum = sp.AccountRow
+    WHERE NOT EXISTS (SELECT 1 FROM Submissions.BoundPolicy p WHERE p.TenantId = @TenantId AND p.PolicyNumber = sp.PolicyNumber AND p.IsDeleted = 0);
 END
 ";
 
@@ -8401,5 +8455,1932 @@ N'@TenantId UNIQUEIDENTIFIER, @AdminUserId UNIQUEIDENTIFIER',
 @WorkflowTaskTenantId, @WorkflowTaskAdminUserId;
 
 DROP TABLE #WorkflowTaskSeed;
+";
+
+    private const string Migration0152_SubmissionsEnterpriseRegisterDiverseSeedSync = @"
+DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+DECLARE @AdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+
+IF OBJECT_ID(N'Submissions.Submission', N'U') IS NOT NULL AND OBJECT_ID(N'Client.Account', N'U') IS NOT NULL
+BEGIN
+    IF OBJECT_ID(N'tempdb..#SubmissionAccountPool') IS NOT NULL DROP TABLE #SubmissionAccountPool;
+
+    SELECT TOP (18)
+           AccountId,
+           ROW_NUMBER() OVER (ORDER BY CreatedDateUtc, AccountName, AccountId) AS RowNum
+    INTO #SubmissionAccountPool
+    FROM Client.Account
+    WHERE TenantId = @TenantId AND IsDeleted = 0
+    ORDER BY CreatedDateUtc, AccountName, AccountId;
+
+    IF EXISTS (SELECT 1 FROM #SubmissionAccountPool)
+    BEGIN
+        IF OBJECT_ID(N'tempdb..#SubmissionSeedMap') IS NOT NULL DROP TABLE #SubmissionSeedMap;
+
+        CREATE TABLE #SubmissionSeedMap
+        (
+            SubmissionId UNIQUEIDENTIFIER NOT NULL,
+            AccountRow INT NOT NULL,
+            Status NVARCHAR(50) NOT NULL,
+            Priority NVARCHAR(50) NOT NULL,
+            ActionCode NVARCHAR(80) NOT NULL,
+            Notes NVARCHAR(1000) NULL
+        );
+
+        INSERT INTO #SubmissionSeedMap (SubmissionId, AccountRow, Status, Priority, ActionCode, Notes)
+        VALUES
+        ('e1000000-0000-0000-0000-000000000001', 1, N'New', N'High', N'Created', N'Enterprise register seed synced to account pool.'),
+        ('e1000000-0000-0000-0000-000000000002', 2, N'In Review', N'Normal', N'SubmittedToMarket', N'Market submission workflow seeded.'),
+        ('e1000000-0000-0000-0000-000000000003', 3, N'Quoted', N'High', N'QuoteRequested', N'Quote workflow seeded.'),
+        ('e1000000-0000-0000-0000-000000000011', 4, N'Quoted', N'High', N'QuotePresented', N'Quote register seed synced.'),
+        ('e1000000-0000-0000-0000-000000000012', 5, N'Quoted', N'Normal', N'QuotePresented', N'Alternate quote workflow seeded.'),
+        ('e1000000-0000-0000-0000-000000000013', 6, N'Declined', N'High', N'Declined', N'Decline workflow seeded.'),
+        ('e1000000-0000-0000-0000-000000000121', 7, N'Draft', N'High', N'ApplicationCreated', N'Application draft workflow seeded.'),
+        ('e1000000-0000-0000-0000-000000000122', 8, N'New', N'Normal', N'ApplicationReceived', N'Application intake seeded.'),
+        ('e1000000-0000-0000-0000-000000000123', 9, N'In Review', N'High', N'UnderwritingReview', N'Application review workflow seeded.'),
+        ('e1000000-0000-0000-0000-000000000124', 10, N'In Review', N'Normal', N'SubmittedToMarket', N'Application market workflow seeded.'),
+        ('e1000000-0000-0000-0000-000000000125', 11, N'Quoted', N'High', N'QuotePresented', N'Application quote workflow seeded.'),
+        ('e1000000-0000-0000-0000-000000000126', 12, N'Declined', N'Normal', N'Declined', N'Application decline workflow seeded.'),
+        ('e1000000-0000-0000-0000-000000000131', 13, N'Declined', N'High', N'Declined', N'Decline recovery seed synced.'),
+        ('e1000000-0000-0000-0000-000000000132', 14, N'Declined', N'High', N'Declined', N'Decline recovery quote retained.'),
+        ('e1000000-0000-0000-0000-000000000133', 15, N'Withdrawn', N'Normal', N'Withdrawn', N'Withdrawn submission seeded.'),
+        ('e1000000-0000-0000-0000-000000000134', 16, N'Declined', N'Normal', N'Declined', N'Umbrella decline seeded.'),
+        ('e1000000-0000-0000-0000-000000000135', 17, N'Declined', N'High', N'Declined', N'Professional liability decline seeded.'),
+        ('e1000000-0000-0000-0000-000000000136', 18, N'Withdrawn', N'Normal', N'Withdrawn', N'Commercial auto withdrawal seeded.');
+
+        ;WITH Pool AS
+        (
+            SELECT AccountId, RowNum FROM #SubmissionAccountPool
+        ),
+        PoolCount AS
+        (
+            SELECT COUNT(1) AS TotalRows FROM Pool
+        ),
+        Mapped AS
+        (
+            SELECT m.SubmissionId,
+                   p.AccountId,
+                   m.Status,
+                   m.Priority,
+                   m.ActionCode,
+                   m.Notes
+            FROM #SubmissionSeedMap m
+            CROSS JOIN PoolCount pc
+            JOIN Pool p ON p.RowNum = ((m.AccountRow - 1) % pc.TotalRows) + 1
+        )
+        UPDATE s
+        SET s.AccountId = m.AccountId,
+            s.Status = m.Status,
+            s.Priority = m.Priority,
+            s.MarketCount = (SELECT COUNT(1) FROM Submissions.SubmissionMarket sm WHERE sm.SubmissionId = s.SubmissionId AND sm.IsDeleted = 0),
+            s.QuoteCount = (SELECT COUNT(1) FROM Submissions.Quote q WHERE q.SubmissionId = s.SubmissionId AND q.IsDeleted = 0),
+            s.ModifiedDateUtc = SYSUTCDATETIME(),
+            s.ModifiedByUserId = @AdminUserId
+        FROM Submissions.Submission s
+        JOIN Mapped m ON m.SubmissionId = s.SubmissionId
+        WHERE s.TenantId = @TenantId AND s.IsDeleted = 0;
+
+        IF OBJECT_ID(N'Submissions.SubmissionActionLog', N'U') IS NOT NULL
+        BEGIN
+            INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, IsDeleted)
+            SELECT NEWID(), s.SubmissionId, @TenantId, m.ActionCode, m.Notes, DATEADD(minute, -m.AccountRow * 11, SYSUTCDATETIME()), 0
+            FROM #SubmissionSeedMap m
+            JOIN Submissions.Submission s ON s.SubmissionId = m.SubmissionId AND s.TenantId = @TenantId AND s.IsDeleted = 0
+            WHERE NOT EXISTS
+            (
+                SELECT 1
+                FROM Submissions.SubmissionActionLog l
+                WHERE l.SubmissionId = m.SubmissionId
+                  AND l.TenantId = @TenantId
+                  AND l.ActionCode = m.ActionCode
+                  AND l.IsDeleted = 0
+            );
+        END
+
+        IF OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL
+        BEGIN
+            UPDATE bp
+            SET bp.AccountId = s.AccountId
+            FROM Submissions.BoundPolicy bp
+            JOIN Submissions.Submission s ON s.SubmissionId = bp.SubmissionId
+            WHERE bp.TenantId = @TenantId AND bp.IsDeleted = 0;
+        END
+
+        DROP TABLE #SubmissionSeedMap;
+    END
+
+    DROP TABLE #SubmissionAccountPool;
+END
+";
+
+    private const string Migration0154_TenantPreferencesEnterpriseSeedSync = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Core')
+    EXEC(N'CREATE SCHEMA Core');
+
+IF OBJECT_ID(N'Core.TenantConfigItem', N'U') IS NULL
+BEGIN
+    CREATE TABLE Core.TenantConfigItem
+    (
+        TenantConfigItemId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Core_TenantConfigItem PRIMARY KEY,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        Kind NVARCHAR(80) NOT NULL,
+        Code NVARCHAR(80) NOT NULL,
+        Name NVARCHAR(200) NOT NULL,
+        Category NVARCHAR(120) NULL,
+        Description NVARCHAR(500) NULL,
+        ConfigurationJson NVARCHAR(4000) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_Core_TenantConfigItem_IsActive DEFAULT(1),
+        SortOrder INT NOT NULL CONSTRAINT DF_Core_TenantConfigItem_SortOrder DEFAULT(0),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_TenantConfigItem_Created DEFAULT SYSUTCDATETIME(),
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Core_TenantConfigItem_IsDeleted DEFAULT(0)
+    );
+END;
+
+IF OBJECT_ID(N'Core.TenantSettingsWorkflowItem', N'U') IS NULL
+BEGIN
+    CREATE TABLE Core.TenantSettingsWorkflowItem
+    (
+        WorkflowItemId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Core_TenantSettingsWorkflowItem PRIMARY KEY,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PageCode NVARCHAR(80) NOT NULL,
+        Title NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(1000) NOT NULL,
+        Category NVARCHAR(100) NOT NULL,
+        Stage NVARCHAR(80) NOT NULL,
+        Status NVARCHAR(80) NOT NULL,
+        Priority NVARCHAR(40) NOT NULL,
+        OwnerName NVARCHAR(200) NOT NULL,
+        DueDateUtc DATETIME2 NULL,
+        RiskCode NVARCHAR(40) NOT NULL,
+        ControlCode NVARCHAR(120) NOT NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_Core_TenantSettingsWorkflowItem_SortOrder DEFAULT(0),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_TenantSettingsWorkflowItem_Created DEFAULT SYSUTCDATETIME(),
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Core_TenantSettingsWorkflowItem_IsDeleted DEFAULT(0)
+    );
+END;
+
+DECLARE @AdminUserId UNIQUEIDENTIFIER = (SELECT TOP (1) UserId FROM IAM.[User] WHERE IsDeleted = 0 ORDER BY CreatedDateUtc);
+
+DECLARE @Tenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+INSERT INTO @Tenants (TenantId)
+SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0;
+
+INSERT INTO Core.TenantConfigItem (TenantConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, N'TenantPreference', v.Code, v.Name, v.Category, v.Description, v.ConfigurationJson, 1, v.SortOrder, SYSUTCDATETIME(), 0
+FROM @Tenants t
+CROSS APPLY (VALUES
+    (N'TIMEZONE_DEFAULT', N'Default timezone', N'Locale & Regional', N'Primary timezone used for task due dates, workflow SLAs, calendar displays, and dashboards.', N'{""CurrentValue"":""America/New_York"",""DefaultValue"":""America/New_York"",""ValueType"":""Text"",""AppliesTo"":""Tenant + User"",""SyncToConfiguration"":true}', 10),
+    (N'LOCALE_DEFAULT', N'Default locale', N'Locale & Regional', N'Default formatting culture for dates, currency, and number displays.', N'{""CurrentValue"":""en-US"",""DefaultValue"":""en-US"",""ValueType"":""Text"",""AppliesTo"":""Tenant"",""SyncToConfiguration"":true}', 20),
+    (N'CURRENCY_DEFAULT', N'Default currency', N'Locale & Regional', N'Agency-wide currency code used by premium, billing, policy, and finance views.', N'{""CurrentValue"":""USD"",""DefaultValue"":""USD"",""ValueType"":""Text"",""AppliesTo"":""Tenant"",""SyncToConfiguration"":true}', 30),
+    (N'FISCAL_YEAR_START', N'Fiscal year start month', N'Fiscal Calendar', N'Start month for fiscal reporting, renewal forecasting, and executive dashboards.', N'{""CurrentValue"":""January"",""DefaultValue"":""January"",""ValueType"":""Text"",""AppliesTo"":""Tenant"",""SyncToConfiguration"":true}', 40),
+    (N'ACCOUNT_NAMING_MODE', N'Account naming mode', N'Account Defaults', N'Controls how new account names are normalized across CRM, submissions, policies, and service workflows.', N'{""CurrentValue"":""Legal name preferred"",""DefaultValue"":""Legal name preferred"",""ValueType"":""Text"",""AppliesTo"":""Tenant + Branch"",""SyncToConfiguration"":true}', 50),
+    (N'POLICY_RENEWAL_LOOKAHEAD_DAYS', N'Renewal lookahead days', N'Policy Defaults', N'Number of days before expiration that policy renewal workflows are surfaced.', N'{""CurrentValue"":""120"",""DefaultValue"":""90"",""ValueType"":""Number"",""AppliesTo"":""Tenant + Workflow"",""SyncToConfiguration"":true}', 60),
+    (N'BILLING_GRACE_PERIOD_DAYS', N'Billing grace period days', N'Billing Defaults', N'Default grace period shown in billing, cancellation, and reinstatement workflows.', N'{""CurrentValue"":""10"",""DefaultValue"":""10"",""ValueType"":""Number"",""AppliesTo"":""Tenant"",""SyncToConfiguration"":true}', 70),
+    (N'DASHBOARD_DENSITY', N'Dashboard density', N'Dashboard Display', N'Default enterprise dashboard row density and card spacing preference.', N'{""CurrentValue"":""Comfortable"",""DefaultValue"":""Comfortable"",""ValueType"":""Text"",""AppliesTo"":""Tenant + User"",""SyncToConfiguration"":true}', 80),
+    (N'WORKFLOW_APPROVAL_REQUIRED', N'Preference approval required', N'Workflow Controls', N'Requires approval workflow before high-risk tenant preference changes are considered complete.', N'{""CurrentValue"":""true"",""DefaultValue"":""true"",""ValueType"":""Boolean"",""AppliesTo"":""Tenant + Workflow"",""SyncToConfiguration"":true}', 90)
+) v(Code, Name, Category, Description, ConfigurationJson, SortOrder)
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM Core.TenantConfigItem existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.Kind = N'TenantPreference'
+      AND existing.Code = v.Code
+      AND existing.IsDeleted = 0
+);
+
+INSERT INTO Core.TenantSettingsWorkflowItem (WorkflowItemId, TenantId, PageCode, Title, Description, Category, Stage, Status, Priority, OwnerName, DueDateUtc, RiskCode, ControlCode, SortOrder, CreatedByUserId, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, N'preferences', v.Title, v.Description, v.Category, v.Stage, v.Status, v.Priority, v.OwnerName, DATEADD(day, v.DueInDays, SYSUTCDATETIME()), v.RiskCode, v.ControlCode, v.SortOrder, @AdminUserId, SYSUTCDATETIME(), 0
+FROM @Tenants t
+CROSS APPLY (VALUES
+    (N'Validate fiscal calendar defaults', N'Review fiscal year start, reporting periods, and dashboard fiscal labels before the next close.', N'Fiscal Calendar', N'Review', N'In Review', N'High', N'Operations Admin', 7, N'High', N'PREF-FISCAL-CALENDAR', 10),
+    (N'Approve workflow preference controls', N'Confirm approval requirements and risk flags for high-impact tenant preference changes.', N'Workflow Controls', N'Approve', N'Open', N'High', N'Compliance Admin', 10, N'High', N'PREF-WORKFLOW-CONTROL', 20),
+    (N'Sync locale preferences to configuration', N'Verify timezone, locale, and currency settings are synchronized for dashboards and downstream workflow services.', N'Locale & Regional', N'Deploy', N'Open', N'Medium', N'Tenant Admin', 14, N'Medium', N'PREF-LOCALE-SYNC', 30)
+) v(Title, Description, Category, Stage, Status, Priority, OwnerName, DueInDays, RiskCode, ControlCode, SortOrder)
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM Core.TenantSettingsWorkflowItem existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.PageCode = N'preferences'
+      AND existing.ControlCode = v.ControlCode
+      AND existing.IsDeleted = 0
+);
+
+IF OBJECT_ID(N'Core.ConfigurationSetting', N'U') IS NOT NULL
+BEGIN
+    MERGE Core.ConfigurationSetting AS target
+    USING
+    (
+        SELECT t.TenantId,
+               CONCAT(N'Tenant.Preference.', p.Code) AS SettingKey,
+               JSON_VALUE(p.ConfigurationJson, '$.CurrentValue') AS SettingValue
+        FROM @Tenants t
+        JOIN Core.TenantConfigItem p ON p.TenantId = t.TenantId AND p.Kind = N'TenantPreference' AND p.IsActive = 1 AND p.IsDeleted = 0
+        WHERE JSON_VALUE(p.ConfigurationJson, '$.SyncToConfiguration') = N'true'
+    ) AS src
+    ON target.TenantId = src.TenantId AND target.ScopeCode = N'Tenant' AND target.SettingKey = src.SettingKey
+    WHEN MATCHED THEN UPDATE SET SettingValue = src.SettingValue, ModifiedDateUtc = SYSUTCDATETIME()
+    WHEN NOT MATCHED THEN INSERT (SettingId, TenantId, ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, IsEncrypted, IsReadOnly, ModuleCode, CreatedDateUtc)
+        VALUES (NEWID(), src.TenantId, N'Tenant', src.SettingKey, src.SettingValue, N'Text', src.SettingValue, N'Synced from tenant preferences dashboard.', 0, 0, N'TenantPreferences', SYSUTCDATETIME());
+END;
+";
+
+    private const string Migration0155_TenantNotificationsEnterpriseSeedSync = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Core')
+    EXEC(N'CREATE SCHEMA Core');
+
+IF OBJECT_ID(N'Core.TenantConfigItem', N'U') IS NULL
+BEGIN
+    CREATE TABLE Core.TenantConfigItem
+    (
+        TenantConfigItemId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Core_TenantConfigItem PRIMARY KEY,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        Kind NVARCHAR(80) NOT NULL,
+        Code NVARCHAR(80) NOT NULL,
+        Name NVARCHAR(200) NOT NULL,
+        Category NVARCHAR(120) NULL,
+        Description NVARCHAR(500) NULL,
+        ConfigurationJson NVARCHAR(4000) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_Core_TenantConfigItem_IsActive DEFAULT(1),
+        SortOrder INT NOT NULL CONSTRAINT DF_Core_TenantConfigItem_SortOrder DEFAULT(0),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_TenantConfigItem_Created DEFAULT SYSUTCDATETIME(),
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Core_TenantConfigItem_IsDeleted DEFAULT(0)
+    );
+END;
+
+IF OBJECT_ID(N'Core.TenantSettingsWorkflowItem', N'U') IS NULL
+BEGIN
+    CREATE TABLE Core.TenantSettingsWorkflowItem
+    (
+        WorkflowItemId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Core_TenantSettingsWorkflowItem PRIMARY KEY,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PageCode NVARCHAR(80) NOT NULL,
+        Title NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(1000) NOT NULL,
+        Category NVARCHAR(100) NOT NULL,
+        Stage NVARCHAR(80) NOT NULL,
+        Status NVARCHAR(80) NOT NULL,
+        Priority NVARCHAR(40) NOT NULL,
+        OwnerName NVARCHAR(200) NOT NULL,
+        DueDateUtc DATETIME2 NULL,
+        RiskCode NVARCHAR(40) NOT NULL,
+        ControlCode NVARCHAR(120) NOT NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_Core_TenantSettingsWorkflowItem_SortOrder DEFAULT(0),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_TenantSettingsWorkflowItem_Created DEFAULT SYSUTCDATETIME(),
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Core_TenantSettingsWorkflowItem_IsDeleted DEFAULT(0)
+    );
+END;
+
+DECLARE @AdminUserId UNIQUEIDENTIFIER = (SELECT TOP (1) UserId FROM IAM.[User] WHERE IsDeleted = 0 ORDER BY CreatedDateUtc);
+
+DECLARE @Tenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+INSERT INTO @Tenants (TenantId)
+SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0;
+
+INSERT INTO Core.TenantConfigItem (TenantConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, N'NotificationSetting', v.Code, v.Name, v.Category, v.Description, v.ConfigurationJson, 1, v.SortOrder, SYSUTCDATETIME(), 0
+FROM @Tenants t
+CROSS APPLY (VALUES
+    (N'CLAIMS_ESCALATION_EMAIL', N'Claims escalation email', N'Escalations', N'Email recipient list for high-severity claim escalation notifications.', N'{""CurrentValue"":""claims-escalation@agency.example"",""DefaultValue"":""claims@agency.example"",""ValueType"":""Text"",""AppliesTo"":""Tenant + Workflow"",""SyncToConfiguration"":true}', 10),
+    (N'RENEWAL_DIGEST_CADENCE', N'Renewal digest cadence', N'Digest Cadence', N'Default cadence for renewal pipeline notification digests.', N'{""CurrentValue"":""Daily at 8:00 AM"",""DefaultValue"":""Daily at 8:00 AM"",""ValueType"":""Text"",""AppliesTo"":""Tenant + User"",""SyncToConfiguration"":true}', 20),
+    (N'QUIET_HOURS_WINDOW', N'Quiet hours window', N'Quiet Hours', N'Tenant quiet hours for non-critical SMS, push, and in-app alert delivery.', N'{""CurrentValue"":""8:00 PM - 7:00 AM"",""DefaultValue"":""8:00 PM - 7:00 AM"",""ValueType"":""Text"",""AppliesTo"":""Tenant + User"",""SyncToConfiguration"":true}', 30),
+    (N'CRITICAL_ALERT_BYPASS', N'Critical alert bypass', N'Consent Controls', N'Allows critical compliance and claim notifications to bypass digest and quiet-hour rules.', N'{""CurrentValue"":""true"",""DefaultValue"":""true"",""ValueType"":""Boolean"",""AppliesTo"":""Tenant + Workflow"",""SyncToConfiguration"":true}', 40),
+    (N'CLIENT_PORTAL_NOTIFICATIONS', N'Client portal notifications', N'Delivery Channels', N'Controls tenant client-facing portal notification delivery where consent is present.', N'{""CurrentValue"":""Enabled with consent"",""DefaultValue"":""Enabled with consent"",""ValueType"":""Text"",""AppliesTo"":""Tenant"",""SyncToConfiguration"":true}', 50),
+    (N'SMS_DELIVERY_PROVIDER', N'SMS delivery provider', N'Delivery Channels', N'Primary SMS provider used by workflow, claims, billing, and renewal notifications.', N'{""CurrentValue"":""AMS Messaging"",""DefaultValue"":""AMS Messaging"",""ValueType"":""Text"",""AppliesTo"":""Tenant"",""SyncToConfiguration"":true}', 60),
+    (N'PRODUCER_ALERT_ROUTING', N'Producer alert routing', N'Role Routing', N'Routes producer-facing opportunity, submission, and renewal alerts by owner role.', N'{""CurrentValue"":""Assigned producer + manager fallback"",""DefaultValue"":""Assigned producer"",""ValueType"":""Text"",""AppliesTo"":""Tenant + Branch"",""SyncToConfiguration"":true}', 70),
+    (N'IN_APP_BADGE_LIMIT', N'In-app badge limit', N'In-App Display', N'Maximum unread notification badge count shown before compact overflow display.', N'{""CurrentValue"":""99"",""DefaultValue"":""99"",""ValueType"":""Number"",""AppliesTo"":""Tenant + User"",""SyncToConfiguration"":true}', 80)
+) v(Code, Name, Category, Description, ConfigurationJson, SortOrder)
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM Core.TenantConfigItem existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.Kind = N'NotificationSetting'
+      AND existing.Code = v.Code
+      AND existing.IsDeleted = 0
+);
+
+INSERT INTO Core.TenantSettingsWorkflowItem (WorkflowItemId, TenantId, PageCode, Title, Description, Category, Stage, Status, Priority, OwnerName, DueDateUtc, RiskCode, ControlCode, SortOrder, CreatedByUserId, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, N'notifications', v.Title, v.Description, v.Category, v.Stage, v.Status, v.Priority, v.OwnerName, DATEADD(day, v.DueInDays, SYSUTCDATETIME()), v.RiskCode, v.ControlCode, v.SortOrder, @AdminUserId, SYSUTCDATETIME(), 0
+FROM @Tenants t
+CROSS APPLY (VALUES
+    (N'Audit escalation recipient routing', N'Review claims, billing, renewal, and compliance escalation recipients for current role ownership.', N'Escalations', N'Review', N'In Review', N'High', N'Operations Admin', 7, N'High', N'NOTIF-ESCALATION-AUDIT', 10),
+    (N'Approve critical alert bypass policy', N'Confirm which critical notifications bypass quiet hours, digest batching, and client consent checks.', N'Consent Controls', N'Approve', N'Open', N'High', N'Compliance Admin', 10, N'High', N'NOTIF-CRITICAL-BYPASS', 20),
+    (N'Sync delivery channel settings', N'Verify email, SMS, portal, in-app, and push notification settings are synced to configuration.', N'Delivery Channels', N'Deploy', N'Open', N'Medium', N'Tenant Admin', 14, N'Medium', N'NOTIF-CHANNEL-SYNC', 30)
+) v(Title, Description, Category, Stage, Status, Priority, OwnerName, DueInDays, RiskCode, ControlCode, SortOrder)
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM Core.TenantSettingsWorkflowItem existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.PageCode = N'notifications'
+      AND existing.ControlCode = v.ControlCode
+      AND existing.IsDeleted = 0
+);
+
+IF OBJECT_ID(N'Core.ConfigurationSetting', N'U') IS NOT NULL
+BEGIN
+    MERGE Core.ConfigurationSetting AS target
+    USING
+    (
+        SELECT t.TenantId,
+               CONCAT(N'Tenant.Notification.', p.Code) AS SettingKey,
+               JSON_VALUE(p.ConfigurationJson, '$.CurrentValue') AS SettingValue
+        FROM @Tenants t
+        JOIN Core.TenantConfigItem p ON p.TenantId = t.TenantId AND p.Kind = N'NotificationSetting' AND p.IsActive = 1 AND p.IsDeleted = 0
+        WHERE JSON_VALUE(p.ConfigurationJson, '$.SyncToConfiguration') = N'true'
+    ) AS src
+    ON target.TenantId = src.TenantId AND target.ScopeCode = N'Tenant' AND target.SettingKey = src.SettingKey
+    WHEN MATCHED THEN UPDATE SET SettingValue = src.SettingValue, ModifiedDateUtc = SYSUTCDATETIME()
+    WHEN NOT MATCHED THEN INSERT (SettingId, TenantId, ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, IsEncrypted, IsReadOnly, ModuleCode, CreatedDateUtc)
+        VALUES (NEWID(), src.TenantId, N'Tenant', src.SettingKey, src.SettingValue, N'Text', src.SettingValue, N'Synced from tenant notification settings dashboard.', 0, 0, N'TenantNotifications', SYSUTCDATETIME());
+END;
+";
+
+    private const string Migration0156_TenantBrandingEnterpriseSeedSync = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Core')
+    EXEC(N'CREATE SCHEMA Core');
+
+IF OBJECT_ID(N'Core.TenantConfigItem', N'U') IS NULL
+BEGIN
+    CREATE TABLE Core.TenantConfigItem
+    (
+        TenantConfigItemId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Core_TenantConfigItem PRIMARY KEY,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        Kind NVARCHAR(80) NOT NULL,
+        Code NVARCHAR(80) NOT NULL,
+        Name NVARCHAR(200) NOT NULL,
+        Category NVARCHAR(120) NULL,
+        Description NVARCHAR(500) NULL,
+        ConfigurationJson NVARCHAR(4000) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_Core_TenantConfigItem_IsActive DEFAULT(1),
+        SortOrder INT NOT NULL CONSTRAINT DF_Core_TenantConfigItem_SortOrder DEFAULT(0),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_TenantConfigItem_Created DEFAULT SYSUTCDATETIME(),
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Core_TenantConfigItem_IsDeleted DEFAULT(0)
+    );
+END;
+
+IF OBJECT_ID(N'Core.TenantSettingsWorkflowItem', N'U') IS NULL
+BEGIN
+    CREATE TABLE Core.TenantSettingsWorkflowItem
+    (
+        WorkflowItemId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Core_TenantSettingsWorkflowItem PRIMARY KEY,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PageCode NVARCHAR(80) NOT NULL,
+        Title NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(1000) NOT NULL,
+        Category NVARCHAR(100) NOT NULL,
+        Stage NVARCHAR(80) NOT NULL,
+        Status NVARCHAR(80) NOT NULL,
+        Priority NVARCHAR(40) NOT NULL,
+        OwnerName NVARCHAR(200) NOT NULL,
+        DueDateUtc DATETIME2 NULL,
+        RiskCode NVARCHAR(40) NOT NULL,
+        ControlCode NVARCHAR(120) NOT NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_Core_TenantSettingsWorkflowItem_SortOrder DEFAULT(0),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_TenantSettingsWorkflowItem_Created DEFAULT SYSUTCDATETIME(),
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Core_TenantSettingsWorkflowItem_IsDeleted DEFAULT(0)
+    );
+END;
+
+DECLARE @AdminUserId UNIQUEIDENTIFIER = (SELECT TOP (1) UserId FROM IAM.[User] WHERE IsDeleted = 0 ORDER BY CreatedDateUtc);
+
+DECLARE @Tenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+INSERT INTO @Tenants (TenantId)
+SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0;
+
+INSERT INTO Core.TenantConfigItem (TenantConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, N'TenantBranding', v.Code, v.Name, v.Category, v.Description, v.ConfigurationJson, 1, v.SortOrder, SYSUTCDATETIME(), 0
+FROM @Tenants t
+CROSS APPLY (VALUES
+    (N'WHITE_LABEL_NAME', N'White-label name', N'Identity', N'Client-facing brand name displayed in portals, documents, and tenant communications.', N'{""CurrentValue"":""Agency Portal"",""DefaultValue"":""Agency Portal"",""ValueType"":""Text"",""AppliesTo"":""Tenant + Portal"",""SyncToConfiguration"":true}', 10),
+    (N'PRIMARY_COLOR', N'Primary color', N'Palette', N'Primary brand color token used by portal, dashboard, and workflow experiences.', N'{""CurrentValue"":""#0d6efd"",""DefaultValue"":""#0d6efd"",""ValueType"":""Color"",""AppliesTo"":""Tenant + Portal"",""SyncToConfiguration"":true}', 20),
+    (N'SECONDARY_COLOR', N'Secondary color', N'Palette', N'Secondary brand color token for neutral and supporting surfaces.', N'{""CurrentValue"":""#6c757d"",""DefaultValue"":""#6c757d"",""ValueType"":""Color"",""AppliesTo"":""Tenant + Portal"",""SyncToConfiguration"":true}', 30),
+    (N'ACCENT_COLOR', N'Accent color', N'Palette', N'Accent brand color token for calls to action and positive states.', N'{""CurrentValue"":""#198754"",""DefaultValue"":""#198754"",""ValueType"":""Color"",""AppliesTo"":""Tenant + Portal"",""SyncToConfiguration"":true}', 40),
+    (N'CUSTOM_DOMAIN', N'Custom domain', N'Domain Governance', N'Optional custom tenant portal domain used for branded client access.', N'{""CurrentValue"":"""",""DefaultValue"":"""",""ValueType"":""Text"",""AppliesTo"":""Tenant + Portal"",""SyncToConfiguration"":true}', 50),
+    (N'SUPPORT_EMAIL', N'Support email', N'Support', N'Client-facing support mailbox shown in branded portal and outbound communications.', N'{""CurrentValue"":""support@agency.example"",""DefaultValue"":""support@agency.example"",""ValueType"":""Email"",""AppliesTo"":""Tenant + Workflow"",""SyncToConfiguration"":true}', 60),
+    (N'FOOTER_TEXT', N'Footer text', N'Support', N'Trust and support footer message used across client-facing branded experiences.', N'{""CurrentValue"":""Your protected insurance workspace."",""DefaultValue"":""Your protected insurance workspace."",""ValueType"":""Text"",""AppliesTo"":""Tenant + Portal"",""SyncToConfiguration"":true}', 70)
+) v(Code, Name, Category, Description, ConfigurationJson, SortOrder)
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM Core.TenantConfigItem existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.Kind = N'TenantBranding'
+      AND existing.Code = v.Code
+      AND existing.IsDeleted = 0
+);
+
+INSERT INTO Core.TenantSettingsWorkflowItem (WorkflowItemId, TenantId, PageCode, Title, Description, Category, Stage, Status, Priority, OwnerName, DueDateUtc, RiskCode, ControlCode, SortOrder, CreatedByUserId, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, N'branding', v.Title, v.Description, v.Category, v.Stage, v.Status, v.Priority, v.OwnerName, DATEADD(day, v.DueInDays, SYSUTCDATETIME()), v.RiskCode, v.ControlCode, v.SortOrder, @AdminUserId, SYSUTCDATETIME(), 0
+FROM @Tenants t
+CROSS APPLY (VALUES
+    (N'Review tenant brand identity', N'Validate white-label name, custom domain, portal footer, and client-facing brand presentation.', N'Identity', N'Brand', N'In Review', N'High', N'Tenant Administrator', 5, N'BrandGovernance', N'BRAND-IDENTITY-REVIEW', 10),
+    (N'Approve accessible color palette', N'Confirm primary, secondary, and accent colors meet enterprise accessibility and contrast expectations.', N'Palette', N'Review', N'Open', N'High', N'Compliance Admin', 7, N'Accessibility', N'BRAND-PALETTE-A11Y', 20),
+    (N'Sync branding into portal configuration', N'Verify branding fields are synchronized into tenant configuration for portal, document, communication, and workflow use.', N'Configuration Sync', N'Deploy', N'Open', N'Medium', N'Tenant Admin', 10, N'Medium', N'BRAND-CONFIG-SYNC', 30)
+) v(Title, Description, Category, Stage, Status, Priority, OwnerName, DueInDays, RiskCode, ControlCode, SortOrder)
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM Core.TenantSettingsWorkflowItem existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.PageCode = N'branding'
+      AND existing.ControlCode = v.ControlCode
+      AND existing.IsDeleted = 0
+);
+
+IF OBJECT_ID(N'Core.ConfigurationSetting', N'U') IS NOT NULL
+BEGIN
+    MERGE Core.ConfigurationSetting AS target
+    USING
+    (
+        SELECT t.TenantId,
+               CONCAT(N'Branding.', p.Code) AS SettingKey,
+               JSON_VALUE(p.ConfigurationJson, '$.CurrentValue') AS SettingValue
+        FROM @Tenants t
+        JOIN Core.TenantConfigItem p ON p.TenantId = t.TenantId AND p.Kind = N'TenantBranding' AND p.IsActive = 1 AND p.IsDeleted = 0
+        WHERE JSON_VALUE(p.ConfigurationJson, '$.SyncToConfiguration') = N'true'
+    ) AS src
+    ON target.TenantId = src.TenantId AND target.ScopeCode = N'Tenant' AND target.SettingKey = src.SettingKey
+    WHEN MATCHED THEN UPDATE SET SettingValue = src.SettingValue, ModifiedDateUtc = SYSUTCDATETIME()
+    WHEN NOT MATCHED THEN INSERT (SettingId, TenantId, ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, IsEncrypted, IsReadOnly, ModuleCode, CreatedDateUtc)
+        VALUES (NEWID(), src.TenantId, N'Tenant', src.SettingKey, src.SettingValue, N'Text', src.SettingValue, N'Synced from tenant branding dashboard.', 0, 0, N'TenantBranding', SYSUTCDATETIME());
+END;
+";
+
+    private const string Migration0157_TenantSupportEnterpriseSeedSync = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Core')
+    EXEC(N'CREATE SCHEMA Core');
+
+IF OBJECT_ID(N'Core.TenantConfigItem', N'U') IS NULL
+BEGIN
+    CREATE TABLE Core.TenantConfigItem
+    (
+        TenantConfigItemId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Core_TenantConfigItem PRIMARY KEY,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        Kind NVARCHAR(80) NOT NULL,
+        Code NVARCHAR(80) NOT NULL,
+        Name NVARCHAR(200) NOT NULL,
+        Category NVARCHAR(120) NULL,
+        Description NVARCHAR(500) NULL,
+        ConfigurationJson NVARCHAR(4000) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_Core_TenantConfigItem_IsActive DEFAULT(1),
+        SortOrder INT NOT NULL CONSTRAINT DF_Core_TenantConfigItem_SortOrder DEFAULT(0),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_TenantConfigItem_Created DEFAULT SYSUTCDATETIME(),
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Core_TenantConfigItem_IsDeleted DEFAULT(0)
+    );
+END;
+
+IF OBJECT_ID(N'Core.TenantSettingsWorkflowItem', N'U') IS NULL
+BEGIN
+    CREATE TABLE Core.TenantSettingsWorkflowItem
+    (
+        WorkflowItemId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Core_TenantSettingsWorkflowItem PRIMARY KEY,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PageCode NVARCHAR(80) NOT NULL,
+        Title NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(1000) NOT NULL,
+        Category NVARCHAR(100) NOT NULL,
+        Stage NVARCHAR(80) NOT NULL,
+        Status NVARCHAR(80) NOT NULL,
+        Priority NVARCHAR(40) NOT NULL,
+        OwnerName NVARCHAR(200) NOT NULL,
+        DueDateUtc DATETIME2 NULL,
+        RiskCode NVARCHAR(40) NOT NULL,
+        ControlCode NVARCHAR(120) NOT NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_Core_TenantSettingsWorkflowItem_SortOrder DEFAULT(0),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_TenantSettingsWorkflowItem_Created DEFAULT SYSUTCDATETIME(),
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Core_TenantSettingsWorkflowItem_IsDeleted DEFAULT(0)
+    );
+END;
+
+DECLARE @AdminUserId UNIQUEIDENTIFIER = (SELECT TOP (1) UserId FROM IAM.[User] WHERE IsDeleted = 0 ORDER BY CreatedDateUtc);
+
+DECLARE @Tenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+INSERT INTO @Tenants (TenantId)
+SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0;
+
+INSERT INTO Core.TenantConfigItem (TenantConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, N'TenantSupport', v.Code, v.Name, v.Category, v.Description, v.ConfigurationJson, 1, v.SortOrder, SYSUTCDATETIME(), 0
+FROM @Tenants t
+CROSS APPLY (VALUES
+    (N'SUPPORT_PRIMARY_CONTACT', N'Primary support contact', N'Support Contacts', N'Primary tenant-facing support mailbox used for case intake and help routing.', N'{""CurrentValue"":""support@agency.example"",""DefaultValue"":""support@agency.example"",""ValueType"":""Email"",""AppliesTo"":""Tenant + Workflow"",""SyncToConfiguration"":true}', 10),
+    (N'CRITICAL_ESCALATION_CONTACT', N'Critical escalation contact', N'Escalations', N'Escalation contact used for high-severity tenant support cases and outage communications.', N'{""CurrentValue"":""operations-lead@agency.example"",""DefaultValue"":""operations@agency.example"",""ValueType"":""Email"",""AppliesTo"":""Tenant + Workflow"",""SyncToConfiguration"":true}', 20),
+    (N'SLA_CRITICAL_RESPONSE', N'Critical response SLA', N'Service Levels', N'Target response commitment for critical production support cases.', N'{""CurrentValue"":""15 minutes"",""DefaultValue"":""30 minutes"",""ValueType"":""Text"",""AppliesTo"":""Tenant"",""SyncToConfiguration"":true}', 30),
+    (N'SLA_STANDARD_RESPONSE', N'Standard response SLA', N'Service Levels', N'Target response commitment for standard tenant support cases.', N'{""CurrentValue"":""4 business hours"",""DefaultValue"":""4 business hours"",""ValueType"":""Text"",""AppliesTo"":""Tenant"",""SyncToConfiguration"":true}', 40),
+    (N'HELP_CENTER_URL', N'Help center URL', N'Help Resources', N'Tenant help center URL exposed from the support dashboard and portal experiences.', N'{""CurrentValue"":""/help"",""DefaultValue"":""/help"",""ValueType"":""Url"",""AppliesTo"":""Tenant + Portal"",""SyncToConfiguration"":true}', 50),
+    (N'RELEASE_NOTES_URL', N'Release notes URL', N'Release Notes', N'Location for release notes and tenant product update information.', N'{""CurrentValue"":""/release-notes"",""DefaultValue"":""/release-notes"",""ValueType"":""Url"",""AppliesTo"":""Tenant + Portal"",""SyncToConfiguration"":true}', 60),
+    (N'ENVIRONMENT_HEALTH_STATUS', N'Environment health status', N'Environment Health', N'Current tenant support health state shown in operational views.', N'{""CurrentValue"":""Good"",""DefaultValue"":""Good"",""ValueType"":""Text"",""AppliesTo"":""Tenant"",""SyncToConfiguration"":true}', 70),
+    (N'TRAINING_SESSION_CADENCE', N'Training session cadence', N'Tenant Training', N'Default cadence for tenant admin enablement and support training sessions.', N'{""CurrentValue"":""Monthly"",""DefaultValue"":""Quarterly"",""ValueType"":""Text"",""AppliesTo"":""Tenant + User"",""SyncToConfiguration"":true}', 80)
+) v(Code, Name, Category, Description, ConfigurationJson, SortOrder)
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM Core.TenantConfigItem existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.Kind = N'TenantSupport'
+      AND existing.Code = v.Code
+      AND existing.IsDeleted = 0
+);
+
+INSERT INTO Core.TenantSettingsWorkflowItem (WorkflowItemId, TenantId, PageCode, Title, Description, Category, Stage, Status, Priority, OwnerName, DueDateUtc, RiskCode, ControlCode, SortOrder, CreatedByUserId, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, N'support', v.Title, v.Description, v.Category, v.Stage, v.Status, v.Priority, v.OwnerName, DATEADD(day, v.DueInDays, SYSUTCDATETIME()), v.RiskCode, v.ControlCode, v.SortOrder, @AdminUserId, SYSUTCDATETIME(), 0
+FROM @Tenants t
+CROSS APPLY (VALUES
+    (N'Triage critical support escalation', N'Review critical support escalation coverage, ownership, and response readiness.', N'Escalations', N'Triage', N'In Review', N'High', N'Operations Admin', 3, N'High', N'SUPPORT-CRITICAL-ESCALATION', 10),
+    (N'Validate service-level commitments', N'Confirm response SLA settings are aligned with tenant support and escalation policy.', N'Service Levels', N'Validate', N'Open', N'High', N'Tenant Admin', 7, N'Medium', N'SUPPORT-SLA-VALIDATION', 20),
+    (N'Sync support resources to portal', N'Verify support contacts, help resources, release notes, and environment health are synced to tenant configuration.', N'Help Resources', N'Resolve', N'Open', N'Medium', N'Tenant Admin', 10, N'Medium', N'SUPPORT-RESOURCE-SYNC', 30)
+) v(Title, Description, Category, Stage, Status, Priority, OwnerName, DueInDays, RiskCode, ControlCode, SortOrder)
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM Core.TenantSettingsWorkflowItem existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.PageCode = N'support'
+      AND existing.ControlCode = v.ControlCode
+      AND existing.IsDeleted = 0
+);
+
+IF OBJECT_ID(N'Core.ConfigurationSetting', N'U') IS NOT NULL
+BEGIN
+    MERGE Core.ConfigurationSetting AS target
+    USING
+    (
+        SELECT t.TenantId,
+               CONCAT(N'Tenant.Support.', p.Code) AS SettingKey,
+               JSON_VALUE(p.ConfigurationJson, '$.CurrentValue') AS SettingValue
+        FROM @Tenants t
+        JOIN Core.TenantConfigItem p ON p.TenantId = t.TenantId AND p.Kind = N'TenantSupport' AND p.IsActive = 1 AND p.IsDeleted = 0
+        WHERE JSON_VALUE(p.ConfigurationJson, '$.SyncToConfiguration') = N'true'
+    ) AS src
+    ON target.TenantId = src.TenantId AND target.ScopeCode = N'Tenant' AND target.SettingKey = src.SettingKey
+    WHEN MATCHED THEN UPDATE SET SettingValue = src.SettingValue, ModifiedDateUtc = SYSUTCDATETIME()
+    WHEN NOT MATCHED THEN INSERT (SettingId, TenantId, ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, IsEncrypted, IsReadOnly, ModuleCode, CreatedDateUtc)
+        VALUES (NEWID(), src.TenantId, N'Tenant', src.SettingKey, src.SettingValue, N'Text', src.SettingValue, N'Synced from tenant support dashboard.', 0, 0, N'TenantSupport', SYSUTCDATETIME());
+END;
+";
+
+    private const string Migration0158_TenantBrandingCoreSeedSync = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Core')
+    EXEC(N'CREATE SCHEMA Core');
+
+IF OBJECT_ID(N'Core.TenantBranding', N'U') IS NULL
+BEGIN
+    CREATE TABLE Core.TenantBranding
+    (
+        BrandingId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Core_TenantBranding PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        WhiteLabelName NVARCHAR(200) NULL,
+        LogoUrl NVARCHAR(500) NULL,
+        FaviconUrl NVARCHAR(500) NULL,
+        PrimaryColor NVARCHAR(20) NOT NULL CONSTRAINT DF_Core_TenantBranding_PrimaryColor DEFAULT(N'#0d6efd'),
+        SecondaryColor NVARCHAR(20) NOT NULL CONSTRAINT DF_Core_TenantBranding_SecondaryColor DEFAULT(N'#6c757d'),
+        AccentColor NVARCHAR(20) NOT NULL CONSTRAINT DF_Core_TenantBranding_AccentColor DEFAULT(N'#198754'),
+        CustomDomain NVARCHAR(255) NULL,
+        CustomCssUrl NVARCHAR(500) NULL,
+        SupportEmail NVARCHAR(254) NULL,
+        SupportPhone NVARCHAR(50) NULL,
+        FooterText NVARCHAR(500) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_Core_TenantBranding_IsActive DEFAULT(1),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_TenantBranding_Created DEFAULT SYSUTCDATETIME(),
+        ModifiedDateUtc DATETIME2 NULL,
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Core_TenantBranding_IsDeleted DEFAULT(0)
+    );
+END;
+
+IF COL_LENGTH(N'Core.TenantBranding', N'BrandingId') IS NULL ALTER TABLE Core.TenantBranding ADD BrandingId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_Core_TenantBranding_BrandingId DEFAULT NEWID();
+IF COL_LENGTH(N'Core.TenantBranding', N'WhiteLabelName') IS NULL ALTER TABLE Core.TenantBranding ADD WhiteLabelName NVARCHAR(200) NULL;
+IF COL_LENGTH(N'Core.TenantBranding', N'LogoUrl') IS NULL ALTER TABLE Core.TenantBranding ADD LogoUrl NVARCHAR(500) NULL;
+IF COL_LENGTH(N'Core.TenantBranding', N'FaviconUrl') IS NULL ALTER TABLE Core.TenantBranding ADD FaviconUrl NVARCHAR(500) NULL;
+IF COL_LENGTH(N'Core.TenantBranding', N'PrimaryColor') IS NULL ALTER TABLE Core.TenantBranding ADD PrimaryColor NVARCHAR(20) NOT NULL CONSTRAINT DF_Core_TenantBranding_PrimaryColor_0158 DEFAULT(N'#0d6efd');
+IF COL_LENGTH(N'Core.TenantBranding', N'SecondaryColor') IS NULL ALTER TABLE Core.TenantBranding ADD SecondaryColor NVARCHAR(20) NOT NULL CONSTRAINT DF_Core_TenantBranding_SecondaryColor_0158 DEFAULT(N'#6c757d');
+IF COL_LENGTH(N'Core.TenantBranding', N'AccentColor') IS NULL ALTER TABLE Core.TenantBranding ADD AccentColor NVARCHAR(20) NOT NULL CONSTRAINT DF_Core_TenantBranding_AccentColor_0158 DEFAULT(N'#198754');
+IF COL_LENGTH(N'Core.TenantBranding', N'CustomDomain') IS NULL ALTER TABLE Core.TenantBranding ADD CustomDomain NVARCHAR(255) NULL;
+IF COL_LENGTH(N'Core.TenantBranding', N'CustomCssUrl') IS NULL ALTER TABLE Core.TenantBranding ADD CustomCssUrl NVARCHAR(500) NULL;
+IF COL_LENGTH(N'Core.TenantBranding', N'SupportEmail') IS NULL ALTER TABLE Core.TenantBranding ADD SupportEmail NVARCHAR(254) NULL;
+IF COL_LENGTH(N'Core.TenantBranding', N'SupportPhone') IS NULL ALTER TABLE Core.TenantBranding ADD SupportPhone NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Core.TenantBranding', N'FooterText') IS NULL ALTER TABLE Core.TenantBranding ADD FooterText NVARCHAR(500) NULL;
+IF COL_LENGTH(N'Core.TenantBranding', N'IsActive') IS NULL ALTER TABLE Core.TenantBranding ADD IsActive BIT NOT NULL CONSTRAINT DF_Core_TenantBranding_IsActive_0158 DEFAULT(1);
+IF COL_LENGTH(N'Core.TenantBranding', N'CreatedDateUtc') IS NULL ALTER TABLE Core.TenantBranding ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_TenantBranding_Created_0158 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Core.TenantBranding', N'ModifiedDateUtc') IS NULL ALTER TABLE Core.TenantBranding ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Core.TenantBranding', N'CreatedByUserId') IS NULL ALTER TABLE Core.TenantBranding ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Core.TenantBranding', N'IsDeleted') IS NULL ALTER TABLE Core.TenantBranding ADD IsDeleted BIT NOT NULL CONSTRAINT DF_Core_TenantBranding_IsDeleted_0158 DEFAULT(0);
+
+DECLARE @AdminUserId UNIQUEIDENTIFIER = (SELECT TOP (1) UserId FROM IAM.[User] WHERE IsDeleted = 0 ORDER BY CreatedDateUtc);
+
+DECLARE @Tenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY, TenantName NVARCHAR(200) NULL);
+INSERT INTO @Tenants (TenantId, TenantName)
+SELECT TenantId, TenantName FROM Core.Tenant WHERE IsDeleted = 0;
+
+INSERT INTO Core.TenantBranding (BrandingId, TenantId, WhiteLabelName, LogoUrl, FaviconUrl, PrimaryColor, SecondaryColor, AccentColor, CustomDomain, CustomCssUrl, SupportEmail, SupportPhone, FooterText, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), t.TenantId, COALESCE(NULLIF(t.TenantName, N''), N'AMS Tenant'), NULL, NULL, N'#0d6efd', N'#6c757d', N'#198754', NULL, NULL, N'support@agency.example', NULL, N'Your protected insurance workspace.', 1, SYSUTCDATETIME(), @AdminUserId, 0
+FROM @Tenants t
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM Core.TenantBranding existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.IsDeleted = 0
+);
+
+IF OBJECT_ID(N'Core.TenantConfigItem', N'U') IS NOT NULL
+BEGIN
+    UPDATE b
+    SET WhiteLabelName = COALESCE(NULLIF(b.WhiteLabelName, N''), JSON_VALUE(c.ConfigurationJson, '$.CurrentValue')),
+        ModifiedDateUtc = SYSUTCDATETIME()
+    FROM Core.TenantBranding b
+    JOIN Core.TenantConfigItem c ON c.TenantId = b.TenantId AND c.Kind = N'TenantBranding' AND c.Code = N'WHITE_LABEL_NAME' AND c.IsActive = 1 AND c.IsDeleted = 0
+    WHERE b.IsDeleted = 0 AND (b.WhiteLabelName IS NULL OR b.WhiteLabelName = N'');
+
+    UPDATE b
+    SET CustomDomain = COALESCE(NULLIF(b.CustomDomain, N''), NULLIF(JSON_VALUE(c.ConfigurationJson, '$.CurrentValue'), N'')),
+        ModifiedDateUtc = SYSUTCDATETIME()
+    FROM Core.TenantBranding b
+    JOIN Core.TenantConfigItem c ON c.TenantId = b.TenantId AND c.Kind = N'TenantBranding' AND c.Code = N'CUSTOM_DOMAIN' AND c.IsActive = 1 AND c.IsDeleted = 0
+    WHERE b.IsDeleted = 0 AND (b.CustomDomain IS NULL OR b.CustomDomain = N'');
+
+    UPDATE b
+    SET SupportEmail = COALESCE(NULLIF(b.SupportEmail, N''), JSON_VALUE(c.ConfigurationJson, '$.CurrentValue')),
+        ModifiedDateUtc = SYSUTCDATETIME()
+    FROM Core.TenantBranding b
+    JOIN Core.TenantConfigItem c ON c.TenantId = b.TenantId AND c.Kind = N'TenantBranding' AND c.Code = N'SUPPORT_EMAIL' AND c.IsActive = 1 AND c.IsDeleted = 0
+    WHERE b.IsDeleted = 0 AND (b.SupportEmail IS NULL OR b.SupportEmail = N'');
+
+    UPDATE b
+    SET FooterText = COALESCE(NULLIF(b.FooterText, N''), JSON_VALUE(c.ConfigurationJson, '$.CurrentValue')),
+        ModifiedDateUtc = SYSUTCDATETIME()
+    FROM Core.TenantBranding b
+    JOIN Core.TenantConfigItem c ON c.TenantId = b.TenantId AND c.Kind = N'TenantBranding' AND c.Code = N'FOOTER_TEXT' AND c.IsActive = 1 AND c.IsDeleted = 0
+    WHERE b.IsDeleted = 0 AND (b.FooterText IS NULL OR b.FooterText = N'');
+END;
+
+IF OBJECT_ID(N'Core.ConfigurationSetting', N'U') IS NOT NULL
+BEGIN
+    MERGE Core.ConfigurationSetting AS target
+    USING
+    (
+        SELECT TenantId, N'Branding.WhiteLabelName' AS SettingKey, COALESCE(WhiteLabelName, N'') AS SettingValue FROM Core.TenantBranding WHERE IsActive = 1 AND IsDeleted = 0
+        UNION ALL SELECT TenantId, N'Branding.PrimaryColor', PrimaryColor FROM Core.TenantBranding WHERE IsActive = 1 AND IsDeleted = 0
+        UNION ALL SELECT TenantId, N'Branding.SecondaryColor', SecondaryColor FROM Core.TenantBranding WHERE IsActive = 1 AND IsDeleted = 0
+        UNION ALL SELECT TenantId, N'Branding.AccentColor', AccentColor FROM Core.TenantBranding WHERE IsActive = 1 AND IsDeleted = 0
+        UNION ALL SELECT TenantId, N'Branding.CustomDomain', COALESCE(CustomDomain, N'') FROM Core.TenantBranding WHERE IsActive = 1 AND IsDeleted = 0
+        UNION ALL SELECT TenantId, N'Branding.CustomCssUrl', COALESCE(CustomCssUrl, N'') FROM Core.TenantBranding WHERE IsActive = 1 AND IsDeleted = 0
+        UNION ALL SELECT TenantId, N'Branding.SupportEmail', COALESCE(SupportEmail, N'') FROM Core.TenantBranding WHERE IsActive = 1 AND IsDeleted = 0
+        UNION ALL SELECT TenantId, N'Branding.SupportPhone', COALESCE(SupportPhone, N'') FROM Core.TenantBranding WHERE IsActive = 1 AND IsDeleted = 0
+        UNION ALL SELECT TenantId, N'Branding.FooterText', COALESCE(FooterText, N'') FROM Core.TenantBranding WHERE IsActive = 1 AND IsDeleted = 0
+    ) AS src
+    ON target.TenantId = src.TenantId AND target.ScopeCode = N'Tenant' AND target.SettingKey = src.SettingKey
+    WHEN MATCHED THEN UPDATE SET SettingValue = src.SettingValue, ModifiedDateUtc = SYSUTCDATETIME()
+    WHEN NOT MATCHED THEN INSERT (SettingId, TenantId, ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, IsEncrypted, IsReadOnly, ModuleCode, CreatedDateUtc)
+        VALUES (NEWID(), src.TenantId, N'Tenant', src.SettingKey, src.SettingValue, N'Text', src.SettingValue, N'Synced from Core.TenantBranding.', 0, 0, N'TenantBranding', SYSUTCDATETIME());
+END;
+";
+
+    private const string Migration0159_PolicyEndorsementsTenantSeedSync = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Policy') EXEC(N'CREATE SCHEMA Policy');
+
+IF OBJECT_ID(N'Policy.PolicyEndorsement', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyEndorsement
+    (
+        EndorsementId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PolicyEndorsement_0159 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NULL,
+        AccountId UNIQUEIDENTIFIER NULL,
+        EndorsementNumber NVARCHAR(50) NOT NULL,
+        PolicyNumber NVARCHAR(50) NOT NULL,
+        AccountName NVARCHAR(200) NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        Carrier NVARCHAR(160) NOT NULL,
+        EndorsementType NVARCHAR(120) NOT NULL,
+        Description NVARCHAR(1000) NOT NULL,
+        EffectiveDate DATETIME2 NOT NULL,
+        RequestedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyEndorsement_RequestedDateUtc_0159 DEFAULT SYSUTCDATETIME(),
+        PremiumDelta DECIMAL(18,2) NOT NULL CONSTRAINT DF_PolicyEndorsement_PremiumDelta_0159 DEFAULT 0,
+        Status NVARCHAR(40) NOT NULL CONSTRAINT DF_PolicyEndorsement_Status_0159 DEFAULT N'Pending',
+        Priority NVARCHAR(40) NOT NULL CONSTRAINT DF_PolicyEndorsement_Priority_0159 DEFAULT N'Normal',
+        RequestedByName NVARCHAR(160) NOT NULL,
+        AssignedToName NVARCHAR(160) NOT NULL,
+        UnderwriterName NVARCHAR(160) NULL,
+        Reason NVARCHAR(1000) NULL,
+        RequiredDocuments NVARCHAR(1000) NULL,
+        WorkflowStage NVARCHAR(80) NULL,
+        DueDate DATETIME2 NULL,
+        ApprovedDateUtc DATETIME2 NULL,
+        IssuedDateUtc DATETIME2 NULL,
+        IsUrgent BIT NOT NULL CONSTRAINT DF_PolicyEndorsement_IsUrgent_0159 DEFAULT 0,
+        IsArchived BIT NOT NULL CONSTRAINT DF_PolicyEndorsement_IsArchived_0159 DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyEndorsement_CreatedDateUtc_0159 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyEndorsement_IsDeleted_0159 DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.PolicyEndorsementActivity', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyEndorsementActivity
+    (
+        ActivityId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PolicyEndorsementActivity_0159 PRIMARY KEY DEFAULT NEWID(),
+        EndorsementId UNIQUEIDENTIFIER NOT NULL,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ActivityType NVARCHAR(60) NOT NULL,
+        Subject NVARCHAR(200) NOT NULL,
+        Notes NVARCHAR(1000) NULL,
+        CreatedByName NVARCHAR(160) NOT NULL,
+        ActivityDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyEndorsementActivity_ActivityDateUtc_0159 DEFAULT SYSUTCDATETIME(),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyEndorsementActivity_CreatedDateUtc_0159 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyEndorsementActivity_IsDeleted_0159 DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.PolicyEndorsementDelta', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyEndorsementDelta
+    (
+        DeltaId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PolicyEndorsementDelta_0159 PRIMARY KEY DEFAULT NEWID(),
+        EndorsementId UNIQUEIDENTIFIER NOT NULL,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        FieldName NVARCHAR(120) NOT NULL,
+        BeforeValue NVARCHAR(500) NOT NULL CONSTRAINT DF_PolicyEndorsementDelta_BeforeValue_0159 DEFAULT N'',
+        AfterValue NVARCHAR(500) NOT NULL CONSTRAINT DF_PolicyEndorsementDelta_AfterValue_0159 DEFAULT N'',
+        NumericDelta DECIMAL(18,2) NOT NULL CONSTRAINT DF_PolicyEndorsementDelta_NumericDelta_0159 DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyEndorsementDelta_CreatedDateUtc_0159 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyEndorsementDelta_IsDeleted_0159 DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.PolicyEndorsement', N'U') IS NOT NULL
+   AND OBJECT_ID(N'Policy.PolicyEndorsementActivity', N'U') IS NOT NULL
+   AND OBJECT_ID(N'Policy.PolicyEndorsementDelta', N'U') IS NOT NULL
+BEGIN
+    DECLARE @Tenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+    INSERT INTO @Tenants (TenantId)
+    SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0;
+
+    DECLARE @AdminUserId UNIQUEIDENTIFIER = (SELECT TOP 1 UserId FROM IAM.[User] WHERE IsDeleted = 0 ORDER BY CreatedDateUtc);
+
+    DECLARE @Seed TABLE
+    (
+        Ord INT NOT NULL,
+        EndorsementNumber NVARCHAR(50) NOT NULL,
+        PolicyNumber NVARCHAR(50) NOT NULL,
+        AccountName NVARCHAR(200) NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        Carrier NVARCHAR(160) NOT NULL,
+        EndorsementType NVARCHAR(120) NOT NULL,
+        Description NVARCHAR(1000) NOT NULL,
+        EffectiveOffset INT NOT NULL,
+        PremiumDelta DECIMAL(18,2) NOT NULL,
+        Status NVARCHAR(40) NOT NULL,
+        Priority NVARCHAR(40) NOT NULL,
+        RequestedByName NVARCHAR(160) NOT NULL,
+        AssignedToName NVARCHAR(160) NOT NULL,
+        UnderwriterName NVARCHAR(160) NOT NULL,
+        Reason NVARCHAR(1000) NOT NULL,
+        RequiredDocuments NVARCHAR(1000) NOT NULL,
+        WorkflowStage NVARCHAR(80) NOT NULL,
+        DueOffset INT NOT NULL,
+        IsUrgent BIT NOT NULL
+    );
+
+    INSERT INTO @Seed VALUES
+    (1, N'END-UPG-0001', N'POL-UPG-10482', N'Sullivan Manufacturing LLC', N'General Liability', N'Travelers', N'Add Insured', N'Add landlord as additional insured for newly leased warehouse.', 7, 450.00, N'Pending', N'High', N'Amy Scott', N'Paula Ngo', N'Karen Lee', N'Lease compliance requirement', N'Lease agreement; additional insured wording', N'Intake', 3, 1),
+    (2, N'END-UPG-0002', N'POL-UPG-11877', N'Lakeside Medical Group', N'Professional Liability', N'Hartford', N'Change Limit', N'Increase professional liability aggregate limit to support contract renewal.', 14, 7200.00, N'In Review', N'High', N'Sarah Chen', N'Dan Rivera', N'Olivia Grant', N'Client contract requires higher aggregate limit', N'Signed contract; updated exposure questionnaire', N'Underwriting Review', 5, 1),
+    (3, N'END-UPG-0003', N'POL-UPG-13209', N'Harbor Logistics Co', N'Commercial Auto', N'CNA', N'Add Vehicle', N'Add two refrigerated trucks to active fleet schedule.', -2, 3900.00, N'Approved', N'Normal', N'Mike Walsh', N'Chris Hall', N'Marcus Young', N'Fleet expansion', N'VIN list; vehicle registrations', N'Approved Pending Issue', 1, 0),
+    (4, N'END-UPG-0004', N'POL-UPG-16540', N'Apex Tech Solutions', N'Cyber', N'Chubb', N'Premium Adjustment', N'Adjust premium after revised endpoint count and revenue declaration.', 21, -1250.00, N'Info Needed', N'Normal', N'Robert Kim', N'Paula Ngo', N'Karen Lee', N'Revised exposure basis', N'Updated revenue statement; endpoint inventory', N'Awaiting Information', 6, 0);
+
+    INSERT INTO Policy.PolicyEndorsement
+    (EndorsementId, TenantId, EndorsementNumber, PolicyNumber, AccountName, LineOfBusiness, Carrier, EndorsementType, Description,
+     EffectiveDate, RequestedDateUtc, PremiumDelta, Status, Priority, RequestedByName, AssignedToName, UnderwriterName, Reason,
+     RequiredDocuments, WorkflowStage, DueDate, ApprovedDateUtc, IssuedDateUtc, IsUrgent, IsArchived, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), t.TenantId, CONCAT(N'END-', RIGHT(CONVERT(NVARCHAR(36), t.TenantId), 4), N'-', FORMAT(s.Ord, N'0000')), s.PolicyNumber, s.AccountName, s.LineOfBusiness, s.Carrier, s.EndorsementType, s.Description,
+           DATEADD(day, s.EffectiveOffset, SYSUTCDATETIME()), DATEADD(day, -10 - s.Ord, SYSUTCDATETIME()), s.PremiumDelta, s.Status, s.Priority, s.RequestedByName, s.AssignedToName, s.UnderwriterName, s.Reason,
+           s.RequiredDocuments, s.WorkflowStage, DATEADD(day, s.DueOffset, SYSUTCDATETIME()),
+           CASE WHEN s.Status IN (N'Approved', N'Issued') THEN DATEADD(day, -2, SYSUTCDATETIME()) ELSE NULL END,
+           CASE WHEN s.Status = N'Issued' THEN DATEADD(day, -1, SYSUTCDATETIME()) ELSE NULL END,
+           s.IsUrgent, 0, SYSUTCDATETIME(), @AdminUserId, 0
+    FROM @Tenants t
+    CROSS JOIN @Seed s
+    WHERE NOT EXISTS (SELECT 1 FROM Policy.PolicyEndorsement e WHERE e.TenantId = t.TenantId AND e.IsDeleted = 0);
+
+    INSERT INTO Policy.PolicyEndorsementActivity
+    (ActivityId, EndorsementId, TenantId, ActivityType, Subject, Notes, CreatedByName, ActivityDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), e.EndorsementId, e.TenantId, N'Created', N'Endorsement request created', e.Description, e.RequestedByName, e.RequestedDateUtc, SYSUTCDATETIME(), @AdminUserId, 0
+    FROM Policy.PolicyEndorsement e
+    WHERE e.IsDeleted = 0
+      AND NOT EXISTS (SELECT 1 FROM Policy.PolicyEndorsementActivity a WHERE a.EndorsementId = e.EndorsementId AND a.ActivityType = N'Created' AND a.IsDeleted = 0);
+
+    INSERT INTO Policy.PolicyEndorsementDelta
+    (DeltaId, EndorsementId, TenantId, FieldName, BeforeValue, AfterValue, NumericDelta, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), e.EndorsementId, e.TenantId, N'Annual Premium', N'Current policy premium', FORMAT(e.PremiumDelta, N'+$#,##0;-$#,##0;$0'), e.PremiumDelta, SYSUTCDATETIME(), @AdminUserId, 0
+    FROM Policy.PolicyEndorsement e
+    WHERE e.IsDeleted = 0
+      AND NOT EXISTS (SELECT 1 FROM Policy.PolicyEndorsementDelta d WHERE d.EndorsementId = e.EndorsementId AND d.FieldName = N'Annual Premium' AND d.IsDeleted = 0);
+END;
+";
+
+    private const string Migration0160_PolicyCancellationsTenantSeedSync = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Policy') EXEC(N'CREATE SCHEMA Policy');
+
+IF OBJECT_ID(N'Policy.PolicyCancellation', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyCancellation
+    (
+        CancellationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PolicyCancellation PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NULL,
+        AccountId UNIQUEIDENTIFIER NULL,
+        CancellationNumber NVARCHAR(50) NOT NULL,
+        PolicyNumber NVARCHAR(50) NOT NULL,
+        AccountName NVARCHAR(200) NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        Carrier NVARCHAR(160) NOT NULL,
+        CancellationReason NVARCHAR(100) NOT NULL,
+        CancellationType NVARCHAR(40) NOT NULL CONSTRAINT DF_PolicyCancellation_Type_0160 DEFAULT N'Pro-Rata',
+        RequestType NVARCHAR(40) NOT NULL CONSTRAINT DF_PolicyCancellation_RequestType_0160 DEFAULT N'Cancellation',
+        RequestDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyCancellation_RequestDateUtc_0160 DEFAULT SYSUTCDATETIME(),
+        EffectiveDate DATETIME2 NOT NULL,
+        CancellationDate DATETIME2 NULL,
+        ReinstatementDate DATETIME2 NULL,
+        ReturnPremium DECIMAL(18,2) NOT NULL CONSTRAINT DF_PolicyCancellation_ReturnPremium_0160 DEFAULT 0,
+        PremiumDue DECIMAL(18,2) NOT NULL CONSTRAINT DF_PolicyCancellation_PremiumDue_0160 DEFAULT 0,
+        Status NVARCHAR(40) NOT NULL CONSTRAINT DF_PolicyCancellation_Status_0160 DEFAULT N'Pending',
+        Priority NVARCHAR(40) NOT NULL CONSTRAINT DF_PolicyCancellation_Priority_0160 DEFAULT N'Normal',
+        RequestedByName NVARCHAR(160) NOT NULL,
+        AssignedToName NVARCHAR(160) NOT NULL,
+        ApprovedByName NVARCHAR(160) NULL,
+        ReinstatedByName NVARCHAR(160) NULL,
+        Notes NVARCHAR(1000) NULL,
+        WorkflowStage NVARCHAR(80) NULL,
+        DueDate DATETIME2 NULL,
+        ApprovedDateUtc DATETIME2 NULL,
+        IsUrgent BIT NOT NULL CONSTRAINT DF_PolicyCancellation_IsUrgent_0160 DEFAULT 0,
+        IsArchived BIT NOT NULL CONSTRAINT DF_PolicyCancellation_IsArchived_0160 DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyCancellation_CreatedDateUtc_0160 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyCancellation_IsDeleted_0160 DEFAULT 0,
+        CONSTRAINT UQ_PolicyCancellation_TenantNumber_0160 UNIQUE (TenantId, CancellationNumber)
+    );
+END;
+
+IF OBJECT_ID(N'Policy.PolicyCancellationActivity', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyCancellationActivity
+    (
+        ActivityId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PolicyCancellationActivity PRIMARY KEY DEFAULT NEWID(),
+        CancellationId UNIQUEIDENTIFIER NOT NULL,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ActivityType NVARCHAR(60) NOT NULL,
+        Subject NVARCHAR(200) NOT NULL,
+        Notes NVARCHAR(1000) NULL,
+        CreatedByName NVARCHAR(160) NOT NULL,
+        ActivityDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyCancellationActivity_ActivityDateUtc_0160 DEFAULT SYSUTCDATETIME(),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyCancellationActivity_CreatedDateUtc_0160 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyCancellationActivity_IsDeleted_0160 DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyCancellation') AND name = N'IX_PolicyCancellation_TenantDashboard_0160')
+    CREATE INDEX IX_PolicyCancellation_TenantDashboard_0160 ON Policy.PolicyCancellation(TenantId, IsDeleted, IsArchived, Status, RequestType, DueDate) INCLUDE (PolicyNumber, AccountName, LineOfBusiness, Carrier, ReturnPremium, PremiumDue, IsUrgent);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyCancellationActivity') AND name = N'IX_PolicyCancellationActivity_TenantCancellation_0160')
+    CREATE INDEX IX_PolicyCancellationActivity_TenantCancellation_0160 ON Policy.PolicyCancellationActivity(TenantId, CancellationId, IsDeleted, ActivityDateUtc DESC);
+
+DECLARE @AdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE IsDeleted = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+
+DECLARE @Tenants TABLE (TenantId UNIQUEIDENTIFIER, AdminUserId UNIQUEIDENTIFIER);
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO @Tenants (TenantId, AdminUserId)
+    SELECT TenantId,
+           COALESCE((SELECT TOP 1 UserId FROM IAM.[User] u WHERE u.TenantId = t.TenantId AND u.IsDeleted = 0 ORDER BY u.CreatedDateUtc), @AdminUserId)
+    FROM Core.Tenant t
+    WHERE ISNULL(t.IsDeleted, 0) = 0;
+END;
+
+IF NOT EXISTS (SELECT 1 FROM @Tenants)
+    INSERT INTO @Tenants VALUES ('00000000-0000-0000-0000-000000000001', @AdminUserId);
+
+IF OBJECT_ID(N'tempdb..#CancellationSource') IS NOT NULL DROP TABLE #CancellationSource;
+
+CREATE TABLE #CancellationSource
+(
+    TenantId UNIQUEIDENTIFIER NOT NULL,
+    AdminUserId UNIQUEIDENTIFIER NULL,
+    RowNum INT NOT NULL,
+    PolicyId UNIQUEIDENTIFIER NULL,
+    AccountId UNIQUEIDENTIFIER NULL,
+    PolicyNumber NVARCHAR(50) NOT NULL,
+    AccountName NVARCHAR(200) NOT NULL,
+    LineOfBusiness NVARCHAR(100) NOT NULL,
+    Carrier NVARCHAR(160) NOT NULL,
+    RequestType NVARCHAR(40) NOT NULL,
+    CancellationReason NVARCHAR(100) NOT NULL,
+    CancellationType NVARCHAR(40) NOT NULL,
+    EffectiveDate DATETIME2 NOT NULL,
+    ReturnPremium DECIMAL(18,2) NOT NULL,
+    PremiumDue DECIMAL(18,2) NOT NULL,
+    Status NVARCHAR(40) NOT NULL,
+    Priority NVARCHAR(40) NOT NULL,
+    WorkflowStage NVARCHAR(80) NOT NULL,
+    DueDate DATETIME2 NULL,
+    IsUrgent BIT NOT NULL,
+    Notes NVARCHAR(1000) NULL,
+    RequestedByName NVARCHAR(160) NOT NULL,
+    AssignedToName NVARCHAR(160) NOT NULL
+);
+
+IF OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO #CancellationSource
+    SELECT t.TenantId,
+           t.AdminUserId,
+           ROW_NUMBER() OVER (PARTITION BY t.TenantId ORDER BY bp.ExpirationDate, bp.PolicyNumber),
+           bp.PolicyId,
+           bp.AccountId,
+           LEFT(COALESCE(NULLIF(bp.PolicyNumber, N''), CONCAT(N'POL-', RIGHT(CONVERT(NVARCHAR(36), bp.PolicyId), 8))), 50),
+           LEFT(COALESCE(NULLIF(a.AccountName, N''), CONCAT(N'Account ', RIGHT(CONVERT(NVARCHAR(36), bp.AccountId), 8)), N'Policy Account'), 200),
+           LEFT(COALESCE(NULLIF(s.LineOfBusiness, N''), N'General Liability'), 100),
+           LEFT(COALESCE(NULLIF(car.CarrierName, N''), N'Carrier'), 160),
+           CASE WHEN ROW_NUMBER() OVER (PARTITION BY t.TenantId ORDER BY bp.ExpirationDate, bp.PolicyNumber) % 5 = 0 THEN N'Reinstatement' ELSE N'Cancellation' END,
+           CASE WHEN ROW_NUMBER() OVER (PARTITION BY t.TenantId ORDER BY bp.ExpirationDate, bp.PolicyNumber) % 5 = 0 THEN N'Payment Received' WHEN ROW_NUMBER() OVER (PARTITION BY t.TenantId ORDER BY bp.ExpirationDate, bp.PolicyNumber) % 3 = 0 THEN N'Underwriting' ELSE N'Insured Request' END,
+           CASE WHEN ROW_NUMBER() OVER (PARTITION BY t.TenantId ORDER BY bp.ExpirationDate, bp.PolicyNumber) % 4 = 0 THEN N'Flat' WHEN ROW_NUMBER() OVER (PARTITION BY t.TenantId ORDER BY bp.ExpirationDate, bp.PolicyNumber) % 3 = 0 THEN N'Short Rate' ELSE N'Pro-Rata' END,
+           DATEADD(day, 12 + ROW_NUMBER() OVER (PARTITION BY t.TenantId ORDER BY bp.ExpirationDate, bp.PolicyNumber), CAST(SYSUTCDATETIME() AS date)),
+           CASE WHEN ROW_NUMBER() OVER (PARTITION BY t.TenantId ORDER BY bp.ExpirationDate, bp.PolicyNumber) % 5 = 0 THEN 0 ELSE CAST(COALESCE(bp.AnnualPremium, 0) * 0.08 AS DECIMAL(18,2)) END,
+           CASE WHEN ROW_NUMBER() OVER (PARTITION BY t.TenantId ORDER BY bp.ExpirationDate, bp.PolicyNumber) % 5 = 0 THEN CAST(COALESCE(bp.AnnualPremium, 0) * 0.015 AS DECIMAL(18,2)) ELSE 0 END,
+           CASE WHEN ROW_NUMBER() OVER (PARTITION BY t.TenantId ORDER BY bp.ExpirationDate, bp.PolicyNumber) % 5 = 0 THEN N'Reinstatement Pending' WHEN ROW_NUMBER() OVER (PARTITION BY t.TenantId ORDER BY bp.ExpirationDate, bp.PolicyNumber) % 3 = 0 THEN N'Under Review' ELSE N'Pending' END,
+           CASE WHEN ROW_NUMBER() OVER (PARTITION BY t.TenantId ORDER BY bp.ExpirationDate, bp.PolicyNumber) % 3 = 0 THEN N'High' ELSE N'Normal' END,
+           CASE WHEN ROW_NUMBER() OVER (PARTITION BY t.TenantId ORDER BY bp.ExpirationDate, bp.PolicyNumber) % 5 = 0 THEN N'Reinstatement Review' WHEN ROW_NUMBER() OVER (PARTITION BY t.TenantId ORDER BY bp.ExpirationDate, bp.PolicyNumber) % 3 = 0 THEN N'Carrier / Service Review' ELSE N'Cancellation Intake' END,
+           DATEADD(day, 3 + ROW_NUMBER() OVER (PARTITION BY t.TenantId ORDER BY bp.ExpirationDate, bp.PolicyNumber) % 8, CAST(SYSUTCDATETIME() AS date)),
+           CASE WHEN ROW_NUMBER() OVER (PARTITION BY t.TenantId ORDER BY bp.ExpirationDate, bp.PolicyNumber) % 3 = 0 THEN 1 ELSE 0 END,
+           CONCAT(N'Enterprise cancellation workflow synced from bound policy ', bp.PolicyNumber, N'.'),
+           COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin'),
+           COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin')
+    FROM @Tenants t
+    JOIN Submissions.BoundPolicy bp ON bp.TenantId = t.TenantId AND ISNULL(bp.IsDeleted, 0) = 0
+    LEFT JOIN Client.Account a ON a.AccountId = bp.AccountId
+    LEFT JOIN Submissions.Submission s ON s.SubmissionId = bp.SubmissionId
+    LEFT JOIN Core.Carrier car ON car.CarrierId = bp.CarrierId
+    LEFT JOIN IAM.[User] u ON u.UserId = t.AdminUserId;
+END;
+
+DECLARE @Fallback TABLE
+(
+    Ord INT,
+    PolicyNumber NVARCHAR(50),
+    AccountName NVARCHAR(200),
+    LineOfBusiness NVARCHAR(100),
+    Carrier NVARCHAR(160),
+    RequestType NVARCHAR(40),
+    CancellationReason NVARCHAR(100),
+    Status NVARCHAR(40),
+    Priority NVARCHAR(40),
+    ReturnPremium DECIMAL(18,2),
+    PremiumDue DECIMAL(18,2),
+    DueOffset INT,
+    IsUrgent BIT
+);
+
+INSERT INTO @Fallback VALUES
+(1, N'POL-CAN-10482', N'Sullivan Manufacturing LLC', N'General Liability', N'Travelers', N'Cancellation', N'Non-Payment', N'Pending', N'High', 2450.00, 0.00, 3, 1),
+(2, N'POL-CAN-11877', N'Lakeside Medical Group', N'Professional Liability', N'Hartford', N'Cancellation', N'Insured Request', N'Cancelled', N'Normal', 18500.00, 0.00, -5, 0),
+(3, N'POL-CAN-13209', N'Harbor Logistics Co', N'Commercial Auto', N'CNA', N'Cancellation', N'Underwriting', N'Under Review', N'High', 3920.00, 0.00, 4, 1),
+(4, N'POL-CAN-14211', N'Cascade Retail Group', N'Commercial Property', N'Zurich', N'Reinstatement', N'Payment Received', N'Reinstatement Pending', N'Normal', 0.00, 1260.00, 2, 0),
+(5, N'POL-CAN-16540', N'Apex Tech Solutions', N'Cyber', N'Chubb', N'Reinstatement', N'Payment Received', N'Reinstated', N'Normal', 0.00, 890.00, -2, 0),
+(6, N'POL-CAN-17892', N'Green Valley Foods Inc', N'Workers Comp', N'Liberty Mutual', N'Cancellation', N'Business Closed', N'Rescinded', N'Low', 5100.00, 0.00, -1, 0);
+
+INSERT INTO #CancellationSource
+SELECT t.TenantId,
+       t.AdminUserId,
+       f.Ord,
+       NULL,
+       NULL,
+       f.PolicyNumber,
+       f.AccountName,
+       f.LineOfBusiness,
+       f.Carrier,
+       f.RequestType,
+       f.CancellationReason,
+       N'Pro-Rata',
+       DATEADD(day, 8 + f.Ord, CAST(SYSUTCDATETIME() AS date)),
+       f.ReturnPremium,
+       f.PremiumDue,
+       f.Status,
+       f.Priority,
+       CASE f.Status
+           WHEN N'Under Review' THEN N'Carrier / Service Review'
+           WHEN N'Cancelled' THEN N'Cancelled Policy'
+           WHEN N'Rescinded' THEN N'Rescinded by Client'
+           WHEN N'Reinstatement Pending' THEN N'Reinstatement Review'
+           WHEN N'Reinstated' THEN N'Policy Reinstated'
+           ELSE N'Cancellation Intake'
+       END,
+       DATEADD(day, f.DueOffset, CAST(SYSUTCDATETIME() AS date)),
+       f.IsUrgent,
+       N'Enterprise cancellation workflow seeded for dashboard readiness.',
+       COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin'),
+       COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin')
+FROM @Tenants t
+CROSS JOIN @Fallback f
+LEFT JOIN IAM.[User] u ON u.UserId = t.AdminUserId
+WHERE NOT EXISTS (SELECT 1 FROM #CancellationSource s WHERE s.TenantId = t.TenantId);
+
+INSERT INTO Policy.PolicyCancellation
+(CancellationId, TenantId, PolicyId, AccountId, CancellationNumber, PolicyNumber, AccountName, LineOfBusiness, Carrier, CancellationReason, CancellationType, RequestType,
+ RequestDateUtc, EffectiveDate, CancellationDate, ReinstatementDate, ReturnPremium, PremiumDue, Status, Priority, RequestedByName, AssignedToName, ApprovedByName, ReinstatedByName,
+ Notes, WorkflowStage, DueDate, ApprovedDateUtc, IsUrgent, IsArchived, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), s.TenantId, s.PolicyId, s.AccountId,
+       CONCAT(CASE WHEN s.RequestType = N'Reinstatement' THEN N'REI-' ELSE N'CAN-' END, RIGHT(REPLACE(CONVERT(NVARCHAR(36), s.TenantId), N'-', N''), 4), N'-', FORMAT(s.RowNum, N'0000')),
+       s.PolicyNumber, s.AccountName, s.LineOfBusiness, s.Carrier, s.CancellationReason, s.CancellationType, s.RequestType,
+       DATEADD(day, -7 - s.RowNum, SYSUTCDATETIME()), s.EffectiveDate,
+       CASE WHEN s.RequestType = N'Cancellation' AND s.Status IN (N'Cancelled', N'Rescinded') THEN s.EffectiveDate ELSE NULL END,
+       CASE WHEN s.Status = N'Reinstated' THEN s.EffectiveDate ELSE NULL END,
+       s.ReturnPremium, s.PremiumDue, s.Status, s.Priority, s.RequestedByName, s.AssignedToName,
+       CASE WHEN s.Status IN (N'Cancelled', N'Reinstated') THEN s.AssignedToName ELSE NULL END,
+       CASE WHEN s.Status = N'Reinstated' THEN s.AssignedToName ELSE NULL END,
+       s.Notes, s.WorkflowStage, s.DueDate,
+       CASE WHEN s.Status IN (N'Cancelled', N'Reinstated') THEN DATEADD(day, -1, SYSUTCDATETIME()) ELSE NULL END,
+       s.IsUrgent, 0, SYSUTCDATETIME(), s.AdminUserId, 0
+FROM #CancellationSource s
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM Policy.PolicyCancellation pc
+    WHERE pc.TenantId = s.TenantId
+      AND pc.IsDeleted = 0
+      AND (pc.PolicyNumber = s.PolicyNumber OR (s.PolicyId IS NOT NULL AND pc.PolicyId = s.PolicyId))
+);
+
+UPDATE pc
+SET PolicyId = COALESCE(pc.PolicyId, s.PolicyId),
+    AccountId = COALESCE(pc.AccountId, s.AccountId),
+    LineOfBusiness = COALESCE(NULLIF(pc.LineOfBusiness, N''), s.LineOfBusiness),
+    Carrier = COALESCE(NULLIF(pc.Carrier, N''), s.Carrier),
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = s.AdminUserId
+FROM Policy.PolicyCancellation pc
+JOIN #CancellationSource s ON s.TenantId = pc.TenantId AND s.PolicyNumber = pc.PolicyNumber
+WHERE pc.IsDeleted = 0
+  AND (pc.PolicyId IS NULL OR pc.AccountId IS NULL OR pc.LineOfBusiness = N'' OR pc.Carrier = N'');
+
+INSERT INTO Policy.PolicyCancellationActivity
+(ActivityId, CancellationId, TenantId, ActivityType, Subject, Notes, CreatedByName, ActivityDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), pc.CancellationId, pc.TenantId, N'Created', CONCAT(pc.RequestType, N' workflow synced'), pc.Notes, pc.RequestedByName, pc.RequestDateUtc, SYSUTCDATETIME(), pc.CreatedByUserId, 0
+FROM Policy.PolicyCancellation pc
+WHERE pc.IsDeleted = 0
+  AND NOT EXISTS (SELECT 1 FROM Policy.PolicyCancellationActivity a WHERE a.CancellationId = pc.CancellationId AND a.ActivityType = N'Created' AND a.IsDeleted = 0);
+
+INSERT INTO Policy.PolicyCancellationActivity
+(ActivityId, CancellationId, TenantId, ActivityType, Subject, Notes, CreatedByName, ActivityDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), pc.CancellationId, pc.TenantId, N'Status', CONCAT(N'Status changed to ', pc.Status), pc.Notes, pc.AssignedToName, COALESCE(pc.ApprovedDateUtc, DATEADD(day, -1, SYSUTCDATETIME())), SYSUTCDATETIME(), pc.ModifiedByUserId, 0
+FROM Policy.PolicyCancellation pc
+WHERE pc.IsDeleted = 0
+  AND pc.Status NOT IN (N'Pending', N'Reinstatement Pending')
+  AND NOT EXISTS (SELECT 1 FROM Policy.PolicyCancellationActivity a WHERE a.CancellationId = pc.CancellationId AND a.Subject = CONCAT(N'Status changed to ', pc.Status) AND a.IsDeleted = 0);
+
+IF OBJECT_ID(N'Workflow.WorkflowDefinition', N'U') IS NOT NULL AND OBJECT_ID(N'Workflow.WorkflowInstance', N'U') IS NOT NULL
+BEGIN
+    DECLARE @WorkflowDefinitionId UNIQUEIDENTIFIER = NULL;
+
+    SELECT TOP 1 @WorkflowDefinitionId = WorkflowDefinitionId
+    FROM Workflow.WorkflowDefinition
+    WHERE IsDeleted = 0 AND (WorkflowCode = N'POLICY-CANCELLATION-SYNC' OR TargetEntityName = N'PolicyCancellation')
+    ORDER BY CASE WHEN WorkflowCode = N'POLICY-CANCELLATION-SYNC' THEN 0 ELSE 1 END, CreatedDateUtc;
+
+    IF @WorkflowDefinitionId IS NULL
+    BEGIN
+        SET @WorkflowDefinitionId = 'b5000000-0000-0000-0000-000000000160';
+        INSERT INTO Workflow.WorkflowDefinition (WorkflowDefinitionId, TenantId, WorkflowCode, WorkflowName, Description, TargetEntityName, TriggerTypeCode, ThresholdAmount, IsActive, IsSystemDefined, Version, CreatedDateUtc, ModifiedDateUtc, IsDeleted)
+        SELECT TOP 1 @WorkflowDefinitionId, TenantId, N'POLICY-CANCELLATION-SYNC', N'Policy Cancellation Workflow', N'System workflow for policy cancellation and reinstatement dashboard synchronization.', N'PolicyCancellation', N'Manual', NULL, 1, 1, 1, SYSUTCDATETIME(), NULL, 0
+        FROM @Tenants;
+    END;
+
+    INSERT INTO Workflow.WorkflowInstance (WorkflowInstanceId, TenantId, WorkflowDefinitionId, TargetEntityName, TargetEntityId, StatusCodeId, SubmittedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), pc.TenantId, @WorkflowDefinitionId, N'PolicyCancellation', pc.CancellationId,
+           CASE WHEN pc.Status IN (N'Cancelled', N'Denied', N'Rescinded', N'Reinstated') THEN 3 ELSE 1 END,
+           pc.RequestDateUtc, SYSUTCDATETIME(), pc.CreatedByUserId, 0
+    FROM Policy.PolicyCancellation pc
+    WHERE pc.IsDeleted = 0
+      AND NOT EXISTS (SELECT 1 FROM Workflow.WorkflowInstance wi WHERE wi.TenantId = pc.TenantId AND wi.TargetEntityName = N'PolicyCancellation' AND wi.TargetEntityId = pc.CancellationId AND wi.IsDeleted = 0);
+END;
+
+DROP TABLE #CancellationSource;
+";
+
+    private const string Migration0161_PolicyDocumentsTenantSeedSync = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'DMS') EXEC(N'CREATE SCHEMA DMS');
+
+IF OBJECT_ID(N'DMS.Document', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.Document
+    (
+        DocumentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_Document_0161 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentTypeCode NVARCHAR(100) NOT NULL,
+        CategoryCode NVARCHAR(100) NOT NULL,
+        EntityName NVARCHAR(100) NULL,
+        EntityId UNIQUEIDENTIFIER NULL,
+        FileName NVARCHAR(260) NOT NULL,
+        StoragePath NVARCHAR(500) NOT NULL,
+        ContentType NVARCHAR(150) NULL,
+        FileSizeBytes BIGINT NULL,
+        VersionNumber INT NOT NULL CONSTRAINT DF_DMS_Document_VersionNumber_0161 DEFAULT 1,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_DMS_Document_StatusCode_0161 DEFAULT N'Active',
+        RetentionDate DATE NULL,
+        Description NVARCHAR(1000) NULL,
+        Tags NVARCHAR(500) NULL,
+        UploadedByName NVARCHAR(200) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DMS_Document_CreatedDateUtc_0161 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DMS_Document_IsDeleted_0161 DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'DMS.DocumentVersion', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentVersion
+    (
+        DocumentVersionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_DocumentVersion_0161 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentId UNIQUEIDENTIFIER NOT NULL,
+        VersionNumber INT NOT NULL,
+        FileName NVARCHAR(260) NOT NULL,
+        StoragePath NVARCHAR(500) NOT NULL,
+        ContentType NVARCHAR(150) NULL,
+        FileSizeBytes BIGINT NULL,
+        ChangeNotes NVARCHAR(1000) NULL,
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DMS_DocumentVersion_CreatedDateUtc_0161 DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DMS_DocumentVersion_IsDeleted_0161 DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'DMS.DocumentAccessLog', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentAccessLog
+    (
+        AccessLogId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_DocumentAccessLog_0161 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentId UNIQUEIDENTIFIER NOT NULL,
+        ActionCode NVARCHAR(80) NOT NULL,
+        AccessedByUserId UNIQUEIDENTIFIER NULL,
+        IpAddress NVARCHAR(64) NULL,
+        UserAgent NVARCHAR(400) NULL,
+        AccessDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DMS_DocumentAccessLog_AccessDateUtc_0161 DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DMS_DocumentAccessLog_IsDeleted_0161 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'DMS.DocumentAccessLog', N'AccessedByUserId') IS NULL ALTER TABLE DMS.DocumentAccessLog ADD AccessedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'DMS.DocumentAccessLog', N'UserAgent') IS NULL ALTER TABLE DMS.DocumentAccessLog ADD UserAgent NVARCHAR(400) NULL;
+IF COL_LENGTH(N'DMS.DocumentAccessLog', N'IsDeleted') IS NULL ALTER TABLE DMS.DocumentAccessLog ADD IsDeleted BIT NOT NULL CONSTRAINT DF_DMS_DocumentAccessLog_IsDeleted_0161b DEFAULT 0;
+
+IF COL_LENGTH(N'DMS.DocumentAccessLog', N'UserId') IS NOT NULL
+    EXEC(N'UPDATE DMS.DocumentAccessLog SET AccessedByUserId = UserId WHERE AccessedByUserId IS NULL AND UserId IS NOT NULL;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.Document') AND name = N'IX_DMS_Document_PolicyDashboard_0161')
+    CREATE INDEX IX_DMS_Document_PolicyDashboard_0161 ON DMS.Document(TenantId, EntityName, IsDeleted, StatusCode, CategoryCode, CreatedDateUtc DESC) INCLUDE (FileName, DocumentTypeCode, VersionNumber, FileSizeBytes, RetentionDate, UploadedByName);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.DocumentVersion') AND name = N'IX_DMS_DocumentVersion_PolicyDashboard_0161')
+    CREATE INDEX IX_DMS_DocumentVersion_PolicyDashboard_0161 ON DMS.DocumentVersion(TenantId, DocumentId, IsDeleted, VersionNumber DESC);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.DocumentAccessLog') AND name = N'IX_DMS_DocumentAccessLog_PolicyDashboard_0161')
+    EXEC(N'CREATE INDEX IX_DMS_DocumentAccessLog_PolicyDashboard_0161 ON DMS.DocumentAccessLog(TenantId, DocumentId, IsDeleted, AccessDateUtc DESC);');
+
+DECLARE @PolicyDocAdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE IsDeleted = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+
+DECLARE @PolicyDocTenants TABLE (TenantId UNIQUEIDENTIFIER, AdminUserId UNIQUEIDENTIFIER, TenantName NVARCHAR(200));
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO @PolicyDocTenants (TenantId, AdminUserId, TenantName)
+    SELECT TenantId,
+           COALESCE((SELECT TOP 1 UserId FROM IAM.[User] u WHERE u.TenantId = t.TenantId AND u.IsDeleted = 0 ORDER BY u.CreatedDateUtc), @PolicyDocAdminUserId),
+           COALESCE(TenantName, N'Demo Agency')
+    FROM Core.Tenant t
+    WHERE ISNULL(t.IsDeleted, 0) = 0;
+END;
+
+IF NOT EXISTS (SELECT 1 FROM @PolicyDocTenants)
+    INSERT INTO @PolicyDocTenants VALUES ('00000000-0000-0000-0000-000000000001', @PolicyDocAdminUserId, N'Demo Agency');
+
+DECLARE @PolicyDocSeed TABLE
+(
+    Ord INT NOT NULL,
+    CategoryCode NVARCHAR(100) NOT NULL,
+    DocumentTypeCode NVARCHAR(100) NOT NULL,
+    FileName NVARCHAR(260) NOT NULL,
+    ContentType NVARCHAR(150) NOT NULL,
+    FileSizeBytes BIGINT NOT NULL,
+    VersionNumber INT NOT NULL,
+    StatusCode NVARCHAR(50) NOT NULL,
+    RetentionOffsetDays INT NULL,
+    Description NVARCHAR(1000) NULL,
+    Tags NVARCHAR(500) NULL
+);
+
+INSERT INTO @PolicyDocSeed VALUES
+(1, N'Policy', N'Declarations', N'GL-Policy-Declarations-2025.pdf', N'application/pdf', 1864200, 3, N'Active', 2555, N'Issued commercial general liability declarations and coverage schedule.', N'policy,declarations,issued'),
+(2, N'Endorsement', N'Endorsement', N'Property-Endorsement-Additional-Insured.pdf', N'application/pdf', 842600, 2, N'Active', 2190, N'Additional insured endorsement retained with policy service workflow.', N'policy,endorsement,additional-insured'),
+(3, N'Certificate', N'Certificate', N'Certificate-of-Insurance-Client-Copy.pdf', N'application/pdf', 512300, 1, N'Active', 365, N'Client-facing certificate of insurance generated from policy record.', N'policy,certificate,coi'),
+(4, N'Binder', N'Binder', N'Commercial-Auto-Binder-Bound.pdf', N'application/pdf', 1139800, 2, N'Active', 120, N'Bound binder package awaiting final policy issuance.', N'policy,binder,bound'),
+(5, N'Declaration', N'Policy', N'Workers-Comp-Final-Policy-Packet.pdf', N'application/pdf', 3240100, 4, N'Active', 2920, N'Full workers compensation policy packet synchronized from bound policy.', N'policy,packet,workers-comp'),
+(6, N'Policy', N'Cancellation Notice', N'Cancellation-Notice-Nonpayment.pdf', N'application/pdf', 478220, 1, N'Archived', -15, N'Archived cancellation notice retained for audit and workflow history.', N'policy,cancellation,notice,archive');
+
+INSERT INTO DMS.Document
+(DocumentId, TenantId, DocumentTypeCode, CategoryCode, EntityName, EntityId, FileName, StoragePath, ContentType, FileSizeBytes, VersionNumber, StatusCode, RetentionDate, Description, Tags, UploadedByName, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+SELECT NEWID(), t.TenantId, s.DocumentTypeCode, s.CategoryCode, N'Policy', NULL, s.FileName,
+       CONCAT(N'policy-documents/', CONVERT(NVARCHAR(36), t.TenantId), N'/', s.FileName),
+       s.ContentType, s.FileSizeBytes, s.VersionNumber, s.StatusCode,
+       CASE WHEN s.RetentionOffsetDays IS NULL THEN NULL ELSE DATEADD(day, s.RetentionOffsetDays, CAST(SYSUTCDATETIME() AS date)) END,
+       s.Description, s.Tags, COALESCE(u.FullName, u.DisplayName, u.UserName, t.TenantName, N'Tenant Admin'),
+       DATEADD(day, -1 * (s.Ord * 7), SYSUTCDATETIME()), t.AdminUserId,
+       CASE WHEN s.VersionNumber > 1 THEN DATEADD(day, -1 * s.Ord, SYSUTCDATETIME()) ELSE NULL END,
+       CASE WHEN s.VersionNumber > 1 THEN t.AdminUserId ELSE NULL END,
+       0
+FROM @PolicyDocTenants t
+CROSS JOIN @PolicyDocSeed s
+LEFT JOIN IAM.[User] u ON u.UserId = t.AdminUserId
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM DMS.Document d
+    WHERE d.TenantId = t.TenantId
+      AND d.IsDeleted = 0
+      AND d.EntityName = N'Policy'
+      AND d.FileName = s.FileName
+);
+
+INSERT INTO DMS.DocumentVersion
+(DocumentVersionId, TenantId, DocumentId, VersionNumber, FileName, StoragePath, ContentType, FileSizeBytes, ChangeNotes, CreatedByUserId, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), d.TenantId, d.DocumentId, d.VersionNumber, d.FileName, d.StoragePath, d.ContentType, d.FileSizeBytes,
+       CASE WHEN d.VersionNumber > 1 THEN N'Enterprise policy document version synchronized for dashboard readiness.' ELSE N'Initial policy document version.' END,
+       d.CreatedByUserId, COALESCE(d.ModifiedDateUtc, d.CreatedDateUtc), 0
+FROM DMS.Document d
+WHERE d.IsDeleted = 0
+  AND d.EntityName = N'Policy'
+  AND NOT EXISTS (SELECT 1 FROM DMS.DocumentVersion v WHERE v.DocumentId = d.DocumentId AND v.VersionNumber = d.VersionNumber AND v.IsDeleted = 0);
+
+IF OBJECT_ID(N'DMS.DocumentAccessLog', N'U') IS NOT NULL
+BEGIN
+    EXEC(N'
+    INSERT INTO DMS.DocumentAccessLog
+    (AccessLogId, TenantId, DocumentId, ActionCode, AccessedByUserId, IpAddress, UserAgent, AccessDateUtc, IsDeleted)
+    SELECT NEWID(), d.TenantId, d.DocumentId, N''Index'', d.CreatedByUserId, N''system'', N''PolicyDocumentsSeedSync'', d.CreatedDateUtc, 0
+    FROM DMS.Document d
+    WHERE d.IsDeleted = 0
+      AND d.EntityName = N''Policy''
+      AND NOT EXISTS (SELECT 1 FROM DMS.DocumentAccessLog l WHERE l.DocumentId = d.DocumentId AND l.ActionCode = N''Index'' AND l.IsDeleted = 0);
+
+    INSERT INTO DMS.DocumentAccessLog
+    (AccessLogId, TenantId, DocumentId, ActionCode, AccessedByUserId, IpAddress, UserAgent, AccessDateUtc, IsDeleted)
+    SELECT NEWID(), d.TenantId, d.DocumentId, N''WorkflowSync'', d.CreatedByUserId, N''system'', N''PolicyDocumentsSeedSync'', SYSUTCDATETIME(), 0
+    FROM DMS.Document d
+    WHERE d.IsDeleted = 0
+      AND d.EntityName = N''Policy''
+      AND NOT EXISTS (SELECT 1 FROM DMS.DocumentAccessLog l WHERE l.DocumentId = d.DocumentId AND l.ActionCode = N''WorkflowSync'' AND l.IsDeleted = 0);
+    ');
+END;
+
+IF OBJECT_ID(N'Workflow.WorkflowDefinition', N'U') IS NOT NULL AND OBJECT_ID(N'Workflow.WorkflowInstance', N'U') IS NOT NULL
+BEGIN
+    DECLARE @PolicyDocumentWorkflowDefinitionId UNIQUEIDENTIFIER = NULL;
+
+    SELECT TOP 1 @PolicyDocumentWorkflowDefinitionId = WorkflowDefinitionId
+    FROM Workflow.WorkflowDefinition
+    WHERE IsDeleted = 0 AND (WorkflowCode = N'POLICY-DOCUMENT-SYNC' OR TargetEntityName = N'PolicyDocument')
+    ORDER BY CASE WHEN WorkflowCode = N'POLICY-DOCUMENT-SYNC' THEN 0 ELSE 1 END, CreatedDateUtc;
+
+    IF @PolicyDocumentWorkflowDefinitionId IS NULL
+    BEGIN
+        SET @PolicyDocumentWorkflowDefinitionId = 'b6000000-0000-0000-0000-000000000161';
+        INSERT INTO Workflow.WorkflowDefinition (WorkflowDefinitionId, TenantId, WorkflowCode, WorkflowName, Description, TargetEntityName, TriggerTypeCode, ThresholdAmount, IsActive, IsSystemDefined, Version, CreatedDateUtc, ModifiedDateUtc, IsDeleted)
+        SELECT TOP 1 @PolicyDocumentWorkflowDefinitionId, TenantId, N'POLICY-DOCUMENT-SYNC', N'Policy Document Workflow', N'System workflow for policy document vault indexing, retention, versioning, and sharing.', N'PolicyDocument', N'Manual', NULL, 1, 1, 1, SYSUTCDATETIME(), NULL, 0
+        FROM @PolicyDocTenants;
+    END;
+
+    INSERT INTO Workflow.WorkflowInstance (WorkflowInstanceId, TenantId, WorkflowDefinitionId, TargetEntityName, TargetEntityId, StatusCodeId, SubmittedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), d.TenantId, @PolicyDocumentWorkflowDefinitionId, N'PolicyDocument', d.DocumentId,
+           CASE WHEN d.StatusCode = N'Archived' THEN 3 ELSE 1 END,
+           d.CreatedDateUtc, SYSUTCDATETIME(), d.CreatedByUserId, 0
+    FROM DMS.Document d
+    WHERE d.IsDeleted = 0
+      AND d.EntityName = N'Policy'
+      AND NOT EXISTS (SELECT 1 FROM Workflow.WorkflowInstance wi WHERE wi.TenantId = d.TenantId AND wi.TargetEntityName = N'PolicyDocument' AND wi.TargetEntityId = d.DocumentId AND wi.IsDeleted = 0);
+END;
+";
+
+    private const string Migration0162_CompliancePoliciesTenantSeedSync = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Compliance') EXEC(N'CREATE SCHEMA Compliance');
+
+IF OBJECT_ID(N'Compliance.PolicyDocument', N'U') IS NULL
+BEGIN
+    CREATE TABLE Compliance.PolicyDocument
+    (
+        PolicyDocumentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Compliance_PolicyDocument_0162 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyCode NVARCHAR(50) NOT NULL,
+        PolicyTitle NVARCHAR(200) NOT NULL,
+        PolicyTypeCode NVARCHAR(100) NOT NULL,
+        Version NVARCHAR(50) NOT NULL CONSTRAINT DF_Compliance_PolicyDocument_Version_0162 DEFAULT N'1.0',
+        EffectiveDateUtc DATETIME2 NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_Compliance_PolicyDocument_IsActive_0162 DEFAULT 1,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_Compliance_PolicyDocument_StatusCode_0162 DEFAULT N'Draft',
+        Description NVARCHAR(1000) NULL,
+        Content NVARCHAR(MAX) NULL,
+        OwnedByUserId UNIQUEIDENTIFIER NULL,
+        ParentPolicyDocumentId UNIQUEIDENTIFIER NULL,
+        PublishedByUserId UNIQUEIDENTIFIER NULL,
+        PublishedDateUtc DATETIME2 NULL,
+        RetiredByUserId UNIQUEIDENTIFIER NULL,
+        RetiredDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Compliance_PolicyDocument_CreatedDateUtc_0162 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Compliance_PolicyDocument_IsDeleted_0162 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'TenantId') IS NULL ALTER TABLE Compliance.PolicyDocument ADD TenantId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'PolicyCode') IS NULL ALTER TABLE Compliance.PolicyDocument ADD PolicyCode NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'PolicyTitle') IS NULL ALTER TABLE Compliance.PolicyDocument ADD PolicyTitle NVARCHAR(200) NULL;
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'PolicyTypeCode') IS NULL ALTER TABLE Compliance.PolicyDocument ADD PolicyTypeCode NVARCHAR(100) NULL;
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'Version') IS NULL ALTER TABLE Compliance.PolicyDocument ADD Version NVARCHAR(50) NOT NULL CONSTRAINT DF_Compliance_PolicyDocument_Version_0162b DEFAULT N'1.0';
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'EffectiveDateUtc') IS NULL ALTER TABLE Compliance.PolicyDocument ADD EffectiveDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'IsActive') IS NULL ALTER TABLE Compliance.PolicyDocument ADD IsActive BIT NOT NULL CONSTRAINT DF_Compliance_PolicyDocument_IsActive_0162b DEFAULT 1;
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'StatusCode') IS NULL ALTER TABLE Compliance.PolicyDocument ADD StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_Compliance_PolicyDocument_StatusCode_0162b DEFAULT N'Draft';
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'Description') IS NULL ALTER TABLE Compliance.PolicyDocument ADD Description NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'Content') IS NULL ALTER TABLE Compliance.PolicyDocument ADD Content NVARCHAR(MAX) NULL;
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'OwnedByUserId') IS NULL ALTER TABLE Compliance.PolicyDocument ADD OwnedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'ParentPolicyDocumentId') IS NULL ALTER TABLE Compliance.PolicyDocument ADD ParentPolicyDocumentId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'PublishedByUserId') IS NULL ALTER TABLE Compliance.PolicyDocument ADD PublishedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'PublishedDateUtc') IS NULL ALTER TABLE Compliance.PolicyDocument ADD PublishedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'RetiredByUserId') IS NULL ALTER TABLE Compliance.PolicyDocument ADD RetiredByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'RetiredDateUtc') IS NULL ALTER TABLE Compliance.PolicyDocument ADD RetiredDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'CreatedDateUtc') IS NULL ALTER TABLE Compliance.PolicyDocument ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Compliance_PolicyDocument_CreatedDateUtc_0162b DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'CreatedByUserId') IS NULL ALTER TABLE Compliance.PolicyDocument ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'ModifiedDateUtc') IS NULL ALTER TABLE Compliance.PolicyDocument ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'ModifiedByUserId') IS NULL ALTER TABLE Compliance.PolicyDocument ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Compliance.PolicyDocument', N'IsDeleted') IS NULL ALTER TABLE Compliance.PolicyDocument ADD IsDeleted BIT NOT NULL CONSTRAINT DF_Compliance_PolicyDocument_IsDeleted_0162b DEFAULT 0;
+
+IF OBJECT_ID(N'Compliance.PolicyAudience', N'U') IS NULL
+BEGIN
+    CREATE TABLE Compliance.PolicyAudience
+    (
+        AudienceId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Compliance_PolicyAudience_0162 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyDocumentId UNIQUEIDENTIFIER NOT NULL,
+        TargetTypeCode NVARCHAR(50) NOT NULL,
+        TargetId UNIQUEIDENTIFIER NULL,
+        TargetName NVARCHAR(200) NOT NULL,
+        IsRequired BIT NOT NULL CONSTRAINT DF_Compliance_PolicyAudience_IsRequired_0162 DEFAULT 1,
+        AddedByUserId UNIQUEIDENTIFIER NULL,
+        AddedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Compliance_PolicyAudience_AddedDateUtc_0162 DEFAULT SYSUTCDATETIME(),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Compliance_PolicyAudience_CreatedDateUtc_0162 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Compliance_PolicyAudience_IsDeleted_0162 DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Compliance.PolicyAcknowledgement', N'U') IS NULL
+BEGIN
+    CREATE TABLE Compliance.PolicyAcknowledgement
+    (
+        AcknowledgementId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Compliance_PolicyAcknowledgement_0162 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyDocumentId UNIQUEIDENTIFIER NOT NULL,
+        UserId UNIQUEIDENTIFIER NOT NULL,
+        AcknowledgedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Compliance_PolicyAcknowledgement_AcknowledgedDateUtc_0162 DEFAULT SYSUTCDATETIME(),
+        Channel NVARCHAR(50) NULL,
+        IpAddress NVARCHAR(64) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Compliance_PolicyAcknowledgement_CreatedDateUtc_0162 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Compliance_PolicyAcknowledgement_IsDeleted_0162 DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Compliance.PolicyDocument') AND name = N'IX_CompliancePolicyDocument_Dashboard_0162')
+    CREATE INDEX IX_CompliancePolicyDocument_Dashboard_0162 ON Compliance.PolicyDocument(TenantId, IsDeleted, StatusCode, PolicyTypeCode, EffectiveDateUtc) INCLUDE (PolicyCode, PolicyTitle, Version, OwnedByUserId, PublishedDateUtc, RetiredDateUtc);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Compliance.PolicyAudience') AND name = N'IX_CompliancePolicyAudience_Dashboard_0162')
+    CREATE INDEX IX_CompliancePolicyAudience_Dashboard_0162 ON Compliance.PolicyAudience(TenantId, PolicyDocumentId, IsDeleted, TargetTypeCode);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Compliance.PolicyAcknowledgement') AND name = N'IX_CompliancePolicyAcknowledgement_Dashboard_0162')
+    CREATE INDEX IX_CompliancePolicyAcknowledgement_Dashboard_0162 ON Compliance.PolicyAcknowledgement(TenantId, PolicyDocumentId, IsDeleted, AcknowledgedDateUtc DESC);
+
+DECLARE @ComplianceAdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE IsDeleted = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+
+DECLARE @ComplianceTenants TABLE (TenantId UNIQUEIDENTIFIER, AdminUserId UNIQUEIDENTIFIER, TenantName NVARCHAR(200));
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO @ComplianceTenants (TenantId, AdminUserId, TenantName)
+    SELECT TenantId,
+           COALESCE((SELECT TOP 1 UserId FROM IAM.[User] u WHERE u.TenantId = t.TenantId AND u.IsDeleted = 0 ORDER BY u.CreatedDateUtc), @ComplianceAdminUserId),
+           COALESCE(TenantName, N'Demo Agency')
+    FROM Core.Tenant t
+    WHERE ISNULL(t.IsDeleted, 0) = 0;
+END;
+
+IF NOT EXISTS (SELECT 1 FROM @ComplianceTenants)
+    INSERT INTO @ComplianceTenants VALUES ('00000000-0000-0000-0000-000000000001', @ComplianceAdminUserId, N'Demo Agency');
+
+DECLARE @ComplianceSeed TABLE
+(
+    PolicyCode NVARCHAR(50) NOT NULL,
+    PolicyTitle NVARCHAR(200) NOT NULL,
+    PolicyTypeCode NVARCHAR(100) NOT NULL,
+    Version NVARCHAR(50) NOT NULL,
+    EffectiveOffsetDays INT NULL,
+    StatusCode NVARCHAR(50) NOT NULL,
+    Description NVARCHAR(1000) NULL,
+    Content NVARCHAR(MAX) NULL,
+    AudienceName NVARCHAR(200) NOT NULL,
+    AckOffsetDays INT NULL
+);
+
+INSERT INTO @ComplianceSeed VALUES
+(N'COMP-001', N'Agency Code of Conduct', N'Compliance', N'2.0', -30, N'Published', N'Core conduct, ethics, and professional standards for all agency staff.', N'All users must follow ethical sales, service, privacy, documentation, and conflict-of-interest requirements.', N'All Employees', -12),
+(N'PRIV-001', N'Client Data Privacy Policy', N'Privacy', N'1.2', -10, N'Published', N'Privacy handling requirements for insured, prospect, and carrier data.', N'Client data must be collected, stored, shared, retained, and disposed using approved controls.', N'Licensed Staff', -4),
+(N'INFOSEC-001', N'Information Security Policy', N'Information Security', N'1.0', 14, N'Draft', N'Security baseline for devices, credentials, multi-factor authentication, and incident reporting.', N'Draft controls cover password hygiene, endpoint security, access review, and phishing reporting.', N'IT and Operations', NULL),
+(N'HR-001', N'Harassment Prevention and Workplace Conduct', N'Human Resources', N'1.1', -45, N'Published', N'Workplace conduct standards and required acknowledgement evidence.', N'All workers must maintain a respectful workplace and complete acknowledgement attestation.', N'All Employees', -20),
+(N'FIN-001', N'Premium Trust Accounting Policy', N'Finance', N'1.0', 7, N'Draft', N'Controls for premium trust, payment reconciliation, and segregation of duties.', N'Draft accounting controls for receipt, deposit, reconciliation, and exception handling.', N'Accounting Team', NULL),
+(N'OPS-001', N'Policy Servicing Standards', N'Operations', N'3.0', -120, N'Retired', N'Retired servicing standards retained for audit history and policy workflow continuity.', N'Retired policy content retained for historical reference.', N'Service Team', -90),
+(N'ITGOV-001', N'Change Management and Release Governance', N'IT Governance', N'1.0', 30, N'Draft', N'Governance for production changes, approvals, release evidence, and rollback readiness.', N'Production changes require impact assessment, approval, testing evidence, and rollback plan.', N'Technology Team', NULL);
+
+INSERT INTO Compliance.PolicyDocument
+(PolicyDocumentId, TenantId, PolicyCode, PolicyTitle, PolicyTypeCode, Version, EffectiveDateUtc, IsActive, StatusCode, Description, Content, OwnedByUserId, PublishedByUserId, PublishedDateUtc, RetiredByUserId, RetiredDateUtc, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+SELECT NEWID(), t.TenantId, s.PolicyCode, s.PolicyTitle, s.PolicyTypeCode, s.Version,
+       CASE WHEN s.EffectiveOffsetDays IS NULL THEN NULL ELSE DATEADD(day, s.EffectiveOffsetDays, SYSUTCDATETIME()) END,
+       CASE WHEN s.StatusCode = N'Retired' THEN 0 ELSE 1 END,
+       s.StatusCode, s.Description, s.Content, t.AdminUserId,
+       CASE WHEN s.StatusCode IN (N'Published', N'Retired') THEN t.AdminUserId ELSE NULL END,
+       CASE WHEN s.StatusCode IN (N'Published', N'Retired') THEN DATEADD(day, -21, SYSUTCDATETIME()) ELSE NULL END,
+       CASE WHEN s.StatusCode = N'Retired' THEN t.AdminUserId ELSE NULL END,
+       CASE WHEN s.StatusCode = N'Retired' THEN DATEADD(day, -30, SYSUTCDATETIME()) ELSE NULL END,
+       DATEADD(day, -60, SYSUTCDATETIME()), t.AdminUserId,
+       CASE WHEN s.StatusCode = N'Draft' THEN DATEADD(day, -2, SYSUTCDATETIME()) ELSE NULL END,
+       CASE WHEN s.StatusCode = N'Draft' THEN t.AdminUserId ELSE NULL END,
+       0
+FROM @ComplianceTenants t
+CROSS JOIN @ComplianceSeed s
+WHERE NOT EXISTS (SELECT 1 FROM Compliance.PolicyDocument p WHERE p.TenantId = t.TenantId AND p.PolicyCode = s.PolicyCode AND p.Version = s.Version AND p.IsDeleted = 0);
+
+INSERT INTO Compliance.PolicyAudience
+(AudienceId, TenantId, PolicyDocumentId, TargetTypeCode, TargetId, TargetName, IsRequired, AddedByUserId, AddedDateUtc, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+SELECT NEWID(), p.TenantId, p.PolicyDocumentId, N'Role', NULL, s.AudienceName, 1, p.CreatedByUserId, DATEADD(day, -18, SYSUTCDATETIME()), SYSUTCDATETIME(), p.CreatedByUserId, NULL, NULL, 0
+FROM Compliance.PolicyDocument p
+JOIN @ComplianceSeed s ON s.PolicyCode = p.PolicyCode AND s.Version = p.Version
+WHERE p.IsDeleted = 0
+  AND NOT EXISTS (SELECT 1 FROM Compliance.PolicyAudience a WHERE a.PolicyDocumentId = p.PolicyDocumentId AND a.TargetTypeCode = N'Role' AND a.TargetName = s.AudienceName AND a.IsDeleted = 0);
+
+INSERT INTO Compliance.PolicyAcknowledgement
+(AcknowledgementId, TenantId, PolicyDocumentId, UserId, AcknowledgedDateUtc, Channel, IpAddress, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+SELECT NEWID(), p.TenantId, p.PolicyDocumentId, p.CreatedByUserId,
+       DATEADD(day, COALESCE(s.AckOffsetDays, -1), SYSUTCDATETIME()), N'Web', N'system', SYSUTCDATETIME(), p.CreatedByUserId, NULL, NULL, 0
+FROM Compliance.PolicyDocument p
+JOIN @ComplianceSeed s ON s.PolicyCode = p.PolicyCode AND s.Version = p.Version
+WHERE p.IsDeleted = 0
+  AND p.StatusCode IN (N'Published', N'Retired')
+  AND p.CreatedByUserId IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM Compliance.PolicyAcknowledgement ack WHERE ack.PolicyDocumentId = p.PolicyDocumentId AND ack.UserId = p.CreatedByUserId AND ack.IsDeleted = 0);
+
+IF OBJECT_ID(N'Workflow.WorkflowDefinition', N'U') IS NOT NULL AND OBJECT_ID(N'Workflow.WorkflowInstance', N'U') IS NOT NULL
+BEGIN
+    DECLARE @ComplianceWorkflowDefinitionId UNIQUEIDENTIFIER = NULL;
+
+    SELECT TOP 1 @ComplianceWorkflowDefinitionId = WorkflowDefinitionId
+    FROM Workflow.WorkflowDefinition
+    WHERE IsDeleted = 0 AND (WorkflowCode = N'COMPLIANCE-POLICY-LIFECYCLE' OR TargetEntityName = N'CompliancePolicy')
+    ORDER BY CASE WHEN WorkflowCode = N'COMPLIANCE-POLICY-LIFECYCLE' THEN 0 ELSE 1 END, CreatedDateUtc;
+
+    IF @ComplianceWorkflowDefinitionId IS NULL
+    BEGIN
+        SET @ComplianceWorkflowDefinitionId = 'b6000000-0000-0000-0000-000000000162';
+        INSERT INTO Workflow.WorkflowDefinition (WorkflowDefinitionId, TenantId, WorkflowCode, WorkflowName, Description, TargetEntityName, TriggerTypeCode, ThresholdAmount, IsActive, IsSystemDefined, Version, CreatedDateUtc, ModifiedDateUtc, IsDeleted)
+        SELECT TOP 1 @ComplianceWorkflowDefinitionId, TenantId, N'COMPLIANCE-POLICY-LIFECYCLE', N'Compliance Policy Lifecycle', N'System workflow for compliance policy drafting, approval, publishing, acknowledgements, retirement, and evidence retention.', N'CompliancePolicy', N'Manual', NULL, 1, 1, 1, SYSUTCDATETIME(), NULL, 0
+        FROM @ComplianceTenants;
+    END;
+
+    INSERT INTO Workflow.WorkflowInstance (WorkflowInstanceId, TenantId, WorkflowDefinitionId, TargetEntityName, TargetEntityId, StatusCodeId, SubmittedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), p.TenantId, @ComplianceWorkflowDefinitionId, N'CompliancePolicy', p.PolicyDocumentId,
+           CASE WHEN p.StatusCode = N'Retired' THEN 3 WHEN p.StatusCode = N'Published' THEN 2 ELSE 1 END,
+           COALESCE(p.PublishedDateUtc, p.CreatedDateUtc), SYSUTCDATETIME(), p.CreatedByUserId, 0
+    FROM Compliance.PolicyDocument p
+    WHERE p.IsDeleted = 0
+      AND NOT EXISTS (SELECT 1 FROM Workflow.WorkflowInstance wi WHERE wi.TenantId = p.TenantId AND wi.TargetEntityName = N'CompliancePolicy' AND wi.TargetEntityId = p.PolicyDocumentId AND wi.IsDeleted = 0);
+END;
+";
+
+    private const string Migration0163_ComplianceAcknowledgementsTenantSeedSync = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Compliance') EXEC(N'CREATE SCHEMA Compliance');
+
+IF OBJECT_ID(N'Compliance.PolicyDocument', N'U') IS NULL OR OBJECT_ID(N'Compliance.PolicyAudience', N'U') IS NULL OR OBJECT_ID(N'Compliance.PolicyAcknowledgement', N'U') IS NULL
+    RETURN;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Compliance.PolicyAudience') AND name = N'IX_ComplianceAcknowledgements_Audience_0163')
+    CREATE INDEX IX_ComplianceAcknowledgements_Audience_0163 ON Compliance.PolicyAudience(TenantId, PolicyDocumentId, IsDeleted, TargetTypeCode, TargetName) INCLUDE (TargetId, IsRequired, AddedDateUtc);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Compliance.PolicyAcknowledgement') AND name = N'IX_ComplianceAcknowledgements_Evidence_0163')
+    CREATE INDEX IX_ComplianceAcknowledgements_Evidence_0163 ON Compliance.PolicyAcknowledgement(TenantId, PolicyDocumentId, IsDeleted, UserId, AcknowledgedDateUtc DESC) INCLUDE (Channel, IpAddress);
+
+DECLARE @AckAdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE IsDeleted = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+
+DECLARE @AckTenants TABLE (TenantId UNIQUEIDENTIFIER, AdminUserId UNIQUEIDENTIFIER, TenantName NVARCHAR(200));
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO @AckTenants (TenantId, AdminUserId, TenantName)
+    SELECT TenantId,
+           COALESCE((SELECT TOP 1 UserId FROM IAM.[User] u WHERE u.TenantId = t.TenantId AND u.IsDeleted = 0 ORDER BY u.CreatedDateUtc), @AckAdminUserId),
+           COALESCE(TenantName, N'Demo Agency')
+    FROM Core.Tenant t
+    WHERE ISNULL(t.IsDeleted, 0) = 0;
+END;
+
+IF NOT EXISTS (SELECT 1 FROM @AckTenants)
+    INSERT INTO @AckTenants VALUES ('00000000-0000-0000-0000-000000000001', @AckAdminUserId, N'Demo Agency');
+
+INSERT INTO Compliance.PolicyAudience
+(AudienceId, TenantId, PolicyDocumentId, TargetTypeCode, TargetId, TargetName, IsRequired, AddedByUserId, AddedDateUtc, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+SELECT NEWID(), p.TenantId, p.PolicyDocumentId, N'Role', NULL,
+       CASE p.PolicyTypeCode
+           WHEN N'Privacy' THEN N'Licensed Staff'
+           WHEN N'Information Security' THEN N'All System Users'
+           WHEN N'Human Resources' THEN N'All Employees'
+           WHEN N'Finance' THEN N'Accounting Team'
+           WHEN N'Operations' THEN N'Service Team'
+           ELSE N'All Employees'
+       END,
+       1, COALESCE(p.CreatedByUserId, t.AdminUserId), DATEADD(day, -14, SYSUTCDATETIME()), SYSUTCDATETIME(), COALESCE(p.CreatedByUserId, t.AdminUserId), NULL, NULL, 0
+FROM Compliance.PolicyDocument p
+JOIN @AckTenants t ON t.TenantId = p.TenantId
+WHERE p.IsDeleted = 0
+  AND p.StatusCode = N'Published'
+  AND NOT EXISTS (SELECT 1 FROM Compliance.PolicyAudience a WHERE a.PolicyDocumentId = p.PolicyDocumentId AND a.IsDeleted = 0);
+
+INSERT INTO Compliance.PolicyAudience
+(AudienceId, TenantId, PolicyDocumentId, TargetTypeCode, TargetId, TargetName, IsRequired, AddedByUserId, AddedDateUtc, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+SELECT NEWID(), p.TenantId, p.PolicyDocumentId, N'User', t.AdminUserId, COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin'), 1, t.AdminUserId, DATEADD(day, -12, SYSUTCDATETIME()), SYSUTCDATETIME(), t.AdminUserId, NULL, NULL, 0
+FROM Compliance.PolicyDocument p
+JOIN @AckTenants t ON t.TenantId = p.TenantId
+LEFT JOIN IAM.[User] u ON u.UserId = t.AdminUserId
+WHERE p.IsDeleted = 0
+  AND p.StatusCode = N'Published'
+  AND NOT EXISTS (SELECT 1 FROM Compliance.PolicyAudience a WHERE a.PolicyDocumentId = p.PolicyDocumentId AND a.TargetTypeCode = N'User' AND a.TargetId = t.AdminUserId AND a.IsDeleted = 0);
+
+INSERT INTO Compliance.PolicyAcknowledgement
+(AcknowledgementId, TenantId, PolicyDocumentId, UserId, AcknowledgedDateUtc, Channel, IpAddress, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+SELECT NEWID(), p.TenantId, p.PolicyDocumentId, t.AdminUserId,
+       DATEADD(day, -1 * (ABS(CHECKSUM(p.PolicyCode)) % 18 + 2), SYSUTCDATETIME()),
+       CASE WHEN ABS(CHECKSUM(p.PolicyCode)) % 3 = 0 THEN N'Mobile' ELSE N'Web' END,
+       N'system', SYSUTCDATETIME(), t.AdminUserId, NULL, NULL, 0
+FROM Compliance.PolicyDocument p
+JOIN @AckTenants t ON t.TenantId = p.TenantId
+WHERE p.IsDeleted = 0
+  AND p.StatusCode IN (N'Published', N'Retired')
+  AND (p.PolicyCode LIKE N'COMP-%' OR p.PolicyCode LIKE N'PRIV-%' OR p.PolicyCode LIKE N'HR-%')
+  AND NOT EXISTS (SELECT 1 FROM Compliance.PolicyAcknowledgement ack WHERE ack.PolicyDocumentId = p.PolicyDocumentId AND ack.UserId = t.AdminUserId AND ack.IsDeleted = 0);
+
+IF OBJECT_ID(N'Workflow.WorkflowDefinition', N'U') IS NOT NULL AND OBJECT_ID(N'Workflow.WorkflowInstance', N'U') IS NOT NULL
+BEGIN
+    DECLARE @AckWorkflowDefinitionId UNIQUEIDENTIFIER = NULL;
+
+    SELECT TOP 1 @AckWorkflowDefinitionId = WorkflowDefinitionId
+    FROM Workflow.WorkflowDefinition
+    WHERE IsDeleted = 0 AND (WorkflowCode = N'COMPLIANCE-ACKNOWLEDGEMENT-EVIDENCE' OR TargetEntityName = N'ComplianceAcknowledgement')
+    ORDER BY CASE WHEN WorkflowCode = N'COMPLIANCE-ACKNOWLEDGEMENT-EVIDENCE' THEN 0 ELSE 1 END, CreatedDateUtc;
+
+    IF @AckWorkflowDefinitionId IS NULL
+    BEGIN
+        SET @AckWorkflowDefinitionId = 'b6000000-0000-0000-0000-000000000163';
+        INSERT INTO Workflow.WorkflowDefinition (WorkflowDefinitionId, TenantId, WorkflowCode, WorkflowName, Description, TargetEntityName, TriggerTypeCode, ThresholdAmount, IsActive, IsSystemDefined, Version, CreatedDateUtc, ModifiedDateUtc, IsDeleted)
+        SELECT TOP 1 @AckWorkflowDefinitionId, TenantId, N'COMPLIANCE-ACKNOWLEDGEMENT-EVIDENCE', N'Compliance Acknowledgement Evidence', N'System workflow for pending, overdue, completed, and retained compliance acknowledgement evidence.', N'ComplianceAcknowledgement', N'Manual', NULL, 1, 1, 1, SYSUTCDATETIME(), NULL, 0
+        FROM @AckTenants;
+    END;
+
+    INSERT INTO Workflow.WorkflowInstance (WorkflowInstanceId, TenantId, WorkflowDefinitionId, TargetEntityName, TargetEntityId, StatusCodeId, SubmittedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), a.TenantId, @AckWorkflowDefinitionId, N'ComplianceAcknowledgement', a.AudienceId,
+           CASE WHEN EXISTS (SELECT 1 FROM Compliance.PolicyAcknowledgement ack WHERE ack.PolicyDocumentId = a.PolicyDocumentId AND ack.UserId = a.TargetId AND ack.IsDeleted = 0) THEN 2 ELSE 1 END,
+           a.AddedDateUtc, SYSUTCDATETIME(), a.CreatedByUserId, 0
+    FROM Compliance.PolicyAudience a
+    WHERE a.IsDeleted = 0
+      AND NOT EXISTS (SELECT 1 FROM Workflow.WorkflowInstance wi WHERE wi.TenantId = a.TenantId AND wi.TargetEntityName = N'ComplianceAcknowledgement' AND wi.TargetEntityId = a.AudienceId AND wi.IsDeleted = 0);
+END;
+";
+
+    private const string Migration0153_LeadWorkflowDataSync = @"
+DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+DECLARE @AdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+
+IF OBJECT_ID(N'CRM.Lead', N'U') IS NOT NULL
+   AND OBJECT_ID(N'Client.Account', N'U') IS NOT NULL
+   AND OBJECT_ID(N'CRM.Opportunity', N'U') IS NOT NULL
+   AND OBJECT_ID(N'Submissions.Submission', N'U') IS NOT NULL
+   AND OBJECT_ID(N'Submissions.Quote', N'U') IS NOT NULL
+   AND OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'CRM.Lead', N'AccountId') IS NULL ALTER TABLE CRM.Lead ADD AccountId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.Opportunity', N'LeadId') IS NULL ALTER TABLE CRM.Opportunity ADD LeadId UNIQUEIDENTIFIER NULL;
+
+    DECLARE @DefaultCarrierId UNIQUEIDENTIFIER = COALESCE(
+        (SELECT TOP 1 CarrierId FROM Core.Carrier WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CarrierName),
+        'd1000000-0000-0000-0000-000000000001');
+    DECLARE @LeadAccountTypeCode NVARCHAR(50) = COALESCE(
+        (SELECT TOP 1 AccountTypeCode FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountTypeCode IS NOT NULL ORDER BY CreatedDateUtc),
+        N'Customer');
+    DECLARE @LeadWorkflowStageId UNIQUEIDENTIFIER = NULL;
+    DECLARE @LeadWorkflowDefinitionId UNIQUEIDENTIFIER = NULL;
+
+    IF OBJECT_ID(N'CRM.OpportunityStage', N'U') IS NOT NULL
+    BEGIN
+        SELECT TOP 1 @LeadWorkflowStageId = OpportunityStageId
+        FROM CRM.OpportunityStage
+        WHERE TenantId = @TenantId AND IsActive = 1
+        ORDER BY SortOrder, StageName;
+
+        IF @LeadWorkflowStageId IS NULL
+        BEGIN
+            SET @LeadWorkflowStageId = '05000000-0000-0000-0000-000000000153';
+            INSERT INTO CRM.OpportunityStage (OpportunityStageId, TenantId, StageCode, StageName, SortOrder, ProbabilityPercent, IsClosedStage, IsWonStage, IsActive)
+            VALUES (@LeadWorkflowStageId, @TenantId, N'LEADSYNC', N'Lead Sync', 1, 25, 0, 0, 1);
+        END
+    END
+
+    IF OBJECT_ID(N'Workflow.WorkflowDefinition', N'U') IS NOT NULL
+    BEGIN
+        SELECT TOP 1 @LeadWorkflowDefinitionId = WorkflowDefinitionId
+        FROM Workflow.WorkflowDefinition
+        WHERE TenantId = @TenantId AND IsDeleted = 0 AND (TargetEntityName = N'Submission' OR WorkflowCode = N'LEAD-SUBMISSION-SYNC')
+        ORDER BY CASE WHEN WorkflowCode = N'LEAD-SUBMISSION-SYNC' THEN 0 ELSE 1 END, CreatedDateUtc;
+
+        IF @LeadWorkflowDefinitionId IS NULL
+        BEGIN
+            SET @LeadWorkflowDefinitionId = 'b5000000-0000-0000-0000-000000000153';
+            INSERT INTO Workflow.WorkflowDefinition (WorkflowDefinitionId, TenantId, WorkflowCode, WorkflowName, Description, TargetEntityName, TriggerTypeCode, ThresholdAmount, IsActive, IsSystemDefined, Version, CreatedDateUtc, ModifiedDateUtc, IsDeleted)
+            VALUES (@LeadWorkflowDefinitionId, @TenantId, N'LEAD-SUBMISSION-SYNC', N'Lead to Submission Workflow', N'System workflow for lead-to-submission data continuity.', N'Submission', N'Manual', NULL, 1, 1, 1, SYSUTCDATETIME(), NULL, 0);
+        END
+    END
+
+    IF OBJECT_ID(N'tempdb..#LeadWorkflowSource') IS NOT NULL DROP TABLE #LeadWorkflowSource;
+
+    SELECT TOP (24)
+           ROW_NUMBER() OVER (ORDER BY l.CreatedDateUtc, l.LeadNumber, l.LeadId) AS RowNum,
+           l.LeadId,
+           l.LeadNumber,
+           LEFT(CONCAT(N'ACC-', REPLACE(REPLACE(COALESCE(NULLIF(l.LeadNumber, N''), CONVERT(NVARCHAR(36), l.LeadId)), N' ', N'-'), N'/', N'-')), 50) AS AccountNumber,
+           LEFT(CONCAT(N'OPP-', REPLACE(REPLACE(COALESCE(NULLIF(l.LeadNumber, N''), CONVERT(NVARCHAR(36), l.LeadId)), N' ', N'-'), N'/', N'-')), 50) AS OpportunityNumber,
+           COALESCE(NULLIF(LTRIM(RTRIM(l.AccountName)), N''), CONCAT(NULLIF(LTRIM(RTRIM(l.FirstName)), N''), N' ', NULLIF(LTRIM(RTRIM(l.LastName)), N'')), CONCAT(N'Lead Account ', l.LeadNumber)) AS AccountName,
+           NULLIF(LTRIM(RTRIM(CONCAT(COALESCE(l.FirstName, N''), N' ', COALESCE(l.LastName, N'')))), N'') AS ContactName,
+           l.Email,
+           l.Phone,
+           COALESCE(NULLIF(LTRIM(RTRIM(l.InterestedService)), N''), N'General Liability') AS LineOfBusiness,
+           CAST(CASE
+                WHEN COALESCE(l.Score, 0) >= 80 THEN 185000
+                WHEN COALESCE(l.Score, 0) >= 60 THEN 112000
+                WHEN COALESCE(l.Score, 0) >= 40 THEN 72500
+                ELSE 50000
+           END AS DECIMAL(18,2)) AS TargetPremium,
+           COALESCE(NULLIF(l.PriorityCode, N''), CASE WHEN COALESCE(l.Score, 0) >= 80 THEN N'High' ELSE N'Normal' END) AS Priority,
+           COALESCE(l.AssignedToUserId, @AdminUserId) AS AssignedToUserId
+    INTO #LeadWorkflowSource
+    FROM CRM.Lead l
+    WHERE l.TenantId = @TenantId AND l.IsDeleted = 0
+    ORDER BY l.CreatedDateUtc, l.LeadNumber, l.LeadId;
+
+    IF EXISTS (SELECT 1 FROM #LeadWorkflowSource)
+    BEGIN
+        INSERT INTO Client.Account
+        (AccountId, TenantId, AccountNumber, AccountName, AccountTypeCode, MainEmail, MainPhone, StatusCode, StatusCodeId, SegmentCode, OwnerUserId, LifecycleStageCode, Industry, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        SELECT NEWID(), @TenantId, s.AccountNumber, s.AccountName, @LeadAccountTypeCode, s.Email, s.Phone, N'Active',
+               1,
+               CASE WHEN s.TargetPremium >= 150000 THEN N'Enterprise' WHEN s.TargetPremium >= 75000 THEN N'Mid-Market' ELSE N'Standard' END,
+               s.AssignedToUserId, N'Prospect', s.LineOfBusiness, SYSUTCDATETIME(), @AdminUserId, 0
+        FROM #LeadWorkflowSource s
+        WHERE NOT EXISTS (SELECT 1 FROM Client.Account a WHERE a.TenantId = @TenantId AND a.IsDeleted = 0 AND (a.AccountName = s.AccountName OR a.AccountNumber = s.AccountNumber));
+
+        UPDATE l
+        SET AccountId = a.AccountId
+        FROM CRM.Lead l
+        JOIN #LeadWorkflowSource s ON s.LeadId = l.LeadId
+        JOIN Client.Account a ON a.TenantId = @TenantId AND a.IsDeleted = 0 AND (a.AccountName = s.AccountName OR a.AccountNumber = s.AccountNumber)
+        WHERE l.TenantId = @TenantId AND l.IsDeleted = 0 AND (l.AccountId IS NULL OR l.AccountId <> a.AccountId);
+
+        INSERT INTO CRM.Opportunity
+        (OpportunityId, TenantId, OpportunityNumber, AccountId, OpportunityName, EstimatedAmount, OwnerUserId, CloseDate, LeadId, WinProbability, ForecastCategoryCode, StageName, OpportunityStageId, StatusCodeId, Description, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        SELECT NEWID(), @TenantId, s.OpportunityNumber, l.AccountId,
+               CONCAT(s.AccountName, N' - ', s.LineOfBusiness), s.TargetPremium, s.AssignedToUserId, DATEADD(day, 45 + s.RowNum, CAST(SYSUTCDATETIME() AS date)), s.LeadId,
+               CASE WHEN s.TargetPremium >= 150000 THEN 75 WHEN s.TargetPremium >= 75000 THEN 60 ELSE 40 END,
+               N'Pipeline', N'Qualification', @LeadWorkflowStageId, 1, CONCAT(N'Synced from lead ', s.LeadNumber, N' for lead-to-policy workflow data continuity.'), SYSUTCDATETIME(), @AdminUserId, 0
+        FROM #LeadWorkflowSource s
+        JOIN CRM.Lead l ON l.LeadId = s.LeadId
+        WHERE l.AccountId IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM CRM.Opportunity o WHERE o.TenantId = @TenantId AND o.IsDeleted = 0 AND (o.LeadId = s.LeadId OR o.OpportunityNumber = s.OpportunityNumber));
+
+        UPDATE o
+        SET o.LeadId = s.LeadId,
+            o.AccountId = l.AccountId,
+            o.ModifiedDateUtc = SYSUTCDATETIME(),
+            o.ModifiedByUserId = @AdminUserId
+        FROM CRM.Opportunity o
+        JOIN #LeadWorkflowSource s ON s.OpportunityNumber = o.OpportunityNumber
+        JOIN CRM.Lead l ON l.LeadId = s.LeadId
+        WHERE o.TenantId = @TenantId
+          AND o.IsDeleted = 0
+          AND l.AccountId IS NOT NULL
+          AND (o.LeadId IS NULL OR o.LeadId <> s.LeadId OR o.AccountId <> l.AccountId);
+
+        IF OBJECT_ID(N'tempdb..#LeadWorkflowChain') IS NOT NULL DROP TABLE #LeadWorkflowChain;
+
+        SELECT s.RowNum,
+               s.LeadId,
+               s.LeadNumber,
+               s.AccountName,
+               s.LineOfBusiness,
+               s.TargetPremium,
+               s.Priority,
+               s.AssignedToUserId,
+               l.AccountId,
+               o.OpportunityId,
+               COALESCE(sub.SubmissionId, NEWID()) AS SubmissionId,
+               COALESCE(q.QuoteId, NEWID()) AS QuoteId,
+               COALESCE(bp.PolicyId, NEWID()) AS PolicyId,
+               CONCAT(N'SUB-', s.LeadNumber) AS SubmissionNumber,
+               CONCAT(N'QT-', s.LeadNumber) AS QuoteNumber,
+               CONCAT(N'POL-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), s.LeadId), N'-', N''), 8)) AS PolicyNumber,
+               CASE
+                   WHEN s.RowNum % 5 = 1 THEN N'New'
+                   WHEN s.RowNum % 5 = 2 THEN N'In Review'
+                   WHEN s.RowNum % 5 = 3 THEN N'Quoted'
+                   WHEN s.RowNum % 5 = 4 THEN N'Bound'
+                   ELSE N'Declined'
+               END AS SubmissionStatus
+        INTO #LeadWorkflowChain
+        FROM #LeadWorkflowSource s
+        JOIN CRM.Lead l ON l.LeadId = s.LeadId
+        JOIN CRM.Opportunity o ON o.TenantId = @TenantId AND o.IsDeleted = 0 AND (o.LeadId = s.LeadId OR o.OpportunityNumber = s.OpportunityNumber)
+        LEFT JOIN Submissions.Submission sub ON sub.TenantId = @TenantId AND sub.SubmissionNumber = CONCAT(N'SUB-', s.LeadNumber)
+        LEFT JOIN Submissions.Quote q ON q.QuoteNumber = CONCAT(N'QT-', s.LeadNumber) AND q.IsDeleted = 0
+        LEFT JOIN Submissions.BoundPolicy bp ON bp.TenantId = @TenantId AND bp.PolicyNumber = CONCAT(N'POL-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), s.LeadId), N'-', N''), 8)) AND bp.IsDeleted = 0
+        WHERE l.AccountId IS NOT NULL;
+
+        INSERT INTO Submissions.Submission
+        (SubmissionId, TenantId, AccountId, OpportunityId, SubmissionNumber, LineOfBusiness, Status, Priority, AssignedToUserId, EffectiveDate, ExpirationDate, TargetPremium, MarketCount, QuoteCount, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        SELECT c.SubmissionId, @TenantId, c.AccountId, c.OpportunityId, c.SubmissionNumber, c.LineOfBusiness, c.SubmissionStatus, c.Priority, c.AssignedToUserId,
+               DATEADD(day, 30 + c.RowNum, CAST(SYSUTCDATETIME() AS date)), DATEADD(day, 395 + c.RowNum, CAST(SYSUTCDATETIME() AS date)), c.TargetPremium,
+               CASE WHEN c.SubmissionStatus IN (N'In Review', N'Quoted', N'Bound', N'Declined') THEN 1 ELSE 0 END,
+               CASE WHEN c.SubmissionStatus IN (N'Quoted', N'Bound') THEN 1 ELSE 0 END,
+               SYSUTCDATETIME(), @AdminUserId, 0
+        FROM #LeadWorkflowChain c
+        WHERE NOT EXISTS (SELECT 1 FROM Submissions.Submission s WHERE s.SubmissionId = c.SubmissionId);
+
+        UPDATE s
+        SET s.AccountId = c.AccountId,
+            s.OpportunityId = c.OpportunityId,
+            s.LineOfBusiness = c.LineOfBusiness,
+            s.Status = c.SubmissionStatus,
+            s.Priority = c.Priority,
+            s.AssignedToUserId = c.AssignedToUserId,
+            s.TargetPremium = c.TargetPremium,
+            s.ModifiedDateUtc = SYSUTCDATETIME(),
+            s.ModifiedByUserId = @AdminUserId,
+            s.IsDeleted = 0
+        FROM Submissions.Submission s
+        JOIN #LeadWorkflowChain c ON c.SubmissionId = s.SubmissionId
+        WHERE s.TenantId = @TenantId;
+
+        IF OBJECT_ID(N'Submissions.SubmissionMarket', N'U') IS NOT NULL AND @DefaultCarrierId IS NOT NULL
+        BEGIN
+            INSERT INTO Submissions.SubmissionMarket (SubmissionMarketId, SubmissionId, CarrierId, Status, AppetiteScore, IsRecommended, AddedDateUtc, RespondedDateUtc, DeclineReason, IsDeleted)
+            SELECT NEWID(), c.SubmissionId, @DefaultCarrierId,
+                   CASE WHEN c.SubmissionStatus = N'Declined' THEN N'Declined' WHEN c.SubmissionStatus IN (N'Quoted', N'Bound') THEN N'Quoted' ELSE N'Submitted' END,
+                   CASE WHEN c.Priority = N'High' THEN 88 ELSE 76 END, 1, DATEADD(day, -7, SYSUTCDATETIME()),
+                   CASE WHEN c.SubmissionStatus IN (N'Quoted', N'Bound', N'Declined') THEN DATEADD(day, -2, SYSUTCDATETIME()) ELSE NULL END,
+                   CASE WHEN c.SubmissionStatus = N'Declined' THEN N'Lead-sourced market declined during qualification.' ELSE NULL END, 0
+            FROM #LeadWorkflowChain c
+            WHERE c.SubmissionStatus IN (N'In Review', N'Quoted', N'Bound', N'Declined')
+              AND NOT EXISTS (SELECT 1 FROM Submissions.SubmissionMarket sm WHERE sm.SubmissionId = c.SubmissionId AND sm.CarrierId = @DefaultCarrierId AND sm.IsDeleted = 0);
+        END
+
+        IF @DefaultCarrierId IS NOT NULL
+        BEGIN
+            INSERT INTO Submissions.Quote (QuoteId, SubmissionId, CarrierId, QuoteNumber, Status, AnnualPremium, Deductible, [Limit], CoverageNotes, QuotedDateUtc, ExpiresDateUtc, CreatedDateUtc, IsDeleted)
+            SELECT c.QuoteId, c.SubmissionId, @DefaultCarrierId, c.QuoteNumber,
+                   CASE WHEN c.SubmissionStatus = N'Declined' THEN N'Declined' WHEN c.SubmissionStatus = N'Bound' THEN N'Accepted' ELSE N'Presented' END,
+                   c.TargetPremium, 5000, 1000000, CONCAT(N'Quote synced from lead ', c.LeadNumber, N' workflow.'), DATEADD(day, -3, SYSUTCDATETIME()), DATEADD(day, 27, SYSUTCDATETIME()), SYSUTCDATETIME(), 0
+            FROM #LeadWorkflowChain c
+            WHERE c.SubmissionStatus IN (N'Quoted', N'Bound', N'Declined')
+              AND NOT EXISTS (SELECT 1 FROM Submissions.Quote q WHERE q.QuoteId = c.QuoteId);
+
+            INSERT INTO Submissions.BoundPolicy (PolicyId, SubmissionId, QuoteId, TenantId, AccountId, CarrierId, PolicyNumber, Status, AnnualPremium, EffectiveDate, ExpirationDate, BoundDateUtc, IsDeleted)
+            SELECT c.PolicyId, c.SubmissionId, c.QuoteId, @TenantId, c.AccountId, @DefaultCarrierId, c.PolicyNumber, N'Bound', c.TargetPremium,
+                   DATEADD(day, -30, CAST(SYSUTCDATETIME() AS date)), DATEADD(day, 335, CAST(SYSUTCDATETIME() AS date)), DATEADD(day, -25, SYSUTCDATETIME()), 0
+            FROM #LeadWorkflowChain c
+            WHERE c.SubmissionStatus = N'Bound'
+              AND EXISTS (SELECT 1 FROM Submissions.Quote q WHERE q.QuoteId = c.QuoteId AND q.IsDeleted = 0)
+              AND NOT EXISTS (SELECT 1 FROM Submissions.BoundPolicy bp WHERE bp.TenantId = @TenantId AND bp.PolicyNumber = c.PolicyNumber AND bp.IsDeleted = 0);
+        END
+
+        IF OBJECT_ID(N'Policy.PolicyEndorsement', N'U') IS NOT NULL
+        BEGIN
+            UPDATE Policy.PolicyEndorsement SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @AdminUserId
+            WHERE TenantId = @TenantId AND PolicyId IS NULL AND EndorsementNumber LIKE N'END-2025-%' AND IsDeleted = 0;
+
+            INSERT INTO Policy.PolicyEndorsement
+            (EndorsementId, TenantId, PolicyId, AccountId, EndorsementNumber, PolicyNumber, AccountName, LineOfBusiness, Carrier, EndorsementType, Description, EffectiveDate, RequestedDateUtc, PremiumDelta, Status, Priority, RequestedByName, AssignedToName, UnderwriterName, Reason, RequiredDocuments, WorkflowStage, DueDate, IsUrgent, IsArchived, CreatedDateUtc, CreatedByUserId, IsDeleted)
+            SELECT NEWID(), @TenantId, bp.PolicyId, c.AccountId, CONCAT(N'END-', RIGHT(c.PolicyNumber, 8)), c.PolicyNumber, c.AccountName, c.LineOfBusiness, COALESCE(car.CarrierName, N'Carrier'), N'Coverage Change',
+                   CONCAT(N'Lead-sourced endorsement workflow for ', c.AccountName, N'.'), DATEADD(day, 10, SYSUTCDATETIME()), SYSUTCDATETIME(), 750.00, N'Pending', c.Priority,
+                   COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin'), COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin'), NULL, N'Client requested policy change after bind.', N'Updated exposure details', N'Intake', DATEADD(day, 5, SYSUTCDATETIME()), CASE WHEN c.Priority = N'High' THEN 1 ELSE 0 END, 0, SYSUTCDATETIME(), @AdminUserId, 0
+            FROM #LeadWorkflowChain c
+            JOIN Submissions.BoundPolicy bp ON bp.PolicyId = c.PolicyId AND bp.IsDeleted = 0
+            LEFT JOIN Core.Carrier car ON car.CarrierId = bp.CarrierId
+            LEFT JOIN IAM.[User] u ON u.UserId = c.AssignedToUserId
+            WHERE NOT EXISTS (SELECT 1 FROM Policy.PolicyEndorsement e WHERE e.TenantId = @TenantId AND e.PolicyId = bp.PolicyId AND e.IsDeleted = 0);
+        END
+
+        IF OBJECT_ID(N'Policy.PolicyCancellation', N'U') IS NOT NULL
+        BEGIN
+            UPDATE Policy.PolicyCancellation SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @AdminUserId
+            WHERE TenantId = @TenantId AND PolicyId IS NULL AND (CancellationNumber LIKE N'CAN-2025-%' OR CancellationNumber LIKE N'REI-2025-%') AND IsDeleted = 0;
+
+            INSERT INTO Policy.PolicyCancellation
+            (CancellationId, TenantId, PolicyId, AccountId, CancellationNumber, PolicyNumber, AccountName, LineOfBusiness, Carrier, CancellationReason, CancellationType, RequestType, RequestDateUtc, EffectiveDate, ReturnPremium, PremiumDue, Status, Priority, RequestedByName, AssignedToName, Notes, WorkflowStage, DueDate, IsUrgent, IsArchived, CreatedDateUtc, CreatedByUserId, IsDeleted)
+            SELECT NEWID(), @TenantId, bp.PolicyId, c.AccountId, CONCAT(N'CAN-', RIGHT(c.PolicyNumber, 8)), c.PolicyNumber, c.AccountName, c.LineOfBusiness, COALESCE(car.CarrierName, N'Carrier'), N'Insured Request', N'Pro-Rata', N'Cancellation', SYSUTCDATETIME(), DATEADD(day, 20, SYSUTCDATETIME()), 0, 0, N'Pending', c.Priority,
+                   COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin'), COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin'), N'Lead-sourced cancellation workflow placeholder removed and replaced by policy-linked request.', N'Cancellation Intake', DATEADD(day, 7, SYSUTCDATETIME()), CASE WHEN c.Priority = N'High' THEN 1 ELSE 0 END, 0, SYSUTCDATETIME(), @AdminUserId, 0
+            FROM #LeadWorkflowChain c
+            JOIN Submissions.BoundPolicy bp ON bp.PolicyId = c.PolicyId AND bp.IsDeleted = 0
+            LEFT JOIN Core.Carrier car ON car.CarrierId = bp.CarrierId
+            LEFT JOIN IAM.[User] u ON u.UserId = c.AssignedToUserId
+            WHERE NOT EXISTS (SELECT 1 FROM Policy.PolicyCancellation pc WHERE pc.TenantId = @TenantId AND pc.PolicyId = bp.PolicyId AND pc.IsDeleted = 0);
+        END
+
+        IF OBJECT_ID(N'Renewal.RetentionCase', N'U') IS NOT NULL
+        BEGIN
+            UPDATE Renewal.RetentionCase SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @AdminUserId
+            WHERE TenantId = @TenantId AND PolicyId IS NULL AND IsDeleted = 0;
+
+            INSERT INTO Renewal.RetentionCase
+            (RetentionCaseId, TenantId, PolicyId, AccountId, AccountName, PolicyNumber, LineOfBusiness, Carrier, Producer, Csr, ExpirationDate, CurrentPremium, ProposedPremium, RetentionProbability, RiskScore, Stage, Priority, OutreachStatus, Sentiment, RiskDrivers, NextBestAction, NextActionDueDate, LastTouchDateUtc, AssignedToUserId, AssignedToName, IsEscalated, IsAtRisk, IsSaved, CreatedDateUtc, CreatedByUserId, IsDeleted)
+            SELECT NEWID(), @TenantId, bp.PolicyId, c.AccountId, c.AccountName, bp.PolicyNumber, c.LineOfBusiness, COALESCE(car.CarrierName, N'Carrier'), COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin'), COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin'), CAST(bp.ExpirationDate AS date), bp.AnnualPremium, bp.AnnualPremium * 1.06, 72, CASE WHEN c.Priority = N'High' THEN 68 ELSE 42 END, N'Retention Desk', c.Priority, N'Not Started', N'Neutral', N'Synced from lead-to-policy chain', N'Prepare renewal outreach from source lead context.', DATEADD(day, 14, CAST(SYSUTCDATETIME() AS date)), NULL, c.AssignedToUserId, COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin'), 0, CASE WHEN c.Priority = N'High' THEN 1 ELSE 0 END, 0, SYSUTCDATETIME(), @AdminUserId, 0
+            FROM #LeadWorkflowChain c
+            JOIN Submissions.BoundPolicy bp ON bp.PolicyId = c.PolicyId AND bp.IsDeleted = 0
+            LEFT JOIN Core.Carrier car ON car.CarrierId = bp.CarrierId
+            LEFT JOIN IAM.[User] u ON u.UserId = c.AssignedToUserId
+            WHERE NOT EXISTS (SELECT 1 FROM Renewal.RetentionCase r WHERE r.TenantId = @TenantId AND r.PolicyId = bp.PolicyId AND r.IsDeleted = 0);
+        END
+
+        IF OBJECT_ID(N'Workflow.WorkflowInstance', N'U') IS NOT NULL AND @LeadWorkflowDefinitionId IS NOT NULL
+        BEGIN
+            INSERT INTO Workflow.WorkflowInstance (WorkflowInstanceId, TenantId, WorkflowDefinitionId, TargetEntityName, TargetEntityId, StatusCodeId, SubmittedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+            SELECT NEWID(), @TenantId, @LeadWorkflowDefinitionId, N'Submission', c.SubmissionId, 1, SYSUTCDATETIME(), SYSUTCDATETIME(), @AdminUserId, 0
+            FROM #LeadWorkflowChain c
+            WHERE NOT EXISTS (SELECT 1 FROM Workflow.WorkflowInstance w WHERE w.TenantId = @TenantId AND w.TargetEntityName = N'Submission' AND w.TargetEntityId = c.SubmissionId AND w.IsDeleted = 0);
+        END
+
+        UPDATE s
+        SET MarketCount = (SELECT COUNT(1) FROM Submissions.SubmissionMarket sm WHERE sm.SubmissionId = s.SubmissionId AND sm.IsDeleted = 0),
+            QuoteCount = (SELECT COUNT(1) FROM Submissions.Quote q WHERE q.SubmissionId = s.SubmissionId AND q.IsDeleted = 0),
+            ModifiedDateUtc = SYSUTCDATETIME(),
+            ModifiedByUserId = @AdminUserId
+        FROM Submissions.Submission s
+        JOIN #LeadWorkflowChain c ON c.SubmissionId = s.SubmissionId
+        WHERE s.TenantId = @TenantId AND s.IsDeleted = 0;
+
+        UPDATE Submissions.Submission
+        SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @AdminUserId
+        WHERE TenantId = @TenantId
+          AND IsDeleted = 0
+          AND (SubmissionNumber LIKE N'SUB-2025-ENT-%' OR SubmissionNumber LIKE N'APP-2025-ENT-%' OR SubmissionNumber LIKE N'DEC-2025-ENT-%' OR SubmissionNumber LIKE N'SUB-POL-%')
+          AND NOT EXISTS (SELECT 1 FROM #LeadWorkflowChain c WHERE c.SubmissionId = Submissions.Submission.SubmissionId);
+
+        DROP TABLE #LeadWorkflowChain;
+    END
+
+    DROP TABLE #LeadWorkflowSource;
+END
 ";
 }

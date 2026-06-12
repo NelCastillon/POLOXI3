@@ -1,54 +1,1144 @@
 @page "/tenant/support"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using System.Text.Json
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.TenantConfig
+@using Ams.Application.Features.TenantSettings
+@inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
+@inject CurrentUserContext CurrentUser
 
-<PageTitle>Support — AMS</PageTitle>
+<PageTitle>Tenant Support — AMS</PageTitle>
 
-<AppPageHeader Title="Support"
-               Subtitle="Manage tenant support contacts, open cases, escalation paths, service levels, and help resources"
-               Icon="bi-question-circle">
-    <Actions>
-        <button class="um-btn um-btn-ghost"><i class="bi bi-book" aria-hidden="true"></i> Knowledge Base</button>
-    </Actions>
-</AppPageHeader>
-
-<section class="tset-hero" aria-label="Tenant support overview">
-    <div>
-        <span class="tset-eyebrow">Tenant administration</span>
-        <h2>Support Readiness</h2>
-        <p>Track support cases, service level commitments, escalation contacts, environment health, and tenant assistance resources.</p>
+@if (_toastVisible)
+{
+    <div class="tsup-toast tsup-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="tsup-toast-close" @onclick="HideToast" aria-label="Close support"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
-</section>
+}
 
-<section class="tset-kpi-grid" aria-label="Support metrics">
-    @Kpi("Open Cases", "2", "Active support cases", "bi-life-preserver", "tset-tone-red")
-    @Kpi("SLA", "99.9%", "Enterprise target", "bi-stopwatch", "tset-tone-green")
-    @Kpi("Contacts", "5", "Tenant admins", "bi-people", "tset-tone-blue")
-    @Kpi("Health", "Good", "Environment status", "bi-heart-pulse", "tset-tone-green")
-</section>
-
-<section class="tset-layout">
-    <TenantSettingsWorkflowManager PageCode="support"
-                                   Label="Tenant support workflow"
-                                   DefaultStage="Assist"
-                                   DefaultCategory="Open Cases" />
-    <TenantConfigManager Kind="TenantSupport"
-                         Title="Support"
-                         Subtitle="Manage tenant support contacts, open cases, escalation paths, service levels, and help resources"
-                         Icon="bi bi-question-circle" />
-    <aside class="tset-admin-panel">
-        <h3>Support escalation</h3>
-        <div class="tset-policy-card">
-            <strong>Support controls</strong>
-            <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Critical case escalation contacts are verified</span>
-            <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Tenant admins can access help resources and release notes</span>
-            <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Open support cases are tracked against SLA target</span>
+@if (_showSupportModal)
+{
+    <div class="tsup-modal-backdrop" role="presentation" @onclick="CloseSupportModal">
+        <div class="tsup-action-modal" role="dialog" aria-modal="true" aria-labelledby="supportFormTitle" @onclick:stopPropagation="true">
+            <div class="tsup-modal-header">
+                <div class="tsup-modal-title">
+                    <span class="tsup-modal-icon"><i class="bi bi-life-preserver" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 id="supportFormTitle">@(_editingSupportId.HasValue ? "Edit support item" : "Create support item")</h2>
+                        <p>Manage support contacts, open cases, escalation paths, service levels, portal links, and tenant help resources.</p>
+                    </div>
+                </div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseSupportModal" disabled="@_saving" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_supportForm" OnValidSubmit="SaveSupportAsync" OnInvalidSubmit="HandleInvalidSubmitAsync">
+                <DataAnnotationsValidator />
+                <div class="tsup-modal-body">
+                    <div class="tsup-form-banner">
+                        <i class="bi bi-database-check" aria-hidden="true"></i>
+                        <div>
+                            <strong>Database-backed support item</strong>
+                            <span>Saving updates the support catalog and syncs the item to tenant configuration settings.</span>
+                        </div>
+                    </div>
+                    <div class="tsup-form-grid">
+                        <div class="tsup-field">
+                            <label>Code <span>*</span></label>
+                            <InputText class="tsup-input" @bind-Value="_supportForm.Code" placeholder="SUPPORT_PRIMARY_CONTACT" />
+                            <ValidationMessage For="() => _supportForm.Code" class="text-danger" />
+                        </div>
+                        <div class="tsup-field">
+                            <label>Name <span>*</span></label>
+                            <InputText class="tsup-input" @bind-Value="_supportForm.Name" placeholder="Primary support contact" />
+                            <ValidationMessage For="() => _supportForm.Name" class="text-danger" />
+                        </div>
+                        <div class="tsup-field">
+                            <label>Category <span>*</span></label>
+                            <InputSelect class="tsup-input" @bind-Value="_supportForm.Category">
+                                @foreach (var category in _categoryOptions)
+                                {
+                                    <option value="@category">@category</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _supportForm.Category" class="text-danger" />
+                        </div>
+                        <div class="tsup-field">
+                            <label>Value type <span>*</span></label>
+                            <InputSelect class="tsup-input" @bind-Value="_supportForm.ValueType">
+                                <option>Text</option>
+                                <option>Number</option>
+                                <option>Boolean</option>
+                                <option>Date</option>
+                                <option>Json</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _supportForm.ValueType" class="text-danger" />
+                        </div>
+                        <div class="tsup-field">
+                            <label>Support value <span>*</span></label>
+                            <InputText class="tsup-input" @bind-Value="_supportForm.CurrentValue" placeholder="Contact, URL, SLA, escalation path, or operational value" />
+                            <ValidationMessage For="() => _supportForm.CurrentValue" class="text-danger" />
+                        </div>
+                        <div class="tsup-field">
+                            <label>Default value</label>
+                            <InputText class="tsup-input" @bind-Value="_supportForm.DefaultValue" placeholder="Default value" />
+                            <ValidationMessage For="() => _supportForm.DefaultValue" class="text-danger" />
+                        </div>
+                        <div class="tsup-field">
+                            <label>Applies to</label>
+                            <InputSelect class="tsup-input" @bind-Value="_supportForm.AppliesTo">
+                                <option>Tenant</option>
+                                <option>Tenant + Branch</option>
+                                <option>Tenant + User</option>
+                                <option>Tenant + Workflow</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _supportForm.AppliesTo" class="text-danger" />
+                        </div>
+                        <div class="tsup-field">
+                            <label>Sort order</label>
+                            <InputNumber class="tsup-input" @bind-Value="_supportForm.SortOrder" />
+                            <ValidationMessage For="() => _supportForm.SortOrder" class="text-danger" />
+                        </div>
+                        <div class="tsup-field tsup-field-wide">
+                            <label>Description</label>
+                            <InputTextArea class="tsup-input" rows="3" @bind-Value="_supportForm.Description" placeholder="Explain how this support item affects support operations, escalation, service levels, or help resources" />
+                            <ValidationMessage For="() => _supportForm.Description" class="text-danger" />
+                        </div>
+                        <div class="tsup-field tsup-field-wide tsup-check-row">
+                            <label><InputCheckbox @bind-Value="_supportForm.SyncToConfiguration" /> Sync to tenant configuration setting</label>
+                            <label><InputCheckbox @bind-Value="_supportForm.IsActive" /> Active</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="tsup-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseSupportModal" disabled="@_saving">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        @(_editingSupportId.HasValue ? "Save changes" : "Create support item")
+                    </button>
+                </div>
+            </EditForm>
         </div>
-    </aside>
-</section>
+    </div>
+}
+
+@if (_showWorkflowModal)
+{
+    <div class="tsup-modal-backdrop" role="presentation" @onclick="CloseWorkflowModal">
+        <div class="tsup-action-modal" role="dialog" aria-modal="true" aria-labelledby="workflowFormTitle" @onclick:stopPropagation="true">
+            <div class="tsup-modal-header">
+                <div class="tsup-modal-title">
+                    <span class="tsup-modal-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 id="workflowFormTitle">@(_editingWorkflowId.HasValue ? "Edit workflow item" : "Create workflow item")</h2>
+                        <p>Coordinate support review, approvals, ownership, due dates, and compliance controls.</p>
+                    </div>
+                </div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseWorkflowModal" disabled="@_saving" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_workflowForm" OnValidSubmit="SaveWorkflowAsync" OnInvalidSubmit="HandleInvalidSubmitAsync">
+                <DataAnnotationsValidator />
+                <div class="tsup-modal-body">
+                    <div class="tsup-form-banner">
+                        <i class="bi bi-shield-check" aria-hidden="true"></i>
+                        <div>
+                            <strong>Workflow governance enabled</strong>
+                            <span>Each workflow item is tied to the support page and can be advanced through review stages.</span>
+                        </div>
+                    </div>
+                    <div class="tsup-form-grid">
+                        <div class="tsup-field tsup-field-wide">
+                            <label>Title <span>*</span></label>
+                            <InputText class="tsup-input" @bind-Value="_workflowForm.Title" placeholder="Review escalation contacts and SLA coverage" />
+                            <ValidationMessage For="() => _workflowForm.Title" class="text-danger" />
+                        </div>
+                        <div class="tsup-field tsup-field-wide">
+                            <label>Description <span>*</span></label>
+                            <InputTextArea class="tsup-input" rows="3" @bind-Value="_workflowForm.Description" />
+                            <ValidationMessage For="() => _workflowForm.Description" class="text-danger" />
+                        </div>
+                        <div class="tsup-field">
+                            <label>Category <span>*</span></label>
+                            <InputSelect class="tsup-input" @bind-Value="_workflowForm.Category">
+                                @foreach (var category in _categoryOptions)
+                                {
+                                    <option value="@category">@category</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _workflowForm.Category" class="text-danger" />
+                        </div>
+                        <div class="tsup-field">
+                            <label>Stage <span>*</span></label>
+                            <InputSelect class="tsup-input" @bind-Value="_workflowForm.Stage">
+                                @foreach (var stage in _stageOptions)
+                                {
+                                    <option value="@stage">@stage</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _workflowForm.Stage" class="text-danger" />
+                        </div>
+                        <div class="tsup-field">
+                            <label>Status <span>*</span></label>
+                            <InputSelect class="tsup-input" @bind-Value="_workflowForm.Status">
+                                @foreach (var status in _workflowStatusOptions)
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _workflowForm.Status" class="text-danger" />
+                        </div>
+                        <div class="tsup-field">
+                            <label>Priority <span>*</span></label>
+                            <InputSelect class="tsup-input" @bind-Value="_workflowForm.Priority">
+                                <option>Low</option>
+                                <option>Medium</option>
+                                <option>High</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _workflowForm.Priority" class="text-danger" />
+                        </div>
+                        <div class="tsup-field">
+                            <label>Risk <span>*</span></label>
+                            <InputSelect class="tsup-input" @bind-Value="_workflowForm.RiskCode">
+                                <option>Low</option>
+                                <option>Medium</option>
+                                <option>High</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _workflowForm.RiskCode" class="text-danger" />
+                        </div>
+                        <div class="tsup-field">
+                            <label>Owner <span>*</span></label>
+                            <InputText class="tsup-input" @bind-Value="_workflowForm.OwnerName" />
+                            <ValidationMessage For="() => _workflowForm.OwnerName" class="text-danger" />
+                        </div>
+                        <div class="tsup-field">
+                            <label>Due date</label>
+                            <InputDate class="tsup-input" @bind-Value="_workflowForm.DueDate" />
+                            <ValidationMessage For="() => _workflowForm.DueDate" class="text-danger" />
+                        </div>
+                        <div class="tsup-field">
+                            <label>Control code <span>*</span></label>
+                            <InputText class="tsup-input" @bind-Value="_workflowForm.ControlCode" />
+                            <ValidationMessage For="() => _workflowForm.ControlCode" class="text-danger" />
+                        </div>
+                        <div class="tsup-field">
+                            <label>Sort order</label>
+                            <InputNumber class="tsup-input" @bind-Value="_workflowForm.SortOrder" />
+                            <ValidationMessage For="() => _workflowForm.SortOrder" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="tsup-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseWorkflowModal" disabled="@_saving">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        @(_editingWorkflowId.HasValue ? "Save workflow" : "Create workflow")
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showConfirm && _confirmAction is not null)
+{
+    <div class="tsup-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="tsup-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="supportConfirmTitle" @onclick:stopPropagation="true">
+            <div class="tsup-confirm-icon tsup-confirm-@_confirmAction.Kind"><i class="bi @_confirmAction.Icon" aria-hidden="true"></i></div>
+            <h2 id="supportConfirmTitle">@_confirmAction.Title</h2>
+            <p>@_confirmAction.Message</p>
+            <div class="tsup-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_saving">Cancel</button>
+                <button type="button" class="um-btn @_confirmAction.ButtonClass" @onclick="ExecuteConfirmedAsync" disabled="@_saving">
+                    @if (_saving)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    @_confirmAction.ButtonText
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="tsup-enterprise-page">
+    <section class="tsup-hero">
+        <div class="tsup-hero-left">
+            <div class="tsup-hero-icon"><i class="bi bi-life-preserver" aria-hidden="true"></i></div>
+            <div>
+                <div class="tsup-title-row">
+                    <h1>Tenant Support</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i>@_supports.Count configured</span>
+                    <span><i class="bi bi-diagram-3" aria-hidden="true"></i>@_workflow.Count workflow</span>
+                    @if (HasFilters)
+                    {
+                        <span><i class="bi bi-funnel" aria-hidden="true"></i>Filtered</span>
+                    }
+                </div>
+                <p>Manage tenant support contacts, open cases, escalation paths, service levels, help resources, and support workflow from one enterprise dashboard.</p>
+            </div>
+        </div>
+        <div class="tsup-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "tsup-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="SyncAllSupportsAsync" disabled="@_saving"><i class="bi bi-cloud-check" aria-hidden="true"></i> Sync Settings</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreateSupport"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Support Item</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="OpenCreateWorkflow"><i class="bi bi-diagram-3" aria-hidden="true"></i> New Workflow</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="tsup-error-banner" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span>@_loadError</span>
+        </div>
+    }
+
+    <section class="tsup-kpi-strip" aria-label="Support item KPIs">
+        @KpiCard("all", "Total", _supports.Count.ToString(), "All support item records", "bi-life-preserver", "")
+        @KpiCard("active", "Active", _supports.Count(p => p.IsActive).ToString(), "Active support items", "bi-check-circle", "tsup-green")
+        @KpiCard("overrides", "Custom Items", _supports.Count(HasOverride).ToString(), "Support values different from defaults", "bi-toggle-on", "tsup-amber")
+        @KpiCard("review", "Needs Review", _workflow.Count(w => w.Status is not "Complete").ToString(), "Open support workflow governance", "bi-clipboard-check", "tsup-purple")
+        @KpiCard("risk", "High Risk", _workflow.Count(w => IsHighRisk(w)).ToString(), "High priority or risk items", "bi-exclamation-octagon", "tsup-red")
+        @KpiCard("synced", "Synced", _supports.Count(p => ReadSupportMeta(p).SyncToConfiguration).ToString(), "Synced support configuration settings", "bi-cloud-check", "tsup-cyan")
+    </section>
+
+    <section class="tsup-workflow-strip" aria-label="Support workflow shortcuts">
+        @WorkflowButton("Open cases", "Review active tenant support cases and blockers", "bi-life-preserver", () => FocusDashboard("supports", "Open Cases", "active"))
+        @WorkflowButton("SLA controls", "Validate response commitments, severity routing, and service levels", "bi-stopwatch", () => FocusDashboard("supports", "Service Levels", "overrides"))
+        @WorkflowButton("Review workflow", "Open incomplete support governance and escalation items", "bi-diagram-3", () => FocusDashboard("workflow", null, "review"))
+        @WorkflowButton("Escalation risks", "Prioritize high-risk support escalations and overdue workflow", "bi-shield-exclamation", () => FocusDashboard("workflow", null, "risk"))
+    </section>
+
+    <section class="tsup-search-panel" aria-label="Support item filters">
+        <div class="tsup-search-wrap">
+            <div class="tsup-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+            <div class="tsup-search-body">
+                <label for="support-search-input">Enterprise search</label>
+                <input id="support-search-input" class="tsup-search-input" @bind="SearchText" @bind:event="oninput" placeholder="Search code, name, category, case, contact, SLA, owner, workflow, or control…" />
+                <span class="tsup-search-hint">Searches support items and workflow items as you type.</span>
+            </div>
+        </div>
+        <select class="tsup-filter-select" @bind="CategoryFilter" aria-label="Category filter">
+            <option value="">All categories</option>
+            @foreach (var category in CategoryOptions)
+            {
+                <option value="@category">@category</option>
+            }
+        </select>
+        <select class="tsup-filter-select" @bind="StatusFilter" aria-label="Status filter">
+            <option value="">All statuses</option>
+            <option value="Active">Active</option>
+            <option value="Inactive">Inactive</option>
+            @foreach (var status in _workflowStatusOptions)
+            {
+                <option value="@status">@status workflow</option>
+            }
+        </select>
+        <select class="tsup-filter-select" @bind="SortMode" aria-label="Sort">
+            <option value="order">Sort: Order</option>
+            <option value="category">Sort: Category</option>
+            <option value="name">Sort: Name</option>
+            <option value="status">Sort: Status</option>
+            <option value="risk">Sort: Risk</option>
+        </select>
+        <div class="tsup-search-result"><strong>@ActiveCount</strong><span>matches</span></div>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+    </section>
+
+    <nav class="tsup-view-tabs" aria-label="Support item views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="tsup-view-btn @(_activeTab == tab.Key ? "tsup-view-btn-active" : null)" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                @tab.Label
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </nav>
+
+    <main class="tsup-content-layout">
+        <section class="tsup-main-card">
+            @if (_loading)
+            {
+                <div class="tsup-loading"><i class="bi bi-arrow-repeat tsup-spin" aria-hidden="true"></i><strong>Loading support items…</strong></div>
+            }
+            else if (_activeTab == "board")
+            {
+                <div class="tsup-board">
+                    @foreach (var category in CategoryOptions)
+                    {
+                        var rows = FilteredSupports.Where(p => string.Equals(Safe(p.Category, "General"), category, StringComparison.OrdinalIgnoreCase)).ToList();
+                        <section class="tsup-board-col">
+                            <header><strong>@category</strong><span>@rows.Count</span></header>
+                            @foreach (var pref in rows)
+                            {
+                                var meta = ReadSupportMeta(pref);
+                                <article class="tsup-board-card" @onclick="() => SelectSupport(pref)">
+                                    <div><strong>@pref.Name</strong>@StatusBadge(pref.IsActive)</div>
+                                    <span>@pref.Code</span>
+                                    <small>@Safe(meta.CurrentValue, pref.ConfigurationJson ?? "Not set")</small>
+                                </article>
+                            }
+                        </section>
+                    }
+                </div>
+            }
+            else if (_activeTab == "workflow")
+            {
+                @if (!FilteredWorkflow.Any())
+                {
+                    <div class="tsup-empty-state"><i class="bi bi-diagram-3" aria-hidden="true"></i><strong>No workflow items found</strong><span>Create a workflow item or adjust filters.</span></div>
+                }
+                else
+                {
+                    <div class="tsup-table-scroll">
+                        <table class="tsup-table">
+                            <thead>
+                                <tr><th>Workflow</th><th>Category</th><th>Stage</th><th>Status</th><th>Risk</th><th>Owner</th><th>Due</th><th></th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var item in FilteredWorkflow)
+                                {
+                                    <tr class="@(_selectedWorkflow?.WorkflowItemId == item.WorkflowItemId ? "tsup-row-selected" : null)" @onclick="() => SelectWorkflow(item)">
+                                        <td><strong>@item.Title</strong><small>@item.Description</small></td>
+                                        <td>@item.Category</td>
+                                        <td>@item.Stage</td>
+                                        <td>@WorkflowStatusBadge(item.Status)</td>
+                                        <td>@RiskBadge(item.RiskCode)</td>
+                                        <td>@Safe(item.OwnerName, "Unassigned")</td>
+                                        <td>@DueText(item.DueDateUtc)</td>
+                                        <td>
+                                            <div class="tsup-row-actions">
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => AdvanceWorkflowAsync(item)">Advance</button>
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEditWorkflow(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDeleteWorkflow(item)"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            }
+            else
+            {
+                @if (!FilteredSupports.Any())
+                {
+                    <div class="tsup-empty-state"><i class="bi bi-life-preserver" aria-hidden="true"></i><strong>No support items found</strong><span>Create a support item or adjust the active filters.</span></div>
+                }
+                else
+                {
+                    <div class="tsup-table-scroll">
+                        <table class="tsup-table">
+                            <thead>
+                                <tr><th>Support Item</th><th>Category</th><th>Support Value</th><th>Default</th><th>Scope</th><th>Status</th><th>Sync</th><th></th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var pref in PagedSupports)
+                                {
+                                    var meta = ReadSupportMeta(pref);
+                                    <tr class="@(_selectedSupport?.TenantConfigItemId == pref.TenantConfigItemId ? "tsup-row-selected" : null)" @onclick="() => SelectSupport(pref)">
+                                        <td><strong>@pref.Name</strong><small>@pref.Code</small></td>
+                                        <td>@Safe(pref.Category, "General")</td>
+                                        <td>@Safe(meta.CurrentValue, "Not set")</td>
+                                        <td>@Safe(meta.DefaultValue, "—")</td>
+                                        <td>@Safe(meta.AppliesTo, "Tenant")</td>
+                                        <td>@StatusBadge(pref.IsActive)</td>
+                                        <td>@(meta.SyncToConfiguration ? @<span class="tsup-pill tsup-pill-cyan">Synced</span> : @<span class="tsup-pill">Catalog</span>)</td>
+                                        <td>
+                                            <div class="tsup-row-actions">
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEditSupport(pref)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDeleteSupport(pref)"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="tsup-pager">
+                        <span>Page @_page of @TotalPages</span>
+                        <div>
+                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)">Previous</button>
+                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button>
+                        </div>
+                    </div>
+                }
+            }
+        </section>
+
+        <aside class="tsup-detail-card">
+            <div class="tsup-detail-head">
+                <div>
+                    <span class="tsup-detail-eyebrow"><i class="bi bi-life-preserver" aria-hidden="true"></i>Selected support</span>
+                    <h2>@(_selectedSupport?.Name ?? _selectedWorkflow?.Title ?? "Select a record")</h2>
+                    <p>@(_selectedSupport?.Code ?? _selectedWorkflow?.ControlCode ?? "Choose a row to inspect support details and actions")</p>
+                </div>
+            </div>
+            <div class="tsup-detail-body">
+                @if (_selectedSupport is not null)
+                {
+                    var meta = ReadSupportMeta(_selectedSupport);
+                    <div class="tsup-detail-summary">
+                        <div><span>Category</span><strong>@Safe(_selectedSupport.Category, "General")</strong></div>
+                        <div><span>Status</span><strong>@(_selectedSupport.IsActive ? "Active" : "Inactive")</strong></div>
+                        <div><span>Current</span><strong>@Safe(meta.CurrentValue, "Not set")</strong></div>
+                        <div><span>Default</span><strong>@Safe(meta.DefaultValue, "—")</strong></div>
+                    </div>
+                    <div class="tsup-contact-card"><strong>@Safe(_selectedSupport.Description, "No support description provided.")</strong><span>Scope: @Safe(meta.AppliesTo, "Tenant") • Type: @Safe(meta.ValueType, "Text")</span></div>
+                    <div class="tsup-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEditSupport(_selectedSupport)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit item</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => ToggleSupportAsync(_selectedSupport)"><i class="bi bi-toggle-on" aria-hidden="true"></i> @(_selectedSupport.IsActive ? "Deactivate" : "Activate")</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => SyncSupportAsync(_selectedSupport)"><i class="bi bi-cloud-check" aria-hidden="true"></i> Sync setting</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="OpenCreateWorkflow"><i class="bi bi-diagram-3" aria-hidden="true"></i> Add workflow</button>
+                    </div>
+                }
+                else if (_selectedWorkflow is not null)
+                {
+                    <div class="tsup-detail-summary">
+                        <div><span>Category</span><strong>@_selectedWorkflow.Category</strong></div>
+                        <div><span>Stage</span><strong>@_selectedWorkflow.Stage</strong></div>
+                        <div><span>Status</span><strong>@_selectedWorkflow.Status</strong></div>
+                        <div><span>Risk</span><strong>@_selectedWorkflow.RiskCode</strong></div>
+                    </div>
+                    <div class="tsup-contact-card"><strong>@_selectedWorkflow.Description</strong><span>Owner: @Safe(_selectedWorkflow.OwnerName, "Unassigned") • Due: @DueText(_selectedWorkflow.DueDateUtc)</span></div>
+                    <div class="tsup-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEditWorkflow(_selectedWorkflow)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit workflow</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => AdvanceWorkflowAsync(_selectedWorkflow)"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Advance workflow</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="OpenCreateSupport"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add support</button>
+                    </div>
+                }
+                else
+                {
+                    <div class="tsup-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a support or workflow item</strong><span>Details and actions appear here.</span></div>
+                }
+            </div>
+        </aside>
+    </main>
+</div>
 
 @code {
-    protected override void OnInitialized() => Breadcrumbs.SetCrumbs(new("Home", "/"), new("Support", "/tenant/support"));
+    const string SupportKind = "TenantSupport";
+    const string WorkflowPageCode = "support";
+    const int PageSize = 18;
 
-    private RenderFragment Kpi(string label, string value, string meta, string icon, string tone) => @<article class="tset-kpi-card"><span class="tset-kpi-icon @tone"><i class="bi @icon" aria-hidden="true"></i></span><div><strong>@value</strong><span>@label</span><small>@meta</small></div></article>;
+    readonly TabDef[] _tabs =
+    [
+        new("supports", "Support Items", "bi-life-preserver"),
+        new("workflow", "Workflow", "bi-diagram-3"),
+        new("board", "Board", "bi-kanban")
+    ];
+
+    readonly string[] _categoryOptions = ["Open Cases", "Support Contacts", "Service Levels", "Escalations", "Help Resources", "Environment Health", "Release Notes", "Tenant Training"];
+    readonly string[] _stageOptions = ["Intake", "Triage", "Escalate", "Resolve", "Validate", "Complete"];
+    readonly string[] _workflowStatusOptions = ["Open", "In Review", "Complete", "Blocked"];
+
+    Guid _tenantId;
+    Guid? _userId;
+    bool _loading;
+    bool _saving;
+    bool _showSupportModal;
+    bool _showWorkflowModal;
+    bool _showConfirm;
+    bool _toastVisible;
+    string _toastKind = "success";
+    string _toastMessage = string.Empty;
+    string _activeTab = "supports";
+    string _activeKpi = "all";
+    string _sortMode = "order";
+    string? _searchText;
+    string? _categoryFilter;
+    string? _statusFilter;
+    string? _loadError;
+    int _page = 1;
+    ConfirmAction? _confirmAction;
+    TenantConfigItemDto? _selectedSupport;
+    TenantSettingsWorkflowItemDto? _selectedWorkflow;
+    Guid? _editingSupportId;
+    Guid? _editingWorkflowId;
+    readonly SupportForm _supportForm = new();
+    readonly WorkflowForm _workflowForm = new();
+    List<TenantConfigItemDto> _supports = [];
+    List<TenantSettingsWorkflowItemDto> _workflow = [];
+
+    string? SearchText { get => _searchText; set { _searchText = value; _page = 1; } }
+    string? CategoryFilter { get => _categoryFilter; set { _categoryFilter = value; _page = 1; } }
+    string? StatusFilter { get => _statusFilter; set { _statusFilter = value; _page = 1; } }
+    string SortMode { get => _sortMode; set { _sortMode = value; _page = 1; } }
+    bool HasFilters => _activeKpi != "all" || !string.IsNullOrWhiteSpace(_searchText) || !string.IsNullOrWhiteSpace(_categoryFilter) || !string.IsNullOrWhiteSpace(_statusFilter);
+    int ActiveCount => _activeTab == "workflow" ? FilteredWorkflow.Count() : FilteredSupports.Count();
+    int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredSupports.Count() / (double)PageSize));
+    string ToastIconClass => _toastKind == "danger" ? "bi-exclamation-triangle" : "bi-check-circle";
+    IEnumerable<string> CategoryOptions => _categoryOptions.Concat(_supports.Select(p => Safe(p.Category, "General"))).Concat(_workflow.Select(w => w.Category)).Where(c => !string.IsNullOrWhiteSpace(c)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(c => c);
+
+    IEnumerable<TenantConfigItemDto> FilteredSupports => SortSupports(ApplySupportFilters(_supports));
+    IEnumerable<TenantConfigItemDto> PagedSupports => FilteredSupports.Skip((_page - 1) * PageSize).Take(PageSize);
+    IEnumerable<TenantSettingsWorkflowItemDto> FilteredWorkflow => SortWorkflow(ApplyWorkflowFilters(_workflow));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = await CurrentUser.RequireAsync();
+        _tenantId = user.TenantId;
+        _userId = user.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Tenant Support", "/tenant/support"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var supportResult = await Api.SearchTenantConfigItemsAsync(_tenantId, SupportKind, pageSize: 500);
+            _supports = supportResult?.Items.ToList() ?? [];
+            _workflow = (await Api.GetTenantSettingsWorkflowAsync(_tenantId, WorkflowPageCode))?.ToList() ?? [];
+            _selectedSupport = _selectedSupport is null ? _supports.FirstOrDefault() : _supports.FirstOrDefault(p => p.TenantConfigItemId == _selectedSupport.TenantConfigItemId) ?? _supports.FirstOrDefault();
+            _selectedWorkflow = _selectedWorkflow is null ? _workflow.FirstOrDefault() : _workflow.FirstOrDefault(w => w.WorkflowItemId == _selectedWorkflow.WorkflowItemId) ?? _workflow.FirstOrDefault();
+            _page = Math.Min(_page, TotalPages);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load support items: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    IEnumerable<TenantConfigItemDto> ApplySupportFilters(IEnumerable<TenantConfigItemDto> rows)
+    {
+        rows = _activeKpi switch
+        {
+            "active" => rows.Where(p => p.IsActive),
+            "overrides" => rows.Where(HasOverride),
+            "synced" => rows.Where(p => ReadSupportMeta(p).SyncToConfiguration),
+            _ => rows
+        };
+
+        if (!string.IsNullOrWhiteSpace(_categoryFilter))
+            rows = rows.Where(p => string.Equals(Safe(p.Category, "General"), _categoryFilter, StringComparison.OrdinalIgnoreCase));
+
+        if (!string.IsNullOrWhiteSpace(_statusFilter))
+            rows = _statusFilter switch
+            {
+                "Active" => rows.Where(p => p.IsActive),
+                "Inactive" => rows.Where(p => !p.IsActive),
+                _ => rows
+            };
+
+        if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            var term = _searchText.Trim();
+            rows = rows.Where(p => Contains(p.Code, term) || Contains(p.Name, term) || Contains(p.Category, term) || Contains(p.Description, term) || Contains(p.ConfigurationJson, term));
+        }
+
+        return rows;
+    }
+
+    IEnumerable<TenantSettingsWorkflowItemDto> ApplyWorkflowFilters(IEnumerable<TenantSettingsWorkflowItemDto> rows)
+    {
+        rows = _activeKpi switch
+        {
+            "review" => rows.Where(w => w.Status is not "Complete"),
+            "risk" => rows.Where(IsHighRisk),
+            _ => rows
+        };
+
+        if (!string.IsNullOrWhiteSpace(_categoryFilter))
+            rows = rows.Where(w => string.Equals(w.Category, _categoryFilter, StringComparison.OrdinalIgnoreCase));
+
+        if (!string.IsNullOrWhiteSpace(_statusFilter) && _statusFilter is not "Active" and not "Inactive")
+            rows = rows.Where(w => string.Equals(w.Status, _statusFilter, StringComparison.OrdinalIgnoreCase));
+
+        if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            var term = _searchText.Trim();
+            rows = rows.Where(w => Contains(w.Title, term) || Contains(w.Description, term) || Contains(w.Category, term) || Contains(w.Stage, term) || Contains(w.Status, term) || Contains(w.OwnerName, term) || Contains(w.ControlCode, term));
+        }
+
+        return rows;
+    }
+
+    IEnumerable<TenantConfigItemDto> SortSupports(IEnumerable<TenantConfigItemDto> rows) => _sortMode switch
+    {
+        "category" => rows.OrderBy(r => r.Category).ThenBy(r => r.SortOrder),
+        "name" => rows.OrderBy(r => r.Name),
+        "status" => rows.OrderByDescending(r => r.IsActive).ThenBy(r => r.SortOrder),
+        _ => rows.OrderBy(r => r.SortOrder).ThenBy(r => r.Name)
+    };
+
+    IEnumerable<TenantSettingsWorkflowItemDto> SortWorkflow(IEnumerable<TenantSettingsWorkflowItemDto> rows) => _sortMode switch
+    {
+        "category" => rows.OrderBy(r => r.Category).ThenBy(r => r.SortOrder),
+        "name" => rows.OrderBy(r => r.Title),
+        "status" => rows.OrderBy(r => r.Status).ThenBy(r => r.DueDateUtc),
+        "risk" => rows.OrderByDescending(r => RiskScore(r)).ThenBy(r => r.DueDateUtc),
+        _ => rows.OrderBy(r => r.SortOrder).ThenBy(r => r.DueDateUtc).ThenBy(r => r.Title)
+    };
+
+    void SetActiveTab(string tab)
+    {
+        _activeTab = tab;
+        _page = 1;
+    }
+
+    void SetKpi(string key)
+    {
+        _activeKpi = _activeKpi == key ? "all" : key;
+        if (key is "review" or "risk") _activeTab = "workflow";
+        if (key is "active" or "overrides" or "synced") _activeTab = "supports";
+        _page = 1;
+    }
+
+    void FocusDashboard(string tab, string? category, string kpi)
+    {
+        _activeTab = tab;
+        _categoryFilter = category;
+        _activeKpi = kpi;
+        _page = 1;
+    }
+
+    void ClearFilters()
+    {
+        _activeKpi = "all";
+        _searchText = null;
+        _categoryFilter = null;
+        _statusFilter = null;
+        _page = 1;
+    }
+
+    int TabCount(string key) => key switch
+    {
+        "workflow" => _workflow.Count,
+        "board" => CategoryOptions.Count(),
+        _ => _supports.Count
+    };
+
+    void PreviousPage() { if (_page > 1) _page--; }
+    void NextPage() { if (_page < TotalPages) _page++; }
+    void SelectSupport(TenantConfigItemDto support) { _selectedSupport = support; _selectedWorkflow = null; }
+    void SelectWorkflow(TenantSettingsWorkflowItemDto workflow) { _selectedWorkflow = workflow; _selectedSupport = null; }
+
+    void OpenCreateSupport()
+    {
+        _editingSupportId = null;
+        _supportForm.Reset(new SupportMeta(CurrentValue: string.Empty, DefaultValue: string.Empty, ValueType: "Text", AppliesTo: "Tenant", SyncToConfiguration: true), null, (_supports.Count + 1) * 10);
+        _showSupportModal = true;
+    }
+
+    void OpenEditSupport(TenantConfigItemDto support)
+    {
+        _editingSupportId = support.TenantConfigItemId;
+        _supportForm.Reset(ReadSupportMeta(support), support, support.SortOrder);
+        _showSupportModal = true;
+    }
+
+    void CloseSupportModal()
+    {
+        if (_saving) return;
+        _showSupportModal = false;
+    }
+
+    async Task SaveSupportAsync()
+    {
+        _saving = true;
+        try
+        {
+            var configurationJson = SerializeMeta(_supportForm);
+            if (_editingSupportId.HasValue)
+            {
+                await Api.UpdateTenantConfigItemAsync(_editingSupportId.Value, new UpdateTenantConfigItemRequest(_supportForm.Code.Trim(), _supportForm.Name.Trim(), _supportForm.Category, _supportForm.Description, configurationJson, _supportForm.IsActive, _supportForm.SortOrder));
+            }
+            else
+            {
+                await Api.CreateTenantConfigItemAsync(new CreateTenantConfigItemRequest(_tenantId, SupportKind, _supportForm.Code.Trim(), _supportForm.Name.Trim(), _supportForm.Category, _supportForm.Description, configurationJson, _supportForm.SortOrder));
+            }
+
+            if (_supportForm.SyncToConfiguration)
+                await Api.SaveTenantConfigurationAsync(_tenantId, [new UpsertTenantSettingModel { SettingKey = SettingKey(_supportForm.Code), SettingValue = _supportForm.CurrentValue }]);
+
+            _showSupportModal = false;
+            ShowToast("Support saved and synced successfully.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    void OpenCreateWorkflow()
+    {
+        _editingWorkflowId = null;
+        _workflowForm.Reset(null, _selectedSupport?.Category ?? "Open Cases", (_workflow.Count + 1) * 10);
+        _showWorkflowModal = true;
+    }
+
+    void OpenEditWorkflow(TenantSettingsWorkflowItemDto item)
+    {
+        _editingWorkflowId = item.WorkflowItemId;
+        _workflowForm.Reset(item, item.Category, item.SortOrder);
+        _showWorkflowModal = true;
+    }
+
+    void CloseWorkflowModal()
+    {
+        if (_saving) return;
+        _showWorkflowModal = false;
+    }
+
+    async Task SaveWorkflowAsync()
+    {
+        _saving = true;
+        try
+        {
+            var dueUtc = _workflowForm.DueDate.HasValue ? DateTime.SpecifyKind(_workflowForm.DueDate.Value.Date, DateTimeKind.Local).ToUniversalTime() : (DateTime?)null;
+            if (_editingWorkflowId.HasValue)
+            {
+                await Api.UpdateTenantSettingsWorkflowAsync(_editingWorkflowId.Value, new UpdateTenantSettingsWorkflowItemRequest
+                {
+                    Title = _workflowForm.Title,
+                    Description = _workflowForm.Description,
+                    Category = _workflowForm.Category,
+                    Stage = _workflowForm.Stage,
+                    Status = _workflowForm.Status,
+                    Priority = _workflowForm.Priority,
+                    OwnerName = _workflowForm.OwnerName,
+                    DueDateUtc = dueUtc,
+                    RiskCode = _workflowForm.RiskCode,
+                    ControlCode = _workflowForm.ControlCode,
+                    SortOrder = _workflowForm.SortOrder,
+                    ModifiedByUserId = _userId
+                });
+            }
+            else
+            {
+                await Api.CreateTenantSettingsWorkflowAsync(new CreateTenantSettingsWorkflowItemRequest
+                {
+                    TenantId = _tenantId,
+                    PageCode = WorkflowPageCode,
+                    Title = _workflowForm.Title,
+                    Description = _workflowForm.Description,
+                    Category = _workflowForm.Category,
+                    Stage = _workflowForm.Stage,
+                    Status = _workflowForm.Status,
+                    Priority = _workflowForm.Priority,
+                    OwnerName = _workflowForm.OwnerName,
+                    DueDateUtc = dueUtc,
+                    RiskCode = _workflowForm.RiskCode,
+                    ControlCode = _workflowForm.ControlCode,
+                    SortOrder = _workflowForm.SortOrder,
+                    CreatedByUserId = _userId
+                });
+            }
+
+            _showWorkflowModal = false;
+            ShowToast("Workflow item saved successfully.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Workflow save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    Task HandleInvalidSubmitAsync()
+    {
+        ShowToast("Please correct the highlighted fields before saving.", "danger");
+        return Task.CompletedTask;
+    }
+
+    void ConfirmDeleteSupport(TenantConfigItemDto support)
+    {
+        _confirmAction = new("danger", "Delete support item?", $"Delete {support.Name}? This removes the catalog item after confirmation.", "Delete", "um-btn-danger", "bi-trash", async () => await DeleteSupportAsync(support));
+        _showConfirm = true;
+    }
+
+    void ConfirmDeleteWorkflow(TenantSettingsWorkflowItemDto item)
+    {
+        _confirmAction = new("danger", "Delete workflow item?", $"Delete {item.Title}?", "Delete", "um-btn-danger", "bi-trash", async () => await DeleteWorkflowAsync(item));
+        _showConfirm = true;
+    }
+
+    void CancelConfirm()
+    {
+        if (_saving) return;
+        _showConfirm = false;
+        _confirmAction = null;
+    }
+
+    async Task ExecuteConfirmedAsync()
+    {
+        if (_confirmAction is null) return;
+        await _confirmAction.ExecuteAsync();
+        _showConfirm = false;
+        _confirmAction = null;
+    }
+
+    async Task DeleteSupportAsync(TenantConfigItemDto support)
+    {
+        _saving = true;
+        try
+        {
+            await Api.DeleteTenantConfigItemAsync(support.TenantConfigItemId);
+            ShowToast("Support deleted successfully.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    async Task DeleteWorkflowAsync(TenantSettingsWorkflowItemDto item)
+    {
+        _saving = true;
+        try
+        {
+            await Api.DeleteTenantSettingsWorkflowAsync(item.WorkflowItemId, _userId);
+            ShowToast("Workflow item deleted successfully.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Workflow delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    async Task ToggleSupportAsync(TenantConfigItemDto support)
+    {
+        var meta = ReadSupportMeta(support);
+        _saving = true;
+        try
+        {
+            await Api.UpdateTenantConfigItemAsync(support.TenantConfigItemId, new UpdateTenantConfigItemRequest(support.Code, support.Name, support.Category, support.Description, support.ConfigurationJson, !support.IsActive, support.SortOrder));
+            ShowToast($"Support {(support.IsActive ? "deactivated" : "activated")} successfully.", "success");
+            if (meta.SyncToConfiguration)
+                await SyncSupportAsync(support, showToast: false);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Status update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    async Task AdvanceWorkflowAsync(TenantSettingsWorkflowItemDto item)
+    {
+        var next = NextStage(item.Stage);
+        var status = next == "Complete" ? "Complete" : "In Review";
+        _saving = true;
+        try
+        {
+            await Api.AdvanceTenantSettingsWorkflowAsync(item.WorkflowItemId, new AdvanceTenantSettingsWorkflowRequest { Stage = next, Status = status, ModifiedByUserId = _userId });
+            ShowToast($"Workflow advanced to {next}.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Workflow advance failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    async Task SyncSupportAsync(TenantConfigItemDto support, bool showToast = true)
+    {
+        var meta = ReadSupportMeta(support);
+        try
+        {
+            await Api.SaveTenantConfigurationAsync(_tenantId, [new UpsertTenantSettingModel { SettingKey = SettingKey(support.Code), SettingValue = meta.CurrentValue }]);
+            if (showToast) ShowToast("Support synced to tenant configuration.", "success");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Sync failed: {ex.Message}", "danger");
+        }
+    }
+
+    async Task SyncAllSupportsAsync()
+    {
+        var settings = _supports.Where(p => p.IsActive && ReadSupportMeta(p).SyncToConfiguration).Select(p => new UpsertTenantSettingModel { SettingKey = SettingKey(p.Code), SettingValue = ReadSupportMeta(p).CurrentValue }).ToList();
+        if (settings.Count == 0)
+        {
+            ShowToast("No active synced supports found.", "danger");
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            await Api.SaveTenantConfigurationAsync(_tenantId, settings);
+            ShowToast($"Synced {settings.Count} support item settings.", "success");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Sync failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string tone)
+    {
+        var active = _activeKpi == key;
+        return @<button type="button" class="tsup-kpi-card @tone @(active ? "tsup-kpi-card-active" : null)" @onclick="() => SetKpi(key)" title="@(active ? "Clear KPI filter" : subtitle)">
+            <span class="tsup-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span>
+            <div><strong class="tsup-kpi-val">@value</strong><span class="tsup-kpi-lbl">@label</span><small>@subtitle</small></div>
+        </button>;
+    }
+
+    RenderFragment WorkflowButton(string title, string description, string icon, System.Action callback) => @<button type="button" class="tsup-workflow-card" @onclick="() => callback()">
+        <i class="bi @icon" aria-hidden="true"></i>
+        <span><strong>@title</strong><small>@description</small></span>
+    </button>;
+
+    RenderFragment StatusBadge(bool active) => @<span class="tsup-pill @(active ? "tsup-pill-green" : "tsup-pill-red")">@(active ? "Active" : "Inactive")</span>;
+    RenderFragment WorkflowStatusBadge(string status) => @<span class="tsup-pill tsup-pill-@Slug(status)">@status</span>;
+    RenderFragment RiskBadge(string risk) => @<span class="tsup-pill @(string.Equals(risk, "High", StringComparison.OrdinalIgnoreCase) ? "tsup-pill-red" : string.Equals(risk, "Medium", StringComparison.OrdinalIgnoreCase) ? "tsup-pill-amber" : "tsup-pill-green")">@risk</span>;
+
+    void ShowToast(string message, string kind)
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(4500);
+            await InvokeAsync(HideToast);
+        });
+    }
+
+    void HideToast() => _toastVisible = false;
+
+    static SupportMeta ReadSupportMeta(TenantConfigItemDto item)
+    {
+        if (!string.IsNullOrWhiteSpace(item.ConfigurationJson))
+        {
+            try
+            {
+                var meta = JsonSerializer.Deserialize<SupportMeta>(item.ConfigurationJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                if (meta is not null) return meta;
+            }
+            catch
+            {
+            }
+        }
+
+        return new SupportMeta(item.ConfigurationJson ?? string.Empty, string.Empty, "Text", "Tenant", false);
+    }
+
+    static string SerializeMeta(SupportForm form) => JsonSerializer.Serialize(new SupportMeta(form.CurrentValue, form.DefaultValue, form.ValueType, form.AppliesTo, form.SyncToConfiguration));
+    static string SettingKey(string code) => $"Tenant.Support.{code.Trim().Replace(' ', '_').ToUpperInvariant()}";
+    static bool HasOverride(TenantConfigItemDto item) { var meta = ReadSupportMeta(item); return !string.Equals(meta.CurrentValue, meta.DefaultValue, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(meta.DefaultValue); }
+    static bool IsHighRisk(TenantSettingsWorkflowItemDto item) => string.Equals(item.RiskCode, "High", StringComparison.OrdinalIgnoreCase) || string.Equals(item.Priority, "High", StringComparison.OrdinalIgnoreCase) || (item.DueDateUtc.HasValue && item.DueDateUtc.Value.Date < DateTime.UtcNow.Date && item.Status is not "Complete");
+    static int RiskScore(TenantSettingsWorkflowItemDto item) => IsHighRisk(item) ? 100 : string.Equals(item.RiskCode, "Medium", StringComparison.OrdinalIgnoreCase) ? 50 : 10;
+    static string NextStage(string stage) => stage switch { "Intake" => "Triage", "Triage" => "Escalate", "Escalate" => "Resolve", "Resolve" => "Validate", "Validate" => "Complete", _ => "Triage" };
+    static string DueText(DateTime? dueDateUtc) => dueDateUtc?.ToLocalTime().ToString("MMM d, yyyy") ?? "—";
+    static bool Contains(string? source, string term) => !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
+    static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    static string Slug(string value) => value.ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
+
+    sealed record SupportMeta(string? CurrentValue, string? DefaultValue, string? ValueType, string? AppliesTo, bool SyncToConfiguration);
+    sealed record TabDef(string Key, string Label, string Icon);
+    sealed record ConfirmAction(string Kind, string Title, string Message, string ButtonText, string ButtonClass, string Icon, Func<Task> ExecuteAsync);
+
+    sealed class SupportForm
+    {
+        [Required, StringLength(80)] public string Code { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string Name { get; set; } = string.Empty;
+        [Required, StringLength(120)] public string Category { get; set; } = "Open Cases";
+        [StringLength(500)] public string? Description { get; set; }
+        [Required, StringLength(500)] public string CurrentValue { get; set; } = string.Empty;
+        [StringLength(500)] public string? DefaultValue { get; set; }
+        [Required, StringLength(40)] public string ValueType { get; set; } = "Text";
+        [Required, StringLength(80)] public string AppliesTo { get; set; } = "Tenant";
+        [Range(0, 9999)] public int SortOrder { get; set; }
+        public bool SyncToConfiguration { get; set; } = true;
+        public bool IsActive { get; set; } = true;
+
+        public void Reset(SupportMeta meta, TenantConfigItemDto? item, int sortOrder)
+        {
+            Code = item?.Code ?? string.Empty;
+            Name = item?.Name ?? string.Empty;
+            Category = item?.Category ?? "Open Cases";
+            Description = item?.Description;
+            CurrentValue = meta.CurrentValue ?? string.Empty;
+            DefaultValue = meta.DefaultValue;
+            ValueType = meta.ValueType ?? "Text";
+            AppliesTo = meta.AppliesTo ?? "Tenant";
+            SyncToConfiguration = meta.SyncToConfiguration || item is null;
+            SortOrder = sortOrder;
+            IsActive = item?.IsActive ?? true;
+        }
+    }
+
+    sealed class WorkflowForm
+    {
+        [Required, StringLength(200)] public string Title { get; set; } = string.Empty;
+        [Required, StringLength(1000)] public string Description { get; set; } = string.Empty;
+        [Required, StringLength(100)] public string Category { get; set; } = "Open Cases";
+        [Required, StringLength(80)] public string Stage { get; set; } = "Intake";
+        [Required, StringLength(80)] public string Status { get; set; } = "Open";
+        [Required, StringLength(40)] public string Priority { get; set; } = "Medium";
+        [Required, StringLength(200)] public string OwnerName { get; set; } = "Operations Admin";
+        public DateTime? DueDate { get; set; }
+        [Required, StringLength(40)] public string RiskCode { get; set; } = "Medium";
+        [Required, StringLength(120)] public string ControlCode { get; set; } = "SUPPORT-CONTROL";
+        [Range(0, 9999)] public int SortOrder { get; set; }
+
+        public void Reset(TenantSettingsWorkflowItemDto? item, string category, int sortOrder)
+        {
+            Title = item?.Title ?? string.Empty;
+            Description = item?.Description ?? string.Empty;
+            Category = item?.Category ?? category;
+            Stage = item?.Stage ?? "Intake";
+            Status = item?.Status ?? "Open";
+            Priority = item?.Priority ?? "Medium";
+            OwnerName = item?.OwnerName ?? "Operations Admin";
+            DueDate = item?.DueDateUtc?.ToLocalTime().Date ?? DateTime.Today.AddDays(14);
+            RiskCode = item?.RiskCode ?? "Medium";
+            ControlCode = item?.ControlCode ?? "SUPPORT-CONTROL";
+            SortOrder = item?.SortOrder ?? sortOrder;
+        }
+    }
 }
+
+
+

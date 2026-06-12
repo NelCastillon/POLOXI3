@@ -513,6 +513,100 @@ ORDER BY ar.AppetiteScore DESC;";
 
     // ── Bind & Issue ──────────────────────────────────────────────────
 
+    public async Task<PagedResult<PolicyRegisterDto>> SearchPoliciesAsync(Guid tenantId, string? searchTerm, string? status, string? lineOfBusiness, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+;WITH Cte AS
+(
+    SELECT p.PolicyId,
+           p.SubmissionId,
+           p.QuoteId,
+           p.TenantId,
+           p.AccountId,
+           COALESCE(a.AccountName, s.SubmissionNumber, p.PolicyNumber) AS AccountName,
+           N'Commercial' AS AccountType,
+           p.CarrierId,
+           COALESCE(c.CarrierName, N'Bound Carrier') AS CarrierName,
+           p.PolicyNumber,
+           CASE WHEN p.Status = N'Bound' THEN N'Active' ELSE p.Status END AS Status,
+           COALESCE(NULLIF(s.LineOfBusiness, N''), N'General Liability') AS LineOfBusiness,
+           COALESCE(NULLIF(s.Priority, N''), N'Normal') AS Priority,
+           p.AnnualPremium,
+           p.AnnualPremium AS WrittenPremium,
+           p.EffectiveDate,
+           p.ExpirationDate,
+           p.BoundDateUtc,
+           s.AssignedToUserId,
+           COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin') AS AssignedToUserName,
+           COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin') AS ProducerName,
+           COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin') AS CsrName,
+           N'HQ' AS Branch,
+           (SELECT COUNT(1) FROM Compliance.PolicyDocument d WHERE d.TenantId = p.TenantId AND d.IsDeleted = 0 AND d.PolicyCode = p.PolicyNumber) AS DocumentCount,
+           (SELECT COUNT(1) FROM Submissions.SubmissionActionLog al WHERE al.TenantId = p.TenantId AND al.SubmissionId = p.SubmissionId AND al.IsDeleted = 0) AS ActivityCount,
+           (SELECT COUNT(1) FROM Policy.PolicyEndorsement e WHERE e.TenantId = p.TenantId AND e.PolicyNumber = p.PolicyNumber AND e.IsDeleted = 0) AS EndorsementCount,
+           CASE
+               WHEN DATEDIFF(day, SYSUTCDATETIME(), p.ExpirationDate) BETWEEN 0 AND 90 THEN N'Pre-Renewal'
+               WHEN p.ExpirationDate < SYSUTCDATETIME() THEN N'Expired'
+               ELSE N'Not Started'
+           END AS RenewalStage,
+           CONCAT(N'Policy bound ', CONVERT(nvarchar(10), p.BoundDateUtc, 101), N' from submission ', COALESCE(s.SubmissionNumber, N'')) AS LastAction
+    FROM   Submissions.BoundPolicy p
+    LEFT JOIN Submissions.Submission s ON s.SubmissionId = p.SubmissionId AND s.IsDeleted = 0
+    LEFT JOIN Client.Account a ON a.AccountId = p.AccountId
+    LEFT JOIN Core.Carrier c ON c.CarrierId = p.CarrierId
+    LEFT JOIN IAM.[User] u ON u.UserId = s.AssignedToUserId
+    WHERE  p.TenantId = @TenantId
+      AND  p.IsDeleted = 0
+      AND  (@SearchTerm IS NULL OR @SearchTerm = N'' OR p.PolicyNumber LIKE N'%' + @SearchTerm + N'%' OR a.AccountName LIKE N'%' + @SearchTerm + N'%' OR c.CarrierName LIKE N'%' + @SearchTerm + N'%' OR s.LineOfBusiness LIKE N'%' + @SearchTerm + N'%')
+),
+Filtered AS
+(
+    SELECT *
+    FROM Cte
+    WHERE (@Status IS NULL OR @Status = N'' OR Status = @Status)
+      AND (@LineOfBusiness IS NULL OR @LineOfBusiness = N'' OR LineOfBusiness = @LineOfBusiness)
+)
+SELECT * FROM Filtered
+ORDER BY BoundDateUtc DESC, ExpirationDate ASC
+OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+
+;WITH Cte AS
+(
+    SELECT CASE WHEN p.Status = N'Bound' THEN N'Active' ELSE p.Status END AS Status,
+           COALESCE(NULLIF(s.LineOfBusiness, N''), N'General Liability') AS LineOfBusiness
+    FROM   Submissions.BoundPolicy p
+    LEFT JOIN Submissions.Submission s ON s.SubmissionId = p.SubmissionId AND s.IsDeleted = 0
+    LEFT JOIN Client.Account a ON a.AccountId = p.AccountId
+    LEFT JOIN Core.Carrier c ON c.CarrierId = p.CarrierId
+    WHERE  p.TenantId = @TenantId
+      AND  p.IsDeleted = 0
+      AND  (@SearchTerm IS NULL OR @SearchTerm = N'' OR p.PolicyNumber LIKE N'%' + @SearchTerm + N'%' OR a.AccountName LIKE N'%' + @SearchTerm + N'%' OR c.CarrierName LIKE N'%' + @SearchTerm + N'%' OR s.LineOfBusiness LIKE N'%' + @SearchTerm + N'%')
+),
+Filtered AS
+(
+    SELECT *
+    FROM Cte
+    WHERE (@Status IS NULL OR @Status = N'' OR Status = @Status)
+      AND (@LineOfBusiness IS NULL OR @LineOfBusiness = N'' OR LineOfBusiness = @LineOfBusiness)
+)
+SELECT COUNT(1) FROM Filtered;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new
+        {
+            TenantId       = tenantId,
+            SearchTerm     = searchTerm,
+            Status         = status,
+            LineOfBusiness = lineOfBusiness,
+            Offset         = (Math.Max(pageNumber, 1) - 1) * pageSize,
+            PageSize       = pageSize,
+        }, cancellationToken: cancellationToken));
+
+        var items = (await multi.ReadAsync<PolicyRegisterDto>()).AsList();
+        var total = await multi.ReadSingleAsync<int>();
+        return new PagedResult<PolicyRegisterDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
+    }
+
     public async Task<PolicyBindDto?> GetPolicyBySubmissionAsync(Guid submissionId, CancellationToken cancellationToken = default)
     {
         const string sql = @"

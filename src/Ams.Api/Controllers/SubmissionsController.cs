@@ -103,6 +103,17 @@ public sealed class SubmissionsController : ControllerBase
 
     // ── Bound Policy ──────────────────────────────────────────────────
 
+    [HttpGet("policies")]
+    public async Task<IActionResult> SearchPolicies(
+        [FromQuery] Guid tenantId,
+        [FromQuery] string? searchTerm,
+        [FromQuery] string? status,
+        [FromQuery] string? lineOfBusiness,
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 25,
+        CancellationToken cancellationToken = default)
+        => Ok(await _service.SearchPoliciesAsync(tenantId, searchTerm, status, lineOfBusiness, pageNumber, pageSize, cancellationToken));
+
     [HttpGet("{id:guid}/quotes")]
     public async Task<IActionResult> GetQuotes(Guid id, CancellationToken cancellationToken)
         => Ok(await _service.GetQuoteComparisonAsync(id, cancellationToken));

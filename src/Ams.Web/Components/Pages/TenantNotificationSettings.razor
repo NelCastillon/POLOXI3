@@ -1,54 +1,1162 @@
 @page "/tenant/settings/notifications"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using System.Text.Json
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.TenantConfig
+@using Ams.Application.Features.TenantSettings
+@inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
+@inject CurrentUserContext CurrentUser
 
 <PageTitle>Notification Settings — AMS</PageTitle>
 
-<AppPageHeader Title="Notification Settings"
-               Subtitle="Configure tenant notification channels, routing, digests, quiet hours, and escalation recipients"
-               Icon="bi-bell-gear">
-    <Actions>
-        <button class="um-btn um-btn-primary"><i class="bi bi-check2" aria-hidden="true"></i> Save Rules</button>
-    </Actions>
-</AppPageHeader>
-
-<section class="tset-hero" aria-label="Notification settings overview">
-    <div>
-        <span class="tset-eyebrow">Tenant administration</span>
-        <h2>Notification Governance</h2>
-        <p>Control tenant-wide delivery channels, digest cadence, escalation paths, and notification policy exceptions.</p>
+@if (_toastVisible)
+{
+    <div class="tp-toast tp-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="tp-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
-</section>
+}
 
-<section class="tset-kpi-grid" aria-label="Notification metrics">
-    @Kpi("Rules", "18", "Active routing rules", "bi-bell-gear", "tset-tone-amber")
-    @Kpi("Channels", "4", "Email, SMS, push, in-app", "bi-broadcast", "tset-tone-blue")
-    @Kpi("Escalations", "7", "Manager paths", "bi-arrow-up-circle", "tset-tone-red")
-    @Kpi("Digest", "Daily", "Default cadence", "bi-calendar-check", "tset-tone-green")
-</section>
-
-<section class="tset-layout">
-    <TenantSettingsWorkflowManager PageCode="notifications"
-                                   Label="Notification settings workflow"
-                                   DefaultStage="Notify"
-                                   DefaultCategory="Digest Rules" />
-    <TenantConfigManager Kind="NotificationSetting"
-                         Title="Notification Settings"
-                         Subtitle="Configure tenant notification channels, routing, digests, quiet hours, and escalation recipients"
-                         Icon="bi bi-bell-gear" />
-    <aside class="tset-admin-panel">
-        <h3>Notification controls</h3>
-        <div class="tset-policy-card">
-            <strong>Delivery governance</strong>
-            <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Critical alerts bypass digest and quiet hour policies</span>
-            <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Role-based routing and escalation recipients audited</span>
-            <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Client-facing notification channels respect consent state</span>
+@if (_showNotificationModal)
+{
+    <div class="tp-modal-backdrop" role="presentation" @onclick="CloseNotificationModal">
+        <div class="tp-action-modal" role="dialog" aria-modal="true" aria-labelledby="notificationFormTitle" @onclick:stopPropagation="true">
+            <div class="tp-modal-header">
+                <div class="tp-modal-title">
+                    <span class="tp-modal-icon"><i class="bi bi-bell-gear" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 id="notificationFormTitle">@(_editingNotificationId.HasValue ? "Edit notification setting" : "Create notification setting")</h2>
+                        <p>Configure channels, routing, digest cadence, quiet hours, escalation paths, and sync behavior.</p>
+                    </div>
+                </div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseNotificationModal" disabled="@_saving" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_notificationForm" OnValidSubmit="SaveNotificationAsync" OnInvalidSubmit="HandleInvalidSubmitAsync">
+                <DataAnnotationsValidator />
+                <div class="tp-modal-body">
+                    <div class="tp-form-banner">
+                        <i class="bi bi-database-check" aria-hidden="true"></i>
+                        <div>
+                            <strong>Database-backed notification setting</strong>
+                            <span>Saving updates the notification catalog and syncs the rule to tenant configuration settings.</span>
+                        </div>
+                    </div>
+                    <div class="tp-form-grid">
+                        <div class="tp-field">
+                            <label>Code <span>*</span></label>
+                            <InputText class="tp-input" @bind-Value="_notificationForm.Code" placeholder="CLAIMS_ESCALATION_EMAIL" />
+                            <ValidationMessage For="() => _notificationForm.Code" class="text-danger" />
+                        </div>
+                        <div class="tp-field">
+                            <label>Name <span>*</span></label>
+                            <InputText class="tp-input" @bind-Value="_notificationForm.Name" placeholder="Claims escalation email" />
+                            <ValidationMessage For="() => _notificationForm.Name" class="text-danger" />
+                        </div>
+                        <div class="tp-field">
+                            <label>Category <span>*</span></label>
+                            <InputSelect class="tp-input" @bind-Value="_notificationForm.Category">
+                                @foreach (var category in _categoryOptions)
+                                {
+                                    <option value="@category">@category</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _notificationForm.Category" class="text-danger" />
+                        </div>
+                        <div class="tp-field">
+                            <label>Value type <span>*</span></label>
+                            <InputSelect class="tp-input" @bind-Value="_notificationForm.ValueType">
+                                <option>Text</option>
+                                <option>Number</option>
+                                <option>Boolean</option>
+                                <option>Date</option>
+                                <option>Json</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _notificationForm.ValueType" class="text-danger" />
+                        </div>
+                        <div class="tp-field">
+                            <label>Rule value <span>*</span></label>
+                            <InputText class="tp-input" @bind-Value="_notificationForm.CurrentValue" placeholder="Channel, recipient, cadence, or policy value" />
+                            <ValidationMessage For="() => _notificationForm.CurrentValue" class="text-danger" />
+                        </div>
+                        <div class="tp-field">
+                            <label>Fallback value</label>
+                            <InputText class="tp-input" @bind-Value="_notificationForm.DefaultValue" placeholder="Fallback value" />
+                            <ValidationMessage For="() => _notificationForm.DefaultValue" class="text-danger" />
+                        </div>
+                        <div class="tp-field">
+                            <label>Applies to</label>
+                            <InputSelect class="tp-input" @bind-Value="_notificationForm.AppliesTo">
+                                <option>Tenant</option>
+                                <option>Tenant + Branch</option>
+                                <option>Tenant + User</option>
+                                <option>Tenant + Workflow</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _notificationForm.AppliesTo" class="text-danger" />
+                        </div>
+                        <div class="tp-field">
+                            <label>Sort order</label>
+                            <InputNumber class="tp-input" @bind-Value="_notificationForm.SortOrder" />
+                            <ValidationMessage For="() => _notificationForm.SortOrder" class="text-danger" />
+                        </div>
+                        <div class="tp-field tp-field-wide">
+                            <label>Description</label>
+                            <InputTextArea class="tp-input" rows="3" @bind-Value="_notificationForm.Description" placeholder="Explain how this notification rule affects tenant delivery, routing, or escalation" />
+                            <ValidationMessage For="() => _notificationForm.Description" class="text-danger" />
+                        </div>
+                        <div class="tp-field tp-field-wide tp-check-row">
+                            <label><InputCheckbox @bind-Value="_notificationForm.SyncToConfiguration" /> Sync to tenant configuration setting</label>
+                            <label><InputCheckbox @bind-Value="_notificationForm.IsActive" /> Active</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="tp-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseNotificationModal" disabled="@_saving">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        @(_editingNotificationId.HasValue ? "Save changes" : "Create notification rule")
+                    </button>
+                </div>
+            </EditForm>
         </div>
-    </aside>
-</section>
+    </div>
+}
+
+@if (_showWorkflowModal)
+{
+    <div class="tp-modal-backdrop" role="presentation" @onclick="CloseWorkflowModal">
+        <div class="tp-action-modal" role="dialog" aria-modal="true" aria-labelledby="workflowFormTitle" @onclick:stopPropagation="true">
+            <div class="tp-modal-header">
+                <div class="tp-modal-title">
+                    <span class="tp-modal-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 id="workflowFormTitle">@(_editingWorkflowId.HasValue ? "Edit workflow item" : "Create workflow item")</h2>
+                        <p>Coordinate notification review, approvals, ownership, due dates, and compliance controls.</p>
+                    </div>
+                </div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseWorkflowModal" disabled="@_saving" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_workflowForm" OnValidSubmit="SaveWorkflowAsync" OnInvalidSubmit="HandleInvalidSubmitAsync">
+                <DataAnnotationsValidator />
+                <div class="tp-modal-body">
+                    <div class="tp-form-banner">
+                        <i class="bi bi-shield-check" aria-hidden="true"></i>
+                        <div>
+                            <strong>Workflow governance enabled</strong>
+                            <span>Each workflow item is tied to the notifications page and can be advanced through review stages.</span>
+                        </div>
+                    </div>
+                    <div class="tp-form-grid">
+                        <div class="tp-field tp-field-wide">
+                            <label>Title <span>*</span></label>
+                            <InputText class="tp-input" @bind-Value="_workflowForm.Title" placeholder="Review escalation routing rules" />
+                            <ValidationMessage For="() => _workflowForm.Title" class="text-danger" />
+                        </div>
+                        <div class="tp-field tp-field-wide">
+                            <label>Description <span>*</span></label>
+                            <InputTextArea class="tp-input" rows="3" @bind-Value="_workflowForm.Description" />
+                            <ValidationMessage For="() => _workflowForm.Description" class="text-danger" />
+                        </div>
+                        <div class="tp-field">
+                            <label>Category <span>*</span></label>
+                            <InputSelect class="tp-input" @bind-Value="_workflowForm.Category">
+                                @foreach (var category in _categoryOptions)
+                                {
+                                    <option value="@category">@category</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _workflowForm.Category" class="text-danger" />
+                        </div>
+                        <div class="tp-field">
+                            <label>Stage <span>*</span></label>
+                            <InputSelect class="tp-input" @bind-Value="_workflowForm.Stage">
+                                @foreach (var stage in _stageOptions)
+                                {
+                                    <option value="@stage">@stage</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _workflowForm.Stage" class="text-danger" />
+                        </div>
+                        <div class="tp-field">
+                            <label>Status <span>*</span></label>
+                            <InputSelect class="tp-input" @bind-Value="_workflowForm.Status">
+                                @foreach (var status in _workflowStatusOptions)
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _workflowForm.Status" class="text-danger" />
+                        </div>
+                        <div class="tp-field">
+                            <label>Priority <span>*</span></label>
+                            <InputSelect class="tp-input" @bind-Value="_workflowForm.Priority">
+                                <option>Low</option>
+                                <option>Medium</option>
+                                <option>High</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _workflowForm.Priority" class="text-danger" />
+                        </div>
+                        <div class="tp-field">
+                            <label>Risk <span>*</span></label>
+                            <InputSelect class="tp-input" @bind-Value="_workflowForm.RiskCode">
+                                <option>Low</option>
+                                <option>Medium</option>
+                                <option>High</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _workflowForm.RiskCode" class="text-danger" />
+                        </div>
+                        <div class="tp-field">
+                            <label>Owner <span>*</span></label>
+                            <InputText class="tp-input" @bind-Value="_workflowForm.OwnerName" />
+                            <ValidationMessage For="() => _workflowForm.OwnerName" class="text-danger" />
+                        </div>
+                        <div class="tp-field">
+                            <label>Due date</label>
+                            <InputDate class="tp-input" @bind-Value="_workflowForm.DueDate" />
+                            <ValidationMessage For="() => _workflowForm.DueDate" class="text-danger" />
+                        </div>
+                        <div class="tp-field">
+                            <label>Control code <span>*</span></label>
+                            <InputText class="tp-input" @bind-Value="_workflowForm.ControlCode" />
+                            <ValidationMessage For="() => _workflowForm.ControlCode" class="text-danger" />
+                        </div>
+                        <div class="tp-field">
+                            <label>Sort order</label>
+                            <InputNumber class="tp-input" @bind-Value="_workflowForm.SortOrder" />
+                            <ValidationMessage For="() => _workflowForm.SortOrder" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="tp-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseWorkflowModal" disabled="@_saving">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        @(_editingWorkflowId.HasValue ? "Save workflow" : "Create workflow")
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showConfirm && _confirmAction is not null)
+{
+    <div class="tp-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="tp-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="notificationConfirmTitle" @onclick:stopPropagation="true">
+            <div class="tp-confirm-icon tp-confirm-@_confirmAction.Kind"><i class="bi @_confirmAction.Icon" aria-hidden="true"></i></div>
+            <h2 id="notificationConfirmTitle">@_confirmAction.Title</h2>
+            <p>@_confirmAction.Message</p>
+            <div class="tp-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_saving">Cancel</button>
+                <button type="button" class="um-btn @_confirmAction.ButtonClass" @onclick="ExecuteConfirmedAsync" disabled="@_saving">
+                    @if (_saving)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    @_confirmAction.ButtonText
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="tp-enterprise-page">
+    <section class="tp-hero">
+        <div class="tp-hero-left">
+            <div class="tp-hero-icon"><i class="bi bi-bell-gear" aria-hidden="true"></i></div>
+            <div>
+                <div class="tp-title-row">
+                    <h1>Notification Settings</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i>@_notifications.Count configured</span>
+                    <span><i class="bi bi-diagram-3" aria-hidden="true"></i>@_workflow.Count workflow</span>
+                    @if (HasFilters)
+                    {
+                        <span><i class="bi bi-funnel" aria-hidden="true"></i>Filtered</span>
+                    }
+                </div>
+                <p>Manage tenant-wide delivery channels, routing, digests, quiet hours, escalation paths, consent controls, and notification workflow from one enterprise dashboard.</p>
+            </div>
+        </div>
+        <div class="tp-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "tp-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="SyncAllNotificationsAsync" disabled="@_saving"><i class="bi bi-cloud-check" aria-hidden="true"></i> Sync Settings</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreateNotification"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Rule</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="OpenCreateWorkflow"><i class="bi bi-diagram-3" aria-hidden="true"></i> New Workflow</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="tp-error-banner" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span>@_loadError</span>
+        </div>
+    }
+
+    <section class="tp-kpi-strip" aria-label="Notification setting KPIs">
+        @foreach (var kpi in KpiItems)
+        {
+            <button type="button" class="tp-kpi-card @kpi.Tone @(_activeKpi == kpi.Key ? "tp-kpi-card-active" : null)" @onclick="() => SetKpi(kpi.Key)" title="@(_activeKpi == kpi.Key ? "Clear KPI filter" : kpi.Subtitle)">
+                <span class="tp-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <div><strong class="tp-kpi-val">@kpi.Value</strong><span class="tp-kpi-lbl">@kpi.Label</span><small>@kpi.Subtitle</small></div>
+            </button>
+        }
+    </section>
+
+    <section class="tp-workflow-strip" aria-label="Notification workflow shortcuts">
+        <button type="button" class="tp-workflow-card" @onclick='() => FocusDashboard("notifications", "Channel Routing", "active")'>
+            <i class="bi bi-globe-americas" aria-hidden="true"></i>
+            <span><strong>Configure channels</strong><small>Review email, SMS, push, in-app, and portal delivery channels</small></span>
+        </button>
+        <button type="button" class="tp-workflow-card" @onclick='() => FocusDashboard("notifications", null, "overrides")'>
+            <i class="bi bi-toggle-on" aria-hidden="true"></i>
+            <span><strong>Audit routing</strong><small>Find role, team, channel, and escalation routing rules needing governance</small></span>
+        </button>
+        <button type="button" class="tp-workflow-card" @onclick='() => FocusDashboard("workflow", null, "review")'>
+            <i class="bi bi-diagram-3" aria-hidden="true"></i>
+            <span><strong>Review workflow</strong><small>Open incomplete notification approval and review items</small></span>
+        </button>
+        <button type="button" class="tp-workflow-card" @onclick='() => FocusDashboard("workflow", null, "risk")'>
+            <i class="bi bi-shield-exclamation" aria-hidden="true"></i>
+            <span><strong>Escalation controls</strong><small>Prioritize high-risk delivery and escalation changes</small></span>
+        </button>
+    </section>
+
+    <section class="tp-search-panel" aria-label="Notification setting filters">
+        <div class="tp-search-wrap">
+            <div class="tp-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+            <div class="tp-search-body">
+                <label for="notification-search-input">Enterprise search</label>
+                <input id="notification-search-input" class="tp-search-input" @bind="SearchText" @bind:event="oninput" placeholder="Search code, name, category, channel, recipient, owner, workflow, or control…" />
+                <span class="tp-search-hint">Searches notification settings and workflow items as you type.</span>
+            </div>
+        </div>
+        <select class="tp-filter-select" @bind="CategoryFilter" aria-label="Category filter">
+            <option value="">All categories</option>
+            @foreach (var category in CategoryOptions)
+            {
+                <option value="@category">@category</option>
+            }
+        </select>
+        <select class="tp-filter-select" @bind="StatusFilter" aria-label="Status filter">
+            <option value="">All statuses</option>
+            <option value="Active">Active</option>
+            <option value="Inactive">Inactive</option>
+            @foreach (var status in _workflowStatusOptions)
+            {
+                <option value="@status">@status workflow</option>
+            }
+        </select>
+        <select class="tp-filter-select" @bind="SortMode" aria-label="Sort">
+            <option value="order">Sort: Order</option>
+            <option value="category">Sort: Category</option>
+            <option value="name">Sort: Name</option>
+            <option value="status">Sort: Status</option>
+            <option value="risk">Sort: Risk</option>
+        </select>
+        <div class="tp-search-result"><strong>@ActiveCount</strong><span>matches</span></div>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+    </section>
+
+    <nav class="tp-view-tabs" aria-label="Notification setting views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="tp-view-btn @(_activeTab == tab.Key ? "tp-view-btn-active" : null)" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                @tab.Label
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </nav>
+
+    <main class="tp-content-layout">
+        <section class="tp-main-card">
+            @if (_loading)
+            {
+                <div class="tp-loading"><i class="bi bi-arrow-repeat tp-spin" aria-hidden="true"></i><strong>Loading notification settings…</strong></div>
+            }
+            else if (_activeTab == "board")
+            {
+                <div class="tp-board">
+                    @foreach (var category in CategoryOptions)
+                    {
+                        var rows = FilteredNotifications.Where(p => string.Equals(Safe(p.Category, "General"), category, StringComparison.OrdinalIgnoreCase)).ToList();
+                        <section class="tp-board-col">
+                            <header><strong>@category</strong><span>@rows.Count</span></header>
+                            @foreach (var pref in rows)
+                            {
+                                var meta = ReadMeta(pref);
+                                <article class="tp-board-card" @onclick="() => SelectNotification(pref)">
+                                    <div><strong>@pref.Name</strong><span class="@StatusBadgeClass(pref.IsActive)">@StatusBadgeText(pref.IsActive)</span></div>
+                                    <span>@pref.Code</span>
+                                    <small>@Safe(meta.CurrentValue, pref.ConfigurationJson ?? "Not set")</small>
+                                </article>
+                            }
+                        </section>
+                    }
+                </div>
+            }
+            else if (_activeTab == "workflow")
+            {
+                @if (!FilteredWorkflow.Any())
+                {
+                    <div class="tp-empty-state"><i class="bi bi-diagram-3" aria-hidden="true"></i><strong>No workflow items found</strong><span>Create a workflow item or adjust filters.</span></div>
+                }
+                else
+                {
+                    <div class="tp-table-scroll">
+                        <table class="tp-table">
+                            <thead>
+                                <tr><th>Workflow</th><th>Category</th><th>Stage</th><th>Status</th><th>Risk</th><th>Owner</th><th>Due</th><th></th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var item in FilteredWorkflow)
+                                {
+                                    <tr class="@(_selectedWorkflow?.WorkflowItemId == item.WorkflowItemId ? "tp-row-selected" : null)" @onclick="() => SelectWorkflow(item)">
+                                        <td><strong>@item.Title</strong><small>@item.Description</small></td>
+                                        <td>@item.Category</td>
+                                        <td>@item.Stage</td>
+                                        <td><span class="@WorkflowStatusBadgeClass(item.Status)">@item.Status</span></td>
+                                        <td><span class="@RiskBadgeClass(item.RiskCode)">@item.RiskCode</span></td>
+                                        <td>@Safe(item.OwnerName, "Unassigned")</td>
+                                        <td>@DueText(item.DueDateUtc)</td>
+                                        <td>
+                                            <div class="tp-row-actions">
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => AdvanceWorkflowAsync(item)">Advance</button>
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEditWorkflow(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDeleteWorkflow(item)"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            }
+            else
+            {
+                @if (!FilteredNotifications.Any())
+                {
+                    <div class="tp-empty-state"><i class="bi bi-bell-gear" aria-hidden="true"></i><strong>No notification settings found</strong><span>Create a notification setting or adjust the active filters.</span></div>
+                }
+                else
+                {
+                    <div class="tp-table-scroll">
+                        <table class="tp-table">
+                            <thead>
+                                <tr><th>Notification Rule</th><th>Category</th><th>Rule Value</th><th>Fallback</th><th>Scope</th><th>Status</th><th>Sync</th><th></th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var pref in PagedNotifications)
+                                {
+                                    var meta = ReadMeta(pref);
+                                    <tr class="@(_selectedNotification?.TenantConfigItemId == pref.TenantConfigItemId ? "tp-row-selected" : null)" @onclick="() => SelectNotification(pref)">
+                                        <td><strong>@pref.Name</strong><small>@pref.Code</small></td>
+                                        <td>@Safe(pref.Category, "General")</td>
+                                        <td>@Safe(meta.CurrentValue, "Not set")</td>
+                                        <td>@Safe(meta.DefaultValue, "—")</td>
+                                        <td>@Safe(meta.AppliesTo, "Tenant")</td>
+                                        <td><span class="@StatusBadgeClass(pref.IsActive)">@StatusBadgeText(pref.IsActive)</span></td>
+                                        <td>
+                                            @if (meta.SyncToConfiguration)
+                                            {
+                                                <span class="tp-pill tp-pill-cyan">Synced</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="tp-pill">Catalog</span>
+                                            }
+                                        </td>
+                                        <td>
+                                            <div class="tp-row-actions">
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEditNotification(pref)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDeleteNotification(pref)"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="tp-pager">
+                        <span>Page @_page of @TotalPages</span>
+                        <div>
+                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)">Previous</button>
+                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button>
+                        </div>
+                    </div>
+                }
+            }
+        </section>
+
+        <aside class="tp-detail-card">
+            <div class="tp-detail-head">
+                <div>
+                    <span class="tp-detail-eyebrow"><i class="bi bi-bell-gear" aria-hidden="true"></i>Selected notification</span>
+                    <h2>@(_selectedNotification?.Name ?? _selectedWorkflow?.Title ?? "Select a record")</h2>
+                    <p>@(_selectedNotification?.Code ?? _selectedWorkflow?.ControlCode ?? "Choose a row to inspect notification details and actions")</p>
+                </div>
+            </div>
+            <div class="tp-detail-body">
+                @if (_selectedNotification is not null)
+                {
+                    var meta = ReadMeta(_selectedNotification);
+                    <div class="tp-detail-summary">
+                        <div><span>Category</span><strong>@Safe(_selectedNotification.Category, "General")</strong></div>
+                        <div><span>Status</span><strong>@(_selectedNotification.IsActive ? "Active" : "Inactive")</strong></div>
+                        <div><span>Current</span><strong>@Safe(meta.CurrentValue, "Not set")</strong></div>
+                        <div><span>Default</span><strong>@Safe(meta.DefaultValue, "—")</strong></div>
+                    </div>
+                    <div class="tp-contact-card"><strong>@Safe(_selectedNotification.Description, "No notification description provided.")</strong><span>Scope: @Safe(meta.AppliesTo, "Tenant") • Type: @Safe(meta.ValueType, "Text")</span></div>
+                    <div class="tp-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEditNotification(_selectedNotification)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit rule</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => ToggleNotificationAsync(_selectedNotification)"><i class="bi bi-toggle-on" aria-hidden="true"></i> @(_selectedNotification.IsActive ? "Deactivate" : "Activate")</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => SyncNotificationAsync(_selectedNotification)"><i class="bi bi-cloud-check" aria-hidden="true"></i> Sync setting</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="OpenCreateWorkflow"><i class="bi bi-diagram-3" aria-hidden="true"></i> Add workflow</button>
+                    </div>
+                }
+                else if (_selectedWorkflow is not null)
+                {
+                    <div class="tp-detail-summary">
+                        <div><span>Category</span><strong>@_selectedWorkflow.Category</strong></div>
+                        <div><span>Stage</span><strong>@_selectedWorkflow.Stage</strong></div>
+                        <div><span>Status</span><strong>@_selectedWorkflow.Status</strong></div>
+                        <div><span>Risk</span><strong>@_selectedWorkflow.RiskCode</strong></div>
+                    </div>
+                    <div class="tp-contact-card"><strong>@_selectedWorkflow.Description</strong><span>Owner: @Safe(_selectedWorkflow.OwnerName, "Unassigned") • Due: @DueText(_selectedWorkflow.DueDateUtc)</span></div>
+                    <div class="tp-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEditWorkflow(_selectedWorkflow)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit workflow</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => AdvanceWorkflowAsync(_selectedWorkflow)"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Advance workflow</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="OpenCreateNotification"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add notification</button>
+                    </div>
+                }
+                else
+                {
+                    <div class="tp-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a notification or workflow item</strong><span>Details and actions appear here.</span></div>
+                }
+            </div>
+        </aside>
+    </main>
+</div>
 
 @code {
-    protected override void OnInitialized() => Breadcrumbs.SetCrumbs(new("Home", "/"), new("Notification Settings", "/tenant/settings/notifications"));
+    const string NotificationKind = "NotificationSetting";
+    const string WorkflowPageCode = "notifications";
+    const int PageSize = 18;
 
-    private RenderFragment Kpi(string label, string value, string meta, string icon, string tone) => @<article class="tset-kpi-card"><span class="tset-kpi-icon @tone"><i class="bi @icon" aria-hidden="true"></i></span><div><strong>@value</strong><span>@label</span><small>@meta</small></div></article>;
+    readonly TabDef[] _tabs =
+    [
+        new("notifications", "Notifications", "bi-bell-gear"),
+        new("workflow", "Workflow", "bi-diagram-3"),
+        new("board", "Board", "bi-kanban")
+    ];
+
+    readonly string[] _categoryOptions = ["Channel Routing", "Delivery Channels", "Digest Cadence", "Role Routing", "Escalations", "Quiet Hours", "In-App Display", "Consent Controls"];
+    readonly string[] _stageOptions = ["Configure", "Review", "Approve", "Deploy", "Monitor", "Complete"];
+    readonly string[] _workflowStatusOptions = ["Open", "In Review", "Complete", "Blocked"];
+
+    Guid _tenantId;
+    Guid? _userId;
+    bool _loading;
+    bool _saving;
+    bool _showNotificationModal;
+    bool _showWorkflowModal;
+    bool _showConfirm;
+    bool _toastVisible;
+    string _toastKind = "success";
+    string _toastMessage = string.Empty;
+    string _activeTab = "notifications";
+    string _activeKpi = "all";
+    string _sortMode = "order";
+    string? _searchText;
+    string? _categoryFilter;
+    string? _statusFilter;
+    string? _loadError;
+    int _page = 1;
+    ConfirmAction? _confirmAction;
+    TenantConfigItemDto? _selectedNotification;
+    TenantSettingsWorkflowItemDto? _selectedWorkflow;
+    Guid? _editingNotificationId;
+    Guid? _editingWorkflowId;
+    readonly NotificationForm _notificationForm = new();
+    readonly WorkflowForm _workflowForm = new();
+    List<TenantConfigItemDto> _notifications = [];
+    List<TenantSettingsWorkflowItemDto> _workflow = [];
+
+    string? SearchText { get => _searchText; set { _searchText = value; _page = 1; } }
+    string? CategoryFilter { get => _categoryFilter; set { _categoryFilter = value; _page = 1; } }
+    string? StatusFilter { get => _statusFilter; set { _statusFilter = value; _page = 1; } }
+    string SortMode { get => _sortMode; set { _sortMode = value; _page = 1; } }
+    bool HasFilters => _activeKpi != "all" || !string.IsNullOrWhiteSpace(_searchText) || !string.IsNullOrWhiteSpace(_categoryFilter) || !string.IsNullOrWhiteSpace(_statusFilter);
+    int ActiveCount => _activeTab == "workflow" ? FilteredWorkflow.Count() : FilteredNotifications.Count();
+    int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredNotifications.Count() / (double)PageSize));
+    string ToastIconClass => _toastKind == "danger" ? "bi-exclamation-triangle" : "bi-check-circle";
+    IEnumerable<string> CategoryOptions => _categoryOptions.Concat(_notifications.Select(p => Safe(p.Category, "General"))).Concat(_workflow.Select(w => w.Category)).Where(c => !string.IsNullOrWhiteSpace(c)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(c => c);
+
+    IEnumerable<TenantConfigItemDto> FilteredNotifications => SortNotifications(ApplyNotificationFilters(_notifications));
+    IEnumerable<TenantConfigItemDto> PagedNotifications => FilteredNotifications.Skip((_page - 1) * PageSize).Take(PageSize);
+    IEnumerable<TenantSettingsWorkflowItemDto> FilteredWorkflow => SortWorkflow(ApplyWorkflowFilters(_workflow));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = await CurrentUser.RequireAsync();
+        _tenantId = user.TenantId;
+        _userId = user.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Notification Settings", "/tenant/settings/notifications"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var notificationResult = await Api.SearchTenantConfigItemsAsync(_tenantId, NotificationKind, pageSize: 500);
+            _notifications = notificationResult?.Items.ToList() ?? [];
+            _workflow = (await Api.GetTenantSettingsWorkflowAsync(_tenantId, WorkflowPageCode))?.ToList() ?? [];
+            _selectedNotification = _selectedNotification is null ? _notifications.FirstOrDefault() : _notifications.FirstOrDefault(p => p.TenantConfigItemId == _selectedNotification.TenantConfigItemId) ?? _notifications.FirstOrDefault();
+            _selectedWorkflow = _selectedWorkflow is null ? _workflow.FirstOrDefault() : _workflow.FirstOrDefault(w => w.WorkflowItemId == _selectedWorkflow.WorkflowItemId) ?? _workflow.FirstOrDefault();
+            _page = Math.Min(_page, TotalPages);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load notification settings: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    IEnumerable<TenantConfigItemDto> ApplyNotificationFilters(IEnumerable<TenantConfigItemDto> rows)
+    {
+        rows = _activeKpi switch
+        {
+            "active" => rows.Where(p => p.IsActive),
+            "overrides" => rows.Where(HasOverride),
+            "synced" => rows.Where(p => ReadMeta(p).SyncToConfiguration),
+            _ => rows
+        };
+
+        if (!string.IsNullOrWhiteSpace(_categoryFilter))
+            rows = rows.Where(p => string.Equals(Safe(p.Category, "General"), _categoryFilter, StringComparison.OrdinalIgnoreCase));
+
+        if (!string.IsNullOrWhiteSpace(_statusFilter))
+            rows = _statusFilter switch
+            {
+                "Active" => rows.Where(p => p.IsActive),
+                "Inactive" => rows.Where(p => !p.IsActive),
+                _ => rows
+            };
+
+        if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            var term = _searchText.Trim();
+            rows = rows.Where(p => Contains(p.Code, term) || Contains(p.Name, term) || Contains(p.Category, term) || Contains(p.Description, term) || Contains(p.ConfigurationJson, term));
+        }
+
+        return rows;
+    }
+
+    IEnumerable<TenantSettingsWorkflowItemDto> ApplyWorkflowFilters(IEnumerable<TenantSettingsWorkflowItemDto> rows)
+    {
+        rows = _activeKpi switch
+        {
+            "review" => rows.Where(w => w.Status is not "Complete"),
+            "risk" => rows.Where(IsHighRisk),
+            _ => rows
+        };
+
+        if (!string.IsNullOrWhiteSpace(_categoryFilter))
+            rows = rows.Where(w => string.Equals(w.Category, _categoryFilter, StringComparison.OrdinalIgnoreCase));
+
+        if (!string.IsNullOrWhiteSpace(_statusFilter) && _statusFilter is not "Active" and not "Inactive")
+            rows = rows.Where(w => string.Equals(w.Status, _statusFilter, StringComparison.OrdinalIgnoreCase));
+
+        if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            var term = _searchText.Trim();
+            rows = rows.Where(w => Contains(w.Title, term) || Contains(w.Description, term) || Contains(w.Category, term) || Contains(w.Stage, term) || Contains(w.Status, term) || Contains(w.OwnerName, term) || Contains(w.ControlCode, term));
+        }
+
+        return rows;
+    }
+
+    IEnumerable<TenantConfigItemDto> SortNotifications(IEnumerable<TenantConfigItemDto> rows) => _sortMode switch
+    {
+        "category" => rows.OrderBy(r => r.Category).ThenBy(r => r.SortOrder),
+        "name" => rows.OrderBy(r => r.Name),
+        "status" => rows.OrderByDescending(r => r.IsActive).ThenBy(r => r.SortOrder),
+        _ => rows.OrderBy(r => r.SortOrder).ThenBy(r => r.Name)
+    };
+
+    IEnumerable<TenantSettingsWorkflowItemDto> SortWorkflow(IEnumerable<TenantSettingsWorkflowItemDto> rows) => _sortMode switch
+    {
+        "category" => rows.OrderBy(r => r.Category).ThenBy(r => r.SortOrder),
+        "name" => rows.OrderBy(r => r.Title),
+        "status" => rows.OrderBy(r => r.Status).ThenBy(r => r.DueDateUtc),
+        "risk" => rows.OrderByDescending(r => RiskScore(r)).ThenBy(r => r.DueDateUtc),
+        _ => rows.OrderBy(r => r.SortOrder).ThenBy(r => r.DueDateUtc).ThenBy(r => r.Title)
+    };
+
+    void SetActiveTab(string tab)
+    {
+        _activeTab = tab;
+        _page = 1;
+    }
+
+    void SetKpi(string key)
+    {
+        _activeKpi = _activeKpi == key ? "all" : key;
+        if (key is "review" or "risk") _activeTab = "workflow";
+        if (key is "active" or "overrides" or "synced") _activeTab = "notifications";
+        _page = 1;
+    }
+
+    void FocusDashboard(string tab, string? category, string kpi)
+    {
+        _activeTab = tab;
+        _categoryFilter = category;
+        _activeKpi = kpi;
+        _page = 1;
+    }
+
+    void ClearFilters()
+    {
+        _activeKpi = "all";
+        _searchText = null;
+        _categoryFilter = null;
+        _statusFilter = null;
+        _page = 1;
+    }
+
+    int TabCount(string key) => key switch
+    {
+        "workflow" => _workflow.Count,
+        "board" => CategoryOptions.Count(),
+        _ => _notifications.Count
+    };
+
+    void PreviousPage() { if (_page > 1) _page--; }
+    void NextPage() { if (_page < TotalPages) _page++; }
+    void SelectNotification(TenantConfigItemDto notification) { _selectedNotification = notification; _selectedWorkflow = null; }
+    void SelectWorkflow(TenantSettingsWorkflowItemDto workflow) { _selectedWorkflow = workflow; _selectedNotification = null; }
+
+    void OpenCreateNotification()
+    {
+        _editingNotificationId = null;
+        _notificationForm.Reset(new NotificationMeta(CurrentValue: string.Empty, DefaultValue: string.Empty, ValueType: "Text", AppliesTo: "Tenant", SyncToConfiguration: true), null, (_notifications.Count + 1) * 10);
+        _showNotificationModal = true;
+    }
+
+    void OpenEditNotification(TenantConfigItemDto notification)
+    {
+        _editingNotificationId = notification.TenantConfigItemId;
+        _notificationForm.Reset(ReadMeta(notification), notification, notification.SortOrder);
+        _showNotificationModal = true;
+    }
+
+    void CloseNotificationModal()
+    {
+        if (_saving) return;
+        _showNotificationModal = false;
+    }
+
+    async Task SaveNotificationAsync()
+    {
+        _saving = true;
+        try
+        {
+            var configurationJson = SerializeMeta(_notificationForm);
+            if (_editingNotificationId.HasValue)
+            {
+                await Api.UpdateTenantConfigItemAsync(_editingNotificationId.Value, new UpdateTenantConfigItemRequest(_notificationForm.Code.Trim(), _notificationForm.Name.Trim(), _notificationForm.Category, _notificationForm.Description, configurationJson, _notificationForm.IsActive, _notificationForm.SortOrder));
+            }
+            else
+            {
+                await Api.CreateTenantConfigItemAsync(new CreateTenantConfigItemRequest(_tenantId, NotificationKind, _notificationForm.Code.Trim(), _notificationForm.Name.Trim(), _notificationForm.Category, _notificationForm.Description, configurationJson, _notificationForm.SortOrder));
+            }
+
+            if (_notificationForm.SyncToConfiguration)
+                await Api.SaveTenantConfigurationAsync(_tenantId, [new UpsertTenantSettingModel { SettingKey = SettingKey(_notificationForm.Code), SettingValue = _notificationForm.CurrentValue }]);
+
+            _showNotificationModal = false;
+            ShowToast("Notification saved and synced successfully.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    void OpenCreateWorkflow()
+    {
+        _editingWorkflowId = null;
+        _workflowForm.Reset(null, _selectedNotification?.Category ?? "Channel Routing", (_workflow.Count + 1) * 10);
+        _showWorkflowModal = true;
+    }
+
+    void OpenEditWorkflow(TenantSettingsWorkflowItemDto item)
+    {
+        _editingWorkflowId = item.WorkflowItemId;
+        _workflowForm.Reset(item, item.Category, item.SortOrder);
+        _showWorkflowModal = true;
+    }
+
+    void CloseWorkflowModal()
+    {
+        if (_saving) return;
+        _showWorkflowModal = false;
+    }
+
+    async Task SaveWorkflowAsync()
+    {
+        _saving = true;
+        try
+        {
+            var dueUtc = _workflowForm.DueDate.HasValue ? DateTime.SpecifyKind(_workflowForm.DueDate.Value.Date, DateTimeKind.Local).ToUniversalTime() : (DateTime?)null;
+            if (_editingWorkflowId.HasValue)
+            {
+                await Api.UpdateTenantSettingsWorkflowAsync(_editingWorkflowId.Value, new UpdateTenantSettingsWorkflowItemRequest
+                {
+                    Title = _workflowForm.Title,
+                    Description = _workflowForm.Description,
+                    Category = _workflowForm.Category,
+                    Stage = _workflowForm.Stage,
+                    Status = _workflowForm.Status,
+                    Priority = _workflowForm.Priority,
+                    OwnerName = _workflowForm.OwnerName,
+                    DueDateUtc = dueUtc,
+                    RiskCode = _workflowForm.RiskCode,
+                    ControlCode = _workflowForm.ControlCode,
+                    SortOrder = _workflowForm.SortOrder,
+                    ModifiedByUserId = _userId
+                });
+            }
+            else
+            {
+                await Api.CreateTenantSettingsWorkflowAsync(new CreateTenantSettingsWorkflowItemRequest
+                {
+                    TenantId = _tenantId,
+                    PageCode = WorkflowPageCode,
+                    Title = _workflowForm.Title,
+                    Description = _workflowForm.Description,
+                    Category = _workflowForm.Category,
+                    Stage = _workflowForm.Stage,
+                    Status = _workflowForm.Status,
+                    Priority = _workflowForm.Priority,
+                    OwnerName = _workflowForm.OwnerName,
+                    DueDateUtc = dueUtc,
+                    RiskCode = _workflowForm.RiskCode,
+                    ControlCode = _workflowForm.ControlCode,
+                    SortOrder = _workflowForm.SortOrder,
+                    CreatedByUserId = _userId
+                });
+            }
+
+            _showWorkflowModal = false;
+            ShowToast("Workflow item saved successfully.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Workflow save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    Task HandleInvalidSubmitAsync()
+    {
+        ShowToast("Please correct the highlighted fields before saving.", "danger");
+        return Task.CompletedTask;
+    }
+
+    void ConfirmDeleteNotification(TenantConfigItemDto notification)
+    {
+        _confirmAction = new("danger", "Delete notification setting?", $"Delete {notification.Name}? This removes the catalog item after confirmation.", "Delete", "um-btn-danger", "bi-trash", async () => await DeleteNotificationAsync(notification));
+        _showConfirm = true;
+    }
+
+    void ConfirmDeleteWorkflow(TenantSettingsWorkflowItemDto item)
+    {
+        _confirmAction = new("danger", "Delete workflow item?", $"Delete {item.Title}?", "Delete", "um-btn-danger", "bi-trash", async () => await DeleteWorkflowAsync(item));
+        _showConfirm = true;
+    }
+
+    void CancelConfirm()
+    {
+        if (_saving) return;
+        _showConfirm = false;
+        _confirmAction = null;
+    }
+
+    async Task ExecuteConfirmedAsync()
+    {
+        if (_confirmAction is null) return;
+        await _confirmAction.ExecuteAsync();
+        _showConfirm = false;
+        _confirmAction = null;
+    }
+
+    async Task DeleteNotificationAsync(TenantConfigItemDto notification)
+    {
+        _saving = true;
+        try
+        {
+            await Api.DeleteTenantConfigItemAsync(notification.TenantConfigItemId);
+            ShowToast("Notification deleted successfully.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    async Task DeleteWorkflowAsync(TenantSettingsWorkflowItemDto item)
+    {
+        _saving = true;
+        try
+        {
+            await Api.DeleteTenantSettingsWorkflowAsync(item.WorkflowItemId, _userId);
+            ShowToast("Workflow item deleted successfully.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Workflow delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    async Task ToggleNotificationAsync(TenantConfigItemDto notification)
+    {
+        var meta = ReadMeta(notification);
+        _saving = true;
+        try
+        {
+            await Api.UpdateTenantConfigItemAsync(notification.TenantConfigItemId, new UpdateTenantConfigItemRequest(notification.Code, notification.Name, notification.Category, notification.Description, notification.ConfigurationJson, !notification.IsActive, notification.SortOrder));
+            ShowToast($"Notification {(notification.IsActive ? "deactivated" : "activated")} successfully.", "success");
+            if (meta.SyncToConfiguration)
+                await SyncNotificationAsync(notification, showToast: false);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Status update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    async Task AdvanceWorkflowAsync(TenantSettingsWorkflowItemDto item)
+    {
+        var next = NextStage(item.Stage);
+        var status = next == "Complete" ? "Complete" : "In Review";
+        _saving = true;
+        try
+        {
+            await Api.AdvanceTenantSettingsWorkflowAsync(item.WorkflowItemId, new AdvanceTenantSettingsWorkflowRequest { Stage = next, Status = status, ModifiedByUserId = _userId });
+            ShowToast($"Workflow advanced to {next}.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Workflow advance failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    async Task SyncNotificationAsync(TenantConfigItemDto notification, bool showToast = true)
+    {
+        var meta = ReadMeta(notification);
+        try
+        {
+            await Api.SaveTenantConfigurationAsync(_tenantId, [new UpsertTenantSettingModel { SettingKey = SettingKey(notification.Code), SettingValue = meta.CurrentValue }]);
+            if (showToast) ShowToast("Notification synced to tenant configuration.", "success");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Sync failed: {ex.Message}", "danger");
+        }
+    }
+
+    async Task SyncAllNotificationsAsync()
+    {
+        var settings = _notifications.Where(p => p.IsActive && ReadMeta(p).SyncToConfiguration).Select(p => new UpsertTenantSettingModel { SettingKey = SettingKey(p.Code), SettingValue = ReadMeta(p).CurrentValue }).ToList();
+        if (settings.Count == 0)
+        {
+            ShowToast("No active synced notifications found.", "danger");
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            await Api.SaveTenantConfigurationAsync(_tenantId, settings);
+            ShowToast($"Synced {settings.Count} notification setting settings.", "success");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Sync failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    IEnumerable<KpiItem> KpiItems =>
+    [
+        new("all", "Total", _notifications.Count.ToString(), "All notification setting records", "bi-bell-gear", ""),
+        new("active", "Active", _notifications.Count(p => p.IsActive).ToString(), "Active notification rules", "bi-check-circle", "tp-green"),
+        new("overrides", "Custom Rules", _notifications.Count(HasOverride).ToString(), "Rule values different from fallback", "bi-toggle-on", "tp-amber"),
+        new("review", "Needs Review", _workflow.Count(w => w.Status is not "Complete").ToString(), "Open notification workflow governance", "bi-clipboard-check", "tp-purple"),
+        new("risk", "High Risk", _workflow.Count(w => IsHighRisk(w)).ToString(), "High priority or risk items", "bi-exclamation-octagon", "tp-red"),
+        new("synced", "Synced", _notifications.Count(p => ReadMeta(p).SyncToConfiguration).ToString(), "Synced notification configuration settings", "bi-cloud-check", "tp-cyan")
+    ];
+
+    static string StatusBadgeText(bool active) => active ? "Active" : "Inactive";
+    static string StatusBadgeClass(bool active) => active ? "tp-pill tp-pill-green" : "tp-pill tp-pill-red";
+    static string WorkflowStatusBadgeClass(string status) => $"tp-pill tp-pill-{Slug(status)}";
+    static string RiskBadgeClass(string risk) => string.Equals(risk, "High", StringComparison.OrdinalIgnoreCase) ? "tp-pill tp-pill-red" : string.Equals(risk, "Medium", StringComparison.OrdinalIgnoreCase) ? "tp-pill tp-pill-amber" : "tp-pill tp-pill-green";
+
+    void ShowToast(string message, string kind)
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(4500);
+            await InvokeAsync(HideToast);
+        });
+    }
+
+    void HideToast() => _toastVisible = false;
+
+    static NotificationMeta ReadMeta(TenantConfigItemDto item)
+    {
+        if (!string.IsNullOrWhiteSpace(item.ConfigurationJson))
+        {
+            try
+            {
+                var meta = JsonSerializer.Deserialize<NotificationMeta>(item.ConfigurationJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                if (meta is not null) return meta;
+            }
+            catch
+            {
+            }
+        }
+
+        return new NotificationMeta(item.ConfigurationJson ?? string.Empty, string.Empty, "Text", "Tenant", false);
+    }
+
+    static string SerializeMeta(NotificationForm form) => JsonSerializer.Serialize(new NotificationMeta(form.CurrentValue, form.DefaultValue, form.ValueType, form.AppliesTo, form.SyncToConfiguration));
+    static string SettingKey(string code) => $"Tenant.Notification.{code.Trim().Replace(' ', '_').ToUpperInvariant()}";
+    static bool HasOverride(TenantConfigItemDto item) { var meta = ReadMeta(item); return !string.Equals(meta.CurrentValue, meta.DefaultValue, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(meta.DefaultValue); }
+    static bool IsHighRisk(TenantSettingsWorkflowItemDto item) => string.Equals(item.RiskCode, "High", StringComparison.OrdinalIgnoreCase) || string.Equals(item.Priority, "High", StringComparison.OrdinalIgnoreCase) || (item.DueDateUtc.HasValue && item.DueDateUtc.Value.Date < DateTime.UtcNow.Date && item.Status is not "Complete");
+    static int RiskScore(TenantSettingsWorkflowItemDto item) => IsHighRisk(item) ? 100 : string.Equals(item.RiskCode, "Medium", StringComparison.OrdinalIgnoreCase) ? 50 : 10;
+    static string NextStage(string stage) => stage switch { "Configure" => "Review", "Review" => "Approve", "Approve" => "Deploy", "Deploy" => "Monitor", "Monitor" => "Complete", _ => "Review" };
+    static string DueText(DateTime? dueDateUtc) => dueDateUtc?.ToLocalTime().ToString("MMM d, yyyy") ?? "—";
+    static bool Contains(string? source, string term) => !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
+    static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    static string Slug(string value) => value.ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
+
+    sealed record NotificationMeta(string? CurrentValue, string? DefaultValue, string? ValueType, string? AppliesTo, bool SyncToConfiguration);
+    sealed record TabDef(string Key, string Label, string Icon);
+    sealed record KpiItem(string Key, string Label, string Value, string Subtitle, string Icon, string Tone);
+    sealed record ConfirmAction(string Kind, string Title, string Message, string ButtonText, string ButtonClass, string Icon, Func<Task> ExecuteAsync);
+
+    sealed class NotificationForm
+    {
+        [Required, StringLength(80)] public string Code { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string Name { get; set; } = string.Empty;
+        [Required, StringLength(120)] public string Category { get; set; } = "Channel Routing";
+        [StringLength(500)] public string? Description { get; set; }
+        [Required, StringLength(500)] public string CurrentValue { get; set; } = string.Empty;
+        [StringLength(500)] public string? DefaultValue { get; set; }
+        [Required, StringLength(40)] public string ValueType { get; set; } = "Text";
+        [Required, StringLength(80)] public string AppliesTo { get; set; } = "Tenant";
+        [Range(0, 9999)] public int SortOrder { get; set; }
+        public bool SyncToConfiguration { get; set; } = true;
+        public bool IsActive { get; set; } = true;
+
+        public void Reset(NotificationMeta meta, TenantConfigItemDto? item, int sortOrder)
+        {
+            Code = item?.Code ?? string.Empty;
+            Name = item?.Name ?? string.Empty;
+            Category = item?.Category ?? "Channel Routing";
+            Description = item?.Description;
+            CurrentValue = meta.CurrentValue ?? string.Empty;
+            DefaultValue = meta.DefaultValue;
+            ValueType = meta.ValueType ?? "Text";
+            AppliesTo = meta.AppliesTo ?? "Tenant";
+            SyncToConfiguration = meta.SyncToConfiguration || item is null;
+            SortOrder = sortOrder;
+            IsActive = item?.IsActive ?? true;
+        }
+    }
+
+    sealed class WorkflowForm
+    {
+        [Required, StringLength(200)] public string Title { get; set; } = string.Empty;
+        [Required, StringLength(1000)] public string Description { get; set; } = string.Empty;
+        [Required, StringLength(100)] public string Category { get; set; } = "Channel Routing";
+        [Required, StringLength(80)] public string Stage { get; set; } = "Configure";
+        [Required, StringLength(80)] public string Status { get; set; } = "Open";
+        [Required, StringLength(40)] public string Priority { get; set; } = "Medium";
+        [Required, StringLength(200)] public string OwnerName { get; set; } = "Operations Admin";
+        public DateTime? DueDate { get; set; }
+        [Required, StringLength(40)] public string RiskCode { get; set; } = "Medium";
+        [Required, StringLength(120)] public string ControlCode { get; set; } = "NOTIF-CONTROL";
+        [Range(0, 9999)] public int SortOrder { get; set; }
+
+        public void Reset(TenantSettingsWorkflowItemDto? item, string category, int sortOrder)
+        {
+            Title = item?.Title ?? string.Empty;
+            Description = item?.Description ?? string.Empty;
+            Category = item?.Category ?? category;
+            Stage = item?.Stage ?? "Configure";
+            Status = item?.Status ?? "Open";
+            Priority = item?.Priority ?? "Medium";
+            OwnerName = item?.OwnerName ?? "Operations Admin";
+            DueDate = item?.DueDateUtc?.ToLocalTime().Date ?? DateTime.Today.AddDays(14);
+            RiskCode = item?.RiskCode ?? "Medium";
+            ControlCode = item?.ControlCode ?? "NOTIF-CONTROL";
+            SortOrder = item?.SortOrder ?? sortOrder;
+        }
+    }
 }
+

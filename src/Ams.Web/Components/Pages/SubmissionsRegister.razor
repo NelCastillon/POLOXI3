@@ -12,15 +12,26 @@
 
 <div class="sde-page">
     <section class="sde-hero">
-        <div class="sde-hero__content">
-            <div class="sde-hero__eyebrow"><i class="bi bi-send-check" aria-hidden="true"></i> Enterprise submissions command center</div>
-            <h1>Submissions Command Center</h1>
-            <p>Prioritize underwriting work, monitor market progress, and run submission workflows from one native Blazor dashboard.</p>
-            <div class="sde-hero__meta">
-                <span><i class="bi bi-stack" aria-hidden="true"></i>@_rows.Count submissions</span>
-                <span><i class="bi bi-exclamation-diamond" aria-hidden="true"></i>@CriticalRows.Count() critical</span>
-                <span><i class="bi bi-cash-stack" aria-hidden="true"></i>@PipelinePremium.ToString("C0") target premium</span>
-                <span><i class="bi bi-diagram-3" aria-hidden="true"></i>@MarketedRows.Count() marketed</span>
+        <div class="sde-hero-left">
+            <div class="sde-hero-icon">
+                <i class="bi bi-send-check" aria-hidden="true"></i>
+            </div>
+            <div class="sde-hero__content">
+                <div class="sde-title-row">
+                    <h1>Submissions Command Center</h1>
+                    <span><i class="bi bi-stack" aria-hidden="true"></i>@FilteredRows.Count() matches</span>
+                    @if (HasFilters)
+                    {
+                        <span><i class="bi bi-funnel" aria-hidden="true"></i>Filtered</span>
+                    }
+                </div>
+                <p>Prioritize underwriting work, monitor market progress, and run submission workflows from one native Blazor dashboard.</p>
+                <div class="sde-hero__meta">
+                    <span><i class="bi bi-stack" aria-hidden="true"></i>@_rows.Count submissions</span>
+                    <span><i class="bi bi-exclamation-diamond" aria-hidden="true"></i>@CriticalRows.Count() critical</span>
+                    <span><i class="bi bi-cash-stack" aria-hidden="true"></i>@PipelinePremium.ToString("C0") target premium</span>
+                    <span><i class="bi bi-diagram-3" aria-hidden="true"></i>@MarketedRows.Count() marketed</span>
+                </div>
             </div>
         </div>
         <div class="sde-hero__actions">
@@ -35,6 +46,12 @@
             </button>
             <button type="button" class="sde-btn sde-btn--light" @onclick='() => Nav.NavigateTo("/submissions/applications")'>
                 <i class="bi bi-clipboard-check" aria-hidden="true"></i> Applications
+            </button>
+            <button type="button" class="sde-btn sde-btn--light" @onclick='() => Nav.NavigateTo("/submissions/intake")'>
+                <i class="bi bi-inboxes" aria-hidden="true"></i> Intake
+            </button>
+            <button type="button" class="sde-btn sde-btn--light" @onclick='() => Nav.NavigateTo("/submissions/declines")'>
+                <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Declines
             </button>
         </div>
     </section>
@@ -65,9 +82,13 @@
     </section>
 
     <section class="sde-filter-panel" aria-label="Submission filters">
-        <div class="sde-search">
-            <i class="bi bi-search" aria-hidden="true"></i>
-            <input @bind="SearchText" @bind:event="oninput" placeholder="Search submission #, account, opportunity, LOB, status, priority, assignee, premium, marketsâ€¦" />
+        <div class="sde-search-wrap">
+            <div class="sde-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+            <div class="sde-search-body">
+                <label for="submission-search-input">Enterprise search</label>
+                <input id="submission-search-input" class="sde-search-input" @bind="SearchText" @bind:event="oninput" placeholder="Search submission #, account, opportunity, LOB, status, priority, assignee, premium, marketsâ€¦" />
+                <span class="sde-search-hint">Searches all visible and supporting submission fields as you type.</span>
+            </div>
         </div>
         <div class="sde-filter-grid">
             <label>
@@ -110,6 +131,10 @@
                     <option value="markets">Market activity</option>
                 </select>
             </label>
+        </div>
+        <div class="sde-search-result">
+            <strong>@FilteredRows.Count()</strong>
+            <span>matches</span>
         </div>
         <button type="button" class="sde-btn sde-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)">
             <i class="bi bi-x-lg" aria-hidden="true"></i> Reset
@@ -299,6 +324,9 @@
                             <button type="button" class="sde-btn sde-btn--primary" @onclick="() => OpenSubmission(_selected)"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open</button>
                             <button type="button" class="sde-btn sde-btn--ghost" @onclick='() => OpenActionDialog("Submit to Market")'><i class="bi bi-send" aria-hidden="true"></i> Submit</button>
                             <button type="button" class="sde-btn sde-btn--ghost" @onclick='() => OpenActionDialog("Request Quote")'><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Quote</button>
+                            <button type="button" class="sde-btn sde-btn--ghost" @onclick="() => OpenMarkets(_selected)"><i class="bi bi-diagram-3" aria-hidden="true"></i> Markets</button>
+                            <button type="button" class="sde-btn sde-btn--ghost" @onclick='() => OpenConfirmDialog("Initiate Workflow")'><i class="bi bi-diagram-2" aria-hidden="true"></i> Workflow</button>
+                            <button type="button" class="sde-btn sde-btn--ghost" @onclick='() => OpenActionDialog("Copy")'><i class="bi bi-copy" aria-hidden="true"></i> Copy</button>
                         </div>
                     </div>
                 }
@@ -345,6 +373,7 @@
                             <label class="sde-field sde-field--full">
                                 <span>Carrier ID <small>optional</small></span>
                                 <InputText class="form-control" @bind-Value="_actionForm.CarrierIdText" placeholder="Carrier GUID, or leave blank for best market" />
+                                <ValidationMessage For="() => _actionForm.CarrierIdText" class="text-danger" />
                             </label>
                         }
                         @if (_pendingAction is "Request Quote" or "Bind" or "Create Policy")
@@ -352,10 +381,12 @@
                             <label class="sde-field">
                                 <span>Annual Premium <em>*</em></span>
                                 <InputNumber class="form-control" @bind-Value="_actionForm.AnnualPremium" />
+                                <ValidationMessage For="() => _actionForm.AnnualPremium" class="text-danger" />
                             </label>
                             <label class="sde-field">
                                 <span>Effective Date <em>*</em></span>
                                 <InputDate class="form-control" @bind-Value="_actionForm.EffectiveDate" />
+                                <ValidationMessage For="() => _actionForm.EffectiveDate" class="text-danger" />
                             </label>
                         }
                         @if (_pendingAction is "Copy")
@@ -363,6 +394,7 @@
                             <label class="sde-field">
                                 <span>Effective Date <em>*</em></span>
                                 <InputDate class="form-control" @bind-Value="_actionForm.EffectiveDate" />
+                                <ValidationMessage For="() => _actionForm.EffectiveDate" class="text-danger" />
                             </label>
                             <label class="sde-field">
                                 <span>Line of Business <em>*</em></span>
@@ -373,11 +405,13 @@
                                         <option value="@lob">@lob</option>
                                     }
                                 </InputSelect>
+                                <ValidationMessage For="() => _actionForm.LineOfBusiness" class="text-danger" />
                             </label>
                         }
                         <label class="sde-field sde-field--full">
-                            <span>@(_pendingAction == "Decline" ? "Reason" : "Notes") @if (_pendingAction == "Decline") { <em>*</em> }</span>
+                            <span>@(_pendingAction == "Decline" ? "Reason *" : "Notes")</span>
                             <InputTextArea class="form-control" rows="4" @bind-Value="_actionForm.Notes" />
+                            <ValidationMessage For="() => _actionForm.Notes" class="text-danger" />
                         </label>
                     </div>
                 </div>
@@ -486,6 +520,8 @@
     readonly ActionDef[] _actions =
     [
         new("Open", "Open", "bi-box-arrow-up-right", false),
+        new("Markets", "Markets", "bi-diagram-3", false),
+        new("Quote Register", "Quote Register", "bi-table", false),
         new("Submit to Market", "Submit to Market", "bi-send", false),
         new("Request Quote", "Request Quote", "bi-file-earmark-text", false),
         new("Bind", "Bind", "bi-shield-check", false),
@@ -735,6 +771,7 @@
     }
 
     void OpenSubmission(SubmissionDto row) => Nav.NavigateTo($"/submissions/{row.SubmissionId}");
+    void OpenMarkets(SubmissionDto row) => Nav.NavigateTo($"/submissions/{row.SubmissionId}/markets");
 
     void ToggleActionMenu(SubmissionDto row)
     {
@@ -769,6 +806,12 @@
         {
             case "Open":
                 OpenSubmission(_selected);
+                break;
+            case "Markets":
+                OpenMarkets(_selected);
+                break;
+            case "Quote Register":
+                Nav.NavigateTo($"/submissions/quotes?submissionId={_selected.SubmissionId}");
                 break;
             case "Initiate Workflow":
                 OpenConfirmDialog(action);

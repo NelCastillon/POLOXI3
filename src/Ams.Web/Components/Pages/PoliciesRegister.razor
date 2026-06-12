@@ -1,6 +1,7 @@
 ﻿@page "/policies"
 @namespace Ams.Web.Components.Pages
 @using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
 @using Ams.Application.Features.Submissions
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
@@ -89,9 +90,45 @@
                         </div>
 
                         <div class="um-field um-field--full pr-dlg-section">Assignment</div>
-                        <div class="um-field">
+                        <div class="um-field um-field--full pr-account-picker-field">
                             <label>Account <span class="text-danger">*</span></label>
-                            <InputText class="form-control" @bind-Value="_policyForm.Account" />
+                            <div class="pr-account-picker" @onfocusout="CloseAccountDropdownAsync">
+                                <div class="pr-account-picker-control">
+                                    <i class="bi bi-building" aria-hidden="true"></i>
+                                    <input class="form-control pr-account-search"
+                                           value="@_accountSearchText"
+                                           placeholder="Search and select an account"
+                                           autocomplete="off"
+                                           role="combobox"
+                                           aria-expanded="@_accountDropdownOpen"
+                                           aria-controls="policy-account-options"
+                                           @onfocus="OpenAccountDropdown"
+                                           @oninput="OnAccountSearchChanged" />
+                                    <button type="button" class="pr-account-picker-toggle" title="Show accounts" @onclick="ToggleAccountDropdown" disabled="@_actionBusy">
+                                        <i class="bi bi-chevron-down" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                                @if (_accountDropdownOpen)
+                                {
+                                    <div id="policy-account-options" class="pr-account-options" role="listbox">
+                                        @if (FilteredAccountOptions.Any())
+                                        {
+                                            @foreach (var account in FilteredAccountOptions)
+                                            {
+                                                <button type="button" class="pr-account-option" role="option" @onclick="() => SelectAccount(account)">
+                                                    <span class="pr-account-option-main">@account.Name</span>
+                                                    <span class="pr-account-option-meta">@AccountOptionMeta(account)</span>
+                                                </button>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <div class="pr-account-option-empty">No matching accounts</div>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                            <ValidationMessage For="() => _policyForm.Account" class="text-danger" />
                         </div>
                         <div class="um-field">
                             <label>Account Type</label>
@@ -246,20 +283,21 @@
 }
 
 <div class="pr-enterprise-page">
-    <div class="pr-header">
-        <div class="pr-header-left">
-            <div class="pr-lob-icon">
+    <div class="pr-hero">
+        <div class="pr-hero-left">
+            <div class="pr-hero-icon">
                 <i class="bi bi-shield-check" aria-hidden="true"></i>
             </div>
             <div class="pr-header-info">
                 <div class="pr-title-row">
                     <h1 class="pr-page-title">Policies Register</h1>
-                    <span class="pr-status-pill">@FilteredRows.Count() active</span>
+                    <span class="pr-status-pill">@FilteredRows.Count() matches</span>
                     @if (HasFilters)
                     {
                         <span class="pr-filter-pill">Filtered</span>
                     }
                 </div>
+                <p>Enterprise policy command center for active books, renewals, endorsements, cancellations, documents, and service workflow.</p>
                 <div class="pr-sub-row">
                     <span class="pr-sub-chip"><i class="bi bi-stack" aria-hidden="true"></i>@_rows.Count total policies</span>
                     <span class="pr-sub-chip"><i class="bi bi-shield-check" aria-hidden="true"></i>@_rows.Count(r => r.Status == "Active") active</span>
@@ -268,7 +306,7 @@
                 </div>
             </div>
         </div>
-        <div class="pr-header-actions">
+        <div class="pr-hero-actions">
             <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "pr-spin" : "")"></i> Refresh</button>
             <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenNewPolicy"><i class="bi bi-plus-lg"></i> New Policy</button>
             <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/policies/endorsements")'><i class="bi bi-pen"></i> Endorsements</button>
@@ -293,6 +331,25 @@
         @KpiCard("bi-clock", "Expiring 90d", _rows.Count(r => DaysToExp(r.ExpDate) is >= 0 and <= 90).ToString(), "pr-kpi-exp90", "__exp90")
         @KpiCard("bi-x-circle", "Cancelled", _rows.Count(r => r.Status == "Cancelled").ToString(), "pr-kpi-cancelled", "Cancelled")
         @KpiCard("bi-cash-stack", "Active Premium", _rows.Where(r => r.Status == "Active").Sum(r => r.WrittenPremium).ToString("C0"), "pr-kpi-prem", "__premium")
+    </div>
+
+    <div class="pr-workflow-strip" aria-label="Policy workflow shortcuts">
+        <button type="button" class="pr-workflow-card" @onclick="OpenEndorsements" title="Open Endorsements">
+            <i class="bi bi-pen" aria-hidden="true"></i>
+            <div><strong>Endorsements</strong><span>Policy changes, limits, locations, and insured updates</span></div>
+        </button>
+        <button type="button" class="pr-workflow-card" @onclick="OpenCancellations" title="Open Cancellations">
+            <i class="bi bi-x-circle" aria-hidden="true"></i>
+            <div><strong>Cancellations</strong><span>Notices, reinstatements, rescissions, and cancellation review</span></div>
+        </button>
+        <button type="button" class="pr-workflow-card" @onclick="OpenDocuments" title="Open Documents">
+            <i class="bi bi-folder2-open" aria-hidden="true"></i>
+            <div><strong>Documents</strong><span>Declarations, binders, certificates, forms, and policy files</span></div>
+        </button>
+        <button type="button" class="pr-workflow-card" @onclick="OpenCompliance" title="Open Compliance">
+            <i class="bi bi-patch-check" aria-hidden="true"></i>
+            <div><strong>Compliance</strong><span>Compliance policies, attestations, and retained evidence</span></div>
+        </button>
     </div>
 
     <div class="pr-enterprise-search" role="search" aria-label="Search policies">
@@ -325,35 +382,57 @@
         }
     </div>
 
-    <div class="pr-grid-wrap">
-        @if (_loading)
-        {
-            <div class="pr-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span>Loading policiesâ€¦</span></div>
-        }
-        else if (!PagedRows.Any())
-        {
-            <div class="pr-empty-state">
-                <i class="bi bi-shield-exclamation" aria-hidden="true"></i>
-                <strong>No policies found</strong>
-                <span>Adjust the current tab, KPI, or search criteria.</span>
-            </div>
-        }
-        else
-        {
-            <div class="pr-grid-toolbar">
-                <div>
-                    <strong>@FilteredRows.Count()</strong> policies
-                    @if (HasFilters)
-                    {
-                        <span class="pr-filter-note">Filtered</span>
-                    }
+    <div class="pr-content-layout">
+        <div class="pr-main-card">
+            @if (_loading)
+            {
+                <div class="pr-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span>Loading policies...</span></div>
+            }
+            else if (!FilteredRows.Any())
+            {
+                <div class="pr-empty-state">
+                    <i class="bi bi-shield-exclamation" aria-hidden="true"></i>
+                    <strong>No policies found</strong>
+                    <span>Adjust the current tab, KPI, or search criteria.</span>
                 </div>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters" disabled="@(!HasFilters)">
-                    <i class="bi bi-x-lg" aria-hidden="true"></i> Reset
-                </button>
-            </div>
-            <div class="pr-table-scroll">
-                <table class="pr-table" aria-label="Policies register">
+            }
+            else
+            {
+                <div class="pr-grid-toolbar">
+                    <div>
+                        <strong>@FilteredRows.Count()</strong> policies
+                        @if (HasFilters)
+                        {
+                            <span class="pr-filter-note">Filtered</span>
+                        }
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters" disabled="@(!HasFilters)">
+                        <i class="bi bi-x-lg" aria-hidden="true"></i> Reset
+                    </button>
+                </div>
+
+                @if (IsGroupingTab)
+                {
+                    <div class="pr-group-board">
+                        @foreach (var group in GroupedRows)
+                        {
+                            <button type="button" class="pr-group-card" @onclick="() => ApplyGroupSearch(group.Key)">
+                                <div>
+                                    <span>@GroupTitle</span>
+                                    <strong>@group.Key</strong>
+                                </div>
+                                <div class="pr-group-metrics">
+                                    <span><b>@group.Count()</b> policies</span>
+                                    <span><b>@group.Sum(x => x.WrittenPremium).ToString("C0")</b> premium</span>
+                                </div>
+                                <div class="pr-group-meter"><i style="width:@Percent(group.Count(), Math.Max(FilteredRows.Count(), 1))%"></i></div>
+                            </button>
+                        }
+                    </div>
+                }
+
+                <div class="pr-table-scroll">
+                    <table class="pr-table" aria-label="Policies register">
                     <thead>
                         <tr>
                             <th>Policy #</th>
@@ -374,7 +453,7 @@
                     <tbody>
                         @foreach (var row in PagedRows)
                         {
-                            <tr class="pr-table-row" @onclick="() => OpenPolicy(row)">
+                            <tr class="pr-table-row @(_selected.Id == row.Id ? "pr-row-selected" : null)" @onclick="() => SelectPolicy(row)">
                                 <td>@PolicyNoLink(row)</td>
                                 <td>
                                     <div class="pr-account-cell">
@@ -401,12 +480,58 @@
                     </tbody>
                 </table>
             </div>
-            <div class="pr-pager">
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left"></i> Previous</button>
-                <span class="pr-page-chip">@PageSummary</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right"></i></button>
-            </div>
-        }
+                <div class="pr-pager">
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left"></i> Previous</button>
+                    <span class="pr-page-chip">@PageSummary</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right"></i></button>
+                </div>
+            }
+        </div>
+
+        <aside class="pr-detail-card" aria-label="Selected policy details">
+            @if (_selected.Id == Guid.Empty)
+            {
+                <div class="pr-detail-empty">
+                    <i class="bi bi-shield-check" aria-hidden="true"></i>
+                    <strong>Select a policy</strong>
+                    <span>Choose any row to review workflow state and available actions.</span>
+                </div>
+            }
+            else
+            {
+                <div class="pr-detail-head">
+                    <div>
+                        <span class="pr-detail-eyebrow"><i class="bi bi-shield-lock" aria-hidden="true"></i> Policy workspace</span>
+                        <h2>@_selected.PolicyNumber</h2>
+                        <p>@_selected.Account</p>
+                    </div>
+                    @StatusChip(_selected.Status)
+                </div>
+                <div class="pr-detail-body">
+                    <div class="pr-detail-summary">
+                        <div><span>Carrier</span><strong>@_selected.Carrier</strong></div>
+                        <div><span>LOB</span><strong>@_selected.Lob</strong></div>
+                        <div><span>Premium</span><strong>@_selected.WrittenPremium.ToString("C0")</strong></div>
+                        <div><span>Expires</span><strong>@_selected.ExpDate.ToString("MM/dd/yyyy")</strong></div>
+                        <div><span>Producer</span><strong>@_selected.Producer</strong></div>
+                        <div><span>CSR</span><strong>@_selected.Csr</strong></div>
+                    </div>
+                    <div class="pr-work-card">
+                        <span>Last action</span>
+                        <strong>@_selected.LastAction</strong>
+                    </div>
+                    <div class="pr-detail-actions">
+                        <div class="pr-detail-actions-row">
+                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenEditAction"><i class="bi bi-pencil"></i> Edit</button>
+                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenEndorseAction"><i class="bi bi-pen"></i> Endorse</button>
+                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenDocumentAction"><i class="bi bi-paperclip"></i> Document</button>
+                        </div>
+                        <button type="button" class="um-btn um-btn-primary pr-detail-open-btn" @onclick="() => OpenPolicy(_selected)"><i class="bi bi-box-arrow-up-right"></i> Open policy file</button>
+                        <button type="button" class="um-btn um-btn-danger pr-detail-open-btn" @onclick="OpenCancelAction"><i class="bi bi-x-circle"></i> Start cancellation</button>
+                    </div>
+                </div>
+            }
+        </aside>
     </div>
 </div>
 
@@ -442,8 +567,11 @@
     string _confirmTitle = "Confirm action";
     string _confirmMessage = "Confirm this policy action?";
     string _confirmIcon = "bi-question-circle";
+    string _accountSearchText = string.Empty;
+    bool _accountDropdownOpen;
 
     readonly List<PolicyRow> _rows = [];
+    readonly List<AccountOption> _accountOptions = [];
 
     static readonly string[] PolicyStatuses = ["Active", "Pending", "Cancelled", "Expired", "Non-Renewed"];
     static readonly string[] LinesOfBusiness = ["Commercial Auto", "Commercial Property", "General Liability", "Workers Comp", "Professional Liability", "Umbrella", "Cyber", "Directors & Officers", "Personal Auto", "Homeowners", "Life", "Health", "Flood"];
@@ -502,7 +630,38 @@
     };
 
     IEnumerable<PolicyRow> FilteredRows => ApplyEnterpriseFilters(BaseTabRows);
+    IEnumerable<AccountOption> FilteredAccountOptions
+    {
+        get
+        {
+            var options = _accountOptions.AsEnumerable();
+            if (!string.IsNullOrWhiteSpace(_accountSearchText))
+            {
+                var term = _accountSearchText.Trim();
+                options = options.Where(a => Contains(a.Name, term) || Contains(a.Number, term) || Contains(a.Type, term));
+            }
+
+            return options.Take(25);
+        }
+    }
     IEnumerable<PolicyRow> PagedRows => FilteredRows.Skip((_page - 1) * PageSize).Take(PageSize);
+    bool IsGroupingTab => _activeTab is "carrier" or "producer" or "branch" or "lob";
+    string GroupTitle => _activeTab switch
+    {
+        "carrier" => "Carrier",
+        "producer" => "Producer",
+        "branch" => "Branch",
+        "lob" => "Line of business",
+        _ => "Group"
+    };
+    IEnumerable<IGrouping<string, PolicyRow>> GroupedRows => _activeTab switch
+    {
+        "carrier" => FilteredRows.GroupBy(r => r.Carrier).OrderByDescending(g => g.Count()),
+        "producer" => FilteredRows.GroupBy(r => r.Producer).OrderByDescending(g => g.Count()),
+        "branch" => FilteredRows.GroupBy(r => r.Branch).OrderByDescending(g => g.Count()),
+        "lob" => FilteredRows.GroupBy(r => r.Lob).OrderByDescending(g => g.Count()),
+        _ => Enumerable.Empty<IGrouping<string, PolicyRow>>()
+    };
     int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRows.Count() / (double)PageSize));
     string PageSummary
     {
@@ -529,12 +688,16 @@
         _loadError = null;
         try
         {
-            var result = await Api.SearchSubmissionsAsync(_tenantId, pageSize: 150);
+            var result = await Api.SearchPolicyRegisterAsync(_tenantId, pageSize: 250);
+            var accounts = await Api.SearchAccountsAsync(_tenantId, pageSize: 250);
             _rows.Clear();
-            _rows.AddRange((result?.Items ?? []).Where(s => s.Status is "Bound" or "Quoted" or "In Review" or "Declined" or "Withdrawn").Select(MapSubmissionToPolicy));
+            _rows.AddRange((result?.Items ?? []).Select(MapRegisterPolicy));
+            BuildAccountOptions(accounts?.Items ?? []);
 
             if (_rows.Count == 0)
                 BuildStubData();
+
+            BuildAccountOptionsFromRows();
 
             _page = Math.Min(_page, TotalPages);
         }
@@ -544,6 +707,8 @@
             ShowToast($"Load failed: {ex.Message}", "danger");
             if (_rows.Count == 0)
                 BuildStubData();
+
+            BuildAccountOptionsFromRows();
         }
         finally
         {
@@ -551,40 +716,54 @@
         }
     }
 
-    PolicyRow MapSubmissionToPolicy(SubmissionDto s)
+    void BuildAccountOptions(IEnumerable<AccountDto> accounts)
     {
-        var status = s.Status switch
-        {
-            "Bound" => "Active",
-            "Declined" or "Withdrawn" => "Cancelled",
-            "Quoted" or "In Review" => "Pending",
-            _ => s.ExpirationDate.Date < DateTime.Today ? "Expired" : "Active"
-        };
-
-        return new PolicyRow
-        {
-            Id = s.SubmissionId,
-            PolicyNumber = $"POL-{s.SubmissionNumber.Replace("SUB-", string.Empty)}",
-            Account = s.AccountName,
-            AccountType = "Commercial",
-            AccountId = s.AccountId,
-            Carrier = s.QuoteCount > 0 ? "Quoted Markets" : "Pending Carrier",
-            Lob = string.IsNullOrWhiteSpace(s.LineOfBusiness) ? "General Liability" : s.LineOfBusiness,
-            Status = status,
-            EffDate = s.EffectiveDate,
-            ExpDate = s.ExpirationDate,
-            WrittenPremium = s.TargetPremium ?? 0,
-            AnnualPremium = s.TargetPremium ?? 0,
-            Producer = s.AssignedToUserName ?? "Unassigned",
-            Csr = s.AssignedToUserName ?? "Unassigned",
-            Branch = "HQ",
-            Documents = Math.Max(1, s.MarketCount + s.QuoteCount),
-            Activities = Math.Max(1, s.MarketCount + s.QuoteCount + 1),
-            Endorsements = 0,
-            RenewalStage = status == "Active" ? "Not Started" : "Marketing",
-            LastAction = "Created from submission workflow"
-        };
+        _accountOptions.Clear();
+        _accountOptions.AddRange(accounts
+            .Where(a => a.AccountId != Guid.Empty && !string.IsNullOrWhiteSpace(a.AccountName))
+            .Select(a => new AccountOption(a.AccountId, a.AccountName, string.IsNullOrWhiteSpace(a.AccountTypeCode) ? "Commercial" : a.AccountTypeCode, a.AccountNumber))
+            .DistinctBy(a => a.Id)
+            .OrderBy(a => a.Name));
     }
+
+    void BuildAccountOptionsFromRows()
+    {
+        foreach (var row in _rows.Where(r => r.AccountId != Guid.Empty && !string.IsNullOrWhiteSpace(r.Account)))
+        {
+            if (_accountOptions.All(a => a.Id != row.AccountId))
+            {
+                _accountOptions.Add(new AccountOption(row.AccountId, row.Account, row.AccountType, string.Empty));
+            }
+        }
+
+        _accountOptions.Sort((left, right) => string.Compare(left.Name, right.Name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    PolicyRow MapRegisterPolicy(PolicyRegisterDto p) => new()
+    {
+        Id = p.PolicyId,
+        SubmissionId = p.SubmissionId,
+        QuoteId = p.QuoteId,
+        PolicyNumber = p.PolicyNumber,
+        Account = p.AccountName,
+        AccountType = p.AccountType,
+        AccountId = p.AccountId,
+        Carrier = p.CarrierName,
+        Lob = string.IsNullOrWhiteSpace(p.LineOfBusiness) ? "General Liability" : p.LineOfBusiness,
+        Status = p.Status == "Bound" ? "Active" : p.Status,
+        EffDate = p.EffectiveDate,
+        ExpDate = p.ExpirationDate,
+        WrittenPremium = p.WrittenPremium,
+        AnnualPremium = p.AnnualPremium,
+        Producer = string.IsNullOrWhiteSpace(p.ProducerName) ? p.AssignedToUserName ?? "Unassigned" : p.ProducerName,
+        Csr = string.IsNullOrWhiteSpace(p.CsrName) ? p.AssignedToUserName ?? "Unassigned" : p.CsrName,
+        Branch = string.IsNullOrWhiteSpace(p.Branch) ? "HQ" : p.Branch,
+        Documents = Math.Max(0, p.DocumentCount),
+        Activities = Math.Max(1, p.ActivityCount),
+        Endorsements = Math.Max(0, p.EndorsementCount),
+        RenewalStage = string.IsNullOrWhiteSpace(p.RenewalStage) ? "Not Started" : p.RenewalStage,
+        LastAction = string.IsNullOrWhiteSpace(p.LastAction) ? "Policy synchronized from bound policy workflow." : p.LastAction
+    };
 
     void BuildStubData()
     {
@@ -698,6 +877,29 @@
         _page = 1;
     }
 
+    void SelectPolicy(PolicyRow row)
+    {
+        _selected = row;
+        _openActionMenuFor = null;
+    }
+
+    void ApplyGroupSearch(string value)
+    {
+        _searchText = value;
+        _page = 1;
+    }
+
+    static int Percent(int value, int total) => total <= 0 ? 0 : Math.Clamp((int)Math.Round(value * 100m / total), 4, 100);
+
+    Task OpenEditAction() => HandleActionAsync("Edit");
+    Task OpenEndorseAction() => HandleActionAsync("Endorse");
+    Task OpenDocumentAction() => HandleActionAsync("Add Document");
+    Task OpenCancelAction() => HandleActionAsync("Cancel Policy");
+    void OpenEndorsements() => Nav.NavigateTo("/policies/endorsements");
+    void OpenCancellations() => Nav.NavigateTo("/policies/cancellations");
+    void OpenDocuments() => Nav.NavigateTo("/policies/documents");
+    void OpenCompliance() => Nav.NavigateTo("/compliance/policies");
+
     void ToggleKpiFilter(string? filterKey)
     {
         _kpiFilter = filterKey is null || _kpiFilter == filterKey ? null : filterKey;
@@ -727,6 +929,7 @@
 
     void OpenNewPolicy()
     {
+        var firstAccount = _accountOptions.FirstOrDefault();
         _policyForm = new PolicyForm
         {
             PolicyNumber = $"POL-{DateTime.Today:yyyy}-{_rows.Count + 1:D4}",
@@ -736,8 +939,13 @@
             Lob = "General Liability",
             Carrier = Carriers[0],
             Branch = Branches[0],
-            RenewalStage = "Not Started"
+            RenewalStage = "Not Started",
+            AccountId = firstAccount?.Id ?? Guid.Empty,
+            Account = firstAccount?.Name ?? string.Empty,
+            AccountType = firstAccount?.Type ?? "Commercial"
         };
+        _accountSearchText = _policyForm.Account;
+        _accountDropdownOpen = false;
         _showForm = true;
     }
 
@@ -745,6 +953,36 @@
     {
         if (_actionBusy) return;
         _showForm = false;
+        _accountDropdownOpen = false;
+    }
+
+    void OpenAccountDropdown() => _accountDropdownOpen = true;
+
+    void ToggleAccountDropdown() => _accountDropdownOpen = !_accountDropdownOpen;
+
+    void OnAccountSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs args)
+    {
+        _accountSearchText = args.Value?.ToString() ?? string.Empty;
+        _policyForm.Account = _accountSearchText;
+        _policyForm.AccountId = Guid.Empty;
+        _accountDropdownOpen = true;
+    }
+
+    void SelectAccount(AccountOption account)
+    {
+        _policyForm.AccountId = account.Id;
+        _policyForm.Account = account.Name;
+        _policyForm.AccountType = string.IsNullOrWhiteSpace(account.Type) ? "Commercial" : account.Type;
+        _accountSearchText = account.Name;
+        _accountDropdownOpen = false;
+    }
+
+    static string AccountOptionMeta(AccountOption account) => string.IsNullOrWhiteSpace(account.Number) ? account.Type : $"{account.Type} · {account.Number}";
+
+    async Task CloseAccountDropdownAsync()
+    {
+        await Task.Delay(120);
+        _accountDropdownOpen = false;
     }
 
     async Task SavePolicyAsync()
@@ -800,6 +1038,8 @@
                 break;
             case "Edit":
                 _policyForm = PolicyForm.From(_selected);
+                _accountSearchText = _policyForm.Account;
+                _accountDropdownOpen = false;
                 _showForm = true;
                 break;
             case "Cancel Policy":
@@ -1024,6 +1264,12 @@
         </button>;
     }
 
+    RenderFragment WorkflowCard(string icon, string title, string description, string url) =>
+        @<button type="button" class="pr-workflow-card" @onclick="() => Nav.NavigateTo(url)" title="Open @title">
+            <i class="bi @icon" aria-hidden="true"></i>
+            <div><strong>@title</strong><span>@description</span></div>
+        </button>;
+
     static string Initials(string value)
     {
         var words = value.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -1041,10 +1287,13 @@
 
     sealed record TabDef(string Key, string Label, string Icon);
     sealed record ActionItem(string Text, string IconCss);
+    sealed record AccountOption(Guid Id, string Name, string Type, string Number);
 
     sealed class PolicyRow
     {
         public Guid Id { get; set; }
+        public Guid SubmissionId { get; set; }
+        public Guid QuoteId { get; set; }
         public string PolicyNumber { get; set; } = string.Empty;
         public string Account { get; set; } = string.Empty;
         public string AccountType { get; set; } = "Commercial";
@@ -1069,9 +1318,12 @@
         public static PolicyRow From(PolicyForm form) => new()
         {
             Id = Guid.NewGuid(),
+            SubmissionId = Guid.Empty,
+            QuoteId = Guid.Empty,
             PolicyNumber = form.PolicyNumber,
             Account = form.Account,
             AccountType = form.AccountType,
+            AccountId = form.AccountId,
             Carrier = form.Carrier,
             Lob = form.Lob,
             Status = form.Status,
@@ -1094,6 +1346,7 @@
             PolicyNumber = form.PolicyNumber;
             Account = form.Account;
             AccountType = form.AccountType;
+            AccountId = form.AccountId;
             Carrier = form.Carrier;
             Lob = form.Lob;
             Status = form.Status;
@@ -1112,6 +1365,8 @@
         public PolicyRow CloneForRenewal(DateTime effectiveDate, decimal premium) => new()
         {
             Id = Guid.NewGuid(),
+            SubmissionId = SubmissionId,
+            QuoteId = QuoteId,
             PolicyNumber = $"{PolicyNumber}-REN-{DateTime.Today:yyMMdd}",
             Account = Account,
             AccountType = AccountType,
@@ -1139,6 +1394,7 @@
     {
         public Guid Id { get; set; }
         [Required, StringLength(80)] public string PolicyNumber { get; set; } = string.Empty;
+        public Guid AccountId { get; set; }
         [Required, StringLength(200)] public string Account { get; set; } = string.Empty;
         [Required, StringLength(40)] public string AccountType { get; set; } = "Commercial";
         [Required, StringLength(120)] public string Carrier { get; set; } = string.Empty;
@@ -1158,6 +1414,7 @@
         {
             Id = row.Id,
             PolicyNumber = row.PolicyNumber,
+            AccountId = row.AccountId,
             Account = row.Account,
             AccountType = row.AccountType,
             Carrier = row.Carrier,
@@ -1178,6 +1435,8 @@
         {
             if (ExpDate <= EffDate)
                 yield return new ValidationResult("Expiration date must be after effective date.", [nameof(ExpDate)]);
+            if (AccountId == Guid.Empty)
+                yield return new ValidationResult("Select an account from the account list.", [nameof(Account)]);
         }
     }
 

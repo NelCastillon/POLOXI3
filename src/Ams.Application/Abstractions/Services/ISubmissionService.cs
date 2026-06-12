@@ -37,6 +37,7 @@ public interface ISubmissionService
     Task<IReadOnlyList<AppetiteMatchDto>> SearchAppetiteAsync(AppetiteSearchRequest request, CancellationToken cancellationToken = default);
 
     // Bind
+    Task<PagedResult<PolicyRegisterDto>> SearchPoliciesAsync(Guid tenantId, string? searchTerm, string? status, string? lineOfBusiness, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default);
     Task<PolicyBindDto?> GetPolicyBySubmissionAsync(Guid submissionId, CancellationToken cancellationToken = default);
     Task<Guid> BindPolicyAsync(BindPolicyRequest request, CancellationToken cancellationToken = default);
 }

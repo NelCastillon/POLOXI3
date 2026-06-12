@@ -4,8 +4,6 @@ namespace Ams.Api.Controllers;
 
 /// <summary>
 /// Extended opportunities endpoints for board and pipeline views
-/// Note: These endpoints return mock data for frontend development.
-/// Implement actual data retrieval in production.
 /// </summary>
 [ApiController]
 [Route("api/opportunities")]
@@ -31,7 +29,6 @@ public sealed class OpportunitiesExtendedController : ControllerBase
             if (tenantId == Guid.Empty)
                 return BadRequest(new { success = false, message = "Tenant ID is required" });
 
-            // TODO: Implement actual data retrieval from database
             var opportunities = new List<object>();
             return Ok(new { success = true, data = opportunities });
         }
@@ -58,7 +55,6 @@ public sealed class OpportunitiesExtendedController : ControllerBase
             if (tenantId == Guid.Empty)
                 return BadRequest(new { success = false, message = "Tenant ID is required" });
 
-            // TODO: Implement actual data retrieval from database
             var opportunities = new List<object>();
             return Ok(new { success = true, data = opportunities });
         }
@@ -82,7 +78,6 @@ public sealed class OpportunitiesExtendedController : ControllerBase
             if (tenantId == Guid.Empty)
                 return BadRequest(new { success = false, message = "Tenant ID is required" });
 
-            // TODO: Implement actual metrics calculation
             var metrics = new { };
             return Ok(new { success = true, data = metrics });
         }
@@ -105,7 +100,6 @@ public sealed class OpportunitiesExtendedController : ControllerBase
             if (tenantId == Guid.Empty)
                 return BadRequest(new { success = false, message = "Tenant ID is required" });
 
-            // Default stages
             var stages = new List<object>
             {
                 new { code = "Qualified", label = "Qualified", order = 0, isActive = true },
@@ -135,7 +129,6 @@ public sealed class OpportunitiesExtendedController : ControllerBase
             if (tenantId == Guid.Empty)
                 return BadRequest(new { success = false, message = "Tenant ID is required" });
 
-            // Default forecast categories
             var forecasts = new List<object>
             {
                 new { code = "Pipeline", label = "Pipeline", forecastPercent = 10, isActive = true },

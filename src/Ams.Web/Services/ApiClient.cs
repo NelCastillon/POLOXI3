@@ -2353,6 +2353,9 @@ public sealed partial class ApiClient
     public Task<PagedResult<SubmissionDto>?> SearchSubmissionsAsync(Guid tenantId, string? searchTerm = null, string? status = null, string? lineOfBusiness = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<SubmissionDto>>($"api/submissions?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&status={Uri.EscapeDataString(status ?? string.Empty)}&lineOfBusiness={Uri.EscapeDataString(lineOfBusiness ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
+    public Task<PagedResult<PolicyRegisterDto>?> SearchPolicyRegisterAsync(Guid tenantId, string? searchTerm = null, string? status = null, string? lineOfBusiness = null, int pageNumber = 1, int pageSize = 250, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PolicyRegisterDto>>($"api/submissions/policies?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&status={Uri.EscapeDataString(status ?? string.Empty)}&lineOfBusiness={Uri.EscapeDataString(lineOfBusiness ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
     public Task<List<SubmissionReferenceOptionDto>?> GetSubmissionReferenceOptionsAsync(Guid tenantId, string? optionGroup = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<List<SubmissionReferenceOptionDto>>($"api/submissions/reference-options?tenantId={tenantId}&optionGroup={Uri.EscapeDataString(optionGroup ?? string.Empty)}", cancellationToken);
 
