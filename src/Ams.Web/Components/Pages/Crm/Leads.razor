@@ -53,7 +53,7 @@
 
 @if (_showLeadModal)
 {
-    <div id="lead-form-modal-root" class="ld-modal-backdrop" role="presentation" @onclick="CloseLeadModal">
+    <div id="lead-form-modal-root" class="ld-modal-backdrop" role="presentation" @onclick="() => CloseLeadModal()">
         <div class="ld-lead-modal" role="dialog" aria-modal="true" aria-labelledby="leadFormTitle" @onclick:stopPropagation="true">
             <div class="ld-modal-header">
                 <div class="ld-modal-title">
@@ -63,7 +63,7 @@
                         <p>Capture prospect details, scoring, ownership, source, and nurture workflow metadata.</p>
                     </div>
                 </div>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseLeadModal" disabled="@_savingLead" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => CloseLeadModal()" disabled="@_savingLead" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
             </div>
             <EditForm Model="_leadForm" OnValidSubmit="SaveLeadAsync" OnInvalidSubmit="HandleInvalidLeadSubmitAsync">
                 <DataAnnotationsValidator />
@@ -131,7 +131,7 @@
                         <div class="ld-field">
                             <label>Owner <span>*</span></label>
                             <InputSelect class="ld-input" @bind-Value="_leadForm.Owner">
-                                <option value="">Assign owner</option>
+                                <option value="">Assign Owner</option>
                                 @foreach (var owner in _ownerOptions)
                                 {
                                     <option value="@owner.Value">@owner.Label</option>
@@ -153,7 +153,7 @@
                     </div>
                 </div>
                 <div class="ld-modal-footer">
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseLeadModal" disabled="@_savingLead">Cancel</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => CloseLeadModal()" disabled="@_savingLead">Cancel</button>
                     <button type="submit" class="um-btn um-btn-primary" disabled="@_savingLead">
                         @if (_savingLead)
                         {
@@ -252,7 +252,7 @@
                 </select>
                 <div class="ld-check-row"><label><InputCheckbox @bind-Value="_assignNotify" /> Add notification flag to workflow</label></div>
             </div>
-            <div class="ld-modal-footer"><button class="um-btn um-btn-ghost" @onclick="CloseAssign">Cancel</button><button class="um-btn um-btn-primary" @onclick="ConfirmAssign" disabled="@AssignDisabled">Assign leads</button></div>
+            <div class="ld-modal-footer"><button class="um-btn um-btn-ghost" @onclick="CloseAssign">Cancel</button><button class="um-btn um-btn-primary" @onclick="CommitAssignAsync" disabled="@AssignDisabled">Assign leads</button></div>
         </div>
     </div>
 }
@@ -480,7 +480,6 @@
     private static readonly List<LabelValue> _sourceOptions = [new("Referral", "Referral"), new("Website", "Website"), new("Cold Call", "Cold Call"), new("Social", "Social"), new("Email", "Email"), new("Event", "Event"), new("Partner", "Partner"), new("Inbound", "Inbound")];
     private static readonly List<LabelValue> _ratingOptions = [new("Hot", "Hot"), new("Warm", "Warm"), new("Cold", "Cold")];
     private static readonly List<LabelValue> _campaignOptions = [new("c1", "Q3 Commercial BOP Drip"), new("c2", "Renewal Win-Back 2025"), new("c3", "Mid-Market Cyber Awareness"), new("c4", "New Business Referral Series")];
-    private static readonly string[] _modalRootIds = ["lead-confirm-modal-root", "lead-form-modal-root", "lead-import-modal-root", "lead-assign-modal-root", "lead-merge-modal-root", "lead-convert-modal-root", "lead-campaign-modal-root"];
 
     private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
     private bool AllPageSelected => _paged.Count > 0 && _paged.All(IsSelected);
@@ -524,32 +523,10 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        await PortalOpenModalsAsync();
-
         if (!firstRender || _hasLoaded) return;
         await ResolveCurrentUserContextAsync();
         await LoadAsync();
         StateHasChanged();
-    }
-
-    private async Task PortalOpenModalsAsync()
-    {
-        try
-        {
-            foreach (var id in _modalRootIds)
-            {
-                await JS.InvokeVoidAsync("amsShell.portalModal", id);
-            }
-        }
-        catch (JSDisconnectedException) { }
-        catch (InvalidOperationException) { }
-    }
-
-    private async Task ReleaseModalAsync(string id)
-    {
-        try { await JS.InvokeVoidAsync("amsShell.releaseModal", id); }
-        catch (JSDisconnectedException) { }
-        catch (InvalidOperationException) { }
     }
 
     private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs args)
@@ -568,10 +545,6 @@
     {
         Nav.LocationChanged -= OnLocationChanged;
         await LeadScoringRealtime.DisposeAsync();
-        foreach (var id in _modalRootIds)
-        {
-            await ReleaseModalAsync(id);
-        }
         _toastCts?.Cancel();
         _toastCts?.Dispose();
     }
@@ -689,20 +662,25 @@
     private void OnOwnerFilterChanged(BlazorChangeEventArgs e) { _filterOwner = e.Value?.ToString() ?? string.Empty; ApplyFilters(); }
     private void OnRatingFilterChanged(BlazorChangeEventArgs e) { _filterRating = e.Value?.ToString() ?? string.Empty; ApplyFilters(); }
 
-    private void OnNewLeadClick() { _editingId = Guid.Empty; _leadForm = new LeadFormModel { Source = "Referral", Stage = "New", Priority = "Warm", Score = 50, Owner = _ownerOptions.FirstOrDefault()?.Value ?? string.Empty }; _showLeadModal = true; }
+    private void OnNewLeadClick() { _editingId = Guid.Empty; _leadForm = new LeadFormModel { Source = "Referral", Stage = "New", Priority = "Warm", Score = 50, Owner = string.Empty }; _showLeadModal = true; }
     private void OpenEdit(LeadRow lead) { _editingId = lead.LeadId; _leadForm = new LeadFormModel { FirstName = lead.FirstName, LastName = lead.LastName, Company = lead.CompanyName, Email = lead.Email, Phone = lead.Phone, Source = lead.Source, Stage = lead.Stage, Priority = lead.Rating, Owner = lead.AssignedToUserId?.ToString() ?? string.Empty, EstPremium = lead.EstPremium, Score = lead.Score, Notes = lead.Notes ?? string.Empty }; _showLeadModal = true; }
-    private async Task CloseLeadModal() { if (!_savingLead) { await ReleaseModalAsync("lead-form-modal-root"); _showLeadModal = false; } }
+    private Task CloseLeadModal() => CloseLeadModalAsync();
+    private Task CloseLeadModalAsync(bool force = false) { if (!_savingLead || force) { _showLeadModal = false; StateHasChanged(); } return Task.CompletedTask; }
     private void OpenImport() => _showImport = true;
-    private async Task CloseImport() { await ReleaseModalAsync("lead-import-modal-root"); _showImport = false; _importErrors.Clear(); _importPreview.Clear(); }
-    private void OpenAssign() => _showAssign = true;
-    private async Task CloseAssign() { await ReleaseModalAsync("lead-assign-modal-root"); _showAssign = false; }
+    private Task CloseImport() { _showImport = false; _importErrors.Clear(); _importPreview.Clear(); return Task.CompletedTask; }
+    private void OpenAssign()
+    {
+        _assignTarget = ResolveSelectedAssignmentDefault();
+        _showAssign = true;
+    }
+    private Task CloseAssign() { _showAssign = false; return Task.CompletedTask; }
     private void OpenMerge() => _showMerge = true;
-    private async Task CloseMerge() { await ReleaseModalAsync("lead-merge-modal-root"); _showMerge = false; }
+    private Task CloseMerge() { _showMerge = false; return Task.CompletedTask; }
     private void SelectMergeTarget(LeadRow lead) => _mergeTarget = lead.LeadId.ToString();
-    private async Task CloseConvert() { await ReleaseModalAsync("lead-convert-modal-root"); _showConvert = false; }
+    private Task CloseConvert() { _showConvert = false; return Task.CompletedTask; }
     private void OpenCampaign() => _showCampaign = true;
-    private async Task CloseCampaign() { await ReleaseModalAsync("lead-campaign-modal-root"); _showCampaign = false; }
-    private void OpenLeadAssign(LeadRow lead) { _selected = [lead]; _showAssign = true; }
+    private Task CloseCampaign() { _showCampaign = false; return Task.CompletedTask; }
+    private void OpenLeadAssign(LeadRow lead) { _selected = [lead]; _assignTarget = lead.AssignedToUserId?.ToString() ?? string.Empty; _showAssign = true; }
     private void OpenLeadCampaign(LeadRow lead) { _selected = [lead]; _showCampaign = true; }
     private void OpenLeadConvert(LeadRow lead) { _selected = [lead]; ConfirmConvertToOpportunity(); }
 
@@ -716,19 +694,31 @@
             if (_editingId == Guid.Empty)
             {
                 await Api.CreateLeadAsync(new CreateLeadRequest { TenantId = _tenantId, LeadNumber = $"LD-{DateTime.UtcNow:yyyyMMddHHmmss}", AccountName = _leadForm.Company.Trim(), FirstName = _leadForm.FirstName.Trim(), LastName = _leadForm.LastName.Trim(), Email = _leadForm.Email.Trim(), Phone = NormalizePhone(_leadForm.Phone), InterestedService = _leadForm.Notes, AnnualRevenue = _leadForm.EstPremium, Score = _leadForm.Score, PriorityCode = _leadForm.Priority, SourceCode = _leadForm.Source, NurturingStageCode = _leadForm.Stage, AssignedToUserId = assignedToUserId, CreatedByUserId = TenantAdminUserId });
-                await ShowToastAsync("Lead created.", "success");
+                ShowToast("Lead created.", "success");
             }
             else
             {
                 await Api.UpdateLeadAsync(_editingId, new UpdateLeadRequest { LeadId = _editingId, AccountName = _leadForm.Company.Trim(), FirstName = _leadForm.FirstName.Trim(), LastName = _leadForm.LastName.Trim(), Email = _leadForm.Email.Trim(), Phone = NormalizePhone(_leadForm.Phone), InterestedService = _leadForm.Notes, AnnualRevenue = _leadForm.EstPremium, Score = _leadForm.Score, PriorityCode = _leadForm.Priority, SourceCode = _leadForm.Source, NurturingStageCode = _leadForm.Stage, StatusCode = StageToStatusCode(_leadForm.Stage), AssignedToUserId = assignedToUserId, UpdatedByUserId = TenantAdminUserId });
-                await ShowToastAsync("Lead saved.", "success");
+                ShowToast("Lead saved.", "success");
             }
-            await CloseLeadModal();
+            await CloseLeadModalAsync(force: true);
             _editingId = Guid.Empty;
             await LoadAsync();
+            StateHasChanged();
         }
-        catch (Exception ex) { await ShowToastAsync($"Save failed: {ex.Message}", "danger"); }
+        catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", "danger"); }
         finally { _savingLead = false; }
+    }
+
+    private string ResolveSelectedAssignmentDefault()
+    {
+        var assigned = _selected
+            .Select(x => x.AssignedToUserId?.ToString() ?? string.Empty)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return assigned.Count == 1 ? assigned[0] : string.Empty;
     }
 
     private bool ValidateLeadForm()
@@ -777,17 +767,42 @@
             await Api.CreateLeadAsync(new CreateLeadRequest { TenantId = _tenantId, LeadNumber = $"LD-{DateTime.UtcNow:yyyyMMddHHmmss}-{created + 1}", AccountName = row.CompanyName, FirstName = row.FirstName, LastName = row.LastName, Email = row.Email, Phone = NormalizePhone(row.Phone), InterestedService = row.Notes, AnnualRevenue = decimal.TryParse(row.PremiumText, out var premium) ? premium : null, Score = 45, PriorityCode = "Warm", SourceCode = row.Source, NurturingStageCode = "New", AssignedToUserId = ownerId, CreatedByUserId = TenantAdminUserId });
             created++;
         }
-        await CloseImport();
-        await ShowToastAsync($"Imported {created} lead(s).", "success");
         await LoadAsync();
+        await CloseImport();
+        ShowToast($"Imported {created} lead(s).", "success");
     }
 
     private async Task CommitAssignAsync()
     {
         if (!Guid.TryParse(_assignTarget, out var ownerId)) { await ShowToastAsync("Select an owner.", "warning"); return; }
+        var selectedIds = _selected.Select(x => x.LeadId).ToHashSet();
+        var detailId = _detail?.LeadId;
         foreach (var lead in _selected) await UpdateLeadWorkflowAsync(lead, lead.Stage, StageToStatusCode(lead.Stage), ownerId, lead.Rating, lead.Score, lead.Notes);
         var owner = _ownerOptions.FirstOrDefault(x => x.Value == _assignTarget)?.Label ?? "owner";
-        await CloseAssign(); _selected.Clear(); await ShowToastAsync($"Assigned to {owner}.", "success"); await LoadAsync();
+        ApplyAssignedOwner(selectedIds, ownerId, owner);
+        _assignTarget = string.Empty;
+        _selected.Clear();
+        await CloseAssign();
+        await LoadAsync();
+        if (detailId.HasValue) _detail = _leads.FirstOrDefault(x => x.LeadId == detailId.Value) ?? _detail;
+        ShowToast($"Assigned to {owner}.", "success");
+        StateHasChanged();
+    }
+
+    private void ApplyAssignedOwner(IReadOnlySet<Guid> leadIds, Guid ownerId, string owner)
+    {
+        foreach (var lead in _leads.Where(x => leadIds.Contains(x.LeadId)))
+        {
+            lead.AssignedToUserId = ownerId;
+            lead.Owner = owner;
+            lead.LastActivity = DateTime.UtcNow;
+        }
+
+        RebuildDerived();
+        if (_detail is not null && leadIds.Contains(_detail.LeadId))
+        {
+            _detail = _leads.FirstOrDefault(x => x.LeadId == _detail.LeadId) ?? _detail;
+        }
     }
 
     private async Task CommitMergeAsync()
@@ -795,7 +810,7 @@
         if (!Guid.TryParse(_mergeTarget, out var masterId)) { await ShowToastAsync("Select a master lead.", "warning"); return; }
         var master = _selected.First(x => x.LeadId == masterId);
         foreach (var duplicate in _selected.Where(x => x.LeadId != masterId)) await UpdateLeadWorkflowAsync(duplicate, "Lost", 5, duplicate.AssignedToUserId, duplicate.Rating, duplicate.Score, $"Merged into {master.FullName}. {duplicate.Notes}");
-        await CloseMerge(); _selected.Clear(); await ShowToastAsync($"Merged into {master.FullName}.", "success"); await LoadAsync();
+        _selected.Clear(); await LoadAsync(); await CloseMerge(); ShowToast($"Merged into {master.FullName}.", "success");
     }
 
     private void ConfirmConvertToOpportunity()
@@ -863,37 +878,42 @@
             }
         }
 
-        await CloseConvert(); _selected.Clear();
+        _selected.Clear();
+        await LoadAsync();
+        await CloseConvert();
         if (failures.Count > 0)
         {
-            await ShowToastAsync($"Converted {convertedCount} lead(s); {failures.Count} failed: {failures[0]}", "danger");
+            ShowToast($"Converted {convertedCount} lead(s); {failures.Count} failed: {failures[0]}", "danger");
         }
         else if (_convertCreateOpportunity)
         {
-            await ShowToastAsync($"Converted {convertedCount} lead(s), created {accountCount} Prospect account(s) and {opportunityCount} opportunity(ies).", "success");
+            ShowToast($"Converted {convertedCount} lead(s), created {accountCount} Prospect account(s) and {opportunityCount} opportunity(ies).", "success");
         }
         else
         {
-            await ShowToastAsync($"Converted {convertedCount} lead(s).", "success");
+            ShowToast($"Converted {convertedCount} lead(s).", "success");
         }
-        await LoadAsync();
     }
 
     private async Task CommitCampaignAsync()
     {
         var campaignName = _campaignOptions.FirstOrDefault(x => x.Value == _campaignTarget)?.Label ?? _campaignTarget;
         foreach (var lead in _selected) await Api.CreateLeadCampaignAsync(lead.LeadId, new CreateLeadCampaignEnrollmentRequest { TenantId = _tenantId, LeadId = lead.LeadId, CampaignName = campaignName, Status = "Active", EnrolledAt = DateTime.UtcNow, EmailsSent = _campaignSendImmediately ? 1 : 0, EmailsOpen = 0, Clicks = 0, LastTouch = _campaignSendImmediately ? DateTime.UtcNow : null, CreatedByUserId = TenantAdminUserId });
-        await CloseCampaign(); _selected.Clear(); await ShowToastAsync("Campaign enrollment completed.", "success");
+        _campaignTarget = string.Empty;
+        _campaignSendImmediately = false;
+        _selected.Clear();
+        await LoadAsync();
+        await CloseCampaign();
+        ShowToast("Campaign enrollment completed.", "success");
     }
 
     private void ConfirmImport() => OpenConfirm(new("Import leads", $"Import {_importPreview.Count} validated lead(s)?", "Import", "um-btn-primary", "bi-cloud-arrow-up", "warning", CommitImportAsync));
-    private void ConfirmAssign() => OpenConfirm(new("Assign owner", $"Assign {_selected.Count} selected lead(s)?", "Assign", "um-btn-primary", "bi-person-check", "warning", CommitAssignAsync));
     private void ConfirmMerge() => OpenConfirm(new("Merge duplicates", $"Merge {_selected.Count} selected lead(s)?", "Merge", "um-btn-danger", "bi-intersect", "danger", CommitMergeAsync));
     private void ConfirmCommitConvert() => OpenConfirm(new("Confirm conversion", $"Convert {_selected.Count} selected lead(s)?", "Convert", "um-btn-primary", "bi-trophy", "warning", CommitConvertAsync));
     private void ConfirmCampaign() => OpenConfirm(new("Enroll campaign", $"Enroll {_selected.Count} lead(s)?", "Enroll", "um-btn-primary", "bi-megaphone", "warning", CommitCampaignAsync));
     private void ConfirmDisqualify(LeadRow lead) => OpenConfirm(new("Disqualify lead", $"Disqualify {lead.FullName}?", "Disqualify", "um-btn-danger", "bi-x-octagon", "danger", () => DisqualifyLeadAsync(lead)));
 
-    private async Task DisqualifyLeadAsync(LeadRow lead) { await UpdateLeadWorkflowAsync(lead, "Lost", 5, lead.AssignedToUserId, lead.Rating, lead.Score, lead.Notes); _selected.RemoveAll(x => x.LeadId == lead.LeadId); _detail = null; await ShowToastAsync("Lead disqualified.", "success"); await LoadAsync(); }
+    private async Task DisqualifyLeadAsync(LeadRow lead) { await UpdateLeadWorkflowAsync(lead, "Lost", 5, lead.AssignedToUserId, lead.Rating, lead.Score, lead.Notes); _selected.RemoveAll(x => x.LeadId == lead.LeadId); await LoadAsync(); ShowToast("Lead disqualified.", "success"); }
 
     private async Task UpdateLeadWorkflowAsync(LeadRow lead, string stage, int status, Guid? ownerId, string priority, int score, string? notes, DateTime? qualifiedDate = null, Guid? accountId = null)
     {
@@ -901,14 +921,25 @@
     }
 
     private void OpenConfirm(ConfirmAction action) { _confirmAction = action; _showConfirm = true; }
-    private async Task CancelConfirm() { if (!_busy) { await ReleaseModalAsync("lead-confirm-modal-root"); _showConfirm = false; _confirmAction = null; } }
-    private async Task ExecuteConfirmedAsync() { if (_confirmAction is null) return; _busy = true; try { var action = _confirmAction; await action.ExecuteAsync(); await ReleaseModalAsync("lead-confirm-modal-root"); _showConfirm = false; _confirmAction = null; } catch (Exception ex) { await ShowToastAsync($"Action failed: {ex.Message}", "danger"); } finally { _busy = false; } }
+    private Task CancelConfirm() { if (!_busy) { _showConfirm = false; _confirmAction = null; } return Task.CompletedTask; }
+    private async Task ExecuteConfirmedAsync() { if (_confirmAction is null) return; _busy = true; try { var action = _confirmAction; await action.ExecuteAsync(); _showConfirm = false; _confirmAction = null; } catch (Exception ex) { await ShowToastAsync($"Action failed: {ex.Message}", "danger"); } finally { _busy = false; } }
 
-    private async Task ShowToastAsync(string message, string kind = "info")
+    private Task ShowToastAsync(string message, string kind = "info")
+    {
+        ShowToast(message, kind);
+        return Task.CompletedTask;
+    }
+
+    private void ShowToast(string message, string kind = "info")
     {
         _toastCts?.Cancel(); _toastCts?.Dispose(); _toastCts = new CancellationTokenSource();
         _toastMessage = message.Length <= 96 ? message : $"{message[..93]}..."; _toastKind = ToastKind(kind); _toastVisible = true; StateHasChanged();
-        try { await Task.Delay(_toastKind == "danger" ? 10400 : 8000, _toastCts.Token); _toastVisible = false; await InvokeAsync(StateHasChanged); } catch (TaskCanceledException) { }
+        _ = HideToastAfterDelayAsync(_toastCts.Token, _toastKind == "danger" ? 5200 : 2800);
+    }
+
+    private async Task HideToastAfterDelayAsync(CancellationToken cancellationToken, int delayMs)
+    {
+        try { await Task.Delay(delayMs, cancellationToken); _toastVisible = false; await InvokeAsync(StateHasChanged); } catch (TaskCanceledException) { }
     }
 
     private void HideToast() { _toastCts?.Cancel(); _toastVisible = false; }

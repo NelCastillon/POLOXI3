@@ -138,8 +138,7 @@ window.amsShell = (function () {
     }
 
     function lockBodyForModals() {
-        var root = document.getElementById('ams-modal-root');
-        var hasModal = root && root.children.length > 0;
+        var hasModal = !!document.querySelector('.ld-modal-backdrop, .um-modal-backdrop, .e-dlg-container');
         document.body.classList.toggle('ams-modal-open', !!hasModal);
         document.body.style.overflow = hasModal ? 'hidden' : '';
     }
@@ -192,7 +191,7 @@ window.amsShell = (function () {
             document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
         },
 
-        /** Move a Blazor-rendered modal element to the document body so it escapes clipped layouts. */
+        /** Keep Blazor-rendered modal elements in place; only lock body scrolling while visible. */
         portalModal: function (id) {
             var el = document.getElementById(id);
             if (!el) {
@@ -200,27 +199,12 @@ window.amsShell = (function () {
                 return false;
             }
 
-            var root = getModalRoot();
-            if (el.parentElement !== root) {
-                _portals[id] = { parent: el.parentNode, next: el.nextSibling };
-                root.appendChild(el);
-            }
             lockBodyForModals();
             return true;
         },
 
-        /** Return a portaled modal to normal Blazor disposal flow when it is still present. */
+        /** Release modal state without moving or removing Blazor-owned DOM. */
         releaseModal: function (id) {
-            var el = document.getElementById(id);
-            if (el && el.parentElement && el.parentElement.id === 'ams-modal-root') {
-                var portal = _portals[id];
-                if (portal && portal.parent && portal.parent.isConnected) {
-                    portal.parent.insertBefore(el, portal.next && portal.next.isConnected ? portal.next : null);
-                } else {
-                    el.remove();
-                }
-            }
-
             delete _portals[id];
             lockBodyForModals();
         },

@@ -514,6 +514,19 @@ IF NOT EXISTS (SELECT 1 FROM CRM.LeadActivity WHERE TenantId = @TenantId AND Sub
     INSERT INTO CRM.LeadActivity (ActivityId, TenantId, LeadId, OpportunityId, ActivityTypeCode, Subject, Notes, ActivityDate, DurationMinutes, OutcomeCode, IsCompleted, CreatedByUserId, IsDeleted, CreatedDateUtc)
     VALUES (NEWID(), @TenantId, NULL, @OppId6, 'Task', 'GL policy bound – ABC Financial', 'Travelers GL policy issued. Premium $22,500. Client satisfied.', DATEADD(DAY, -15, @Now), 10, 'Won', 1, @UserId, 0, DATEADD(DAY, -15, @Now));
 
+-- Producer Workbench contact history seeded for Log Contact enterprise workflow
+IF NOT EXISTS (SELECT 1 FROM CRM.LeadActivity WHERE TenantId = @TenantId AND Subject = 'Producer contact – Pinnacle discovery touchpoint')
+    INSERT INTO CRM.LeadActivity (ActivityId, TenantId, LeadId, OpportunityId, ActivityTypeCode, Subject, Notes, ActivityDate, DurationMinutes, OutcomeCode, IsCompleted, CreatedByUserId, IsDeleted, CreatedDateUtc)
+    VALUES (NEWID(), @TenantId, @LeadId1, @OppId7, 'Call', 'Producer contact – Pinnacle discovery touchpoint', 'Logged from Producer Workbench. Confirmed incumbent renewal timing, decision committee, and BOP target premium range.', DATEADD(HOUR, -6, @Now), 18, 'Contacted', 1, @UserId, 0, DATEADD(HOUR, -6, @Now));
+
+IF NOT EXISTS (SELECT 1 FROM CRM.LeadActivity WHERE TenantId = @TenantId AND Subject = 'Producer contact – Summit benefits follow-up')
+    INSERT INTO CRM.LeadActivity (ActivityId, TenantId, LeadId, OpportunityId, ActivityTypeCode, Subject, Notes, ActivityDate, DurationMinutes, OutcomeCode, IsCompleted, CreatedByUserId, IsDeleted, CreatedDateUtc)
+    VALUES (NEWID(), @TenantId, @LeadId2, @OppId8, 'Email', 'Producer contact – Summit benefits follow-up', 'Logged from Producer Workbench. Sent benefits benchmark packet and requested current census for E&O expansion underwriting.', DATEADD(HOUR, -3, @Now), 12, 'Sent', 1, @UserId, 0, DATEADD(HOUR, -3, @Now));
+
+IF NOT EXISTS (SELECT 1 FROM CRM.LeadActivity WHERE TenantId = @TenantId AND Subject = 'Producer contact – ACME cyber pricing checkpoint')
+    INSERT INTO CRM.LeadActivity (ActivityId, TenantId, LeadId, OpportunityId, ActivityTypeCode, Subject, Notes, ActivityDate, DurationMinutes, OutcomeCode, IsCompleted, CreatedByUserId, IsDeleted, CreatedDateUtc)
+    VALUES (NEWID(), @TenantId, NULL, @OppId4, 'Meeting', 'Producer contact – ACME cyber pricing checkpoint', 'Logged from Producer Workbench. Reviewed cyber liability retention options and agreed to final carrier comparison before proposal.', DATEADD(HOUR, -2, @Now), 30, 'Positive', 1, @UserId, 0, DATEADD(HOUR, -2, @Now));
+
 -- =============================================================================
 -- 10. CRM FORECAST ENTRIES
 -- =============================================================================

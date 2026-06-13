@@ -107,6 +107,8 @@ SELECT TOP 50
     a.AccountName, o.EstimatedAmount, o.WinProbability,
     o.ForecastCategoryCode AS StageName, o.ForecastCategoryCode,
     o.CloseDate, o.StatusCodeId,
+    (SELECT MAX(la.ActivityDate) FROM CRM.LeadActivity la
+     WHERE la.OpportunityId = o.OpportunityId AND la.IsDeleted = 0) AS LastActivityDate,
     (SELECT TOP 1 la.Subject FROM CRM.LeadActivity la
      WHERE la.OpportunityId = o.OpportunityId AND la.IsDeleted = 0 AND la.IsCompleted = 0
      ORDER BY la.ActivityDate ASC) AS NextAction
@@ -395,12 +397,14 @@ WHERE TenantId = @TenantId AND LeadNumber LIKE 'LDN-%';";
 
         if (itemType.Equals("Lead", StringComparison.OrdinalIgnoreCase))
         {
+            await EnsureLeadExistsAsync(cn, request.TenantId, request.ItemId, cancellationToken);
             await InsertLeadActivityAsync(cn, request.TenantId, request.ItemId, null, activityType, subject, notes, outcome, request.DurationMinutes, request.CreatedByUserId, cancellationToken);
             return;
         }
 
         if (itemType.Equals("Opportunity", StringComparison.OrdinalIgnoreCase))
         {
+            await EnsureOpportunityExistsAsync(cn, request.TenantId, request.ItemId, cancellationToken);
             await InsertLeadActivityAsync(cn, request.TenantId, null, request.ItemId, activityType, subject, notes, outcome, request.DurationMinutes, request.CreatedByUserId, cancellationToken);
             return;
         }
@@ -419,6 +423,34 @@ WHERE TenantId = @TenantId AND LeadNumber LIKE 'LDN-%';";
         }
 
         await InsertAccountActivityAsync(cn, request.TenantId, accountId.Value, activityType, subject, notes, outcome, request.DurationMinutes, request.CreatedByUserId, cancellationToken);
+    }
+
+    private static async Task EnsureLeadExistsAsync(System.Data.IDbConnection cn, Guid tenantId, Guid leadId, CancellationToken cancellationToken)
+    {
+        const string sql = @"
+SELECT COUNT(1)
+FROM CRM.Lead
+WHERE TenantId = @TenantId AND LeadId = @LeadId AND IsDeleted = 0;";
+
+        var exists = await cn.ExecuteScalarAsync<int>(new CommandDefinition(sql, new { TenantId = tenantId, LeadId = leadId }, cancellationToken: cancellationToken));
+        if (exists == 0)
+        {
+            throw new InvalidOperationException("Lead was not found or has already been removed.");
+        }
+    }
+
+    private static async Task EnsureOpportunityExistsAsync(System.Data.IDbConnection cn, Guid tenantId, Guid opportunityId, CancellationToken cancellationToken)
+    {
+        const string sql = @"
+SELECT COUNT(1)
+FROM CRM.Opportunity
+WHERE TenantId = @TenantId AND OpportunityId = @OpportunityId AND IsDeleted = 0;";
+
+        var exists = await cn.ExecuteScalarAsync<int>(new CommandDefinition(sql, new { TenantId = tenantId, OpportunityId = opportunityId }, cancellationToken: cancellationToken));
+        if (exists == 0)
+        {
+            throw new InvalidOperationException("Opportunity was not found or has already been removed.");
+        }
     }
 
     private static async Task InsertLeadActivityAsync(

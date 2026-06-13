@@ -178,6 +178,7 @@ public sealed class WorkbenchOpportunityDto
     public string? ForecastCategoryCode { get; set; }
     public DateTime? CloseDate         { get; set; }
     public int     StatusCodeId        { get; set; }
+    public DateTime? LastActivityDate  { get; set; }
     public string? NextAction          { get; set; }
     public bool IsClosingSoon          => CloseDate.HasValue && CloseDate.Value <= DateTime.UtcNow.AddDays(14);
 }

@@ -9,14 +9,11 @@
 @inject LeadDialogService LeadDialogs
 @implements IDisposable
 
-@if (_toastVisible)
-{
-    <div class="ld-dialog-alert ld-dialog-alert-@_toastKind" role="status" aria-live="polite">
-        <i class="bi @ToastIconClass" aria-hidden="true"></i>
-        <span>@_toastMessage</span>
-        <button type="button" class="ld-dialog-alert-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
-    </div>
-}
+<div class="@ToastCssClass" role="status" aria-live="polite" aria-hidden="@(!_toastVisible)">
+    <i class="bi @ToastIconClass" aria-hidden="true"></i>
+    <span>@_toastMessage</span>
+    <button type="button" class="ld-dialog-alert-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+</div>
 
 @if (_visible)
 {
@@ -98,7 +95,7 @@
                         <div class="ld-field">
                             <label>Owner <span>*</span></label>
                             <InputSelect class="ld-input" @bind-Value="_form.Owner">
-                                <option value="">Assign owner</option>
+                                <option value="">Assign Owner</option>
                                 @foreach (var owner in _ownerOptions)
                                 {
                                     <option value="@owner.Value">@owner.Label</option>
@@ -164,6 +161,7 @@
     private static readonly List<LabelValue> _sourceOptions = [new("Referral", "Referral"), new("Website", "Website"), new("Cold Call", "Cold Call"), new("Social", "Social"), new("Email", "Email"), new("Event", "Event"), new("Partner", "Partner"), new("Inbound", "Inbound")];
     private static readonly List<LabelValue> _ratingOptions = [new("Hot", "Hot"), new("Warm", "Warm"), new("Cold", "Cold")];
 
+    private string ToastCssClass => $"ld-dialog-alert ld-dialog-alert-{_toastKind}{(_toastVisible ? string.Empty : " ld-dialog-alert-hidden")}";
     private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-octagon", "warning" => "bi-exclamation-triangle", "success" => "bi-check2-circle", _ => "bi-info-circle" };
     private string PhoneStatusText => IsPhoneValid(_form.Phone) ? $"Phone formatted as {NormalizePhone(_form.Phone)}" : "Enter a valid 10-digit phone number.";
     private string PhoneHintClass => IsPhoneValid(_form.Phone) ? "ld-field-hint ld-hint-good" : "ld-field-hint ld-hint-bad";
@@ -186,7 +184,7 @@
     {
         await EnsureContextAsync();
         await EnsureOwnersLoadedAsync();
-        _form = new LeadFormModel { Source = "Referral", Stage = "New", Priority = "Warm", Score = 50, Owner = _ownerOptions.FirstOrDefault()?.Value ?? string.Empty };
+        _form = new LeadFormModel { Source = "Referral", Stage = "New", Priority = "Warm", Score = 50, Owner = string.Empty };
         _visible = true;
         StateHasChanged();
     }
@@ -287,11 +285,22 @@
 
     private void OnPhoneChanged() { if (IsPhoneValid(_form.Phone)) _form.Phone = NormalizePhone(_form.Phone) ?? string.Empty; }
 
-    private async Task ShowToastAsync(string message, string kind = "info")
+    private Task ShowToastAsync(string message, string kind = "info")
+    {
+        ShowToast(message, kind);
+        return Task.CompletedTask;
+    }
+
+    private void ShowToast(string message, string kind = "info")
     {
         _toastCts?.Cancel(); _toastCts?.Dispose(); _toastCts = new System.Threading.CancellationTokenSource();
         _toastMessage = message.Length <= 96 ? message : $"{message[..93]}..."; _toastKind = ToastKind(kind); _toastVisible = true; StateHasChanged();
-        try { await Task.Delay(_toastKind == "danger" ? 10400 : 8000, _toastCts.Token); _toastVisible = false; await InvokeAsync(StateHasChanged); } catch (TaskCanceledException) { }
+        _ = HideToastAfterDelayAsync(_toastCts.Token, _toastKind == "danger" ? 5200 : 2800);
+    }
+
+    private async Task HideToastAfterDelayAsync(CancellationToken cancellationToken, int delayMs)
+    {
+        try { await Task.Delay(delayMs, cancellationToken); _toastVisible = false; await InvokeAsync(StateHasChanged); } catch (TaskCanceledException) { }
     }
 
     private void HideToast() { _toastCts?.Cancel(); _toastVisible = false; }

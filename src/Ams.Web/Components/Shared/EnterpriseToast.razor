@@ -1,0 +1,86 @@
+@using Syncfusion.Blazor.Notifications
+
+<div class="@ToastCss" role="status" aria-live="polite" aria-hidden="@(!_visible)">
+    <i class="@IconCss" aria-hidden="true"></i>
+    <span>@_message</span>
+    @if (ShowCloseButton)
+    {
+        <button type="button" class="um-btn um-btn-ghost um-btn-sm" aria-label="Dismiss notification" @onclick="Hide">
+            <i class="bi bi-x-lg" aria-hidden="true"></i>
+        </button>
+    }
+</div>
+
+@code {
+    private CancellationTokenSource? _toastCts;
+    private bool _visible;
+    private string _message = string.Empty;
+    private string _kind = "info";
+
+    [Parameter] public int Timeout { get; set; } = 2800;
+    [Parameter] public bool ShowCloseButton { get; set; } = true;
+    [Parameter] public bool ShowProgressBar { get; set; }
+    [Parameter] public bool NewestOnTop { get; set; } = true;
+
+    private string ToastCss => $"um-toast um-toast-{_kind}{(_visible ? string.Empty : " um-toast-hidden")}";
+
+    private string IconCss => _kind switch
+    {
+        "success" => "bi bi-check-circle-fill",
+        "danger" => "bi bi-exclamation-triangle-fill",
+        "warning" => "bi bi-exclamation-circle-fill",
+        _ => "bi bi-info-circle-fill"
+    };
+
+    public Task ShowAsync(ToastModel model)
+    {
+        _toastCts?.Cancel();
+        _toastCts?.Dispose();
+        _toastCts = new CancellationTokenSource();
+
+        _message = string.IsNullOrWhiteSpace(model.Content) ? model.Title ?? string.Empty : model.Content;
+        _kind = ResolveKind(model.CssClass);
+        _visible = true;
+        StateHasChanged();
+
+        var timeout = model.Timeout > 0 ? model.Timeout : Timeout;
+        _ = HideAfterDelayAsync(_toastCts.Token, _kind == "danger" ? Math.Max(timeout, 5200) : timeout);
+        return Task.CompletedTask;
+    }
+
+    public Task ShowAsync()
+    {
+        _visible = true;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private static string ResolveKind(string? cssClass)
+    {
+        if (string.IsNullOrWhiteSpace(cssClass)) return "info";
+        if (cssClass.Contains("success", StringComparison.OrdinalIgnoreCase)) return "success";
+        if (cssClass.Contains("danger", StringComparison.OrdinalIgnoreCase) || cssClass.Contains("error", StringComparison.OrdinalIgnoreCase)) return "danger";
+        if (cssClass.Contains("warning", StringComparison.OrdinalIgnoreCase) || cssClass.Contains("warn", StringComparison.OrdinalIgnoreCase)) return "warning";
+        return "info";
+    }
+
+    private async Task HideAfterDelayAsync(CancellationToken cancellationToken, int delayMs)
+    {
+        try
+        {
+            await Task.Delay(delayMs, cancellationToken);
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _visible = false;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (TaskCanceledException) { }
+    }
+
+    private void Hide()
+    {
+        _toastCts?.Cancel();
+        _visible = false;
+    }
+}
