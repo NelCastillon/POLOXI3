@@ -8,6 +8,7 @@ public sealed class OpportunityDetailDto
     public IReadOnlyList<OpportunitySubmissionDto> Submissions { get; set; } = [];
     public IReadOnlyList<QuoteDto> Quotes { get; set; } = [];
     public IReadOnlyList<OpportunityCompetitorDto> Competitors { get; set; } = [];
+    public IReadOnlyList<OpportunityWorkflowEventDto> WorkflowEvents { get; set; } = [];
 }
 
 public sealed class OpportunityLineDto
@@ -21,6 +22,20 @@ public sealed class OpportunityLineDto
     public string Priority { get; set; } = "Medium";
     public DateTime CreatedDateUtc { get; set; }
     public DateTime? ModifiedDateUtc { get; set; }
+}
+
+public sealed class OpportunityWorkflowEventDto
+{
+    public Guid WorkflowEventId { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid OpportunityId { get; set; }
+    public string EventType { get; set; } = string.Empty;
+    public string EventTitle { get; set; } = string.Empty;
+    public string? EventDetail { get; set; }
+    public string? RelatedEntityName { get; set; }
+    public Guid? RelatedEntityId { get; set; }
+    public DateTime EventDateUtc { get; set; }
+    public DateTime CreatedDateUtc { get; set; }
 }
 
 public sealed class OpportunityActivityDto

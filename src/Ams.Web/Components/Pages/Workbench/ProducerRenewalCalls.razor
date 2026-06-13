@@ -1,0 +1,392 @@
+@page "/workbench/producer/renewal-calls"
+@namespace Ams.Web.Components.Pages.Workbench
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using Microsoft.AspNetCore.Components.Forms
+@inject ProducerWorkbenchApiClient WorkbenchApi
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Producer Renewal Call List — AMS</PageTitle>
+
+<div class="prc-page">
+    @if (_toastVisible)
+    {
+        <div class="prc-toast prc-toast-@_toastKind" role="status" aria-live="polite">
+            <i class="bi @ToastIcon" aria-hidden="true"></i>
+            <span>@_toastMessage</span>
+            <button type="button" class="prc-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+        </div>
+    }
+
+    <section class="prc-hero" aria-labelledby="renewal-call-title">
+        <div class="prc-hero-main">
+            <span class="prc-hero-icon"><i class="bi bi-telephone-outbound" aria-hidden="true"></i></span>
+            <div>
+                <div class="prc-title-row">
+                    <h1 id="renewal-call-title">Renewal Call List</h1>
+                    <span><i class="bi bi-shield-check" aria-hidden="true"></i> Producer retention execution</span>
+                </div>
+                <p>Prioritize renewal outreach, document call outcomes, and keep at-risk premium moving before expiration.</p>
+            </div>
+        </div>
+        <div class="prc-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/workbench/producer")'>
+                <i class="bi bi-arrow-left" aria-hidden="true"></i> Producer Workbench
+            </button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync">
+                <i class="bi bi-download" aria-hidden="true"></i> Export
+            </button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading">
+                <i class="bi bi-arrow-clockwise @(_loading ? "prc-spin" : null)" aria-hidden="true"></i> Refresh
+            </button>
+        </div>
+    </section>
+
+    <section class="pc-kpi-strip" aria-label="Renewal call metrics">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="pc-kpi-card @(metric.Filter == _activeFilter ? "pc-kpi-card--active" : null)" title="@metric.Tooltip" @onclick="() => SetFilter(metric.Filter)">
+                <span class="pc-kpi-icon @metric.Tone"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                <span class="pc-kpi-content"><small>@metric.Label</small><strong>@metric.Value</strong></span>
+            </button>
+        }
+    </section>
+
+    <section class="prc-filters" aria-label="Renewal call filters">
+        <div class="prc-filter-field prc-filter-search">
+            <label for="prcSearch">Search call list</label>
+            <div class="prc-search-box">
+                <i class="bi bi-search" aria-hidden="true"></i>
+                <input id="prcSearch" class="form-control" placeholder="Account, policy, line, action..." @bind="_search" @bind:event="oninput" />
+            </div>
+        </div>
+        <div class="prc-filter-field">
+            <label for="prcPriority">Priority</label>
+            <select id="prcPriority" class="form-select" @bind="_priorityFilter">
+                <option value="">All priorities</option>
+                <option value="High">High</option>
+                <option value="Medium">Medium</option>
+                <option value="Low">Low</option>
+            </select>
+        </div>
+        <div class="prc-filter-field">
+            <label for="prcStatus">Status</label>
+            <select id="prcStatus" class="form-select" @bind="_statusFilter">
+                <option value="">All statuses</option>
+                <option value="Open">Open</option>
+                <option value="InProgress">In Progress</option>
+                <option value="Completed">Completed</option>
+                <option value="Closed">Closed</option>
+            </select>
+        </div>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-circle" aria-hidden="true"></i> Reset</button>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger prc-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            @_loadError
+        </div>
+    }
+
+    <section class="prc-workspace" aria-label="Renewal call workspace">
+        <div class="prc-list-panel">
+            <div class="prc-panel-head">
+                <div>
+                    <span>Call queue</span>
+                    <strong>@FilteredItems.Count.ToString("N0", CultureInfo.CurrentCulture) renewal calls</strong>
+                </div>
+                <small>@ActiveFilterLabel</small>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="prc-empty"><i class="bi bi-arrow-repeat prc-spin" aria-hidden="true"></i><strong>Loading renewal calls...</strong><span>Syncing producer renewal call workflow.</span></div>
+            }
+            else if (FilteredItems.Count == 0)
+            {
+                <div class="prc-empty"><i class="bi bi-check2-circle" aria-hidden="true"></i><strong>No renewal calls match the current filters.</strong><span>Adjust filters or refresh the page.</span></div>
+            }
+            else
+            {
+                <div class="prc-call-list">
+                    @foreach (var item in FilteredItems)
+                    {
+                        <button type="button" class="prc-call-card @(item.RenewalCallId == _selected?.RenewalCallId ? "prc-call-card-active" : null)" @onclick="() => SelectCall(item)">
+                            <span class="prc-call-top">
+                                <strong>@item.AccountName</strong>
+                                <span class="prc-badge @PriorityClass(item.PriorityCode)">@item.PriorityCode</span>
+                            </span>
+                            <span class="prc-call-meta"><i class="bi bi-file-earmark-text" aria-hidden="true"></i> @PolicyNumberDisplay(item)</span>
+                            <span class="prc-call-meta"><i class="bi bi-calendar-event" aria-hidden="true"></i> Due @DateLabel(item.DueDate) · expires @DateLabel(item.ExpirationDate)</span>
+                            <span class="prc-call-bottom">
+                                <span class="prc-status @StatusClass(item.StatusCode)">@StatusLabel(item.StatusCode)</span>
+                                <span>@Money(item.CurrentPremium)</span>
+                            </span>
+                        </button>
+                    }
+                </div>
+            }
+        </div>
+
+        <aside class="prc-detail-panel" aria-label="Selected renewal call detail">
+            @if (_selected is null)
+            {
+                <div class="prc-empty prc-empty-detail"><i class="bi bi-telephone" aria-hidden="true"></i><strong>Select a renewal call</strong><span>Choose an account from the call queue to update status, outcome, and next action.</span></div>
+            }
+            else
+            {
+                <div class="prc-detail-card">
+                    <div class="prc-detail-head">
+                        <div>
+                            <span>@_selected.CallNumber</span>
+                            <h2>@_selected.AccountName</h2>
+                            <p>@LineOfBusinessDisplay(_selected) · @Money(_selected.CurrentPremium) current premium</p>
+                        </div>
+                        <span class="prc-badge @PriorityClass(_selected.PriorityCode)">@_selected.PriorityCode</span>
+                    </div>
+
+                    <div class="prc-detail-grid">
+                        <div><small>Policy</small><strong>@PolicyNumberDisplay(_selected)</strong></div>
+                        <div><small>Status</small><strong>@StatusLabel(_selected.StatusCode)</strong></div>
+                        <div><small>Due</small><strong>@DateLabel(_selected.DueDate)</strong></div>
+                        <div><small>Expiration</small><strong>@DateLabel(_selected.ExpirationDate)</strong></div>
+                    </div>
+
+                    <div class="prc-next-action">
+                        <i class="bi bi-lightning-charge" aria-hidden="true"></i>
+                        <div><small>Next action</small><strong>@(_selected.NextAction ?? "Schedule renewal touchpoint")</strong></div>
+                    </div>
+
+                    <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                        <DataAnnotationsValidator />
+                        <div class="um-form-grid prc-form-grid">
+                            <div class="um-form-field">
+                                <label for="prcFormStatus">Status</label>
+                                <InputSelect id="prcFormStatus" class="form-select" @bind-Value="_form.StatusCode">
+                                    <option value="Open">Open</option>
+                                    <option value="InProgress">In Progress</option>
+                                    <option value="Completed">Completed</option>
+                                    <option value="Closed">Closed</option>
+                                </InputSelect>
+                                <ValidationMessage For="() => _form.StatusCode" class="text-danger" />
+                            </div>
+                            <div class="um-form-field">
+                                <label for="prcFormPriority">Priority</label>
+                                <InputSelect id="prcFormPriority" class="form-select" @bind-Value="_form.PriorityCode">
+                                    <option value="High">High</option>
+                                    <option value="Medium">Medium</option>
+                                    <option value="Low">Low</option>
+                                </InputSelect>
+                                <ValidationMessage For="() => _form.PriorityCode" class="text-danger" />
+                            </div>
+                            <div class="um-form-field">
+                                <label for="prcFormOutcome">Outcome</label>
+                                <InputText id="prcFormOutcome" class="form-control" @bind-Value="_form.OutcomeCode" placeholder="Left message, confirmed renewal, needs follow-up" />
+                                <ValidationMessage For="() => _form.OutcomeCode" class="text-danger" />
+                            </div>
+                            <div class="um-form-field">
+                                <label for="prcFormLastContact">Last contact</label>
+                                <InputDate id="prcFormLastContact" class="form-control" @bind-Value="_form.LastContactDateUtc" />
+                                <ValidationMessage For="() => _form.LastContactDateUtc" class="text-danger" />
+                            </div>
+                            <div class="um-form-field prc-form-span">
+                                <label for="prcFormNextAction">Next action</label>
+                                <InputText id="prcFormNextAction" class="form-control" @bind-Value="_form.NextAction" />
+                                <ValidationMessage For="() => _form.NextAction" class="text-danger" />
+                            </div>
+                            <div class="um-form-field prc-form-span">
+                                <label for="prcFormNotes">Notes</label>
+                                <InputTextArea id="prcFormNotes" class="form-control" @bind-Value="_form.Notes" rows="4" />
+                                <ValidationMessage For="() => _form.Notes" class="text-danger" />
+                            </div>
+                        </div>
+                        <div class="prc-form-actions">
+                            <button type="button" class="um-btn um-btn-ghost" @onclick="MarkContacted"><i class="bi bi-telephone-check" aria-hidden="true"></i> Mark Contacted</button>
+                            <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check2-circle" aria-hidden="true"></i> @(_saving ? "Saving..." : "Save Call")</button>
+                        </div>
+                    </EditForm>
+                </div>
+            }
+        </aside>
+    </section>
+</div>
+
+@code {
+    private Guid? _tenantId;
+    private Guid? _userId;
+    private bool _loading;
+    private bool _saving;
+    private string? _loadError;
+    private string _search = string.Empty;
+    private string _activeFilter = string.Empty;
+    private string _priorityFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private bool _toastVisible;
+    private string _toastKind = "success";
+    private string _toastMessage = string.Empty;
+    private ProducerRenewalCallSummaryDto _summary = new();
+    private List<ProducerRenewalCallDto> _items = [];
+    private ProducerRenewalCallDto? _selected;
+    private UpdateProducerRenewalCallRequest _form = new();
+
+    private string ToastIcon => _toastKind == "danger" ? "bi-exclamation-triangle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-check-circle-fill";
+    private string ActiveFilterLabel => string.IsNullOrWhiteSpace(_activeFilter) ? "All renewal calls" : _activeFilter switch { "due" => "Due today", "overdue" => "Overdue", "high" => "High priority", "completed" => "Completed", _ => "Filtered" };
+
+    private IReadOnlyList<Metric> Metrics =>
+    [
+        new("", _summary.TotalCalls.ToString("N0", CultureInfo.CurrentCulture), "Total Calls", "All renewal calls", "bi-telephone", "prc-tone-blue"),
+        new("due", _summary.DueToday.ToString("N0", CultureInfo.CurrentCulture), "Due Today", "Calls due today", "bi-calendar-check", "prc-tone-amber"),
+        new("overdue", _summary.Overdue.ToString("N0", CultureInfo.CurrentCulture), "Overdue", "Calls past due", "bi-exclamation-triangle", "prc-tone-red"),
+        new("high", _summary.HighPriority.ToString("N0", CultureInfo.CurrentCulture), "High Priority", "High priority calls", "bi-fire", "prc-tone-purple"),
+        new("premium", MoneyShort(_summary.PremiumAtRisk), "Premium at Risk", "Open premium at risk", "bi-cash-stack", "prc-tone-green"),
+        new("completed", _summary.Completed.ToString("N0", CultureInfo.CurrentCulture), "Completed", "Completed call work", "bi-check2-circle", "prc-tone-slate")
+    ];
+
+    private List<ProducerRenewalCallDto> FilteredItems => _items
+        .Where(MatchesActiveFilter)
+        .Where(MatchesPriorityFilter)
+        .Where(MatchesStatusFilter)
+        .Where(MatchesSearch)
+        .ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _userId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Producer Workbench", "/workbench/producer"), new("Renewal Call List", "/workbench/producer/renewal-calls"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (!_tenantId.HasValue) return;
+
+        try
+        {
+            _loading = true;
+            _loadError = null;
+            var dto = await WorkbenchApi.GetRenewalCallsAsync(_tenantId.Value);
+            _summary = dto?.Summary ?? new();
+            _items = dto?.Items ?? [];
+            _selected = _selected is null ? _items.FirstOrDefault() : _items.FirstOrDefault(i => i.RenewalCallId == _selected.RenewalCallId) ?? _items.FirstOrDefault();
+            if (_selected is not null) BindForm(_selected);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load renewal call list: {ex.Message}";
+            ShowToast($"Failed to load renewal call list: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void SelectCall(ProducerRenewalCallDto item)
+    {
+        _selected = item;
+        BindForm(item);
+    }
+
+    private void BindForm(ProducerRenewalCallDto item)
+    {
+        _form = new()
+        {
+            StatusCode = item.StatusCode,
+            PriorityCode = item.PriorityCode,
+            OutcomeCode = item.OutcomeCode,
+            LastContactDateUtc = item.LastContactDateUtc,
+            NextAction = item.NextAction ?? "Schedule renewal touchpoint",
+            Notes = item.Notes,
+            ModifiedByUserId = _userId
+        };
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_selected is null) return;
+
+        try
+        {
+            _saving = true;
+            _form.ModifiedByUserId = _userId;
+            await WorkbenchApi.UpdateRenewalCallAsync(_selected.RenewalCallId, _form);
+            ShowToast("Renewal call updated.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void MarkContacted()
+    {
+        _form.StatusCode = "InProgress";
+        _form.OutcomeCode = string.IsNullOrWhiteSpace(_form.OutcomeCode) ? "Contacted" : _form.OutcomeCode;
+        _form.LastContactDateUtc = DateTime.UtcNow;
+        _form.NextAction = string.IsNullOrWhiteSpace(_form.NextAction) ? "Confirm renewal strategy and requested application updates" : _form.NextAction;
+    }
+
+    private void SetFilter(string filter) => _activeFilter = _activeFilter == filter ? string.Empty : filter;
+
+    private void ResetFilters()
+    {
+        _search = string.Empty;
+        _activeFilter = string.Empty;
+        _priorityFilter = string.Empty;
+        _statusFilter = string.Empty;
+    }
+
+    private async Task ExportAsync()
+    {
+        await Task.Run(() => ShowToast($"Export prepared for {FilteredItems.Count:N0} renewal call rows."));
+    }
+
+    private bool MatchesActiveFilter(ProducerRenewalCallDto item) => _activeFilter switch
+    {
+        "due" => item.IsDueToday,
+        "overdue" => item.IsOverdue,
+        "high" => item.IsHighPriority,
+        "premium" => item.StatusCode != "Completed" && (item.CurrentPremium ?? 0) > 0,
+        "completed" => item.StatusCode == "Completed",
+        _ => true
+    };
+
+    private bool MatchesPriorityFilter(ProducerRenewalCallDto item) => string.IsNullOrWhiteSpace(_priorityFilter) || item.PriorityCode.Equals(_priorityFilter, StringComparison.OrdinalIgnoreCase);
+    private bool MatchesStatusFilter(ProducerRenewalCallDto item) => string.IsNullOrWhiteSpace(_statusFilter) || item.StatusCode.Equals(_statusFilter, StringComparison.OrdinalIgnoreCase);
+
+    private bool MatchesSearch(ProducerRenewalCallDto item)
+    {
+        if (string.IsNullOrWhiteSpace(_search)) return true;
+        var term = _search.Trim();
+        return Contains(item.AccountName, term)
+            || Contains(item.PolicyNumber, term)
+            || Contains(item.LineOfBusiness, term)
+            || Contains(item.NextAction, term)
+            || Contains(item.CallNumber, term);
+    }
+
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static string DateLabel(DateTime value) => value.ToString("MMM d, yyyy", CultureInfo.CurrentCulture);
+    private static string Money(decimal? value) => value.HasValue ? value.Value.ToString("C0", CultureInfo.CurrentCulture) : "—";
+    private static string MoneyShort(decimal value) => value >= 1_000_000 ? (value / 1_000_000).ToString("C1", CultureInfo.CurrentCulture) + "M" : value >= 1_000 ? (value / 1_000).ToString("C0", CultureInfo.CurrentCulture) + "K" : value.ToString("C0", CultureInfo.CurrentCulture);
+    private static string PolicyNumberDisplay(ProducerRenewalCallDto item) => string.IsNullOrWhiteSpace(item.PolicyNumber) ? "No policy number" : item.PolicyNumber;
+    private static string LineOfBusinessDisplay(ProducerRenewalCallDto item) => string.IsNullOrWhiteSpace(item.LineOfBusiness) ? "Renewal coverage" : item.LineOfBusiness;
+    private static string StatusLabel(string value) => value == "InProgress" ? "In Progress" : value;
+    private static string StatusClass(string value) => value switch { "Completed" => "prc-status-success", "InProgress" => "prc-status-info", "Closed" => "prc-status-muted", _ => "prc-status-open" };
+    private static string PriorityClass(string value) => value switch { "High" => "prc-badge-high", "Low" => "prc-badge-low", _ => "prc-badge-medium" };
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+
+    private sealed record Metric(string Filter, string Value, string Label, string Tooltip, string Icon, string Tone);
+}

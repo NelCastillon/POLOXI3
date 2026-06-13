@@ -3354,6 +3354,13 @@ public sealed partial class ApiClient
     public Task<PagedResult<MarketingCrossSellOpportunityDto>?> SearchMarketingCrossSellAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<MarketingCrossSellOpportunityDto>>($"api/marketing/cross-sell?tenantId={tenantId}", cancellationToken);
 
+    public Task<MarketingCrossSellOpportunityDto?> GetMarketingCrossSellAsync(Guid tenantId, Guid crossSellKey, string? accountName = null, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/marketing/cross-sell/{crossSellKey}?tenantId={tenantId}";
+        if (!string.IsNullOrWhiteSpace(accountName)) url += $"&accountName={Uri.EscapeDataString(accountName)}";
+        return _httpClient.GetFromJsonAsync<MarketingCrossSellOpportunityDto>(url, cancellationToken);
+    }
+
     public async Task EnsureMarketingCrossSellSeedAsync(Guid tenantId, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsync($"api/marketing/cross-sell/seed?tenantId={tenantId}", null, cancellationToken);

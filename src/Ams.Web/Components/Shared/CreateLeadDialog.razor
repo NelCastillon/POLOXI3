@@ -1,0 +1,327 @@
+@namespace Ams.Web.Components.Shared
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Common.Validation
+@using Ams.Application.Features.Leads
+@using Microsoft.AspNetCore.Components.Forms
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject LeadDialogService LeadDialogs
+@implements IDisposable
+
+@if (_toastVisible)
+{
+    <div class="ld-dialog-alert ld-dialog-alert-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ld-dialog-alert-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_visible)
+{
+    <div class="ld-modal-backdrop" role="presentation" @onclick="CloseAsync">
+        <div class="ld-lead-modal" role="dialog" aria-modal="true" aria-labelledby="sharedLeadFormTitle" @onclick:stopPropagation="true">
+            <div class="ld-modal-header">
+                <div class="ld-modal-title">
+                    <span class="ld-modal-icon"><i class="bi bi-person-plus" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 id="sharedLeadFormTitle">Create enterprise lead</h2>
+                        <p>Capture prospect details, scoring, ownership, source, and nurture workflow metadata.</p>
+                    </div>
+                </div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseAsync" disabled="@_saving" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="HandleInvalidSubmitAsync">
+                <DataAnnotationsValidator />
+                <div class="ld-modal-body">
+                    <div class="ld-form-banner">
+                        <i class="bi bi-shield-check" aria-hidden="true"></i>
+                        <div>
+                            <strong>Enterprise validations enabled</strong>
+                            <span>Required identity, source, owner, email, phone, score, and premium checks are enforced before save.</span>
+                        </div>
+                    </div>
+                    <div class="ld-form-grid">
+                        <div class="ld-field">
+                            <label>First name <span>*</span></label>
+                            <InputText class="ld-input" @bind-Value="_form.FirstName" placeholder="First name" />
+                        </div>
+                        <div class="ld-field">
+                            <label>Last name <span>*</span></label>
+                            <InputText class="ld-input" @bind-Value="_form.LastName" placeholder="Last name" />
+                        </div>
+                        <div class="ld-field ld-field-wide">
+                            <label>Company <span>*</span></label>
+                            <InputText class="ld-input" @bind-Value="_form.Company" placeholder="Company or account name" />
+                        </div>
+                        <div class="ld-field">
+                            <label>Email <span>*</span></label>
+                            <InputText class="ld-input" type="email" @bind-Value="_form.Email" placeholder="name@company.com" />
+                        </div>
+                        <div class="ld-field">
+                            <label>Phone</label>
+                            <InputText class="ld-input" type="tel" @bind-Value="_form.Phone" @bind-Value:after="OnPhoneChanged" placeholder="(555) 123-4567" />
+                            @if (!string.IsNullOrWhiteSpace(_form.Phone))
+                            {
+                                <span class="@PhoneHintClass">@PhoneStatusText</span>
+                            }
+                        </div>
+                        <div class="ld-field">
+                            <label>Source <span>*</span></label>
+                            <InputSelect class="ld-input" @bind-Value="_form.Source">
+                                <option value="">Select source</option>
+                                @foreach (var source in _sourceOptions)
+                                {
+                                    <option value="@source.Value">@source.Label</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="ld-field">
+                            <label>Stage</label>
+                            <InputSelect class="ld-input" @bind-Value="_form.Stage">
+                                @foreach (var stage in _stageOptions)
+                                {
+                                    <option value="@stage.Value">@stage.Label</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="ld-field">
+                            <label>Priority</label>
+                            <InputSelect class="ld-input" @bind-Value="_form.Priority">
+                                @foreach (var rating in _ratingOptions)
+                                {
+                                    <option value="@rating.Value">@rating.Label</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="ld-field">
+                            <label>Owner <span>*</span></label>
+                            <InputSelect class="ld-input" @bind-Value="_form.Owner">
+                                <option value="">Assign owner</option>
+                                @foreach (var owner in _ownerOptions)
+                                {
+                                    <option value="@owner.Value">@owner.Label</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="ld-field">
+                            <label>Estimated premium</label>
+                            <InputNumber class="ld-input" @bind-Value="_form.EstPremium" />
+                        </div>
+                        <div class="ld-field">
+                            <label>Lead score</label>
+                            <InputNumber class="ld-input" @bind-Value="_form.Score" />
+                        </div>
+                        <div class="ld-field ld-field-wide">
+                            <label>Notes / interested service</label>
+                            <InputTextArea class="ld-input" rows="4" @bind-Value="_form.Notes" placeholder="Coverage interests, timing, decision process, or next best action" />
+                        </div>
+                    </div>
+                </div>
+                <div class="ld-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseAsync" disabled="@_saving">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        Create lead
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@code {
+    /// <summary>Optional tenant override. When empty the current user context tenant is used.</summary>
+    [Parameter] public Guid? TenantId { get; set; }
+
+    /// <summary>Optional creator override. When empty the current user context user id is used.</summary>
+    [Parameter] public Guid? CreatedByUserId { get; set; }
+
+    /// <summary>Raised after a lead is created successfully so the host page can refresh.</summary>
+    [Parameter] public EventCallback OnLeadCreated { get; set; }
+
+    private bool _visible;
+    private bool _saving;
+    private bool _ownersLoaded;
+    private Guid _tenantId;
+    private Guid? _createdByUserId;
+    private Guid? _requestTenantId;
+    private Guid? _requestCreatedByUserId;
+    private Func<Task>? _requestOnLeadCreated;
+    private LeadFormModel _form = new();
+    private List<LabelValue> _ownerOptions = [];
+
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "info";
+    private System.Threading.CancellationTokenSource? _toastCts;
+
+    private static readonly List<LabelValue> _stageOptions = [new("New", "New"), new("Contacted", "Contacted"), new("Qualified", "Qualified"), new("Proposal", "Proposal"), new("Negotiation", "Negotiation"), new("Converted", "Converted"), new("Lost", "Lost")];
+    private static readonly List<LabelValue> _sourceOptions = [new("Referral", "Referral"), new("Website", "Website"), new("Cold Call", "Cold Call"), new("Social", "Social"), new("Email", "Email"), new("Event", "Event"), new("Partner", "Partner"), new("Inbound", "Inbound")];
+    private static readonly List<LabelValue> _ratingOptions = [new("Hot", "Hot"), new("Warm", "Warm"), new("Cold", "Cold")];
+
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-octagon", "warning" => "bi-exclamation-triangle", "success" => "bi-check2-circle", _ => "bi-info-circle" };
+    private string PhoneStatusText => IsPhoneValid(_form.Phone) ? $"Phone formatted as {NormalizePhone(_form.Phone)}" : "Enter a valid 10-digit phone number.";
+    private string PhoneHintClass => IsPhoneValid(_form.Phone) ? "ld-field-hint ld-hint-good" : "ld-field-hint ld-hint-bad";
+
+    protected override void OnInitialized()
+    {
+        LeadDialogs.OnOpenCreate += OpenRequested;
+    }
+
+    private void OpenRequested(LeadDialogRequest request)
+    {
+        _requestTenantId = request.TenantId;
+        _requestCreatedByUserId = request.CreatedByUserId;
+        _requestOnLeadCreated = request.OnLeadCreated;
+        _ = InvokeAsync(OpenForCreate);
+    }
+
+    /// <summary>Opens the dialog in create mode, ensuring owner options and tenant context are loaded.</summary>
+    public async Task OpenForCreate()
+    {
+        await EnsureContextAsync();
+        await EnsureOwnersLoadedAsync();
+        _form = new LeadFormModel { Source = "Referral", Stage = "New", Priority = "Warm", Score = 50, Owner = _ownerOptions.FirstOrDefault()?.Value ?? string.Empty };
+        _visible = true;
+        StateHasChanged();
+    }
+
+    private Task CloseAsync()
+    {
+        if (_saving) return Task.CompletedTask;
+        _visible = false;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private async Task EnsureContextAsync()
+    {
+        if (_requestTenantId.HasValue && _requestTenantId.Value != Guid.Empty)
+        {
+            _tenantId = _requestTenantId.Value;
+            _createdByUserId = _requestCreatedByUserId ?? CreatedByUserId;
+            return;
+        }
+
+        if (TenantId.HasValue && TenantId.Value != Guid.Empty)
+        {
+            _tenantId = TenantId.Value;
+            _createdByUserId = CreatedByUserId;
+            return;
+        }
+
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _createdByUserId = CreatedByUserId ?? context.UserId;
+    }
+
+    private async Task EnsureOwnersLoadedAsync()
+    {
+        if (_ownersLoaded || _tenantId == Guid.Empty) return;
+        try
+        {
+            var users = (await Api.SearchUsersAsync(_tenantId))?.Items?.ToList() ?? [];
+            _ownerOptions = users
+                .Where(u => string.Equals(u.StatusCode, "Active", StringComparison.OrdinalIgnoreCase))
+                .Select(u => new LabelValue(u.UserId.ToString(), string.IsNullOrWhiteSpace(u.DisplayName) ? u.FullName : u.DisplayName))
+                .Where(x => !string.IsNullOrWhiteSpace(x.Label))
+                .OrderBy(x => x.Label)
+                .ToList();
+            _ownersLoaded = true;
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Unable to load owners: {ex.Message}", "warning");
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!ValidateForm()) return;
+        _saving = true;
+        try
+        {
+            await EnsureContextAsync();
+            var assignedToUserId = Guid.TryParse(_form.Owner, out var ownerId) ? ownerId : (Guid?)null;
+            await Api.CreateLeadAsync(new CreateLeadRequest
+            {
+                TenantId = _tenantId,
+                LeadNumber = $"LD-{DateTime.UtcNow:yyyyMMddHHmmss}",
+                AccountName = _form.Company.Trim(),
+                FirstName = _form.FirstName.Trim(),
+                LastName = _form.LastName.Trim(),
+                Email = _form.Email.Trim(),
+                Phone = NormalizePhone(_form.Phone),
+                InterestedService = _form.Notes,
+                AnnualRevenue = _form.EstPremium,
+                Score = _form.Score,
+                PriorityCode = _form.Priority,
+                SourceCode = _form.Source,
+                NurturingStageCode = _form.Stage,
+                AssignedToUserId = assignedToUserId,
+                CreatedByUserId = _createdByUserId
+            });
+            await ShowToastAsync("Lead created.", "success");
+            _visible = false;
+            if (OnLeadCreated.HasDelegate) await OnLeadCreated.InvokeAsync();
+            if (_requestOnLeadCreated is not null) await _requestOnLeadCreated.Invoke();
+        }
+        catch (Exception ex) { await ShowToastAsync($"Save failed: {ex.Message}", "danger"); }
+        finally { _saving = false; }
+    }
+
+    private bool ValidateForm()
+    {
+        if (string.IsNullOrWhiteSpace(_form.FirstName) || string.IsNullOrWhiteSpace(_form.LastName) || string.IsNullOrWhiteSpace(_form.Company) || string.IsNullOrWhiteSpace(_form.Email) || string.IsNullOrWhiteSpace(_form.Source) || string.IsNullOrWhiteSpace(_form.Owner)) { _ = ShowToastAsync("Complete required lead fields.", "warning"); return false; }
+        if (!new EmailAddressAttribute().IsValid(_form.Email)) { _ = ShowToastAsync("Enter a valid email address.", "warning"); return false; }
+        if (!IsPhoneValid(_form.Phone)) { _ = ShowToastAsync("Enter a valid phone number.", "warning"); return false; }
+        return true;
+    }
+
+    private Task HandleInvalidSubmitAsync(EditContext _) => ShowToastAsync("Fix validation errors.", "warning");
+
+    private void OnPhoneChanged() { if (IsPhoneValid(_form.Phone)) _form.Phone = NormalizePhone(_form.Phone) ?? string.Empty; }
+
+    private async Task ShowToastAsync(string message, string kind = "info")
+    {
+        _toastCts?.Cancel(); _toastCts?.Dispose(); _toastCts = new System.Threading.CancellationTokenSource();
+        _toastMessage = message.Length <= 96 ? message : $"{message[..93]}..."; _toastKind = ToastKind(kind); _toastVisible = true; StateHasChanged();
+        try { await Task.Delay(_toastKind == "danger" ? 10400 : 8000, _toastCts.Token); _toastVisible = false; await InvokeAsync(StateHasChanged); } catch (TaskCanceledException) { }
+    }
+
+    private void HideToast() { _toastCts?.Cancel(); _toastVisible = false; }
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : value.Contains("success", StringComparison.OrdinalIgnoreCase) ? "success" : "info";
+
+    private static bool IsPhoneValid(string? value) { if (string.IsNullOrWhiteSpace(value)) return true; var digits = new string(value.Where(char.IsDigit).ToArray()); if (digits.Length == 11 && digits[0] == '1') digits = digits[1..]; return digits.Length == 10; }
+    private static string? NormalizePhone(string? value) { if (string.IsNullOrWhiteSpace(value)) return null; var digits = new string(value.Where(char.IsDigit).ToArray()); if (digits.Length == 11 && digits[0] == '1') digits = digits[1..]; return digits.Length == 10 ? $"({digits[..3]}) {digits.Substring(3, 3)}-{digits[6..]}" : value.Trim(); }
+
+    public void Dispose()
+    {
+        LeadDialogs.OnOpenCreate -= OpenRequested;
+        _toastCts?.Cancel();
+        _toastCts?.Dispose();
+    }
+
+    private sealed record LabelValue(string Value, string Label);
+
+    private sealed class LeadFormModel
+    {
+        [Required, StringLength(100)] public string FirstName { get; set; } = string.Empty;
+        [Required, StringLength(100)] public string LastName { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string Company { get; set; } = string.Empty;
+        [Required, AmsEmailAddress, StringLength(200)] public string Email { get; set; } = string.Empty;
+        [AmsPhone, StringLength(30)] public string Phone { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string Source { get; set; } = string.Empty;
+        [Required, StringLength(100)] public string Owner { get; set; } = string.Empty;
+        [StringLength(50)] public string Stage { get; set; } = "New";
+        [StringLength(50)] public string Priority { get; set; } = "Warm";
+        [Range(0, 99999999.99)] public decimal EstPremium { get; set; }
+        [Range(0, 100)] public int Score { get; set; } = 50;
+        [StringLength(1000)] public string Notes { get; set; } = string.Empty;
+    }
+}

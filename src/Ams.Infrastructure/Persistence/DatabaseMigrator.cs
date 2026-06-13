@@ -194,6 +194,10 @@ public sealed class DatabaseMigrator
         new("0161_PolicyDocuments_TenantSeedSync", Migration0161_PolicyDocumentsTenantSeedSync),
         new("0162_CompliancePolicies_TenantSeedSync", Migration0162_CompliancePoliciesTenantSeedSync),
         new("0163_ComplianceAcknowledgements_TenantSeedSync", Migration0163_ComplianceAcknowledgementsTenantSeedSync),
+        new("0164_CRM_OpportunityDetail_EnterpriseSeedSync", Migration0164_CrmOpportunityDetailEnterpriseSeedSync),
+        new("0165_ProducerRenewalCallList_CreateSeed", Migration0165_ProducerRenewalCallListCreateSeed),
+        new("0166_ProducerRenewalCallList_SeedSync", Migration0166_ProducerRenewalCallListSeedSync),
+        new("0167_MarketingCrossSell_ProducerSeedSync", Migration0167_MarketingCrossSellProducerSeedSync),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -216,6 +220,377 @@ IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'IAM.[User
 
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'IAM.[User]') AND name = N'IsLockedOut')
     ALTER TABLE IAM.[User] ADD IsLockedOut BIT NOT NULL DEFAULT 0;
+";
+
+    private const string Migration0164_CrmOpportunityDetailEnterpriseSeedSync = @"
+DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+DECLARE @AdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+DECLARE @OpportunityId UNIQUEIDENTIFIER = 'c2000000-0000-0000-0000-000000000004';
+DECLARE @AccountId UNIQUEIDENTIFIER = '20000000-0000-0000-0000-000000000004';
+DECLARE @SubmissionId UNIQUEIDENTIFIER = 'c6000000-0000-0000-0000-000000000004';
+DECLARE @QuoteId UNIQUEIDENTIFIER = 'c7000000-0000-0000-0000-000000000004';
+
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM') EXEC(N'CREATE SCHEMA CRM');
+
+IF OBJECT_ID(N'CRM.OpportunityWorkflowEvent', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.OpportunityWorkflowEvent
+    (
+        WorkflowEventId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_OpportunityWorkflowEvent PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        OpportunityId UNIQUEIDENTIFIER NOT NULL,
+        EventType NVARCHAR(50) NOT NULL,
+        EventTitle NVARCHAR(200) NOT NULL,
+        EventDetail NVARCHAR(1000) NULL,
+        RelatedEntityName NVARCHAR(100) NULL,
+        RelatedEntityId UNIQUEIDENTIFIER NULL,
+        EventDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunityWorkflowEvent_Date DEFAULT SYSUTCDATETIME(),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunityWorkflowEvent_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_OpportunityWorkflowEvent_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'CRM.OpportunityWorkflowEvent', N'TenantId') IS NULL ALTER TABLE CRM.OpportunityWorkflowEvent ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_OpportunityWorkflowEvent_TenantId_0164 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'CRM.OpportunityWorkflowEvent', N'OpportunityId') IS NULL ALTER TABLE CRM.OpportunityWorkflowEvent ADD OpportunityId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_OpportunityWorkflowEvent_OpportunityId_0164 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'CRM.OpportunityWorkflowEvent', N'EventType') IS NULL ALTER TABLE CRM.OpportunityWorkflowEvent ADD EventType NVARCHAR(50) NOT NULL CONSTRAINT DF_OpportunityWorkflowEvent_Type_0164 DEFAULT N'Workflow';
+IF COL_LENGTH(N'CRM.OpportunityWorkflowEvent', N'EventTitle') IS NULL ALTER TABLE CRM.OpportunityWorkflowEvent ADD EventTitle NVARCHAR(200) NOT NULL CONSTRAINT DF_OpportunityWorkflowEvent_Title_0164 DEFAULT N'Workflow event';
+IF COL_LENGTH(N'CRM.OpportunityWorkflowEvent', N'EventDetail') IS NULL ALTER TABLE CRM.OpportunityWorkflowEvent ADD EventDetail NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'CRM.OpportunityWorkflowEvent', N'RelatedEntityName') IS NULL ALTER TABLE CRM.OpportunityWorkflowEvent ADD RelatedEntityName NVARCHAR(100) NULL;
+IF COL_LENGTH(N'CRM.OpportunityWorkflowEvent', N'RelatedEntityId') IS NULL ALTER TABLE CRM.OpportunityWorkflowEvent ADD RelatedEntityId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.OpportunityWorkflowEvent', N'EventDateUtc') IS NULL ALTER TABLE CRM.OpportunityWorkflowEvent ADD EventDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunityWorkflowEvent_Date_0164 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'CRM.OpportunityWorkflowEvent', N'CreatedDateUtc') IS NULL ALTER TABLE CRM.OpportunityWorkflowEvent ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunityWorkflowEvent_Created_0164 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'CRM.OpportunityWorkflowEvent', N'CreatedByUserId') IS NULL ALTER TABLE CRM.OpportunityWorkflowEvent ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.OpportunityWorkflowEvent', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.OpportunityWorkflowEvent ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'CRM.OpportunityWorkflowEvent', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.OpportunityWorkflowEvent ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.OpportunityWorkflowEvent', N'IsDeleted') IS NULL ALTER TABLE CRM.OpportunityWorkflowEvent ADD IsDeleted BIT NOT NULL CONSTRAINT DF_OpportunityWorkflowEvent_IsDeleted_0164 DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunityWorkflowEvent') AND name = N'IX_OpportunityWorkflowEvent_Opportunity')
+    CREATE INDEX IX_OpportunityWorkflowEvent_Opportunity ON CRM.OpportunityWorkflowEvent(OpportunityId, IsDeleted, EventDateUtc DESC);
+
+IF OBJECT_ID(N'Client.Account', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM Client.Account WHERE AccountId = @AccountId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Client.Account (AccountId, TenantId, AccountNumber, AccountName, AccountTypeCode, MainEmail, MainPhone, StatusCode, SegmentCode, OwnerUserId, LifecycleStageCode, Industry, Website, AnnualRevenue, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (@AccountId, @TenantId, N'GLOBAL-004', N'Global Manufacturing Group', N'Commercial', N'risk@globalmfg.example', N'+1 312 555 0144', N'Active', N'Enterprise', @AdminUserId, N'Prospect', N'Manufacturing', N'https://globalmfg.example', 42000000.00, SYSUTCDATETIME(), @AdminUserId, 0);
+END;
+
+IF OBJECT_ID(N'CRM.Opportunity', N'U') IS NOT NULL
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM CRM.Opportunity WHERE OpportunityId = @OpportunityId)
+    BEGIN
+        INSERT INTO CRM.Opportunity (OpportunityId, TenantId, OpportunityNumber, AccountId, OpportunityName, EstimatedAmount, OwnerUserId, CloseDate, WinProbability, ForecastCategoryCode, StageName, Description, StatusCodeId, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        VALUES (@OpportunityId, @TenantId, N'ENT-OPP-1004', @AccountId, N'Global manufacturing risk program', 425000.00, @AdminUserId, DATEADD(day, 38, SYSUTCDATETIME()), 68, N'Best Case', N'Proposal', N'Enterprise opportunity seeded for the polished CRM opportunity dashboard and workflow sync.', 1, DATEADD(day, -18, SYSUTCDATETIME()), @AdminUserId, 0);
+    END
+    ELSE
+    BEGIN
+        UPDATE CRM.Opportunity
+        SET TenantId = @TenantId,
+            AccountId = COALESCE(AccountId, @AccountId),
+            OpportunityName = COALESCE(NULLIF(OpportunityName, N''), N'Global manufacturing risk program'),
+            EstimatedAmount = CASE WHEN EstimatedAmount = 0 THEN 425000 ELSE EstimatedAmount END,
+            OwnerUserId = COALESCE(OwnerUserId, @AdminUserId),
+            CloseDate = COALESCE(CloseDate, DATEADD(day, 38, SYSUTCDATETIME())),
+            WinProbability = CASE WHEN WinProbability = 0 THEN 68 ELSE WinProbability END,
+            ForecastCategoryCode = COALESCE(NULLIF(ForecastCategoryCode, N''), N'Best Case'),
+            StageName = COALESCE(NULLIF(StageName, N''), N'Proposal'),
+            Description = COALESCE(Description, N'Enterprise opportunity seeded for the polished CRM opportunity dashboard and workflow sync.'),
+            IsDeleted = 0
+        WHERE OpportunityId = @OpportunityId;
+    END;
+END;
+
+IF OBJECT_ID(N'CRM.OpportunityLine', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM CRM.OpportunityLine WHERE OpportunityId = @OpportunityId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO CRM.OpportunityLine (OpportunityLineId, TenantId, OpportunityId, LineOfBusiness, Carrier, EstPremium, Priority, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES
+        (NEWID(), @TenantId, @OpportunityId, N'Workers Comp', N'Travelers', 185000, N'High', SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, @OpportunityId, N'Commercial Auto', N'Chubb', 142000, N'High', SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, @OpportunityId, N'Umbrella / Excess', N'Liberty Mutual', 98000, N'Medium', SYSUTCDATETIME(), @AdminUserId, 0);
+END;
+
+IF OBJECT_ID(N'CRM.OpportunityActivity', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM CRM.OpportunityActivity WHERE OpportunityId = @OpportunityId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO CRM.OpportunityActivity (ActivityId, TenantId, OpportunityId, ActivityTypeCode, Subject, Notes, ActivityDate, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES
+        (NEWID(), @TenantId, @OpportunityId, N'Meeting', N'Executive risk review completed', N'Confirmed workers comp, auto, and excess strategy with finance and operations stakeholders.', DATEADD(day, -5, SYSUTCDATETIME()), SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, @OpportunityId, N'Email', N'Carrier submission package distributed', N'Sent updated loss runs, schedules, and target premiums to selected markets.', DATEADD(day, -3, SYSUTCDATETIME()), SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, @OpportunityId, N'Call', N'Pricing checkpoint scheduled', N'Scheduled pricing checkpoint before proposal presentation.', DATEADD(day, -1, SYSUTCDATETIME()), SYSUTCDATETIME(), @AdminUserId, 0);
+END;
+
+IF OBJECT_ID(N'CRM.OpportunitySubmission', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM CRM.OpportunitySubmission WHERE SubmissionId = @SubmissionId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO CRM.OpportunitySubmission (SubmissionId, TenantId, OpportunityId, SubmissionNumber, LineOfBusiness, Status, TargetPremium, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (@SubmissionId, @TenantId, @OpportunityId, N'SUB-ENT-1004', N'Workers Comp', N'In Review', 185000, DATEADD(day, -4, SYSUTCDATETIME()), @AdminUserId, 0);
+END;
+
+IF OBJECT_ID(N'Submissions.Submission', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM Submissions.Submission WHERE SubmissionId = @SubmissionId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Submissions.Submission (SubmissionId, TenantId, AccountId, OpportunityId, SubmissionNumber, LineOfBusiness, Status, Priority, AssignedToUserId, EffectiveDate, ExpirationDate, TargetPremium, MarketCount, QuoteCount, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (@SubmissionId, @TenantId, @AccountId, @OpportunityId, N'SUB-ENT-1004', N'Workers Comp', N'In Review', N'High', @AdminUserId, DATEADD(day, 45, SYSUTCDATETIME()), DATEADD(day, 410, SYSUTCDATETIME()), 185000, 3, 1, DATEADD(day, -4, SYSUTCDATETIME()), @AdminUserId, 0);
+END;
+
+IF OBJECT_ID(N'CRM.Quote', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM CRM.Quote WHERE QuoteId = @QuoteId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO CRM.Quote (QuoteId, TenantId, QuoteNumber, OpportunityId, AccountId, TotalAmount, ValidUntilDate, StatusCode, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (@QuoteId, @TenantId, N'Q-ENT-1004', @OpportunityId, @AccountId, 181750, DATEADD(day, 21, SYSUTCDATETIME()), N'Presented', DATEADD(day, -1, SYSUTCDATETIME()), @AdminUserId, 0);
+END;
+
+IF OBJECT_ID(N'CRM.OpportunityCompetitor', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM CRM.OpportunityCompetitor WHERE OpportunityId = @OpportunityId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO CRM.OpportunityCompetitor (CompetitorId, TenantId, OpportunityId, Name, Strength, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES
+        (NEWID(), @TenantId, @OpportunityId, N'National Broker Inc.', N'Strong', SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, @OpportunityId, N'Regional Risk Partners', N'Moderate', SYSUTCDATETIME(), @AdminUserId, 0);
+END;
+
+IF OBJECT_ID(N'DMS.Document', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM DMS.Document WHERE TenantId = @TenantId AND EntityName = N'Opportunity' AND EntityId = @OpportunityId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO DMS.Document (DocumentId, TenantId, DocumentTypeCode, CategoryCode, EntityName, EntityId, FileName, StoragePath, ContentType, FileSizeBytes, VersionNumber, StatusCode, Description, Tags, UploadedByName, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (NEWID(), @TenantId, N'Proposal', N'Proposal', N'Opportunity', @OpportunityId, N'global-manufacturing-risk-proposal.pdf', N'/opportunities/global-manufacturing-risk-proposal.pdf', N'application/pdf', 312320, 1, N'Active', N'Seeded enterprise opportunity proposal document.', N'opportunity,proposal,enterprise', N'Tenant Admin', SYSUTCDATETIME(), @AdminUserId, 0);
+END;
+
+IF OBJECT_ID(N'CRM.OpportunityWorkflowEvent', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM CRM.OpportunityWorkflowEvent WHERE OpportunityId = @OpportunityId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO CRM.OpportunityWorkflowEvent (WorkflowEventId, TenantId, OpportunityId, EventType, EventTitle, EventDetail, RelatedEntityName, RelatedEntityId, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES
+        (NEWID(), @TenantId, @OpportunityId, N'Seed', N'Enterprise opportunity synchronized', N'Opportunity, account, submission, quote, document, and workflow seed data synchronized for the enterprise detail page.', N'Opportunity', @OpportunityId, DATEADD(day, -6, SYSUTCDATETIME()), SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, @OpportunityId, N'Submission', N'Submission synced to underwriting', N'Opportunity submission synchronized to the enterprise Submissions workspace.', N'Submission', @SubmissionId, DATEADD(day, -4, SYSUTCDATETIME()), SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, @OpportunityId, N'Quote', N'Quote presented', N'Presented quote synchronized back to the opportunity workflow timeline.', N'Quote', @QuoteId, DATEADD(day, -1, SYSUTCDATETIME()), SYSUTCDATETIME(), @AdminUserId, 0);
+END;
+";
+
+    private const string Migration0165_ProducerRenewalCallListCreateSeed = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'OPS') EXEC(N'CREATE SCHEMA OPS');
+
+IF OBJECT_ID(N'OPS.ProducerRenewalCall', N'U') IS NULL
+BEGIN
+    CREATE TABLE OPS.ProducerRenewalCall
+    (
+        RenewalCallId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ProducerRenewalCall PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AgreementRenewalId UNIQUEIDENTIFIER NULL,
+        AgreementId UNIQUEIDENTIFIER NULL,
+        AccountId UNIQUEIDENTIFIER NULL,
+        AssignedProducerUserId UNIQUEIDENTIFIER NULL,
+        CallNumber NVARCHAR(50) NOT NULL,
+        AccountName NVARCHAR(200) NOT NULL,
+        PolicyNumber NVARCHAR(80) NULL,
+        LineOfBusiness NVARCHAR(100) NULL,
+        CurrentPremium DECIMAL(18,2) NULL,
+        ExpirationDate DATE NOT NULL,
+        DueDate DATE NOT NULL,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_ProducerRenewalCall_Status DEFAULT N'Open',
+        PriorityCode NVARCHAR(50) NOT NULL CONSTRAINT DF_ProducerRenewalCall_Priority DEFAULT N'Medium',
+        OutcomeCode NVARCHAR(100) NULL,
+        LastContactDateUtc DATETIME2 NULL,
+        NextAction NVARCHAR(250) NULL,
+        Notes NVARCHAR(1000) NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_ProducerRenewalCall_Sort DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ProducerRenewalCall_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_ProducerRenewalCall_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'TenantId') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_ProducerRenewalCall_Tenant_0165 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'AgreementRenewalId') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD AgreementRenewalId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'AgreementId') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD AgreementId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'AccountId') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD AccountId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'AssignedProducerUserId') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD AssignedProducerUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'CallNumber') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD CallNumber NVARCHAR(50) NOT NULL CONSTRAINT DF_ProducerRenewalCall_Number_0165 DEFAULT N'PRC-0000';
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'AccountName') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD AccountName NVARCHAR(200) NOT NULL CONSTRAINT DF_ProducerRenewalCall_Account_0165 DEFAULT N'Account';
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'PolicyNumber') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD PolicyNumber NVARCHAR(80) NULL;
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'LineOfBusiness') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD LineOfBusiness NVARCHAR(100) NULL;
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'CurrentPremium') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD CurrentPremium DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'ExpirationDate') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD ExpirationDate DATE NOT NULL CONSTRAINT DF_ProducerRenewalCall_Expiration_0165 DEFAULT CONVERT(date, DATEADD(day, 60, SYSUTCDATETIME()));
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'DueDate') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD DueDate DATE NOT NULL CONSTRAINT DF_ProducerRenewalCall_Due_0165 DEFAULT CONVERT(date, DATEADD(day, 30, SYSUTCDATETIME()));
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'StatusCode') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_ProducerRenewalCall_Status_0165 DEFAULT N'Open';
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'PriorityCode') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD PriorityCode NVARCHAR(50) NOT NULL CONSTRAINT DF_ProducerRenewalCall_Priority_0165 DEFAULT N'Medium';
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'OutcomeCode') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD OutcomeCode NVARCHAR(100) NULL;
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'LastContactDateUtc') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD LastContactDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'NextAction') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD NextAction NVARCHAR(250) NULL;
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'Notes') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD Notes NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'SortOrder') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD SortOrder INT NOT NULL CONSTRAINT DF_ProducerRenewalCall_Sort_0165 DEFAULT 0;
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'CreatedDateUtc') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ProducerRenewalCall_Created_0165 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'CreatedByUserId') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'ModifiedDateUtc') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'ModifiedByUserId') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'OPS.ProducerRenewalCall', N'IsDeleted') IS NULL ALTER TABLE OPS.ProducerRenewalCall ADD IsDeleted BIT NOT NULL CONSTRAINT DF_ProducerRenewalCall_IsDeleted_0165 DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'OPS.ProducerRenewalCall') AND name = N'IX_ProducerRenewalCall_Tenant_Status_Due')
+    CREATE INDEX IX_ProducerRenewalCall_Tenant_Status_Due ON OPS.ProducerRenewalCall(TenantId, IsDeleted, StatusCode, DueDate, ExpirationDate);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'OPS.ProducerRenewalCall') AND name = N'IX_ProducerRenewalCall_Producer')
+    CREATE INDEX IX_ProducerRenewalCall_Producer ON OPS.ProducerRenewalCall(TenantId, AssignedProducerUserId, IsDeleted, DueDate);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'OPS.ProducerRenewalCall') AND name = N'UX_ProducerRenewalCall_Renewal')
+    CREATE UNIQUE INDEX UX_ProducerRenewalCall_Renewal ON OPS.ProducerRenewalCall(TenantId, AgreementRenewalId) WHERE AgreementRenewalId IS NOT NULL AND IsDeleted = 0;
+
+DECLARE @TenantId0165 UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM Core.Tenant ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000001');
+DECLARE @AdminUserId0165 UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId0165 AND IsDeleted = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+
+IF OBJECT_ID(N'OPS.AgreementRenewal', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO OPS.ProducerRenewalCall
+    (
+        RenewalCallId, TenantId, AgreementRenewalId, AgreementId, AccountId, AssignedProducerUserId,
+        CallNumber, AccountName, PolicyNumber, LineOfBusiness, CurrentPremium, ExpirationDate, DueDate,
+        StatusCode, PriorityCode, OutcomeCode, LastContactDateUtc, NextAction, Notes, SortOrder,
+        CreatedDateUtc, CreatedByUserId, IsDeleted
+    )
+    SELECT TOP 25
+        NEWID(), ar.TenantId, ar.RenewalId, ar.AgreementId, ag.AccountId, COALESCE(ag.CreatedByUserId, @AdminUserId0165),
+        CONCAT(N'PRC-', RIGHT(CONCAT(N'0000', ROW_NUMBER() OVER (ORDER BY ar.NewStartDate, ar.RenewalNumber)), 4)),
+        COALESCE(NULLIF(a.AccountName, N''), CONCAT(N'Renewal Account ', RIGHT(CONVERT(NVARCHAR(36), ar.RenewalId), 6))),
+        COALESCE(NULLIF(ag.AgreementNumber, N''), ar.RenewalNumber),
+        N'Commercial Package',
+        ar.TotalContractValue,
+        CONVERT(date, ar.NewStartDate),
+        CONVERT(date, DATEADD(day, -30, ar.NewStartDate)),
+        CASE WHEN ar.StatusCode IN (N'Renewed', N'Complete', N'Won') THEN N'Completed' WHEN ar.StatusCode IN (N'Lost', N'Cancelled') THEN N'Closed' ELSE N'Open' END,
+        CASE WHEN ar.NewStartDate <= DATEADD(day, 30, SYSUTCDATETIME()) THEN N'High' WHEN ar.NewStartDate <= DATEADD(day, 60, SYSUTCDATETIME()) THEN N'Medium' ELSE N'Low' END,
+        NULL,
+        NULL,
+        CASE WHEN ar.NewStartDate <= DATEADD(day, 30, SYSUTCDATETIME()) THEN N'Call insured and confirm renewal strategy' ELSE N'Schedule renewal review call' END,
+        N'Seeded from agreement renewal workflow for producer call-list execution.',
+        ROW_NUMBER() OVER (ORDER BY ar.NewStartDate, ar.RenewalNumber),
+        SYSUTCDATETIME(), @AdminUserId0165, 0
+    FROM OPS.AgreementRenewal ar
+    LEFT JOIN Sales.Agreement ag ON ag.AgreementId = ar.AgreementId
+    LEFT JOIN Client.Account a ON a.AccountId = ag.AccountId
+    WHERE ar.TenantId = @TenantId0165
+      AND ar.IsDeleted = 0
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM OPS.ProducerRenewalCall prc
+          WHERE prc.TenantId = ar.TenantId
+            AND prc.AgreementRenewalId = ar.RenewalId
+            AND prc.IsDeleted = 0
+      )
+    ORDER BY ar.NewStartDate, ar.RenewalNumber;
+END;
+
+IF NOT EXISTS (SELECT 1 FROM OPS.ProducerRenewalCall WHERE TenantId = @TenantId0165 AND IsDeleted = 0)
+BEGIN
+    INSERT INTO OPS.ProducerRenewalCall
+    (RenewalCallId, TenantId, AssignedProducerUserId, CallNumber, AccountName, PolicyNumber, LineOfBusiness, CurrentPremium, ExpirationDate, DueDate, StatusCode, PriorityCode, NextAction, Notes, SortOrder, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES
+    ('d5100000-0000-0000-0000-000000000001', @TenantId0165, @AdminUserId0165, N'PRC-1001', N'Northstar Robotics', N'PWB-LD-1001', N'Cyber Liability', 25340.00, CONVERT(date, DATEADD(day, 28, SYSUTCDATETIME())), CONVERT(date, DATEADD(day, 2, SYSUTCDATETIME())), N'Open', N'High', N'Call insured and confirm renewal application timeline', N'Fallback producer renewal call seed.', 10, SYSUTCDATETIME(), @AdminUserId0165, 0),
+    ('d5100000-0000-0000-0000-000000000002', @TenantId0165, @AdminUserId0165, N'PRC-1002', N'Hamilton Food Group', N'PWB-LD-1002', N'Workers Comp', 81590.00, CONVERT(date, DATEADD(day, 47, SYSUTCDATETIME())), CONVERT(date, DATEADD(day, 12, SYSUTCDATETIME())), N'InProgress', N'Medium', N'Review loss runs before renewal call', N'Fallback producer renewal call seed.', 20, SYSUTCDATETIME(), @AdminUserId0165, 0),
+    ('d5100000-0000-0000-0000-000000000003', @TenantId0165, @AdminUserId0165, N'PRC-1003', N'Cloud Computing Partners', N'PWB-LD-1003', N'Technology E&O', 20000.00, CONVERT(date, DATEADD(day, 74, SYSUTCDATETIME())), CONVERT(date, DATEADD(day, 30, SYSUTCDATETIME())), N'Open', N'Low', N'Prepare renewal touchpoint and exposure update', N'Fallback producer renewal call seed.', 30, SYSUTCDATETIME(), @AdminUserId0165, 0),
+    ('d5100000-0000-0000-0000-000000000004', @TenantId0165, @AdminUserId0165, N'PRC-1004', N'Riverbend Logistics', N'PWB-LD-1004', N'Commercial Auto', 126480.00, CONVERT(date, DATEADD(day, 21, SYSUTCDATETIME())), CONVERT(date, DATEADD(day, -3, SYSUTCDATETIME())), N'Open', N'High', N'Escalate renewal call and request driver schedule updates', N'Overdue due date seed for KPI validation.', 40, SYSUTCDATETIME(), @AdminUserId0165, 0),
+    ('d5100000-0000-0000-0000-000000000005', @TenantId0165, @AdminUserId0165, N'PRC-1005', N'Evergreen Dental Group', N'PWB-LD-1005', N'Professional Liability', 18475.00, CONVERT(date, DATEADD(day, 36, SYSUTCDATETIME())), CONVERT(date, SYSUTCDATETIME()), N'Open', N'High', N'Call practice administrator and confirm renewal questionnaire', N'Due today seed for producer call list.', 50, SYSUTCDATETIME(), @AdminUserId0165, 0),
+    ('d5100000-0000-0000-0000-000000000006', @TenantId0165, @AdminUserId0165, N'PRC-1006', N'Ironclad Fabrication', N'PWB-LD-1006', N'General Liability', 64210.00, CONVERT(date, DATEADD(day, 59, SYSUTCDATETIME())), CONVERT(date, DATEADD(day, 18, SYSUTCDATETIME())), N'InProgress', N'Medium', N'Follow up on payroll and sales exposure changes', N'Industrial account renewal seed.', 60, SYSUTCDATETIME(), @AdminUserId0165, 0),
+    ('d5100000-0000-0000-0000-000000000007', @TenantId0165, @AdminUserId0165, N'PRC-1007', N'Summit Hospitality Partners', N'PWB-LD-1007', N'Property', 148900.00, CONVERT(date, DATEADD(day, 68, SYSUTCDATETIME())), CONVERT(date, DATEADD(day, 25, SYSUTCDATETIME())), N'Open', N'Medium', N'Review property schedule and confirm renovation updates', N'Hospitality account renewal seed.', 70, SYSUTCDATETIME(), @AdminUserId0165, 0),
+    ('d5100000-0000-0000-0000-000000000008', @TenantId0165, @AdminUserId0165, N'PRC-1008', N'Atlas Medical Supply', N'PWB-LD-1008', N'Product Liability', 53250.00, CONVERT(date, DATEADD(day, 88, SYSUTCDATETIME())), CONVERT(date, DATEADD(day, 42, SYSUTCDATETIME())), N'Open', N'Low', N'Prepare renewal exposure summary for insured review', N'Medical supply renewal seed.', 80, SYSUTCDATETIME(), @AdminUserId0165, 0),
+    ('d5100000-0000-0000-0000-000000000009', @TenantId0165, @AdminUserId0165, N'PRC-1009', N'Cedar Grove Schools', N'PWB-LD-1009', N'Package', 93400.00, CONVERT(date, DATEADD(day, 33, SYSUTCDATETIME())), CONVERT(date, DATEADD(day, 6, SYSUTCDATETIME())), N'InProgress', N'High', N'Confirm board meeting date and renewal approval timeline', N'Public entity renewal seed.', 90, SYSUTCDATETIME(), @AdminUserId0165, 0),
+    ('d5100000-0000-0000-0000-000000000010', @TenantId0165, @AdminUserId0165, N'PRC-1010', N'Beacon Architecture Studio', N'PWB-LD-1010', N'Architects E&O', 27890.00, CONVERT(date, DATEADD(day, 95, SYSUTCDATETIME())), CONVERT(date, DATEADD(day, 55, SYSUTCDATETIME())), N'Completed', N'Low', N'Renewal strategy confirmed; await carrier terms', N'Completed status seed for KPI validation.', 100, SYSUTCDATETIME(), @AdminUserId0165, 0);
+END;
+";
+
+    private const string Migration0166_ProducerRenewalCallListSeedSync = @"
+IF OBJECT_ID(N'OPS.ProducerRenewalCall', N'U') IS NOT NULL
+BEGIN
+    DECLARE @TenantId0166 UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM Core.Tenant ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000001');
+    DECLARE @AdminUserId0166 UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId0166 AND IsDeleted = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+
+    INSERT INTO OPS.ProducerRenewalCall
+    (RenewalCallId, TenantId, AssignedProducerUserId, CallNumber, AccountName, PolicyNumber, LineOfBusiness, CurrentPremium, ExpirationDate, DueDate, StatusCode, PriorityCode, NextAction, Notes, SortOrder, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT s.RenewalCallId, @TenantId0166, @AdminUserId0166, s.CallNumber, s.AccountName, s.PolicyNumber, s.LineOfBusiness, s.CurrentPremium, s.ExpirationDate, s.DueDate, s.StatusCode, s.PriorityCode, s.NextAction, s.Notes, s.SortOrder, SYSUTCDATETIME(), @AdminUserId0166, 0
+    FROM
+    (
+        VALUES
+        ('d5100000-0000-0000-0000-000000000001', N'PRC-1001', N'Northstar Robotics', N'PWB-LD-1001', N'Cyber Liability', 25340.00, CONVERT(date, DATEADD(day, 28, SYSUTCDATETIME())), CONVERT(date, DATEADD(day, 2, SYSUTCDATETIME())), N'Open', N'High', N'Call insured and confirm renewal application timeline', N'Producer renewal call seed synchronized for the enterprise call list.', 10),
+        ('d5100000-0000-0000-0000-000000000002', N'PRC-1002', N'Hamilton Food Group', N'PWB-LD-1002', N'Workers Comp', 81590.00, CONVERT(date, DATEADD(day, 47, SYSUTCDATETIME())), CONVERT(date, DATEADD(day, 12, SYSUTCDATETIME())), N'InProgress', N'Medium', N'Review loss runs before renewal call', N'Producer renewal call seed synchronized for the enterprise call list.', 20),
+        ('d5100000-0000-0000-0000-000000000003', N'PRC-1003', N'Cloud Computing Partners', N'PWB-LD-1003', N'Technology E&O', 20000.00, CONVERT(date, DATEADD(day, 74, SYSUTCDATETIME())), CONVERT(date, DATEADD(day, 30, SYSUTCDATETIME())), N'Open', N'Low', N'Prepare renewal touchpoint and exposure update', N'Producer renewal call seed synchronized for the enterprise call list.', 30),
+        ('d5100000-0000-0000-0000-000000000004', N'PRC-1004', N'Riverbend Logistics', N'PWB-LD-1004', N'Commercial Auto', 126480.00, CONVERT(date, DATEADD(day, 21, SYSUTCDATETIME())), CONVERT(date, DATEADD(day, -3, SYSUTCDATETIME())), N'Open', N'High', N'Escalate renewal call and request driver schedule updates', N'Overdue due date seed for KPI validation.', 40),
+        ('d5100000-0000-0000-0000-000000000005', N'PRC-1005', N'Evergreen Dental Group', N'PWB-LD-1005', N'Professional Liability', 18475.00, CONVERT(date, DATEADD(day, 36, SYSUTCDATETIME())), CONVERT(date, SYSUTCDATETIME()), N'Open', N'High', N'Call practice administrator and confirm renewal questionnaire', N'Due today seed for producer call list.', 50),
+        ('d5100000-0000-0000-0000-000000000006', N'PRC-1006', N'Ironclad Fabrication', N'PWB-LD-1006', N'General Liability', 64210.00, CONVERT(date, DATEADD(day, 59, SYSUTCDATETIME())), CONVERT(date, DATEADD(day, 18, SYSUTCDATETIME())), N'InProgress', N'Medium', N'Follow up on payroll and sales exposure changes', N'Industrial account renewal seed.', 60),
+        ('d5100000-0000-0000-0000-000000000007', N'PRC-1007', N'Summit Hospitality Partners', N'PWB-LD-1007', N'Property', 148900.00, CONVERT(date, DATEADD(day, 68, SYSUTCDATETIME())), CONVERT(date, DATEADD(day, 25, SYSUTCDATETIME())), N'Open', N'Medium', N'Review property schedule and confirm renovation updates', N'Hospitality account renewal seed.', 70),
+        ('d5100000-0000-0000-0000-000000000008', N'PRC-1008', N'Atlas Medical Supply', N'PWB-LD-1008', N'Product Liability', 53250.00, CONVERT(date, DATEADD(day, 88, SYSUTCDATETIME())), CONVERT(date, DATEADD(day, 42, SYSUTCDATETIME())), N'Open', N'Low', N'Prepare renewal exposure summary for insured review', N'Medical supply renewal seed.', 80),
+        ('d5100000-0000-0000-0000-000000000009', N'PRC-1009', N'Cedar Grove Schools', N'PWB-LD-1009', N'Package', 93400.00, CONVERT(date, DATEADD(day, 33, SYSUTCDATETIME())), CONVERT(date, DATEADD(day, 6, SYSUTCDATETIME())), N'InProgress', N'High', N'Confirm board meeting date and renewal approval timeline', N'Public entity renewal seed.', 90),
+        ('d5100000-0000-0000-0000-000000000010', N'PRC-1010', N'Beacon Architecture Studio', N'PWB-LD-1010', N'Architects E&O', 27890.00, CONVERT(date, DATEADD(day, 95, SYSUTCDATETIME())), CONVERT(date, DATEADD(day, 55, SYSUTCDATETIME())), N'Completed', N'Low', N'Renewal strategy confirmed; await carrier terms', N'Completed status seed for KPI validation.', 100)
+    ) AS s(RenewalCallId, CallNumber, AccountName, PolicyNumber, LineOfBusiness, CurrentPremium, ExpirationDate, DueDate, StatusCode, PriorityCode, NextAction, Notes, SortOrder)
+    WHERE NOT EXISTS
+    (
+        SELECT 1
+        FROM OPS.ProducerRenewalCall prc
+        WHERE prc.TenantId = @TenantId0166
+          AND prc.RenewalCallId = s.RenewalCallId
+          AND prc.IsDeleted = 0
+    );
+END;
+";
+
+    private const string Migration0167_MarketingCrossSellProducerSeedSync = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Marketing') EXEC(N'CREATE SCHEMA Marketing');
+
+IF OBJECT_ID(N'Marketing.CrossSellOpportunity', N'U') IS NULL
+BEGIN
+    CREATE TABLE Marketing.CrossSellOpportunity
+    (
+        OpportunityId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Marketing_CrossSellOpportunity PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountName NVARCHAR(200) NOT NULL,
+        AccountType NVARCHAR(80) NOT NULL,
+        Producer NVARCHAR(150) NOT NULL,
+        OpportunityType NVARCHAR(150) NOT NULL,
+        Score INT NOT NULL CONSTRAINT DF_MarketingCrossSell_Score DEFAULT 0,
+        EstimatedPremium DECIMAL(18,2) NOT NULL CONSTRAINT DF_MarketingCrossSell_EstimatedPremium DEFAULT 0,
+        TriggerSignal NVARCHAR(500) NULL,
+        LastContactDate DATETIME2 NOT NULL CONSTRAINT DF_MarketingCrossSell_LastContact DEFAULT SYSUTCDATETIME(),
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_MarketingCrossSell_Status DEFAULT N'Open',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_MarketingCrossSell_Created DEFAULT SYSUTCDATETIME(),
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_MarketingCrossSell_IsDeleted DEFAULT 0
+    );
+END;
+
+DECLARE @TenantId0167 UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM Core.Tenant ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000001');
+
+IF OBJECT_ID(N'Portal.AdminRecord', N'U') IS NOT NULL AND OBJECT_ID(N'Client.Account', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Marketing.CrossSellOpportunity
+    (OpportunityId, TenantId, AccountName, AccountType, Producer, OpportunityType, Score, EstimatedPremium, TriggerSignal, LastContactDate, StatusCode, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), a.TenantId, a.AccountName, COALESCE(NULLIF(a.AccountTypeCode, N''), N'Commercial'), N'Tenant Admin',
+           COALESCE(NULLIF(JSON_VALUE(pe.JsonData, '$.targetLob'), N''), N'Umbrella'),
+           COALESCE(TRY_CONVERT(INT, JSON_VALUE(pe.JsonData, '$.score')), 72),
+           COALESCE(TRY_CONVERT(DECIMAL(18,2), JSON_VALUE(pe.JsonData, '$.oppPremium')), 25000),
+           COALESCE(NULLIF(JSON_VALUE(pe.JsonData, '$.reason'), N''), CONCAT(N'Producer workbench cross-sell signal for ', a.AccountName, N'.')),
+           COALESCE(TRY_CONVERT(DATETIME2, JSON_VALUE(pe.JsonData, '$.lastContact')), DATEADD(day, -7, SYSUTCDATETIME())),
+           N'Open', SYSUTCDATETIME(), 0
+    FROM Portal.AdminRecord pe
+    JOIN Client.Account a ON a.TenantId = pe.TenantId AND a.AccountId = TRY_CONVERT(UNIQUEIDENTIFIER, pe.Code) AND a.IsDeleted = 0
+    WHERE pe.TenantId = @TenantId0167
+      AND pe.Kind = N'ProducerCrossSell'
+      AND pe.IsDeleted = 0
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Marketing.CrossSellOpportunity m
+          WHERE m.TenantId = a.TenantId
+            AND m.IsDeleted = 0
+            AND m.AccountName = a.AccountName
+            AND m.OpportunityType = COALESCE(NULLIF(JSON_VALUE(pe.JsonData, '$.targetLob'), N''), N'Umbrella')
+      );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Marketing.CrossSellOpportunity WHERE TenantId = @TenantId0167 AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Marketing.CrossSellOpportunity
+    (OpportunityId, TenantId, AccountName, AccountType, Producer, OpportunityType, Score, EstimatedPremium, TriggerSignal, LastContactDate, StatusCode, CreatedDateUtc, IsDeleted)
+    VALUES
+    ('e6200000-0000-0000-0000-000000000001', @TenantId0167, N'Northstar Robotics', N'Commercial', N'Tenant Admin', N'Cyber Liability', 91, 42000.00, N'Technology exposure and no cyber policy on file; strong producer workbench cross-sell signal.', DATEADD(day, -4, SYSUTCDATETIME()), N'Open', SYSUTCDATETIME(), 0),
+    ('e6200000-0000-0000-0000-000000000002', @TenantId0167, N'Hamilton Food Group', N'Commercial', N'Tenant Admin', N'Umbrella', 84, 36500.00, N'Fleet and payroll growth indicate excess liability need.', DATEADD(day, -11, SYSUTCDATETIME()), N'Working', SYSUTCDATETIME(), 0),
+    ('e6200000-0000-0000-0000-000000000003', @TenantId0167, N'Cloud Computing Partners', N'Commercial', N'Tenant Admin', N'Technology E&O', 79, 51500.00, N'Additional technology services identified during account review.', DATEADD(day, -21, SYSUTCDATETIME()), N'Open', SYSUTCDATETIME(), 0),
+    ('e6200000-0000-0000-0000-000000000004', @TenantId0167, N'Riverbend Logistics', N'Commercial', N'Tenant Admin', N'Commercial Auto', 88, 57500.00, N'Vehicle schedule expansion indicates account rounding potential.', DATEADD(day, -6, SYSUTCDATETIME()), N'Open', SYSUTCDATETIME(), 0),
+    ('e6200000-0000-0000-0000-000000000005', @TenantId0167, N'Evergreen Dental Group', N'Commercial', N'Tenant Admin', N'EPLI', 76, 18400.00, N'Practice growth suggests employment practices coverage review.', DATEADD(day, -14, SYSUTCDATETIME()), N'Reviewed', SYSUTCDATETIME(), 0);
+END;
 ";
 
     private const string Migration0133_DmsDocumentWorkflowCreateSeed = @"

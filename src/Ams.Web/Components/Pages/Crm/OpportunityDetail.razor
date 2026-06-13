@@ -9,36 +9,61 @@
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>@(_opp is null ? "Opportunity" : _opp.Name) â€” CRM</PageTitle>
+<PageTitle>@(_opp is null ? "Opportunity" : _opp.Name) — CRM</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+@if (_toastVisible)
+{
+    <div class="od-toast od-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="od-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
 
 @if (_loading)
 {
-    <div class="od-loading"><span class="um-spin" aria-hidden="true"></span><span>Loading opportunityâ€¦</span></div>
+    <div class="od-enterprise-page"><div class="od-loading"><span class="um-spin" aria-hidden="true"></span><span>Loading opportunity…</span></div></div>
 }
 else if (_opp is null)
 {
-    <div class="od-not-found">
+    <div class="od-enterprise-page"><div class="od-not-found">
         <i class="bi bi-trophy od-nf-icon" aria-hidden="true"></i>
         <h2>Opportunity not found</h2>
         <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/opportunities")'>
             <i class="bi bi-arrow-left" aria-hidden="true"></i> Back
         </button>
-    </div>
+    </div></div>
 }
 else
 {
-    <AppPageHeader Title="@_opp.Name" Subtitle="@_opp.AccountName" Icon="bi-trophy-fill">
-        <Actions>
+    <div class="od-enterprise-page">
+    <section class="od-hero">
+        <div class="od-hero-left">
+            <span class="od-hero-icon"><i class="bi bi-trophy-fill" aria-hidden="true"></i></span>
+            <div class="od-hero-copy">
+                <div class="od-title-row">
+                    <h1>@_opp.Name</h1>
+                    <span><i class="bi bi-hash" aria-hidden="true"></i> @_opp.OppNumber</span>
+                </div>
+                <p>@_opp.AccountName · @_opp.Owner · Close @_opp.CloseDate.ToString("d")</p>
+            </div>
+        </div>
+        <div class="od-hero-actions">
             <button class="um-btn um-btn-ghost" @onclick="OpenEditOpportunity"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
             <button class="um-btn um-btn-ghost" @onclick="OpenStageDialog"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Move Stage</button>
             <button class="um-btn um-btn-ghost" @onclick="OpenNewSubmission"><i class="bi bi-send-plus" aria-hidden="true"></i> New Submission</button>
             <button class="um-btn um-btn-primary" @onclick="OpenWonDialog"><i class="bi bi-check2-circle" aria-hidden="true"></i> Mark Won</button>
-        </Actions>
-    </AppPageHeader>
+        </div>
+    </section>
+
+    <section class="od-kpi-strip" aria-label="Opportunity KPI filters">
+        <button type="button" class='@KpiClass("overview")' title="Show overview" @onclick='() => ActivateKpi("overview", 0)'><span class="od-kpi-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></span><span><strong class="od-kpi-val">@_opp.Amount.ToString("C0")</strong><span class="od-kpi-lbl">Amount</span><small>@WeightedAmount.ToString("C0") weighted</small></span></button>
+        <button type="button" class='@KpiClass("stage")' title="Show workflow" @onclick='() => ActivateKpi("stage", 6)'><span class="od-kpi-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span><span><strong class="od-kpi-val">@_opp.WinPct%</strong><span class="od-kpi-lbl">Win probability</span><small>@_opp.ForecastCategory forecast</small></span></button>
+        <button type="button" class='@KpiClass("activities")' title="Show activities" @onclick='() => ActivateKpi("activities", 1)'><span class="od-kpi-icon"><i class="bi bi-lightning-charge" aria-hidden="true"></i></span><span><strong class="od-kpi-val">@_activities.Count</strong><span class="od-kpi-lbl">Activities</span><small>@RecentActivityText</small></span></button>
+        <button type="button" class='@KpiClass("submissions")' title="Show submissions" @onclick='() => ActivateKpi("submissions", 2)'><span class="od-kpi-icon"><i class="bi bi-send" aria-hidden="true"></i></span><span><strong class="od-kpi-val">@_submissions.Count</strong><span class="od-kpi-lbl">Submissions</span><small>@_quotes.Count quote(s)</small></span></button>
+        <button type="button" class='@KpiClass("documents")' title="Show documents" @onclick='() => ActivateKpi("documents", 4)'><span class="od-kpi-icon"><i class="bi bi-folder2-open" aria-hidden="true"></i></span><span><strong class="od-kpi-val">@_documents.Count</strong><span class="od-kpi-lbl">Documents</span><small>Proposal package</small></span></button>
+        <button type="button" class='@KpiClass("competitors")' title="Show competitors" @onclick='() => ActivateKpi("competitors", 5)'><span class="od-kpi-icon"><i class="bi bi-crosshair" aria-hidden="true"></i></span><span><strong class="od-kpi-val">@_competitors.Count</strong><span class="od-kpi-lbl">Competitors</span><small>Market intel</small></span></button>
+    </section>
 
     <!-- Identity strip -->
     <div class="od-strip">
@@ -63,12 +88,18 @@ else
     <!-- Two-column layout -->
     <div class="od-layout">
         <div class="od-tabs-col">
-            <AppDetailTabs SelectedTab="_tab" SelectedTabChanged="t => _tab = t">
-                <Tabs>
-                    <!-- 0 Overview -->
-                    <TabItem>
-                        <ChildContent><TabHeader Text="Overview" IconCss="bi bi-house" /></ChildContent>
-                        <ContentTemplate>
+            <div class="od-native-tabs" role="tablist" aria-label="Opportunity detail sections">
+                @TabButton(0, "Overview", "bi-house")
+                @TabButton(1, "Activities", "bi-lightning")
+                @TabButton(2, "Submissions", "bi-send")
+                @TabButton(3, "Quotes", "bi-file-text")
+                @TabButton(4, "Documents", "bi-folder2")
+                @TabButton(5, "Competitors", "bi-crosshair")
+                @TabButton(6, "Workflow", "bi-diagram-3")
+            </div>
+            <div class="od-native-panels">
+                @if (_tab == 0)
+                {
                             <div class="od-tab-body">
                                 <div class="od-info-card">
                                     <h3 class="od-section-hdr">Opportunity Details</h3>
@@ -100,28 +131,19 @@ else
                                     { <p class="od-empty-sm">No lines added yet.</p> }
                                     else
                                     {
-                                        <SfGrid TValue="OppLine" DataSource="_lines" EnableHover="true" RowHeight="48">
-                                            <GridColumns>
-                                                <GridColumn Field="@nameof(OppLine.LineOfBusiness)" HeaderText="Line"    MinWidth="160" />
-                                                <GridColumn Field="@nameof(OppLine.Carrier)"        HeaderText="Carrier" Width="150" />
-                                                <GridColumn Field="@nameof(OppLine.EstPremium)"     HeaderText="Est. Premium" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                                    <Template>@{ var l = (OppLine)context; }<span class="od-mono od-bold">@l.EstPremium.ToString("C0")</span></Template>
-                                                </GridColumn>
-                                                <GridColumn Field="@nameof(OppLine.Priority)"       HeaderText="Priority" Width="100">
-                                                    <Template>@{ var l = (OppLine)context; }<span class="@PriBadge(l.Priority)">@l.Priority</span></Template>
-                                                </GridColumn>
-                                            </GridColumns>
-                                        </SfGrid>
+                                        <div class="od-table-wrap"><table class="od-table"><thead><tr><th>Line</th><th>Carrier</th><th class="text-end">Est. Premium</th><th>Priority</th></tr></thead><tbody>
+                                            @foreach (var l in _lines)
+                                            {
+                                                <tr><td data-label="Line">@l.LineOfBusiness</td><td data-label="Carrier">@(l.Carrier ?? "—")</td><td data-label="Est. Premium" class="text-end od-mono od-bold">@l.EstPremium.ToString("C0")</td><td data-label="Priority"><span class="@PriBadge(l.Priority)">@l.Priority</span></td></tr>
+                                            }
+                                        </tbody></table></div>
                                     }
                                 </div>
                             </div>
-                        </ContentTemplate>
-                    </TabItem>
+                }
 
-                    <!-- 1 Activities -->
-                    <TabItem>
-                        <ChildContent><TabHeader Text="Activities" IconCss="bi bi-lightning" /></ChildContent>
-                        <ContentTemplate>
+                @if (_tab == 1)
+                {
                             <div class="od-tab-body">
                                 <div class="od-tab-toolbar">
                                     <span class="od-tab-count">@_activities.Count activit@(_activities.Count == 1 ? "y" : "ies")</span>
@@ -147,16 +169,51 @@ else
                                                 </div>
                                             </div>
                                         }
+                @if (_tab == 5)
+                {
+                    <div class="od-tab-body">
+                        <div class="od-tab-toolbar">
+                            <span class="od-tab-count">@_competitors.Count competitor(s)</span>
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenAddCompetitor"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add</button>
+                        </div>
+                        @if (_competitors.Count == 0) { @OEmpty("bi-crosshair", "No competitors", "Track competitive pressure and strength for win strategy.") }
+                        else
+                        {
+                            <div class="od-competitor-grid">
+                                @foreach (var c in _competitors)
+                                {
+                                    <article class="od-competitor-card">
+                                        <div><strong>@c.Name</strong><span class="@CompBadge(c.Strength)">@c.Strength</span></div>
+                                        <div class="od-row-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditCompetitor(c)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDeleteCompetitor(c)"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button></div>
+                                    </article>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+                @if (_tab == 6)
+                {
+                    <div class="od-tab-body">
+                        <div class="od-tab-toolbar"><span class="od-tab-count">@_workflowEvents.Count workflow event(s)</span></div>
+                        @if (_workflowEvents.Count == 0) { @OEmpty("bi-diagram-3", "No workflow events", "Opportunity actions will appear here as they sync to related entities.") }
+                        else
+                        {
+                            <div class="od-timeline">
+                                @foreach (var e in _workflowEvents.OrderByDescending(x => x.EventDateUtc))
+                                {
+                                    <div class="od-tl-item"><div class="od-tl-icon od-tl-ic--workflow"><i class="bi @WorkflowIcon(e.EventType)" aria-hidden="true"></i></div><div class="od-tl-body"><div class="od-tl-hdr"><span class="od-tl-type">@e.EventType</span><span class="od-mono od-muted">@e.EventDateUtc.ToString("g")</span>@if (!string.IsNullOrWhiteSpace(e.RelatedEntityName)) { <span class="od-related-chip">@e.RelatedEntityName</span> }</div><div class="od-tl-subject">@e.EventTitle</div>@if (!string.IsNullOrWhiteSpace(e.EventDetail)) { <p class="od-tl-notes">@e.EventDetail</p> }</div></div>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
                                     </div>
                                 }
                             </div>
-                        </ContentTemplate>
-                    </TabItem>
+                }
 
-                    <!-- 2 Submissions -->
-                    <TabItem>
-                        <ChildContent><TabHeader Text="Submissions" IconCss="bi bi-send" /></ChildContent>
-                        <ContentTemplate>
+                @if (_tab == 2)
+                {
                             <div class="od-tab-body">
                                 <div class="od-tab-toolbar">
                                     <span class="od-tab-count">@_submissions.Count submission(s)</span>
@@ -165,49 +222,37 @@ else
                                 @if (_submissions.Count == 0) { @OEmpty("bi-send","No submissions","Create underwriting submissions from this opportunity before requesting quotes.") }
                                 else
                                 {
-                                    <div class="app-datagrid">
-                                        <SfGrid TValue="SubmissionRow" DataSource="_submissions" AllowSorting="true" EnableHover="true" RowHeight="52">
-                                            <GridColumns>
-                                                <GridColumn Field="@nameof(SubmissionRow.SubmissionNumber)" HeaderText="Submission #" Width="150" />
-                                                <GridColumn Field="@nameof(SubmissionRow.LineOfBusiness)" HeaderText="Line" Width="170" />
-                                                <GridColumn Field="@nameof(SubmissionRow.Status)" HeaderText="Status" Width="120" />
-                                                <GridColumn Field="@nameof(SubmissionRow.TargetPremium)" HeaderText="Target Premium" Width="140" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                                    <Template>@{ var s = (SubmissionRow)context; }<span class="od-mono od-bold">@s.TargetPremium.ToString("C0")</span></Template>
-                                                </GridColumn>
-                                                <GridColumn Field="@nameof(SubmissionRow.QuoteCount)" HeaderText="Quotes" Width="90" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
-                                                <GridColumn HeaderText="" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                                    <Template>
-                                                        @{ var s = (SubmissionRow)context; }
-                                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenSubmission(s.SubmissionId)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button>
-                                                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditSubmission(s)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
-                                                        <button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDeleteSubmission(s)"><i class="bi bi-trash" aria-hidden="true"></i></button>
-                                                    </Template>
-                                                </GridColumn>
-                                            </GridColumns>
-                                        </SfGrid>
-                                    </div>
+                                    <div class="od-table-wrap"><table class="od-table"><thead><tr><th>Submission #</th><th>Line</th><th>Status</th><th class="text-end">Target Premium</th><th class="text-end">Quotes</th><th class="text-end">Actions</th></tr></thead><tbody>
+                                        @foreach (var s in _submissions)
+                                        {
+                                            <tr><td data-label="Submission #" class="od-mono od-bold">@s.SubmissionNumber</td><td data-label="Line">@s.LineOfBusiness</td><td data-label="Status"><span class="@QSBadge(s.Status)">@s.Status</span></td><td data-label="Target Premium" class="text-end od-mono od-bold">@s.TargetPremium.ToString("C0")</td><td data-label="Quotes" class="text-end">@s.QuoteCount</td><td data-label="Actions" class="text-end"><div class="od-row-actions"><button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenSubmission(s.SubmissionId)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditSubmission(s)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDeleteSubmission(s)"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td></tr>
+                                        }
+                                    </tbody></table></div>
                                 }
                             </div>
-                        </ContentTemplate>
-                    </TabItem>
+                }
 
-                    <!-- 3 Quotes -->
-                    <TabItem>
-                        <ChildContent><TabHeader Text="Quotes" IconCss="bi bi-file-text" /></ChildContent>
-                        <ContentTemplate>
+                @if (_tab == 3)
+                {
                             <div class="od-tab-body">
                                 <div class="od-tab-toolbar">
                                     <span class="od-tab-count">@_quotes.Count quote(s)</span>
                                 </div>
                                 @if (_quotes.Count == 0) { @OEmpty("bi-file-text","No quotes","Quotes are created downstream from submissions.") }
+                                else
+                                {
+                                    <div class="od-table-wrap"><table class="od-table"><thead><tr><th>Quote #</th><th>Carrier</th><th>Status</th><th class="text-end">Premium</th><th>Expires</th></tr></thead><tbody>
+                                        @foreach (var q in _quotes)
+                                        {
+                                            <tr><td data-label="Quote #" class="od-mono od-bold">@q.QuoteNumber</td><td data-label="Carrier">@(string.IsNullOrWhiteSpace(q.Carrier) ? "—" : q.Carrier)</td><td data-label="Status"><span class="@QSBadge(q.Status)">@q.Status</span></td><td data-label="Premium" class="text-end od-mono od-bold">@q.Premium.ToString("C0")</td><td data-label="Expires" class="od-mono">@q.ExpiresAt.ToString("d")</td></tr>
+                                        }
+                                    </tbody></table></div>
+                                }
                             </div>
-                        </ContentTemplate>
-                    </TabItem>
+                }
 
-                    <!-- 4 Documents -->
-                    <TabItem>
-                        <ChildContent><TabHeader Text="Documents" IconCss="bi bi-folder2" /></ChildContent>
-                        <ContentTemplate>
+                @if (_tab == 4)
+                {
                             <div class="od-tab-body">
                                 <div class="od-tab-toolbar">
                                     <span class="od-tab-count">@_documents.Count document(s)</span>
@@ -216,32 +261,16 @@ else
                                 @if (_documents.Count == 0) { @OEmpty("bi-folder2","No documents","Attach proposals, carrier submissions or correspondence.") }
                                 else
                                 {
-                                    <div class="app-datagrid">
-                                        <SfGrid TValue="DocRow" DataSource="_documents" AllowSorting="true" EnableHover="true" RowHeight="52">
-                                            <GridColumns>
-                                                <GridColumn Field="@nameof(DocRow.FileName)"    HeaderText="File"        MinWidth="200">
-                                                    <Template>@{ var d = (DocRow)context; }<span class="od-doc-name"><i class="bi @DocIcon(d.Extension)" aria-hidden="true"></i> @d.FileName</span></Template>
-                                                </GridColumn>
-                                                <GridColumn Field="@nameof(DocRow.Category)"   HeaderText="Category"    Width="140" />
-                                                <GridColumn Field="@nameof(DocRow.SizeKb)"     HeaderText="Size"        Width="90" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                                    <Template>@{ var d = (DocRow)context; }<span class="od-mono">@d.SizeKb KB</span></Template>
-                                                </GridColumn>
-                                                <GridColumn Field="@nameof(DocRow.UploadedBy)" HeaderText="Uploaded By" Width="150" />
-                                                <GridColumn Field="@nameof(DocRow.UploadedAt)" HeaderText="Date"        Width="120">
-                                                    <Template>@{ var d = (DocRow)context; }<span class="od-mono">@d.UploadedAt.ToString("d")</span></Template>
-                                                </GridColumn>
-                                                <GridColumn HeaderText="Actions" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                                    <Template>@{ var d = (DocRow)context; }<button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => DownloadDocumentAsync(d)"><i class="bi bi-download" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDeleteDocument(d)"><i class="bi bi-trash" aria-hidden="true"></i></button></Template>
-                                                </GridColumn>
-                                            </GridColumns>
-                                        </SfGrid>
-                                    </div>
+                                    <div class="od-table-wrap"><table class="od-table"><thead><tr><th>File</th><th>Category</th><th class="text-end">Size</th><th>Uploaded By</th><th>Date</th><th class="text-end">Actions</th></tr></thead><tbody>
+                                        @foreach (var d in _documents)
+                                        {
+                                            <tr><td data-label="File"><span class="od-doc-name"><i class="bi @DocIcon(d.Extension)" aria-hidden="true"></i> @d.FileName</span></td><td data-label="Category">@d.Category</td><td data-label="Size" class="text-end od-mono">@d.SizeKb KB</td><td data-label="Uploaded By">@d.UploadedBy</td><td data-label="Date" class="od-mono">@d.UploadedAt.ToString("d")</td><td data-label="Actions" class="text-end"><div class="od-row-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => DownloadDocumentAsync(d)"><i class="bi bi-download" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDeleteDocument(d)"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td></tr>
+                                        }
+                                    </tbody></table></div>
                                 }
                             </div>
-                        </ContentTemplate>
-                    </TabItem>
-                </Tabs>
-            </AppDetailTabs>
+                }
+            </div>
         </div>
 
         <!-- Right panel -->
@@ -300,11 +329,13 @@ else
             </div>
         </aside>
     </div>
+    </div>
 }
 
 <!-- Edit Opportunity dialog -->
-<SfDialog @bind-Visible="_showEdit" Width="720px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
+@if (_showEdit)
+{
+    <div class="od-modal-backdrop" role="presentation" @onclick="() => _showEdit = false"><div class="od-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-modal-header"><i class="bi bi-trophy" aria-hidden="true"></i><span>Edit Opportunity</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showEdit = false"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
         <EditForm Model="_editForm" OnValidSubmit="SaveOpportunityAsync">
             <DataAnnotationsValidator />
@@ -320,12 +351,13 @@ else
             </div></div>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showEdit = false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_savingAction"><i class="bi bi-check-lg" aria-hidden="true"></i> Save Changes</button></div>
         </EditForm>
-    </DialogContent>
-</SfDialog>
+    </div></div>
+}
 
 <!-- Log/Edit Activity dialog -->
-<SfDialog @bind-Visible="_showLogActivity" Width="620px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
+@if (_showLogActivity)
+{
+    <div class="od-modal-backdrop" role="presentation" @onclick="CloseActivityDialog"><div class="od-modal od-modal-sm" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-modal-header"><i class="bi bi-lightning" aria-hidden="true"></i><span>@(_editingActivity is null ? "Log Activity" : "Edit Activity")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseActivityDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
         <EditForm Model="_activityForm" OnValidSubmit="CommitActivityAsync">
             <DataAnnotationsValidator />
@@ -337,24 +369,26 @@ else
             </div></div>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseActivityDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_savingAction"><i class="bi bi-check-lg" aria-hidden="true"></i> Save</button></div>
         </EditForm>
-    </DialogContent>
-</SfDialog>
+    </div></div>
+}
 
 <!-- Move Stage dialog -->
-<SfDialog @bind-Visible="_showStage" Width="520px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
+@if (_showStage)
+{
+    <div class="od-modal-backdrop" role="presentation" @onclick="() => _showStage = false"><div class="od-modal od-modal-xs" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-modal-header"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i><span>Move Stage</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showStage = false"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
         <EditForm Model="_stageForm" OnValidSubmit="CommitStageAsync">
             <DataAnnotationsValidator />
             <div class="um-modal-body"><div class="um-form-grid"><div class="um-field um-field--full"><label>Target Stage <span class="text-danger">*</span></label><InputSelect @bind-Value="_stageForm.Stage" class="um-input"><option value="">Select stage</option>@foreach (var option in _stageOpts) { <option value="@option.Value">@option.Label</option> }</InputSelect></div></div></div>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showStage = false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_savingAction"><i class="bi bi-check-lg" aria-hidden="true"></i> Move</button></div>
         </EditForm>
-    </DialogContent>
-</SfDialog>
+    </div></div>
+}
 
 <!-- Mark Won confirmation -->
-<SfDialog @bind-Visible="_showWon" Width="460px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
+@if (_showWon)
+{
+    <div class="od-modal-backdrop" role="presentation" @onclick="() => _showWon = false"><div class="od-confirm-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-confirm-dialog">
             <div class="um-confirm-icon"><i class="bi bi-trophy-fill" aria-hidden="true"></i></div>
             <div class="um-confirm-title">Mark as Closed Won</div>
@@ -362,13 +396,13 @@ else
             <label class="od-toggle-label"><InputCheckbox @bind-Value="_wonForm.CreatePolicy" /> Create bound policy record</label>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showWon = false">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="CommitWonAsync" disabled="@_savingAction"><i class="bi bi-check2-circle" aria-hidden="true"></i> Confirm Won</button></div>
         </div>
-    </DialogContent>
-</SfDialog>
+    </div></div>
+}
 
 <!-- Upload doc dialog -->
-<SfDialog @bind-Visible="_showUpload" Width="720px" IsModal="true" ShowCloseIcon="false">
-    <DialogEvents Closed="ResetUpload" />
-    <DialogContent>
+@if (_showUpload)
+{
+    <div class="od-modal-backdrop" role="presentation" @onclick="() => _showUpload = false"><div class="od-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-modal-header">
             <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i>
             <span>Upload Opportunity Document</span>
@@ -430,24 +464,26 @@ else
                 </button>
             </div>
         </EditForm>
-    </DialogContent>
-</SfDialog>
+    </div></div>
+}
 
 <!-- Add/Edit competitor dialog -->
-<SfDialog @bind-Visible="_showAddComp" Width="520px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
+@if (_showAddComp)
+{
+    <div class="od-modal-backdrop" role="presentation" @onclick="CloseCompetitorDialog"><div class="od-modal od-modal-xs" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-modal-header"><i class="bi bi-crosshair" aria-hidden="true"></i><span>@(_editingCompetitor is null ? "Add Competitor" : "Edit Competitor")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseCompetitorDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
         <EditForm Model="_competitorForm" OnValidSubmit="CommitAddCompAsync">
             <DataAnnotationsValidator />
             <div class="um-modal-body"><div class="um-form-grid"><div class="um-field um-field--full"><label>Competitor Name <span class="text-danger">*</span></label><InputText @bind-Value="_competitorForm.Name" class="um-input" /></div><div class="um-field um-field--full"><label>Strength <span class="text-danger">*</span></label><InputSelect @bind-Value="_competitorForm.Strength" class="um-input">@foreach (var option in _compStrengths) { <option value="@option.Value">@option.Label</option> }</InputSelect></div></div></div>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseCompetitorDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_savingAction"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_editingCompetitor is null ? "Add" : "Save")</button></div>
         </EditForm>
-    </DialogContent>
-</SfDialog>
+    </div></div>
+}
 
 <!-- New/Edit Submission dialog -->
-<SfDialog @bind-Visible="_showSubmission" Width="620px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
+@if (_showSubmission)
+{
+    <div class="od-modal-backdrop" role="presentation" @onclick="CloseSubmissionDialog"><div class="od-modal od-modal-sm" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-modal-header"><i class="bi bi-send" aria-hidden="true"></i><span>@(_editingSubmission is null ? "New Submission" : "Edit Submission")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseSubmissionDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
         <EditForm Model="_submissionForm" OnValidSubmit="CommitSubmissionAsync">
             <DataAnnotationsValidator />
@@ -458,29 +494,33 @@ else
             </div></div>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseSubmissionDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_savingAction"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_editingSubmission is null ? "Create" : "Save")</button></div>
         </EditForm>
-    </DialogContent>
-</SfDialog>
+    </div></div>
+}
 
-<SfDialog @bind-Visible="_showDeleteConfirm" Width="440px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
+@if (_showDeleteConfirm)
+{
+    <div class="od-modal-backdrop" role="presentation" @onclick="() => _showDeleteConfirm = false"><div class="od-confirm-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-confirm-dialog">
             <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
             <div class="um-confirm-title">@_deleteTitle</div>
             <div class="um-confirm-body">@_deleteMessage</div>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showDeleteConfirm = false">Cancel</button><button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_savingAction">Delete</button></div>
         </div>
-    </DialogContent>
-</SfDialog>
+    </div></div>
+}
 
 @code {
     [Parameter] public Guid OpportunityId { get; set; }
 
-    private SfToast? _toast;
     private bool     _loading = true;
     private int      _tab     = 0;
     private OppDetailModel? _opp;
     private Guid _tenantId;
     private Guid? _currentUserId;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string _activeKpi = "overview";
 
     private List<OppLine>    _lines       = [];
     private List<ActivityRow> _activities = [];
@@ -488,6 +528,7 @@ else
     private List<QuoteRow>   _quotes      = [];
     private List<DocRow>     _documents   = [];
     private List<CompetitorRow> _competitors = [];
+    private List<WorkflowEventRow> _workflowEvents = [];
 
     private bool   _showEdit        = false;
     private bool   _showStage       = false;
@@ -552,6 +593,7 @@ else
             _submissions = detail.Submissions.Select(MapSubmission).ToList();
             _quotes = detail.Quotes.Select(MapQuote).ToList();
             _competitors = detail.Competitors.Select(MapCompetitor).ToList();
+            _workflowEvents = detail.WorkflowEvents.Select(MapWorkflowEvent).ToList();
             await LoadOpportunityDocumentsAsync();
 
             Breadcrumbs.SetCrumbs(
@@ -695,11 +737,11 @@ else
             _showUpload = false;
             ResetUpload();
             await LoadOpportunityDocumentsAsync();
-            await _toast!.ShowAsync(new ToastModel { Content = "Document uploaded successfully.", CssClass = "e-toast-success" });
+            await ShowToast("Document uploaded successfully.");
         }
         catch (Exception ex)
         {
-            await _toast!.ShowAsync(new ToastModel { Content = $"Document upload failed: {ex.Message}", CssClass = "e-toast-danger" });
+            await ShowToast($"Document upload failed: {ex.Message}", "e-toast-danger");
         }
         finally
         {
@@ -740,6 +782,7 @@ else
     }
 
     private void OpenStageDialog() { _stageForm = new() { Stage = _opp?.Stage ?? string.Empty }; _showStage = true; }
+    private void OpenStageDialog(string stage) { _stageForm = new() { Stage = stage }; _showStage = true; }
     private void OpenWonDialog() { _wonForm = new() { CreatePolicy = true }; _showWon = true; }
     private void OpenLogActivity() { _editingActivity = null; _activityForm = new() { Type = "Call", OccurredAt = DateTime.UtcNow }; _showLogActivity = true; }
     private void OpenEditActivity(ActivityRow row) { _editingActivity = row; _activityForm = new() { Type = row.Type, Subject = row.Subject, Notes = row.Notes, OccurredAt = row.OccurredAt }; _showLogActivity = true; }
@@ -810,9 +853,38 @@ else
 
     private async Task ShowToast(string content, string cssClass = "e-toast-success")
     {
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = content, CssClass = cssClass });
+        _toastMessage = content;
+        _toastKind = cssClass.Contains("danger", StringComparison.OrdinalIgnoreCase) ? "danger" : "success";
+        _toastVisible = true;
+        await InvokeAsync(StateHasChanged);
     }
+
+    private void HideToast() => _toastVisible = false;
+
+    private string ToastIconClass => _toastKind == "danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill";
+
+    private decimal WeightedAmount => _opp is null ? 0 : _opp.Amount * _opp.WinPct / 100m;
+
+    private int DaysOpen => _opp is null ? 0 : Math.Max(0, (int)(DateTime.UtcNow - _opp.CreatedAt).TotalDays);
+
+    private int DaysToClose => _opp is null ? 0 : Math.Max(0, (int)(_opp.CloseDate - DateTime.UtcNow).TotalDays);
+
+    private string RecentActivityText => _activities.Count == 0
+        ? "No recent activity"
+        : _activities.OrderByDescending(x => x.OccurredAt).First().OccurredAt.ToString("MMM d");
+
+    private string KpiClass(string key) => _activeKpi == key ? "od-kpi-card od-kpi-card-active" : "od-kpi-card";
+
+    private void ActivateKpi(string key, int tab)
+    {
+        _activeKpi = key;
+        _tab = tab;
+    }
+
+    private RenderFragment TabButton(int index, string text, string icon) => __builder =>
+    {
+        <button type="button" class="@(_tab == index ? "od-tab-btn od-tab-btn-active" : "od-tab-btn")" role="tab" aria-selected="@(_tab == index)" @onclick="() => _tab = index"><i class="bi @icon" aria-hidden="true"></i> @text</button>
+    };
 
     private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
@@ -846,6 +918,7 @@ else
     private static QuoteRow MapQuote(QuoteDto dto) => new() { QuoteId = dto.QuoteId, QuoteNumber = dto.QuoteNumber, Premium = dto.TotalAmount, Status = dto.StatusCode, ExpiresAt = dto.ValidUntilDate ?? DateTime.UtcNow.AddDays(30), Carrier = dto.AccountName ?? string.Empty };
     private static CompetitorRow MapCompetitor(OpportunityCompetitorDto dto) => new() { CompetitorId = dto.CompetitorId, Name = dto.Name, Strength = dto.Strength };
     private static DocRow MapDocument(DocumentDto dto) => new() { DocumentId = dto.DocumentId, FileName = dto.FileName, Extension = Path.GetExtension(dto.FileName), Category = dto.CategoryCode, SizeKb = ToSizeKb(dto.FileSizeBytes ?? 0), UploadedBy = dto.UploadedByName ?? "System", UploadedAt = dto.CreatedDateUtc };
+    private static WorkflowEventRow MapWorkflowEvent(OpportunityWorkflowEventDto dto) => new() { WorkflowEventId = dto.WorkflowEventId, EventType = dto.EventType, EventTitle = dto.EventTitle, EventDetail = dto.EventDetail, RelatedEntityName = dto.RelatedEntityName, RelatedEntityId = dto.RelatedEntityId, EventDateUtc = dto.EventDateUtc };
 
     // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private static RenderFragment OField(string label, string? val) => __builder =>
@@ -874,6 +947,7 @@ else
     private static string CompBadge(string s) => s switch { "Strong" => "od-comp-badge od-cb--strong","Weak" => "od-comp-badge od-cb--weak",_ => "od-comp-badge od-cb--mid" };
     private static string ActivityIcon(string t) => t switch { "Call"=>"bi-telephone","Email"=>"bi-envelope","Meeting"=>"bi-calendar3","Note"=>"bi-sticky","Task"=>"bi-check2-square",_=>"bi-lightning" };
     private static string ActivityColor(string t) => t switch { "Call"=>"od-tl-ic--call","Email"=>"od-tl-ic--email","Meeting"=>"od-tl-ic--meeting","Note"=>"od-tl-ic--note",_=>"od-tl-ic--other" };
+    private static string WorkflowIcon(string t) => t switch { "Created"=>"bi-plus-circle","Updated"=>"bi-pencil-square","Stage"=>"bi-arrow-right-circle","Submission" or "SubmissionUpdated"=>"bi-send","Quote"=>"bi-file-text","Activity" or "ActivityUpdated"=>"bi-lightning","Competitor" or "CompetitorUpdated"=>"bi-crosshair",_=>"bi-diagram-3" };
     private static string DocIcon(string ext) => ext.ToLower() switch { ".pdf"=>"bi-file-earmark-pdf",".docx"=>"bi-file-earmark-word",".xlsx"=>"bi-file-earmark-excel",_=>"bi-file-earmark" };
     private static string WinColor(int p) => p >= 70 ? "#16a34a" : p >= 40 ? "#b45309" : "#dc2626";
     private static int StageOrder(string s) => s switch { "Qualification"=>0,"Needs Analysis"=>1,"Proposal"=>2,"Negotiation"=>3,"Closed Won"=>4,"Closed Lost"=>5,_=>99 };
@@ -1003,6 +1077,7 @@ else
     private sealed class ActivityRow { public Guid ActivityId { get; set; } public string Type { get; set; }=string.Empty; public string Subject { get; set; }=string.Empty; public string? Notes { get; set; } public string By { get; set; }=string.Empty; public DateTime OccurredAt { get; set; }=DateTime.UtcNow; }
     private sealed class QuoteRow    { public Guid QuoteId { get; set; }=Guid.NewGuid(); public string QuoteNumber { get; set; }=string.Empty; public string LineOfBusiness { get; set; }=string.Empty; public string Carrier { get; set; }=string.Empty; public decimal Premium { get; set; } public string Status { get; set; }="Pending"; public DateTime ExpiresAt { get; set; }=DateTime.UtcNow.AddDays(30); }
     private sealed class DocRow      { public Guid DocumentId { get; set; } public string FileName { get; set; }=string.Empty; public string Extension { get; set; }=string.Empty; public string Category { get; set; }=string.Empty; public int SizeKb { get; set; } public string UploadedBy { get; set; }=string.Empty; public DateTime UploadedAt { get; set; }=DateTime.UtcNow; }
+    private sealed class WorkflowEventRow { public Guid WorkflowEventId { get; set; } public string EventType { get; set; }=string.Empty; public string EventTitle { get; set; }=string.Empty; public string? EventDetail { get; set; } public string? RelatedEntityName { get; set; } public Guid? RelatedEntityId { get; set; } public DateTime EventDateUtc { get; set; }=DateTime.UtcNow; }
     private sealed class UploadDocumentForm
     {
         [Required, StringLength(100)] public string Category { get; set; } = string.Empty;

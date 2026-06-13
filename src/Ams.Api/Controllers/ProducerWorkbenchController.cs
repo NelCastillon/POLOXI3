@@ -1,5 +1,5 @@
 using Ams.Application.Abstractions.Services;
-using Ams.Application.Features.Leads;
+using Ams.Application.Common.Dtos;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Ams.Api.Controllers;
@@ -22,6 +22,32 @@ public sealed class ProducerWorkbenchController : ControllerBase
         return Ok(result);
     }
 
+    [HttpGet("renewal-calls")]
+    public async Task<IActionResult> GetRenewalCalls([FromQuery] Guid tenantId, [FromQuery] Guid? userId, [FromQuery] string? statusCode, CancellationToken cancellationToken)
+    {
+        var result = await _service.GetRenewalCallsAsync(tenantId, userId, statusCode, cancellationToken);
+        return Ok(result);
+    }
+
+    [HttpGet("renewal-calls/{renewalKey:guid}")]
+    public async Task<IActionResult> GetRenewalCall(Guid renewalKey, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
+    {
+        var result = await _service.GetRenewalCallAsync(tenantId, renewalKey, cancellationToken);
+        return result is null ? NotFound() : Ok(result);
+    }
+
+    [HttpPut("renewal-calls/{renewalCallId:guid}")]
+    public async Task<IActionResult> UpdateRenewalCall(Guid renewalCallId, [FromBody] UpdateProducerRenewalCallRequest request, CancellationToken cancellationToken)
+    {
+        if (!ModelState.IsValid)
+        {
+            return ValidationProblem(ModelState);
+        }
+
+        await _service.UpdateRenewalCallAsync(renewalCallId, request, cancellationToken);
+        return NoContent();
+    }
+
     [HttpGet("next-lead-number")]
     public async Task<IActionResult> NextLeadNumber([FromQuery] Guid tenantId, CancellationToken cancellationToken)
     {
@@ -30,9 +56,14 @@ public sealed class ProducerWorkbenchController : ControllerBase
     }
 
     [HttpPost("log-contact")]
-    public async Task<IActionResult> LogContact([FromQuery] Guid tenantId, [FromQuery] Guid itemId, [FromQuery] string itemType, CancellationToken cancellationToken)
+    public async Task<IActionResult> LogContact([FromBody] ProducerWorkbenchLogContactRequest request, CancellationToken cancellationToken)
     {
-        await _service.LogContactAsync(tenantId, itemId, itemType, cancellationToken);
+        if (!ModelState.IsValid)
+        {
+            return ValidationProblem(ModelState);
+        }
+
+        await _service.LogContactAsync(request, cancellationToken);
         return NoContent();
     }
 }

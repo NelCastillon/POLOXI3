@@ -3,6 +3,7 @@ using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
 using Ams.Application.Features.Opportunities;
 using Dapper;
+using System.Data;
 
 namespace Ams.Infrastructure.Persistence.Repositories;
 
@@ -82,6 +83,8 @@ VALUES
             request.CreatedByUserId
         }, cancellationToken: cancellationToken));
 
+        await RecordWorkflowEventAsync(cn, id, request.TenantId, "Created", "Opportunity created", $"Opportunity {request.OpportunityNumber} was created.", "Opportunity", id, request.CreatedByUserId, cancellationToken);
+
         return id;
     }
 
@@ -127,7 +130,13 @@ ORDER BY CreatedDateUtc DESC;
 SELECT CompetitorId, TenantId, OpportunityId, Name, Strength, CreatedDateUtc, ModifiedDateUtc
 FROM CRM.OpportunityCompetitor
 WHERE OpportunityId = @Id AND IsDeleted = 0
-ORDER BY CreatedDateUtc;";
+ORDER BY CreatedDateUtc;
+
+SELECT WorkflowEventId, TenantId, OpportunityId, EventType, EventTitle, EventDetail,
+       RelatedEntityName, RelatedEntityId, EventDateUtc, CreatedDateUtc
+FROM CRM.OpportunityWorkflowEvent
+WHERE OpportunityId = @Id AND IsDeleted = 0
+ORDER BY EventDateUtc DESC, CreatedDateUtc DESC;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
@@ -141,7 +150,8 @@ ORDER BY CreatedDateUtc;";
             Activities = (await multi.ReadAsync<OpportunityActivityDto>()).AsList(),
             Submissions = (await multi.ReadAsync<OpportunitySubmissionDto>()).AsList(),
             Quotes = (await multi.ReadAsync<QuoteDto>()).AsList(),
-            Competitors = (await multi.ReadAsync<OpportunityCompetitorDto>()).AsList()
+            Competitors = (await multi.ReadAsync<OpportunityCompetitorDto>()).AsList(),
+            WorkflowEvents = (await multi.ReadAsync<OpportunityWorkflowEventDto>()).AsList()
         };
     }
 
@@ -219,6 +229,7 @@ WHERE OpportunityId = @OpportunityId AND IsDeleted = 0;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { OpportunityId = id, request.OpportunityName, request.EstimatedAmount, request.CloseDate, request.WinProbability, request.ForecastCategoryCode, request.StageName, request.OwnerUserId, request.Description, request.ModifiedByUserId }, cancellationToken: cancellationToken));
+        await RecordWorkflowEventAsync(cn, id, null, "Updated", "Opportunity updated", $"Opportunity was updated with stage {request.StageName} and forecast {request.ForecastCategoryCode}.", "Opportunity", id, request.ModifiedByUserId, cancellationToken);
     }
 
     public async Task UpdateStageAsync(Guid id, UpdateOpportunityStageRequest request, CancellationToken cancellationToken = default)
@@ -233,6 +244,7 @@ WHERE OpportunityId = @OpportunityId AND IsDeleted = 0;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { OpportunityId = id, request.Stage, request.ModifiedByUserId }, cancellationToken: cancellationToken));
+        await RecordWorkflowEventAsync(cn, id, null, "Stage", $"Moved to {request.Stage}", $"Opportunity stage changed to {request.Stage}.", "Opportunity", id, request.ModifiedByUserId, cancellationToken);
     }
 
     public async Task<Guid> UpsertActivityAsync(UpsertOpportunityActivityRequest request, CancellationToken cancellationToken = default)
@@ -258,14 +270,20 @@ END
 SELECT @ActivityId;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        return await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { request.ActivityId, request.TenantId, request.OpportunityId, request.ActivityTypeCode, request.Subject, request.Notes, request.ActivityDate, request.UserId }, cancellationToken: cancellationToken));
+        var isNew = request.ActivityId is null;
+        var id = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { request.ActivityId, request.TenantId, request.OpportunityId, request.ActivityTypeCode, request.Subject, request.Notes, request.ActivityDate, request.UserId }, cancellationToken: cancellationToken));
+        await RecordWorkflowEventAsync(cn, request.OpportunityId, request.TenantId, isNew ? "Activity" : "ActivityUpdated", isNew ? "Activity logged" : "Activity updated", request.Subject, "Activity", id, request.UserId, cancellationToken);
+        return id;
     }
 
     public async Task DeleteActivityAsync(Guid activityId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
     {
         const string sql = "UPDATE CRM.OpportunityActivity SET IsDeleted = 1, ModifiedByUserId = @ModifiedByUserId, ModifiedDateUtc = SYSUTCDATETIME() WHERE ActivityId = @ActivityId;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var target = await cn.QuerySingleOrDefaultAsync<WorkflowTarget>(new CommandDefinition("SELECT TenantId, OpportunityId FROM CRM.OpportunityActivity WHERE ActivityId = @ActivityId;", new { ActivityId = activityId }, cancellationToken: cancellationToken));
         await cn.ExecuteAsync(new CommandDefinition(sql, new { ActivityId = activityId, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
+        if (target is not null)
+            await RecordWorkflowEventAsync(cn, target.OpportunityId, target.TenantId, "ActivityDeleted", "Activity deleted", "An opportunity activity was deleted.", "Activity", activityId, modifiedByUserId, cancellationToken);
     }
 
     public async Task<Guid> UpsertSubmissionAsync(UpsertOpportunitySubmissionRequest request, CancellationToken cancellationToken = default)
@@ -291,14 +309,20 @@ END
 SELECT @SubmissionId;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        return await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { request.SubmissionId, request.TenantId, request.OpportunityId, request.SubmissionNumber, request.LineOfBusiness, request.Status, request.TargetPremium, request.UserId }, cancellationToken: cancellationToken));
+        var isNew = request.SubmissionId is null;
+        var id = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { request.SubmissionId, request.TenantId, request.OpportunityId, request.SubmissionNumber, request.LineOfBusiness, request.Status, request.TargetPremium, request.UserId }, cancellationToken: cancellationToken));
+        await RecordWorkflowEventAsync(cn, request.OpportunityId, request.TenantId, isNew ? "Submission" : "SubmissionUpdated", isNew ? "Submission created" : "Submission updated", $"{request.LineOfBusiness} submission is {request.Status} with target premium {request.TargetPremium:C0}.", "Submission", id, request.UserId, cancellationToken);
+        return id;
     }
 
     public async Task DeleteSubmissionAsync(Guid submissionId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
     {
         const string sql = "UPDATE CRM.OpportunitySubmission SET IsDeleted = 1, ModifiedByUserId = @ModifiedByUserId, ModifiedDateUtc = SYSUTCDATETIME() WHERE SubmissionId = @SubmissionId;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var target = await cn.QuerySingleOrDefaultAsync<WorkflowTarget>(new CommandDefinition("SELECT TenantId, OpportunityId FROM CRM.OpportunitySubmission WHERE SubmissionId = @SubmissionId;", new { SubmissionId = submissionId }, cancellationToken: cancellationToken));
         await cn.ExecuteAsync(new CommandDefinition(sql, new { SubmissionId = submissionId, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
+        if (target is not null)
+            await RecordWorkflowEventAsync(cn, target.OpportunityId, target.TenantId, "SubmissionDeleted", "Submission deleted", "An opportunity submission was deleted.", "Submission", submissionId, modifiedByUserId, cancellationToken);
     }
 
     public async Task<Guid> UpsertCompetitorAsync(UpsertOpportunityCompetitorRequest request, CancellationToken cancellationToken = default)
@@ -322,13 +346,58 @@ END
 SELECT @CompetitorId;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        return await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { request.CompetitorId, request.TenantId, request.OpportunityId, request.Name, request.Strength, request.UserId }, cancellationToken: cancellationToken));
+        var isNew = request.CompetitorId is null;
+        var id = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { request.CompetitorId, request.TenantId, request.OpportunityId, request.Name, request.Strength, request.UserId }, cancellationToken: cancellationToken));
+        await RecordWorkflowEventAsync(cn, request.OpportunityId, request.TenantId, isNew ? "Competitor" : "CompetitorUpdated", isNew ? "Competitor added" : "Competitor updated", $"{request.Name} tracked as {request.Strength}.", "Competitor", id, request.UserId, cancellationToken);
+        return id;
     }
 
     public async Task DeleteCompetitorAsync(Guid competitorId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
     {
         const string sql = "UPDATE CRM.OpportunityCompetitor SET IsDeleted = 1, ModifiedByUserId = @ModifiedByUserId, ModifiedDateUtc = SYSUTCDATETIME() WHERE CompetitorId = @CompetitorId;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var target = await cn.QuerySingleOrDefaultAsync<WorkflowTarget>(new CommandDefinition("SELECT TenantId, OpportunityId FROM CRM.OpportunityCompetitor WHERE CompetitorId = @CompetitorId;", new { CompetitorId = competitorId }, cancellationToken: cancellationToken));
         await cn.ExecuteAsync(new CommandDefinition(sql, new { CompetitorId = competitorId, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
+        if (target is not null)
+            await RecordWorkflowEventAsync(cn, target.OpportunityId, target.TenantId, "CompetitorDeleted", "Competitor deleted", "An opportunity competitor was deleted.", "Competitor", competitorId, modifiedByUserId, cancellationToken);
     }
+
+    private static async Task RecordWorkflowEventAsync(IDbConnection cn, Guid opportunityId, Guid? tenantId, string eventType, string eventTitle, string? eventDetail, string? relatedEntityName, Guid? relatedEntityId, Guid? userId, CancellationToken cancellationToken)
+    {
+        var resolvedTenantId = tenantId ?? await cn.ExecuteScalarAsync<Guid?>(new CommandDefinition(
+            "SELECT TenantId FROM CRM.Opportunity WHERE OpportunityId = @OpportunityId;",
+            new { OpportunityId = opportunityId }, cancellationToken: cancellationToken));
+
+        if (!resolvedTenantId.HasValue || resolvedTenantId.Value == Guid.Empty)
+            return;
+
+        const string sql = @"
+IF OBJECT_ID(N'CRM.OpportunityWorkflowEvent', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO CRM.OpportunityWorkflowEvent
+    (
+        WorkflowEventId, TenantId, OpportunityId, EventType, EventTitle, EventDetail,
+        RelatedEntityName, RelatedEntityId, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted
+    )
+    VALUES
+    (
+        NEWID(), @TenantId, @OpportunityId, @EventType, @EventTitle, @EventDetail,
+        @RelatedEntityName, @RelatedEntityId, SYSUTCDATETIME(), SYSUTCDATETIME(), @UserId, 0
+    );
+END;";
+
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            TenantId = resolvedTenantId.Value,
+            OpportunityId = opportunityId,
+            EventType = eventType,
+            EventTitle = eventTitle,
+            EventDetail = eventDetail,
+            RelatedEntityName = relatedEntityName,
+            RelatedEntityId = relatedEntityId,
+            UserId = userId
+        }, cancellationToken: cancellationToken));
+    }
+
+    private sealed record WorkflowTarget(Guid TenantId, Guid OpportunityId);
 }

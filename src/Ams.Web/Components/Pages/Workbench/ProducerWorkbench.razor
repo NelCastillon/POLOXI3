@@ -1,13 +1,16 @@
 @page "/workbench/producer"
 @namespace Ams.Web.Components.Pages.Workbench
+@using System.ComponentModel.DataAnnotations
 @using System.Globalization
 @using System.Security.Claims
 @using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
 @inject ProducerWorkbenchApiClient WorkbenchApi
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
 @inject AuthenticationStateProvider AuthenticationStateProvider
+@inject LeadDialogService LeadDialogs
 
 <PageTitle>Enterprise Producer Workbench</PageTitle>
 
@@ -17,6 +20,72 @@
         <i class="bi @ToastIconClass" aria-hidden="true"></i>
         <span>@_toastMessage</span>
         <button type="button" class="pwe-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showLogContact && _contactItem is not null)
+{
+    <div class="pwe-modal-backdrop" role="presentation" @onclick="CloseLogContact">
+        <div class="pwe-modal" role="dialog" aria-modal="true" aria-labelledby="pweLogContactTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_contactForm" OnValidSubmit="SaveContactAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-header">
+                    <i class="bi bi-telephone-outbound" aria-hidden="true"></i>
+                    <span id="pweLogContactTitle">Log producer contact</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseLogContact"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="pwe-contact-context">
+                        <strong>@ContactTargetName</strong>
+                        <span>@_contactItem.ItemType · @(_contactItem.RefNumber == string.Empty ? "No reference" : _contactItem.RefNumber)</span>
+                        <small>Use Log Contact to record a completed producer touchpoint on the CRM lead/opportunity or account activity timeline.</small>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-form-field">
+                            <label for="pweContactMethod">Contact method</label>
+                            <InputSelect id="pweContactMethod" class="form-select" @bind-Value="_contactForm.ContactMethod">
+                                <option value="Call">Call</option>
+                                <option value="Email">Email</option>
+                                <option value="Meeting">Meeting</option>
+                                <option value="Note">Note</option>
+                                <option value="Other">Other</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _contactForm.ContactMethod" class="text-danger" />
+                        </div>
+                        <div class="um-form-field">
+                            <label for="pweContactOutcome">Outcome</label>
+                            <InputSelect id="pweContactOutcome" class="form-select" @bind-Value="_contactForm.OutcomeCode">
+                                <option value="Contacted">Contacted</option>
+                                <option value="Left Message">Left Message</option>
+                                <option value="No Answer">No Answer</option>
+                                <option value="Follow-up Needed">Follow-up Needed</option>
+                                <option value="Not Interested">Not Interested</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _contactForm.OutcomeCode" class="text-danger" />
+                        </div>
+                        <div class="um-form-field um-form-field--span-2">
+                            <label for="pweContactSubject">Subject</label>
+                            <InputText id="pweContactSubject" class="form-control" @bind-Value="_contactForm.Subject" />
+                            <ValidationMessage For="() => _contactForm.Subject" class="text-danger" />
+                        </div>
+                        <div class="um-form-field">
+                            <label for="pweContactDuration">Duration minutes</label>
+                            <InputNumber id="pweContactDuration" class="form-control" @bind-Value="_contactForm.DurationMinutes" />
+                            <ValidationMessage For="() => _contactForm.DurationMinutes" class="text-danger" />
+                        </div>
+                        <div class="um-form-field um-form-field--span-2">
+                            <label for="pweContactNotes">Notes</label>
+                            <InputTextArea id="pweContactNotes" class="form-control" rows="4" @bind-Value="_contactForm.Notes" />
+                            <ValidationMessage For="() => _contactForm.Notes" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseLogContact" disabled="@_savingContact">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_savingContact"><i class="bi @(_savingContact ? "bi-arrow-repeat pwe-spin" : "bi-check2-circle")" aria-hidden="true"></i> Save contact</button>
+                </div>
+            </EditForm>
+        </div>
     </div>
 }
 
@@ -37,7 +106,7 @@
             <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh producer workbench"><i class="bi @(_loading ? "bi-arrow-repeat pwe-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
             <button class="um-btn um-btn-ghost" @onclick="ExportAsync"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
             <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/workbench")'><i class="bi bi-grid-1x2" aria-hidden="true"></i> Workbench</button>
-            <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/crm/leads")'><i class="bi bi-plus-lg" aria-hidden="true"></i> New Lead</button>
+            <button class="um-btn um-btn-primary" @onclick="OpenCreateLeadAsync"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Lead</button>
         </div>
     </section>
 
@@ -149,7 +218,7 @@
             }
             else
             {
-                <div class="pwe-section-head"><div><h2>@ActiveQueueTitle</h2><p>@ActiveQueueSubtitle</p></div><button class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/crm/leads")'><i class="bi bi-plus-lg"></i> New Lead</button></div>
+                <div class="pwe-section-head"><div><h2>@ActiveQueueTitle</h2><p>@ActiveQueueSubtitle</p></div><button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreateLeadAsync"><i class="bi bi-plus-lg"></i> New Lead</button></div>
                 @if (ActiveItems.Count == 0) { @EmptyState(ActiveQueueIcon, "No records match this queue", "Adjust filters, refresh the workbench, or open the source workspace.") } else { <div class="pwe-card-grid">@foreach (var item in ActiveItems) { @QueueCard(item) }</div> }
             }
         </main>
@@ -158,12 +227,12 @@
             @if (_selectedItem is not null)
             {
                 <div class="pwe-detail-head"><div><span class="pwe-detail-eyebrow"><i class="bi @ActiveQueueIcon" aria-hidden="true"></i> @_selectedItem.ItemType</span><h2>@_selectedItem.CompanyName</h2><p>@_selectedItem.Name</p></div>@if (_selectedItem.HeatScore > 0) { <span class="@HeatBadge(_selectedItem.HeatScore)">@HeatLabel(_selectedItem.HeatScore)</span> }</div>
-                <div class="pwe-detail-body"><div class="pwe-detail-summary"><div><span>Ref</span><strong>@(_selectedItem.RefNumber == string.Empty ? "—" : _selectedItem.RefNumber)</strong></div><div><span>LoB</span><strong>@(_selectedItem.LobCode == string.Empty ? "—" : _selectedItem.LobCode)</strong></div><div><span>Premium</span><strong>@_selectedItem.EstPremium.ToString("C0")</strong></div><div><span>Stage</span><strong>@(_selectedItem.Stage == string.Empty ? "—" : _selectedItem.Stage)</strong></div><div><span>Win %</span><strong>@(_selectedItem.WinProbPct > 0 ? _selectedItem.WinProbPct.ToString("F0") + "%" : "—")</strong></div><div><span>Last contact</span><strong>@(_selectedItem.LastContact.HasValue ? FormatAge(_selectedItem.LastContact.Value) : "—")</strong></div></div>@if (!string.IsNullOrWhiteSpace(_selectedItem.NextAction) || !string.IsNullOrWhiteSpace(_selectedItem.CrossSellReason)) { <p class="pwe-detail-note">@(!string.IsNullOrWhiteSpace(_selectedItem.NextAction) ? _selectedItem.NextAction : _selectedItem.CrossSellReason)</p> }<div class="pwe-detail-actions"><button class="um-btn um-btn-ghost" @onclick="@(() => LogContactAsync(_selectedItem))"><i class="bi bi-telephone"></i> Log Contact</button><button class="um-btn um-btn-primary" @onclick="@(() => Nav.NavigateTo(_selectedItem.DetailUrl))">Open Record <i class="bi bi-arrow-right"></i></button></div></div>
+                <div class="pwe-detail-body"><div class="pwe-detail-summary"><div><span>Ref</span><strong>@(_selectedItem.RefNumber == string.Empty ? "—" : _selectedItem.RefNumber)</strong></div><div><span>LoB</span><strong>@(_selectedItem.LobCode == string.Empty ? "—" : _selectedItem.LobCode)</strong></div><div><span>Premium</span><strong>@_selectedItem.EstPremium.ToString("C0")</strong></div><div><span>Stage</span><strong>@(_selectedItem.Stage == string.Empty ? "—" : _selectedItem.Stage)</strong></div><div><span>Win %</span><strong>@(_selectedItem.WinProbPct > 0 ? _selectedItem.WinProbPct.ToString("F0") + "%" : "—")</strong></div><div><span>Last contact</span><strong>@(_selectedItem.LastContact.HasValue ? FormatAge(_selectedItem.LastContact.Value) : "—")</strong></div></div>@if (!string.IsNullOrWhiteSpace(_selectedItem.NextAction) || !string.IsNullOrWhiteSpace(_selectedItem.CrossSellReason)) { <p class="pwe-detail-note">@(!string.IsNullOrWhiteSpace(_selectedItem.NextAction) ? _selectedItem.NextAction : _selectedItem.CrossSellReason)</p> }<div class="pwe-detail-actions"><button class="um-btn um-btn-ghost" @onclick="@(() => OpenLogContact(_selectedItem))" title="Record a completed producer touchpoint"><i class="bi bi-telephone"></i> Log Contact</button><button class="um-btn um-btn-primary" @onclick="@(() => OpenRecord(_selectedItem))">@ActiveOpenRecordLabel <i class="bi bi-arrow-right"></i></button></div></div>
             }
             else if (_selectedMessage is not null)
             {
                 <div class="pwe-detail-head"><div><span class="pwe-detail-eyebrow"><i class="bi bi-chat-dots"></i> Message</span><h2>@_selectedMessage.Subject</h2><p>From @_selectedMessage.SenderName · @FormatAge(_selectedMessage.ReceivedAt)</p></div><span class="@MessageTypeBadge(_selectedMessage.MessageType)">@_selectedMessage.MessageType</span></div>
-                <div class="pwe-detail-body"><p class="pwe-detail-note">@_selectedMessage.Body</p><div class="pwe-detail-actions"><button class="um-btn um-btn-ghost" @onclick="CloseMessage">Close</button><button class="um-btn um-btn-primary" @onclick="@(() => Nav.NavigateTo(_selectedMessage.AccountUrl))">Open Account <i class="bi bi-arrow-right"></i></button></div></div>
+                <div class="pwe-detail-body"><p class="pwe-detail-note">@_selectedMessage.Body</p><div class="pwe-detail-actions"><button class="um-btn um-btn-ghost" @onclick="CloseMessage">Close</button><button class="um-btn um-btn-primary" @onclick="@(() => OpenMessageAccount(_selectedMessage))">Open Account <i class="bi bi-arrow-right"></i></button></div></div>
             }
             else
             {
@@ -177,6 +246,8 @@
     private Guid? _tenantId;
     private Guid? _tenantAdminUserId;
     private bool _loading;
+    private bool _savingContact;
+    private bool _showLogContact;
     private bool _toastVisible;
     private string? _loadError;
     private string _toastMessage = string.Empty;
@@ -185,6 +256,8 @@
     private string _oppView = "board";
     private WorkbenchLeadItemVm? _selectedItem;
     private WorkbenchNotificationItemVm? _selectedMessage;
+    private WorkbenchLeadItemVm? _contactItem;
+    private ContactLogForm _contactForm = new();
     private string _search = string.Empty;
     private string _filterLob = string.Empty;
     private string _filterStage = string.Empty;
@@ -220,6 +293,8 @@
     private string ActiveQueueTitle => _activeQueue switch { "quotes" => "Quote follow-up queue", "renewals" => "Renewal call list", "cross-sell" => "Cross-sell targets", _ => "Assigned leads" };
     private string ActiveQueueSubtitle => _activeQueue switch { "quotes" => "Prioritize presented quotes, expirations, and follow-up calls.", "renewals" => "Work upcoming renewals and policy review touchpoints.", "cross-sell" => "Identify accounts with complementary coverage opportunities.", _ => "Work assigned leads by heat, source, next action, and premium potential." };
     private string ActiveQueueIcon => _activeQueue switch { "quotes" => "bi-file-earmark-text-fill", "renewals" => "bi-telephone-fill", "cross-sell" => "bi-arrows-expand", "messages" => "bi-chat-dots-fill", "opportunities" => "bi-trophy-fill", _ => "bi-person-plus-fill" };
+    private string ActiveOpenRecordLabel => _activeQueue switch { "opportunities" => "Open Opportunity", "quotes" => "Open Quote Follow-up", "renewals" => "Open Renewal Call", "cross-sell" => "Open Cross-sell", _ => "Open Lead" };
+    private string ContactTargetName => _contactItem is null ? "Selected record" : string.IsNullOrWhiteSpace(_contactItem.CompanyName) ? _contactItem.Name : _contactItem.CompanyName;
 
     private List<WorkbenchLeadItemVm> FilteredLeads => _leads.Where(i => MatchesCommon(i) && (!_filterHotOnly || i.HeatScore >= 70)).ToList();
     private List<WorkbenchOppItemVm> FilteredOpps => _opportunities.Where(MatchesCommon).ToList();
@@ -267,16 +342,28 @@
         _goal = new() { WrittenPremium = dto.Goal.WrittenPremium, GoalPremium = dto.Goal.GoalPremium, NewPolicies = dto.Goal.NewPolicies, RetentionRate = dto.Goal.RetentionRate, PipelineValue = dto.Goal.PipelineValue, UnreadMessages = dto.Goal.UnreadMessages };
         _counts = new() { AssignedLeads = dto.Counts.AssignedLeads, HotLeads = dto.Counts.HotLeads, OpenOpportunities = dto.Counts.OpenOpportunities, OppsPremium = dto.Counts.OppsPremium, QuoteFollowups = dto.Counts.QuoteFollowups, OverdueQuotes = dto.Counts.OverdueQuotes, RenewalCallList = dto.Counts.RenewalCallList, RenewalsThisMonth = dto.Counts.RenewalsThisMonth, CrossSellList = dto.Counts.CrossSellList, CrossSellPremium = dto.Counts.CrossSellPremium, UnreadMessages = dto.Counts.UnreadMessages };
         _leads = dto.MyLeads.Select(l => new WorkbenchLeadItemVm { ItemId = l.LeadId, Name = l.FullName, CompanyName = l.AccountName ?? string.Empty, RefNumber = l.LeadNumber, LobCode = l.InterestedService ?? string.Empty, Source = l.SourceCode ?? string.Empty, Stage = MapLeadStatus(l.StatusCodeId), EstPremium = EstimateLeadPremium(l.InterestedService, l.Score), HeatScore = l.Score ?? 0, LastContact = l.LastActivityDate, NextAction = l.NextAction ?? string.Empty, NextActionDate = l.NextActionDate, DetailUrl = $"/crm/leads/{l.LeadId}" }).ToList();
-        _opportunities = dto.MyOpportunities.Select(o => new WorkbenchOppItemVm { ItemId = o.OpportunityId, Name = o.OpportunityName, CompanyName = o.AccountName ?? string.Empty, RefNumber = o.OpportunityNumber, LobCode = MapLobFromText(o.OpportunityName), Stage = NormalizePipelineStage(o.StageName, o.ForecastCategoryCode, o.StatusCodeId), EstPremium = o.EstimatedAmount, WinProbPct = o.WinProbability, CloseDate = o.CloseDate, NextAction = o.NextAction ?? string.Empty, DetailUrl = $"/crm/opportunities/{o.OpportunityId}" }).ToList();
-        _quoteFollowups = dto.QuoteFollowups.Select(q => new WorkbenchQuoteItemVm { ItemId = q.QuoteId, Name = q.OpportunityName ?? string.Empty, CompanyName = q.AccountName ?? string.Empty, RefNumber = q.QuoteNumber, EstPremium = q.TotalAmount, LobCode = MapLobFromText(q.OpportunityName ?? q.AccountName ?? string.Empty), Stage = q.StatusCode, QuoteExpiryDate = q.ValidUntilDate, NextActionDate = q.ValidUntilDate?.AddDays(-3), NextAction = q.IsExpired ? "Recover expired quote" : q.IsExpiringSoon ? "Call before quote expires" : "Follow up on presented quote", DetailUrl = $"/submissions/quotes/{q.QuoteId}" }).ToList();
-        _renewalCallList = dto.RenewalCallList.Select(r => new WorkbenchRenewalItemVm { ItemId = r.RenewalId, CompanyName = r.AccountName ?? string.Empty, RefNumber = r.AgreementNumber ?? string.Empty, PolicyNumber = r.RenewalNumber, EstPremium = r.TotalContractValue ?? 0, RenewalStage = r.StatusCode, Stage = r.StatusCode, LobCode = MapLobFromText(r.AccountName ?? r.AgreementNumber ?? string.Empty), ExpiryDate = r.NewStartDate, NextAction = r.IsUrgent ? "Schedule renewal review" : "Prepare renewal touchpoint", NextActionDate = r.NewStartDate.AddDays(-30), DetailUrl = $"/renewals/{r.RenewalId}" }).ToList();
-        _crossSellList = dto.CrossSellList.Select(c => new WorkbenchCrossSellItemVm { ItemId = c.AccountId, CompanyName = c.AccountName, CurrentLobs = c.CurrentLobs ?? string.Empty, LobCode = c.TargetLob ?? string.Empty, EstPremium = c.OppPremium, CrossSellScore = c.Score, CrossSellReason = c.Reason ?? string.Empty, LastContact = c.LastContact, DetailUrl = $"/accounts/{c.AccountId}" }).ToList();
+        _opportunities = dto.MyOpportunities.Select(o => new WorkbenchOppItemVm { ItemId = o.OpportunityId, AccountId = o.AccountId, Name = o.OpportunityName, CompanyName = o.AccountName ?? string.Empty, RefNumber = o.OpportunityNumber, LobCode = MapLobFromText(o.OpportunityName), Stage = NormalizePipelineStage(o.StageName, o.ForecastCategoryCode, o.StatusCodeId), EstPremium = o.EstimatedAmount, WinProbPct = o.WinProbability, CloseDate = o.CloseDate, NextAction = o.NextAction ?? string.Empty, DetailUrl = $"/crm/opportunities/{o.OpportunityId}" }).ToList();
+        _quoteFollowups = dto.QuoteFollowups.Select(q => new WorkbenchQuoteItemVm { ItemId = q.QuoteId, AccountId = q.AccountId, OpportunityId = q.OpportunityId, Name = q.OpportunityName ?? string.Empty, CompanyName = q.AccountName ?? string.Empty, RefNumber = q.QuoteNumber, EstPremium = q.TotalAmount, LobCode = MapLobFromText(q.OpportunityName ?? q.AccountName ?? string.Empty), Stage = q.StatusCode, QuoteExpiryDate = q.ValidUntilDate, NextActionDate = q.ValidUntilDate?.AddDays(-3), NextAction = q.IsExpired ? "Recover expired quote" : q.IsExpiringSoon ? "Call before quote expires" : "Follow up on presented quote", DetailUrl = $"/quotes/{q.QuoteId}" }).ToList();
+        _renewalCallList = dto.RenewalCallList.Select(r => new WorkbenchRenewalItemVm { ItemId = r.RenewalId, CompanyName = r.AccountName ?? string.Empty, RefNumber = r.AgreementNumber ?? string.Empty, PolicyNumber = r.RenewalNumber, EstPremium = r.TotalContractValue ?? 0, RenewalStage = r.StatusCode, Stage = r.StatusCode, LobCode = MapLobFromText(r.AccountName ?? r.AgreementNumber ?? string.Empty), ExpiryDate = r.NewStartDate, NextAction = r.IsUrgent ? "Schedule renewal review" : "Prepare renewal touchpoint", NextActionDate = r.NewStartDate.AddDays(-30), DetailUrl = $"/workbench/producer/renewal-calls/{r.RenewalId}" }).ToList();
+        _crossSellList = dto.CrossSellList.Select(c => new WorkbenchCrossSellItemVm { ItemId = c.AccountId, CompanyName = c.AccountName, CurrentLobs = c.CurrentLobs ?? string.Empty, LobCode = c.TargetLob ?? string.Empty, EstPremium = c.OppPremium, CrossSellScore = c.Score, CrossSellReason = c.Reason ?? string.Empty, LastContact = c.LastContact, DetailUrl = $"/marketing/cross-sell/{c.AccountId}?accountName={Uri.EscapeDataString(c.AccountName)}" }).ToList();
         _messages = dto.Messages.Select(n => new WorkbenchNotificationItemVm { MessageId = n.NotificationId, SenderName = n.EntityName ?? "System", Subject = n.Subject ?? "(no subject)", Preview = n.Body.Length > 120 ? n.Body[..120] + "…" : n.Body, Body = n.Body, MessageType = MapChannel(n.ChannelCode), ReceivedAt = n.CreatedDateUtc, IsUnread = !n.IsRead, AccountUrl = n.EntityId.HasValue ? $"/accounts/{n.EntityId}" : "/accounts" }).ToList();
         _goal.UnreadMessages = _counts.UnreadMessages;
     }
 
     private async Task ExportAsync() => await Task.Run(() => ShowToast($"Export prepared for {_leads.Count + _opportunities.Count + _quoteFollowups.Count + _renewalCallList.Count + _crossSellList.Count} workbench rows."));
     private void SetActiveQueue(string id) { _activeQueue = id; _selectedItem = id == "messages" || id == "analytics" ? null : ActiveItems.FirstOrDefault(); _selectedMessage = null; }
+
+    private async Task OpenCreateLeadAsync()
+    {
+        if ((!_tenantId.HasValue || !_tenantAdminUserId.HasValue) && !await ResolveTenantAdminContextAsync()) return;
+        await LeadDialogs.OpenCreateAsync(_tenantId, _tenantAdminUserId, OnLeadCreatedAsync);
+    }
+
+    private async Task OnLeadCreatedAsync()
+    {
+        ShowToast("Lead created from producer workbench.");
+        await LoadAsync();
+    }
     private void ShowHotLeads() { _filterHotOnly = true; SetActiveQueue("leads"); }
     private void ShowPipeline() { _oppView = "board"; SetActiveQueue("opportunities"); }
     private void ShowOverdueQuotes() { _filterHotOnly = true; SetActiveQueue("quotes"); }
@@ -288,19 +375,83 @@
     private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
     private void HideToast() => _toastVisible = false;
 
-    private async Task LogContactAsync(WorkbenchLeadItemVm item)
+    private void OpenLogContact(WorkbenchLeadItemVm item)
     {
+        _contactItem = item;
+        _contactForm = new ContactLogForm
+        {
+            ContactMethod = SuggestedContactMethod(item),
+            OutcomeCode = "Contacted",
+            Subject = BuildContactSubject(item),
+            Notes = BuildContactNotes(item),
+            DurationMinutes = 15
+        };
+        _showLogContact = true;
+    }
+
+    private void CloseLogContact()
+    {
+        if (_savingContact) return;
+        _showLogContact = false;
+        _contactItem = null;
+        _contactForm = new();
+    }
+
+    private async Task SaveContactAsync()
+    {
+        if (_contactItem is null) return;
+
         try
         {
+            _savingContact = true;
             if (!_tenantId.HasValue && !await ResolveTenantAdminContextAsync()) return;
-            await WorkbenchApi.LogContactAsync(_tenantId!.Value, item.ItemId, item.ItemType);
-            ShowToast($"Contact logged for {item.CompanyName}.");
+            await WorkbenchApi.LogContactAsync(new ProducerWorkbenchLogContactRequest
+            {
+                TenantId = _tenantId!.Value,
+                ItemId = _contactItem.ItemId,
+                ItemType = _contactItem.ItemType,
+                ContactMethod = _contactForm.ContactMethod,
+                Subject = _contactForm.Subject,
+                Notes = _contactForm.Notes,
+                OutcomeCode = _contactForm.OutcomeCode,
+                DurationMinutes = _contactForm.DurationMinutes,
+                CreatedByUserId = _tenantAdminUserId
+            });
+            ShowToast($"Contact logged for {ContactTargetName}.");
+            _showLogContact = false;
+            _contactItem = null;
             await LoadAsync();
         }
         catch (Exception ex)
         {
             ShowToast($"Failed to log contact: {ex.Message}", "danger");
         }
+        finally
+        {
+            _savingContact = false;
+        }
+    }
+
+    private void OpenRecord(WorkbenchLeadItemVm item)
+    {
+        if (string.IsNullOrWhiteSpace(item.DetailUrl))
+        {
+            ShowToast("No source record route is available for this workbench item.", "warning");
+            return;
+        }
+
+        Nav.NavigateTo(item.DetailUrl);
+    }
+
+    private void OpenMessageAccount(WorkbenchNotificationItemVm msg)
+    {
+        if (string.IsNullOrWhiteSpace(msg.AccountUrl) || msg.AccountUrl == "/accounts")
+        {
+            ShowToast("This message is not linked to a specific account record.", "warning");
+            return;
+        }
+
+        Nav.NavigateTo(msg.AccountUrl);
     }
 
     private async Task<bool> ResolveTenantAdminContextAsync()
@@ -316,8 +467,8 @@
 
     private bool MatchesCommon(WorkbenchLeadItemVm item) => (string.IsNullOrWhiteSpace(_filterLob) || item.LobCode.Contains(_filterLob, StringComparison.OrdinalIgnoreCase)) && (string.IsNullOrWhiteSpace(_filterStage) || item.Stage.Equals(_filterStage, StringComparison.OrdinalIgnoreCase) || item.RenewalStage.Equals(_filterStage, StringComparison.OrdinalIgnoreCase)) && (string.IsNullOrWhiteSpace(_search) || new[] { item.Name, item.CompanyName, item.RefNumber, item.PolicyNumber, item.LobCode, item.Source, item.Stage, item.NextAction, item.CrossSellReason }.Any(v => !string.IsNullOrWhiteSpace(v) && v.Contains(_search, StringComparison.OrdinalIgnoreCase)));
     private static bool IsUrgent(WorkbenchLeadItemVm item) => (item.NextActionDate.HasValue && item.NextActionDate.Value.Date <= DateTime.Today) || (item.QuoteExpiryDate.HasValue && item.QuoteExpiryDate.Value.Date <= DateTime.Today.AddDays(7)) || (item.ExpiryDate.HasValue && item.ExpiryDate.Value.Date <= DateTime.Today.AddDays(30));
-    private RenderFragment QueueCard(WorkbenchLeadItemVm item) => @<article class="pwe-item-card @(ReferenceEquals(_selectedItem, item) ? "pwe-item-selected" : string.Empty)" @onclick="@(() => OpenDetail(item))"><div class="pwe-item-top"><span class="pwe-avatar" style="@AvatarStyle(item.CompanyName)">@Initials(item.CompanyName)</span><div><strong>@(string.IsNullOrWhiteSpace(item.CompanyName) ? item.Name : item.CompanyName)</strong><span>@(string.IsNullOrWhiteSpace(item.Name) ? item.RefNumber : item.Name)</span></div></div><div class="pwe-item-meta">@if (!string.IsNullOrWhiteSpace(item.LobCode)) { <span class="pwe-lob">@item.LobCode</span> } @if (!string.IsNullOrWhiteSpace(item.Stage)) { <span class="@StageBadge(item.Stage)">@item.Stage</span> } @if (item.HeatScore > 0) { <span class="@HeatBadge(item.HeatScore)">@HeatLabel(item.HeatScore)</span> }</div><div class="pwe-item-footer"><strong>@item.EstPremium.ToString("C0")</strong><span>@(item.NextActionDate?.ToString("MMM d", CultureInfo.CurrentCulture) ?? item.CloseDate?.ToString("MMM d", CultureInfo.CurrentCulture) ?? item.ExpiryDate?.ToString("MMM d", CultureInfo.CurrentCulture) ?? "No date")</span></div><div class="pwe-item-actions" @onclick:stopPropagation="true"><button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => LogContactAsync(item))"><i class="bi bi-telephone"></i></button><button class="pwe-card-open" @onclick="@(() => Nav.NavigateTo(item.DetailUrl))" title="Open record" aria-label="Open record">↗️</button></div></article>;
-    private RenderFragment QueueTable(List<WorkbenchLeadItemVm> items) => @<div class="pwe-table-wrap"><table class="pwe-table"><thead><tr><th>Name</th><th>Ref</th><th>LoB</th><th>Stage</th><th>Premium</th><th>Next</th><th></th></tr></thead><tbody>@foreach (var item in items) { <tr @onclick="@(() => OpenDetail(item))"><td><strong>@(string.IsNullOrWhiteSpace(item.CompanyName) ? item.Name : item.CompanyName)</strong><small>@item.Name</small></td><td>@item.RefNumber</td><td>@item.LobCode</td><td><span class="@StageBadge(item.Stage)">@item.Stage</span></td><td>@item.EstPremium.ToString("C0")</td><td>@(item.NextActionDate?.ToString("MMM d") ?? item.CloseDate?.ToString("MMM d") ?? "—")</td><td @onclick:stopPropagation="true"><button class="um-btn um-btn-primary um-btn-sm" @onclick="@(() => Nav.NavigateTo(item.DetailUrl))">Open</button></td></tr> }</tbody></table></div>;
+    private RenderFragment QueueCard(WorkbenchLeadItemVm item) => @<article class="pwe-item-card @(ReferenceEquals(_selectedItem, item) ? "pwe-item-selected" : string.Empty)" @onclick="@(() => OpenDetail(item))"><div class="pwe-item-top"><span class="pwe-avatar" style="@AvatarStyle(item.CompanyName)">@Initials(item.CompanyName)</span><div><strong>@(string.IsNullOrWhiteSpace(item.CompanyName) ? item.Name : item.CompanyName)</strong><span>@(string.IsNullOrWhiteSpace(item.Name) ? item.RefNumber : item.Name)</span></div></div><div class="pwe-item-meta">@if (!string.IsNullOrWhiteSpace(item.LobCode)) { <span class="pwe-lob">@item.LobCode</span> } @if (!string.IsNullOrWhiteSpace(item.Stage)) { <span class="@StageBadge(item.Stage)">@item.Stage</span> } @if (item.HeatScore > 0) { <span class="@HeatBadge(item.HeatScore)">@HeatLabel(item.HeatScore)</span> }</div><div class="pwe-item-footer"><strong>@item.EstPremium.ToString("C0")</strong><span>@(item.NextActionDate?.ToString("MMM d", CultureInfo.CurrentCulture) ?? item.CloseDate?.ToString("MMM d", CultureInfo.CurrentCulture) ?? item.ExpiryDate?.ToString("MMM d", CultureInfo.CurrentCulture) ?? "No date")</span></div><div class="pwe-item-actions" @onclick:stopPropagation="true"><button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenLogContact(item))" title="Log contact" aria-label="Log contact"><i class="bi bi-telephone"></i></button><button class="pwe-card-open" @onclick="@(() => OpenRecord(item))" title="Open record" aria-label="Open record"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></button></div></article>;
+    private RenderFragment QueueTable(List<WorkbenchLeadItemVm> items) => @<div class="pwe-table-wrap"><table class="pwe-table"><thead><tr><th>Name</th><th>Ref</th><th>LoB</th><th>Stage</th><th>Premium</th><th>Next</th><th></th></tr></thead><tbody>@foreach (var item in items) { <tr @onclick="@(() => OpenDetail(item))"><td><strong>@(string.IsNullOrWhiteSpace(item.CompanyName) ? item.Name : item.CompanyName)</strong><small>@item.Name</small></td><td>@item.RefNumber</td><td>@item.LobCode</td><td><span class="@StageBadge(item.Stage)">@item.Stage</span></td><td>@item.EstPremium.ToString("C0")</td><td>@(item.NextActionDate?.ToString("MMM d") ?? item.CloseDate?.ToString("MMM d") ?? "—")</td><td @onclick:stopPropagation="true"><button class="um-btn um-btn-primary um-btn-sm" @onclick="@(() => OpenRecord(item))">Open</button></td></tr> }</tbody></table></div>;
     private RenderFragment EmptyState(string icon, string title, string text) => @<div class="pwe-empty-state"><i class="bi @icon" aria-hidden="true"></i><strong>@title</strong><span>@text</span><button class="um-btn um-btn-primary" @onclick="LoadAsync">Refresh</button></div>;
     private RenderFragment AnalyticsItem(ProducerMetricBar row) => @<button class="pwe-analytics-row"><span>@row.Label</span><div><i class="@row.Tone" style="width:@row.WidthPercent%"></i></div><strong>@row.Count</strong><small>@row.Percent.ToString("F0")%</small></button>;
 
@@ -339,15 +490,19 @@
     private static decimal EstimateLeadPremium(string? lob, int? score) => MapLobFromText(lob ?? string.Empty) switch { "WC" => 42000 + (score ?? 0) * 225, "BOP" => 18500 + (score ?? 0) * 140, "GL" => 24000 + (score ?? 0) * 160, "CY" => 15000 + (score ?? 0) * 110, "CA" => 36000 + (score ?? 0) * 190, "PL" => 27000 + (score ?? 0) * 150, _ => 12000 + (score ?? 0) * 100 };
     private static string MapLobFromText(string text) { if (text.Contains("Worker", StringComparison.OrdinalIgnoreCase) || text.Contains(" WC", StringComparison.OrdinalIgnoreCase)) return "WC"; if (text.Contains("Cyber", StringComparison.OrdinalIgnoreCase)) return "CY"; if (text.Contains("Auto", StringComparison.OrdinalIgnoreCase) || text.Contains("Fleet", StringComparison.OrdinalIgnoreCase)) return "CA"; if (text.Contains("Umbrella", StringComparison.OrdinalIgnoreCase)) return "UMB"; if (text.Contains("Professional", StringComparison.OrdinalIgnoreCase) || text.Contains("E&O", StringComparison.OrdinalIgnoreCase)) return "PL"; if (text.Contains("Property", StringComparison.OrdinalIgnoreCase) || text.Contains("Package", StringComparison.OrdinalIgnoreCase)) return "CPP"; if (text.Contains("BOP", StringComparison.OrdinalIgnoreCase) || text.Contains("Business", StringComparison.OrdinalIgnoreCase)) return "BOP"; if (text.Contains("General", StringComparison.OrdinalIgnoreCase) || text.Contains("GL", StringComparison.OrdinalIgnoreCase)) return "GL"; return string.Empty; }
     private static string NormalizePipelineStage(string? stageName, string? forecastCategory, int statusCode) => (stageName ?? forecastCategory) switch { "Pipeline" => "Prospect", "BestCase" => "Quoted", "Commit" => "Presented", "Closed" when statusCode == 2 => "Won", "Closed" when statusCode == 3 => "Lost", "Won" => "Won", "Lost" => "Lost", "Negotiating" => "Negotiating", "Presented" => "Presented", "Quoted" => "Quoted", "Prospect" => "Prospect", _ => statusCode == 2 ? "Won" : statusCode == 3 ? "Lost" : "Prospect" };
+    private static string SuggestedContactMethod(WorkbenchLeadItemVm item) => item.ItemType == "Quote" || item.ItemType == "Renewal" ? "Call" : "Call";
+    private static string BuildContactSubject(WorkbenchLeadItemVm item) => $"{SuggestedContactMethod(item)} logged from producer workbench - {(string.IsNullOrWhiteSpace(item.CompanyName) ? item.Name : item.CompanyName)}";
+    private static string? BuildContactNotes(WorkbenchLeadItemVm item) => string.IsNullOrWhiteSpace(item.NextAction) && string.IsNullOrWhiteSpace(item.CrossSellReason) ? null : !string.IsNullOrWhiteSpace(item.NextAction) ? item.NextAction : item.CrossSellReason;
 
     private sealed record LabelValue(string Value, string Label);
     private sealed record QueueTab(string Id, string Label, string Icon, int Badge, bool IsAlert);
     private sealed record KpiMetric(string QueueId, string Label, string Value, string Caption, string Icon, string Tone);
     private sealed record AnalyticsSeed(string Label, int Count, string Tone);
     private sealed record ProducerMetricBar(string Label, int Count, string Tone, decimal Percent, decimal WidthPercent);
+    private sealed class ContactLogForm { [Required, StringLength(50)] public string ContactMethod { get; set; } = "Call"; [Required, StringLength(100)] public string OutcomeCode { get; set; } = "Contacted"; [Required, StringLength(200)] public string Subject { get; set; } = string.Empty; [StringLength(2000)] public string? Notes { get; set; } [Range(0, 1440)] public int? DurationMinutes { get; set; } = 15; }
     private sealed class WorkbenchGoalVm { public decimal WrittenPremium { get; set; } public decimal GoalPremium { get; set; } = 1; public double WrittenPct => GoalPremium == 0 ? 0 : (double)(WrittenPremium / GoalPremium * 100); public int NewPolicies { get; set; } public double RetentionRate { get; set; } public decimal PipelineValue { get; set; } public int UnreadMessages { get; set; } }
     private sealed class WorkbenchCountsVm { public int AssignedLeads { get; set; } public int HotLeads { get; set; } public int OpenOpportunities { get; set; } public decimal OppsPremium { get; set; } public int QuoteFollowups { get; set; } public int OverdueQuotes { get; set; } public int RenewalCallList { get; set; } public int RenewalsThisMonth { get; set; } public int CrossSellList { get; set; } public decimal CrossSellPremium { get; set; } public int UnreadMessages { get; set; } }
-    private class WorkbenchLeadItemVm { public Guid ItemId { get; set; } = Guid.NewGuid(); public virtual string ItemType => "Lead"; public string Name { get; set; } = string.Empty; public string CompanyName { get; set; } = string.Empty; public string RefNumber { get; set; } = string.Empty; public string PolicyNumber { get; set; } = string.Empty; public string LobCode { get; set; } = string.Empty; public string CurrentLobs { get; set; } = string.Empty; public string Source { get; set; } = string.Empty; public string Stage { get; set; } = string.Empty; public string RenewalStage { get; set; } = string.Empty; public decimal EstPremium { get; set; } public double WinProbPct { get; set; } public double HeatScore { get; set; } public double CrossSellScore { get; set; } public string CrossSellReason { get; set; } = string.Empty; public DateTime? LastContact { get; set; } public DateTime? NextActionDate { get; set; } public string NextAction { get; set; } = string.Empty; public DateTime? CloseDate { get; set; } public DateTime? ExpiryDate { get; set; } public DateTime? QuoteExpiryDate { get; set; } public string DetailUrl { get; set; } = "/workbench/producer"; }
+    private class WorkbenchLeadItemVm { public Guid ItemId { get; set; } = Guid.NewGuid(); public Guid? AccountId { get; set; } public Guid? OpportunityId { get; set; } public virtual string ItemType => "Lead"; public string Name { get; set; } = string.Empty; public string CompanyName { get; set; } = string.Empty; public string RefNumber { get; set; } = string.Empty; public string PolicyNumber { get; set; } = string.Empty; public string LobCode { get; set; } = string.Empty; public string CurrentLobs { get; set; } = string.Empty; public string Source { get; set; } = string.Empty; public string Stage { get; set; } = string.Empty; public string RenewalStage { get; set; } = string.Empty; public decimal EstPremium { get; set; } public double WinProbPct { get; set; } public double HeatScore { get; set; } public double CrossSellScore { get; set; } public string CrossSellReason { get; set; } = string.Empty; public DateTime? LastContact { get; set; } public DateTime? NextActionDate { get; set; } public string NextAction { get; set; } = string.Empty; public DateTime? CloseDate { get; set; } public DateTime? ExpiryDate { get; set; } public DateTime? QuoteExpiryDate { get; set; } public string DetailUrl { get; set; } = "/workbench/producer"; }
     private sealed class WorkbenchOppItemVm : WorkbenchLeadItemVm { public override string ItemType => "Opportunity"; }
     private sealed class WorkbenchQuoteItemVm : WorkbenchLeadItemVm { public override string ItemType => "Quote"; }
     private sealed class WorkbenchRenewalItemVm : WorkbenchLeadItemVm { public override string ItemType => "Renewal"; }

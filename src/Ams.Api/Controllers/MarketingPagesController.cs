@@ -457,6 +457,116 @@ WHERE SegmentId = @Id AND IsDeleted = 0;";
         return Ok(new PagedResult<MarketingCrossSellOpportunityDto> { Items = items, TotalCount = items.Count, PageNumber = 1, PageSize = items.Count });
     }
 
+    [HttpGet("cross-sell/{crossSellKey:guid}")]
+    public async Task<IActionResult> GetCrossSell(Guid crossSellKey, [FromQuery] Guid tenantId, [FromQuery] string? accountName, CancellationToken cancellationToken)
+    {
+        await EnsureMarketingPageDataAsync(tenantId, cancellationToken);
+
+        const string sql = @"
+SELECT TOP 1
+    m.OpportunityId, m.TenantId, m.AccountName, m.AccountType, m.Producer, m.OpportunityType,
+    m.Score, m.EstimatedPremium, COALESCE(m.TriggerSignal, N'') AS TriggerSignal, m.LastContactDate, m.StatusCode
+FROM Marketing.CrossSellOpportunity m
+LEFT JOIN Client.Account a
+    ON a.TenantId = m.TenantId
+   AND a.IsDeleted = 0
+   AND (
+        a.AccountName = m.AccountName
+        OR a.AccountName LIKE N'%' + m.AccountName + N'%'
+        OR m.AccountName LIKE N'%' + a.AccountName + N'%'
+   )
+WHERE m.TenantId = @TenantId
+  AND m.IsDeleted = 0
+  AND m.StatusCode <> N'Dismissed'
+  AND (
+       m.OpportunityId = @CrossSellKey
+       OR a.AccountId = @CrossSellKey
+       OR (@AccountName IS NOT NULL AND @AccountName <> N'' AND (m.AccountName = @AccountName OR m.AccountName LIKE N'%' + @AccountName + N'%' OR @AccountName LIKE N'%' + m.AccountName + N'%'))
+  )
+ORDER BY
+    CASE WHEN m.OpportunityId = @CrossSellKey THEN 0 WHEN a.AccountId = @CrossSellKey THEN 1 WHEN m.AccountName = @AccountName THEN 2 ELSE 3 END,
+    m.Score DESC,
+    m.EstimatedPremium DESC;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var item = await cn.QuerySingleOrDefaultAsync<MarketingCrossSellOpportunityDto>(new CommandDefinition(sql, new
+        {
+            TenantId = tenantId,
+            CrossSellKey = crossSellKey,
+            AccountName = string.IsNullOrWhiteSpace(accountName) ? null : accountName.Trim()
+        }, cancellationToken: cancellationToken));
+
+        if (item is null)
+        {
+            const string syncSql = @"
+DECLARE @NewId UNIQUEIDENTIFIER = NEWID();
+
+;WITH SourceAccount AS
+(
+    SELECT TOP 1
+        a.TenantId,
+        a.AccountId,
+        a.AccountName,
+        COALESCE(NULLIF(a.AccountTypeCode, N''), N'Commercial') AS AccountType,
+        COALESCE(JSON_VALUE(pe.JsonData, '$.targetLob'), N'Umbrella') AS OpportunityType,
+        COALESCE(TRY_CONVERT(INT, JSON_VALUE(pe.JsonData, '$.score')), 72) AS Score,
+        COALESCE(TRY_CONVERT(DECIMAL(18,2), JSON_VALUE(pe.JsonData, '$.oppPremium')), 25000) AS EstimatedPremium,
+        COALESCE(NULLIF(JSON_VALUE(pe.JsonData, '$.reason'), N''), CONCAT(N'Producer workbench cross-sell signal for ', a.AccountName, N'.')) AS TriggerSignal,
+        COALESCE(TRY_CONVERT(DATETIME2, JSON_VALUE(pe.JsonData, '$.lastContact')), SYSUTCDATETIME()) AS LastContactDate
+    FROM Client.Account a
+    LEFT JOIN Portal.AdminRecord pe
+        ON pe.TenantId = a.TenantId
+       AND pe.Kind = N'ProducerCrossSell'
+       AND pe.Code = CONVERT(NVARCHAR(36), a.AccountId)
+       AND pe.IsDeleted = 0
+    WHERE a.TenantId = @TenantId
+      AND a.IsDeleted = 0
+      AND (
+           a.AccountId = @CrossSellKey
+           OR (@AccountName IS NOT NULL AND @AccountName <> N'' AND (a.AccountName = @AccountName OR a.AccountName LIKE N'%' + @AccountName + N'%' OR @AccountName LIKE N'%' + a.AccountName + N'%'))
+      )
+    ORDER BY CASE WHEN a.AccountId = @CrossSellKey THEN 0 WHEN a.AccountName = @AccountName THEN 1 ELSE 2 END, a.AccountName
+)
+INSERT INTO Marketing.CrossSellOpportunity
+(OpportunityId, TenantId, AccountName, AccountType, Producer, OpportunityType, Score, EstimatedPremium, TriggerSignal, LastContactDate, StatusCode, CreatedDateUtc, IsDeleted)
+SELECT @NewId, s.TenantId, s.AccountName, s.AccountType, N'Tenant Admin', s.OpportunityType, s.Score, s.EstimatedPremium, s.TriggerSignal, s.LastContactDate, N'Open', SYSUTCDATETIME(), 0
+FROM SourceAccount s
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Marketing.CrossSellOpportunity m
+    WHERE m.TenantId = s.TenantId
+      AND m.IsDeleted = 0
+      AND m.StatusCode <> N'Dismissed'
+      AND m.AccountName = s.AccountName
+      AND m.OpportunityType = s.OpportunityType
+);
+
+SELECT TOP 1
+    m.OpportunityId, m.TenantId, m.AccountName, m.AccountType, m.Producer, m.OpportunityType,
+    m.Score, m.EstimatedPremium, COALESCE(m.TriggerSignal, N'') AS TriggerSignal, m.LastContactDate, m.StatusCode
+FROM Marketing.CrossSellOpportunity m
+LEFT JOIN Client.Account a
+    ON a.TenantId = m.TenantId
+   AND a.IsDeleted = 0
+   AND (a.AccountName = m.AccountName OR a.AccountName LIKE N'%' + m.AccountName + N'%' OR m.AccountName LIKE N'%' + a.AccountName + N'%')
+WHERE m.TenantId = @TenantId
+  AND m.IsDeleted = 0
+  AND m.StatusCode <> N'Dismissed'
+  AND (m.OpportunityId = @NewId OR m.OpportunityId = @CrossSellKey OR a.AccountId = @CrossSellKey OR (@AccountName IS NOT NULL AND @AccountName <> N'' AND (m.AccountName = @AccountName OR m.AccountName LIKE N'%' + @AccountName + N'%' OR @AccountName LIKE N'%' + m.AccountName + N'%')))
+ORDER BY CASE WHEN m.OpportunityId = @NewId THEN 0 WHEN m.OpportunityId = @CrossSellKey THEN 1 WHEN a.AccountId = @CrossSellKey THEN 2 ELSE 3 END, m.Score DESC, m.EstimatedPremium DESC;";
+
+            item = await cn.QuerySingleOrDefaultAsync<MarketingCrossSellOpportunityDto>(new CommandDefinition(syncSql, new
+            {
+                TenantId = tenantId,
+                CrossSellKey = crossSellKey,
+                AccountName = string.IsNullOrWhiteSpace(accountName) ? null : accountName.Trim()
+            }, cancellationToken: cancellationToken));
+        }
+
+        return item is null ? NotFound() : Ok(item);
+    }
+
     [HttpPost("cross-sell/seed")]
     public async Task<IActionResult> EnsureCrossSellSeed([FromQuery] Guid tenantId, CancellationToken cancellationToken)
     {

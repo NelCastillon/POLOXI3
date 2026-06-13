@@ -1,0 +1,231 @@
+@page "/marketing/cross-sell/{CrossSellKey:guid}"
+@namespace Ams.Web.Components.Pages
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>@PageTitleText</PageTitle>
+
+<div class="mkxd-page">
+    @if (_toastVisible)
+    {
+        <div class="mkxd-toast mkxd-toast-@_toastKind" role="status" aria-live="polite">
+            <i class="bi @ToastIcon" aria-hidden="true"></i>
+            <span>@_toastMessage</span>
+            <button type="button" class="mkxd-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+        </div>
+    }
+
+    <section class="mkxd-hero" aria-labelledby="cross-sell-detail-title">
+        <div class="mkxd-hero-main">
+            <span class="mkxd-hero-icon"><i class="bi bi-arrows-expand" aria-hidden="true"></i></span>
+            <div>
+                <div class="mkxd-title-row">
+                    <h1 id="cross-sell-detail-title">@(_item?.AccountName ?? "Cross-Sell Opportunity")</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> Synced to marketing cross-sell</span>
+                </div>
+                <p>Review this account only, coordinate the producer expansion workflow, and sync actions back to `/marketing/cross-sell`.</p>
+            </div>
+        </div>
+        <div class="mkxd-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/workbench/producer")'><i class="bi bi-arrow-left" aria-hidden="true"></i> Producer Workbench</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/marketing/cross-sell")'><i class="bi bi-list-task" aria-hidden="true"></i> Cross-Sell List</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "mkxd-spin" : null)" aria-hidden="true"></i> Refresh</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger mkxd-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            @_loadError
+        </div>
+    }
+
+    @if (_loading)
+    {
+        <section class="mkxd-empty"><i class="bi bi-arrow-repeat mkxd-spin" aria-hidden="true"></i><strong>Loading cross-sell opportunity...</strong><span>Resolving the selected account against marketing cross-sell data.</span></section>
+    }
+    else if (_item is null)
+    {
+        <section class="mkxd-empty"><i class="bi bi-search" aria-hidden="true"></i><strong>Cross-sell opportunity not found</strong><span>This selected account does not have an active Marketing.CrossSellOpportunity record yet. Use Sync Seed or create one under /marketing/cross-sell.</span></section>
+    }
+    else
+    {
+        <section class="mkxd-kpi-grid" aria-label="Selected cross-sell metrics">
+            <article class="mkxd-kpi-card"><span><i class="bi bi-stars" aria-hidden="true"></i></span><div><small>Score</small><strong>@_item.Score.ToString("N0", CultureInfo.CurrentCulture)</strong></div></article>
+            <article class="mkxd-kpi-card"><span class="mkxd-tone-green"><i class="bi bi-cash-stack" aria-hidden="true"></i></span><div><small>Premium</small><strong>@Money(_item.EstimatedPremium)</strong></div></article>
+            <article class="mkxd-kpi-card"><span class="mkxd-tone-purple"><i class="bi bi-bullseye" aria-hidden="true"></i></span><div><small>Opportunity</small><strong>@_item.OpportunityType</strong></div></article>
+            <article class="mkxd-kpi-card"><span class="mkxd-tone-amber"><i class="bi bi-person-badge" aria-hidden="true"></i></span><div><small>Producer</small><strong>@_item.Producer</strong></div></article>
+        </section>
+
+        <section class="mkxd-workspace" aria-label="Cross-sell detail workspace">
+            <article class="mkxd-account-card">
+                <div class="mkxd-account-head">
+                    <div>
+                        <span>@_item.AccountType account</span>
+                        <h2>@_item.AccountName</h2>
+                        <p>@_item.OpportunityType · @StatusLabel(_item.StatusCode)</p>
+                    </div>
+                    <span class="mkxd-badge @ScoreClass(_item.Score)">@ScoreBand(_item.Score)</span>
+                </div>
+
+                <div class="mkxd-summary-grid">
+                    <div><small>Status</small><strong>@StatusLabel(_item.StatusCode)</strong></div>
+                    <div><small>Last contact</small><strong>@DateLabel(_item.LastContactDate)</strong></div>
+                    <div><small>Signal strength</small><strong>@ScoreBand(_item.Score)</strong></div>
+                    <div><small>Estimated premium</small><strong>@Money(_item.EstimatedPremium)</strong></div>
+                </div>
+
+                <div class="mkxd-trigger-card">
+                    <i class="bi bi-lightning-charge" aria-hidden="true"></i>
+                    <div><small>Trigger signal</small><strong>@TriggerTitle</strong><p>@(_item.TriggerSignal.Length == 0 ? "No trigger signal has been recorded yet." : _item.TriggerSignal)</p></div>
+                </div>
+
+                <div class="mkxd-timeline">
+                    <h3><i class="bi bi-diagram-3" aria-hidden="true"></i> Cross-sell workflow</h3>
+                    <ol>
+                        <li class="mkxd-complete"><span></span><div><strong>Opportunity identified</strong><small>Marketing cross-sell sync</small></div></li>
+                        <li class="@(_item.StatusCode is "Contacted" or "Working" or "Reviewed" ? "mkxd-complete" : null)"><span></span><div><strong>Producer/account contact</strong><small>@DateLabel(_item.LastContactDate)</small></div></li>
+                        <li class="@(_item.StatusCode is "Reviewed" or "Won" ? "mkxd-complete" : null)"><span></span><div><strong>Expansion recommendation reviewed</strong><small>@StatusLabel(_item.StatusCode)</small></div></li>
+                    </ol>
+                </div>
+            </article>
+
+            <aside class="mkxd-action-card">
+                <h2><i class="bi bi-rocket-takeoff" aria-hidden="true"></i> Marketing actions</h2>
+                <p>Actions update the existing `/marketing/cross-sell` opportunity, so the list, analytics, and producer workflow stay synchronized.</p>
+                <div class="mkxd-action-stack">
+                    <button type="button" class="um-btn um-btn-primary" @onclick="MarkWorkingAsync" disabled="@_busy"><i class="bi bi-telephone-outbound" aria-hidden="true"></i> Mark Working</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="RescoreAsync" disabled="@_busy"><i class="bi bi-stars" aria-hidden="true"></i> Rescore Opportunity</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="MarkReviewedAsync" disabled="@_busy"><i class="bi bi-check2-circle" aria-hidden="true"></i> Mark Reviewed</button>
+                    <button type="button" class="um-btn um-btn-danger" @onclick="DismissAsync" disabled="@_busy"><i class="bi bi-x-circle" aria-hidden="true"></i> Dismiss</button>
+                </div>
+                <div class="mkxd-sync-panel">
+                    <span><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Sync target</span>
+                    <strong>/marketing/cross-sell</strong>
+                    <small>Opportunity ID: @_item.OpportunityId</small>
+                </div>
+            </aside>
+        </section>
+    }
+</div>
+
+@code {
+    [Parameter] public Guid CrossSellKey { get; set; }
+    [SupplyParameterFromQuery] public string? AccountName { get; set; }
+
+    private Guid _tenantId;
+    private bool _loading;
+    private bool _busy;
+    private string? _loadError;
+    private bool _toastVisible;
+    private string _toastKind = "success";
+    private string _toastMessage = string.Empty;
+    private MarketingCrossSellOpportunityDto? _item;
+
+    private string PageTitleText => _item is null ? "Cross-Sell Opportunity — AMS" : $"{_item.AccountName} Cross-Sell — AMS";
+    private string ToastIcon => _toastKind == "danger" ? "bi-exclamation-triangle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-check-circle-fill";
+    private string TriggerTitle => _item is null ? "Trigger" : $"{_item.OpportunityType} expansion signal";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Marketing", "/marketing"), new("Cross-Sell", "/marketing/cross-sell"), new("Cross-Sell Detail", $"/marketing/cross-sell/{CrossSellKey}"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _loading = true;
+            _loadError = null;
+            _item = await Api.GetMarketingCrossSellAsync(_tenantId, CrossSellKey, AccountName);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load cross-sell opportunity: {ex.Message}";
+            ShowToast($"Failed to load cross-sell opportunity: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task MarkWorkingAsync() => await UpdateStatusAsync("Working", "Cross-sell opportunity marked as working.");
+    private async Task MarkReviewedAsync() => await UpdateStatusAsync("Reviewed", "Cross-sell opportunity marked as reviewed.");
+
+    private async Task UpdateStatusAsync(string status, string message)
+    {
+        if (_item is null) return;
+        try
+        {
+            _busy = true;
+            await Api.UpdateMarketingCrossSellStatusAsync(_item.OpportunityId, status);
+            ShowToast(message);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Status update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RescoreAsync()
+    {
+        if (_item is null) return;
+        try
+        {
+            _busy = true;
+            await Api.RescoreMarketingCrossSellAsync(_item.OpportunityId);
+            ShowToast("Cross-sell opportunity rescored.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Rescore failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DismissAsync()
+    {
+        if (_item is null) return;
+        try
+        {
+            _busy = true;
+            await Api.DismissMarketingCrossSellAsync(_item.OpportunityId);
+            ShowToast("Cross-sell opportunity dismissed.", "warning");
+            Nav.NavigateTo("/marketing/cross-sell");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Dismiss failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string DateLabel(DateTime value) => value == default ? "Not contacted" : value.ToString("MMM d, yyyy", CultureInfo.CurrentCulture);
+    private static string Money(decimal value) => value.ToString("C0", CultureInfo.CurrentCulture);
+    private static string StatusLabel(string value) => string.IsNullOrWhiteSpace(value) ? "Open" : value;
+    private static string ScoreBand(int score) => score >= 85 ? "High Fit" : score >= 70 ? "Medium Fit" : "Watch";
+    private static string ScoreClass(int score) => score >= 85 ? "mkxd-badge-high" : score >= 70 ? "mkxd-badge-medium" : "mkxd-badge-low";
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+}

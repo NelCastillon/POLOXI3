@@ -110,6 +110,7 @@ builder.Services.AddScoped<BreadcrumbService>();
 builder.Services.AddScoped<NotificationService>();
 builder.Services.AddScoped<NavigationContextService>();
 builder.Services.AddScoped<ConfirmationDialogService>();
+builder.Services.AddScoped<LeadDialogService>();
 builder.Services.AddScoped<CurrentUserContext>();
 builder.Services.AddTransient<LeadScoringRealtimeClient>();
 

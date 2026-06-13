@@ -103,7 +103,7 @@ ORDER BY l.Score DESC, l.CreatedDateUtc DESC;";
         // ── Opportunities ──────────────────────────────────────────────────────
         const string oppsSql = @"
 SELECT TOP 50
-    o.OpportunityId, o.OpportunityNumber, o.OpportunityName,
+    o.OpportunityId, o.AccountId, o.OpportunityNumber, o.OpportunityName,
     a.AccountName, o.EstimatedAmount, o.WinProbability,
     o.ForecastCategoryCode AS StageName, o.ForecastCategoryCode,
     o.CloseDate, o.StatusCodeId,
@@ -119,7 +119,7 @@ ORDER BY o.EstimatedAmount DESC;";
         // ── Quote Follow-ups ───────────────────────────────────────────────────
         const string quotesSql = @"
 SELECT TOP 50
-    q.QuoteId, q.QuoteNumber, a.AccountName, o.OpportunityName,
+    q.QuoteId, q.AccountId, q.OpportunityId, q.QuoteNumber, a.AccountName, o.OpportunityName,
     q.TotalAmount, q.ValidUntilDate, q.StatusCode, q.CreatedDateUtc
 FROM CRM.Quote q
 LEFT JOIN Client.Account   a ON a.AccountId     = q.AccountId
@@ -131,7 +131,7 @@ ORDER BY q.ValidUntilDate ASC;";
         // ── Renewals ───────────────────────────────────────────────────────────
         const string renewalsSql = @"
 SELECT TOP 50
-    ar.RenewalId, ar.RenewalNumber, ar.AgreementId,
+    ar.RenewalId, ag.AccountId, ar.RenewalNumber, ar.AgreementId,
     a.AccountName, ag.AgreementNumber,
     ar.TotalContractValue, ar.NewStartDate, ar.NewEndDate,
     ar.StatusCode, ar.CreatedDateUtc
@@ -221,6 +221,142 @@ ORDER BY Score DESC, a.AccountName;";
         };
     }
 
+    public async Task<ProducerRenewalCallListDto> GetRenewalCallsAsync(Guid tenantId, Guid? userId, string? statusCode = null, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT
+    COUNT(1) AS TotalCalls,
+    SUM(CASE WHEN prc.StatusCode <> N'Completed' AND CONVERT(date, prc.DueDate) = CONVERT(date, SYSUTCDATETIME()) THEN 1 ELSE 0 END) AS DueToday,
+    SUM(CASE WHEN prc.StatusCode <> N'Completed' AND CONVERT(date, prc.DueDate) < CONVERT(date, SYSUTCDATETIME()) THEN 1 ELSE 0 END) AS Overdue,
+    SUM(CASE WHEN prc.PriorityCode = N'High' AND prc.StatusCode <> N'Completed' THEN 1 ELSE 0 END) AS HighPriority,
+    SUM(CASE WHEN prc.StatusCode = N'Completed' THEN 1 ELSE 0 END) AS Completed,
+    ISNULL(SUM(CASE WHEN prc.StatusCode <> N'Completed' THEN prc.CurrentPremium ELSE 0 END), 0) AS PremiumAtRisk
+FROM OPS.ProducerRenewalCall prc
+WHERE prc.TenantId = @TenantId
+  AND prc.IsDeleted = 0
+  AND (@UserId IS NULL OR prc.AssignedProducerUserId = @UserId)
+  AND (@StatusCode IS NULL OR @StatusCode = N'' OR prc.StatusCode = @StatusCode);
+
+SELECT TOP 200
+    prc.RenewalCallId, prc.TenantId, prc.AgreementRenewalId, prc.AgreementId, prc.AccountId,
+    prc.AssignedProducerUserId, prc.CallNumber, prc.AccountName, prc.PolicyNumber, prc.LineOfBusiness,
+    prc.CurrentPremium, CAST(prc.ExpirationDate AS DATETIME2) AS ExpirationDate, CAST(prc.DueDate AS DATETIME2) AS DueDate,
+    prc.StatusCode, prc.PriorityCode, prc.OutcomeCode, prc.LastContactDateUtc, prc.NextAction, prc.Notes,
+    prc.CreatedDateUtc, prc.ModifiedDateUtc
+FROM OPS.ProducerRenewalCall prc
+WHERE prc.TenantId = @TenantId
+  AND prc.IsDeleted = 0
+  AND (@UserId IS NULL OR prc.AssignedProducerUserId = @UserId)
+  AND (@StatusCode IS NULL OR @StatusCode = N'' OR prc.StatusCode = @StatusCode)
+ORDER BY
+    CASE WHEN prc.StatusCode = N'Completed' THEN 1 ELSE 0 END,
+    CASE prc.PriorityCode WHEN N'High' THEN 0 WHEN N'Medium' THEN 1 ELSE 2 END,
+    prc.DueDate,
+    prc.ExpirationDate,
+    prc.SortOrder;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new
+        {
+            TenantId = tenantId,
+            UserId = userId,
+            StatusCode = string.IsNullOrWhiteSpace(statusCode) ? null : statusCode.Trim()
+        }, cancellationToken: cancellationToken));
+
+        var summary = await multi.ReadSingleAsync<ProducerRenewalCallSummaryDto>();
+        var items = (await multi.ReadAsync<ProducerRenewalCallDto>()).AsList();
+
+        return new ProducerRenewalCallListDto
+        {
+            Summary = summary,
+            Items = items
+        };
+    }
+
+    public async Task<ProducerRenewalCallDto?> GetRenewalCallAsync(Guid tenantId, Guid renewalKey, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT TOP 1
+    prc.RenewalCallId, prc.TenantId, prc.AgreementRenewalId, prc.AgreementId, prc.AccountId,
+    prc.AssignedProducerUserId, prc.CallNumber, prc.AccountName, prc.PolicyNumber, prc.LineOfBusiness,
+    prc.CurrentPremium, CAST(prc.ExpirationDate AS DATETIME2) AS ExpirationDate, CAST(prc.DueDate AS DATETIME2) AS DueDate,
+    prc.StatusCode, prc.PriorityCode, prc.OutcomeCode, prc.LastContactDateUtc, prc.NextAction, prc.Notes,
+    prc.CreatedDateUtc, prc.ModifiedDateUtc
+FROM OPS.ProducerRenewalCall prc
+WHERE prc.TenantId = @TenantId
+  AND prc.IsDeleted = 0
+  AND (prc.RenewalCallId = @RenewalKey OR prc.AgreementRenewalId = @RenewalKey)
+ORDER BY
+    CASE WHEN prc.RenewalCallId = @RenewalKey THEN 0 ELSE 1 END,
+    prc.CreatedDateUtc DESC;";
+
+        if (renewalKey == Guid.Empty)
+        {
+            throw new InvalidOperationException("A renewal call record is required.");
+        }
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await cn.QuerySingleOrDefaultAsync<ProducerRenewalCallDto>(new CommandDefinition(sql, new
+        {
+            TenantId = tenantId,
+            RenewalKey = renewalKey
+        }, cancellationToken: cancellationToken));
+    }
+
+    public async Task UpdateRenewalCallAsync(Guid renewalCallId, UpdateProducerRenewalCallRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE OPS.ProducerRenewalCall
+SET StatusCode = @StatusCode,
+    PriorityCode = @PriorityCode,
+    OutcomeCode = @OutcomeCode,
+    LastContactDateUtc = @LastContactDateUtc,
+    NextAction = @NextAction,
+    Notes = @Notes,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE RenewalCallId = @RenewalCallId
+  AND IsDeleted = 0;";
+
+        if (renewalCallId == Guid.Empty)
+        {
+            throw new InvalidOperationException("A renewal call record is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.StatusCode))
+        {
+            throw new InvalidOperationException("Renewal call status is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.PriorityCode))
+        {
+            throw new InvalidOperationException("Renewal call priority is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.NextAction))
+        {
+            throw new InvalidOperationException("Renewal call next action is required.");
+        }
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var affected = await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            RenewalCallId = renewalCallId,
+            StatusCode = request.StatusCode.Trim(),
+            PriorityCode = request.PriorityCode.Trim(),
+            OutcomeCode = string.IsNullOrWhiteSpace(request.OutcomeCode) ? null : request.OutcomeCode.Trim(),
+            LastContactDateUtc = request.LastContactDateUtc,
+            NextAction = request.NextAction.Trim(),
+            Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim(),
+            request.ModifiedByUserId
+        }, cancellationToken: cancellationToken));
+
+        if (affected == 0)
+        {
+            throw new InvalidOperationException("Renewal call was not found or has already been removed.");
+        }
+    }
+
     public async Task<string> GetNextLeadNumberAsync(Guid tenantId, CancellationToken cancellationToken = default)
     {
         const string sql = @"
@@ -232,22 +368,172 @@ WHERE TenantId = @TenantId AND LeadNumber LIKE 'LDN-%';";
         return $"LDN-{seq:D4}";
     }
 
-    public async Task LogContactAsync(Guid tenantId, Guid itemId, string itemType, CancellationToken cancellationToken = default)
+    public async Task LogContactAsync(ProducerWorkbenchLogContactRequest request, CancellationToken cancellationToken = default)
     {
-        // Insert a completed lead activity of type Call
+        if (request.TenantId == Guid.Empty)
+        {
+            throw new InvalidOperationException("Tenant is required to log contact.");
+        }
+
+        if (request.ItemId == Guid.Empty)
+        {
+            throw new InvalidOperationException("A workbench record is required to log contact.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.ItemType))
+        {
+            throw new InvalidOperationException("Workbench record type is required to log contact.");
+        }
+
+        var itemType = request.ItemType.Trim();
+        var activityType = NormalizeActivityType(request.ContactMethod);
+        var subject = string.IsNullOrWhiteSpace(request.Subject) ? $"{activityType} logged from producer workbench" : request.Subject.Trim();
+        var notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim();
+        var outcome = string.IsNullOrWhiteSpace(request.OutcomeCode) ? "Contacted" : request.OutcomeCode.Trim();
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+
+        if (itemType.Equals("Lead", StringComparison.OrdinalIgnoreCase))
+        {
+            await InsertLeadActivityAsync(cn, request.TenantId, request.ItemId, null, activityType, subject, notes, outcome, request.DurationMinutes, request.CreatedByUserId, cancellationToken);
+            return;
+        }
+
+        if (itemType.Equals("Opportunity", StringComparison.OrdinalIgnoreCase))
+        {
+            await InsertLeadActivityAsync(cn, request.TenantId, null, request.ItemId, activityType, subject, notes, outcome, request.DurationMinutes, request.CreatedByUserId, cancellationToken);
+            return;
+        }
+
+        var accountId = itemType switch
+        {
+            _ when itemType.Equals("Quote", StringComparison.OrdinalIgnoreCase) => await ResolveQuoteAccountIdAsync(cn, request.TenantId, request.ItemId, cancellationToken),
+            _ when itemType.Equals("Renewal", StringComparison.OrdinalIgnoreCase) => await ResolveRenewalAccountIdAsync(cn, request.TenantId, request.ItemId, cancellationToken),
+            _ when itemType.Equals("CrossSell", StringComparison.OrdinalIgnoreCase) || itemType.Equals("Cross-sell", StringComparison.OrdinalIgnoreCase) => request.ItemId,
+            _ => null
+        };
+
+        if (!accountId.HasValue)
+        {
+            throw new InvalidOperationException($"Unable to resolve an account for {itemType} contact logging.");
+        }
+
+        await InsertAccountActivityAsync(cn, request.TenantId, accountId.Value, activityType, subject, notes, outcome, request.DurationMinutes, request.CreatedByUserId, cancellationToken);
+    }
+
+    private static async Task InsertLeadActivityAsync(
+        System.Data.IDbConnection cn,
+        Guid tenantId,
+        Guid? leadId,
+        Guid? opportunityId,
+        string activityType,
+        string subject,
+        string? notes,
+        string? outcome,
+        int? durationMinutes,
+        Guid? createdByUserId,
+        CancellationToken cancellationToken)
+    {
         const string sql = @"
 INSERT INTO CRM.LeadActivity
-    (ActivityId, TenantId, LeadId, OpportunityId, ActivityTypeCode, Subject,
-     ActivityDate, IsCompleted, OutcomeCode, CreatedDateUtc, IsDeleted)
+(
+    ActivityId, TenantId, LeadId, OpportunityId, ActivityTypeCode,
+    Subject, Notes, ActivityDate, DurationMinutes, OutcomeCode,
+    IsCompleted, CreatedByUserId, CreatedDateUtc, IsDeleted
+)
 VALUES
-    (NEWID(), @TenantId,
-     CASE WHEN @ItemType = 'Lead'        THEN @ItemId ELSE NULL END,
-     CASE WHEN @ItemType = 'Opportunity' THEN @ItemId ELSE NULL END,
-     'Call', 'Contact logged from workbench',
-     CAST(GETUTCDATE() AS DATE), 1, 'Contacted', SYSUTCDATETIME(), 0);";
-        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await cn.ExecuteAsync(new CommandDefinition(sql,
-            new { TenantId = tenantId, ItemId = itemId, ItemType = itemType },
-            cancellationToken: cancellationToken));
+(
+    NEWID(), @TenantId, @LeadId, @OpportunityId, @ActivityTypeCode,
+    @Subject, @Notes, SYSUTCDATETIME(), @DurationMinutes, @OutcomeCode,
+    1, @CreatedByUserId, SYSUTCDATETIME(), 0
+);";
+
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            TenantId = tenantId,
+            LeadId = leadId,
+            OpportunityId = opportunityId,
+            ActivityTypeCode = activityType,
+            Subject = subject,
+            Notes = notes,
+            DurationMinutes = durationMinutes,
+            OutcomeCode = outcome,
+            CreatedByUserId = createdByUserId
+        }, cancellationToken: cancellationToken));
+    }
+
+    private static async Task InsertAccountActivityAsync(
+        System.Data.IDbConnection cn,
+        Guid tenantId,
+        Guid accountId,
+        string activityType,
+        string subject,
+        string? notes,
+        string? outcome,
+        int? durationMinutes,
+        Guid? createdByUserId,
+        CancellationToken cancellationToken)
+    {
+        const string sql = @"
+INSERT INTO Client.AccountActivity
+(
+    ActivityId, TenantId, AccountId, ActivityType, [Subject], Notes,
+    OccurredAtUtc, Outcome, DurationMinutes, CreatedDateUtc, CreatedByUserId, IsDeleted
+)
+VALUES
+(
+    NEWID(), @TenantId, @AccountId, @ActivityType, @Subject, @Notes,
+    SYSUTCDATETIME(), @Outcome, @DurationMinutes, SYSUTCDATETIME(), @CreatedByUserId, 0
+);";
+
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            TenantId = tenantId,
+            AccountId = accountId,
+            ActivityType = activityType,
+            Subject = subject,
+            Notes = notes,
+            Outcome = outcome,
+            DurationMinutes = durationMinutes,
+            CreatedByUserId = createdByUserId
+        }, cancellationToken: cancellationToken));
+    }
+
+    private static async Task<Guid?> ResolveQuoteAccountIdAsync(System.Data.IDbConnection cn, Guid tenantId, Guid quoteId, CancellationToken cancellationToken)
+    {
+        const string sql = @"
+SELECT q.AccountId
+FROM CRM.Quote q
+WHERE q.TenantId = @TenantId AND q.QuoteId = @QuoteId AND q.IsDeleted = 0;";
+
+        return await cn.QuerySingleOrDefaultAsync<Guid?>(new CommandDefinition(sql, new { TenantId = tenantId, QuoteId = quoteId }, cancellationToken: cancellationToken));
+    }
+
+    private static async Task<Guid?> ResolveRenewalAccountIdAsync(System.Data.IDbConnection cn, Guid tenantId, Guid renewalId, CancellationToken cancellationToken)
+    {
+        const string sql = @"
+SELECT ag.AccountId
+FROM OPS.AgreementRenewal ar
+JOIN Sales.Agreement ag ON ag.AgreementId = ar.AgreementId
+WHERE ar.TenantId = @TenantId AND ar.RenewalId = @RenewalId AND ar.IsDeleted = 0;";
+
+        return await cn.QuerySingleOrDefaultAsync<Guid?>(new CommandDefinition(sql, new { TenantId = tenantId, RenewalId = renewalId }, cancellationToken: cancellationToken));
+    }
+
+    private static string NormalizeActivityType(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "Call";
+
+        return value.Trim() switch
+        {
+            "Phone" => "Call",
+            "Call" => "Call",
+            "Email" => "Email",
+            "Meeting" => "Meeting",
+            "Note" => "Note",
+            "Task" => "Task",
+            "Other" => "Other",
+            _ => "Other"
+        };
     }
 }

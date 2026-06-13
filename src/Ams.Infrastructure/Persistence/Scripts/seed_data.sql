@@ -297,6 +297,7 @@ DECLARE @OppId5 UNIQUEIDENTIFIER = '40000000-0000-0000-0000-000000000005';
 DECLARE @OppId6 UNIQUEIDENTIFIER = '40000000-0000-0000-0000-000000000006';
 DECLARE @OppId7 UNIQUEIDENTIFIER = '40000000-0000-0000-0000-000000000007';
 DECLARE @OppId8 UNIQUEIDENTIFIER = '40000000-0000-0000-0000-000000000008';
+DECLARE @OppEnterpriseId UNIQUEIDENTIFIER = 'c2000000-0000-0000-0000-000000000004';
 
 -- StatusCodeId: 1=Open, 2=Negotiation, 3=Won, 4=Lost
 IF NOT EXISTS (SELECT 1 FROM CRM.Opportunity WHERE OpportunityId = @OppId1)
@@ -379,12 +380,63 @@ IF NOT EXISTS (SELECT 1 FROM CRM.Opportunity WHERE OpportunityId = @OppId8)
          9800.00, 25, 'Pipeline', DATEADD(DAY, 90, @Now),
          @StageProspect, 1, @UserId, @LeadId2, @UserId, 0, DATEADD(DAY, -3, @Now));
 
+IF NOT EXISTS (SELECT 1 FROM CRM.Opportunity WHERE OpportunityId = @OppEnterpriseId)
+    INSERT INTO CRM.Opportunity
+        (OpportunityId, TenantId, OpportunityNumber, AccountId, OpportunityName,
+         EstimatedAmount, WinProbability, ForecastCategoryCode, CloseDate,
+         OpportunityStageId, StageName, StatusCodeId, OwnerUserId, LeadId, Description, CreatedByUserId, IsDeleted, CreatedDateUtc)
+    VALUES
+        (@OppEnterpriseId, @TenantId, 'ENT-OPP-1004', @AccId6, 'Global manufacturing risk program',
+         425000.00, 68, 'Best Case', DATEADD(DAY, 38, @Now),
+         @StageProposal, 'Proposal', 1, @UserId, NULL,
+         'Enterprise opportunity seeded for the polished CRM opportunity dashboard and workflow sync.', @UserId, 0, DATEADD(DAY, -18, @Now));
+
+IF OBJECT_ID(N'CRM.OpportunityLine', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM CRM.OpportunityLine WHERE OpportunityId = @OppEnterpriseId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO CRM.OpportunityLine (OpportunityLineId, TenantId, OpportunityId, LineOfBusiness, Carrier, EstPremium, Priority, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES
+        (NEWID(), @TenantId, @OppEnterpriseId, 'Workers Comp', 'Travelers Companies', 185000.00, 'High', DATEADD(DAY, -6, @Now), @UserId, 0),
+        (NEWID(), @TenantId, @OppEnterpriseId, 'Commercial Auto', 'Chubb Limited', 142000.00, 'High', DATEADD(DAY, -6, @Now), @UserId, 0),
+        (NEWID(), @TenantId, @OppEnterpriseId, 'Umbrella / Excess', 'Berkshire Hathaway Specialty', 98000.00, 'Medium', DATEADD(DAY, -6, @Now), @UserId, 0);
+END
+
+IF OBJECT_ID(N'CRM.OpportunityActivity', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM CRM.OpportunityActivity WHERE OpportunityId = @OppEnterpriseId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO CRM.OpportunityActivity (ActivityId, TenantId, OpportunityId, ActivityTypeCode, Subject, Notes, ActivityDate, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES
+        (NEWID(), @TenantId, @OppEnterpriseId, 'Meeting', 'Executive risk review completed', 'Confirmed workers comp, auto, and excess strategy with finance and operations stakeholders.', DATEADD(DAY, -5, @Now), DATEADD(DAY, -5, @Now), @UserId, 0),
+        (NEWID(), @TenantId, @OppEnterpriseId, 'Email', 'Carrier submission package distributed', 'Sent updated loss runs, schedules, and target premiums to selected markets.', DATEADD(DAY, -3, @Now), DATEADD(DAY, -3, @Now), @UserId, 0),
+        (NEWID(), @TenantId, @OppEnterpriseId, 'Call', 'Pricing checkpoint scheduled', 'Scheduled pricing checkpoint before proposal presentation.', DATEADD(DAY, -1, @Now), DATEADD(DAY, -1, @Now), @UserId, 0);
+END
+
+IF OBJECT_ID(N'CRM.OpportunitySubmission', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM CRM.OpportunitySubmission WHERE OpportunityId = @OppEnterpriseId AND IsDeleted = 0)
+    INSERT INTO CRM.OpportunitySubmission (SubmissionId, TenantId, OpportunityId, SubmissionNumber, LineOfBusiness, Status, TargetPremium, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES ('c3000000-0000-0000-0000-000000000004', @TenantId, @OppEnterpriseId, 'SUB-ENT-1004', 'Workers Comp', 'In Review', 185000.00, DATEADD(DAY, -4, @Now), @UserId, 0);
+
+IF OBJECT_ID(N'CRM.OpportunityCompetitor', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM CRM.OpportunityCompetitor WHERE OpportunityId = @OppEnterpriseId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO CRM.OpportunityCompetitor (CompetitorId, TenantId, OpportunityId, Name, Strength, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES
+        (NEWID(), @TenantId, @OppEnterpriseId, 'National Broker Inc.', 'Strong', DATEADD(DAY, -7, @Now), @UserId, 0),
+        (NEWID(), @TenantId, @OppEnterpriseId, 'Regional Risk Partners', 'Moderate', DATEADD(DAY, -6, @Now), @UserId, 0);
+END
+
+IF OBJECT_ID(N'CRM.OpportunityWorkflowEvent', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM CRM.OpportunityWorkflowEvent WHERE OpportunityId = @OppEnterpriseId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO CRM.OpportunityWorkflowEvent (WorkflowEventId, TenantId, OpportunityId, EventType, EventTitle, EventDetail, RelatedEntityName, RelatedEntityId, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES
+        (NEWID(), @TenantId, @OppEnterpriseId, 'Seed', 'Enterprise opportunity synchronized', 'Opportunity, account, submission, quote, and workflow seed data synchronized for the enterprise detail page.', 'Opportunity', @OppEnterpriseId, DATEADD(DAY, -6, @Now), @Now, @UserId, 0),
+        (NEWID(), @TenantId, @OppEnterpriseId, 'Submission', 'Submission synced to underwriting', 'Opportunity submission synchronized to the enterprise submissions workflow.', 'Submission', 'c3000000-0000-0000-0000-000000000004', DATEADD(DAY, -4, @Now), @Now, @UserId, 0),
+        (NEWID(), @TenantId, @OppEnterpriseId, 'Quote', 'Quote presented', 'Presented quote synchronized back to the opportunity workflow timeline.', 'Quote', 'c5000000-0000-0000-0000-000000000004', DATEADD(DAY, -1, @Now), @Now, @UserId, 0);
+END
+
 -- =============================================================================
 -- 8. CRM QUOTES
 -- =============================================================================
 DECLARE @QuoteId1 UNIQUEIDENTIFIER = '50000000-0000-0000-0000-000000000001';
 DECLARE @QuoteId2 UNIQUEIDENTIFIER = '50000000-0000-0000-0000-000000000002';
 DECLARE @QuoteId3 UNIQUEIDENTIFIER = '50000000-0000-0000-0000-000000000003';
+DECLARE @QuoteEnterpriseId UNIQUEIDENTIFIER = 'c5000000-0000-0000-0000-000000000004';
 
 IF NOT EXISTS (SELECT 1 FROM CRM.Quote WHERE QuoteId = @QuoteId1)
     INSERT INTO CRM.Quote (QuoteId, TenantId, QuoteNumber, OpportunityId, AccountId, TotalAmount, ValidUntilDate, StatusCode, IsDeleted, CreatedDateUtc)
@@ -397,6 +449,10 @@ IF NOT EXISTS (SELECT 1 FROM CRM.Quote WHERE QuoteId = @QuoteId2)
 IF NOT EXISTS (SELECT 1 FROM CRM.Quote WHERE QuoteId = @QuoteId3)
     INSERT INTO CRM.Quote (QuoteId, TenantId, QuoteNumber, OpportunityId, AccountId, TotalAmount, ValidUntilDate, StatusCode, IsDeleted, CreatedDateUtc)
     VALUES (@QuoteId3, @TenantId, 'Q-2024-003', @OppId5, @AccId2, 27000.00, DATEADD(DAY, -10, @Now), 'Accepted', 0, DATEADD(DAY, -30, @Now));
+
+IF NOT EXISTS (SELECT 1 FROM CRM.Quote WHERE QuoteId = @QuoteEnterpriseId)
+    INSERT INTO CRM.Quote (QuoteId, TenantId, QuoteNumber, OpportunityId, AccountId, TotalAmount, ValidUntilDate, StatusCode, IsDeleted, CreatedDateUtc, CreatedByUserId)
+    VALUES (@QuoteEnterpriseId, @TenantId, 'Q-ENT-1004', @OppEnterpriseId, @AccId6, 181750.00, DATEADD(DAY, 21, @Now), 'Presented', 0, DATEADD(DAY, -1, @Now), @UserId);
 
 -- Quote Lines
 IF NOT EXISTS (SELECT 1 FROM CRM.QuoteLine WHERE QuoteId = @QuoteId1 AND LineOrder = 1)
