@@ -17,6 +17,17 @@ public sealed class MgaWholesalerService : IMgaWholesalerService
     public Task DeleteAsync(Guid id, CancellationToken ct = default) => _repo.DeleteAsync(id, ct);
 }
 
+public sealed class CarrierSettingService : ICarrierSettingService
+{
+    private readonly ICarrierSettingRepository _repo;
+    public CarrierSettingService(ICarrierSettingRepository repo) => _repo = repo;
+    public Task<CarrierSettingDto?> GetByIdAsync(Guid id, CancellationToken ct = default) => _repo.GetByIdAsync(id, ct);
+    public Task<PagedResult<CarrierSettingDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 100, CancellationToken ct = default) => _repo.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, ct);
+    public Task<Guid> CreateAsync(CreateCarrierSettingRequest request, CancellationToken ct = default) => _repo.CreateAsync(request, ct);
+    public Task UpdateAsync(Guid id, UpdateCarrierSettingRequest request, CancellationToken ct = default) => _repo.UpdateAsync(id, request, ct);
+    public Task DeleteAsync(Guid id, CancellationToken ct = default) => _repo.DeleteAsync(id, ct);
+}
+
 public sealed class CarrierContactService : ICarrierContactService
 {
     private readonly ICarrierContactRepository _repo;

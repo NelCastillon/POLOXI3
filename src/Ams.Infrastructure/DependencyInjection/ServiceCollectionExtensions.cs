@@ -390,6 +390,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPlatformEventService, PlatformEventService>();
         services.AddScoped<IBackgroundJobRepository, BackgroundJobRepository>();
         services.AddScoped<IBackgroundJobService, BackgroundJobService>();
+        services.AddScoped<IAutomationJobRepository, AutomationJobRepository>();
+        services.AddScoped<IAutomationRuntimeRepository, AutomationRuntimeRepository>();
+        services.AddScoped<IAutomationJobService, AutomationJobService>();
 
         // ── Agency Configuration (Epic 3) ────────────────────────────
         services.AddScoped<IAgencyProfileRepository, AgencyProfileRepository>();
@@ -507,6 +510,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICarrierAppointmentService, CarrierAppointmentService>();
         services.AddScoped<ICarrierPerformanceRepository, CarrierPerformanceRepository>();
         services.AddScoped<ICarrierPerformanceService, CarrierPerformanceService>();
+        services.AddScoped<ICarrierSettingRepository, CarrierSettingRepository>();
+        services.AddScoped<ICarrierSettingService, CarrierSettingService>();
         services.AddScoped<IMarketAccessRuleRepository, MarketAccessRuleRepository>();
         services.AddScoped<IMarketAccessRuleService, MarketAccessRuleService>();
         services.AddScoped<ICarrierDownloadMappingRepository, CarrierDownloadMappingRepository>();

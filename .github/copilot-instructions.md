@@ -18,6 +18,7 @@
 - All delete or remove actions must always show a confirmation dialog before executing. Never execute delete, remove, revoke, deactivate-as-delete, or role-removal actions directly from a button click without first asking the user to confirm.
 - **Clickable KPI filters**: All KPI cards/tiles on list, dashboard, and configuration pages must dynamically filter the displayed data when clicked. Use active filter state (for example `_activeFilter` / `_kpiFilter`), bind grids/lists to the filtered collection, apply filters immediately on click, and visually mark the active KPI card.
 - **Base fields for new tables**: All new tables added to the database must include all base fields: `TenantId`, `CreatedDateUtc`, `CreatedByUserId`, `ModifiedDateUtc`, `ModifiedByUserId`, `IsDeleted`.
+- For this AMS Blazor codebase, remove hardcoded mock/demo UI data and load records from database seed data through API-backed services wherever seeded data exists.
 
 ## CRMConfiguration Guidelines
 - CRM Configuration pages are Blazor pages under `TenantConfig/CrmConfig` and should follow the established CRM Configuration page pattern used by Lead Sources, Lead Statuses, Opportunity Stages, Duplicate Rules, Assignment Rules, and CRM Custom Fields. Preserve existing functionality and add or polish features without removing them, following the `/crm/opportunities` layout pattern.

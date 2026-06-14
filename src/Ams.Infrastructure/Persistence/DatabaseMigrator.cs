@@ -200,6 +200,10 @@ public sealed class DatabaseMigrator
         new("0167_MarketingCrossSell_ProducerSeedSync", Migration0167_MarketingCrossSellProducerSeedSync),
         new("0168_CommissionLedger_SubmissionDetail_DbSeed", Migration0168_CommissionLedgerSubmissionDetailDbSeed),
         new("0169_CarrierAppetite_TravelersInsurance_Seed", Migration0169_CarrierAppetiteTravelersInsuranceSeed),
+        new("0170_CarrierDownload_EnterpriseSchemaSeedSync", Migration0170_CarrierDownloadEnterpriseSchemaSeedSync),
+        new("0171_AutomationJobScheduling_EnterpriseSchemaSeedSync", Migration0171_AutomationJobSchedulingEnterpriseSchemaSeedSync),
+        new("0172_AutomationJobScheduling_BaseFieldsHardening", Migration0172_AutomationJobSchedulingBaseFieldsHardening),
+        new("0173_CarrierSettings_DynamicSeed", Migration0173_CarrierSettingsDynamicSeed),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -11013,5 +11017,795 @@ JOIN @TravelersSeed s ON s.LobCode = existing.LobCode AND ISNULL(s.StateCode, N'
 WHERE existing.TenantId = @TenantId
   AND existing.CarrierName = N'Travelers Insurance'
   AND existing.IsDeleted = 0;
+";
+
+    private const string Migration0170_CarrierDownloadEnterpriseSchemaSeedSync = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Integration') EXEC(N'CREATE SCHEMA Integration');
+
+IF OBJECT_ID(N'Integration.CarrierDownloadBatch', N'U') IS NULL
+BEGIN
+    CREATE TABLE Integration.CarrierDownloadBatch
+    (
+        CarrierDownloadBatchId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Integration_CarrierDownloadBatch PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NULL,
+        CarrierName NVARCHAR(200) NOT NULL CONSTRAINT DF_CarrierDownloadBatch_CarrierName DEFAULT N'Unknown Carrier',
+        SourceType NVARCHAR(50) NOT NULL,
+        ReceivedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierDownloadBatch_Received DEFAULT SYSUTCDATETIME(),
+        FileName NVARCHAR(260) NULL,
+        RawStorageUri NVARCHAR(1000) NULL,
+        Status NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierDownloadBatch_Status DEFAULT N'Received',
+        TotalRecords INT NOT NULL CONSTRAINT DF_CarrierDownloadBatch_TotalRecords DEFAULT 0,
+        ProcessedRecords INT NOT NULL CONSTRAINT DF_CarrierDownloadBatch_ProcessedRecords DEFAULT 0,
+        FailedRecords INT NOT NULL CONSTRAINT DF_CarrierDownloadBatch_FailedRecords DEFAULT 0,
+        CompletedDateUtc DATETIME2 NULL,
+        ErrorMessage NVARCHAR(2000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierDownloadBatch_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierDownloadBatch_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Integration.CarrierDownloadBatch', N'TenantId') IS NULL ALTER TABLE Integration.CarrierDownloadBatch ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_CarrierDownloadBatch_TenantId_0170 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Integration.CarrierDownloadBatch', N'CarrierId') IS NULL ALTER TABLE Integration.CarrierDownloadBatch ADD CarrierId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadBatch', N'CarrierName') IS NULL ALTER TABLE Integration.CarrierDownloadBatch ADD CarrierName NVARCHAR(200) NOT NULL CONSTRAINT DF_CarrierDownloadBatch_CarrierName_0170 DEFAULT N'Unknown Carrier';
+IF COL_LENGTH(N'Integration.CarrierDownloadBatch', N'SourceType') IS NULL ALTER TABLE Integration.CarrierDownloadBatch ADD SourceType NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierDownloadBatch_SourceType_0170 DEFAULT N'ManualUpload';
+IF COL_LENGTH(N'Integration.CarrierDownloadBatch', N'ReceivedDateUtc') IS NULL ALTER TABLE Integration.CarrierDownloadBatch ADD ReceivedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierDownloadBatch_Received_0170 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Integration.CarrierDownloadBatch', N'FileName') IS NULL ALTER TABLE Integration.CarrierDownloadBatch ADD FileName NVARCHAR(260) NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadBatch', N'RawStorageUri') IS NULL ALTER TABLE Integration.CarrierDownloadBatch ADD RawStorageUri NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadBatch', N'Status') IS NULL ALTER TABLE Integration.CarrierDownloadBatch ADD Status NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierDownloadBatch_Status_0170 DEFAULT N'Received';
+IF COL_LENGTH(N'Integration.CarrierDownloadBatch', N'TotalRecords') IS NULL ALTER TABLE Integration.CarrierDownloadBatch ADD TotalRecords INT NOT NULL CONSTRAINT DF_CarrierDownloadBatch_TotalRecords_0170 DEFAULT 0;
+IF COL_LENGTH(N'Integration.CarrierDownloadBatch', N'ProcessedRecords') IS NULL ALTER TABLE Integration.CarrierDownloadBatch ADD ProcessedRecords INT NOT NULL CONSTRAINT DF_CarrierDownloadBatch_ProcessedRecords_0170 DEFAULT 0;
+IF COL_LENGTH(N'Integration.CarrierDownloadBatch', N'FailedRecords') IS NULL ALTER TABLE Integration.CarrierDownloadBatch ADD FailedRecords INT NOT NULL CONSTRAINT DF_CarrierDownloadBatch_FailedRecords_0170 DEFAULT 0;
+IF COL_LENGTH(N'Integration.CarrierDownloadBatch', N'CompletedDateUtc') IS NULL ALTER TABLE Integration.CarrierDownloadBatch ADD CompletedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadBatch', N'ErrorMessage') IS NULL ALTER TABLE Integration.CarrierDownloadBatch ADD ErrorMessage NVARCHAR(2000) NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadBatch', N'CreatedDateUtc') IS NULL ALTER TABLE Integration.CarrierDownloadBatch ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierDownloadBatch_Created_0170 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Integration.CarrierDownloadBatch', N'CreatedByUserId') IS NULL ALTER TABLE Integration.CarrierDownloadBatch ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadBatch', N'ModifiedDateUtc') IS NULL ALTER TABLE Integration.CarrierDownloadBatch ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadBatch', N'ModifiedByUserId') IS NULL ALTER TABLE Integration.CarrierDownloadBatch ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadBatch', N'IsDeleted') IS NULL ALTER TABLE Integration.CarrierDownloadBatch ADD IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierDownloadBatch_IsDeleted_0170 DEFAULT 0;
+
+IF OBJECT_ID(N'Integration.CarrierDownloadItem', N'U') IS NULL
+BEGIN
+    CREATE TABLE Integration.CarrierDownloadItem
+    (
+        CarrierDownloadItemId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Integration_CarrierDownloadItem PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierDownloadBatchId UNIQUEIDENTIFIER NOT NULL,
+        TransactionType NVARCHAR(50) NOT NULL,
+        CarrierPolicyNumber NVARCHAR(100) NULL,
+        NamedInsured NVARCHAR(300) NULL,
+        EffectiveDate DATE NULL,
+        ExpirationDate DATE NULL,
+        LineOfBusiness NVARCHAR(100) NULL,
+        Premium DECIMAL(18,2) NULL,
+        Commission DECIMAL(18,2) NULL,
+        RawPayload NVARCHAR(MAX) NULL,
+        NormalizedPayload NVARCHAR(MAX) NULL,
+        MatchStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierDownloadItem_MatchStatus DEFAULT N'Pending',
+        ProcessingStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierDownloadItem_ProcessingStatus DEFAULT N'Pending',
+        ErrorMessage NVARCHAR(2000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierDownloadItem_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierDownloadItem_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Integration.CarrierDownloadItem', N'TenantId') IS NULL ALTER TABLE Integration.CarrierDownloadItem ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_CarrierDownloadItem_TenantId_0170 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Integration.CarrierDownloadItem', N'CarrierDownloadBatchId') IS NULL ALTER TABLE Integration.CarrierDownloadItem ADD CarrierDownloadBatchId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_CarrierDownloadItem_BatchId_0170 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Integration.CarrierDownloadItem', N'TransactionType') IS NULL ALTER TABLE Integration.CarrierDownloadItem ADD TransactionType NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierDownloadItem_TransactionType_0170 DEFAULT N'Document';
+IF COL_LENGTH(N'Integration.CarrierDownloadItem', N'CarrierPolicyNumber') IS NULL ALTER TABLE Integration.CarrierDownloadItem ADD CarrierPolicyNumber NVARCHAR(100) NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadItem', N'NamedInsured') IS NULL ALTER TABLE Integration.CarrierDownloadItem ADD NamedInsured NVARCHAR(300) NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadItem', N'EffectiveDate') IS NULL ALTER TABLE Integration.CarrierDownloadItem ADD EffectiveDate DATE NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadItem', N'ExpirationDate') IS NULL ALTER TABLE Integration.CarrierDownloadItem ADD ExpirationDate DATE NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadItem', N'LineOfBusiness') IS NULL ALTER TABLE Integration.CarrierDownloadItem ADD LineOfBusiness NVARCHAR(100) NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadItem', N'Premium') IS NULL ALTER TABLE Integration.CarrierDownloadItem ADD Premium DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadItem', N'Commission') IS NULL ALTER TABLE Integration.CarrierDownloadItem ADD Commission DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadItem', N'RawPayload') IS NULL ALTER TABLE Integration.CarrierDownloadItem ADD RawPayload NVARCHAR(MAX) NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadItem', N'NormalizedPayload') IS NULL ALTER TABLE Integration.CarrierDownloadItem ADD NormalizedPayload NVARCHAR(MAX) NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadItem', N'MatchStatus') IS NULL ALTER TABLE Integration.CarrierDownloadItem ADD MatchStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierDownloadItem_MatchStatus_0170 DEFAULT N'Pending';
+IF COL_LENGTH(N'Integration.CarrierDownloadItem', N'ProcessingStatus') IS NULL ALTER TABLE Integration.CarrierDownloadItem ADD ProcessingStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierDownloadItem_ProcessingStatus_0170 DEFAULT N'Pending';
+IF COL_LENGTH(N'Integration.CarrierDownloadItem', N'ErrorMessage') IS NULL ALTER TABLE Integration.CarrierDownloadItem ADD ErrorMessage NVARCHAR(2000) NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadItem', N'CreatedDateUtc') IS NULL ALTER TABLE Integration.CarrierDownloadItem ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierDownloadItem_Created_0170 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Integration.CarrierDownloadItem', N'CreatedByUserId') IS NULL ALTER TABLE Integration.CarrierDownloadItem ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadItem', N'ModifiedDateUtc') IS NULL ALTER TABLE Integration.CarrierDownloadItem ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadItem', N'ModifiedByUserId') IS NULL ALTER TABLE Integration.CarrierDownloadItem ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Integration.CarrierDownloadItem', N'IsDeleted') IS NULL ALTER TABLE Integration.CarrierDownloadItem ADD IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierDownloadItem_IsDeleted_0170 DEFAULT 0;
+
+IF OBJECT_ID(N'Integration.CarrierDownloadMatch', N'U') IS NULL
+BEGIN
+    CREATE TABLE Integration.CarrierDownloadMatch
+    (
+        CarrierDownloadMatchId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Integration_CarrierDownloadMatch PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierDownloadItemId UNIQUEIDENTIFIER NOT NULL,
+        MatchedAccountId UNIQUEIDENTIFIER NULL,
+        MatchedPolicyId UNIQUEIDENTIFIER NULL,
+        MatchedContactId UNIQUEIDENTIFIER NULL,
+        MatchScore DECIMAL(9,4) NOT NULL CONSTRAINT DF_CarrierDownloadMatch_Score DEFAULT 0,
+        MatchMethod NVARCHAR(50) NOT NULL,
+        ReviewedByUserId UNIQUEIDENTIFIER NULL,
+        ReviewedDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierDownloadMatch_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierDownloadMatch_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Integration.CarrierDownloadException', N'U') IS NULL
+BEGIN
+    CREATE TABLE Integration.CarrierDownloadException
+    (
+        CarrierDownloadExceptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Integration_CarrierDownloadException PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierDownloadItemId UNIQUEIDENTIFIER NOT NULL,
+        ExceptionType NVARCHAR(100) NOT NULL,
+        Severity NVARCHAR(50) NOT NULL,
+        AssignedToUserId UNIQUEIDENTIFIER NULL,
+        Status NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierDownloadException_Status DEFAULT N'Open',
+        ResolutionNotes NVARCHAR(2000) NULL,
+        ResolvedByUserId UNIQUEIDENTIFIER NULL,
+        ResolvedDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierDownloadException_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierDownloadException_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Integration.CarrierDownloadBatch') AND name = N'IX_CarrierDownloadBatch_Tenant_Status_0170')
+    CREATE INDEX IX_CarrierDownloadBatch_Tenant_Status_0170 ON Integration.CarrierDownloadBatch(TenantId, IsDeleted, Status, ReceivedDateUtc DESC) INCLUDE (CarrierName, SourceType, FileName, TotalRecords, ProcessedRecords, FailedRecords);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Integration.CarrierDownloadItem') AND name = N'IX_CarrierDownloadItem_Batch_Status_0170')
+    CREATE INDEX IX_CarrierDownloadItem_Batch_Status_0170 ON Integration.CarrierDownloadItem(CarrierDownloadBatchId, IsDeleted, MatchStatus, ProcessingStatus) INCLUDE (TransactionType, CarrierPolicyNumber, NamedInsured, LineOfBusiness);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Integration.CarrierDownloadException') AND name = N'IX_CarrierDownloadException_Tenant_Status_0170')
+    CREATE INDEX IX_CarrierDownloadException_Tenant_Status_0170 ON Integration.CarrierDownloadException(TenantId, IsDeleted, Status, Severity, CreatedDateUtc DESC);
+
+IF OBJECT_ID(N'Integration.DownloadLog', N'V') IS NOT NULL DROP VIEW Integration.DownloadLog;
+EXEC(N'CREATE VIEW Integration.DownloadLog AS
+SELECT CarrierDownloadBatchId AS DownloadLogId,
+       TenantId,
+       COALESCE(CarrierId, CONVERT(uniqueidentifier, ''00000000-0000-0000-0000-000000000000'')) AS CarrierId,
+       CarrierName,
+       SourceType AS FeedType,
+       Status,
+       TotalRecords AS RecordsReceived,
+       ProcessedRecords AS RecordsProcessed,
+       FailedRecords AS RecordsFailed,
+       FileName,
+       RawStorageUri,
+       ReceivedDateUtc AS StartedUtc,
+       CompletedDateUtc AS CompletedUtc,
+       ErrorMessage,
+       IsDeleted
+FROM Integration.CarrierDownloadBatch');
+
+IF OBJECT_ID(N'Integration.DownloadException', N'V') IS NOT NULL DROP VIEW Integration.DownloadException;
+EXEC(N'CREATE VIEW Integration.DownloadException AS
+SELECT e.CarrierDownloadExceptionId AS DownloadExceptionId,
+       e.TenantId,
+       i.CarrierDownloadBatchId AS DownloadLogId,
+       e.CarrierDownloadItemId,
+       COALESCE(b.CarrierId, CONVERT(uniqueidentifier, ''00000000-0000-0000-0000-000000000000'')) AS CarrierId,
+       b.CarrierName,
+       i.CarrierPolicyNumber,
+       i.NamedInsured,
+       i.TransactionType,
+       i.LineOfBusiness,
+       i.EffectiveDate,
+       i.Premium,
+       e.ExceptionType,
+       e.Severity,
+       CONCAT(e.Severity, '' - '', COALESCE(i.ErrorMessage, e.ResolutionNotes, e.ExceptionType)) AS Message,
+       i.RawPayload,
+       e.Status AS ResolutionStatus,
+       e.AssignedToUserId,
+       CONVERT(nvarchar(36), e.ResolvedByUserId) AS ResolvedByUserId,
+       e.CreatedDateUtc AS OccurredUtc,
+       e.ResolvedDateUtc AS ResolvedUtc,
+       e.ResolutionNotes,
+       e.IsDeleted
+FROM Integration.CarrierDownloadException e
+JOIN Integration.CarrierDownloadItem i ON i.CarrierDownloadItemId = e.CarrierDownloadItemId
+JOIN Integration.CarrierDownloadBatch b ON b.CarrierDownloadBatchId = i.CarrierDownloadBatchId');
+
+DECLARE @TenantId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted, 0) = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000001');
+DECLARE @AdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId AND ISNULL(IsDeleted, 0) = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+DECLARE @CarrierId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 CarrierId FROM Core.Carrier WHERE TenantId = @TenantId AND ISNULL(IsDeleted, 0) = 0 ORDER BY CarrierName), '9e3a20d9-3db1-4b5a-9f9e-4c7c5d940601');
+DECLARE @CarrierName NVARCHAR(200) = COALESCE((SELECT TOP 1 CarrierName FROM Core.Carrier WHERE CarrierId = @CarrierId), N'Travelers Insurance');
+
+DECLARE @Batch1 UNIQUEIDENTIFIER = 'bd170000-0000-0000-0000-000000000001';
+DECLARE @Batch2 UNIQUEIDENTIFIER = 'bd170000-0000-0000-0000-000000000002';
+DECLARE @Batch3 UNIQUEIDENTIFIER = 'bd170000-0000-0000-0000-000000000003';
+
+INSERT INTO Integration.CarrierDownloadBatch
+(CarrierDownloadBatchId, TenantId, CarrierId, CarrierName, SourceType, ReceivedDateUtc, FileName, RawStorageUri, Status, TotalRecords, ProcessedRecords, FailedRecords, CompletedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT v.BatchId, @TenantId, @CarrierId, v.CarrierName, v.SourceType, DATEADD(hour, v.ReceivedOffsetHours, SYSUTCDATETIME()), v.FileName, v.RawStorageUri, v.Status, v.TotalRecords, v.ProcessedRecords, v.FailedRecords, CASE WHEN v.Status IN (N'Completed', N'CompletedWithErrors', N'Failed') THEN DATEADD(hour, v.CompletedOffsetHours, SYSUTCDATETIME()) ELSE NULL END, SYSUTCDATETIME(), @AdminUserId, 0
+FROM (VALUES
+    (@Batch1, @CarrierName, N'IVANS', -8, -7, N'ivans-travelers-policy-20250715.al3', N'carrier-downloads/ivans/2025/07/15/ivans-travelers-policy-20250715.al3', N'CompletedWithErrors', 6, 4, 2),
+    (@Batch2, N'Chubb', N'SFTP', -3, -2, N'chubb-edocs-20250715.zip', N'carrier-downloads/sftp/chubb/2025/07/15/chubb-edocs-20250715.zip', N'Matching', 4, 1, 1),
+    (@Batch3, N'The Hartford', N'CarrierApi', -1, 0, N'hartford-claims-webhook-20250715.json', N'carrier-downloads/api/hartford/2025/07/15/hartford-claims-webhook-20250715.json', N'Processing', 3, 1, 0)
+) v(BatchId, CarrierName, SourceType, ReceivedOffsetHours, CompletedOffsetHours, FileName, RawStorageUri, Status, TotalRecords, ProcessedRecords, FailedRecords)
+WHERE NOT EXISTS (SELECT 1 FROM Integration.CarrierDownloadBatch b WHERE b.CarrierDownloadBatchId = v.BatchId);
+
+DECLARE @ItemSeed TABLE
+(
+    ItemId UNIQUEIDENTIFIER NOT NULL,
+    BatchId UNIQUEIDENTIFIER NOT NULL,
+    TransactionType NVARCHAR(50) NOT NULL,
+    CarrierPolicyNumber NVARCHAR(100) NULL,
+    NamedInsured NVARCHAR(300) NULL,
+    EffectiveDate DATE NULL,
+    ExpirationDate DATE NULL,
+    LineOfBusiness NVARCHAR(100) NULL,
+    Premium DECIMAL(18,2) NULL,
+    Commission DECIMAL(18,2) NULL,
+    MatchStatus NVARCHAR(50) NOT NULL,
+    ProcessingStatus NVARCHAR(50) NOT NULL,
+    ErrorMessage NVARCHAR(2000) NULL
+);
+
+INSERT INTO @ItemSeed VALUES
+('bd170001-0000-0000-0000-000000000001', @Batch1, N'NewBusiness', N'POL-2024-001847', N'Acme Manufacturing Group', DATEADD(day, -30, CAST(SYSUTCDATETIME() AS date)), DATEADD(day, 335, CAST(SYSUTCDATETIME() AS date)), N'Workers Compensation', 125000, 15000, N'AutoMatched', N'Applied', NULL),
+('bd170001-0000-0000-0000-000000000002', @Batch1, N'Endorsement', N'POL-2024-001847', N'Acme Manufacturing Group', DATEADD(day, 5, CAST(SYSUTCDATETIME() AS date)), DATEADD(day, 335, CAST(SYSUTCDATETIME() AS date)), N'Workers Compensation', 18000, 2160, N'AutoMatched', N'Applied', NULL),
+('bd170001-0000-0000-0000-000000000003', @Batch1, N'Cancellation', N'PLY-77002', N'Summit Restaurant Group', DATEADD(day, 12, CAST(SYSUTCDATETIME() AS date)), NULL, N'General Liability', 0, NULL, N'Exception', N'NeedsReview', N'Policy number not found in AMS. Manual policy/account review required.'),
+('bd170001-0000-0000-0000-000000000004', @Batch1, N'Billing', N'POL-2024-001611', N'Northwind Logistics', DATEADD(day, -15, CAST(SYSUTCDATETIME() AS date)), DATEADD(day, 350, CAST(SYSUTCDATETIME() AS date)), N'Commercial Auto', 94200, 9420, N'AutoMatched', N'Applied', NULL),
+('bd170001-0000-0000-0000-000000000005', @Batch2, N'Document', N'PLY-55901', N'Rivera Roofing LLC', DATEADD(day, 10, CAST(SYSUTCDATETIME() AS date)), NULL, N'Commercial Property', NULL, NULL, N'Exception', N'NeedsReview', N'Carrier credentials expired; reconnect carrier integration before document classification.'),
+('bd170001-0000-0000-0000-000000000006', @Batch2, N'Document', N'POL-2024-001702', N'Blue Harbor Foods', DATEADD(day, -20, CAST(SYSUTCDATETIME() AS date)), DATEADD(day, 345, CAST(SYSUTCDATETIME() AS date)), N'General Liability', NULL, NULL, N'AutoMatched', N'Staged', NULL),
+('bd170001-0000-0000-0000-000000000007', @Batch3, N'Claim', N'POL-2024-001889', N'Summit Professional Services', DATEADD(day, -5, CAST(SYSUTCDATETIME() AS date)), NULL, N'Professional Liability', NULL, NULL, N'Matched', N'Staged', NULL),
+('bd170001-0000-0000-0000-000000000008', @Batch3, N'Commission', N'POL-2024-001920', N'Pioneer Design Studio', DATEADD(day, -3, CAST(SYSUTCDATETIME() AS date)), NULL, N'Umbrella', 52000, 4160, N'Pending', N'Pending', NULL);
+
+INSERT INTO Integration.CarrierDownloadItem
+(CarrierDownloadItemId, TenantId, CarrierDownloadBatchId, TransactionType, CarrierPolicyNumber, NamedInsured, EffectiveDate, ExpirationDate, LineOfBusiness, Premium, Commission, RawPayload, NormalizedPayload, MatchStatus, ProcessingStatus, ErrorMessage, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT s.ItemId, @TenantId, s.BatchId, s.TransactionType, s.CarrierPolicyNumber, s.NamedInsured, s.EffectiveDate, s.ExpirationDate, s.LineOfBusiness, s.Premium, s.Commission,
+       CONCAT(N'{""policyNumber"":""', COALESCE(s.CarrierPolicyNumber, N''), N'"",""namedInsured"":""', COALESCE(s.NamedInsured, N''), N'"",""transactionType"":""', s.TransactionType, N'""}'),
+       CONCAT(N'{""carrierCode"":""', @CarrierName, N'"",""policyNumber"":""', COALESCE(s.CarrierPolicyNumber, N''), N'"",""transactionType"":""', s.TransactionType, N'"",""lineOfBusiness"":""', COALESCE(s.LineOfBusiness, N''), N'""}'),
+       s.MatchStatus, s.ProcessingStatus, s.ErrorMessage, SYSUTCDATETIME(), @AdminUserId, 0
+FROM @ItemSeed s
+WHERE NOT EXISTS (SELECT 1 FROM Integration.CarrierDownloadItem i WHERE i.CarrierDownloadItemId = s.ItemId);
+
+IF OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Integration.CarrierDownloadMatch
+    (CarrierDownloadMatchId, TenantId, CarrierDownloadItemId, MatchedAccountId, MatchedPolicyId, MatchScore, MatchMethod, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), @TenantId, i.CarrierDownloadItemId, bp.AccountId, bp.PolicyId, CASE WHEN i.MatchStatus = N'AutoMatched' THEN 98 ELSE 84 END, CASE WHEN bp.PolicyId IS NOT NULL THEN N'PolicyNumber' ELSE N'AccountName' END, SYSUTCDATETIME(), @AdminUserId, 0
+    FROM Integration.CarrierDownloadItem i
+    LEFT JOIN Submissions.BoundPolicy bp ON bp.TenantId = @TenantId AND bp.PolicyNumber = i.CarrierPolicyNumber AND ISNULL(bp.IsDeleted, 0) = 0
+    WHERE i.TenantId = @TenantId
+      AND i.MatchStatus IN (N'AutoMatched', N'Matched')
+      AND NOT EXISTS (SELECT 1 FROM Integration.CarrierDownloadMatch m WHERE m.CarrierDownloadItemId = i.CarrierDownloadItemId AND m.IsDeleted = 0);
+END;
+
+INSERT INTO Integration.CarrierDownloadException
+(CarrierDownloadExceptionId, TenantId, CarrierDownloadItemId, ExceptionType, Severity, AssignedToUserId, Status, ResolutionNotes, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @TenantId, i.CarrierDownloadItemId,
+       CASE WHEN i.ErrorMessage LIKE N'%credentials%' THEN N'Carrier credentials expired' WHEN i.ErrorMessage LIKE N'%not found%' THEN N'Policy not found' ELSE N'Manual review required' END,
+       CASE WHEN i.TransactionType IN (N'Cancellation', N'Claim') THEN N'High' WHEN i.TransactionType = N'Document' THEN N'Medium' ELSE N'Low' END,
+       @AdminUserId,
+       N'Open',
+       i.ErrorMessage,
+       SYSUTCDATETIME(), @AdminUserId, 0
+FROM Integration.CarrierDownloadItem i
+WHERE i.TenantId = @TenantId
+  AND i.MatchStatus = N'Exception'
+  AND NOT EXISTS (SELECT 1 FROM Integration.CarrierDownloadException e WHERE e.CarrierDownloadItemId = i.CarrierDownloadItemId AND e.IsDeleted = 0);
+
+IF OBJECT_ID(N'OPS.TaskItem', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO OPS.TaskItem (TaskItemId, TenantId, TaskNumber, Title, Description, TaskTypeCode, StageCode, PriorityCode, StatusCode, RelatedEntityName, RelatedEntityId, AssignedToUserId, DueDate, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+    SELECT NEWID(), @TenantId, CONCAT(N'CDL-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), e.CarrierDownloadExceptionId), N'-', N''), 8)), CONCAT(N'Carrier download review: ', e.ExceptionType), CONCAT(N'Review carrier download item for ', COALESCE(i.NamedInsured, N'unknown insured'), N' / ', COALESCE(i.CarrierPolicyNumber, N'no policy number'), N'.'), N'Carrier Download', N'Exception Review', e.Severity, N'Open', N'CarrierDownloadException', e.CarrierDownloadExceptionId, @AdminUserId, DATEADD(day, CASE WHEN e.Severity = N'High' THEN 1 ELSE 3 END, CAST(SYSUTCDATETIME() AS date)), SYSUTCDATETIME(), @AdminUserId, NULL, NULL, 0
+    FROM Integration.CarrierDownloadException e
+    JOIN Integration.CarrierDownloadItem i ON i.CarrierDownloadItemId = e.CarrierDownloadItemId
+    WHERE e.TenantId = @TenantId AND e.Status = N'Open'
+      AND NOT EXISTS (SELECT 1 FROM OPS.TaskItem t WHERE t.TenantId = @TenantId AND t.RelatedEntityName = N'CarrierDownloadException' AND t.RelatedEntityId = e.CarrierDownloadExceptionId AND ISNULL(t.IsDeleted, 0) = 0);
+END;
+
+IF OBJECT_ID(N'Workflow.WorkflowDefinition', N'U') IS NOT NULL
+BEGIN
+    DECLARE @WorkflowDefinitionId UNIQUEIDENTIFIER = 'bd170002-0000-0000-0000-000000000001';
+    IF NOT EXISTS (SELECT 1 FROM Workflow.WorkflowDefinition WHERE WorkflowDefinitionId = @WorkflowDefinitionId)
+    BEGIN
+        INSERT INTO Workflow.WorkflowDefinition (WorkflowDefinitionId, TenantId, WorkflowCode, WorkflowName, Description, TargetEntityName, TriggerTypeCode, ThresholdAmount, IsActive, IsSystemDefined, Version, CreatedDateUtc, ModifiedDateUtc, IsDeleted)
+        VALUES (@WorkflowDefinitionId, @TenantId, N'CARRIER_DOWNLOAD_EXCEPTION_REVIEW', N'Carrier Download Exception Review', N'Routes low-confidence carrier download items to CSR review before applying policy, document, billing, claims, or commission updates.', N'CarrierDownloadException', N'DownloadExceptionCreated', NULL, 1, 1, 1, SYSUTCDATETIME(), NULL, 0);
+    END;
+
+    IF OBJECT_ID(N'Workflow.WorkflowInstance', N'U') IS NOT NULL
+    BEGIN
+        INSERT INTO Workflow.WorkflowInstance (WorkflowInstanceId, TenantId, WorkflowDefinitionId, TargetEntityName, TargetEntityId, StatusCodeId, SubmittedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        SELECT NEWID(), @TenantId, @WorkflowDefinitionId, N'CarrierDownloadException', e.CarrierDownloadExceptionId, 1, SYSUTCDATETIME(), SYSUTCDATETIME(), @AdminUserId, 0
+        FROM Integration.CarrierDownloadException e
+        WHERE e.TenantId = @TenantId
+          AND e.Status = N'Open'
+          AND EXISTS (SELECT 1 FROM Workflow.WorkflowDefinition wd WHERE wd.WorkflowDefinitionId = @WorkflowDefinitionId)
+          AND NOT EXISTS (SELECT 1 FROM Workflow.WorkflowInstance wi WHERE wi.TenantId = @TenantId AND wi.TargetEntityName = N'CarrierDownloadException' AND wi.TargetEntityId = e.CarrierDownloadExceptionId AND wi.IsDeleted = 0);
+    END;
+END;
+";
+
+    private const string Migration0171_AutomationJobSchedulingEnterpriseSchemaSeedSync = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Automation') EXEC(N'CREATE SCHEMA Automation');
+
+IF OBJECT_ID(N'Automation.JobDefinition', N'U') IS NULL
+BEGIN
+    CREATE TABLE Automation.JobDefinition
+    (
+        JobDefinitionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Automation_JobDefinition PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        JobCode NVARCHAR(100) NOT NULL,
+        JobName NVARCHAR(240) NOT NULL,
+        Description NVARCHAR(1000) NULL,
+        JobTypeCode NVARCHAR(80) NOT NULL CONSTRAINT DF_JobDefinition_JobType DEFAULT N'Workflow',
+        CategoryCode NVARCHAR(80) NOT NULL CONSTRAINT DF_JobDefinition_Category DEFAULT N'Automation',
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_JobDefinition_Status DEFAULT N'Draft',
+        OwnerTeam NVARCHAR(160) NULL,
+        ConcurrencyPolicy NVARCHAR(50) NOT NULL CONSTRAINT DF_JobDefinition_Concurrency DEFAULT N'DisallowConcurrent',
+        MaxRetryCount INT NOT NULL CONSTRAINT DF_JobDefinition_MaxRetry DEFAULT 3,
+        TimeoutSeconds INT NOT NULL CONSTRAINT DF_JobDefinition_Timeout DEFAULT 3600,
+        Tags NVARCHAR(500) NULL,
+        ConfigurationJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_JobDefinition_Config DEFAULT N'{}',
+        IsActive BIT NOT NULL CONSTRAINT DF_JobDefinition_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_JobDefinition_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_JobDefinition_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Automation.JobStep', N'U') IS NULL
+BEGIN
+    CREATE TABLE Automation.JobStep
+    (
+        JobStepId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Automation_JobStep PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        JobDefinitionId UNIQUEIDENTIFIER NOT NULL,
+        StepOrder INT NOT NULL,
+        StepCode NVARCHAR(100) NOT NULL,
+        StepName NVARCHAR(240) NOT NULL,
+        StepExecutorType NVARCHAR(240) NOT NULL,
+        Description NVARCHAR(1000) NULL,
+        InputMappingJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_JobStep_Input DEFAULT N'{}',
+        OutputMappingJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_JobStep_Output DEFAULT N'{}',
+        RetryPolicyJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_JobStep_Retry DEFAULT N'{""maxAttempts"":3,""backoffSeconds"":60}',
+        TimeoutSeconds INT NOT NULL CONSTRAINT DF_JobStep_Timeout DEFAULT 900,
+        ContinueOnError BIT NOT NULL CONSTRAINT DF_JobStep_Continue DEFAULT 0,
+        IsEnabled BIT NOT NULL CONSTRAINT DF_JobStep_Enabled DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_JobStep_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_JobStep_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Automation.JobSchedule', N'U') IS NULL
+BEGIN
+    CREATE TABLE Automation.JobSchedule
+    (
+        JobScheduleId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Automation_JobSchedule PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        JobDefinitionId UNIQUEIDENTIFIER NOT NULL,
+        ScheduleName NVARCHAR(240) NOT NULL,
+        CronExpression NVARCHAR(120) NOT NULL,
+        TimeZoneId NVARCHAR(120) NOT NULL CONSTRAINT DF_JobSchedule_TimeZone DEFAULT N'UTC',
+        StartDateUtc DATETIME2 NULL,
+        EndDateUtc DATETIME2 NULL,
+        MisfirePolicy NVARCHAR(80) NOT NULL CONSTRAINT DF_JobSchedule_Misfire DEFAULT N'FireOnce',
+        NextRunDateUtc DATETIME2 NULL,
+        LastRunDateUtc DATETIME2 NULL,
+        IsEnabled BIT NOT NULL CONSTRAINT DF_JobSchedule_Enabled DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_JobSchedule_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_JobSchedule_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Automation.JobRun', N'U') IS NULL
+BEGIN
+    CREATE TABLE Automation.JobRun
+    (
+        JobRunId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Automation_JobRun PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        JobDefinitionId UNIQUEIDENTIFIER NOT NULL,
+        JobScheduleId UNIQUEIDENTIFIER NULL,
+        CorrelationId NVARCHAR(120) NOT NULL,
+        TriggerType NVARCHAR(80) NOT NULL CONSTRAINT DF_JobRun_Trigger DEFAULT N'Schedule',
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_JobRun_Status DEFAULT N'Queued',
+        StartedDateUtc DATETIME2 NULL,
+        CompletedDateUtc DATETIME2 NULL,
+        DurationMs INT NOT NULL CONSTRAINT DF_JobRun_Duration DEFAULT 0,
+        CurrentStepOrder INT NULL,
+        TotalSteps INT NOT NULL CONSTRAINT DF_JobRun_TotalSteps DEFAULT 0,
+        SuccessfulSteps INT NOT NULL CONSTRAINT DF_JobRun_Success DEFAULT 0,
+        FailedSteps INT NOT NULL CONSTRAINT DF_JobRun_Failed DEFAULT 0,
+        RetryAttempt INT NOT NULL CONSTRAINT DF_JobRun_Retry DEFAULT 0,
+        TriggeredByUserId UNIQUEIDENTIFIER NULL,
+        ErrorMessage NVARCHAR(2000) NULL,
+        ExecutionContextJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_JobRun_Context DEFAULT N'{}',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_JobRun_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_JobRun_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Automation.JobStepRun', N'U') IS NULL
+BEGIN
+    CREATE TABLE Automation.JobStepRun
+    (
+        JobStepRunId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Automation_JobStepRun PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        JobRunId UNIQUEIDENTIFIER NOT NULL,
+        JobStepId UNIQUEIDENTIFIER NOT NULL,
+        StepOrder INT NOT NULL,
+        StepExecutorType NVARCHAR(240) NOT NULL,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_JobStepRun_Status DEFAULT N'Queued',
+        StartedDateUtc DATETIME2 NULL,
+        CompletedDateUtc DATETIME2 NULL,
+        DurationMs INT NOT NULL CONSTRAINT DF_JobStepRun_Duration DEFAULT 0,
+        RetryAttempt INT NOT NULL CONSTRAINT DF_JobStepRun_Retry DEFAULT 0,
+        InputJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_JobStepRun_Input DEFAULT N'{}',
+        OutputJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_JobStepRun_Output DEFAULT N'{}',
+        ErrorMessage NVARCHAR(2000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_JobStepRun_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_JobStepRun_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Automation.FileSave', N'U') IS NULL
+BEGIN
+    CREATE TABLE Automation.FileSave
+    (
+        FileSaveId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Automation_FileSave PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        JobRunId UNIQUEIDENTIFIER NULL,
+        JobStepRunId UNIQUEIDENTIFIER NULL,
+        SourceType NVARCHAR(80) NOT NULL,
+        OriginalFileName NVARCHAR(260) NOT NULL,
+        StoredFileName NVARCHAR(260) NOT NULL,
+        ContentType NVARCHAR(160) NULL,
+        FileSizeBytes BIGINT NOT NULL CONSTRAINT DF_FileSave_Size DEFAULT 0,
+        ChecksumSha256 NVARCHAR(128) NULL,
+        StorageProvider NVARCHAR(80) NOT NULL CONSTRAINT DF_FileSave_Provider DEFAULT N'AzureBlob',
+        StoragePath NVARCHAR(1000) NOT NULL,
+        BlobUri NVARCHAR(1000) NULL,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_FileSave_Status DEFAULT N'Saved',
+        MetadataJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_FileSave_Metadata DEFAULT N'{}',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_FileSave_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_FileSave_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Automation.FileExecutionLog', N'U') IS NULL
+BEGIN
+    CREATE TABLE Automation.FileExecutionLog
+    (
+        FileExecutionLogId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Automation_FileExecutionLog PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        FileSaveId UNIQUEIDENTIFIER NULL,
+        JobRunId UNIQUEIDENTIFIER NULL,
+        JobStepRunId UNIQUEIDENTIFIER NULL,
+        LogLevel NVARCHAR(40) NOT NULL,
+        EventType NVARCHAR(100) NOT NULL,
+        Message NVARCHAR(2000) NOT NULL,
+        ExceptionType NVARCHAR(240) NULL,
+        ExceptionDetail NVARCHAR(MAX) NULL,
+        PayloadJson NVARCHAR(MAX) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_FileExecutionLog_Created DEFAULT SYSUTCDATETIME()
+    );
+END;
+
+IF OBJECT_ID(N'Automation.FileRunLog', N'U') IS NULL
+BEGIN
+    CREATE TABLE Automation.FileRunLog
+    (
+        FileRunLogId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Automation_FileRunLog PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        JobRunId UNIQUEIDENTIFIER NOT NULL,
+        FileSaveId UNIQUEIDENTIFIER NULL,
+        Stage NVARCHAR(100) NOT NULL,
+        StatusCode NVARCHAR(50) NOT NULL,
+        RecordsReceived INT NOT NULL CONSTRAINT DF_FileRunLog_Received DEFAULT 0,
+        RecordsProcessed INT NOT NULL CONSTRAINT DF_FileRunLog_Processed DEFAULT 0,
+        RecordsFailed INT NOT NULL CONSTRAINT DF_FileRunLog_Failed DEFAULT 0,
+        StartedDateUtc DATETIME2 NULL,
+        CompletedDateUtc DATETIME2 NULL,
+        ErrorMessage NVARCHAR(2000) NULL,
+        MetricsJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_FileRunLog_Metrics DEFAULT N'{}',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_FileRunLog_Created DEFAULT SYSUTCDATETIME()
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Automation.JobDefinition') AND name = N'UX_JobDefinition_Tenant_Code_0171')
+    CREATE UNIQUE INDEX UX_JobDefinition_Tenant_Code_0171 ON Automation.JobDefinition(TenantId, JobCode) WHERE IsDeleted = 0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Automation.JobStep') AND name = N'IX_JobStep_Definition_Order_0171')
+    CREATE INDEX IX_JobStep_Definition_Order_0171 ON Automation.JobStep(JobDefinitionId, IsDeleted, StepOrder);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Automation.JobSchedule') AND name = N'IX_JobSchedule_Due_0171')
+    CREATE INDEX IX_JobSchedule_Due_0171 ON Automation.JobSchedule(TenantId, IsDeleted, IsEnabled, NextRunDateUtc) INCLUDE (CronExpression, TimeZoneId, JobDefinitionId);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Automation.JobRun') AND name = N'IX_JobRun_Dashboard_0171')
+    CREATE INDEX IX_JobRun_Dashboard_0171 ON Automation.JobRun(TenantId, IsDeleted, StatusCode, CreatedDateUtc DESC) INCLUDE (JobDefinitionId, JobScheduleId, CorrelationId, StartedDateUtc, CompletedDateUtc, DurationMs);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Automation.FileSave') AND name = N'IX_FileSave_Run_0171')
+    CREATE INDEX IX_FileSave_Run_0171 ON Automation.FileSave(TenantId, IsDeleted, JobRunId, CreatedDateUtc DESC);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Automation.FileExecutionLog') AND name = N'IX_FileExecutionLog_Run_0171')
+    CREATE INDEX IX_FileExecutionLog_Run_0171 ON Automation.FileExecutionLog(TenantId, JobRunId, CreatedDateUtc DESC);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Automation.FileRunLog') AND name = N'IX_FileRunLog_Run_0171')
+    CREATE INDEX IX_FileRunLog_Run_0171 ON Automation.FileRunLog(TenantId, JobRunId, CreatedDateUtc DESC);
+
+DECLARE @TenantId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted, 0) = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000001');
+DECLARE @AdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId AND ISNULL(IsDeleted, 0) = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+DECLARE @JobDefinitionId UNIQUEIDENTIFIER = 'a1710000-0000-0000-0000-000000000001';
+DECLARE @ScheduleId UNIQUEIDENTIFIER = 'a1710000-0000-0000-0000-000000000101';
+DECLARE @RunId UNIQUEIDENTIFIER = 'a1710000-0000-0000-0000-000000000201';
+
+IF NOT EXISTS (SELECT 1 FROM Automation.JobDefinition WHERE TenantId = @TenantId AND JobCode = N'CARRIER_DOWNLOAD_INGESTION' AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Automation.JobDefinition
+    (JobDefinitionId, TenantId, JobCode, JobName, Description, JobTypeCode, CategoryCode, StatusCode, OwnerTeam, ConcurrencyPolicy, MaxRetryCount, TimeoutSeconds, Tags, ConfigurationJson, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES
+    (@JobDefinitionId, @TenantId, N'CARRIER_DOWNLOAD_INGESTION', N'Carrier Download File Ingestion Pipeline', N'Enterprise automation pipeline that ingests carrier files, saves source artifacts, normalizes download data, applies safe matches, and routes exceptions.', N'FilePipeline', N'Carrier Integrations', N'Published', N'Integration Operations', N'DisallowConcurrent', 3, 5400, N'carrier-download,file-ingestion,automation', N'{""retentionDays"":365,""exceptionQueue"":""CarrierDownloadException"",""auditRequired"":true}', 1, SYSUTCDATETIME(), @AdminUserId, 0);
+END
+ELSE
+BEGIN
+    SELECT @JobDefinitionId = JobDefinitionId FROM Automation.JobDefinition WHERE TenantId = @TenantId AND JobCode = N'CARRIER_DOWNLOAD_INGESTION' AND IsDeleted = 0;
+END;
+
+DECLARE @Steps TABLE (StepOrder INT, StepCode NVARCHAR(100), StepName NVARCHAR(240), StepExecutorType NVARCHAR(240), Description NVARCHAR(1000), TimeoutSeconds INT, ContinueOnError BIT);
+INSERT INTO @Steps VALUES
+(1, N'FILE_INGESTION', N'Ingest and save carrier file', N'FileIngestionStepExecutor', N'Saves uploaded, SFTP, API, or mailbox files into durable storage and creates FileSave/FileRunLog records.', 900, 0),
+(2, N'CARRIER_DOWNLOAD_PARSE', N'Parse carrier download payload', N'CarrierDownloadStepExecutor', N'Parses AL3, CSV, ZIP, JSON, or document payloads into normalized carrier download batch and item records.', 1200, 0),
+(3, N'CARRIER_DOWNLOAD_MATCH', N'Match account, policy, carrier, and transaction', N'CarrierDownloadMatchStepExecutor', N'Applies deterministic and scored matching while preserving review-required exceptions.', 1200, 0),
+(4, N'APPLY_SAFE_UPDATES', N'Apply safe AMS updates', N'CarrierDownloadApplyUpdatesStepExecutor', N'Applies non-destructive matched updates and creates exception tasks for ambiguous records.', 1800, 0),
+(5, N'NOTIFY_AND_AUDIT', N'Notify owners and write audit trail', N'NotificationStepExecutor', N'Publishes summary notifications, audit events, and operational KPIs after completion.', 600, 1);
+
+INSERT INTO Automation.JobStep
+(JobStepId, TenantId, JobDefinitionId, StepOrder, StepCode, StepName, StepExecutorType, Description, InputMappingJson, OutputMappingJson, RetryPolicyJson, TimeoutSeconds, ContinueOnError, IsEnabled, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @TenantId, @JobDefinitionId, s.StepOrder, s.StepCode, s.StepName, s.StepExecutorType, s.Description, N'{}', N'{}', N'{""maxAttempts"":3,""backoffSeconds"":60}', s.TimeoutSeconds, s.ContinueOnError, 1, SYSUTCDATETIME(), @AdminUserId, 0
+FROM @Steps s
+WHERE NOT EXISTS (SELECT 1 FROM Automation.JobStep js WHERE js.JobDefinitionId = @JobDefinitionId AND js.StepCode = s.StepCode AND js.IsDeleted = 0);
+
+IF NOT EXISTS (SELECT 1 FROM Automation.JobSchedule WHERE JobScheduleId = @ScheduleId)
+BEGIN
+    INSERT INTO Automation.JobSchedule
+    (JobScheduleId, TenantId, JobDefinitionId, ScheduleName, CronExpression, TimeZoneId, StartDateUtc, MisfirePolicy, NextRunDateUtc, LastRunDateUtc, IsEnabled, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (@ScheduleId, @TenantId, @JobDefinitionId, N'Every 15 minutes - Carrier Download Intake', N'*/15 * * * *', N'America/New_York', SYSUTCDATETIME(), N'FireOnce', DATEADD(minute, 15, SYSUTCDATETIME()), DATEADD(minute, -15, SYSUTCDATETIME()), 1, SYSUTCDATETIME(), @AdminUserId, 0);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Automation.JobRun WHERE JobRunId = @RunId)
+BEGIN
+    INSERT INTO Automation.JobRun
+    (JobRunId, TenantId, JobDefinitionId, JobScheduleId, CorrelationId, TriggerType, StatusCode, StartedDateUtc, CompletedDateUtc, DurationMs, CurrentStepOrder, TotalSteps, SuccessfulSteps, FailedSteps, RetryAttempt, TriggeredByUserId, ExecutionContextJson, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (@RunId, @TenantId, @JobDefinitionId, @ScheduleId, N'CDL-SEED-0171', N'Schedule', N'CompletedWithWarnings', DATEADD(minute, -22, SYSUTCDATETIME()), DATEADD(minute, -19, SYSUTCDATETIME()), 184000, 5, 5, 4, 1, 0, @AdminUserId, N'{""sourceType"":""SFTP"",""carrier"":""Travelers Insurance""}', DATEADD(minute, -22, SYSUTCDATETIME()), @AdminUserId, 0);
+END;
+
+INSERT INTO Automation.JobStepRun
+(JobStepRunId, TenantId, JobRunId, JobStepId, StepOrder, StepExecutorType, StatusCode, StartedDateUtc, CompletedDateUtc, DurationMs, RetryAttempt, InputJson, OutputJson, ErrorMessage, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @TenantId, @RunId, js.JobStepId, js.StepOrder, js.StepExecutorType,
+       CASE WHEN js.StepCode = N'CARRIER_DOWNLOAD_MATCH' THEN N'CompletedWithWarnings' ELSE N'Completed' END,
+       DATEADD(minute, -22 + js.StepOrder, SYSUTCDATETIME()), DATEADD(minute, -22 + js.StepOrder, DATEADD(second, 20 + js.StepOrder * 7, SYSUTCDATETIME())), 20000 + js.StepOrder * 7000, 0, N'{}', N'{""seeded"":true}',
+       CASE WHEN js.StepCode = N'CARRIER_DOWNLOAD_MATCH' THEN N'2 records routed to exception review.' ELSE NULL END,
+       SYSUTCDATETIME(), @AdminUserId, 0
+FROM Automation.JobStep js
+WHERE js.JobDefinitionId = @JobDefinitionId AND js.IsDeleted = 0
+  AND NOT EXISTS (SELECT 1 FROM Automation.JobStepRun sr WHERE sr.JobRunId = @RunId AND sr.JobStepId = js.JobStepId AND sr.IsDeleted = 0);
+
+DECLARE @FileSaveId UNIQUEIDENTIFIER = 'a1710000-0000-0000-0000-000000000301';
+IF NOT EXISTS (SELECT 1 FROM Automation.FileSave WHERE FileSaveId = @FileSaveId)
+BEGIN
+    INSERT INTO Automation.FileSave
+    (FileSaveId, TenantId, JobRunId, JobStepRunId, SourceType, OriginalFileName, StoredFileName, ContentType, FileSizeBytes, ChecksumSha256, StorageProvider, StoragePath, BlobUri, StatusCode, MetadataJson, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT @FileSaveId, @TenantId, @RunId, (SELECT TOP 1 JobStepRunId FROM Automation.JobStepRun WHERE JobRunId = @RunId ORDER BY StepOrder), N'SFTP', N'travelers-download-20250715.al3', N'a1710000-travelers-download-20250715.al3', N'application/octet-stream', 284120, N'SEEDED-CHECKSUM', N'AzureBlob', N'automation/carrier-download/2025/07/15/travelers-download-20250715.al3', N'https://storage.example/automation/carrier-download/2025/07/15/travelers-download-20250715.al3', N'Saved', N'{""carrier"":""Travelers Insurance"",""feedType"":""AL3""}', DATEADD(minute, -22, SYSUTCDATETIME()), @AdminUserId, 0;
+END;
+
+INSERT INTO Automation.FileRunLog
+(FileRunLogId, TenantId, JobRunId, FileSaveId, Stage, StatusCode, RecordsReceived, RecordsProcessed, RecordsFailed, StartedDateUtc, CompletedDateUtc, ErrorMessage, MetricsJson, CreatedDateUtc)
+SELECT NEWID(), @TenantId, @RunId, @FileSaveId, v.Stage, v.StatusCode, v.RecordsReceived, v.RecordsProcessed, v.RecordsFailed, DATEADD(minute, v.StartOffset, SYSUTCDATETIME()), DATEADD(minute, v.EndOffset, SYSUTCDATETIME()), v.ErrorMessage, v.MetricsJson, SYSUTCDATETIME()
+FROM (VALUES
+    (N'FileSave', N'Completed', 1, 1, 0, -22, -21, CAST(NULL AS NVARCHAR(2000)), N'{""bytes"":284120}'),
+    (N'CarrierParse', N'Completed', 8, 8, 0, -21, -20, CAST(NULL AS NVARCHAR(2000)), N'{""format"":""AL3""}'),
+    (N'Match', N'CompletedWithWarnings', 8, 6, 2, -20, -19, N'2 records require manual match review.', N'{""autoMatched"":6,""exceptions"":2}')
+) v(Stage, StatusCode, RecordsReceived, RecordsProcessed, RecordsFailed, StartOffset, EndOffset, ErrorMessage, MetricsJson)
+WHERE NOT EXISTS (SELECT 1 FROM Automation.FileRunLog fr WHERE fr.JobRunId = @RunId AND fr.FileSaveId = @FileSaveId AND fr.Stage = v.Stage);
+
+INSERT INTO Automation.FileExecutionLog
+(FileExecutionLogId, TenantId, FileSaveId, JobRunId, JobStepRunId, LogLevel, EventType, Message, ExceptionType, ExceptionDetail, PayloadJson, CreatedDateUtc)
+SELECT NEWID(), @TenantId, @FileSaveId, @RunId, NULL, v.LogLevel, v.EventType, v.Message, v.ExceptionType, v.ExceptionDetail, v.PayloadJson, DATEADD(minute, v.OffsetMinutes, SYSUTCDATETIME())
+FROM (VALUES
+    (N'Info', N'FileSaved', N'Carrier source file saved to durable storage.', CAST(NULL AS NVARCHAR(240)), CAST(NULL AS NVARCHAR(MAX)), N'{""source"":""SFTP""}', -22),
+    (N'Info', N'BatchCreated', N'Carrier download batch created and linked to the automation run.', NULL, NULL, N'{""batchStatus"":""CompletedWithErrors""}', -21),
+    (N'Warning', N'MatchException', N'Policy PLY-77002 was routed to manual review.', N'MatchReviewRequired', N'Policy number not found in AMS.', N'{""policyNumber"":""PLY-77002""}', -19)
+) v(LogLevel, EventType, Message, ExceptionType, ExceptionDetail, PayloadJson, OffsetMinutes)
+WHERE NOT EXISTS (SELECT 1 FROM Automation.FileExecutionLog l WHERE l.JobRunId = @RunId AND l.EventType = v.EventType AND l.Message = v.Message);
+
+IF OBJECT_ID(N'OPS.TaskItem', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO OPS.TaskItem (TaskItemId, TenantId, TaskNumber, Title, Description, TaskTypeCode, StageCode, PriorityCode, StatusCode, RelatedEntityName, RelatedEntityId, AssignedToUserId, DueDate, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), @TenantId, N'AUTO-JOB-0171', N'Review carrier download automation exceptions', N'Enterprise automation run completed with 2 carrier download match exceptions. Review FileExecutionLog and exception queue.', N'Automation', N'Exception Review', N'High', N'Open', N'JobRun', @RunId, @AdminUserId, CAST(DATEADD(day, 1, SYSUTCDATETIME()) AS date), SYSUTCDATETIME(), @AdminUserId, 0
+    WHERE NOT EXISTS (SELECT 1 FROM OPS.TaskItem WHERE TenantId = @TenantId AND TaskNumber = N'AUTO-JOB-0171' AND ISNULL(IsDeleted, 0) = 0);
+END;
+";
+
+    private const string Migration0172_AutomationJobSchedulingBaseFieldsHardening = @"
+IF OBJECT_ID(N'Automation.JobStepRun', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Automation.JobStepRun', N'ModifiedDateUtc') IS NULL ALTER TABLE Automation.JobStepRun ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Automation.JobStepRun', N'ModifiedByUserId') IS NULL ALTER TABLE Automation.JobStepRun ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+END;
+
+IF OBJECT_ID(N'Automation.FileSave', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Automation.FileSave', N'ModifiedDateUtc') IS NULL ALTER TABLE Automation.FileSave ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Automation.FileSave', N'ModifiedByUserId') IS NULL ALTER TABLE Automation.FileSave ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+END;
+
+IF OBJECT_ID(N'Automation.FileExecutionLog', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Automation.FileExecutionLog', N'CreatedByUserId') IS NULL ALTER TABLE Automation.FileExecutionLog ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Automation.FileExecutionLog', N'ModifiedDateUtc') IS NULL ALTER TABLE Automation.FileExecutionLog ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Automation.FileExecutionLog', N'ModifiedByUserId') IS NULL ALTER TABLE Automation.FileExecutionLog ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Automation.FileExecutionLog', N'IsDeleted') IS NULL ALTER TABLE Automation.FileExecutionLog ADD IsDeleted BIT NOT NULL CONSTRAINT DF_FileExecutionLog_IsDeleted_0172 DEFAULT 0;
+END;
+
+IF OBJECT_ID(N'Automation.FileRunLog', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Automation.FileRunLog', N'CreatedByUserId') IS NULL ALTER TABLE Automation.FileRunLog ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Automation.FileRunLog', N'ModifiedDateUtc') IS NULL ALTER TABLE Automation.FileRunLog ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Automation.FileRunLog', N'ModifiedByUserId') IS NULL ALTER TABLE Automation.FileRunLog ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Automation.FileRunLog', N'IsDeleted') IS NULL ALTER TABLE Automation.FileRunLog ADD IsDeleted BIT NOT NULL CONSTRAINT DF_FileRunLog_IsDeleted_0172 DEFAULT 0;
+END;
+
+IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Automation.FileExecutionLog') AND name = N'IX_FileExecutionLog_Run_0171')
+    DROP INDEX IX_FileExecutionLog_Run_0171 ON Automation.FileExecutionLog;
+IF OBJECT_ID(N'Automation.FileExecutionLog', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Automation.FileExecutionLog') AND name = N'IX_FileExecutionLog_Run_0172')
+    CREATE INDEX IX_FileExecutionLog_Run_0172 ON Automation.FileExecutionLog(TenantId, IsDeleted, JobRunId, CreatedDateUtc DESC);
+
+IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Automation.FileRunLog') AND name = N'IX_FileRunLog_Run_0171')
+    DROP INDEX IX_FileRunLog_Run_0171 ON Automation.FileRunLog;
+IF OBJECT_ID(N'Automation.FileRunLog', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Automation.FileRunLog') AND name = N'IX_FileRunLog_Run_0172')
+    CREATE INDEX IX_FileRunLog_Run_0172 ON Automation.FileRunLog(TenantId, IsDeleted, JobRunId, CreatedDateUtc DESC);
+";
+
+    private const string Migration0173_CarrierSettingsDynamicSeed = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Agency')
+    EXEC(N'CREATE SCHEMA Agency');
+
+IF OBJECT_ID(N'Agency.CarrierSetting', N'U') IS NULL
+BEGIN
+    CREATE TABLE Agency.CarrierSetting
+    (
+        CarrierSettingId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Agency_CarrierSetting PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NULL,
+        SettingCode NVARCHAR(100) NOT NULL,
+        SettingName NVARCHAR(240) NOT NULL,
+        CategoryCode NVARCHAR(80) NOT NULL,
+        ScopeCode NVARCHAR(80) NOT NULL CONSTRAINT DF_CarrierSetting_Scope_0173 DEFAULT N'Tenant',
+        DataTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierSetting_DataType_0173 DEFAULT N'Text',
+        SettingValue NVARCHAR(MAX) NULL,
+        DefaultValue NVARCHAR(MAX) NULL,
+        Description NVARCHAR(1000) NULL,
+        ValidationJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierSetting_Validation_0173 DEFAULT N'{}',
+        UiSchemaJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierSetting_UiSchema_0173 DEFAULT N'{}',
+        AppliesToExecutorType NVARCHAR(240) NULL,
+        IsRequired BIT NOT NULL CONSTRAINT DF_CarrierSetting_Required_0173 DEFAULT 0,
+        IsSecret BIT NOT NULL CONSTRAINT DF_CarrierSetting_Secret_0173 DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_CarrierSetting_Active_0173 DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_CarrierSetting_Sort_0173 DEFAULT 100,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierSetting_Created_0173 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierSetting_IsDeleted_0173 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Automation.JobDefinition', N'DynamicFieldSchemaJson') IS NULL ALTER TABLE Automation.JobDefinition ADD DynamicFieldSchemaJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_JobDefinition_DynamicFieldSchema_0173 DEFAULT N'[]';
+IF COL_LENGTH(N'Automation.JobDefinition', N'DefaultParameterJson') IS NULL ALTER TABLE Automation.JobDefinition ADD DefaultParameterJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_JobDefinition_DefaultParameter_0173 DEFAULT N'{}';
+
+IF COL_LENGTH(N'Automation.JobStep', N'DynamicFieldSchemaJson') IS NULL ALTER TABLE Automation.JobStep ADD DynamicFieldSchemaJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_JobStep_DynamicFieldSchema_0173 DEFAULT N'[]';
+IF COL_LENGTH(N'Automation.JobStep', N'InputParameterJson') IS NULL ALTER TABLE Automation.JobStep ADD InputParameterJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_JobStep_InputParameter_0173 DEFAULT N'{}';
+IF COL_LENGTH(N'Automation.JobStep', N'OutputContractJson') IS NULL ALTER TABLE Automation.JobStep ADD OutputContractJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_JobStep_OutputContract_0173 DEFAULT N'{}';
+IF COL_LENGTH(N'Automation.JobStep', N'DependsOnStepCodes') IS NULL ALTER TABLE Automation.JobStep ADD DependsOnStepCodes NVARCHAR(500) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Agency.CarrierSetting') AND name = N'UX_CarrierSetting_Tenant_Code_Carrier_0173')
+    CREATE UNIQUE INDEX UX_CarrierSetting_Tenant_Code_Carrier_0173 ON Agency.CarrierSetting(TenantId, SettingCode, CarrierId) WHERE IsDeleted = 0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Agency.CarrierSetting') AND name = N'IX_CarrierSetting_Tenant_Category_0173')
+    CREATE INDEX IX_CarrierSetting_Tenant_Category_0173 ON Agency.CarrierSetting(TenantId, IsDeleted, CategoryCode, ScopeCode, SortOrder);
+
+DECLARE @TenantSettings0173 TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+INSERT INTO @TenantSettings0173 (TenantId)
+SELECT TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted, 0) = 0;
+
+DECLARE @AdminUserId0173 UNIQUEIDENTIFIER = (SELECT TOP (1) UserId FROM IAM.[User] WHERE ISNULL(IsDeleted, 0) = 0 ORDER BY CreatedDateUtc);
+
+DECLARE @CarrierSettings0173 TABLE
+(
+    SettingCode NVARCHAR(100), SettingName NVARCHAR(240), CategoryCode NVARCHAR(80), ScopeCode NVARCHAR(80), DataTypeCode NVARCHAR(50),
+    SettingValue NVARCHAR(MAX), DefaultValue NVARCHAR(MAX), Description NVARCHAR(1000), ValidationJson NVARCHAR(MAX), UiSchemaJson NVARCHAR(MAX),
+    AppliesToExecutorType NVARCHAR(240), IsRequired BIT, IsSecret BIT, SortOrder INT
+);
+
+INSERT INTO @CarrierSettings0173 VALUES
+(N'DOWNLOAD_ENABLED', N'Carrier Download Enabled', N'Download', N'Tenant', N'Boolean', N'true', N'true', N'Enables carrier download ingestion for the tenant.', N'{""required"":true}', N'{""control"":""toggle""}', N'CarrierDownloadStepExecutor', 1, 0, 10),
+(N'DOWNLOAD_SOURCE_TYPES', N'Enabled Download Source Types', N'Download', N'Tenant', N'Json', N'[""IVANS"",""SFTP"",""CarrierApi""]', N'[""IVANS""]', N'Source channels the worker may poll or process for carrier download ingestion.', N'{""required"":true,""type"":""array""}', N'{""control"":""multi-select""}', N'FileIngestionStepExecutor', 1, 0, 20),
+(N'FILE_RETENTION_DAYS', N'Carrier File Retention Days', N'Storage', N'Tenant', N'Number', N'365', N'365', N'Days to retain source carrier files and related file-save records.', N'{""min"":30,""max"":3650}', N'{""control"":""number""}', N'FileIngestionStepExecutor', 1, 0, 30),
+(N'MAX_FILE_SIZE_MB', N'Max Carrier File Size MB', N'Storage', N'Tenant', N'Number', N'100', N'100', N'Maximum source file size accepted by the ingestion worker.', N'{""min"":1,""max"":2048}', N'{""control"":""number""}', N'FileIngestionStepExecutor', 1, 0, 40),
+(N'MATCH_CONFIDENCE_THRESHOLD', N'Match Confidence Threshold', N'Matching', N'Tenant', N'Number', N'90', N'90', N'Minimum score required for automatic carrier download matching.', N'{""min"":0,""max"":100}', N'{""control"":""slider""}', N'CarrierDownloadMatchStepExecutor', 1, 0, 50),
+(N'REQUIRE_MANUAL_REVIEW_BELOW', N'Require Manual Review Below', N'Matching', N'Tenant', N'Number', N'80', N'80', N'Routes records below this score to the exception queue.', N'{""min"":0,""max"":100}', N'{""control"":""slider""}', N'CarrierDownloadMatchStepExecutor', 1, 0, 60),
+(N'ALLOW_SAFE_POLICY_UPDATES', N'Allow Safe Policy Updates', N'ApplyUpdates', N'Tenant', N'Boolean', N'true', N'true', N'Allows matched carrier download records to apply non-destructive updates to policy data.', N'{""required"":true}', N'{""control"":""toggle""}', N'CarrierDownloadApplyUpdatesStepExecutor', 1, 0, 70),
+(N'ALLOW_BILLING_UPDATES', N'Allow Billing Updates', N'ApplyUpdates', N'Tenant', N'Boolean', N'true', N'true', N'Allows matched billing transactions to update billing data.', N'{""required"":true}', N'{""control"":""toggle""}', N'CarrierDownloadApplyUpdatesStepExecutor', 1, 0, 80),
+(N'ALLOW_CLAIM_UPDATES', N'Allow Claim Updates', N'ApplyUpdates', N'Tenant', N'Boolean', N'true', N'true', N'Allows matched claim transactions to update claims data.', N'{""required"":true}', N'{""control"":""toggle""}', N'CarrierDownloadApplyUpdatesStepExecutor', 1, 0, 90),
+(N'NOTIFY_EXCEPTION_OWNERS', N'Notify Exception Owners', N'Notifications', N'Tenant', N'Boolean', N'true', N'true', N'Sends notifications when carrier download exceptions are created.', N'{""required"":true}', N'{""control"":""toggle""}', N'NotificationStepExecutor', 1, 0, 100),
+(N'EXCEPTION_OWNER_TEAM', N'Exception Owner Team', N'Notifications', N'Tenant', N'Text', N'Integration Operations', N'Integration Operations', N'Default owner team for carrier download exception routing.', N'{""maxLength"":160}', N'{""control"":""text""}', N'NotificationStepExecutor', 0, 0, 110),
+(N'CARRIER_API_SECRET_REFERENCE', N'Carrier API Secret Reference', N'Security', N'Carrier', N'Secret', NULL, NULL, N'Optional Key Vault or secret reference for carrier API integrations.', N'{""maxLength"":500}', N'{""control"":""secret""}', N'CarrierDownloadStepExecutor', 0, 1, 120);
+
+INSERT INTO Agency.CarrierSetting
+(CarrierSettingId, TenantId, CarrierId, SettingCode, SettingName, CategoryCode, ScopeCode, DataTypeCode, SettingValue, DefaultValue, Description, ValidationJson, UiSchemaJson, AppliesToExecutorType, IsRequired, IsSecret, IsActive, SortOrder, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), t.TenantId, NULL, s.SettingCode, s.SettingName, s.CategoryCode, s.ScopeCode, s.DataTypeCode, s.SettingValue, s.DefaultValue, s.Description, s.ValidationJson, s.UiSchemaJson, s.AppliesToExecutorType, s.IsRequired, s.IsSecret, 1, s.SortOrder, SYSUTCDATETIME(), @AdminUserId0173, 0
+FROM @TenantSettings0173 t
+CROSS JOIN @CarrierSettings0173 s
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM Agency.CarrierSetting existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.SettingCode = s.SettingCode
+      AND existing.CarrierId IS NULL
+      AND existing.IsDeleted = 0
+);
+
+EXEC(N'
+UPDATE jd
+SET DynamicFieldSchemaJson = N''[{""name"":""sourceType"",""label"":""Source Type"",""dataType"":""Text"",""required"":true},{""name"":""carrierNaic"",""label"":""Carrier NAIC"",""dataType"":""Text"",""required"":false},{""name"":""retentionDays"",""label"":""Retention Days"",""dataType"":""Number"",""required"":true}]'',
+    DefaultParameterJson = N''{""sourceType"":""SFTP"",""retentionDays"":365}'',
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Automation.JobDefinition jd
+WHERE jd.JobCode = N''CARRIER_DOWNLOAD_INGESTION''
+  AND jd.IsDeleted = 0
+  AND (jd.DynamicFieldSchemaJson IS NULL OR jd.DynamicFieldSchemaJson = N''[]'');
+');
+
+EXEC(N'
+UPDATE js
+SET DynamicFieldSchemaJson = CASE js.StepExecutorType
+        WHEN N''FileIngestionStepExecutor'' THEN N''[{""name"":""sourceType"",""label"":""Source Type"",""dataType"":""Text"",""required"":true},{""name"":""maxFileSizeMb"",""label"":""Max File Size MB"",""dataType"":""Number"",""required"":true}]''
+        WHEN N''CarrierDownloadStepExecutor'' THEN N''[{""name"":""parserFormat"",""label"":""Parser Format"",""dataType"":""Text"",""required"":true},{""name"":""strictValidation"",""label"":""Strict Validation"",""dataType"":""Boolean"",""required"":false}]''
+        WHEN N''CarrierDownloadMatchStepExecutor'' THEN N''[{""name"":""matchThreshold"",""label"":""Match Threshold"",""dataType"":""Number"",""required"":true},{""name"":""manualReviewBelow"",""label"":""Manual Review Below"",""dataType"":""Number"",""required"":true}]''
+        WHEN N''CarrierDownloadApplyUpdatesStepExecutor'' THEN N''[{""name"":""allowPolicyUpdates"",""label"":""Allow Policy Updates"",""dataType"":""Boolean"",""required"":true},{""name"":""allowBillingUpdates"",""label"":""Allow Billing Updates"",""dataType"":""Boolean"",""required"":true},{""name"":""allowClaimUpdates"",""label"":""Allow Claim Updates"",""dataType"":""Boolean"",""required"":true}]''
+        ELSE N''[{""name"":""notifyOwners"",""label"":""Notify Owners"",""dataType"":""Boolean"",""required"":false}]''
+    END,
+    InputParameterJson = CASE js.StepExecutorType
+        WHEN N''FileIngestionStepExecutor'' THEN N''{""sourceType"":""SFTP"",""maxFileSizeMb"":100}''
+        WHEN N''CarrierDownloadStepExecutor'' THEN N''{""parserFormat"":""Auto"",""strictValidation"":true}''
+        WHEN N''CarrierDownloadMatchStepExecutor'' THEN N''{""matchThreshold"":90,""manualReviewBelow"":80}''
+        WHEN N''CarrierDownloadApplyUpdatesStepExecutor'' THEN N''{""allowPolicyUpdates"":true,""allowBillingUpdates"":true,""allowClaimUpdates"":true}''
+        ELSE N''{""notifyOwners"":true}''
+    END,
+    OutputContractJson = CASE js.StepExecutorType
+        WHEN N''FileIngestionStepExecutor'' THEN N''{""fileSaveId"":""Guid?"",""recordsReceived"":""Number""}''
+        WHEN N''CarrierDownloadStepExecutor'' THEN N''{""carrierDownloadBatchId"":""Guid?"",""recordsParsed"":""Number""}''
+        WHEN N''CarrierDownloadMatchStepExecutor'' THEN N''{""autoMatched"":""Number"",""exceptions"":""Number""}''
+        WHEN N''CarrierDownloadApplyUpdatesStepExecutor'' THEN N''{""policiesUpdated"":""Number"",""billingUpdated"":""Number"",""claimsUpdated"":""Number""}''
+        ELSE N''{""notificationsSent"":""Number""}''
+    END,
+    DependsOnStepCodes = CASE WHEN js.StepOrder = 1 THEN NULL ELSE N''PREVIOUS'' END,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Automation.JobStep js
+JOIN Automation.JobDefinition jd ON jd.JobDefinitionId = js.JobDefinitionId
+WHERE jd.JobCode = N''CARRIER_DOWNLOAD_INGESTION''
+  AND js.IsDeleted = 0
+  AND (js.DynamicFieldSchemaJson IS NULL OR js.DynamicFieldSchemaJson = N''[]'');
+');
 ";
 }

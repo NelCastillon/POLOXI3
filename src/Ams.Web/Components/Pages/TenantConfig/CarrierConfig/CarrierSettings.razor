@@ -1,0 +1,363 @@
+@page "/tenant/carriers/settings"
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.CarrierConfig
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Carrier Settings — AMS</PageTitle>
+
+<EnterpriseToast @ref="_toast" NewestOnTop="true" ShowCloseButton="true" Timeout="4000" />
+
+<AppPageHeader Title="Carrier Settings"
+               Subtitle="Manage dynamic carrier, download, matching, storage, security, notification, and worker executor settings from the database"
+               Icon="bi bi-sliders2">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Add setting</button>
+    </Actions>
+</AppPageHeader>
+
+<div class="pc-kpi-strip">
+    <button type="button" class="pc-kpi-card @(_activeFilter == string.Empty ? "pc-kpi-card--active" : null)" title="Show all settings" @onclick='() => SetFilter(string.Empty)'>
+        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-sliders2"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total</div></div>
+    </button>
+    <button type="button" class="pc-kpi-card @(_activeFilter == "active" ? "pc-kpi-card--active" : null)" title="Show active settings" @onclick='() => SetFilter("active")'>
+        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsActive)</div><div class="pc-kpi-label">Active</div></div>
+    </button>
+    <button type="button" class="pc-kpi-card @(_activeFilter == "required" ? "pc-kpi-card--active" : null)" title="Show required settings" @onclick='() => SetFilter("required")'>
+        <span class="pc-kpi-icon pc-kpi-icon--warning"><i class="bi bi-asterisk"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsRequired)</div><div class="pc-kpi-label">Required</div></div>
+    </button>
+    <button type="button" class="pc-kpi-card @(_activeFilter == "secret" ? "pc-kpi-card--active" : null)" title="Show secret settings" @onclick='() => SetFilter("secret")'>
+        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-shield-lock"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsSecret)</div><div class="pc-kpi-label">Secrets</div></div>
+    </button>
+</div>
+
+<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search setting, category, executor, scope, or data type..." />
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError
+    </div>
+}
+
+<div class="um-grid-card cs-grid-card">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading carrier settings...</span></div>
+    }
+
+    <div class="cs-toolbar">
+        <div>
+            <div class="text-uppercase text-primary fw-semibold small">Database-backed module settings</div>
+            <h2 class="h5 mb-0">@_filtered.Count carrier settings</h2>
+        </div>
+        <select class="um-input cs-category" @bind="_categoryFilter" @bind:after="ApplyFilter">
+            <option value="">All categories</option>
+            @foreach (var category in CategoryOptions)
+            {
+                <option value="@category">@category</option>
+            }
+        </select>
+    </div>
+
+    @if (!_filtered.Any() && !_loading)
+    {
+        <div class="cs-empty"><i class="bi bi-sliders2"></i><strong>No carrier settings found</strong><span>Run migrations to seed Agency.CarrierSetting or add a setting.</span></div>
+    }
+    else
+    {
+        <div class="table-responsive enterprise-table-wrap">
+            <table class="table table-hover align-middle mb-0 enterprise-table">
+                <thead>
+                    <tr>
+                        <th>Setting</th>
+                        <th>Category</th>
+                        <th>Scope</th>
+                        <th>Type</th>
+                        <th>Value</th>
+                        <th>Executor</th>
+                        <th>Status</th>
+                        <th class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var item in _filtered)
+                    {
+                        <tr class="@(item.CarrierSettingId == _selected?.CarrierSettingId ? "table-primary-subtle" : null)" @onclick="() => Select(item)">
+                            <td><strong>@item.SettingName</strong><div class="small text-muted"><code>@item.SettingCode</code></div></td>
+                            <td>@item.CategoryCode</td>
+                            <td>@item.ScopeCode</td>
+                            <td>@item.DataTypeCode</td>
+                            <td>@DisplayValue(item)</td>
+                            <td><small>@(item.AppliesToExecutorType ?? "Module")</small></td>
+                            <td><span class="um-badge @(item.IsActive ? "um-badge-success" : "um-badge-neutral")">@(item.IsActive ? "Active" : "Inactive")</span></td>
+                            <td class="text-end" @onclick:stopPropagation="true">
+                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil"></i></button>
+                                <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(item)"><i class="bi bi-trash"></i></button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@if (_selected is not null)
+{
+    <div class="cs-detail um-grid-card">
+        <div><span class="text-uppercase text-primary fw-semibold small">Selected setting</span><h3>@_selected.SettingName</h3><p>@_selected.Description</p></div>
+        <div class="cs-detail-grid">
+            <div><span>Validation</span><code>@_selected.ValidationJson</code></div>
+            <div><span>UI schema</span><code>@_selected.UiSchemaJson</code></div>
+            <div><span>Default</span><strong>@(_selected.DefaultValue ?? "—")</strong></div>
+            <div><span>Secret</span><strong>@(_selected.IsSecret ? "Yes" : "No")</strong></div>
+        </div>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="cs-backdrop" @onclick="CloseForm">
+        <div class="cs-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-header"><i class="bi bi-sliders2"></i><span>@(_editId.HasValue ? "Edit carrier setting" : "Add carrier setting")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Setting code <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_form.SettingCode" /><ValidationMessage For="() => _form.SettingCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Setting name <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_form.SettingName" /><ValidationMessage For="() => _form.SettingName" class="text-danger" /></div>
+                        <div class="um-field"><label>Category <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_form.CategoryCode" list="carrier-setting-categories" /><ValidationMessage For="() => _form.CategoryCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Scope <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_form.ScopeCode" list="carrier-setting-scopes" /><ValidationMessage For="() => _form.ScopeCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Data type <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_form.DataTypeCode" list="carrier-setting-types" /><ValidationMessage For="() => _form.DataTypeCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Sort order</label><InputNumber class="um-input" @bind-Value="_form.SortOrder" /><ValidationMessage For="() => _form.SortOrder" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Applies to executor</label><InputText class="um-input" @bind-Value="_form.AppliesToExecutorType" list="carrier-setting-executors" /><ValidationMessage For="() => _form.AppliesToExecutorType" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Description</label><InputTextArea class="um-input" rows="2" @bind-Value="_form.Description" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Setting value</label><InputTextArea class="um-input" rows="2" @bind-Value="_form.SettingValue" /><ValidationMessage For="() => _form.SettingValue" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Default value</label><InputTextArea class="um-input" rows="2" @bind-Value="_form.DefaultValue" /><ValidationMessage For="() => _form.DefaultValue" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Validation JSON <span class="text-danger">*</span></label><InputTextArea class="um-input" rows="3" @bind-Value="_form.ValidationJson" /><ValidationMessage For="() => _form.ValidationJson" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>UI schema JSON <span class="text-danger">*</span></label><InputTextArea class="um-input" rows="3" @bind-Value="_form.UiSchemaJson" /><ValidationMessage For="() => _form.UiSchemaJson" class="text-danger" /></div>
+                        <label class="um-field um-field--checkbox"><InputCheckbox @bind-Value="_form.IsRequired" /> Required</label>
+                        <label class="um-field um-field--checkbox"><InputCheckbox @bind-Value="_form.IsSecret" /> Secret</label>
+                        <label class="um-field um-field--checkbox"><InputCheckbox @bind-Value="_form.IsActive" /> Active</label>
+                    </div>
+                </div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save changes" : "Create setting")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showDelete && _deleteTarget is not null)
+{
+    <div class="cs-backdrop" @onclick="CancelDelete">
+        <div class="um-confirm-dialog cs-confirm" @onclick:stopPropagation="true">
+            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3-fill"></i></div>
+            <div class="um-confirm-title">Delete carrier setting</div>
+            <div class="um-confirm-body">Delete <strong>@_deleteTarget.SettingName</strong>?</div>
+            <div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="CancelDelete">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div>
+        </div>
+    </div>
+}
+
+<datalist id="carrier-setting-categories">@foreach (var x in CategoryOptions){<option value="@x"></option>}</datalist>
+<datalist id="carrier-setting-scopes">@foreach (var x in ScopeOptions){<option value="@x"></option>}</datalist>
+<datalist id="carrier-setting-types">@foreach (var x in TypeOptions){<option value="@x"></option>}</datalist>
+<datalist id="carrier-setting-executors">@foreach (var x in ExecutorOptions){<option value="@x"></option>}</datalist>
+
+<style>
+    @@keyframes um-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }
+    .pc-kpi-card { cursor: pointer; }
+    .cs-grid-card { margin-top: 1rem; }
+    .cs-toolbar { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:1rem; border-bottom:1px solid #e5e7eb; }
+    .cs-category { max-width: 18rem; }
+    .cs-empty { display:grid; gap:.35rem; justify-items:center; padding:3rem; color:#64748b; }
+    .cs-empty i { font-size:2rem; color:#94a3b8; }
+    .cs-detail { margin-top:1rem; padding:1rem; }
+    .cs-detail h3 { margin:0; }
+    .cs-detail-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:.75rem; }
+    .cs-detail-grid > div { background:#f8fafc; border:1px solid #e5e7eb; border-radius:.75rem; padding:.75rem; display:grid; gap:.25rem; }
+    .cs-detail-grid span { color:#64748b; font-size:.78rem; text-transform:uppercase; font-weight:700; }
+    .cs-detail-grid code { white-space:pre-wrap; word-break:break-word; }
+    .cs-backdrop { position:fixed; inset:0; z-index:1050; display:flex; align-items:center; justify-content:center; background:rgba(15,23,42,.48); padding:1rem; }
+    .cs-modal { width:min(980px, 96vw); max-height:92vh; overflow:auto; background:white; border-radius:1rem; box-shadow:0 24px 70px rgba(15,23,42,.28); }
+    .cs-confirm { background:white; max-width:440px; }
+</style>
+
+@code {
+    private Guid _tenantId;
+    private bool _loading;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private string _search = string.Empty;
+    private string _activeFilter = string.Empty;
+    private string _categoryFilter = string.Empty;
+    private string? _loadError;
+    private Guid? _editId;
+    private CarrierSettingDto? _selected;
+    private CarrierSettingDto? _deleteTarget;
+    private EnterpriseToast? _toast;
+    private List<CarrierSettingDto> _items = [];
+    private List<CarrierSettingDto> _filtered = [];
+    private SettingForm _form = new();
+
+    private IEnumerable<string> CategoryOptions => _items.Select(x => x.CategoryCode).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private IEnumerable<string> ScopeOptions => _items.Select(x => x.ScopeCode).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private IEnumerable<string> TypeOptions => _items.Select(x => x.DataTypeCode).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private IEnumerable<string> ExecutorOptions => _items.Select(x => x.AppliesToExecutorType).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x)!;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Carriers & Markets", null), new("Carrier Settings", null));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchCarrierSettingsAsync(_tenantId, _search.Trim(), 1, 500);
+            _items = result?.Items.ToList() ?? [];
+            ApplyFilter();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Load failed: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private Task OnSearchAsync() => LoadAsync();
+    private void SetFilter(string value) { _activeFilter = value; ApplyFilter(); }
+    private void Select(CarrierSettingDto item) => _selected = item;
+
+    private void ApplyFilter()
+    {
+        IEnumerable<CarrierSettingDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_categoryFilter)) query = query.Where(x => x.CategoryCode.Equals(_categoryFilter, StringComparison.OrdinalIgnoreCase));
+        query = _activeFilter switch
+        {
+            "active" => query.Where(x => x.IsActive),
+            "required" => query.Where(x => x.IsRequired),
+            "secret" => query.Where(x => x.IsSecret),
+            _ => query
+        };
+        _filtered = query.OrderBy(x => x.CategoryCode).ThenBy(x => x.SortOrder).ThenBy(x => x.SettingName).ToList();
+    }
+
+    private void OpenCreate()
+    {
+        _editId = null;
+        _form = new SettingForm();
+        _showForm = true;
+    }
+
+    private void OpenEdit(CarrierSettingDto item)
+    {
+        _editId = item.CarrierSettingId;
+        _form = new SettingForm
+        {
+            SettingCode = item.SettingCode,
+            SettingName = item.SettingName,
+            CategoryCode = item.CategoryCode,
+            ScopeCode = item.ScopeCode,
+            DataTypeCode = item.DataTypeCode,
+            SettingValue = item.SettingValue,
+            DefaultValue = item.DefaultValue,
+            Description = item.Description,
+            ValidationJson = item.ValidationJson,
+            UiSchemaJson = item.UiSchemaJson,
+            AppliesToExecutorType = item.AppliesToExecutorType,
+            IsRequired = item.IsRequired,
+            IsSecret = item.IsSecret,
+            IsActive = item.IsActive,
+            SortOrder = item.SortOrder
+        };
+        _showForm = true;
+    }
+
+    private void CloseForm() => _showForm = false;
+    private void ConfirmDelete(CarrierSettingDto item) { _deleteTarget = item; _showDelete = true; }
+    private void CancelDelete() { _deleteTarget = null; _showDelete = false; }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (_editId.HasValue)
+            {
+                await Api.UpdateCarrierSettingAsync(_editId.Value, new UpdateCarrierSettingRequest(null, _form.SettingCode.Trim(), _form.SettingName.Trim(), _form.CategoryCode.Trim(), _form.ScopeCode.Trim(), _form.DataTypeCode.Trim(), Normalize(_form.SettingValue), Normalize(_form.DefaultValue), Normalize(_form.Description), _form.ValidationJson.Trim(), _form.UiSchemaJson.Trim(), Normalize(_form.AppliesToExecutorType), _form.IsRequired, _form.IsSecret, _form.IsActive, _form.SortOrder));
+            }
+            else
+            {
+                await Api.CreateCarrierSettingAsync(new CreateCarrierSettingRequest(_tenantId, null, _form.SettingCode.Trim(), _form.SettingName.Trim(), _form.CategoryCode.Trim(), _form.ScopeCode.Trim(), _form.DataTypeCode.Trim(), Normalize(_form.SettingValue), Normalize(_form.DefaultValue), Normalize(_form.Description), _form.ValidationJson.Trim(), _form.UiSchemaJson.Trim(), Normalize(_form.AppliesToExecutorType), _form.IsRequired, _form.IsSecret, _form.SortOrder));
+            }
+            _showForm = false;
+            if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "Carrier setting saved.", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteCarrierSettingAsync(_deleteTarget.CarrierSettingId);
+            CancelDelete();
+            if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "Carrier setting deleted.", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string DisplayValue(CarrierSettingDto item) => item.IsSecret ? "••••••••" : string.IsNullOrWhiteSpace(item.SettingValue) ? "—" : item.SettingValue.Length > 48 ? item.SettingValue[..48] + "…" : item.SettingValue;
+
+    private sealed class SettingForm
+    {
+        [Required, StringLength(100)] public string SettingCode { get; set; } = string.Empty;
+        [Required, StringLength(240)] public string SettingName { get; set; } = string.Empty;
+        [Required, StringLength(80)] public string CategoryCode { get; set; } = string.Empty;
+        [Required, StringLength(80)] public string ScopeCode { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string DataTypeCode { get; set; } = string.Empty;
+        public string? SettingValue { get; set; }
+        public string? DefaultValue { get; set; }
+        [StringLength(1000)] public string? Description { get; set; }
+        [Required] public string ValidationJson { get; set; } = "{}";
+        [Required] public string UiSchemaJson { get; set; } = "{}";
+        [StringLength(240)] public string? AppliesToExecutorType { get; set; }
+        public bool IsRequired { get; set; }
+        public bool IsSecret { get; set; }
+        public bool IsActive { get; set; } = true;
+        [Range(0, 9999)] public int SortOrder { get; set; } = 100;
+    }
+}

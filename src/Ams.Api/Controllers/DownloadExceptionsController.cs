@@ -22,6 +22,20 @@ public sealed class DownloadExceptionsController : ControllerBase
         return item is null ? NotFound() : Ok(item);
     }
 
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreateCarrierDownloadExceptionRequest request, CancellationToken cancellationToken)
+    {
+        var id = await _service.CreateCarrierDownloadExceptionAsync(request, cancellationToken);
+        return CreatedAtAction(nameof(GetById), new { id }, new { Id = id });
+    }
+
+    [HttpPost("{id:guid}/manual-match")]
+    public async Task<IActionResult> ManualMatch(Guid id, [FromBody] ManualCarrierDownloadMatchRequest request, CancellationToken cancellationToken)
+    {
+        await _service.ManualMatchCarrierDownloadExceptionAsync(id, request, cancellationToken);
+        return NoContent();
+    }
+
     [HttpPost("{id:guid}/resolve")]
     public async Task<IActionResult> Resolve(Guid id, [FromBody] ResolveDownloadExceptionRequest request, CancellationToken cancellationToken)
     {

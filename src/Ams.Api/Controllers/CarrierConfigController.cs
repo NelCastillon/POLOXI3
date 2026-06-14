@@ -18,6 +18,19 @@ public sealed class MgaWholesalersController : ControllerBase
 }
 
 [ApiController]
+[Route("api/carriers/settings")]
+public sealed class CarrierSettingsController : ControllerBase
+{
+    private readonly ICarrierSettingService _service;
+    public CarrierSettingsController(ICarrierSettingService service) => _service = service;
+    [HttpGet("{id:guid}")] public async Task<IActionResult> GetById(Guid id, CancellationToken ct) => (await _service.GetByIdAsync(id, ct)) is { } item ? Ok(item) : NotFound();
+    [HttpGet] public async Task<IActionResult> Search([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 100, CancellationToken ct = default) => Ok(await _service.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, ct));
+    [HttpPost] public async Task<IActionResult> Create([FromBody] CreateCarrierSettingRequest request, CancellationToken ct) { var id = await _service.CreateAsync(request, ct); return CreatedAtAction(nameof(GetById), new { id }, new { id }); }
+    [HttpPut("{id:guid}")] public async Task<IActionResult> Update(Guid id, [FromBody] UpdateCarrierSettingRequest request, CancellationToken ct) { await _service.UpdateAsync(id, request, ct); return NoContent(); }
+    [HttpDelete("{id:guid}")] public async Task<IActionResult> Delete(Guid id, CancellationToken ct) { await _service.DeleteAsync(id, ct); return NoContent(); }
+}
+
+[ApiController]
 [Route("api/carriers/contacts")]
 public sealed class CarrierContactsController : ControllerBase
 {

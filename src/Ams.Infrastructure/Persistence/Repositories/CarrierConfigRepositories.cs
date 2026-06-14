@@ -53,3 +53,31 @@ public sealed class CarrierPerformanceRepository : ICarrierPerformanceRepository
     public async Task UpdateAsync(Guid id, UpdateCarrierPerformanceRequest r, CancellationToken ct = default) { const string sql = "UPDATE Agency.CarrierPerformance SET CarrierId=@CarrierId,Period=@Period,WrittenPremium=@WrittenPremium,LossRatio=@LossRatio,HitRatio=@HitRatio,QuoteCount=@QuoteCount,BindCount=@BindCount,IsActive=@IsActive,ModifiedDateUtc=GETUTCDATE() WHERE CarrierPerformanceId=@Id AND IsDeleted=0;"; using var cn = await _cf.CreateOpenConnectionAsync(ct); await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, r.CarrierId, r.Period, r.WrittenPremium, r.LossRatio, r.HitRatio, r.QuoteCount, r.BindCount, r.IsActive }, cancellationToken: ct)); }
     public async Task DeleteAsync(Guid id, CancellationToken ct = default) { using var cn = await _cf.CreateOpenConnectionAsync(ct); await cn.ExecuteAsync(new CommandDefinition("UPDATE Agency.CarrierPerformance SET IsDeleted=1 WHERE CarrierPerformanceId=@Id;", new { Id = id }, cancellationToken: ct)); }
 }
+
+public sealed class CarrierSettingRepository : ICarrierSettingRepository
+{
+    private readonly ISqlConnectionFactory _cf;
+    public CarrierSettingRepository(ISqlConnectionFactory cf) => _cf = cf;
+    private const string Cols = "CarrierSettingId, TenantId, CarrierId, SettingCode, SettingName, CategoryCode, ScopeCode, DataTypeCode, SettingValue, DefaultValue, Description, ValidationJson, UiSchemaJson, AppliesToExecutorType, IsRequired, IsSecret, IsActive, SortOrder, CreatedDateUtc, ModifiedDateUtc";
+    public async Task<CarrierSettingDto?> GetByIdAsync(Guid id, CancellationToken ct = default) { using var cn = await _cf.CreateOpenConnectionAsync(ct); return await cn.QuerySingleOrDefaultAsync<CarrierSettingDto>(new CommandDefinition($"SELECT {Cols} FROM Agency.CarrierSetting WHERE CarrierSettingId=@Id AND IsDeleted=0;", new { Id = id }, cancellationToken: ct)); }
+    public async Task<PagedResult<CarrierSettingDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 100, CancellationToken ct = default)
+    {
+        const string sql = @"
+SELECT CarrierSettingId, TenantId, CarrierId, SettingCode, SettingName, CategoryCode, ScopeCode, DataTypeCode, SettingValue, DefaultValue, Description, ValidationJson, UiSchemaJson, AppliesToExecutorType, IsRequired, IsSecret, IsActive, SortOrder, CreatedDateUtc, ModifiedDateUtc
+FROM Agency.CarrierSetting
+WHERE TenantId=@TenantId AND IsDeleted=0
+  AND (@SearchTerm='' OR SettingCode LIKE '%'+@SearchTerm+'%' OR SettingName LIKE '%'+@SearchTerm+'%' OR CategoryCode LIKE '%'+@SearchTerm+'%' OR AppliesToExecutorType LIKE '%'+@SearchTerm+'%')
+ORDER BY CategoryCode ASC, SortOrder ASC, SettingName ASC
+OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+SELECT COUNT(1)
+FROM Agency.CarrierSetting
+WHERE TenantId=@TenantId AND IsDeleted=0
+  AND (@SearchTerm='' OR SettingCode LIKE '%'+@SearchTerm+'%' OR SettingName LIKE '%'+@SearchTerm+'%' OR CategoryCode LIKE '%'+@SearchTerm+'%' OR AppliesToExecutorType LIKE '%'+@SearchTerm+'%');";
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { TenantId = tenantId, SearchTerm = searchTerm ?? string.Empty, Offset = (Math.Max(pageNumber, 1) - 1) * pageSize, PageSize = pageSize }, cancellationToken: ct));
+        return new() { Items = (await multi.ReadAsync<CarrierSettingDto>()).AsList(), TotalCount = await multi.ReadSingleAsync<int>(), PageNumber = pageNumber, PageSize = pageSize };
+    }
+    public async Task<Guid> CreateAsync(CreateCarrierSettingRequest r, CancellationToken ct = default) { const string sql = "INSERT INTO Agency.CarrierSetting (CarrierSettingId,TenantId,CarrierId,SettingCode,SettingName,CategoryCode,ScopeCode,DataTypeCode,SettingValue,DefaultValue,Description,ValidationJson,UiSchemaJson,AppliesToExecutorType,IsRequired,IsSecret,IsActive,SortOrder,CreatedDateUtc,IsDeleted) VALUES (@Id,@TenantId,@CarrierId,@SettingCode,@SettingName,@CategoryCode,@ScopeCode,@DataTypeCode,@SettingValue,@DefaultValue,@Description,COALESCE(NULLIF(@ValidationJson,''),'{}'),COALESCE(NULLIF(@UiSchemaJson,''),'{}'),@AppliesToExecutorType,@IsRequired,@IsSecret,1,@SortOrder,GETUTCDATE(),0);"; var id = Guid.NewGuid(); using var cn = await _cf.CreateOpenConnectionAsync(ct); await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, r.TenantId, r.CarrierId, r.SettingCode, r.SettingName, r.CategoryCode, r.ScopeCode, r.DataTypeCode, r.SettingValue, r.DefaultValue, r.Description, r.ValidationJson, r.UiSchemaJson, r.AppliesToExecutorType, r.IsRequired, r.IsSecret, r.SortOrder }, cancellationToken: ct)); return id; }
+    public async Task UpdateAsync(Guid id, UpdateCarrierSettingRequest r, CancellationToken ct = default) { const string sql = "UPDATE Agency.CarrierSetting SET CarrierId=@CarrierId,SettingCode=@SettingCode,SettingName=@SettingName,CategoryCode=@CategoryCode,ScopeCode=@ScopeCode,DataTypeCode=@DataTypeCode,SettingValue=@SettingValue,DefaultValue=@DefaultValue,Description=@Description,ValidationJson=COALESCE(NULLIF(@ValidationJson,''),'{}'),UiSchemaJson=COALESCE(NULLIF(@UiSchemaJson,''),'{}'),AppliesToExecutorType=@AppliesToExecutorType,IsRequired=@IsRequired,IsSecret=@IsSecret,IsActive=@IsActive,SortOrder=@SortOrder,ModifiedDateUtc=GETUTCDATE() WHERE CarrierSettingId=@Id AND IsDeleted=0;"; using var cn = await _cf.CreateOpenConnectionAsync(ct); await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, r.CarrierId, r.SettingCode, r.SettingName, r.CategoryCode, r.ScopeCode, r.DataTypeCode, r.SettingValue, r.DefaultValue, r.Description, r.ValidationJson, r.UiSchemaJson, r.AppliesToExecutorType, r.IsRequired, r.IsSecret, r.IsActive, r.SortOrder }, cancellationToken: ct)); }
+    public async Task DeleteAsync(Guid id, CancellationToken ct = default) { using var cn = await _cf.CreateOpenConnectionAsync(ct); await cn.ExecuteAsync(new CommandDefinition("UPDATE Agency.CarrierSetting SET IsDeleted=1, ModifiedDateUtc=GETUTCDATE() WHERE CarrierSettingId=@Id;", new { Id = id }, cancellationToken: ct)); }
+}

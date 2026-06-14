@@ -46,6 +46,8 @@ using Ams.Application.Features.Alerts;
 using Ams.Application.Features.SlaDefinitions;
 using Ams.Application.Features.PlatformEvents;
 using Ams.Application.Features.BackgroundJobs;
+using Ams.Application.Features.AutomationJobs;
+using Ams.Application.Features.Integrations;
 using Ams.Application.Features.Agency;
 using Ams.Application.Features.Carriers;
 using Ams.Application.Features.CrmConfig;
@@ -68,6 +70,106 @@ public sealed partial class ApiClient
     {
         _httpClient = httpClient;
     }
+
+    // -- Automation Scheduler ---------------------------------
+    public Task<AutomationSchedulerDashboardDto?> GetAutomationSchedulerDashboardAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<AutomationSchedulerDashboardDto>($"api/automation/jobs/dashboard?tenantId={tenantId}", cancellationToken);
+
+    public Task<PagedResult<JobDefinitionDto>?> SearchAutomationJobsAsync(Guid tenantId, string? searchTerm = null, string? statusCode = null, string? categoryCode = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<JobDefinitionDto>>($"api/automation/jobs?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&statusCode={Uri.EscapeDataString(statusCode ?? string.Empty)}&categoryCode={Uri.EscapeDataString(categoryCode ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public Task<JobDefinitionDto?> GetAutomationJobAsync(Guid jobDefinitionId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<JobDefinitionDto>($"api/automation/jobs/{jobDefinitionId}", cancellationToken);
+
+    public async Task<IReadOnlyCollection<JobStepDto>> GetAutomationJobStepsAsync(Guid jobDefinitionId, CancellationToken cancellationToken = default)
+        => await _httpClient.GetFromJsonAsync<IReadOnlyCollection<JobStepDto>>($"api/automation/jobs/{jobDefinitionId}/steps", cancellationToken) ?? Array.Empty<JobStepDto>();
+
+    public async Task<IReadOnlyCollection<JobScheduleDto>> GetAutomationJobSchedulesAsync(Guid jobDefinitionId, CancellationToken cancellationToken = default)
+        => await _httpClient.GetFromJsonAsync<IReadOnlyCollection<JobScheduleDto>>($"api/automation/jobs/{jobDefinitionId}/schedules", cancellationToken) ?? Array.Empty<JobScheduleDto>();
+
+    public async Task<Guid> CreateAutomationJobAsync(CreateJobDefinitionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/automation/jobs", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
+    }
+
+    public async Task UpdateAutomationJobAsync(Guid jobDefinitionId, UpdateJobDefinitionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/automation/jobs/{jobDefinitionId}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<Guid> SaveAutomationJobStepAsync(Guid jobDefinitionId, Guid? jobStepId, UpsertJobStepRequest request, CancellationToken cancellationToken = default)
+    {
+        HttpResponseMessage response = jobStepId is null
+            ? await _httpClient.PostAsJsonAsync($"api/automation/jobs/{jobDefinitionId}/steps", request, cancellationToken)
+            : await _httpClient.PutAsJsonAsync($"api/automation/jobs/{jobDefinitionId}/steps/{jobStepId}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
+    }
+
+    public async Task<Guid> SaveAutomationJobScheduleAsync(Guid jobDefinitionId, Guid? jobScheduleId, UpsertJobScheduleRequest request, CancellationToken cancellationToken = default)
+    {
+        HttpResponseMessage response = jobScheduleId is null
+            ? await _httpClient.PostAsJsonAsync($"api/automation/jobs/{jobDefinitionId}/schedules", request, cancellationToken)
+            : await _httpClient.PutAsJsonAsync($"api/automation/jobs/{jobDefinitionId}/schedules/{jobScheduleId}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
+    }
+
+    public Task<PagedResult<JobRunDto>?> SearchAutomationJobRunsAsync(Guid tenantId, Guid? jobDefinitionId = null, string? statusCode = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<JobRunDto>>($"api/automation/jobs/runs?tenantId={tenantId}&jobDefinitionId={jobDefinitionId}&statusCode={Uri.EscapeDataString(statusCode ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public async Task<Guid> TriggerAutomationJobAsync(Guid jobDefinitionId, TriggerJobRunRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/automation/jobs/{jobDefinitionId}/runs", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
+    }
+
+    // -- Carrier Downloads ------------------------------------
+    public Task<CarrierDownloadDashboardDto?> GetCarrierDownloadDashboardAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<CarrierDownloadDashboardDto>($"api/downloads/dashboard?tenantId={tenantId}", cancellationToken);
+
+    public Task<PagedResult<DownloadLogDto>?> SearchDownloadLogsAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<DownloadLogDto>>($"api/downloads?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public Task<PagedResult<CarrierDownloadItemDto>?> SearchCarrierDownloadItemsAsync(Guid tenantId, Guid? batchId = null, string? searchTerm = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<CarrierDownloadItemDto>>($"api/downloads/items?tenantId={tenantId}&batchId={batchId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public Task<PagedResult<DownloadExceptionDto>?> SearchDownloadExceptionsAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<DownloadExceptionDto>>($"api/downloads/exceptions?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public async Task ResolveDownloadExceptionAsync(Guid id, Ams.Application.Features.Integrations.ResolveDownloadExceptionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/downloads/exceptions/{id}/resolve", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ManualMatchCarrierDownloadExceptionAsync(Guid id, Ams.Application.Features.Integrations.ManualCarrierDownloadMatchRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/downloads/exceptions/{id}/manual-match", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task RetryDownloadExceptionAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"api/downloads/exceptions/{id}/retry", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<IReadOnlyCollection<JobStepRunDto>> GetAutomationJobStepRunsAsync(Guid jobRunId, CancellationToken cancellationToken = default)
+        => await _httpClient.GetFromJsonAsync<IReadOnlyCollection<JobStepRunDto>>($"api/automation/jobs/runs/{jobRunId}/steps", cancellationToken) ?? Array.Empty<JobStepRunDto>();
+
+    public async Task<IReadOnlyCollection<FileSaveDto>> GetAutomationFileSavesAsync(Guid jobRunId, CancellationToken cancellationToken = default)
+        => await _httpClient.GetFromJsonAsync<IReadOnlyCollection<FileSaveDto>>($"api/automation/jobs/runs/{jobRunId}/files", cancellationToken) ?? Array.Empty<FileSaveDto>();
+
+    public async Task<IReadOnlyCollection<FileExecutionLogDto>> GetAutomationFileExecutionLogsAsync(Guid jobRunId, CancellationToken cancellationToken = default)
+        => await _httpClient.GetFromJsonAsync<IReadOnlyCollection<FileExecutionLogDto>>($"api/automation/jobs/runs/{jobRunId}/file-execution-logs", cancellationToken) ?? Array.Empty<FileExecutionLogDto>();
+
+    public async Task<IReadOnlyCollection<FileRunLogDto>> GetAutomationFileRunLogsAsync(Guid jobRunId, CancellationToken cancellationToken = default)
+        => await _httpClient.GetFromJsonAsync<IReadOnlyCollection<FileRunLogDto>>($"api/automation/jobs/runs/{jobRunId}/file-run-logs", cancellationToken) ?? Array.Empty<FileRunLogDto>();
 
     // -- Dashboard --------------------------------------------
     public Task<DashboardKpiDto?> GetDashboardKpiAsync(Guid tenantId, CancellationToken cancellationToken = default)

@@ -1,0 +1,780 @@
+@page "/automation/job-scheduler"
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Common.Models
+@using Ams.Application.Features.AutomationJobs
+@using Ams.Web.Services
+@inject ApiClient ApiClient
+
+<PageTitle>Enterprise Job Scheduler</PageTitle>
+
+<div class="container-fluid py-4 automation-scheduler">
+    <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-4">
+        <div>
+            <div class="text-uppercase text-primary fw-semibold small">Automation control plane</div>
+            <h1 class="h3 mb-1">Enterprise Cron Job Scheduler</h1>
+            <p class="text-muted mb-0">Define reusable AMS jobs, arrange dynamic worker step executors, schedule cron runs, and inspect file ingestion telemetry.</p>
+        </div>
+        <div class="d-flex gap-2">
+            <button class="btn btn-outline-secondary" @onclick="LoadAsync" disabled="@_isLoading">
+                <span class="bi bi-arrow-clockwise me-1"></span> Refresh
+            </button>
+            <button class="btn btn-primary" @onclick="StartNewJob">
+                <span class="bi bi-plus-lg me-1"></span> New job
+            </button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="alert @(_isError ? "alert-danger" : "alert-success") d-flex justify-content-between align-items-center" style="@( _isError ? "border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" : null)">
+            <span>@_message</span>
+            <button type="button" class="btn-close" @onclick="() => _message = null"></button>
+        </div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+            @_loadError
+        </div>
+    }
+
+    <div class="row g-3 mb-4">
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="metric-card">
+                <span class="metric-icon bg-primary-subtle text-primary bi bi-diagram-3"></span>
+                <div>
+                    <div class="metric-value">@(_dashboard?.ActiveJobs ?? 0)</div>
+                    <div class="metric-label">Active jobs</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="metric-card">
+                <span class="metric-icon bg-success-subtle text-success bi bi-calendar-check"></span>
+                <div>
+                    <div class="metric-value">@(_dashboard?.EnabledSchedules ?? 0)</div>
+                    <div class="metric-label">Enabled schedules</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="metric-card">
+                <span class="metric-icon bg-warning-subtle text-warning bi bi-play-circle"></span>
+                <div>
+                    <div class="metric-value">@(_dashboard?.RunningJobs ?? 0)</div>
+                    <div class="metric-label">Running / queued</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="metric-card">
+                <span class="metric-icon bg-info-subtle text-info bi bi-shield-check"></span>
+                <div>
+                    <div class="metric-value">@((_dashboard?.SuccessRate24h ?? 0).ToString("0.#"))%</div>
+                    <div class="metric-label">24h success rate</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-12 col-xxl-8">
+            <div class="card border-0 shadow-sm mb-4">
+                <div class="card-body">
+                    <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-3">
+                        <div>
+                            <h2 class="h5 mb-1">Job definitions</h2>
+                            <div class="text-muted small">Reusable pipelines composed from worker StepExecutor types.</div>
+                        </div>
+                        <div class="d-flex flex-wrap gap-2">
+                            <input class="form-control form-control-sm scheduler-filter" placeholder="Search jobs" @bind="_searchTerm" @bind:event="oninput" />
+                            <select class="form-select form-select-sm scheduler-select" @bind="_statusFilter">
+                                <option value="">All statuses</option>
+                                <option>Draft</option>
+                                <option>Active</option>
+                                <option>Paused</option>
+                                <option>Retired</option>
+                            </select>
+                            <button class="btn btn-sm btn-outline-primary" @onclick="SearchJobsAsync">Apply</button>
+                        </div>
+                    </div>
+
+                    @if (_isLoading)
+                    {
+                        <div class="py-5 text-center text-muted">
+                            <div class="spinner-border spinner-border-sm me-2"></div> Loading scheduler data...
+                        </div>
+                    }
+                    else if (_jobs.Items.Count == 0)
+                    {
+                        <div class="empty-state">
+                            <div class="bi bi-clock-history empty-icon"></div>
+                            <h3 class="h6">No automation jobs found</h3>
+                            <p>Create the first enterprise job definition to begin scheduling worker pipelines.</p>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="table-responsive enterprise-table-wrap">
+                            <table class="table table-hover align-middle mb-0 enterprise-table">
+                                <thead>
+                                    <tr>
+                                        <th>Job</th>
+                                        <th>Category</th>
+                                        <th>Status</th>
+                                        <th>Steps</th>
+                                        <th>Schedules</th>
+                                        <th>Next run</th>
+                                        <th class="text-end">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var job in _jobs.Items)
+                                    {
+                                        <tr class="@(job.JobDefinitionId == _selectedJob?.JobDefinitionId ? "table-primary-subtle" : null)">
+                                            <td>
+                                                <button class="btn btn-link p-0 fw-semibold text-start" @onclick="() => SelectJobAsync(job)">@job.JobName</button>
+                                                <div class="small text-muted"><code>@job.JobCode</code> · @job.JobTypeCode</div>
+                                            </td>
+                                            <td>@job.CategoryCode</td>
+                                            <td><span class="status-pill @StatusCss(job.StatusCode)">@job.StatusCode</span></td>
+                                            <td>@job.StepCount</td>
+                                            <td>@job.ScheduleCount</td>
+                                            <td>@FormatDate(job.NextRunDateUtc)</td>
+                                            <td class="text-end">
+                                                <button class="btn btn-sm btn-outline-secondary me-1" @onclick="() => EditJob(job)">Edit</button>
+                                                <button class="btn btn-sm btn-primary" @onclick="() => TriggerJobAsync(job)">Run now</button>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <div class="card border-0 shadow-sm">
+                <div class="card-body">
+                    <div class="d-flex align-items-center justify-content-between gap-3 mb-3">
+                        <div>
+                            <h2 class="h5 mb-1">Run history</h2>
+                            <div class="text-muted small">JobRun, JobStepRun, FileRunLog, FileExecutionLog and FileSave telemetry.</div>
+                        </div>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="LoadRunsAsync">Reload runs</button>
+                    </div>
+                    <div class="table-responsive enterprise-table-wrap">
+                        <table class="table table-hover align-middle mb-0 enterprise-table">
+                            <thead>
+                                <tr>
+                                    <th>Run</th>
+                                    <th>Job</th>
+                                    <th>Status</th>
+                                    <th>Trigger</th>
+                                    <th>Duration</th>
+                                    <th>Started</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var run in _runs.Items)
+                                {
+                                    <tr class="@(run.JobRunId == _selectedRun?.JobRunId ? "table-primary-subtle" : null)">
+                                        <td><code>@run.CorrelationId</code></td>
+                                        <td>@run.JobName</td>
+                                        <td><span class="status-pill @StatusCss(run.StatusCode)">@run.StatusCode</span></td>
+                                        <td>@run.TriggerType</td>
+                                        <td>@FormatDuration(run.DurationMs)</td>
+                                        <td>@FormatDate(run.StartedDateUtc ?? run.CreatedDateUtc)</td>
+                                        <td class="text-end"><button class="btn btn-sm btn-outline-primary" @onclick="() => SelectRunAsync(run)">Inspect</button></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-xxl-4">
+            <div class="card border-0 shadow-sm mb-4">
+                <div class="card-body">
+                    <h2 class="h5 mb-3">@(_editingJobId is null ? "Create job" : "Edit job")</h2>
+                    <EditForm Model="_jobForm" OnValidSubmit="SaveJobAsync">
+                        <DataAnnotationsValidator />
+                        <div class="row g-3">
+                            <div class="col-12">
+                                <label class="form-label">Job name</label>
+                                <InputText class="form-control" @bind-Value="_jobForm.JobName" />
+                                <ValidationMessage For="() => _jobForm.JobName" class="text-danger" />
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label">Job code</label>
+                                <InputText class="form-control" @bind-Value="_jobForm.JobCode" disabled="@(_editingJobId is not null)" />
+                                <ValidationMessage For="() => _jobForm.JobCode" class="text-danger" />
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label">Status</label>
+                                <InputSelect class="form-select" @bind-Value="_jobForm.StatusCode">
+                                    <option>Draft</option>
+                                    <option>Active</option>
+                                    <option>Paused</option>
+                                    <option>Retired</option>
+                                </InputSelect>
+                                <ValidationMessage For="() => _jobForm.StatusCode" class="text-danger" />
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label">Type</label>
+                                <InputText class="form-control" @bind-Value="_jobForm.JobTypeCode" />
+                                <ValidationMessage For="() => _jobForm.JobTypeCode" class="text-danger" />
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label">Category</label>
+                                <InputText class="form-control" @bind-Value="_jobForm.CategoryCode" />
+                                <ValidationMessage For="() => _jobForm.CategoryCode" class="text-danger" />
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label">Concurrency</label>
+                                <InputSelect class="form-select" @bind-Value="_jobForm.ConcurrencyPolicy">
+                                    <option>SkipIfRunning</option>
+                                    <option>Queue</option>
+                                    <option>AllowParallel</option>
+                                </InputSelect>
+                                <ValidationMessage For="() => _jobForm.ConcurrencyPolicy" class="text-danger" />
+                            </div>
+                            <div class="col-3">
+                                <label class="form-label">Retries</label>
+                                <InputNumber class="form-control" @bind-Value="_jobForm.MaxRetryCount" />
+                                <ValidationMessage For="() => _jobForm.MaxRetryCount" class="text-danger" />
+                            </div>
+                            <div class="col-3">
+                                <label class="form-label">Timeout</label>
+                                <InputNumber class="form-control" @bind-Value="_jobForm.TimeoutSeconds" />
+                                <ValidationMessage For="() => _jobForm.TimeoutSeconds" class="text-danger" />
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label">Description</label>
+                                <InputTextArea class="form-control" rows="3" @bind-Value="_jobForm.Description" />
+                                <ValidationMessage For="() => _jobForm.Description" class="text-danger" />
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label">Configuration JSON</label>
+                                <InputTextArea class="form-control code-area" rows="4" @bind-Value="_jobForm.ConfigurationJson" />
+                                <ValidationMessage For="() => _jobForm.ConfigurationJson" class="text-danger" />
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label">Dynamic field schema JSON</label>
+                                <InputTextArea class="form-control code-area" rows="3" @bind-Value="_jobForm.DynamicFieldSchemaJson" />
+                                <ValidationMessage For="() => _jobForm.DynamicFieldSchemaJson" class="text-danger" />
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label">Default parameters JSON</label>
+                                <InputTextArea class="form-control code-area" rows="3" @bind-Value="_jobForm.DefaultParameterJson" />
+                                <ValidationMessage For="() => _jobForm.DefaultParameterJson" class="text-danger" />
+                            </div>
+                            <div class="col-12 d-flex justify-content-between align-items-center">
+                                <div class="form-check form-switch">
+                                    <InputCheckbox class="form-check-input" @bind-Value="_jobForm.IsActive" />
+                                    <label class="form-check-label">Active</label>
+                                </div>
+                                <button class="btn btn-primary" type="submit">Save job</button>
+                            </div>
+                        </div>
+                    </EditForm>
+                </div>
+            </div>
+
+            @if (_selectedJob is not null)
+            {
+                <div class="card border-0 shadow-sm mb-4">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h2 class="h5 mb-0">Pipeline steps</h2>
+                            <button class="btn btn-sm btn-outline-primary" @onclick="StartNewStep">Add step</button>
+                        </div>
+                        <div class="timeline-list mb-3">
+                            @foreach (var step in _steps)
+                            {
+                                <div class="timeline-item">
+                                    <div class="timeline-badge">@step.StepOrder</div>
+                                    <div>
+                                        <div class="fw-semibold">@step.StepName</div>
+                                        <div class="small text-muted"><code>@step.StepExecutorType</code></div>
+                                        <button class="btn btn-link btn-sm p-0" @onclick="() => EditStep(step)">Edit</button>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                        <EditForm Model="_stepForm" OnValidSubmit="SaveStepAsync">
+                            <DataAnnotationsValidator />
+                            <div class="row g-2">
+                                <div class="col-3"><InputNumber class="form-control" @bind-Value="_stepForm.StepOrder" /></div>
+                                <div class="col-9"><InputText class="form-control" placeholder="Step code" @bind-Value="_stepForm.StepCode" /><ValidationMessage For="() => _stepForm.StepCode" class="text-danger" /></div>
+                                <div class="col-12"><InputText class="form-control" placeholder="Step name" @bind-Value="_stepForm.StepName" /><ValidationMessage For="() => _stepForm.StepName" class="text-danger" /></div>
+                                <div class="col-12"><InputText class="form-control" placeholder="FileIngestionStepExecutor" @bind-Value="_stepForm.StepExecutorType" /><ValidationMessage For="() => _stepForm.StepExecutorType" class="text-danger" /></div>
+                                <div class="col-12"><InputTextArea class="form-control code-area" rows="3" placeholder="Input mapping JSON" @bind-Value="_stepForm.InputMappingJson" /><ValidationMessage For="() => _stepForm.InputMappingJson" class="text-danger" /></div>
+                                <div class="col-12"><InputTextArea class="form-control code-area" rows="3" placeholder="Dynamic field schema JSON" @bind-Value="_stepForm.DynamicFieldSchemaJson" /><ValidationMessage For="() => _stepForm.DynamicFieldSchemaJson" class="text-danger" /></div>
+                                <div class="col-12"><InputTextArea class="form-control code-area" rows="3" placeholder="Input parameters JSON" @bind-Value="_stepForm.InputParameterJson" /><ValidationMessage For="() => _stepForm.InputParameterJson" class="text-danger" /></div>
+                                <div class="col-12"><InputTextArea class="form-control code-area" rows="3" placeholder="Output contract JSON" @bind-Value="_stepForm.OutputContractJson" /><ValidationMessage For="() => _stepForm.OutputContractJson" class="text-danger" /></div>
+                                <div class="col-12"><InputText class="form-control" placeholder="Depends on step codes" @bind-Value="_stepForm.DependsOnStepCodes" /><ValidationMessage For="() => _stepForm.DependsOnStepCodes" class="text-danger" /></div>
+                                <div class="col-12"><ValidationMessage For="() => _stepForm.StepOrder" class="text-danger" /></div>
+                                <div class="col-12 d-flex justify-content-between align-items-center">
+                                    <div class="form-check form-switch"><InputCheckbox class="form-check-input" @bind-Value="_stepForm.IsEnabled" /> <label class="form-check-label">Enabled</label></div>
+                                    <button class="btn btn-sm btn-primary" type="submit">Save step</button>
+                                </div>
+                            </div>
+                        </EditForm>
+                    </div>
+                </div>
+
+                <div class="card border-0 shadow-sm mb-4">
+                    <div class="card-body">
+                        <h2 class="h5 mb-3">Cron schedules</h2>
+                        @foreach (var schedule in _schedules)
+                        {
+                            <div class="schedule-row">
+                                <div>
+                                    <div class="fw-semibold">@schedule.ScheduleName</div>
+                                    <div class="small text-muted"><code>@schedule.CronExpression</code> · @schedule.TimeZoneId</div>
+                                </div>
+                                <span class="status-pill @(schedule.IsEnabled ? "status-success" : "status-muted")">@(schedule.IsEnabled ? "Enabled" : "Disabled")</span>
+                                <button class="btn btn-link btn-sm p-0" @onclick="() => EditSchedule(schedule)">Edit</button>
+                            </div>
+                        }
+                        <EditForm Model="_scheduleForm" OnValidSubmit="SaveScheduleAsync">
+                            <DataAnnotationsValidator />
+                            <div class="row g-2 mt-2">
+                                <div class="col-12"><InputText class="form-control" placeholder="Schedule name" @bind-Value="_scheduleForm.ScheduleName" /><ValidationMessage For="() => _scheduleForm.ScheduleName" class="text-danger" /></div>
+                                <div class="col-7"><InputText class="form-control" placeholder="*/15 * * * *" @bind-Value="_scheduleForm.CronExpression" /><ValidationMessage For="() => _scheduleForm.CronExpression" class="text-danger" /></div>
+                                <div class="col-5"><InputText class="form-control" placeholder="America/New_York" @bind-Value="_scheduleForm.TimeZoneId" /><ValidationMessage For="() => _scheduleForm.TimeZoneId" class="text-danger" /></div>
+                                <div class="col-12 d-flex justify-content-between align-items-center">
+                                    <div class="form-check form-switch"><InputCheckbox class="form-check-input" @bind-Value="_scheduleForm.IsEnabled" /> <label class="form-check-label">Enabled</label></div>
+                                    <button class="btn btn-sm btn-primary" type="submit">Save schedule</button>
+                                </div>
+                            </div>
+                        </EditForm>
+                    </div>
+                </div>
+            }
+
+            @if (_selectedRun is not null)
+            {
+                <div class="card border-0 shadow-sm">
+                    <div class="card-body">
+                        <h2 class="h5 mb-3">Run inspector</h2>
+                        <div class="mb-3"><code>@_selectedRun.CorrelationId</code></div>
+                        <h3 class="h6">Step execution</h3>
+                        @foreach (var stepRun in _stepRuns)
+                        {
+                            <div class="schedule-row">
+                                <div>
+                                    <div class="fw-semibold">#@stepRun.StepOrder @stepRun.StepExecutorType</div>
+                                    <div class="small text-muted">@FormatDuration(stepRun.DurationMs) · retry @stepRun.RetryAttempt</div>
+                                </div>
+                                <span class="status-pill @StatusCss(stepRun.StatusCode)">@stepRun.StatusCode</span>
+                            </div>
+                        }
+                        <h3 class="h6 mt-3">Files</h3>
+                        @foreach (var file in _fileSaves)
+                        {
+                            <div class="log-line">
+                                <span class="bi bi-file-earmark-arrow-up me-2"></span>
+                                <span>@file.OriginalFileName</span>
+                                <span class="text-muted ms-auto">@file.StatusCode</span>
+                            </div>
+                        }
+                        <h3 class="h6 mt-3">Execution logs</h3>
+                        @foreach (var runLog in _fileRunLogs)
+                        {
+                            <div class="log-line">
+                                <span class="status-pill @StatusCss(runLog.StatusCode)">@runLog.Stage</span>
+                                <span>@runLog.RecordsProcessed processed</span>
+                                <span class="text-muted ms-auto">@runLog.RecordsFailed failed</span>
+                            </div>
+                        }
+                        <div class="log-panel">
+                            @foreach (var log in _fileLogs)
+                            {
+                                <div class="log-line">
+                                    <span class="log-level @LogCss(log.LogLevel)">@log.LogLevel</span>
+                                    <span>@log.Message</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+<style>
+    .automation-scheduler .metric-card { border: 1px solid #e5e7eb; border-radius: 1rem; padding: 1rem; background: #fff; display: flex; gap: .85rem; align-items: center; box-shadow: 0 0.5rem 1.25rem rgba(15, 23, 42, .04); }
+    .automation-scheduler .metric-icon { width: 2.65rem; height: 2.65rem; border-radius: .9rem; display: inline-flex; align-items: center; justify-content: center; font-size: 1.25rem; }
+    .automation-scheduler .metric-value { font-size: 1.35rem; font-weight: 700; color: #111827; }
+    .automation-scheduler .metric-label { font-size: .8rem; color: #6b7280; }
+    .enterprise-table-wrap { border: 1px solid #eef2f7; border-radius: .85rem; overflow: hidden; }
+    .enterprise-table thead th { background: #f8fafc; color: #475569; font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid #e5e7eb; }
+    .status-pill { display: inline-flex; align-items: center; border-radius: 999px; padding: .2rem .55rem; font-size: .75rem; font-weight: 600; background: #eef2f7; color: #475569; }
+    .status-success { background: #dcfce7; color: #166534; }
+    .status-warning { background: #fef3c7; color: #92400e; }
+    .status-danger { background: #fee2e2; color: #991b1b; }
+    .status-info { background: #dbeafe; color: #1d4ed8; }
+    .status-muted { background: #f1f5f9; color: #64748b; }
+    .scheduler-filter { width: 14rem; }
+    .scheduler-select { width: 10rem; }
+    .empty-state { text-align: center; padding: 3rem 1rem; color: #64748b; }
+    .empty-icon { font-size: 2rem; color: #94a3b8; }
+    .timeline-list { border-left: 2px solid #e5e7eb; margin-left: .75rem; }
+    .timeline-item { display: flex; gap: .75rem; margin-bottom: 1rem; margin-left: -.75rem; }
+    .timeline-badge { width: 1.5rem; height: 1.5rem; border-radius: 999px; background: #2563eb; color: #fff; display: flex; align-items: center; justify-content: center; font-size: .75rem; font-weight: 700; flex: 0 0 auto; }
+    .schedule-row { border: 1px solid #eef2f7; border-radius: .75rem; padding: .75rem; display: flex; justify-content: space-between; gap: .75rem; align-items: center; margin-bottom: .65rem; }
+    .code-area, code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+    .log-panel { border: 1px solid #e5e7eb; border-radius: .75rem; background: #0f172a; color: #dbeafe; padding: .75rem; max-height: 18rem; overflow: auto; }
+    .log-line { display: flex; align-items: center; gap: .5rem; padding: .35rem 0; font-size: .82rem; }
+    .log-level { min-width: 4.5rem; font-weight: 700; }
+    .log-error { color: #fca5a5; }
+    .log-warn { color: #fde68a; }
+    .log-info { color: #93c5fd; }
+    @@keyframes um-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }
+</style>
+
+@code {
+    private static readonly Guid DefaultTenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private AutomationSchedulerDashboardDto? _dashboard;
+    private PagedResult<JobDefinitionDto> _jobs = new();
+    private PagedResult<JobRunDto> _runs = new();
+    private IReadOnlyCollection<JobStepDto> _steps = Array.Empty<JobStepDto>();
+    private IReadOnlyCollection<JobScheduleDto> _schedules = Array.Empty<JobScheduleDto>();
+    private IReadOnlyCollection<JobStepRunDto> _stepRuns = Array.Empty<JobStepRunDto>();
+    private IReadOnlyCollection<FileSaveDto> _fileSaves = Array.Empty<FileSaveDto>();
+    private IReadOnlyCollection<FileExecutionLogDto> _fileLogs = Array.Empty<FileExecutionLogDto>();
+    private IReadOnlyCollection<FileRunLogDto> _fileRunLogs = Array.Empty<FileRunLogDto>();
+    private JobDefinitionDto? _selectedJob;
+    private JobRunDto? _selectedRun;
+    private Guid? _editingJobId;
+    private Guid? _editingStepId;
+    private Guid? _editingScheduleId;
+    private string? _searchTerm;
+    private string? _statusFilter;
+    private string? _message;
+    private string? _loadError;
+    private bool _isError;
+    private bool _isLoading;
+    private JobFormModel _jobForm = JobFormModel.New(DefaultTenantId);
+    private StepFormModel _stepForm = StepFormModel.New(DefaultTenantId, Guid.Empty, 1);
+    private ScheduleFormModel _scheduleForm = ScheduleFormModel.New(DefaultTenantId, Guid.Empty);
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _isLoading = true;
+        try
+        {
+            _loadError = null;
+            _dashboard = await ApiClient.GetAutomationSchedulerDashboardAsync(DefaultTenantId);
+            await SearchJobsAsync();
+            await LoadRunsAsync();
+            if (_selectedJob is null && _jobs.Items.Count > 0)
+            {
+                await SelectJobAsync(_jobs.Items.First());
+            }
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Load failed: {ex.Message}";
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task SearchJobsAsync()
+    {
+        _jobs = await ApiClient.SearchAutomationJobsAsync(DefaultTenantId, _searchTerm, _statusFilter, null, 1, 25) ?? new PagedResult<JobDefinitionDto>();
+    }
+
+    private async Task LoadRunsAsync()
+    {
+        _runs = await ApiClient.SearchAutomationJobRunsAsync(DefaultTenantId, _selectedJob?.JobDefinitionId, null, 1, 15) ?? new PagedResult<JobRunDto>();
+    }
+
+    private async Task SelectJobAsync(JobDefinitionDto job)
+    {
+        _selectedJob = job;
+        _steps = await ApiClient.GetAutomationJobStepsAsync(job.JobDefinitionId);
+        _schedules = await ApiClient.GetAutomationJobSchedulesAsync(job.JobDefinitionId);
+        _stepForm = StepFormModel.New(DefaultTenantId, job.JobDefinitionId, _steps.Count + 1);
+        _scheduleForm = ScheduleFormModel.New(DefaultTenantId, job.JobDefinitionId);
+        await LoadRunsAsync();
+    }
+
+    private async Task SelectRunAsync(JobRunDto run)
+    {
+        _selectedRun = run;
+        _stepRuns = await ApiClient.GetAutomationJobStepRunsAsync(run.JobRunId);
+        _fileSaves = await ApiClient.GetAutomationFileSavesAsync(run.JobRunId);
+        _fileLogs = await ApiClient.GetAutomationFileExecutionLogsAsync(run.JobRunId);
+        _fileRunLogs = await ApiClient.GetAutomationFileRunLogsAsync(run.JobRunId);
+    }
+
+    private void StartNewJob()
+    {
+        _editingJobId = null;
+        _jobForm = JobFormModel.New(DefaultTenantId);
+    }
+
+    private void EditJob(JobDefinitionDto job)
+    {
+        _editingJobId = job.JobDefinitionId;
+        _jobForm = new JobFormModel
+        {
+            TenantId = job.TenantId,
+            JobCode = job.JobCode,
+            JobName = job.JobName,
+            Description = job.Description,
+            JobTypeCode = job.JobTypeCode,
+            CategoryCode = job.CategoryCode,
+            StatusCode = job.StatusCode,
+            OwnerTeam = job.OwnerTeam,
+            ConcurrencyPolicy = job.ConcurrencyPolicy,
+            MaxRetryCount = job.MaxRetryCount,
+            TimeoutSeconds = job.TimeoutSeconds,
+            Tags = job.Tags,
+            ConfigurationJson = job.ConfigurationJson,
+            DynamicFieldSchemaJson = job.DynamicFieldSchemaJson,
+            DefaultParameterJson = job.DefaultParameterJson,
+            IsActive = job.IsActive
+        };
+    }
+
+    private async Task SaveJobAsync()
+    {
+        try
+        {
+            if (_editingJobId is null)
+            {
+                var id = await ApiClient.CreateAutomationJobAsync(new CreateJobDefinitionRequest(_jobForm.TenantId, _jobForm.JobCode, _jobForm.JobName, _jobForm.Description, _jobForm.JobTypeCode, _jobForm.CategoryCode, _jobForm.OwnerTeam, _jobForm.ConcurrencyPolicy, _jobForm.MaxRetryCount, _jobForm.TimeoutSeconds, _jobForm.Tags, _jobForm.ConfigurationJson, _jobForm.DynamicFieldSchemaJson, _jobForm.DefaultParameterJson, _jobForm.IsActive));
+                _editingJobId = id;
+            }
+            else
+            {
+                await ApiClient.UpdateAutomationJobAsync(_editingJobId.Value, new UpdateJobDefinitionRequest(_jobForm.JobName, _jobForm.Description, _jobForm.JobTypeCode, _jobForm.CategoryCode, _jobForm.StatusCode, _jobForm.OwnerTeam, _jobForm.ConcurrencyPolicy, _jobForm.MaxRetryCount, _jobForm.TimeoutSeconds, _jobForm.Tags, _jobForm.ConfigurationJson, _jobForm.DynamicFieldSchemaJson, _jobForm.DefaultParameterJson, _jobForm.IsActive));
+            }
+            _message = "Job saved.";
+            _isError = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _message = ex.Message;
+            _isError = true;
+        }
+    }
+
+    private void StartNewStep()
+    {
+        if (_selectedJob is null) return;
+        _editingStepId = null;
+        _stepForm = StepFormModel.New(DefaultTenantId, _selectedJob.JobDefinitionId, _steps.Count + 1);
+    }
+
+    private void EditStep(JobStepDto step)
+    {
+        _editingStepId = step.JobStepId;
+        _stepForm = new StepFormModel
+        {
+            TenantId = step.TenantId,
+            JobDefinitionId = step.JobDefinitionId,
+            StepOrder = step.StepOrder,
+            StepCode = step.StepCode,
+            StepName = step.StepName,
+            StepExecutorType = step.StepExecutorType,
+            Description = step.Description,
+            InputMappingJson = step.InputMappingJson,
+            OutputMappingJson = step.OutputMappingJson,
+            RetryPolicyJson = step.RetryPolicyJson,
+            DynamicFieldSchemaJson = step.DynamicFieldSchemaJson,
+            InputParameterJson = step.InputParameterJson,
+            OutputContractJson = step.OutputContractJson,
+            DependsOnStepCodes = step.DependsOnStepCodes,
+            TimeoutSeconds = step.TimeoutSeconds,
+            ContinueOnError = step.ContinueOnError,
+            IsEnabled = step.IsEnabled
+        };
+    }
+
+    private async Task SaveStepAsync()
+    {
+        try
+        {
+            if (_selectedJob is null) return;
+            await ApiClient.SaveAutomationJobStepAsync(_selectedJob.JobDefinitionId, _editingStepId, new UpsertJobStepRequest(_stepForm.TenantId, _selectedJob.JobDefinitionId, _stepForm.StepOrder, _stepForm.StepCode, _stepForm.StepName, _stepForm.StepExecutorType, _stepForm.Description, _stepForm.InputMappingJson, _stepForm.OutputMappingJson, _stepForm.RetryPolicyJson, _stepForm.DynamicFieldSchemaJson, _stepForm.InputParameterJson, _stepForm.OutputContractJson, _stepForm.DependsOnStepCodes, _stepForm.TimeoutSeconds, _stepForm.ContinueOnError, _stepForm.IsEnabled));
+            _message = "Step saved.";
+            _isError = false;
+            await SelectJobAsync(_selectedJob);
+        }
+        catch (Exception ex)
+        {
+            _message = $"Step save failed: {ex.Message}";
+            _isError = true;
+        }
+    }
+
+    private void EditSchedule(JobScheduleDto schedule)
+    {
+        _editingScheduleId = schedule.JobScheduleId;
+        _scheduleForm = new ScheduleFormModel
+        {
+            TenantId = schedule.TenantId,
+            JobDefinitionId = schedule.JobDefinitionId,
+            ScheduleName = schedule.ScheduleName,
+            CronExpression = schedule.CronExpression,
+            TimeZoneId = schedule.TimeZoneId,
+            MisfirePolicy = schedule.MisfirePolicy,
+            NextRunDateUtc = schedule.NextRunDateUtc,
+            IsEnabled = schedule.IsEnabled
+        };
+    }
+
+    private async Task SaveScheduleAsync()
+    {
+        try
+        {
+            if (_selectedJob is null) return;
+            await ApiClient.SaveAutomationJobScheduleAsync(_selectedJob.JobDefinitionId, _editingScheduleId, new UpsertJobScheduleRequest(_scheduleForm.TenantId, _selectedJob.JobDefinitionId, _scheduleForm.ScheduleName, _scheduleForm.CronExpression, _scheduleForm.TimeZoneId, null, null, _scheduleForm.MisfirePolicy, _scheduleForm.NextRunDateUtc, _scheduleForm.IsEnabled));
+            _message = "Schedule saved.";
+            _isError = false;
+            await SelectJobAsync(_selectedJob);
+        }
+        catch (Exception ex)
+        {
+            _message = $"Schedule save failed: {ex.Message}";
+            _isError = true;
+        }
+    }
+
+    private async Task TriggerJobAsync(JobDefinitionDto job)
+    {
+        try
+        {
+            var id = await ApiClient.TriggerAutomationJobAsync(job.JobDefinitionId, new TriggerJobRunRequest(job.TenantId, null, "{}"));
+            _message = $"Job queued: {id}";
+            _isError = false;
+            await LoadRunsAsync();
+        }
+        catch (Exception ex)
+        {
+            _message = ex.Message;
+            _isError = true;
+        }
+    }
+
+    private static string FormatDate(DateTime? value) => value is null ? "—" : value.Value.ToString("MMM d, yyyy h:mm tt");
+    private static string FormatDuration(int durationMs) => durationMs <= 0 ? "—" : TimeSpan.FromMilliseconds(durationMs).TotalSeconds.ToString("0.#") + "s";
+    private static string StatusCss(string? status) => status switch
+    {
+        "Active" or "Completed" or "Enabled" or "Applied" => "status-success",
+        "Queued" or "Running" or "In Review" or "CompletedWithWarnings" => "status-warning",
+        "Failed" or "Error" or "Disabled" => "status-danger",
+        "Draft" or "Paused" => "status-muted",
+        _ => "status-info"
+    };
+    private static string LogCss(string? level) => level switch
+    {
+        "Error" => "log-error",
+        "Warning" => "log-warn",
+        _ => "log-info"
+    };
+
+    private sealed class JobFormModel
+    {
+        public Guid TenantId { get; set; }
+        [Required, StringLength(100)]
+        public string JobCode { get; set; } = string.Empty;
+        [Required, StringLength(240)]
+        public string JobName { get; set; } = string.Empty;
+        [StringLength(1000)]
+        public string? Description { get; set; }
+        [Required, StringLength(80)]
+        public string JobTypeCode { get; set; } = "Pipeline";
+        [Required, StringLength(80)]
+        public string CategoryCode { get; set; } = "Integration";
+        [Required, StringLength(50)]
+        public string StatusCode { get; set; } = "Draft";
+        [StringLength(160)]
+        public string? OwnerTeam { get; set; } = "Integration Operations";
+        [Required, StringLength(50)]
+        public string ConcurrencyPolicy { get; set; } = "SkipIfRunning";
+        [Range(0, 25)]
+        public int MaxRetryCount { get; set; } = 3;
+        [Range(30, 86400)]
+        public int TimeoutSeconds { get; set; } = 3600;
+        [StringLength(500)]
+        public string? Tags { get; set; }
+        [Required]
+        public string ConfigurationJson { get; set; } = "{}";
+        [Required]
+        public string DynamicFieldSchemaJson { get; set; } = "[]";
+        [Required]
+        public string DefaultParameterJson { get; set; } = "{}";
+        public bool IsActive { get; set; } = true;
+        public static JobFormModel New(Guid tenantId) => new() { TenantId = tenantId, JobCode = $"JOB_{DateTime.UtcNow:yyyyMMddHHmmss}", JobName = "New automation job" };
+    }
+
+    private sealed class StepFormModel
+    {
+        public Guid TenantId { get; set; }
+        public Guid JobDefinitionId { get; set; }
+        [Range(1, 500)]
+        public int StepOrder { get; set; }
+        [Required, StringLength(100)]
+        public string StepCode { get; set; } = "FILE_INGESTION";
+        [Required, StringLength(240)]
+        public string StepName { get; set; } = "File ingestion";
+        [Required, StringLength(240)]
+        public string StepExecutorType { get; set; } = "FileIngestionStepExecutor";
+        [StringLength(1000)]
+        public string? Description { get; set; }
+        [Required]
+        public string InputMappingJson { get; set; } = "{}";
+        [Required]
+        public string OutputMappingJson { get; set; } = "{}";
+        [Required]
+        public string RetryPolicyJson { get; set; } = "{\"maxAttempts\":3}";
+        [Required]
+        public string DynamicFieldSchemaJson { get; set; } = "[]";
+        [Required]
+        public string InputParameterJson { get; set; } = "{}";
+        [Required]
+        public string OutputContractJson { get; set; } = "{}";
+        [StringLength(500)]
+        public string? DependsOnStepCodes { get; set; }
+        [Range(30, 86400)]
+        public int TimeoutSeconds { get; set; } = 900;
+        public bool ContinueOnError { get; set; }
+        public bool IsEnabled { get; set; } = true;
+        public static StepFormModel New(Guid tenantId, Guid jobDefinitionId, int stepOrder) => new() { TenantId = tenantId, JobDefinitionId = jobDefinitionId, StepOrder = stepOrder };
+    }
+
+    private sealed class ScheduleFormModel
+    {
+        public Guid TenantId { get; set; }
+        public Guid JobDefinitionId { get; set; }
+        [Required, StringLength(240)]
+        public string ScheduleName { get; set; } = "Every 15 minutes";
+        [Required, StringLength(120)]
+        public string CronExpression { get; set; } = "*/15 * * * *";
+        [Required, StringLength(120)]
+        public string TimeZoneId { get; set; } = "America/New_York";
+        [Required, StringLength(80)]
+        public string MisfirePolicy { get; set; } = "FireOnce";
+        public DateTime? NextRunDateUtc { get; set; } = DateTime.UtcNow.AddMinutes(15);
+        public bool IsEnabled { get; set; } = true;
+        public static ScheduleFormModel New(Guid tenantId, Guid jobDefinitionId) => new() { TenantId = tenantId, JobDefinitionId = jobDefinitionId };
+    }
+}

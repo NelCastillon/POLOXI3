@@ -13,6 +13,15 @@ public interface IMgaWholesalerService
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 }
 
+public interface ICarrierSettingService
+{
+    Task<CarrierSettingDto?> GetByIdAsync(Guid id, CancellationToken ct = default);
+    Task<PagedResult<CarrierSettingDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 100, CancellationToken ct = default);
+    Task<Guid> CreateAsync(CreateCarrierSettingRequest request, CancellationToken ct = default);
+    Task UpdateAsync(Guid id, UpdateCarrierSettingRequest request, CancellationToken ct = default);
+    Task DeleteAsync(Guid id, CancellationToken ct = default);
+}
+
 public interface ICarrierContactService
 {
     Task<CarrierContactDto?> GetByIdAsync(Guid id, CancellationToken ct = default);
