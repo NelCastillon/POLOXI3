@@ -45,6 +45,7 @@
                                     <option value="@type">@type</option>
                                 }
                             </InputSelect>
+                            <ValidationMessage For="() => _form.ContactTypeCode" class="text-danger" />
                         </div>
                         <div class="um-field">
                             <label>Status <span class="text-danger">*</span></label>
@@ -54,6 +55,7 @@
                                     <option value="@status">@status</option>
                                 }
                             </InputSelect>
+                            <ValidationMessage For="() => _form.StatusCode" class="text-danger" />
                         </div>
                         <div class="um-field">
                             <label>Preferred Method</label>
@@ -64,6 +66,7 @@
                                     <option value="@method">@method</option>
                                 }
                             </InputSelect>
+                            <ValidationMessage For="() => _form.PreferredContactMethod" class="text-danger" />
                         </div>
                         <div class="um-field um-field--full">
                             <label>Responsibilities</label>
@@ -136,6 +139,7 @@
                         <span class="crr-filter-pill">Filtered</span>
                     }
                 </div>
+                <p class="crr-hero-copy">Govern contact role assignments, responsibility flags, portal readiness, and account workflow synchronization from the live contact master record.</p>
                 <div class="crr-sub-row">
                     <span class="crr-sub-chip"><i class="bi bi-people" aria-hidden="true"></i>@_rows.Count contacts</span>
                     <span class="crr-sub-chip"><i class="bi bi-shield" aria-hidden="true"></i>@_rows.Select(r => r.ContactTypeCode).Distinct(StringComparer.OrdinalIgnoreCase).Count() role types</span>
@@ -243,7 +247,7 @@
                                     <div class="crr-empty-state">
                                         <i class="bi bi-inbox" aria-hidden="true"></i>
                                         <strong>No role assignments found</strong>
-                                        <span>Adjust the current tab, KPI, role type, or search criteria.</span>
+                                        <span>@(HasFilters ? "Adjust the current tab, KPI, role type, or search criteria." : "No live contact role data was returned. Add or seed contacts to populate this register.")</span>
                                     </div>
                                 </td>
                             </tr>
@@ -395,20 +399,12 @@
             var result = await Api.SearchContactsAsync(_tenantId, pageSize: 500);
             _rows.Clear();
             _rows.AddRange((result?.Items ?? []).Select(ContactRoleRow.From));
-            if (_rows.Count == 0)
-            {
-                BuildFallbackRows();
-            }
             _page = Math.Min(_page, TotalPages);
         }
         catch (Exception ex)
         {
             _loadError = $"Failed to load contact roles: {ex.Message}";
             ShowToast($"Load failed: {ex.Message}", "danger");
-            if (_rows.Count == 0)
-            {
-                BuildFallbackRows();
-            }
         }
         finally
         {
@@ -563,6 +559,7 @@
         try
         {
             await Api.UpdateContactAsync(_selected.ContactId, BuildUpdateRequest(_selected, _form));
+            await CreateContactRoleWorkflowEventAsync("Roles Updated", $"Contact role assignment updated for {_selected.FullName}: {BuildRoleChangeSummary(_form)}.");
             _showRoleDialog = false;
             ShowToast("Contact roles updated.");
             await LoadAsync();
@@ -620,43 +617,45 @@
             switch (_pendingAction)
             {
                 case "Sync Workflow":
+                    await CreateContactRoleWorkflowEventAsync("Workflow Synced", $"Contact role synchronization requested for {_selected.FullName}: {RoleSummary(_selected)}.");
                     _showConfirmDialog = false;
-                    ShowToast("Workflow center opened for contact role synchronization.");
+                    ShowToast("Contact role workflow sync recorded and workflow center opened.");
                     Nav.NavigateTo($"/workflow?entity=ContactRole&entityId={_selected.ContactId}");
                     break;
                 case "Make Decision Maker":
-                    await UpdateRoleAsync(type: "Decision Maker", key: true);
+                    await UpdateRoleAsync(type: "Decision Maker", key: true, eventTitle: "Decision Maker Role Assigned", eventDetail: $"{_selected.FullName} was assigned Decision Maker role and marked as key for account workflow context.");
                     ShowToast("Contact marked as decision maker.");
                     break;
                 case "Mark Key":
-                    await UpdateRoleAsync(key: true);
+                    await UpdateRoleAsync(key: true, eventTitle: "Key Contact Flagged", eventDetail: $"{_selected.FullName} was flagged as a key contact for account teams.");
                     ShowToast("Contact marked as key.");
                     break;
                 case "Billing Contact":
-                    await UpdateRoleAsync(billing: true);
+                    await UpdateRoleAsync(billing: true, eventTitle: "Billing Contact Flagged", eventDetail: $"{_selected.FullName} was flagged for billing and receivable communications.");
                     ShowToast("Contact marked for billing.");
                     break;
                 case "Service Contact":
-                    await UpdateRoleAsync(service: true);
+                    await UpdateRoleAsync(service: true, eventTitle: "Service Contact Flagged", eventDetail: $"{_selected.FullName} was flagged for service requests and servicing workflows.");
                     ShowToast("Contact marked for service.");
                     break;
                 case "Portal Access":
-                    await UpdateRoleAsync(portal: true);
+                    await UpdateRoleAsync(portal: true, eventTitle: "Portal Access Flagged", eventDetail: $"{_selected.FullName} was marked as a portal user for invite and document sharing workflows.");
                     ShowToast("Portal access flag enabled.");
                     break;
                 case "Remove All Roles":
-                    await UpdateRoleAsync(key: false, billing: false, service: false, portal: false);
+                    await UpdateRoleAsync(key: false, billing: false, service: false, portal: false, eventTitle: "Role Flags Cleared", eventDetail: $"Key, billing, service, and portal flags were cleared for {_selected.FullName}.");
                     ShowToast("Contact role flags cleared.");
                     break;
                 case "Activate":
-                    await UpdateRoleAsync(status: "Active");
+                    await UpdateRoleAsync(status: "Active", eventTitle: "Contact Role Activated", eventDetail: $"Contact role status set to Active for {_selected.FullName}.");
                     ShowToast("Contact activated.");
                     break;
                 case "Deactivate":
-                    await UpdateRoleAsync(status: "Inactive");
+                    await UpdateRoleAsync(status: "Inactive", eventTitle: "Contact Role Deactivated", eventDetail: $"Contact role status set to Inactive for {_selected.FullName}.");
                     ShowToast("Contact deactivated.");
                     break;
                 case "Delete":
+                    await CreateContactRoleWorkflowEventAsync("Contact Role Deleted", $"Contact role assignment for {_selected.FullName} was deleted from the active register.");
                     await Api.DeleteContactAsync(_selected.ContactId);
                     ShowToast("Contact deleted.");
                     break;
@@ -678,7 +677,7 @@
         }
     }
 
-    async Task UpdateRoleAsync(string? type = null, string? status = null, bool? key = null, bool? billing = null, bool? service = null, bool? portal = null)
+    async Task UpdateRoleAsync(string? type = null, string? status = null, bool? key = null, bool? billing = null, bool? service = null, bool? portal = null, string? eventTitle = null, string? eventDetail = null)
     {
         var form = _selected.ToForm();
         form.ContactTypeCode = type ?? form.ContactTypeCode;
@@ -688,6 +687,26 @@
         form.IsServiceContact = service ?? form.IsServiceContact;
         form.IsPortalUser = portal ?? form.IsPortalUser;
         await Api.UpdateContactAsync(_selected.ContactId, BuildUpdateRequest(_selected, form));
+        if (!string.IsNullOrWhiteSpace(eventTitle))
+        {
+            await CreateContactRoleWorkflowEventAsync(eventTitle, eventDetail);
+        }
+    }
+
+    async Task CreateContactRoleWorkflowEventAsync(string eventTitle, string? eventDetail)
+    {
+        await Api.CreateContactWorkflowEventAsync(_selected.ContactId, new CreateContactWorkflowEventRequest
+        {
+            TenantId = _tenantId,
+            ContactId = _selected.ContactId,
+            EventType = "ContactRole",
+            EventTitle = eventTitle,
+            EventDetail = eventDetail,
+            RelatedEntityName = "Account",
+            RelatedEntityId = _selected.AccountId == Guid.Empty ? null : _selected.AccountId,
+            EventDateUtc = DateTime.UtcNow,
+            CreatedByUserId = _tenantAdminUserId
+        });
     }
 
     UpdateContactRequest BuildUpdateRequest(ContactRoleRow row, RoleAssignmentFormModel form) => new()
@@ -808,6 +827,17 @@
         return roles.Count == 0 ? "No responsibility flags" : string.Join(' ', roles);
     }
 
+    static string BuildRoleChangeSummary(RoleAssignmentFormModel form)
+    {
+        var roles = new List<string>();
+        if (form.IsKeyContact) roles.Add("Key");
+        if (form.IsBillingContact) roles.Add("Billing");
+        if (form.IsServiceContact) roles.Add("Service");
+        if (form.IsPortalUser) roles.Add("Portal");
+        var responsibilities = roles.Count == 0 ? "no responsibility flags" : string.Join(", ", roles);
+        return $"{form.ContactTypeCode}, {form.StatusCode}, {responsibilities}";
+    }
+
     static string RoleIcon(string? role) => role switch
     {
         "Billing" => "bi-receipt",
@@ -829,18 +859,6 @@
     }
 
     void HideToast() => _toastVisible = false;
-
-    void BuildFallbackRows()
-    {
-        var now = DateTime.UtcNow;
-        var accountId = Guid.NewGuid();
-        _rows.AddRange(
-        [
-            ContactRoleRow.From(new ContactDto { ContactId = Guid.NewGuid(), TenantId = _tenantId, AccountId = accountId, AccountName = "ACME Corporation", FirstName = "James", LastName = "Brady", Email = "james.brady@acmecorp.com", Phone = "+1 312 555 0111", JobTitle = "VP of Risk Management", ContactTypeCode = "Decision Maker", StatusCode = "Active", PreferredContactMethod = "Email", IsKeyContact = true, IsBillingContact = true, IsServiceContact = true, IsPortalUser = true, CreatedDateUtc = now.AddDays(-120) }),
-            ContactRoleRow.From(new ContactDto { ContactId = Guid.NewGuid(), TenantId = _tenantId, AccountId = accountId, AccountName = "XYZ Industries", FirstName = "Lisa", LastName = "Chen", Email = "lisa.chen@xyzindustries.com", Phone = "+1 404 555 0124", JobTitle = "CFO", ContactTypeCode = "Billing", StatusCode = "Active", PreferredContactMethod = "Email", IsBillingContact = true, CreatedDateUtc = now.AddDays(-95) }),
-            ContactRoleRow.From(new ContactDto { ContactId = Guid.NewGuid(), TenantId = _tenantId, AccountId = accountId, AccountName = "ABC Financial Services", FirstName = "Robert", LastName = "Ward", Email = "robert.ward@abcfinancial.com", Phone = "+1 617 555 0200", JobTitle = "General Counsel", ContactTypeCode = "Executive", StatusCode = "Active", PreferredContactMethod = "Phone", IsKeyContact = true, CreatedDateUtc = now.AddDays(-45) })
-        ]);
-    }
 
     sealed record TabDef(string Key, string Label, string Icon);
     sealed record ActionMenuItem(string Text, string IconCss);

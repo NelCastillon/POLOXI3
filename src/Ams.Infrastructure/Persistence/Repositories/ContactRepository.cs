@@ -162,6 +162,87 @@ SELECT COUNT(*) FROM Client.Contact WHERE AccountId = @AccountId AND IsDeleted =
         };
     }
 
+    public async Task<IReadOnlyList<ContactWorkflowEventDto>> GetWorkflowEventsAsync(Guid contactId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT WorkflowEventId, TenantId, ContactId, EventType, EventTitle, EventDetail,
+       RelatedEntityName, RelatedEntityId, EventDateUtc, CreatedDateUtc, CreatedByUserId
+FROM Client.ContactWorkflowEvent
+WHERE ContactId = @ContactId AND IsDeleted = 0
+ORDER BY EventDateUtc DESC, CreatedDateUtc DESC;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureWorkflowEventTableAsync(cn, cancellationToken);
+        var items = await cn.QueryAsync<ContactWorkflowEventDto>(new CommandDefinition(sql, new { ContactId = contactId }, cancellationToken: cancellationToken));
+        return items.AsList();
+    }
+
+    public async Task<Guid> CreateWorkflowEventAsync(CreateContactWorkflowEventRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+INSERT INTO Client.ContactWorkflowEvent
+(
+    WorkflowEventId, TenantId, ContactId, EventType, EventTitle, EventDetail,
+    RelatedEntityName, RelatedEntityId, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted
+)
+VALUES
+(
+    @WorkflowEventId, @TenantId, @ContactId, @EventType, @EventTitle, @EventDetail,
+    @RelatedEntityName, @RelatedEntityId, COALESCE(@EventDateUtc, SYSUTCDATETIME()), SYSUTCDATETIME(), @CreatedByUserId, 0
+);";
+
+        var id = Guid.NewGuid();
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureWorkflowEventTableAsync(cn, cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            WorkflowEventId = id,
+            request.TenantId,
+            request.ContactId,
+            request.EventType,
+            request.EventTitle,
+            request.EventDetail,
+            request.RelatedEntityName,
+            request.RelatedEntityId,
+            request.EventDateUtc,
+            request.CreatedByUserId
+        }, cancellationToken: cancellationToken));
+
+        return id;
+    }
+
+    private static Task EnsureWorkflowEventTableAsync(System.Data.IDbConnection cn, CancellationToken cancellationToken)
+    {
+        const string sql = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Client')
+    EXEC(N'CREATE SCHEMA Client');
+
+IF OBJECT_ID(N'Client.ContactWorkflowEvent', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.ContactWorkflowEvent
+    (
+        WorkflowEventId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ContactWorkflowEvent PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ContactId UNIQUEIDENTIFIER NOT NULL,
+        EventType NVARCHAR(50) NOT NULL,
+        EventTitle NVARCHAR(200) NOT NULL,
+        EventDetail NVARCHAR(1000) NULL,
+        RelatedEntityName NVARCHAR(100) NULL,
+        RelatedEntityId UNIQUEIDENTIFIER NULL,
+        EventDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ContactWorkflowEvent_Date DEFAULT SYSUTCDATETIME(),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ContactWorkflowEvent_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_ContactWorkflowEvent_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Client.ContactWorkflowEvent', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_ContactWorkflowEvent_ContactId_Date' AND object_id = OBJECT_ID(N'Client.ContactWorkflowEvent'))
+    CREATE NONCLUSTERED INDEX IX_ContactWorkflowEvent_ContactId_Date ON Client.ContactWorkflowEvent(ContactId, IsDeleted, EventDateUtc DESC, CreatedDateUtc DESC);";
+
+        return cn.ExecuteAsync(new CommandDefinition(sql, cancellationToken: cancellationToken));
+    }
+
     public async Task UpdateAsync(Guid id, UpdateContactRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"

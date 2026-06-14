@@ -559,10 +559,15 @@ CREATE TABLE Client.Contact (
     ContactTypeCode   NVARCHAR(50)     NOT NULL DEFAULT 'Primary',
     IsBillingContact  BIT              NOT NULL DEFAULT 0,
     IsPortalUser      BIT              NOT NULL DEFAULT 0,
+    IsKeyContact      BIT              NOT NULL DEFAULT 0,
+    IsServiceContact  BIT              NOT NULL DEFAULT 0,
+    ParentContactId   UNIQUEIDENTIFIER NULL,
+    PreferredContactMethod NVARCHAR(50) NULL,
     StatusCode        NVARCHAR(50)     NOT NULL DEFAULT 'Active',
     CreatedDateUtc    DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
     ModifiedDateUtc   DATETIME2        NULL,
     CreatedByUserId   UNIQUEIDENTIFIER NULL,
+    ModifiedByUserId  UNIQUEIDENTIFIER NULL,
     IsDeleted         BIT              NOT NULL DEFAULT 0
 );
 

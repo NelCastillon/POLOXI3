@@ -10,6 +10,8 @@ public interface IContactRepository
     Task<ContactDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
     Task<PagedResult<ContactDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default);
     Task<PagedResult<ContactDto>> GetByAccountIdAsync(Guid accountId, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<ContactWorkflowEventDto>> GetWorkflowEventsAsync(Guid contactId, CancellationToken cancellationToken = default);
+    Task<Guid> CreateWorkflowEventAsync(CreateContactWorkflowEventRequest request, CancellationToken cancellationToken = default);
     Task UpdateAsync(Guid id, UpdateContactRequest request, CancellationToken cancellationToken = default);
     Task DeleteAsync(Guid id, Guid? userId = null, CancellationToken cancellationToken = default);
 }

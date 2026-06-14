@@ -1523,6 +1523,16 @@ public sealed partial class ApiClient
     public Task<PagedResult<ContactDto>?> GetContactsByAccountAsync(Guid accountId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<ContactDto>>($"api/contacts/by-account/{accountId}", cancellationToken);
 
+    public Task<IReadOnlyList<ContactWorkflowEventDto>?> GetContactWorkflowEventsAsync(Guid contactId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<ContactWorkflowEventDto>>($"api/contacts/{contactId}/workflow-events", cancellationToken);
+
+    public async Task<Guid> CreateContactWorkflowEventAsync(Guid contactId, CreateContactWorkflowEventRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/contacts/{contactId}/workflow-events", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
     public async Task UpdateContactAsync(Guid id, UpdateContactRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PutAsJsonAsync($"api/contacts/{id}", request, cancellationToken);

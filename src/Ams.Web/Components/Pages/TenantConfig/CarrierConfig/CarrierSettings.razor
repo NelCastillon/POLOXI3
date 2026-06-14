@@ -1,220 +1,422 @@
 @page "/tenant/carriers/settings"
 @using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using System.Text.Json
 @using Ams.Application.Common.Dtos
+@using Ams.Application.Features.AutomationJobs
 @using Ams.Application.Features.CarrierConfig
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
 
 <PageTitle>Carrier Settings — AMS</PageTitle>
 
-<EnterpriseToast @ref="_toast" NewestOnTop="true" ShowCloseButton="true" Timeout="4000" />
-
-<AppPageHeader Title="Carrier Settings"
-               Subtitle="Manage dynamic carrier, download, matching, storage, security, notification, and worker executor settings from the database"
-               Icon="bi bi-sliders2">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Add setting</button>
-    </Actions>
-</AppPageHeader>
-
-<div class="pc-kpi-strip">
-    <button type="button" class="pc-kpi-card @(_activeFilter == string.Empty ? "pc-kpi-card--active" : null)" title="Show all settings" @onclick='() => SetFilter(string.Empty)'>
-        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-sliders2"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total</div></div>
-    </button>
-    <button type="button" class="pc-kpi-card @(_activeFilter == "active" ? "pc-kpi-card--active" : null)" title="Show active settings" @onclick='() => SetFilter("active")'>
-        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsActive)</div><div class="pc-kpi-label">Active</div></div>
-    </button>
-    <button type="button" class="pc-kpi-card @(_activeFilter == "required" ? "pc-kpi-card--active" : null)" title="Show required settings" @onclick='() => SetFilter("required")'>
-        <span class="pc-kpi-icon pc-kpi-icon--warning"><i class="bi bi-asterisk"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsRequired)</div><div class="pc-kpi-label">Required</div></div>
-    </button>
-    <button type="button" class="pc-kpi-card @(_activeFilter == "secret" ? "pc-kpi-card--active" : null)" title="Show secret settings" @onclick='() => SetFilter("secret")'>
-        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-shield-lock"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsSecret)</div><div class="pc-kpi-label">Secrets</div></div>
-    </button>
-</div>
-
-<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search setting, category, executor, scope, or data type..." />
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError
+    <div class="cs-toast cs-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="cs-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-<div class="um-grid-card cs-grid-card">
-    @if (_loading)
-    {
-        <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading carrier settings...</span></div>
-    }
-
-    <div class="cs-toolbar">
-        <div>
-            <div class="text-uppercase text-primary fw-semibold small">Database-backed module settings</div>
-            <h2 class="h5 mb-0">@_filtered.Count carrier settings</h2>
-        </div>
-        <select class="um-input cs-category" @bind="_categoryFilter" @bind:after="ApplyFilter">
-            <option value="">All categories</option>
-            @foreach (var category in CategoryOptions)
-            {
-                <option value="@category">@category</option>
-            }
-        </select>
-    </div>
-
-    @if (!_filtered.Any() && !_loading)
-    {
-        <div class="cs-empty"><i class="bi bi-sliders2"></i><strong>No carrier settings found</strong><span>Run migrations to seed Agency.CarrierSetting or add a setting.</span></div>
-    }
-    else
-    {
-        <div class="table-responsive enterprise-table-wrap">
-            <table class="table table-hover align-middle mb-0 enterprise-table">
-                <thead>
-                    <tr>
-                        <th>Setting</th>
-                        <th>Category</th>
-                        <th>Scope</th>
-                        <th>Type</th>
-                        <th>Value</th>
-                        <th>Executor</th>
-                        <th>Status</th>
-                        <th class="text-end">Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach (var item in _filtered)
-                    {
-                        <tr class="@(item.CarrierSettingId == _selected?.CarrierSettingId ? "table-primary-subtle" : null)" @onclick="() => Select(item)">
-                            <td><strong>@item.SettingName</strong><div class="small text-muted"><code>@item.SettingCode</code></div></td>
-                            <td>@item.CategoryCode</td>
-                            <td>@item.ScopeCode</td>
-                            <td>@item.DataTypeCode</td>
-                            <td>@DisplayValue(item)</td>
-                            <td><small>@(item.AppliesToExecutorType ?? "Module")</small></td>
-                            <td><span class="um-badge @(item.IsActive ? "um-badge-success" : "um-badge-neutral")">@(item.IsActive ? "Active" : "Inactive")</span></td>
-                            <td class="text-end" @onclick:stopPropagation="true">
-                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil"></i></button>
-                                <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(item)"><i class="bi bi-trash"></i></button>
-                            </td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        </div>
-    }
-</div>
-
-@if (_selected is not null)
+@if (_showConfirm && _confirmAction is not null)
 {
-    <div class="cs-detail um-grid-card">
-        <div><span class="text-uppercase text-primary fw-semibold small">Selected setting</span><h3>@_selected.SettingName</h3><p>@_selected.Description</p></div>
-        <div class="cs-detail-grid">
-            <div><span>Validation</span><code>@_selected.ValidationJson</code></div>
-            <div><span>UI schema</span><code>@_selected.UiSchemaJson</code></div>
-            <div><span>Default</span><strong>@(_selected.DefaultValue ?? "—")</strong></div>
-            <div><span>Secret</span><strong>@(_selected.IsSecret ? "Yes" : "No")</strong></div>
+    <div class="cs-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="cs-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="carrierSettingConfirmTitle" @onclick:stopPropagation="true">
+            <div class="cs-confirm-icon cs-confirm-@_confirmAction.Kind"><i class="bi @_confirmAction.Icon" aria-hidden="true"></i></div>
+            <h2 id="carrierSettingConfirmTitle">@_confirmAction.Title</h2>
+            <p>@_confirmAction.Message</p>
+            <div class="cs-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_busy">Cancel</button>
+                <button type="button" class="um-btn @_confirmAction.ButtonClass" @onclick="ExecuteConfirmedAsync" disabled="@_busy">
+                    @if (_busy)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    @_confirmAction.ButtonText
+                </button>
+            </div>
         </div>
     </div>
 }
 
 @if (_showForm)
 {
-    <div class="cs-backdrop" @onclick="CloseForm">
-        <div class="cs-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
-            <EditForm Model="_form" OnValidSubmit="SaveAsync">
-                <DataAnnotationsValidator />
-                <div class="um-modal-header"><i class="bi bi-sliders2"></i><span>@(_editId.HasValue ? "Edit carrier setting" : "Add carrier setting")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
-                <div class="um-modal-body">
-                    <div class="um-form-grid">
-                        <div class="um-field"><label>Setting code <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_form.SettingCode" /><ValidationMessage For="() => _form.SettingCode" class="text-danger" /></div>
-                        <div class="um-field"><label>Setting name <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_form.SettingName" /><ValidationMessage For="() => _form.SettingName" class="text-danger" /></div>
-                        <div class="um-field"><label>Category <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_form.CategoryCode" list="carrier-setting-categories" /><ValidationMessage For="() => _form.CategoryCode" class="text-danger" /></div>
-                        <div class="um-field"><label>Scope <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_form.ScopeCode" list="carrier-setting-scopes" /><ValidationMessage For="() => _form.ScopeCode" class="text-danger" /></div>
-                        <div class="um-field"><label>Data type <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_form.DataTypeCode" list="carrier-setting-types" /><ValidationMessage For="() => _form.DataTypeCode" class="text-danger" /></div>
-                        <div class="um-field"><label>Sort order</label><InputNumber class="um-input" @bind-Value="_form.SortOrder" /><ValidationMessage For="() => _form.SortOrder" class="text-danger" /></div>
-                        <div class="um-field um-field--full"><label>Applies to executor</label><InputText class="um-input" @bind-Value="_form.AppliesToExecutorType" list="carrier-setting-executors" /><ValidationMessage For="() => _form.AppliesToExecutorType" class="text-danger" /></div>
-                        <div class="um-field um-field--full"><label>Description</label><InputTextArea class="um-input" rows="2" @bind-Value="_form.Description" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
-                        <div class="um-field um-field--full"><label>Setting value</label><InputTextArea class="um-input" rows="2" @bind-Value="_form.SettingValue" /><ValidationMessage For="() => _form.SettingValue" class="text-danger" /></div>
-                        <div class="um-field um-field--full"><label>Default value</label><InputTextArea class="um-input" rows="2" @bind-Value="_form.DefaultValue" /><ValidationMessage For="() => _form.DefaultValue" class="text-danger" /></div>
-                        <div class="um-field um-field--full"><label>Validation JSON <span class="text-danger">*</span></label><InputTextArea class="um-input" rows="3" @bind-Value="_form.ValidationJson" /><ValidationMessage For="() => _form.ValidationJson" class="text-danger" /></div>
-                        <div class="um-field um-field--full"><label>UI schema JSON <span class="text-danger">*</span></label><InputTextArea class="um-input" rows="3" @bind-Value="_form.UiSchemaJson" /><ValidationMessage For="() => _form.UiSchemaJson" class="text-danger" /></div>
-                        <label class="um-field um-field--checkbox"><InputCheckbox @bind-Value="_form.IsRequired" /> Required</label>
-                        <label class="um-field um-field--checkbox"><InputCheckbox @bind-Value="_form.IsSecret" /> Secret</label>
-                        <label class="um-field um-field--checkbox"><InputCheckbox @bind-Value="_form.IsActive" /> Active</label>
+    <div class="cs-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="cs-setting-modal" role="dialog" aria-modal="true" aria-labelledby="carrierSettingFormTitle" @onclick:stopPropagation="true">
+            <div class="cs-modal-header">
+                <div class="cs-modal-title">
+                    <span class="cs-modal-icon"><i class="bi bi-sliders2" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 id="carrierSettingFormTitle">@(_editId.HasValue ? "Edit carrier setting" : "Create carrier setting")</h2>
+                        <p>Configure module-level carrier behavior, worker executor parameters, validation schema, and UI metadata.</p>
                     </div>
                 </div>
-                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save changes" : "Create setting")</button></div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseForm" disabled="@_busy" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="HandleInvalidSubmitAsync">
+                <DataAnnotationsValidator />
+                <div class="cs-modal-body">
+                    <div class="cs-form-banner">
+                        <i class="bi bi-database-check" aria-hidden="true"></i>
+                        <div>
+                            <strong>Database source of truth</strong>
+                            <span>Settings save into Agency.CarrierSetting and can be synced into the carrier download automation workflow.</span>
+                        </div>
+                    </div>
+                    <div class="cs-form-grid">
+                        <div class="cs-field">
+                            <label>Setting code <span>*</span></label>
+                            <InputText class="cs-input" @bind-Value="_form.SettingCode" placeholder="DOWNLOAD_ENABLED" />
+                            <ValidationMessage For="() => _form.SettingCode" class="text-danger" />
+                        </div>
+                        <div class="cs-field">
+                            <label>Setting name <span>*</span></label>
+                            <InputText class="cs-input" @bind-Value="_form.SettingName" placeholder="Carrier Download Enabled" />
+                            <ValidationMessage For="() => _form.SettingName" class="text-danger" />
+                        </div>
+                        <div class="cs-field">
+                            <label>Category <span>*</span></label>
+                            <InputSelect class="cs-input" @bind-Value="_form.CategoryCode">
+                                @foreach (var category in CategoryChoices)
+                                {
+                                    <option value="@category">@category</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.CategoryCode" class="text-danger" />
+                        </div>
+                        <div class="cs-field">
+                            <label>Scope <span>*</span></label>
+                            <InputSelect class="cs-input" @bind-Value="_form.ScopeCode">
+                                @foreach (var scope in ScopeChoices)
+                                {
+                                    <option value="@scope">@scope</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.ScopeCode" class="text-danger" />
+                        </div>
+                        <div class="cs-field">
+                            <label>Data type <span>*</span></label>
+                            <InputSelect class="cs-input" @bind-Value="_form.DataTypeCode">
+                                @foreach (var type in TypeChoices)
+                                {
+                                    <option value="@type">@type</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.DataTypeCode" class="text-danger" />
+                        </div>
+                        <div class="cs-field">
+                            <label>Sort order</label>
+                            <InputNumber class="cs-input" @bind-Value="_form.SortOrder" />
+                            <ValidationMessage For="() => _form.SortOrder" class="text-danger" />
+                        </div>
+                        <div class="cs-field cs-field-wide">
+                            <label>Applies to executor</label>
+                            <InputSelect class="cs-input" @bind-Value="_form.AppliesToExecutorType">
+                                <option value="">Module setting</option>
+                                @foreach (var executor in ExecutorChoices)
+                                {
+                                    <option value="@executor">@executor</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.AppliesToExecutorType" class="text-danger" />
+                        </div>
+                        <div class="cs-field cs-field-wide">
+                            <label>Description</label>
+                            <InputTextArea class="cs-input" rows="3" @bind-Value="_form.Description" placeholder="Explain how this setting controls carrier setup or automation." />
+                            <ValidationMessage For="() => _form.Description" class="text-danger" />
+                        </div>
+                        <div class="cs-field cs-field-wide">
+                            <label>Setting value</label>
+                            <InputTextArea class="cs-input" rows="3" @bind-Value="_form.SettingValue" placeholder="Current value" />
+                            <ValidationMessage For="() => _form.SettingValue" class="text-danger" />
+                        </div>
+                        <div class="cs-field cs-field-wide">
+                            <label>Default value</label>
+                            <InputTextArea class="cs-input" rows="2" @bind-Value="_form.DefaultValue" placeholder="Fallback value" />
+                            <ValidationMessage For="() => _form.DefaultValue" class="text-danger" />
+                        </div>
+                        <div class="cs-field cs-field-wide">
+                            <label>Validation JSON <span>*</span></label>
+                            <InputTextArea class="cs-input cs-code-input" rows="4" @bind-Value="_form.ValidationJson" />
+                            <ValidationMessage For="() => _form.ValidationJson" class="text-danger" />
+                        </div>
+                        <div class="cs-field cs-field-wide">
+                            <label>UI schema JSON <span>*</span></label>
+                            <InputTextArea class="cs-input cs-code-input" rows="4" @bind-Value="_form.UiSchemaJson" />
+                            <ValidationMessage For="() => _form.UiSchemaJson" class="text-danger" />
+                        </div>
+                        <div class="cs-check-row cs-field-wide">
+                            <label><InputCheckbox @bind-Value="_form.IsRequired" /> Required</label>
+                            <label><InputCheckbox @bind-Value="_form.IsSecret" /> Secret</label>
+                            <label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="cs-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
+                        @if (_busy)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        @(_editId.HasValue ? "Save changes" : "Create setting")
+                    </button>
+                </div>
             </EditForm>
         </div>
     </div>
 }
 
-@if (_showDelete && _deleteTarget is not null)
-{
-    <div class="cs-backdrop" @onclick="CancelDelete">
-        <div class="um-confirm-dialog cs-confirm" @onclick:stopPropagation="true">
-            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3-fill"></i></div>
-            <div class="um-confirm-title">Delete carrier setting</div>
-            <div class="um-confirm-body">Delete <strong>@_deleteTarget.SettingName</strong>?</div>
-            <div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="CancelDelete">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div>
+<div class="cs-enterprise-page">
+    <section class="cs-hero">
+        <div class="cs-hero-left">
+            <span class="cs-hero-icon"><i class="bi bi-sliders2" aria-hidden="true"></i></span>
+            <div>
+                <div class="cs-title-row">
+                    <h1>Carrier Settings</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> Agency.CarrierSetting</span>
+                    <span><i class="bi bi-diagram-3" aria-hidden="true"></i> Workflow synced</span>
+                </div>
+                <p>Manage carrier module settings, worker executor parameters, validation schema, secret controls, and automation sync from live tenant data.</p>
+            </div>
         </div>
-    </div>
-}
+        <div class="cs-hero-actions">
+            <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh carrier settings"><i class="bi @(_loading ? "bi-arrow-repeat cs-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button class="um-btn um-btn-ghost" @onclick="ConfirmSyncWorkflow" disabled="@_loading" title="Sync carrier settings to automation workflow"><i class="bi bi-diagram-3" aria-hidden="true"></i> Sync workflow</button>
+            <button class="um-btn um-btn-primary" @onclick="OpenCreate" title="Create carrier setting"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Setting</button>
+        </div>
+    </section>
 
-<datalist id="carrier-setting-categories">@foreach (var x in CategoryOptions){<option value="@x"></option>}</datalist>
-<datalist id="carrier-setting-scopes">@foreach (var x in ScopeOptions){<option value="@x"></option>}</datalist>
-<datalist id="carrier-setting-types">@foreach (var x in TypeOptions){<option value="@x"></option>}</datalist>
-<datalist id="carrier-setting-executors">@foreach (var x in ExecutorOptions){<option value="@x"></option>}</datalist>
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="cs-error-banner" style="border-left: 4px solid #dc3545; animation: cs-shake 0.3s ease;"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_loadError</div>
+    }
 
-<style>
-    @@keyframes um-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }
-    .pc-kpi-card { cursor: pointer; }
-    .cs-grid-card { margin-top: 1rem; }
-    .cs-toolbar { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:1rem; border-bottom:1px solid #e5e7eb; }
-    .cs-category { max-width: 18rem; }
-    .cs-empty { display:grid; gap:.35rem; justify-items:center; padding:3rem; color:#64748b; }
-    .cs-empty i { font-size:2rem; color:#94a3b8; }
-    .cs-detail { margin-top:1rem; padding:1rem; }
-    .cs-detail h3 { margin:0; }
-    .cs-detail-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:.75rem; }
-    .cs-detail-grid > div { background:#f8fafc; border:1px solid #e5e7eb; border-radius:.75rem; padding:.75rem; display:grid; gap:.25rem; }
-    .cs-detail-grid span { color:#64748b; font-size:.78rem; text-transform:uppercase; font-weight:700; }
-    .cs-detail-grid code { white-space:pre-wrap; word-break:break-word; }
-    .cs-backdrop { position:fixed; inset:0; z-index:1050; display:flex; align-items:center; justify-content:center; background:rgba(15,23,42,.48); padding:1rem; }
-    .cs-modal { width:min(980px, 96vw); max-height:92vh; overflow:auto; background:white; border-radius:1rem; box-shadow:0 24px 70px rgba(15,23,42,.28); }
-    .cs-confirm { background:white; max-width:440px; }
-</style>
+    <section class="cs-kpi-strip" aria-label="Carrier setting metrics">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricCardClass(metric)" title="@metric.Caption" @onclick="@(() => SetQuickFilter(metric.Filter))">
+                <span class="cs-kpi-icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                <span><span class="cs-kpi-val">@metric.Value</span><span class="cs-kpi-lbl">@metric.Label</span><small>@metric.Caption</small></span>
+            </button>
+        }
+    </section>
+
+    <section class="cs-workflow-strip" aria-label="Carrier settings workflow actions">
+        <button class="cs-workflow-card" @onclick="ShowCategoriesView"><i class="bi bi-columns-gap" aria-hidden="true"></i><span><strong>Category view</strong><span>Group settings by module area.</span></span></button>
+        <button class="cs-workflow-card" @onclick="ShowWorkflowView"><i class="bi bi-diagram-3" aria-hidden="true"></i><span><strong>Executor sync</strong><span>Review workflow-bound settings.</span></span></button>
+        <button class="cs-workflow-card" @onclick="ShowSecurityView"><i class="bi bi-shield-lock" aria-hidden="true"></i><span><strong>Secret review</strong><span>Audit security-sensitive values.</span></span></button>
+        <button class="cs-workflow-card" @onclick="ShowRequiredSettings"><i class="bi bi-asterisk" aria-hidden="true"></i><span><strong>Required setup</strong><span>Complete required module settings.</span></span></button>
+    </section>
+
+    <section class="cs-search-panel">
+        <div class="cs-search-wrap">
+            <span class="cs-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="cs-search-body">
+                <label for="carrierSettingSearchInput">Search carrier settings</label>
+                <input id="carrierSettingSearchInput" class="cs-search-input" value="@_search" @oninput="@(e => OnSearchChanged(e))" placeholder="Search setting, code, category, scope, type, executor, value, or description..." />
+                <span class="cs-search-hint">Filters are applied instantly against the loaded tenant settings.</span>
+            </div>
+        </div>
+        <select class="cs-filter-select" value="@_categoryFilter" @onchange="@(e => OnCategoryFilterChanged(e))"><option value="">All categories</option>@foreach (var option in CategoryOptions) { <option value="@option">@option</option> }</select>
+        <select class="cs-filter-select" value="@_scopeFilter" @onchange="@(e => OnScopeFilterChanged(e))"><option value="">All scopes</option>@foreach (var option in ScopeOptions) { <option value="@option">@option</option> }</select>
+        <select class="cs-filter-select" value="@_typeFilter" @onchange="@(e => OnTypeFilterChanged(e))"><option value="">All types</option>@foreach (var option in TypeOptions) { <option value="@option">@option</option> }</select>
+        <select class="cs-filter-select" value="@_executorFilter" @onchange="@(e => OnExecutorFilterChanged(e))"><option value="">All executors</option>@foreach (var option in ExecutorOptions) { <option value="@option">@option</option> }</select>
+        <div class="cs-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (_selected.Count > 0)
+    {
+        <section class="cs-bulk-bar">
+            <span>@_selected.Count selected</span>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ConfirmBulkActivate"><i class="bi bi-check-circle" aria-hidden="true"></i> Activate</button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ConfirmBulkDeactivate"><i class="bi bi-pause-circle" aria-hidden="true"></i> Deactivate</button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ConfirmBulkReset"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset values</button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearSelection" title="Clear selection"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+        </section>
+    }
+
+    <section class="cs-view-tabs" aria-label="Carrier setting views">
+        @foreach (var view in Views)
+        {
+            <button type="button" class="@ViewButtonClass(view)" @onclick="@(() => SetView(view.Id))"><i class="bi @view.Icon" aria-hidden="true"></i> @view.Label</button>
+        }
+    </section>
+
+    <section class="cs-content-layout">
+        <main class="cs-main-card">
+            @if (_loading)
+            {
+                <div class="cs-loading"><i class="bi bi-arrow-repeat cs-spin" aria-hidden="true"></i><strong>Loading carrier setting workspace...</strong></div>
+            }
+            else if (_filtered.Count == 0)
+            {
+                <div class="cs-empty-state"><i class="bi bi-sliders2" aria-hidden="true"></i><strong>No carrier settings match this view</strong><span>Adjust filters, run migrations, or create a setting.</span><button class="um-btn um-btn-primary" @onclick="OpenCreate">Create setting</button></div>
+            }
+            else if (_view == "table")
+            {
+                <div class="cs-table-scroll">
+                    <table class="cs-table">
+                        <thead>
+                            <tr><th><input type="checkbox" checked="@AllPageSelected" @onchange="@(e => ToggleCurrentPageSelection(e))" aria-label="Select all settings on this page" /></th><th>Setting</th><th>Category</th><th>Scope</th><th>Type</th><th>Value</th><th>Executor</th><th>Status</th><th></th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in _paged)
+                            {
+                                <tr class="@RowClass(item)" @onclick="@(() => OpenDetail(item))">
+                                    <td @onclick:stopPropagation="true"><input type="checkbox" checked="@IsSelected(item)" @onchange="@(() => ToggleSelection(item))" aria-label="Select setting" /></td>
+                                    <td><div class="cs-name-cell"><span class="cs-avatar @AvatarColor(item.CategoryCode)" aria-hidden="true">@Initials(item.SettingName)</span><span><strong>@item.SettingName</strong><small><code>@item.SettingCode</code> · @AgeLabel(item)</small></span></div></td>
+                                    <td><button class="cs-category-badge" @onclick:stopPropagation="true" @onclick="@(() => FilterCategory(item.CategoryCode))"><i class="bi @CategoryIcon(item.CategoryCode)" aria-hidden="true"></i> @item.CategoryCode</button></td>
+                                    <td><span class="cs-pill cs-pill-scope">@item.ScopeCode</span></td>
+                                    <td><span class="cs-pill cs-pill-type">@item.DataTypeCode</span></td>
+                                    <td class="cs-value-cell">@DisplayValue(item)</td>
+                                    <td><small>@(item.AppliesToExecutorType ?? "Module")</small></td>
+                                    <td><span class="@StatusBadge(item)">@(item.IsActive ? "Active" : "Inactive")</span></td>
+                                    <td @onclick:stopPropagation="true"><div class="cs-row-actions"><button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => OpenEdit(item))" title="Edit setting"><i class="bi bi-pencil" aria-hidden="true"></i></button><button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => ConfirmToggleActive(item))" title="@(item.IsActive ? "Deactivate" : "Activate")"><i class="bi @(item.IsActive ? "bi-pause-circle" : "bi-check-circle")" aria-hidden="true"></i></button><button class="um-btn um-btn-ghost um-btn-sm" @onclick="@(() => ConfirmReset(item))" title="Reset to default"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i></button><button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="@(() => ConfirmDelete(item))" title="Delete setting"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="cs-pager"><span>@PageSummary</span><div><button class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_pageIndex <= 1)" title="Previous page"><i class="bi bi-chevron-left" aria-hidden="true"></i></button><span>Page @_pageIndex of @TotalPages</span><button class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_pageIndex >= TotalPages)" title="Next page"><i class="bi bi-chevron-right" aria-hidden="true"></i></button></div></div>
+            }
+            else if (_view == "categories")
+            {
+                <div class="cs-category-grid">
+                    @foreach (var row in CategoryRows)
+                    {
+                        <article class="cs-category-card" @onclick="@(() => FilterCategory(row.Category))"><div><span class="cs-category-icon"><i class="bi @CategoryIcon(row.Category)" aria-hidden="true"></i></span><span><strong>@row.Category</strong><small>@row.Total settings · @row.Active active</small></span></div><strong>@row.Required required</strong><div class="cs-meter"><i style="width:@row.ActivePercent.ToString("F0", CultureInfo.InvariantCulture)%"></i></div></article>
+                    }
+                </div>
+            }
+            else if (_view == "workflow")
+            {
+                <div class="cs-workflow-grid">
+                    @foreach (var row in ExecutorRows)
+                    {
+                        <article class="cs-executor-card" @onclick="@(() => FilterExecutor(row.Executor))"><div><span class="cs-category-icon"><i class="bi bi-cpu" aria-hidden="true"></i></span><span><strong>@row.Executor</strong><small>@row.Total settings · @row.Secret secrets</small></span></div><strong>@row.Required required</strong><div class="cs-meter"><i style="width:@row.RequiredPercent.ToString("F0", CultureInfo.InvariantCulture)%"></i></div></article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="cs-security-grid">
+                    @foreach (var item in _filtered.Where(x => x.IsSecret || x.CategoryCode.Equals("Security", StringComparison.OrdinalIgnoreCase) || x.IsRequired))
+                    {
+                        <article class="cs-security-card" @onclick="@(() => OpenDetail(item))"><div><span class="cs-category-icon"><i class="bi @(item.IsSecret ? "bi-shield-lock" : "bi-patch-check")" aria-hidden="true"></i></span><span><strong>@item.SettingName</strong><small>@item.CategoryCode · @(item.IsSecret ? "secret" : "required")</small></span></div><span class="@StatusBadge(item)">@(item.IsActive ? "Active" : "Inactive")</span></article>
+                    }
+                </div>
+            }
+        </main>
+
+        <aside class="cs-detail-card">
+            @if (_detail is null)
+            {
+                <div class="cs-detail-empty"><i class="bi bi-sliders" aria-hidden="true"></i><strong>Select a setting</strong><span>Review schema, value, executor mapping, and related workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="cs-detail-head"><div><span class="cs-detail-eyebrow"><i class="bi @CategoryIcon(_detail.CategoryCode)" aria-hidden="true"></i> @_detail.CategoryCode</span><h2>@_detail.SettingName</h2><p><code>@_detail.SettingCode</code></p></div><span class="@StatusBadge(_detail)">@(_detail.IsActive ? "Active" : "Inactive")</span></div>
+                <div class="cs-detail-body">
+                    <div class="cs-detail-summary"><div><span>Scope</span><strong>@_detail.ScopeCode</strong></div><div><span>Type</span><strong>@_detail.DataTypeCode</strong></div><div><span>Required</span><strong>@(_detail.IsRequired ? "Yes" : "No")</strong></div><div><span>Secret</span><strong>@(_detail.IsSecret ? "Yes" : "No")</strong></div></div>
+                    <div class="cs-info-card"><span><i class="bi bi-info-circle" aria-hidden="true"></i> @(_detail.Description ?? "No description captured.")</span><span><i class="bi bi-cpu" aria-hidden="true"></i> @(_detail.AppliesToExecutorType ?? "Module setting")</span><span><i class="bi bi-database" aria-hidden="true"></i> Value: @DisplayValue(_detail)</span></div>
+                    <div class="cs-schema-card"><strong>Validation JSON</strong><code>@_detail.ValidationJson</code><strong>UI schema JSON</strong><code>@_detail.UiSchemaJson</code><strong>Default</strong><code>@(_detail.DefaultValue ?? "—")</code></div>
+                    <div class="cs-detail-actions"><div class="cs-detail-actions-row"><button class="um-btn um-btn-ghost" @onclick="@(() => OpenEdit(_detail))"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button class="um-btn um-btn-ghost" @onclick="@(() => ConfirmToggleActive(_detail))"><i class="bi @(_detail.IsActive ? "bi-pause-circle" : "bi-check-circle")" aria-hidden="true"></i> @(_detail.IsActive ? "Deactivate" : "Activate")</button><button class="um-btn um-btn-danger" @onclick="@(() => ConfirmDelete(_detail))"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button></div><button class="um-btn um-btn-primary cs-detail-sync-btn" @onclick="ConfirmSyncWorkflow"><i class="bi bi-diagram-3" aria-hidden="true"></i> Sync related workflow</button></div>
+                </div>
+            }
+        </aside>
+    </section>
+</div>
 
 @code {
+    private const string CarrierDownloadJobCode = "CARRIER_DOWNLOAD_INGESTION";
     private Guid _tenantId;
     private bool _loading;
-    private bool _saving;
+    private bool _busy;
     private bool _showForm;
-    private bool _showDelete;
+    private bool _showConfirm;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "info";
     private string _search = string.Empty;
-    private string _activeFilter = string.Empty;
     private string _categoryFilter = string.Empty;
+    private string _scopeFilter = string.Empty;
+    private string _typeFilter = string.Empty;
+    private string _executorFilter = string.Empty;
+    private string _quickFilter = string.Empty;
+    private string _view = "table";
     private string? _loadError;
     private Guid? _editId;
-    private CarrierSettingDto? _selected;
-    private CarrierSettingDto? _deleteTarget;
-    private EnterpriseToast? _toast;
+    private int _pageIndex = 1;
+    private const int PageSize = 12;
+    private CarrierSettingDto? _detail;
+    private ConfirmAction? _confirmAction;
+    private CancellationTokenSource? _toastCts;
     private List<CarrierSettingDto> _items = [];
     private List<CarrierSettingDto> _filtered = [];
+    private List<CarrierSettingDto> _paged = [];
+    private List<CarrierSettingDto> _selected = [];
     private SettingForm _form = new();
 
-    private IEnumerable<string> CategoryOptions => _items.Select(x => x.CategoryCode).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
-    private IEnumerable<string> ScopeOptions => _items.Select(x => x.ScopeCode).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
-    private IEnumerable<string> TypeOptions => _items.Select(x => x.DataTypeCode).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
-    private IEnumerable<string> ExecutorOptions => _items.Select(x => x.AppliesToExecutorType).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x)!;
+    private static readonly string[] CategoryChoices = ["Download", "Storage", "Matching", "ApplyUpdates", "Notifications", "Security", "Workflow", "Integration"];
+    private static readonly string[] ScopeChoices = ["Tenant", "Carrier", "Executor", "Workflow"];
+    private static readonly string[] TypeChoices = ["Text", "Number", "Boolean", "Json", "Secret", "Date", "Url"];
+    private static readonly string[] ExecutorChoices = ["FileIngestionStepExecutor", "CarrierDownloadStepExecutor", "CarrierDownloadMatchStepExecutor", "CarrierDownloadApplyUpdatesStepExecutor", "NotificationStepExecutor"];
+    private static readonly List<ViewDef> Views = [new("table", "Table", "bi-table"), new("categories", "Categories", "bi-columns-gap"), new("workflow", "Workflow", "bi-diagram-3"), new("security", "Security", "bi-shield-lock")];
+
+    private IEnumerable<string> CategoryOptions => _items.Select(x => x.CategoryCode).Concat(CategoryChoices).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private IEnumerable<string> ScopeOptions => _items.Select(x => x.ScopeCode).Concat(ScopeChoices).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private IEnumerable<string> TypeOptions => _items.Select(x => x.DataTypeCode).Concat(TypeChoices).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private IEnumerable<string> ExecutorOptions => _items.Select(x => x.AppliesToExecutorType ?? string.Empty).Concat(ExecutorChoices).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private bool AllPageSelected => _paged.Count > 0 && _paged.All(IsSelected);
+    private string PageSummary => _filtered.Count == 0 ? "No settings" : $"Showing {((_pageIndex - 1) * PageSize) + 1}-{Math.Min(_pageIndex * PageSize, _filtered.Count)} of {_filtered.Count}";
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-octagon", "warning" => "bi-exclamation-triangle", "success" => "bi-check2-circle", _ => "bi-info-circle" };
+
+    private IEnumerable<KpiModel> Metrics =>
+    [
+        new("Total", _items.Count.ToString(CultureInfo.CurrentCulture), "All settings", "bi-sliders2", "cs-blue", string.Empty),
+        new("Active", _items.Count(x => x.IsActive).ToString(CultureInfo.CurrentCulture), "Enabled values", "bi-check-circle-fill", "cs-green", "active"),
+        new("Required", _items.Count(x => x.IsRequired).ToString(CultureInfo.CurrentCulture), "Must be configured", "bi-asterisk", "cs-amber", "required"),
+        new("Secrets", _items.Count(x => x.IsSecret).ToString(CultureInfo.CurrentCulture), "Masked values", "bi-shield-lock", "cs-red", "secret"),
+        new("Executors", _items.Count(x => !string.IsNullOrWhiteSpace(x.AppliesToExecutorType)).ToString(CultureInfo.CurrentCulture), "Worker-bound", "bi-cpu", "cs-purple", "executor"),
+        new("Missing", _items.Count(x => x.IsRequired && string.IsNullOrWhiteSpace(x.SettingValue)).ToString(CultureInfo.CurrentCulture), "Needs value", "bi-exclamation-triangle", "cs-cyan", "missing")
+    ];
+
+    private IEnumerable<CategoryRow> CategoryRows
+    {
+        get
+        {
+            return _filtered.GroupBy(x => x.CategoryCode).OrderBy(g => g.Key).Select(g =>
+            {
+                var total = g.Count();
+                var active = g.Count(x => x.IsActive);
+                return new CategoryRow(g.Key, total, active, g.Count(x => x.IsRequired), total == 0 ? 0 : active / (double)total * 100);
+            });
+        }
+    }
+
+    private IEnumerable<ExecutorRow> ExecutorRows
+    {
+        get
+        {
+            return _filtered.Where(x => !string.IsNullOrWhiteSpace(x.AppliesToExecutorType)).GroupBy(x => x.AppliesToExecutorType!).OrderBy(g => g.Key).Select(g =>
+            {
+                var total = g.Count();
+                var required = g.Count(x => x.IsRequired);
+                return new ExecutorRow(g.Key, total, required, g.Count(x => x.IsSecret), total == 0 ? 0 : required / (double)total * 100);
+            });
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {
         var context = await CurrentUser.RequireAsync();
         _tenantId = context.TenantId;
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Carriers & Markets", null), new("Carrier Settings", null));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Carriers & Markets", "/tenant/carriers"), new("Carrier Settings", "/tenant/carriers/settings"));
         await LoadAsync();
     }
 
@@ -224,9 +426,13 @@
         _loadError = null;
         try
         {
-            var result = await Api.SearchCarrierSettingsAsync(_tenantId, _search.Trim(), 1, 500);
+            var result = await Api.SearchCarrierSettingsAsync(_tenantId, null, 1, 1000);
             _items = result?.Items.ToList() ?? [];
             ApplyFilter();
+            if (_detail is null && _filtered.Count > 0)
+            {
+                _detail = _filtered[0];
+            }
         }
         catch (Exception ex)
         {
@@ -238,22 +444,68 @@
         }
     }
 
-    private Task OnSearchAsync() => LoadAsync();
-    private void SetFilter(string value) { _activeFilter = value; ApplyFilter(); }
-    private void Select(CarrierSettingDto item) => _selected = item;
+    private void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; ApplyFilter(resetPage: true); }
+    private void OnCategoryFilterChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _categoryFilter = e.Value?.ToString() ?? string.Empty; ApplyFilter(resetPage: true); }
+    private void OnScopeFilterChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _scopeFilter = e.Value?.ToString() ?? string.Empty; ApplyFilter(resetPage: true); }
+    private void OnTypeFilterChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _typeFilter = e.Value?.ToString() ?? string.Empty; ApplyFilter(resetPage: true); }
+    private void OnExecutorFilterChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _executorFilter = e.Value?.ToString() ?? string.Empty; ApplyFilter(resetPage: true); }
+    private void SetQuickFilter(string value) { _quickFilter = value; ApplyFilter(resetPage: true); }
+    private void SetView(string value) { _view = value; _pageIndex = 1; ApplyPaging(); }
+    private void ShowCategoriesView() => SetView("categories");
+    private void ShowWorkflowView() { _quickFilter = "executor"; SetView("workflow"); ApplyFilter(resetPage: true); }
+    private void ShowSecurityView() { _quickFilter = "secret"; SetView("security"); ApplyFilter(resetPage: true); }
+    private void ShowRequiredSettings() { _quickFilter = "required"; ApplyFilter(resetPage: true); }
+    private void FilterCategory(string category) { _categoryFilter = category; _quickFilter = string.Empty; SetView("table"); ApplyFilter(resetPage: true); }
+    private void FilterExecutor(string executor) { _executorFilter = executor; _quickFilter = "executor"; SetView("table"); ApplyFilter(resetPage: true); }
 
-    private void ApplyFilter()
+    private void ApplyFilter(bool resetPage = false)
     {
         IEnumerable<CarrierSettingDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var s = _search.Trim();
+            query = query.Where(x => Contains(x.SettingName, s) || Contains(x.SettingCode, s) || Contains(x.CategoryCode, s) || Contains(x.ScopeCode, s) || Contains(x.DataTypeCode, s) || Contains(x.AppliesToExecutorType, s) || Contains(x.Description, s) || Contains(x.SettingValue, s));
+        }
         if (!string.IsNullOrWhiteSpace(_categoryFilter)) query = query.Where(x => x.CategoryCode.Equals(_categoryFilter, StringComparison.OrdinalIgnoreCase));
-        query = _activeFilter switch
+        if (!string.IsNullOrWhiteSpace(_scopeFilter)) query = query.Where(x => x.ScopeCode.Equals(_scopeFilter, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(_typeFilter)) query = query.Where(x => x.DataTypeCode.Equals(_typeFilter, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(_executorFilter)) query = query.Where(x => string.Equals(x.AppliesToExecutorType, _executorFilter, StringComparison.OrdinalIgnoreCase));
+        query = _quickFilter switch
         {
             "active" => query.Where(x => x.IsActive),
             "required" => query.Where(x => x.IsRequired),
             "secret" => query.Where(x => x.IsSecret),
+            "executor" => query.Where(x => !string.IsNullOrWhiteSpace(x.AppliesToExecutorType)),
+            "missing" => query.Where(x => x.IsRequired && string.IsNullOrWhiteSpace(x.SettingValue)),
             _ => query
         };
         _filtered = query.OrderBy(x => x.CategoryCode).ThenBy(x => x.SortOrder).ThenBy(x => x.SettingName).ToList();
+        if (resetPage) _pageIndex = 1;
+        if (_detail is not null && !_filtered.Any(x => x.CarrierSettingId == _detail.CarrierSettingId)) _detail = _filtered.FirstOrDefault();
+        ApplyPaging();
+    }
+
+    private void ApplyPaging()
+    {
+        _pageIndex = Math.Clamp(_pageIndex, 1, TotalPages);
+        _paged = _filtered.Skip((_pageIndex - 1) * PageSize).Take(PageSize).ToList();
+    }
+
+    private void PreviousPage() { if (_pageIndex > 1) { _pageIndex--; ApplyPaging(); } }
+    private void NextPage() { if (_pageIndex < TotalPages) { _pageIndex++; ApplyPaging(); } }
+    private void OpenDetail(CarrierSettingDto item) => _detail = item;
+    private bool IsSelected(CarrierSettingDto item) => _selected.Any(x => x.CarrierSettingId == item.CarrierSettingId);
+    private void ToggleSelection(CarrierSettingDto item) { if (IsSelected(item)) _selected.RemoveAll(x => x.CarrierSettingId == item.CarrierSettingId); else _selected.Add(item); }
+    private void ClearSelection() => _selected.Clear();
+
+    private void ToggleCurrentPageSelection(Microsoft.AspNetCore.Components.ChangeEventArgs _)
+    {
+        if (AllPageSelected)
+        {
+            _selected.RemoveAll(x => _paged.Any(p => p.CarrierSettingId == x.CarrierSettingId));
+            return;
+        }
+        foreach (var item in _paged.Where(x => !IsSelected(x))) _selected.Add(item);
     }
 
     private void OpenCreate()
@@ -278,7 +530,7 @@
             Description = item.Description,
             ValidationJson = item.ValidationJson,
             UiSchemaJson = item.UiSchemaJson,
-            AppliesToExecutorType = item.AppliesToExecutorType,
+            AppliesToExecutorType = item.AppliesToExecutorType ?? string.Empty,
             IsRequired = item.IsRequired,
             IsSecret = item.IsSecret,
             IsActive = item.IsActive,
@@ -288,67 +540,229 @@
     }
 
     private void CloseForm() => _showForm = false;
-    private void ConfirmDelete(CarrierSettingDto item) { _deleteTarget = item; _showDelete = true; }
-    private void CancelDelete() { _deleteTarget = null; _showDelete = false; }
+
+    private async Task HandleInvalidSubmitAsync()
+    {
+        await ShowToastAsync("Review required fields and validation messages before saving.", "warning");
+    }
 
     private async Task SaveAsync()
     {
-        _saving = true;
+        _busy = true;
         try
         {
+            if (!IsValidJson(_form.ValidationJson) || !IsValidJson(_form.UiSchemaJson))
+            {
+                await ShowToastAsync("Save failed: Validation JSON and UI schema JSON must be valid JSON.", "danger");
+                return;
+            }
+
             if (_editId.HasValue)
             {
-                await Api.UpdateCarrierSettingAsync(_editId.Value, new UpdateCarrierSettingRequest(null, _form.SettingCode.Trim(), _form.SettingName.Trim(), _form.CategoryCode.Trim(), _form.ScopeCode.Trim(), _form.DataTypeCode.Trim(), Normalize(_form.SettingValue), Normalize(_form.DefaultValue), Normalize(_form.Description), _form.ValidationJson.Trim(), _form.UiSchemaJson.Trim(), Normalize(_form.AppliesToExecutorType), _form.IsRequired, _form.IsSecret, _form.IsActive, _form.SortOrder));
+                await Api.UpdateCarrierSettingAsync(_editId.Value, ToUpdateRequest(_form));
             }
             else
             {
-                await Api.CreateCarrierSettingAsync(new CreateCarrierSettingRequest(_tenantId, null, _form.SettingCode.Trim(), _form.SettingName.Trim(), _form.CategoryCode.Trim(), _form.ScopeCode.Trim(), _form.DataTypeCode.Trim(), Normalize(_form.SettingValue), Normalize(_form.DefaultValue), Normalize(_form.Description), _form.ValidationJson.Trim(), _form.UiSchemaJson.Trim(), Normalize(_form.AppliesToExecutorType), _form.IsRequired, _form.IsSecret, _form.SortOrder));
+                await Api.CreateCarrierSettingAsync(ToCreateRequest(_form));
             }
             _showForm = false;
-            if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "Carrier setting saved.", CssClass = "e-toast-success" });
+            await ShowToastAsync("Carrier setting saved.", "success");
             await LoadAsync();
         }
         catch (Exception ex)
         {
-            if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" });
+            await ShowToastAsync($"Save failed: {ex.Message}", "danger");
         }
         finally
         {
-            _saving = false;
+            _busy = false;
         }
     }
 
-    private async Task ExecuteDeleteAsync()
+    private void ConfirmDelete(CarrierSettingDto item) => ShowConfirm(new("Delete carrier setting", $"Delete {item.SettingName}? This action soft-deletes the setting after confirmation.", "Delete", "um-btn-danger", "danger", "bi-trash3-fill", () => DeleteAsync(item)));
+    private void ConfirmToggleActive(CarrierSettingDto item) => ShowConfirm(new(item.IsActive ? "Deactivate carrier setting" : "Activate carrier setting", $"{(item.IsActive ? "Deactivate" : "Activate")} {item.SettingName}?", item.IsActive ? "Deactivate" : "Activate", item.IsActive ? "um-btn-warning" : "um-btn-primary", item.IsActive ? "warning" : "success", item.IsActive ? "bi-pause-circle" : "bi-check-circle", () => ToggleActiveAsync(item)));
+    private void ConfirmReset(CarrierSettingDto item) => ShowConfirm(new("Reset setting value", $"Reset {item.SettingName} to its default value?", "Reset value", "um-btn-warning", "warning", "bi-arrow-counterclockwise", () => ResetAsync(item)));
+    private void ConfirmBulkActivate() => ShowConfirm(new("Activate selected settings", $"Activate {_selected.Count} selected carrier setting(s)?", "Activate", "um-btn-primary", "success", "bi-check-circle", () => BulkSetActiveAsync(true)));
+    private void ConfirmBulkDeactivate() => ShowConfirm(new("Deactivate selected settings", $"Deactivate {_selected.Count} selected carrier setting(s)?", "Deactivate", "um-btn-warning", "warning", "bi-pause-circle", () => BulkSetActiveAsync(false)));
+    private void ConfirmBulkReset() => ShowConfirm(new("Reset selected values", $"Reset {_selected.Count} selected carrier setting value(s) to defaults?", "Reset values", "um-btn-warning", "warning", "bi-arrow-counterclockwise", BulkResetAsync));
+    private void ConfirmSyncWorkflow() => ShowConfirm(new("Sync carrier workflow", "Sync current carrier setting schema and executor parameters into the carrier download automation job and steps.", "Sync workflow", "um-btn-primary", "success", "bi-diagram-3", SyncWorkflowAsync));
+
+    private void ShowConfirm(ConfirmAction action) { _confirmAction = action; _showConfirm = true; }
+    private void CancelConfirm() { if (_busy) return; _showConfirm = false; _confirmAction = null; }
+
+    private async Task ExecuteConfirmedAsync()
     {
-        if (_deleteTarget is null) return;
-        _saving = true;
+        if (_confirmAction is null) return;
+        _busy = true;
         try
         {
-            await Api.DeleteCarrierSettingAsync(_deleteTarget.CarrierSettingId);
-            CancelDelete();
-            if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "Carrier setting deleted.", CssClass = "e-toast-success" });
+            await _confirmAction.ExecuteAsync();
+            _showConfirm = false;
+            _confirmAction = null;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeleteAsync(CarrierSettingDto item)
+    {
+        try
+        {
+            await Api.DeleteCarrierSettingAsync(item.CarrierSettingId);
+            _selected.RemoveAll(x => x.CarrierSettingId == item.CarrierSettingId);
+            if (_detail?.CarrierSettingId == item.CarrierSettingId) _detail = null;
+            await ShowToastAsync("Carrier setting deleted.", "success");
             await LoadAsync();
         }
         catch (Exception ex)
         {
-            if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" });
-        }
-        finally
-        {
-            _saving = false;
+            await ShowToastAsync($"Delete failed: {ex.Message}", "danger");
         }
     }
 
+    private async Task ToggleActiveAsync(CarrierSettingDto item) => await UpdateSettingAsync(item, CloneSetting(item, isActive: !item.IsActive), item.IsActive ? "Carrier setting deactivated." : "Carrier setting activated.");
+    private async Task ResetAsync(CarrierSettingDto item) => await UpdateSettingAsync(item, CloneSetting(item, settingValue: item.DefaultValue), "Carrier setting reset to default.");
+
+    private async Task BulkSetActiveAsync(bool isActive)
+    {
+        foreach (var item in _selected.ToList()) await UpdateSettingAsync(item, CloneSetting(item, isActive: isActive), null, reload: false);
+        ClearSelection();
+        await ShowToastAsync(isActive ? "Selected settings activated." : "Selected settings deactivated.", "success");
+        await LoadAsync();
+    }
+
+    private async Task BulkResetAsync()
+    {
+        foreach (var item in _selected.ToList()) await UpdateSettingAsync(item, CloneSetting(item, settingValue: item.DefaultValue), null, reload: false);
+        ClearSelection();
+        await ShowToastAsync("Selected settings reset to defaults.", "success");
+        await LoadAsync();
+    }
+
+    private async Task UpdateSettingAsync(CarrierSettingDto original, CarrierSettingDto updated, string? successMessage, bool reload = true)
+    {
+        try
+        {
+            await Api.UpdateCarrierSettingAsync(original.CarrierSettingId, new UpdateCarrierSettingRequest(updated.CarrierId, updated.SettingCode, updated.SettingName, updated.CategoryCode, updated.ScopeCode, updated.DataTypeCode, Normalize(updated.SettingValue), Normalize(updated.DefaultValue), Normalize(updated.Description), updated.ValidationJson, updated.UiSchemaJson, Normalize(updated.AppliesToExecutorType), updated.IsRequired, updated.IsSecret, updated.IsActive, updated.SortOrder));
+            if (!string.IsNullOrWhiteSpace(successMessage)) await ShowToastAsync(successMessage, "success");
+            if (reload) await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Update failed: {ex.Message}", "danger");
+        }
+    }
+
+    private async Task SyncWorkflowAsync()
+    {
+        try
+        {
+            var jobs = await Api.SearchAutomationJobsAsync(_tenantId, CarrierDownloadJobCode, null, null, 1, 25);
+            var job = jobs?.Items.FirstOrDefault(x => x.JobCode.Equals(CarrierDownloadJobCode, StringComparison.OrdinalIgnoreCase));
+            if (job is null)
+            {
+                await ShowToastAsync("Sync failed: Carrier download automation job was not found. Run automation seed migrations first.", "danger");
+                return;
+            }
+
+            var settings = _items.Count == 0 ? _filtered : _items;
+            var jobSchema = BuildJobDynamicSchema(settings);
+            var jobDefaults = BuildDefaultParameterJson(settings.Where(x => string.IsNullOrWhiteSpace(x.AppliesToExecutorType)));
+            await Api.UpdateAutomationJobAsync(job.JobDefinitionId, new UpdateJobDefinitionRequest(job.JobName, job.Description, job.JobTypeCode, job.CategoryCode, job.StatusCode, job.OwnerTeam, job.ConcurrencyPolicy, job.MaxRetryCount, job.TimeoutSeconds, job.Tags, job.ConfigurationJson, jobSchema, jobDefaults, job.IsActive));
+
+            var steps = await Api.GetAutomationJobStepsAsync(job.JobDefinitionId);
+            foreach (var step in steps.Where(x => !string.IsNullOrWhiteSpace(x.StepExecutorType)))
+            {
+                var stepSettings = settings.Where(x => string.Equals(x.AppliesToExecutorType, step.StepExecutorType, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (stepSettings.Count == 0) continue;
+                await Api.SaveAutomationJobStepAsync(job.JobDefinitionId, step.JobStepId, new UpsertJobStepRequest(step.TenantId, step.JobDefinitionId, step.StepOrder, step.StepCode, step.StepName, step.StepExecutorType, step.Description, step.InputMappingJson, step.OutputMappingJson, step.RetryPolicyJson, BuildStepDynamicSchema(stepSettings), BuildDefaultParameterJson(stepSettings), step.OutputContractJson, step.DependsOnStepCodes, step.TimeoutSeconds, step.ContinueOnError, step.IsEnabled));
+            }
+
+            await ShowToastAsync("Carrier settings synced to automation workflow.", "success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Sync failed: {ex.Message}", "danger");
+        }
+    }
+
+    private async Task ShowToastAsync(string message, string kind = "info")
+    {
+        _toastCts?.Cancel();
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
+        var cts = new CancellationTokenSource();
+        _toastCts = cts;
+        try
+        {
+            await Task.Delay(4200, cts.Token);
+            if (!cts.IsCancellationRequested) HideToast();
+        }
+        catch (TaskCanceledException) { }
+    }
+
+    private void HideToast() => _toastVisible = false;
+
+    private CreateCarrierSettingRequest ToCreateRequest(SettingForm f) => new(_tenantId, null, f.SettingCode.Trim(), f.SettingName.Trim(), f.CategoryCode.Trim(), f.ScopeCode.Trim(), f.DataTypeCode.Trim(), Normalize(f.SettingValue), Normalize(f.DefaultValue), Normalize(f.Description), f.ValidationJson.Trim(), f.UiSchemaJson.Trim(), Normalize(f.AppliesToExecutorType), f.IsRequired, f.IsSecret, f.SortOrder);
+    private UpdateCarrierSettingRequest ToUpdateRequest(SettingForm f) => new(null, f.SettingCode.Trim(), f.SettingName.Trim(), f.CategoryCode.Trim(), f.ScopeCode.Trim(), f.DataTypeCode.Trim(), Normalize(f.SettingValue), Normalize(f.DefaultValue), Normalize(f.Description), f.ValidationJson.Trim(), f.UiSchemaJson.Trim(), Normalize(f.AppliesToExecutorType), f.IsRequired, f.IsSecret, f.IsActive, f.SortOrder);
+
+    private static string BuildJobDynamicSchema(IEnumerable<CarrierSettingDto> settings) => JsonSerializer.Serialize(settings.Where(x => x.IsActive && x.IsRequired).OrderBy(x => x.SortOrder).Select(x => new { name = ToCamel(x.SettingCode), label = x.SettingName, dataType = x.DataTypeCode, required = x.IsRequired, category = x.CategoryCode, scope = x.ScopeCode }));
+    private static string BuildStepDynamicSchema(IEnumerable<CarrierSettingDto> settings) => JsonSerializer.Serialize(settings.Where(x => x.IsActive).OrderBy(x => x.SortOrder).Select(x => new { name = ToCamel(x.SettingCode), label = x.SettingName, dataType = x.DataTypeCode, required = x.IsRequired, category = x.CategoryCode }));
+    private static string BuildDefaultParameterJson(IEnumerable<CarrierSettingDto> settings) => JsonSerializer.Serialize(settings.Where(x => x.IsActive).OrderBy(x => x.SortOrder).ToDictionary(x => ToCamel(x.SettingCode), x => (object?)(x.SettingValue ?? x.DefaultValue)));
+    private static bool IsValidJson(string value) { try { using var _ = JsonDocument.Parse(string.IsNullOrWhiteSpace(value) ? "{}" : value); return true; } catch { return false; } }
+    private static string ToCamel(string value) { var parts = value.Split('_', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); if (parts.Length == 0) return value; return parts[0].ToLowerInvariant() + string.Concat(parts.Skip(1).Select(x => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(x.ToLowerInvariant()))); }
+    private static bool Contains(string? source, string value) => !string.IsNullOrWhiteSpace(source) && source.Contains(value, StringComparison.OrdinalIgnoreCase);
     private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-    private static string DisplayValue(CarrierSettingDto item) => item.IsSecret ? "••••••••" : string.IsNullOrWhiteSpace(item.SettingValue) ? "—" : item.SettingValue.Length > 48 ? item.SettingValue[..48] + "…" : item.SettingValue;
+    private static string DisplayValue(CarrierSettingDto item) => item.IsSecret ? "••••••••" : string.IsNullOrWhiteSpace(item.SettingValue) ? "—" : item.SettingValue.Length > 56 ? item.SettingValue[..56] + "…" : item.SettingValue;
+    private static string Initials(string value) => string.Concat(value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(x => char.ToUpperInvariant(x[0]))).PadRight(1, 'S');
+    private static string AgeLabel(CarrierSettingDto item) => item.ModifiedDateUtc.HasValue ? $"updated {item.ModifiedDateUtc.Value.ToLocalTime():MMM d, yyyy}" : $"created {item.CreatedDateUtc.ToLocalTime():MMM d, yyyy}";
+    private static CarrierSettingDto CloneSetting(CarrierSettingDto item, bool? isActive = null, string? settingValue = null) => new()
+    {
+        CarrierSettingId = item.CarrierSettingId,
+        TenantId = item.TenantId,
+        CarrierId = item.CarrierId,
+        SettingCode = item.SettingCode,
+        SettingName = item.SettingName,
+        CategoryCode = item.CategoryCode,
+        ScopeCode = item.ScopeCode,
+        DataTypeCode = item.DataTypeCode,
+        SettingValue = settingValue ?? item.SettingValue,
+        DefaultValue = item.DefaultValue,
+        Description = item.Description,
+        ValidationJson = item.ValidationJson,
+        UiSchemaJson = item.UiSchemaJson,
+        AppliesToExecutorType = item.AppliesToExecutorType,
+        IsRequired = item.IsRequired,
+        IsSecret = item.IsSecret,
+        IsActive = isActive ?? item.IsActive,
+        SortOrder = item.SortOrder,
+        CreatedDateUtc = item.CreatedDateUtc,
+        ModifiedDateUtc = item.ModifiedDateUtc
+    };
+
+    private static string AvatarColor(string value) => (Math.Abs(value.GetHashCode()) % 6) switch { 0 => "cs-av1", 1 => "cs-av2", 2 => "cs-av3", 3 => "cs-av4", 4 => "cs-av5", _ => "cs-av6" };
+    private static string CategoryIcon(string category) => category.ToLowerInvariant() switch { "download" => "bi-arrow-down-circle", "storage" => "bi-hdd", "matching" => "bi-intersect", "applyupdates" => "bi-pencil-square", "notifications" => "bi-bell", "security" => "bi-shield-lock", "workflow" => "bi-diagram-3", _ => "bi-sliders2" };
+    private static string StatusBadge(CarrierSettingDto item) => item.IsActive ? "cs-status cs-status-active" : "cs-status cs-status-inactive";
+    private string RowClass(CarrierSettingDto item) => (_detail?.CarrierSettingId == item.CarrierSettingId ? "cs-row-selected " : string.Empty) + (IsSelected(item) ? "cs-row-checked" : string.Empty);
+    private string MetricCardClass(KpiModel metric) => $"cs-kpi-card {metric.Tone} {(_quickFilter == metric.Filter ? "cs-kpi-card-active" : string.Empty)}";
+    private string ViewButtonClass(ViewDef view) => $"cs-view-btn {(_view == view.Id ? "cs-view-btn-active" : string.Empty)}";
+
+    private sealed record KpiModel(string Label, string Value, string Caption, string Icon, string Tone, string Filter);
+    private sealed record ViewDef(string Id, string Label, string Icon);
+    private sealed record CategoryRow(string Category, int Total, int Active, int Required, double ActivePercent);
+    private sealed record ExecutorRow(string Executor, int Total, int Required, int Secret, double RequiredPercent);
+    private sealed record ConfirmAction(string Title, string Message, string ButtonText, string ButtonClass, string Kind, string Icon, Func<Task> ExecuteAsync);
 
     private sealed class SettingForm
     {
         [Required, StringLength(100)] public string SettingCode { get; set; } = string.Empty;
         [Required, StringLength(240)] public string SettingName { get; set; } = string.Empty;
-        [Required, StringLength(80)] public string CategoryCode { get; set; } = string.Empty;
-        [Required, StringLength(80)] public string ScopeCode { get; set; } = string.Empty;
-        [Required, StringLength(50)] public string DataTypeCode { get; set; } = string.Empty;
+        [Required, StringLength(80)] public string CategoryCode { get; set; } = "Download";
+        [Required, StringLength(80)] public string ScopeCode { get; set; } = "Tenant";
+        [Required, StringLength(50)] public string DataTypeCode { get; set; } = "Text";
         public string? SettingValue { get; set; }
         public string? DefaultValue { get; set; }
         [StringLength(1000)] public string? Description { get; set; }

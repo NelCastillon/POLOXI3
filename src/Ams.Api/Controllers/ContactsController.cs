@@ -31,6 +31,17 @@ public sealed class ContactsController : ControllerBase
     public async Task<IActionResult> GetByAccount(Guid accountId, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 25, CancellationToken cancellationToken = default)
         => Ok(await _service.GetByAccountIdAsync(accountId, pageNumber, pageSize, cancellationToken));
 
+    [HttpGet("{id:guid}/workflow-events")]
+    public async Task<IActionResult> GetWorkflowEvents(Guid id, CancellationToken cancellationToken)
+        => Ok(await _service.GetWorkflowEventsAsync(id, cancellationToken));
+
+    [HttpPost("{id:guid}/workflow-events")]
+    public async Task<IActionResult> CreateWorkflowEvent(Guid id, [FromBody] CreateContactWorkflowEventRequest request, CancellationToken cancellationToken)
+    {
+        request.ContactId = id;
+        return Ok(await _service.CreateWorkflowEventAsync(request, cancellationToken));
+    }
+
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateContactRequest request, CancellationToken cancellationToken)
     {

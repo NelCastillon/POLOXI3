@@ -53,7 +53,7 @@
             <div class="nav-section-hd" role="separator">Favorites</div>
             @foreach (var fav in _favorites)
             {
-                <NavLink class="nav-item-sub nav-item-fav" href="@fav.Url" title="@fav.Label" role="listitem">
+                <NavLink class="nav-item-sub nav-item-fav" href="@fav.Url" Match="NavLinkMatch.All" title="@fav.Label" role="listitem">
                     <i class="bi bi-star-fill nav-fav-icon" aria-hidden="true"></i>
                     <span class="nav-label">@fav.Label</span>
                     <button class="nav-pin"
@@ -95,7 +95,7 @@
                         @foreach (var item in GetVisibleItems(sec.Groups[0]))
                         {
                             var pinned = _favorites.Any(f => f.Url == item.Url);
-                            <NavLink class="nav-item-sub" href="@item.Url" title="@item.Label" role="listitem">
+                            <NavLink class="nav-item-sub" href="@item.Url" Match="NavLinkMatch.All" title="@item.Label" role="listitem">
                                 <i class="@item.Icon nav-icon" aria-hidden="true"></i>
                                 <span class="nav-label">@item.Label</span>
                                 <button class="nav-pin @(pinned ? "is-active" : "")"
@@ -117,7 +117,7 @@
                                 @* Single-item group — render as a direct NavLink (no collapsible wrapper) *@
                                 var onlyItem = grp.Items[0];
                                 var pinned0 = _favorites.Any(f => f.Url == onlyItem.Url);
-                                <NavLink class="nav-item-sub nav-subgroup-hd" href="@onlyItem.Url" title="@onlyItem.Label" role="listitem">
+                                <NavLink class="nav-item-sub nav-subgroup-hd" href="@onlyItem.Url" Match="NavLinkMatch.All" title="@onlyItem.Label" role="listitem">
                                     <i class="@onlyItem.Icon nav-icon" aria-hidden="true"></i>
                                     <span class="nav-label">@onlyItem.Label</span>
                                     <button class="nav-pin @(pinned0 ? "is-active" : "")"
@@ -145,7 +145,7 @@
                                         @foreach (var item in GetVisibleItems(grp))
                                         {
                                             var pinned = _favorites.Any(f => f.Url == item.Url);
-                                            <NavLink class="nav-item-sub nav-item-deep" href="@item.Url" title="@item.Label" role="listitem">
+                                            <NavLink class="nav-item-sub nav-item-deep" href="@item.Url" Match="NavLinkMatch.All" title="@item.Label" role="listitem">
                                                 <i class="@item.Icon nav-icon" aria-hidden="true"></i>
                                                 <span class="nav-label">@item.Label</span>
                                                 <button class="nav-pin @(pinned ? "is-active" : "")"
@@ -171,7 +171,7 @@
             <div class="nav-section-hd" role="separator">Recent</div>
             @foreach (var r in _recents.AsEnumerable().Reverse().Take(5))
             {
-                <NavLink class="nav-item-sub nav-recent" href="@r.Url" title="@r.Label" role="listitem">
+                <NavLink class="nav-item-sub nav-recent" href="@r.Url" Match="NavLinkMatch.All" title="@r.Label" role="listitem">
                     <i class="bi bi-clock-history nav-icon" aria-hidden="true"></i>
                     <span class="nav-label">@r.Label</span>
                 </NavLink>
@@ -1006,7 +1006,7 @@
     {
         if (url.Contains("{id}"))
         {
-            var id = NavContext.CurrentAccountId?.ToString();
+            var id = GetCurrentRouteIdForUrl(url);
             if (string.IsNullOrWhiteSpace(id))
             {
                 return "/accounts";
@@ -1019,6 +1019,27 @@
 
     private NavItem ResolveItem(NavItem item) =>
         item.Url.Contains("{id}") ? item with { Url = ResolveUrl(item.Url) } : item;
+
+    private bool CanResolveItem(NavItem item) =>
+        !item.Url.Contains("{id}") || !string.IsNullOrWhiteSpace(GetCurrentRouteIdForUrl(item.Url));
+
+    private string? GetCurrentRouteIdForUrl(string url)
+    {
+        if (url.StartsWith("/accounts/", StringComparison.OrdinalIgnoreCase))
+        {
+            return NavContext.CurrentAccountId?.ToString() ?? TryGetAccountIdFromCurrentUrl();
+        }
+
+        return NavContext.CurrentAccountId?.ToString();
+    }
+
+    private string? TryGetAccountIdFromCurrentUrl()
+    {
+        var parts = Nav.ToBaseRelativePath(Nav.Uri).Split('?', 2)[0].Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 && parts[0].Equals("accounts", StringComparison.OrdinalIgnoreCase) && Guid.TryParse(parts[1], out var id)
+            ? id.ToString()
+            : null;
+    }
 
     // ── Filtering ─────────────────────────────────────────────
     private IEnumerable<NavSection> GetVisibleSections()
@@ -1048,7 +1069,7 @@
         var items = string.IsNullOrWhiteSpace(_query)
             ? grp.Items.AsEnumerable()
             : grp.Items.Where(i => i.Label.Contains(_query.Trim(), StringComparison.OrdinalIgnoreCase));
-        return items.Where(CanSeeItem).Select(ResolveItem);
+        return items.Where(CanSeeItem).Where(CanResolveItem).Select(ResolveItem);
     }
 
     private bool CanSeeSection(NavSection section)

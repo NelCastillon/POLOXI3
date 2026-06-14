@@ -24,6 +24,12 @@ public sealed class ContactService : IContactService
     public Task<PagedResult<ContactDto>> GetByAccountIdAsync(Guid accountId, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _repository.GetByAccountIdAsync(accountId, pageNumber, pageSize, cancellationToken);
 
+    public Task<IReadOnlyList<ContactWorkflowEventDto>> GetWorkflowEventsAsync(Guid contactId, CancellationToken cancellationToken = default)
+        => _repository.GetWorkflowEventsAsync(contactId, cancellationToken);
+
+    public Task<Guid> CreateWorkflowEventAsync(CreateContactWorkflowEventRequest request, CancellationToken cancellationToken = default)
+        => _repository.CreateWorkflowEventAsync(request, cancellationToken);
+
     public Task UpdateAsync(Guid id, UpdateContactRequest request, CancellationToken cancellationToken = default)
         => _repository.UpdateAsync(id, request, cancellationToken);
 

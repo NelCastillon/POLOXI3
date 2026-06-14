@@ -154,6 +154,9 @@ public sealed class DatabaseMigrator
         new("0121_Marketing_ContactIntake_CreateSeed", Migration0121_MarketingContactIntakeCreateSeed),
         new("0122_Marketing_ContactIntake_NotificationSetting_Seed", Migration0122_MarketingContactIntakeNotificationSettingSeed),
         new("0123_Client_Contact360_Seed", Migration0123_ClientContact360Seed),
+        new("0123A_Client_ContactWorkflowEvent_Create", Migration0123A_ClientContactWorkflowEventCreate),
+        new("0123B_Client_ContactRoles_Seed", Migration0123B_ClientContactRolesSeed),
+        new("0123C_Client_DecisionMakers_WorkflowSeed", Migration0123C_ClientDecisionMakersWorkflowSeed),
         new("0124_CRM_OpportunityDetail_SchemaSync_Seed", Migration0124_CrmOpportunityDetailSchemaSyncSeed),
         new("0125_Submissions_EnterpriseActions_SchemaSync_Seed", Migration0125_SubmissionsEnterpriseActionsSchemaSyncSeed),
         new("0126_Submissions_QuoteRegister_Seed", Migration0126_SubmissionsQuoteRegisterSeed),
@@ -2317,7 +2320,25 @@ IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'IAM.Acces
     private const string Migration0029_CrmQuoteLineCreate = "";
     private const string Migration0030_CrmForecastEntryPricingRuleCreate = "";
     private const string Migration0031_CrmLeadActivityRecreate = "";
-    private const string Migration0032_ClientContactColumnsFix = "";
+    private const string Migration0032_ClientContactColumnsFix = @"
+IF OBJECT_ID(N'Client.Contact', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Client.Contact', N'IsKeyContact') IS NULL
+        ALTER TABLE Client.Contact ADD IsKeyContact BIT NOT NULL CONSTRAINT DF_ClientContact_IsKeyContact DEFAULT 0;
+
+    IF COL_LENGTH(N'Client.Contact', N'IsServiceContact') IS NULL
+        ALTER TABLE Client.Contact ADD IsServiceContact BIT NOT NULL CONSTRAINT DF_ClientContact_IsServiceContact DEFAULT 0;
+
+    IF COL_LENGTH(N'Client.Contact', N'ParentContactId') IS NULL
+        ALTER TABLE Client.Contact ADD ParentContactId UNIQUEIDENTIFIER NULL;
+
+    IF COL_LENGTH(N'Client.Contact', N'PreferredContactMethod') IS NULL
+        ALTER TABLE Client.Contact ADD PreferredContactMethod NVARCHAR(50) NULL;
+
+    IF COL_LENGTH(N'Client.Contact', N'ModifiedByUserId') IS NULL
+        ALTER TABLE Client.Contact ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+END
+";
     private const string Migration0033_OPSMissingTablesCreate = "";
     private const string Migration0034_FinanceSchemaCreate = @"
 -- ============================================================
@@ -2458,12 +2479,31 @@ END
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Client')
     EXEC(N'CREATE SCHEMA Client');
 
+IF OBJECT_ID(N'Client.ContactWorkflowEvent', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.ContactWorkflowEvent
+    (
+        WorkflowEventId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ContactWorkflowEvent PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ContactId UNIQUEIDENTIFIER NOT NULL,
+        EventType NVARCHAR(50) NOT NULL,
+        EventTitle NVARCHAR(200) NOT NULL,
+        EventDetail NVARCHAR(1000) NULL,
+        RelatedEntityName NVARCHAR(100) NULL,
+        RelatedEntityId UNIQUEIDENTIFIER NULL,
+        EventDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ContactWorkflowEvent_Date DEFAULT SYSUTCDATETIME(),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ContactWorkflowEvent_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_ContactWorkflowEvent_IsDeleted DEFAULT 0
+    );
+END;
+
 IF OBJECT_ID(N'Client.Account', N'U') IS NOT NULL AND OBJECT_ID(N'Client.Contact', N'U') IS NOT NULL
 BEGIN
     DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
     DECLARE @AdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
-    DECLARE @AccountId UNIQUEIDENTIFIER = '20000000-0000-0000-0000-000000000001';
-    DECLARE @ContactId UNIQUEIDENTIFIER = '2f8a5ec8-bfe4-456f-9c61-1b207ddeb0e4';
+    DECLARE @AccountId UNIQUEIDENTIFIER = '20000000-0000-0000-0000-000000000004';
+    DECLARE @ContactId UNIQUEIDENTIFIER = '20000000-0000-0000-0000-000000000004';
     DECLARE @ActiveStatusCodeId INT = 1;
 
     IF NOT EXISTS (SELECT 1 FROM Client.Account WHERE AccountId = @AccountId AND IsDeleted = 0)
@@ -2477,9 +2517,9 @@ BEGIN
         )
         VALUES
         (
-            @AccountId, @TenantId, N'ACME-001', N'ACME Corporation', N'Commercial',
-            N'contact@acmecorp.com', N'+1 312 555 0110', N'Active', N'Enterprise', @AdminUserId,
-            N'Customer', N'Manufacturing', N'https://acmecorp.com', 18500000.00,
+            @AccountId, @TenantId, N'GLB-004', N'Global Risk Partners', N'Commercial',
+            N'contact@globalriskpartners.example', N'+1 404 555 0104', N'Active', N'Enterprise', @AdminUserId,
+            N'Customer', N'Professional Services', N'https://globalrisk.example', 12750000.00,
             SYSUTCDATETIME(), @AdminUserId, 0
         );
     END
@@ -2495,7 +2535,7 @@ BEGIN
             )
             VALUES
             (
-                @ContactId, @TenantId, @AccountId, N'James', N'Brady', N'james.brady@acmecorp.com', N'+1 312 555 0111', N'VP of Risk Management',
+                @ContactId, @TenantId, @AccountId, N'Morgan', N'Patel', N'morgan.patel@globalriskpartners.example', N'+1 404 555 0104', N'Chief Risk Officer',
                 N'Primary', 1, 1, 1, 1,
                 N'Email', NULL, N'Active', @ActiveStatusCodeId, SYSUTCDATETIME(), @AdminUserId, 0
             );
@@ -2508,7 +2548,7 @@ BEGIN
             )
             VALUES
             (
-                @ContactId, @TenantId, @AccountId, N'James', N'Brady', N'james.brady@acmecorp.com', N'+1 312 555 0111', N'VP of Risk Management',
+                @ContactId, @TenantId, @AccountId, N'Morgan', N'Patel', N'morgan.patel@globalriskpartners.example', N'+1 404 555 0104', N'Chief Risk Officer',
                 N'Primary', 1, 1, 1, 1,
                 N'Email', NULL, N'Active', SYSUTCDATETIME(), @AdminUserId, 0
             );
@@ -2518,11 +2558,11 @@ BEGIN
         UPDATE Client.Contact
         SET TenantId = @TenantId,
             AccountId = COALESCE(AccountId, @AccountId),
-            FirstName = COALESCE(NULLIF(FirstName, N''), N'James'),
-            LastName = COALESCE(NULLIF(LastName, N''), N'Brady'),
-            Email = COALESCE(Email, N'james.brady@acmecorp.com'),
-            Phone = COALESCE(Phone, N'+1 312 555 0111'),
-            JobTitle = COALESCE(JobTitle, N'VP of Risk Management'),
+            FirstName = COALESCE(NULLIF(FirstName, N''), N'Morgan'),
+            LastName = COALESCE(NULLIF(LastName, N''), N'Patel'),
+            Email = COALESCE(Email, N'morgan.patel@globalriskpartners.example'),
+            Phone = COALESCE(Phone, N'+1 404 555 0104'),
+            JobTitle = COALESCE(JobTitle, N'Chief Risk Officer'),
             ContactTypeCode = COALESCE(NULLIF(ContactTypeCode, N''), N'Primary'),
             IsBillingContact = 1,
             IsPortalUser = 1,
@@ -2536,6 +2576,213 @@ BEGIN
             ModifiedByUserId = @AdminUserId
         WHERE ContactId = @ContactId;
     END
+
+    IF OBJECT_ID(N'Client.ContactWorkflowEvent', N'U') IS NOT NULL
+    BEGIN
+        IF NOT EXISTS (SELECT 1 FROM Client.ContactWorkflowEvent WHERE ContactId = @ContactId AND EventType = N'Profile' AND EventTitle = N'Contact 360 profile synchronized')
+            INSERT INTO Client.ContactWorkflowEvent (WorkflowEventId,TenantId,ContactId,EventType,EventTitle,EventDetail,RelatedEntityName,RelatedEntityId,EventDateUtc,CreatedDateUtc,CreatedByUserId,IsDeleted)
+            VALUES (NEWID(),@TenantId,@ContactId,N'Profile',N'Contact 360 profile synchronized',N'Enterprise contact profile, responsibility flags, and account relationship were synchronized from seed data.',N'Account',@AccountId,DATEADD(day,-21,SYSUTCDATETIME()),SYSUTCDATETIME(),@AdminUserId,0);
+
+        IF NOT EXISTS (SELECT 1 FROM Client.ContactWorkflowEvent WHERE ContactId = @ContactId AND EventType = N'Portal' AND EventTitle = N'Portal access enabled')
+            INSERT INTO Client.ContactWorkflowEvent (WorkflowEventId,TenantId,ContactId,EventType,EventTitle,EventDetail,RelatedEntityName,RelatedEntityId,EventDateUtc,CreatedDateUtc,CreatedByUserId,IsDeleted)
+            VALUES (NEWID(),@TenantId,@ContactId,N'Portal',N'Portal access enabled',N'Portal readiness was enabled so invite workflows and document sharing can target this contact.',N'Contact',@ContactId,DATEADD(day,-12,SYSUTCDATETIME()),SYSUTCDATETIME(),@AdminUserId,0);
+
+        IF NOT EXISTS (SELECT 1 FROM Client.ContactWorkflowEvent WHERE ContactId = @ContactId AND EventType = N'Workflow' AND EventTitle = N'Service workflow synced')
+            INSERT INTO Client.ContactWorkflowEvent (WorkflowEventId,TenantId,ContactId,EventType,EventTitle,EventDetail,RelatedEntityName,RelatedEntityId,EventDateUtc,CreatedDateUtc,CreatedByUserId,IsDeleted)
+            VALUES (NEWID(),@TenantId,@ContactId,N'Workflow',N'Service workflow synced',N'Key, billing, service, and portal role flags were synchronized into related account servicing workflow context.',N'Account',@AccountId,DATEADD(day,-3,SYSUTCDATETIME()),SYSUTCDATETIME(),@AdminUserId,0);
+    END
+END
+";
+
+    private const string Migration0123A_ClientContactWorkflowEventCreate = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Client')
+    EXEC(N'CREATE SCHEMA Client');
+
+IF OBJECT_ID(N'Client.ContactWorkflowEvent', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.ContactWorkflowEvent
+    (
+        WorkflowEventId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ContactWorkflowEvent PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ContactId UNIQUEIDENTIFIER NOT NULL,
+        EventType NVARCHAR(50) NOT NULL,
+        EventTitle NVARCHAR(200) NOT NULL,
+        EventDetail NVARCHAR(1000) NULL,
+        RelatedEntityName NVARCHAR(100) NULL,
+        RelatedEntityId UNIQUEIDENTIFIER NULL,
+        EventDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ContactWorkflowEvent_Date DEFAULT SYSUTCDATETIME(),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ContactWorkflowEvent_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_ContactWorkflowEvent_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Client.ContactWorkflowEvent', N'U') IS NOT NULL
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_ContactWorkflowEvent_ContactId_Date' AND object_id = OBJECT_ID(N'Client.ContactWorkflowEvent'))
+        CREATE NONCLUSTERED INDEX IX_ContactWorkflowEvent_ContactId_Date ON Client.ContactWorkflowEvent(ContactId, IsDeleted, EventDateUtc DESC, CreatedDateUtc DESC);
+
+    IF OBJECT_ID(N'Client.Contact', N'U') IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_ContactWorkflowEvent_Contact')
+       AND NOT EXISTS (
+            SELECT 1
+            FROM Client.ContactWorkflowEvent e
+            LEFT JOIN Client.Contact c ON c.ContactId = e.ContactId
+            WHERE c.ContactId IS NULL
+       )
+        ALTER TABLE Client.ContactWorkflowEvent ADD CONSTRAINT FK_ContactWorkflowEvent_Contact FOREIGN KEY (ContactId) REFERENCES Client.Contact(ContactId);
+END;
+";
+    private const string Migration0123B_ClientContactRolesSeed = @"
+IF OBJECT_ID(N'Client.Account', N'U') IS NOT NULL AND OBJECT_ID(N'Client.Contact', N'U') IS NOT NULL
+BEGIN
+    DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+    DECLARE @AdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+    DECLARE @AccountId UNIQUEIDENTIFIER = '20000000-0000-0000-0000-000000000004';
+    DECLARE @ActiveStatusCodeId INT = 1;
+
+    IF NOT EXISTS (SELECT 1 FROM Client.Account WHERE AccountId = @AccountId AND IsDeleted = 0)
+    BEGIN
+        INSERT INTO Client.Account
+        (
+            AccountId, TenantId, AccountNumber, AccountName, AccountTypeCode,
+            MainEmail, MainPhone, StatusCode, SegmentCode, OwnerUserId,
+            LifecycleStageCode, Industry, Website, AnnualRevenue,
+            CreatedDateUtc, CreatedByUserId, IsDeleted
+        )
+        VALUES
+        (
+            @AccountId, @TenantId, N'GLB-004', N'Global Risk Partners', N'Commercial',
+            N'contact@globalriskpartners.example', N'+1 404 555 0104', N'Active', N'Enterprise', @AdminUserId,
+            N'Customer', N'Professional Services', N'https://globalrisk.example', 12750000.00,
+            SYSUTCDATETIME(), @AdminUserId, 0
+        );
+    END
+
+    DECLARE @RoleSeed TABLE
+    (
+        ContactId UNIQUEIDENTIFIER NOT NULL,
+        FirstName NVARCHAR(150) NOT NULL,
+        LastName NVARCHAR(150) NOT NULL,
+        Email NVARCHAR(300) NULL,
+        Phone NVARCHAR(50) NULL,
+        JobTitle NVARCHAR(200) NULL,
+        ContactTypeCode NVARCHAR(50) NOT NULL,
+        IsBillingContact BIT NOT NULL,
+        IsPortalUser BIT NOT NULL,
+        IsKeyContact BIT NOT NULL,
+        IsServiceContact BIT NOT NULL,
+        PreferredContactMethod NVARCHAR(50) NULL
+    );
+
+    INSERT INTO @RoleSeed
+    VALUES
+        ('20000000-0000-0000-0000-000000000004', N'Morgan', N'Patel', N'morgan.patel@globalriskpartners.example', N'+1 404 555 0104', N'Chief Risk Officer', N'Decision Maker', 1, 1, 1, 1, N'Email'),
+        ('20000000-0000-0000-0000-000000000014', N'Elena', N'Rodriguez', N'elena.rodriguez@globalriskpartners.example', N'+1 404 555 0114', N'Controller', N'Billing', 1, 0, 0, 0, N'Email'),
+        ('20000000-0000-0000-0000-000000000024', N'Daniel', N'Kim', N'daniel.kim@globalriskpartners.example', N'+1 404 555 0124', N'Director of Operations', N'Technical', 0, 1, 0, 1, N'Portal');
+
+    IF COL_LENGTH(N'Client.Contact', N'StatusCodeId') IS NOT NULL
+    BEGIN
+        INSERT INTO Client.Contact
+        (
+            ContactId, TenantId, AccountId, FirstName, LastName, Email, Phone, JobTitle,
+            ContactTypeCode, IsBillingContact, IsPortalUser, IsKeyContact, IsServiceContact,
+            PreferredContactMethod, ParentContactId, StatusCode, StatusCodeId, CreatedDateUtc, CreatedByUserId, IsDeleted
+        )
+        SELECT r.ContactId, @TenantId, @AccountId, r.FirstName, r.LastName, r.Email, r.Phone, r.JobTitle,
+               r.ContactTypeCode, r.IsBillingContact, r.IsPortalUser, r.IsKeyContact, r.IsServiceContact,
+               r.PreferredContactMethod, NULL, N'Active', @ActiveStatusCodeId, SYSUTCDATETIME(), @AdminUserId, 0
+        FROM @RoleSeed r
+        WHERE NOT EXISTS (SELECT 1 FROM Client.Contact c WHERE c.ContactId = r.ContactId);
+    END
+    ELSE
+    BEGIN
+        INSERT INTO Client.Contact
+        (
+            ContactId, TenantId, AccountId, FirstName, LastName, Email, Phone, JobTitle,
+            ContactTypeCode, IsBillingContact, IsPortalUser, IsKeyContact, IsServiceContact,
+            PreferredContactMethod, ParentContactId, StatusCode, CreatedDateUtc, CreatedByUserId, IsDeleted
+        )
+        SELECT r.ContactId, @TenantId, @AccountId, r.FirstName, r.LastName, r.Email, r.Phone, r.JobTitle,
+               r.ContactTypeCode, r.IsBillingContact, r.IsPortalUser, r.IsKeyContact, r.IsServiceContact,
+               r.PreferredContactMethod, NULL, N'Active', SYSUTCDATETIME(), @AdminUserId, 0
+        FROM @RoleSeed r
+        WHERE NOT EXISTS (SELECT 1 FROM Client.Contact c WHERE c.ContactId = r.ContactId);
+    END
+
+    UPDATE c
+    SET TenantId = @TenantId,
+        AccountId = COALESCE(c.AccountId, @AccountId),
+        FirstName = COALESCE(NULLIF(c.FirstName, N''), r.FirstName),
+        LastName = COALESCE(NULLIF(c.LastName, N''), r.LastName),
+        Email = COALESCE(c.Email, r.Email),
+        Phone = COALESCE(c.Phone, r.Phone),
+        JobTitle = COALESCE(c.JobTitle, r.JobTitle),
+        ContactTypeCode = r.ContactTypeCode,
+        IsBillingContact = r.IsBillingContact,
+        IsPortalUser = r.IsPortalUser,
+        IsKeyContact = r.IsKeyContact,
+        IsServiceContact = r.IsServiceContact,
+        PreferredContactMethod = COALESCE(c.PreferredContactMethod, r.PreferredContactMethod),
+        StatusCode = COALESCE(NULLIF(c.StatusCode, N''), N'Active'),
+        StatusCodeId = CASE WHEN COL_LENGTH(N'Client.Contact', N'StatusCodeId') IS NULL THEN c.StatusCodeId ELSE COALESCE(c.StatusCodeId, @ActiveStatusCodeId) END,
+        IsDeleted = 0,
+        ModifiedDateUtc = SYSUTCDATETIME(),
+        ModifiedByUserId = @AdminUserId
+    FROM Client.Contact c
+    INNER JOIN @RoleSeed r ON r.ContactId = c.ContactId;
+
+    IF OBJECT_ID(N'Client.ContactWorkflowEvent', N'U') IS NOT NULL
+    BEGIN
+        INSERT INTO Client.ContactWorkflowEvent (WorkflowEventId,TenantId,ContactId,EventType,EventTitle,EventDetail,RelatedEntityName,RelatedEntityId,EventDateUtc,CreatedDateUtc,CreatedByUserId,IsDeleted)
+        SELECT NEWID(), @TenantId, r.ContactId, N'ContactRole', N'Contact role seed synchronized',
+               N'Contact role assignment and responsibility flags were synchronized into the account workflow context from database seed data.',
+               N'Account', @AccountId, DATEADD(day,-2,SYSUTCDATETIME()), SYSUTCDATETIME(), @AdminUserId, 0
+        FROM @RoleSeed r
+        WHERE NOT EXISTS
+        (
+            SELECT 1
+            FROM Client.ContactWorkflowEvent e
+            WHERE e.ContactId = r.ContactId
+              AND e.EventType = N'ContactRole'
+              AND e.EventTitle = N'Contact role seed synchronized'
+              AND e.IsDeleted = 0
+        );
+    END
+END
+";
+    private const string Migration0123C_ClientDecisionMakersWorkflowSeed = @"
+IF OBJECT_ID(N'Client.Contact', N'U') IS NOT NULL AND OBJECT_ID(N'Client.ContactWorkflowEvent', N'U') IS NOT NULL
+BEGIN
+    DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+    DECLARE @AdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+
+    INSERT INTO Client.ContactWorkflowEvent (WorkflowEventId,TenantId,ContactId,EventType,EventTitle,EventDetail,RelatedEntityName,RelatedEntityId,EventDateUtc,CreatedDateUtc,CreatedByUserId,IsDeleted)
+    SELECT NEWID(), c.TenantId, c.ContactId, N'DecisionMaker', N'Decision maker authority synchronized',
+           N'Decision-maker role, executive authority, portal readiness, and account workflow context were synchronized from contact master data.',
+           N'Account', NULLIF(c.AccountId, '00000000-0000-0000-0000-000000000000'), DATEADD(day,-1,SYSUTCDATETIME()), SYSUTCDATETIME(), @AdminUserId, 0
+    FROM Client.Contact c
+    WHERE c.TenantId = @TenantId
+      AND c.IsDeleted = 0
+      AND (
+            c.IsKeyContact = 1
+         OR c.ContactTypeCode = N'Decision Maker'
+         OR c.JobTitle LIKE N'%CEO%'
+         OR c.JobTitle LIKE N'%Chief%'
+         OR c.JobTitle LIKE N'%President%'
+         OR c.JobTitle LIKE N'%Owner%'
+         OR c.JobTitle LIKE N'%Principal%'
+         OR c.JobTitle LIKE N'%Executive%'
+      )
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Client.ContactWorkflowEvent e
+          WHERE e.ContactId = c.ContactId
+            AND e.EventType = N'DecisionMaker'
+            AND e.EventTitle = N'Decision maker authority synchronized'
+            AND e.IsDeleted = 0
+      );
 END
 ";
     private const string Migration0035_FinanceSeedGLAccounts = "";

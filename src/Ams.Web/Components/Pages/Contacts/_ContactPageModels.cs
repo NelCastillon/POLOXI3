@@ -29,22 +29,22 @@ internal sealed class ContactFormModel
     public Guid? AccountId { get; set; }
 
     [Required(ErrorMessage = "First Name is required.")]
-    [StringLength(100, ErrorMessage = "First Name cannot exceed 100 characters.")]
+    [StringLength(150, ErrorMessage = "First Name cannot exceed 150 characters.")]
     public string FirstName { get; set; } = string.Empty;
 
     [Required(ErrorMessage = "Last Name is required.")]
-    [StringLength(100, ErrorMessage = "Last Name cannot exceed 100 characters.")]
+    [StringLength(150, ErrorMessage = "Last Name cannot exceed 150 characters.")]
     public string LastName { get; set; } = string.Empty;
 
     [AmsEmailAddress]
-    [StringLength(200, ErrorMessage = "Email cannot exceed 200 characters.")]
+    [StringLength(300, ErrorMessage = "Email cannot exceed 300 characters.")]
     public string? Email { get; set; }
 
     [AmsPhone]
     [StringLength(50, ErrorMessage = "Phone cannot exceed 50 characters.")]
     public string? Phone { get; set; }
 
-    [StringLength(100, ErrorMessage = "Job Title cannot exceed 100 characters.")]
+    [StringLength(200, ErrorMessage = "Job Title cannot exceed 200 characters.")]
     public string? JobTitle { get; set; }
 
     [Required(ErrorMessage = "Contact Type is required.")]
