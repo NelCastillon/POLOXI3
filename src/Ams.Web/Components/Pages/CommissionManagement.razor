@@ -1,125 +1,404 @@
 @page "/commission-management"
+@page "/commissions"
+@page "/analytics/commissions"
+@using System.Globalization
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
 
 <PageTitle>Commission Management</PageTitle>
-<AppPageHeader Title="Commission Management" Icon="bi-grid" />
 
-<SfTab>
-    <TabItems>
-        <TabItem>
-            <ChildContent><TabHeader Text="Payees"></TabHeader></ChildContent>
-            <ContentTemplate>
-                <div class="toolbar" style="margin-top:12px">
-                    <SfTextBox Placeholder="Search..." @bind-Value="_payeeSearch" Width="320px"></SfTextBox>
-                    <SfButton CssClass="e-primary" OnClick="LoadPayeesAsync">Refresh</SfButton>
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger um-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+        <span>@_loadError</span>
+    </div>
+}
+
+<div class="commcfg-hero">
+    <div>
+        <span class="commcfg-eyebrow">Commission ledger</span>
+        <h2>Commission Management</h2>
+        <p>Policy, producer, payout, statement, exception, and forecast views are driven by one synchronized commission ledger seed.</p>
+    </div>
+    <div class="commcfg-hero-grid">
+        <button type="button" class="commcfg-quick-action" @onclick="() => Nav.NavigateTo(PolicyUrl)"><i class="bi bi-shield-check" aria-hidden="true"></i> Policy</button>
+        <button type="button" class="commcfg-quick-action" @onclick='() => Nav.NavigateTo("/commissions/statements")'><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements</button>
+        <button type="button" class="commcfg-quick-action" @onclick='() => Nav.NavigateTo("/commissions/producer-ledger")'><i class="bi bi-journal-text" aria-hidden="true"></i> Producer ledger</button>
+    </div>
+</div>
+
+@if (HasQuery)
+{
+    <div class="commcfg-policy-card">
+        <strong><i class="bi bi-link-45deg" aria-hidden="true"></i> Opened from Policy Detail</strong>
+        <span><i class="bi bi-shield-check" aria-hidden="true"></i> @PolicyFilter</span>
+        <span><i class="bi bi-calendar3" aria-hidden="true"></i> @PeriodFilter</span>
+        <span><i class="bi bi-briefcase" aria-hidden="true"></i> @TypeFilter</span>
+        <span><i class="bi bi-person-badge" aria-hidden="true"></i> @ProducerFilter</span>
+    </div>
+}
+
+<section class="commcfg-kpi-grid" aria-label="Commission metrics">
+    @foreach (var kpi in Kpis)
+    {
+        <button type="button" class="commcfg-kpi-card @(_activeFilter == kpi.Filter ? "pc-kpi-card--active" : string.Empty)" title="@kpi.Title" @onclick="() => SetFilter(kpi.Filter)">
+            <span class="commcfg-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+            <span>
+                <strong>@kpi.Value</strong>
+                <span>@kpi.Label</span>
+                <small>@kpi.Caption</small>
+            </span>
+        </button>
+    }
+</section>
+
+<section class="commcfg-command-bar" aria-label="Commission filters">
+    <div class="commcfg-search-wrap">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <input type="search" placeholder="Search policy, producer, account, carrier, statement, payout..." @bind="SearchText" @bind:event="oninput" />
+    </div>
+    <select class="form-select" style="max-width: 14rem" @bind="StatusFilter" aria-label="Status filter">
+        <option value="">All statuses</option>
+        @foreach (var status in Statuses)
+        {
+            <option value="@status">@status</option>
+        }
+    </select>
+    <select class="form-select" style="max-width: 14rem" @bind="ProducerSelectFilter" aria-label="Producer filter">
+        <option value="">All producers</option>
+        @foreach (var producerName in Producers)
+        {
+            <option value="@producerName">@producerName</option>
+        }
+    </select>
+    <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button>
+    <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Sync seed</button>
+</section>
+
+<section class="commcfg-layout">
+    <div class="enterprise-grid-card">
+        <div class="sr-grid-toolbar">
+            <div>
+                <strong>Commission transactions</strong>
+                <span class="sr-filter-note">@_filtered.Count synchronized row(s)</span>
+            </div>
+            <div class="tset-row-actions">
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/commissions/plans")'><i class="bi bi-clipboard-check" aria-hidden="true"></i> Plans</button>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/commissions/exceptions2")'><i class="bi bi-exclamation-circle" aria-hidden="true"></i> Exceptions</button>
+                <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/commissions/payout-batches")'><i class="bi bi-box-seam" aria-hidden="true"></i> Payouts</button>
+            </div>
+        </div>
+        @if (_loading)
+        {
+            <div class="sr-empty-state"><i class="bi bi-arrow-repeat" aria-hidden="true"></i><strong>Syncing commission data</strong><span>Loading seeded payees, transactions, statements, payouts, and related policy context.</span></div>
+        }
+        else if (!_filtered.Any())
+        {
+            <div class="sr-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No commissions found</strong><span>Clear filters or sync seed data to restore the shared commission ledger.</span><button type="button" class="um-btn um-btn-primary" @onclick="ResetFilters">Show all commissions</button></div>
+        }
+        else
+        {
+            <div class="sr-table-scroll">
+                <table class="sr-table">
+                    <thead>
+                        <tr>
+                            <th>Policy / account</th>
+                            <th>Period</th>
+                            <th>Type</th>
+                            <th>Producer</th>
+                            <th class="rl-preview-num">Gross</th>
+                            <th class="rl-preview-num">Agency</th>
+                            <th class="rl-preview-num">Producer</th>
+                            <th>Status</th>
+                            <th>Statement</th>
+                            <th class="sr-actions-col">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in _filtered)
+                        {
+                            <tr class="sr-table-row @(_selected?.CommissionId == row.CommissionId ? "ma-table-row--selected" : string.Empty)" @onclick="() => SelectRow(row)">
+                                <td>
+                                    <div class="entity-cell">
+                                        <span class="entity-icon"><i class="bi bi-shield-check" aria-hidden="true"></i></span>
+                                        <span><strong>@row.PolicyNumber</strong><small>@row.AccountName · @row.LineOfBusiness</small></span>
+                                    </div>
+                                </td>
+                                <td>@row.Period</td>
+                                <td><span class="commcfg-chip commcfg-tone-blue">@row.BusinessType</span></td>
+                                <td>@row.Producer</td>
+                                <td class="rl-preview-num">@FormatMoney(row.GrossAmount)</td>
+                                <td class="rl-preview-num">@FormatMoney(row.AgencyAmount)</td>
+                                <td class="rl-preview-num">@FormatMoney(row.ProducerAmount)</td>
+                                <td><span class="status-chip @StatusClass(row.Status)">@row.Status</span></td>
+                                <td>@row.StatementNumber</td>
+                                <td class="sr-actions-col">
+                                    <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick:stopPropagation="true" @onclick="() => SelectRow(row)"><i class="bi bi-layout-sidebar-inset" aria-hidden="true"></i> Open</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+
+    <aside class="commcfg-admin-panel" aria-label="Selected commission detail">
+        @if (_selected is null)
+        {
+            <div class="commcfg-side-empty"><i class="bi bi-cursor" aria-hidden="true"></i><h3>Select a commission</h3><p>Choose a row to inspect payout sync, policy source, statement, producer split, and related modules.</p></div>
+        }
+        else
+        {
+            <div class="commcfg-detail-header">
+                <div>
+                    <span class="commcfg-eyebrow">Selected transaction</span>
+                    <h3>@_selected.PolicyNumber</h3>
                 </div>
-                @if (_payees is null) { <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div> }
-                else {
-                <SfGrid DataSource="_payees" AllowPaging="true" AllowSorting="true" Height="420px">
-                    <GridPageSettings PageSize="10"></GridPageSettings>
-                    <GridColumns>
-                        <GridColumn Field="@nameof(CommissionPayeeDto.PayeeTypeCode)"    HeaderText="Type"       Width="130"></GridColumn>
-                        <GridColumn Field="@nameof(CommissionPayeeDto.SplitPercentage)"  HeaderText="Split %"    Width="110" Format="N2"></GridColumn>
-                        <GridColumn Field="@nameof(CommissionPayeeDto.EffectiveDate)"    HeaderText="Effective"  Type="ColumnType.Date" Format="d" Width="130"></GridColumn>
-                        <GridColumn Field="@nameof(CommissionPayeeDto.StatusCode)"       HeaderText="Status"     Width="120"></GridColumn>
-                    </GridColumns>
-                </SfGrid>
+                <span class="status-chip @StatusClass(_selected.Status)">@_selected.Status</span>
+            </div>
+            <div class="commcfg-detail-list">
+                <div><dt>Policy</dt><dd>@_selected.PolicyNumber</dd></div>
+                <div><dt>Account</dt><dd>@_selected.AccountName</dd></div>
+                <div><dt>Period</dt><dd>@_selected.Period</dd></div>
+                <div><dt>Producer</dt><dd>@_selected.Producer</dd></div>
+                <div><dt>Rate</dt><dd>@_selected.CommissionPct.ToString("N2", CultureInfo.CurrentCulture)%</dd></div>
+                <div><dt>Producer</dt><dd>@FormatMoney(_selected.ProducerAmount)</dd></div>
+                <div><dt>Statement</dt><dd>@_selected.StatementNumber</dd></div>
+                <div><dt>Payout</dt><dd>@_selected.PayoutBatch</dd></div>
+            </div>
+            <div class="commcfg-policy-card">
+                <strong><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Synchronized source</strong>
+                <span>Policy Detail, Producer Ledger, Statements, Exceptions, Forecast, and Payouts use this same seeded ledger row context.</span>
+            </div>
+            <div class="commcfg-module-grid">
+                @foreach (var link in RelatedLinks(_selected))
+                {
+                    <button type="button" class="commcfg-module-card" @onclick="() => Nav.NavigateTo(link.Url)">
+                        <span class="commcfg-module-icon"><i class="bi @link.Icon" aria-hidden="true"></i></span>
+                        <span class="commcfg-module-content"><strong>@link.Title</strong><small>@link.Description</small></span>
+                        <i class="bi bi-arrow-right commcfg-module-arrow" aria-hidden="true"></i>
+                    </button>
                 }
-            </ContentTemplate>
-        </TabItem>
-        <TabItem>
-            <ChildContent><TabHeader Text="Transactions"></TabHeader></ChildContent>
-            <ContentTemplate>
-                <div class="toolbar" style="margin-top:12px">
-                    <SfTextBox Placeholder="Search..." @bind-Value="_txSearch" Width="320px"></SfTextBox>
-                    <SfButton CssClass="e-primary" OnClick="LoadTransactionsAsync">Refresh</SfButton>
-                </div>
-                @if (_transactions is null) { <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div> }
-                else {
-                <SfGrid DataSource="_transactions" AllowPaging="true" AllowSorting="true" Height="420px">
-                    <GridPageSettings PageSize="10"></GridPageSettings>
-                    <GridColumns>
-                        <GridColumn Field="@nameof(CommissionTransactionDto.TransactionDate)"   HeaderText="Date"       Type="ColumnType.Date" Format="d" Width="120"></GridColumn>
-                        <GridColumn Field="@nameof(CommissionTransactionDto.SourceEntityName)"  HeaderText="Source"     Width="160"></GridColumn>
-                        <GridColumn Field="@nameof(CommissionTransactionDto.GrossAmount)"       HeaderText="Gross"      Width="120" Format="C2"></GridColumn>
-                        <GridColumn Field="@nameof(CommissionTransactionDto.CommissionRate)"    HeaderText="Rate %"     Width="100" Format="N2"></GridColumn>
-                        <GridColumn Field="@nameof(CommissionTransactionDto.CommissionAmount)"  HeaderText="Commission" Width="130" Format="C2"></GridColumn>
-                        <GridColumn Field="@nameof(CommissionTransactionDto.StatusCode)"        HeaderText="Status"     Width="120"></GridColumn>
-                    </GridColumns>
-                </SfGrid>
-                }
-            </ContentTemplate>
-        </TabItem>
-        <TabItem>
-            <ChildContent><TabHeader Text="Payouts"></TabHeader></ChildContent>
-            <ContentTemplate>
-                <div class="toolbar" style="margin-top:12px">
-                    <SfTextBox Placeholder="Search..." @bind-Value="_payoutSearch" Width="320px"></SfTextBox>
-                    <SfButton CssClass="e-primary" OnClick="LoadPayoutsAsync">Refresh</SfButton>
-                </div>
-                @if (_payouts is null) { <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div> }
-                else {
-                <SfGrid DataSource="_payouts" AllowPaging="true" AllowSorting="true" Height="420px">
-                    <GridPageSettings PageSize="10"></GridPageSettings>
-                    <GridColumns>
-                        <GridColumn Field="@nameof(CommissionPayoutDto.PayoutDate)"   HeaderText="Payout Date" Type="ColumnType.Date" Format="d" Width="140"></GridColumn>
-                        <GridColumn Field="@nameof(CommissionPayoutDto.TotalAmount)"  HeaderText="Total"       Width="140" Format="C2"></GridColumn>
-                        <GridColumn Field="@nameof(CommissionPayoutDto.StatusCode)"   HeaderText="Status"      Width="120"></GridColumn>
-                        <GridColumn Field="@nameof(CommissionPayoutDto.ProcessedDateUtc)" HeaderText="Processed" Type="ColumnType.DateTime" Format="d" Width="140"></GridColumn>
-                        <GridColumn Field="@nameof(CommissionPayoutDto.Notes)"        HeaderText="Notes"       Width="280"></GridColumn>
-                    </GridColumns>
-                </SfGrid>
-                }
-            </ContentTemplate>
-        </TabItem>
-    </TabItems>
-</SfTab>
+            </div>
+        }
+    </aside>
+</section>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private string? _payeeSearch, _txSearch, _payoutSearch;
-    private List<CommissionPayeeDto>? _payees;
-    private List<CommissionTransactionDto>? _transactions;
-    private List<CommissionPayoutDto>? _payouts;
+    private Guid _tenantAdminUserId;
+    private bool _initialized;
+    private bool _loading;
+    private string? _loadError;
+    private string _searchTerm = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _producerFilter = string.Empty;
+    private string _activeFilter = "all";
+    private List<CommissionLedgerRow> _items = [];
+    private List<CommissionLedgerRow> _filtered = [];
+    private CommissionLedgerRow? _selected;
+
+    [SupplyParameterFromQuery(Name = "policy")]
+    public string? PolicyFilter { get; set; }
+
+    [SupplyParameterFromQuery(Name = "period")]
+    public string? PeriodFilter { get; set; }
+
+    [SupplyParameterFromQuery(Name = "type")]
+    public string? TypeFilter { get; set; }
+
+    [SupplyParameterFromQuery(Name = "producer")]
+    public string? ProducerFilter { get; set; }
+
+    private bool HasQuery => !string.IsNullOrWhiteSpace(PolicyFilter) || !string.IsNullOrWhiteSpace(PeriodFilter) || !string.IsNullOrWhiteSpace(TypeFilter) || !string.IsNullOrWhiteSpace(ProducerFilter);
+    private string PolicyUrl => _selected is null ? "/policies" : $"/policies?searchTerm={Uri.EscapeDataString(_selected.PolicyNumber)}";
+    private decimal TotalProducer => _filtered.Sum(x => x.ProducerAmount);
+    private decimal TotalAgency => _filtered.Sum(x => x.AgencyAmount);
+    private IReadOnlyList<string> Statuses => _items.Select(x => x.Status).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+    private IReadOnlyList<string> Producers => _items.Select(x => x.Producer).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+    private IReadOnlyList<KpiModel> Kpis => new List<KpiModel>
+    {
+        new("all", "Transactions", _items.Count.ToString("N0"), "All seeded rows", "bi-grid", "Show all commissions"),
+        new("query", "Policy match", QueryMatches.Count.ToString("N0"), "From Policy Detail", "bi-link-45deg", "Show policy query matches"),
+        new("payable", "Payable", _items.Count(x => x.Status is "Approved" or "Pending").ToString("N0"), "Ready for statement", "bi-cash-stack", "Show payable commissions"),
+        new("paid", "Paid", _items.Count(x => x.Status == "Paid").ToString("N0"), "Settled payouts", "bi-check2-circle", "Show paid commissions"),
+        new("producer", "Producer total", FormatMoney(TotalProducer), "Current filter", "bi-person-badge", "Show producer totals"),
+        new("agency", "Agency total", FormatMoney(TotalAgency), "Current filter", "bi-building-check", "Show agency totals")
+    };
+    private List<CommissionLedgerRow> QueryMatches => _items.Where(MatchesQuery).ToList();
+
+    private string SearchText { get => _searchTerm; set { _searchTerm = value; ApplyFilters(); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(); } }
+    private string ProducerSelectFilter { get => _producerFilter; set { _producerFilter = value; ApplyFilters(); } }
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        await Task.WhenAll(LoadPayeesAsync(), LoadTransactionsAsync(), LoadPayoutsAsync());
+        await LoadAsync();
+        _initialized = true;
     }
 
-    private async Task LoadPayeesAsync()
+    protected override void OnParametersSet()
     {
-        var r = await Api.SearchCommissionPayeesAsync(_tenantId, _payeeSearch);
-        _payees = r?.Items.ToList() ?? [];
+        if (!_initialized)
+        {
+            return;
+        }
+
+        ApplyFilters();
+        SelectQueryMatch();
     }
 
-    private async Task LoadTransactionsAsync()
+    private async Task LoadAsync()
     {
-        var r = await Api.SearchCommissionTransactionsAsync(_tenantId, _txSearch);
-        _transactions = r?.Items.ToList() ?? [];
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            if (_tenantId != Guid.Empty)
+            {
+                await Api.EnsureCommissionSeedAsync(_tenantId, _tenantAdminUserId);
+            }
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Commission data sync failed. {ex.Message}";
+        }
+        finally
+        {
+            if (_tenantId != Guid.Empty)
+            {
+                try
+                {
+                    var rows = await Api.SearchCommissionLedgerAsync(_tenantId);
+                    _items = rows?.Select(CommissionLedgerRow.FromDto).ToList() ?? [];
+                }
+                catch (Exception ex)
+                {
+                    _loadError = $"Commission ledger load failed. {ex.Message}";
+                    _items = [];
+                }
+            }
+
+            ApplyFilters();
+            SelectQueryMatch();
+            _loading = false;
+        }
     }
 
-    private async Task LoadPayoutsAsync()
+    private void ApplyFilters()
     {
-        var r = await Api.SearchCommissionPayoutsAsync(_tenantId, _payoutSearch);
-        _payouts = r?.Items.ToList() ?? [];
+        IEnumerable<CommissionLedgerRow> query = _items;
+
+        if (_activeFilter == "query" && HasQuery)
+        {
+            query = query.Where(MatchesQuery);
+        }
+        else if (_activeFilter == "payable")
+        {
+            query = query.Where(x => x.Status is "Approved" or "Pending");
+        }
+        else if (_activeFilter == "paid")
+        {
+            query = query.Where(x => x.Status == "Paid");
+        }
+
+        if (!string.IsNullOrWhiteSpace(_searchTerm))
+        {
+            var term = _searchTerm.Trim();
+            query = query.Where(x => Contains(x.PolicyNumber, term) || Contains(x.AccountName, term) || Contains(x.Producer, term) || Contains(x.Carrier, term) || Contains(x.StatementNumber, term) || Contains(x.PayoutBatch, term) || Contains(x.BusinessType, term) || Contains(x.Period, term));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_statusFilter))
+        {
+            query = query.Where(x => string.Equals(x.Status, _statusFilter, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_producerFilter))
+        {
+            query = query.Where(x => string.Equals(x.Producer, _producerFilter, StringComparison.OrdinalIgnoreCase));
+        }
+
+        _filtered = query.OrderByDescending(x => x.TransactionDate).ThenBy(x => x.PolicyNumber).ToList();
+        if (_selected is not null && _filtered.All(x => x.CommissionId != _selected.CommissionId))
+        {
+            _selected = _filtered.FirstOrDefault();
+        }
     }
 
-    async Task ResolveCurrentUserContextAsync()
+    private void SetFilter(string filter)
+    {
+        _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter;
+        ApplyFilters();
+    }
+
+    private void ResetFilters()
+    {
+        _searchTerm = string.Empty;
+        _statusFilter = string.Empty;
+        _producerFilter = string.Empty;
+        _activeFilter = HasQuery ? "query" : "all";
+        ApplyFilters();
+        SelectQueryMatch();
+    }
+
+    private void SelectRow(CommissionLedgerRow row) => _selected = row;
+
+    private void SelectQueryMatch()
+    {
+        if (HasQuery)
+        {
+            _activeFilter = "query";
+            _selected = QueryMatches.FirstOrDefault() ?? _filtered.FirstOrDefault();
+            ApplyFilters();
+        }
+        else
+        {
+            _selected ??= _filtered.FirstOrDefault();
+        }
+    }
+
+    private bool MatchesQuery(CommissionLedgerRow row)
+        => MatchesOptional(row.PolicyNumber, PolicyFilter)
+            && MatchesOptional(row.Period, PeriodFilter)
+            && MatchesOptional(row.BusinessType, TypeFilter)
+            && MatchesOptional(row.Producer, ProducerFilter);
+
+    private static bool MatchesOptional(string value, string? filter)
+        => string.IsNullOrWhiteSpace(filter) || string.Equals(value, filter.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    private static bool Contains(string? value, string term)
+        => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+
+    private static string FormatMoney(decimal value)
+        => value.ToString("C0", CultureInfo.CurrentCulture);
+
+    private static string StatusClass(string status) => $"status-{status.ToLowerInvariant().Replace(' ', '-')}";
+
+    private static IReadOnlyList<RelatedLink> RelatedLinks(CommissionLedgerRow row) => new List<RelatedLink>
+    {
+        new("Policy Detail", "Policy context and commission tab", $"/policies?searchTerm={Uri.EscapeDataString(row.PolicyNumber)}", "bi-shield-check"),
+        new("Producer Ledger", "Producer earnings and balances", $"/commissions/producer-ledger?producer={Uri.EscapeDataString(row.Producer)}", "bi-journal-text"),
+        new("Statements", "Statement and net payout", $"/commissions/statements?producer={Uri.EscapeDataString(row.Producer)}&period={Uri.EscapeDataString(row.Period)}", "bi-file-earmark-text"),
+        new("Payout Batches", "Payment run reconciliation", $"/commissions/payout-batches?batch={Uri.EscapeDataString(row.PayoutBatch)}", "bi-box-seam"),
+        new("Exceptions", "Holds, disputes, and blockers", $"/commissions/exceptions2?policy={Uri.EscapeDataString(row.PolicyNumber)}", "bi-exclamation-circle"),
+        new("Forecast", "Compare expected to actual", $"/commissions/forecast2?producer={Uri.EscapeDataString(row.Producer)}", "bi-graph-up")
+    };
+
+    private async Task ResolveCurrentUserContextAsync()
     {
         var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
         _tenantId = context.TenantId;
         _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+    }
+
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Title);
+    private sealed record RelatedLink(string Title, string Description, string Url, string Icon);
+    private sealed record CommissionLedgerRow(Guid CommissionId, string PolicyNumber, string Period, string BusinessType, string Producer, string AccountName, string LineOfBusiness, string Carrier, decimal GrossAmount, decimal CommissionPct, decimal AgencyAmount, decimal ProducerAmount, string Status, string StatementNumber, string PayoutBatch, DateOnly TransactionDate, DateOnly? PaidDate)
+    {
+        public static CommissionLedgerRow FromDto(CommissionLedgerRowDto dto) => new(dto.CommissionId, dto.PolicyNumber, dto.Period, dto.BusinessType, dto.Producer, dto.AccountName, dto.LineOfBusiness, dto.Carrier, dto.GrossAmount, dto.CommissionPct, dto.AgencyAmount, dto.ProducerAmount, dto.Status, dto.StatementNumber, dto.PayoutBatch, dto.TransactionDate, dto.PaidDate);
     }
 }

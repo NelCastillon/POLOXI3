@@ -1,0 +1,122 @@
+@page "/policies/compliance"
+@page "/policies/compliance/{ComplianceDocumentId:guid}"
+@inject NavigationManager Nav
+
+<PageTitle>@SelectedTitle — Policy Compliance</PageTitle>
+
+<div class="pcd-enterprise-page">
+    <section class="pcd-hero">
+        <div>
+            <span class="pcd-eyebrow"><i class="bi bi-patch-check" aria-hidden="true"></i> Policy compliance</span>
+            <h1>Policy Compliance Center</h1>
+            <p>Forms, evidence, notices, acknowledgements, and regulatory exceptions tied to policy servicing.</p>
+        </div>
+        <div class="pcd-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/policies")'>
+                <i class="bi bi-shield-check" aria-hidden="true"></i> Policies
+            </button>
+        </div>
+    </section>
+
+    <section class="pcd-kpi-strip" aria-label="Compliance metrics">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="pcd-kpi-card @(metric.Key == _activeFilter ? "pcd-kpi-card--active" : null)" @onclick="() => SetFilter(metric.Key)">
+                <i class="bi @metric.Icon pcd-kpi-icon" aria-hidden="true"></i>
+                <span>
+                    <strong>@metric.Value</strong>
+                    <small>@metric.Label</small>
+                </span>
+            </button>
+        }
+    </section>
+
+    <section class="pcd-detail-card">
+        <div class="pcd-detail-header">
+            <div>
+                <span>Selected requirement</span>
+                <h2>@SelectedTitle</h2>
+            </div>
+            <span class="pcd-status-chip pcd-status-@Selected.Status.ToLowerInvariant().Replace(" ", "-")">@Selected.Status</span>
+        </div>
+        <div class="pcd-field-grid">
+            <div class="pcd-field"><span>Category</span><strong>@Selected.Category</strong></div>
+            <div class="pcd-field"><span>Due Date</span><strong>@Selected.DueDate.ToString("MMM d, yyyy")</strong></div>
+            <div class="pcd-field"><span>Owner</span><strong>@Selected.Owner</strong></div>
+            <div class="pcd-field"><span>Evidence</span><strong>@Selected.Evidence</strong></div>
+            <div class="pcd-field pcd-field--full"><span>Detail</span><strong>@Selected.Detail</strong></div>
+        </div>
+    </section>
+
+    <section class="pcd-list-card">
+        <div class="pcd-list-header">
+            <h3>Compliance requirements</h3>
+            <span>@FilteredRows.Count requirement(s)</span>
+        </div>
+        <div class="pcd-list">
+            @foreach (var row in FilteredRows)
+            {
+                <button type="button" class="pcd-list-row @(row.Id == Selected.Id ? "pcd-list-row--selected" : null)" @onclick="() => SelectRequirement(row)">
+                    <span class="pcd-row-icon"><i class="bi @row.Icon" aria-hidden="true"></i></span>
+                    <span class="pcd-row-main">
+                        <strong>@row.Requirement</strong>
+                        <small>@row.Category · @row.Owner</small>
+                    </span>
+                    <span class="pcd-row-meta">@row.DueDate.ToString("MMM d")</span>
+                    <span class="pcd-status-chip pcd-status-@row.Status.ToLowerInvariant().Replace(" ", "-")">@row.Status</span>
+                </button>
+            }
+        </div>
+    </section>
+</div>
+
+@code {
+    [Parameter] public Guid? ComplianceDocumentId { get; set; }
+    [SupplyParameterFromQuery(Name = "requirement")] public string? Requirement { get; set; }
+
+    private string _activeFilter = "All";
+
+    private List<ComplianceMetric> Metrics =>
+    [
+        new("All", "Total", Rows.Count.ToString(), "bi-card-checklist"),
+        new("Compliant", "Compliant", Rows.Count(r => r.Status == "Compliant").ToString(), "bi-check-circle"),
+        new("Due", "Due", Rows.Count(r => r.Status == "Due").ToString(), "bi-clock"),
+        new("Exception", "Exceptions", Rows.Count(r => r.Status == "Exception").ToString(), "bi-exclamation-triangle")
+    ];
+
+    private List<ComplianceRequirement> FilteredRows => _activeFilter == "All"
+        ? Rows
+        : Rows.Where(r => r.Status == _activeFilter).ToList();
+
+    private ComplianceRequirement Selected => Rows.FirstOrDefault(IsSelected) ?? FilteredRows.FirstOrDefault() ?? Rows.First();
+    private string SelectedTitle => Selected.Requirement;
+
+    private bool IsSelected(ComplianceRequirement row)
+    {
+        if (ComplianceDocumentId.HasValue && row.Id == ComplianceDocumentId.Value)
+        {
+            return true;
+        }
+
+        return !string.IsNullOrWhiteSpace(Requirement)
+            && string.Equals(Uri.UnescapeDataString(Requirement), row.Requirement, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void SetFilter(string filter) => _activeFilter = filter;
+
+    private void SelectRequirement(ComplianceRequirement row)
+    {
+        Nav.NavigateTo($"/policies/compliance?requirement={Uri.EscapeDataString(row.Requirement)}");
+    }
+
+    private static readonly List<ComplianceRequirement> Rows =
+    [
+        new(Guid.Parse("11111111-1111-4111-8111-111111111111"), "Signed ACORD 25 holder evidence", "Certificate", "Compliant", DateTime.Today.AddDays(45), "Amy Scott", "ACORD 25 PDF", "Certificate holder evidence is on file for current policy term.", "bi-award"),
+        new(Guid.Parse("22222222-2222-4222-8222-222222222222"), "Workers compensation posting notice", "Regulatory", "Due", DateTime.Today.AddDays(12), "James Miller", "Pending insured upload", "State posting notice acknowledgement is due before renewal release.", "bi-file-earmark-check"),
+        new(Guid.Parse("33333333-3333-4333-8333-333333333333"), "Signed terrorism rejection form", "Coverage Form", "Compliant", DateTime.Today.AddDays(90), "Amy Scott", "Signed form", "TRIA rejection form is signed and indexed to the policy document set.", "bi-shield-check"),
+        new(Guid.Parse("44444444-4444-4444-8444-444444444444"), "Subjectivity exception review", "Underwriting", "Exception", DateTime.Today.AddDays(5), "Carrier Desk", "UW email thread", "Carrier subjectivity is open and needs underwriter confirmation.", "bi-exclamation-octagon")
+    ];
+
+    private sealed record ComplianceMetric(string Key, string Label, string Value, string Icon);
+    private sealed record ComplianceRequirement(Guid Id, string Requirement, string Category, string Status, DateTime DueDate, string Owner, string Evidence, string Detail, string Icon);
+}

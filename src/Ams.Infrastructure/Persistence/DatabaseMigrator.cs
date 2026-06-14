@@ -198,6 +198,8 @@ public sealed class DatabaseMigrator
         new("0165_ProducerRenewalCallList_CreateSeed", Migration0165_ProducerRenewalCallListCreateSeed),
         new("0166_ProducerRenewalCallList_SeedSync", Migration0166_ProducerRenewalCallListSeedSync),
         new("0167_MarketingCrossSell_ProducerSeedSync", Migration0167_MarketingCrossSellProducerSeedSync),
+        new("0168_CommissionLedger_SubmissionDetail_DbSeed", Migration0168_CommissionLedgerSubmissionDetailDbSeed),
+        new("0169_CarrierAppetite_TravelersInsurance_Seed", Migration0169_CarrierAppetiteTravelersInsuranceSeed),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -10757,5 +10759,259 @@ BEGIN
 
     DROP TABLE #LeadWorkflowSource;
 END
+";
+
+    private const string Migration0168_CommissionLedgerSubmissionDetailDbSeed = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Commission') EXEC(N'CREATE SCHEMA Commission');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Commission.CommissionLedger', N'U') IS NULL
+BEGIN
+    CREATE TABLE Commission.CommissionLedger
+    (
+        CommissionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionLedger_0168 PRIMARY KEY,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyNumber NVARCHAR(50) NOT NULL,
+        Period NVARCHAR(50) NOT NULL,
+        BusinessType NVARCHAR(100) NOT NULL,
+        Producer NVARCHAR(200) NOT NULL,
+        AccountName NVARCHAR(200) NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        Carrier NVARCHAR(200) NOT NULL,
+        GrossAmount DECIMAL(18,2) NOT NULL,
+        CommissionPct DECIMAL(9,4) NOT NULL,
+        AgencyAmount DECIMAL(18,2) NOT NULL,
+        ProducerAmount DECIMAL(18,2) NOT NULL,
+        Status NVARCHAR(50) NOT NULL,
+        StatementNumber NVARCHAR(80) NOT NULL,
+        PayoutBatch NVARCHAR(80) NOT NULL,
+        TransactionDate DATE NOT NULL,
+        PaidDate DATE NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionLedger_Created_0168 DEFAULT SYSUTCDATETIME(),
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionLedger_IsDeleted_0168 DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Commission.CommissionLedger') AND name = N'IX_CommissionLedger_Tenant_Search_0168')
+    CREATE INDEX IX_CommissionLedger_Tenant_Search_0168 ON Commission.CommissionLedger(TenantId, IsDeleted, TransactionDate DESC) INCLUDE (PolicyNumber, Producer, AccountName, Carrier, Status, StatementNumber, PayoutBatch);
+
+DECLARE @LedgerTenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL);
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO @LedgerTenants (TenantId)
+    SELECT TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted, 0) = 0;
+END;
+
+IF NOT EXISTS (SELECT 1 FROM @LedgerTenants)
+    INSERT INTO @LedgerTenants VALUES ('00000000-0000-0000-0000-000000000001');
+
+DECLARE @CommissionLedgerSeed TABLE
+(
+    CommissionId UNIQUEIDENTIFIER NOT NULL,
+    PolicyNumber NVARCHAR(50) NOT NULL,
+    Period NVARCHAR(50) NOT NULL,
+    BusinessType NVARCHAR(100) NOT NULL,
+    Producer NVARCHAR(200) NOT NULL,
+    AccountName NVARCHAR(200) NOT NULL,
+    LineOfBusiness NVARCHAR(100) NOT NULL,
+    Carrier NVARCHAR(200) NOT NULL,
+    GrossAmount DECIMAL(18,2) NOT NULL,
+    CommissionPct DECIMAL(9,4) NOT NULL,
+    AgencyAmount DECIMAL(18,2) NOT NULL,
+    ProducerAmount DECIMAL(18,2) NOT NULL,
+    Status NVARCHAR(50) NOT NULL,
+    StatementNumber NVARCHAR(80) NOT NULL,
+    PayoutBatch NVARCHAR(80) NOT NULL,
+    TransactionDate DATE NOT NULL,
+    PaidDate DATE NULL
+);
+
+INSERT INTO @CommissionLedgerSeed VALUES
+('2b11d31a-1be1-46a1-9d94-33e39a0f6d01', N'POL-2024-001847', N'Jun 2024', N'New Business', N'James Miller', N'Acme Manufacturing Group', N'Workers Compensation', N'Travelers', 125000, 12, 15000, 9000, N'Approved', N'STM-2024-06-JM', N'PAY-2024-06-02', '2024-06-28', '2024-07-05'),
+('3c7bdf16-f81f-4b18-9a7f-48a2502f6d22', N'POL-2024-001847', N'Jul 2024', N'Endorsement', N'James Miller', N'Acme Manufacturing Group', N'Workers Compensation', N'Travelers', 18000, 12, 2160, 1296, N'Pending', N'STM-2024-07-JM', N'PAY-2024-07-01', '2024-07-22', NULL),
+('407d1ad5-24d5-4f9b-871f-f92022ee29d5', N'POL-2024-001611', N'Jun 2024', N'Renewal', N'James Miller', N'Northwind Logistics', N'Commercial Auto', N'The Hartford', 94200, 10, 9420, 5652, N'Paid', N'STM-2024-06-JM', N'PAY-2024-06-02', '2024-06-17', '2024-07-05'),
+('c98d9015-c8a8-4331-a4fe-b49f01919d31', N'POL-2024-001702', N'Jun 2024', N'New Business', N'Sarah Chen', N'Blue Harbor Foods', N'General Liability', N'Chubb', 216000, 11, 23760, 11880, N'Approved', N'STM-2024-06-SC', N'PAY-2024-06-02', '2024-06-24', '2024-07-05'),
+('7af6ab4e-55fe-4688-bc12-f49fbbd8c0fd', N'POL-2024-001534', N'May 2024', N'Renewal', N'Michael Thompson', N'Evergreen Retail Partners', N'Business Owner Policy', N'CNA', 78500, 9, 7065, 3532.50, N'Paid', N'STM-2024-05-MT', N'PAY-2024-05-02', '2024-05-19', '2024-06-03'),
+('75977d2b-2d15-4dd3-a524-8a903d69bb75', N'POL-2024-001889', N'Jun 2024', N'New Business', N'Olivia Grant', N'Summit Professional Services', N'Professional Liability', N'AIG', 166400, 13, 21632, 12979.20, N'In Review', N'STM-2024-06-OG', N'PAY-2024-06-HOLD', '2024-06-30', NULL),
+('c2c02c41-8e0e-43b4-8c2b-1b96d999a6b8', N'POL-2024-001433', N'Jun 2024', N'Rewrite', N'James Miller', N'Crescent Medical Group', N'Cyber Liability', N'Coalition', 63500, 14, 8890, 5334, N'Approved', N'STM-2024-06-JM', N'PAY-2024-06-02', '2024-06-26', '2024-07-05'),
+('ec8a7b02-6090-444b-9dc0-d4cf55549c81', N'POL-2024-001920', N'Jul 2024', N'New Business', N'Sarah Chen', N'Pioneer Design Studio', N'Umbrella', N'Liberty Mutual', 52000, 8, 4160, 2080, N'Pending', N'STM-2024-07-SC', N'PAY-2024-07-01', '2024-07-03', NULL);
+
+INSERT INTO Commission.CommissionLedger
+(CommissionId, TenantId, PolicyNumber, Period, BusinessType, Producer, AccountName, LineOfBusiness, Carrier, GrossAmount, CommissionPct, AgencyAmount, ProducerAmount, Status, StatementNumber, PayoutBatch, TransactionDate, PaidDate, CreatedDateUtc, IsDeleted)
+SELECT s.CommissionId, t.TenantId, s.PolicyNumber, s.Period, s.BusinessType, s.Producer, s.AccountName, s.LineOfBusiness, s.Carrier, s.GrossAmount, s.CommissionPct, s.AgencyAmount, s.ProducerAmount, s.Status, s.StatementNumber, s.PayoutBatch, s.TransactionDate, s.PaidDate, SYSUTCDATETIME(), 0
+FROM (SELECT TOP (1) TenantId FROM @LedgerTenants ORDER BY TenantId) t
+CROSS JOIN @CommissionLedgerSeed s
+WHERE NOT EXISTS (SELECT 1 FROM Commission.CommissionLedger l WHERE l.CommissionId = s.CommissionId);
+
+IF OBJECT_ID(N'Client.Account', N'U') IS NOT NULL AND OBJECT_ID(N'CRM.Opportunity', N'U') IS NOT NULL AND OBJECT_ID(N'Core.Carrier', N'U') IS NOT NULL AND OBJECT_ID(N'Submissions.Submission', N'U') IS NOT NULL AND OBJECT_ID(N'Submissions.SubmissionMarket', N'U') IS NOT NULL AND OBJECT_ID(N'Submissions.Quote', N'U') IS NOT NULL
+BEGIN
+    DECLARE @SubmissionTenantId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM @LedgerTenants), '00000000-0000-0000-0000-000000000001');
+    DECLARE @SubmissionAdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @SubmissionTenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+    DECLARE @SubmissionAccountId UNIQUEIDENTIFIER = '6db76b50-086a-4556-a105-6b0d22e5330a';
+    DECLARE @SubmissionOpportunityId UNIQUEIDENTIFIER = '8d3a20d9-3db1-4b5a-9f9e-4c7c5d940401';
+    DECLARE @SubmissionId UNIQUEIDENTIFIER = '9e3a20d9-3db1-4b5a-9f9e-4c7c5d940403';
+    DECLARE @SubmissionOpportunityStageId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 OpportunityStageId FROM CRM.OpportunityStage WHERE TenantId = @SubmissionTenantId AND IsActive = 1 ORDER BY SortOrder, StageName), '05000000-0000-0000-0000-000000000001');
+    DECLARE @SubmissionAccountTypeCode NVARCHAR(50) = (SELECT TOP 1 AccountTypeCode FROM Client.Account WHERE TenantId = @SubmissionTenantId AND IsDeleted = 0 AND AccountTypeCode IS NOT NULL ORDER BY CreatedDateUtc DESC);
+
+    IF @SubmissionAccountTypeCode IS NOT NULL AND NOT EXISTS (SELECT 1 FROM Client.Account WHERE AccountId = @SubmissionAccountId)
+    BEGIN
+        INSERT INTO Client.Account (AccountId, TenantId, AccountNumber, AccountName, AccountTypeCode, MainEmail, MainPhone, StatusCode, StatusCodeId, SegmentCode, OwnerUserId, LifecycleStageCode, Industry, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        VALUES (@SubmissionAccountId, @SubmissionTenantId, N'ACC-SULLIVAN-MFG', N'Sullivan Mfg. LLC', @SubmissionAccountTypeCode, N'risk@sullivanmfg.example', N'(312) 555-0198', N'Active', 1, N'Enterprise', @SubmissionAdminUserId, N'Prospect', N'Manufacturing', SYSUTCDATETIME(), @SubmissionAdminUserId, 0);
+    END;
+
+    IF EXISTS (SELECT 1 FROM Client.Account WHERE AccountId = @SubmissionAccountId) AND NOT EXISTS (SELECT 1 FROM CRM.Opportunity WHERE OpportunityId = @SubmissionOpportunityId)
+    BEGIN
+        INSERT INTO CRM.Opportunity (OpportunityId, TenantId, OpportunityNumber, AccountId, OpportunityName, EstimatedAmount, OwnerUserId, CloseDate, WinProbability, ForecastCategoryCode, StageName, OpportunityStageId, Description, StatusCodeId, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        VALUES (@SubmissionOpportunityId, @SubmissionTenantId, N'OPP-SUB-2025-0403', @SubmissionAccountId, N'2025 General Liability Renewal', 175000, @SubmissionAdminUserId, DATEADD(day, 45, CAST(SYSUTCDATETIME() AS date)), 70, N'Pipeline', N'Market', @SubmissionOpportunityStageId, N'Database-seeded submission detail for synchronized carrier market workflow.', 1, SYSUTCDATETIME(), @SubmissionAdminUserId, 0);
+    END;
+
+    DECLARE @CarrierSeed TABLE (CarrierId UNIQUEIDENTIFIER, CarrierCode NVARCHAR(50), CarrierName NVARCHAR(200));
+    INSERT INTO @CarrierSeed VALUES
+    ('9e3a20d9-3db1-4b5a-9f9e-4c7c5d940601', N'TRV', N'Travelers'),
+    ('9e3a20d9-3db1-4b5a-9f9e-4c7c5d940602', N'CHB', N'Chubb'),
+    ('9e3a20d9-3db1-4b5a-9f9e-4c7c5d940603', N'HFD', N'The Hartford'),
+    ('9e3a20d9-3db1-4b5a-9f9e-4c7c5d940604', N'LM', N'Liberty Mutual'),
+    ('9e3a20d9-3db1-4b5a-9f9e-4c7c5d940605', N'CNA', N'CNA');
+
+    INSERT INTO Core.Carrier (CarrierId, TenantId, CarrierCode, CarrierName, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT c.CarrierId, @SubmissionTenantId, c.CarrierCode, c.CarrierName, 1, SYSUTCDATETIME(), @SubmissionAdminUserId, 0
+    FROM @CarrierSeed c
+    WHERE NOT EXISTS (SELECT 1 FROM Core.Carrier existing WHERE existing.CarrierId = c.CarrierId);
+
+    IF NOT EXISTS (SELECT 1 FROM Submissions.Submission WHERE SubmissionId = @SubmissionId)
+    BEGIN
+        INSERT INTO Submissions.Submission (SubmissionId, TenantId, AccountId, OpportunityId, SubmissionNumber, LineOfBusiness, Status, Priority, AssignedToUserId, EffectiveDate, ExpirationDate, TargetPremium, MarketCount, QuoteCount, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, IsDeleted)
+        VALUES (@SubmissionId, @SubmissionTenantId, @SubmissionAccountId, @SubmissionOpportunityId, N'SUB-2025-0403', N'General Liability', N'In Market', N'High', @SubmissionAdminUserId, DATEADD(day, 42, CAST(SYSUTCDATETIME() AS date)), DATEADD(day, 407, CAST(SYSUTCDATETIME() AS date)), 175000, 5, 3, DATEADD(day, -18, SYSUTCDATETIME()), @SubmissionAdminUserId, DATEADD(day, -1, SYSUTCDATETIME()), 0);
+    END;
+
+    INSERT INTO Submissions.SubmissionMarket (SubmissionMarketId, SubmissionId, CarrierId, Status, AppetiteScore, IsRecommended, AddedDateUtc, RespondedDateUtc, DeclineReason, IsDeleted)
+    SELECT v.SubmissionMarketId, @SubmissionId, v.CarrierId, v.Status, v.AppetiteScore, v.IsRecommended, DATEADD(day, v.AddedOffset, SYSUTCDATETIME()), CASE WHEN v.RespondedOffset IS NULL THEN NULL ELSE DATEADD(day, v.RespondedOffset, SYSUTCDATETIME()) END, v.DeclineReason, 0
+    FROM (VALUES
+        ('9e3a20d9-3db1-4b5a-9f9e-4c7c5d940501', '9e3a20d9-3db1-4b5a-9f9e-4c7c5d940601', N'Submitted', 94, CONVERT(bit, 1), -12, -8, CAST(NULL AS NVARCHAR(500))),
+        ('9e3a20d9-3db1-4b5a-9f9e-4c7c5d940502', '9e3a20d9-3db1-4b5a-9f9e-4c7c5d940602', N'Quoted', 91, CONVERT(bit, 1), -11, -4, CAST(NULL AS NVARCHAR(500))),
+        ('9e3a20d9-3db1-4b5a-9f9e-4c7c5d940503', '9e3a20d9-3db1-4b5a-9f9e-4c7c5d940603', N'Quoted', 86, CONVERT(bit, 1), -10, -3, CAST(NULL AS NVARCHAR(500))),
+        ('9e3a20d9-3db1-4b5a-9f9e-4c7c5d940504', '9e3a20d9-3db1-4b5a-9f9e-4c7c5d940604', N'Pending', 78, CONVERT(bit, 0), -9, NULL, CAST(NULL AS NVARCHAR(500))),
+        ('9e3a20d9-3db1-4b5a-9f9e-4c7c5d940505', '9e3a20d9-3db1-4b5a-9f9e-4c7c5d940605', N'Declined', 62, CONVERT(bit, 0), -8, -2, N'Current operations outside underwriting appetite')
+    ) v(SubmissionMarketId, CarrierId, Status, AppetiteScore, IsRecommended, AddedOffset, RespondedOffset, DeclineReason)
+    WHERE NOT EXISTS (SELECT 1 FROM Submissions.SubmissionMarket sm WHERE sm.SubmissionMarketId = v.SubmissionMarketId);
+
+    INSERT INTO Submissions.Quote (QuoteId, SubmissionId, CarrierId, QuoteNumber, Status, AnnualPremium, Deductible, [Limit], CoverageNotes, QuotedDateUtc, ExpiresDateUtc, CreatedDateUtc, IsDeleted)
+    SELECT v.QuoteId, @SubmissionId, v.CarrierId, v.QuoteNumber, v.Status, v.AnnualPremium, v.Deductible, v.[Limit], v.CoverageNotes, DATEADD(day, v.QuotedOffset, SYSUTCDATETIME()), DATEADD(day, v.ExpiresOffset, SYSUTCDATETIME()), SYSUTCDATETIME(), 0
+    FROM (VALUES
+        ('9e3a20d9-3db1-4b5a-9f9e-4c7c5d940701', '9e3a20d9-3db1-4b5a-9f9e-4c7c5d940602', N'Q-CHB-2025-1187', N'Quoted', 168400, 10000, 2000000, N'Best overall coverage with blanket additional insured wording.', -4, 26),
+        ('9e3a20d9-3db1-4b5a-9f9e-4c7c5d940702', '9e3a20d9-3db1-4b5a-9f9e-4c7c5d940603', N'Q-HFD-2025-4432', N'Quoted', 172250, 7500, 2000000, N'Competitive deductible and strong loss control services.', -3, 24),
+        ('9e3a20d9-3db1-4b5a-9f9e-4c7c5d940703', '9e3a20d9-3db1-4b5a-9f9e-4c7c5d940601', N'Q-TRV-2025-9021', N'Indication', 181900, 10000, 1000000, N'Indication pending final payroll and product hazard review.', -6, 18)
+    ) v(QuoteId, CarrierId, QuoteNumber, Status, AnnualPremium, Deductible, [Limit], CoverageNotes, QuotedOffset, ExpiresOffset)
+    WHERE NOT EXISTS (SELECT 1 FROM Submissions.Quote q WHERE q.QuoteId = v.QuoteId);
+
+    UPDATE Submissions.Submission
+    SET MarketCount = (SELECT COUNT(1) FROM Submissions.SubmissionMarket WHERE SubmissionId = @SubmissionId AND IsDeleted = 0),
+        QuoteCount = (SELECT COUNT(1) FROM Submissions.Quote WHERE SubmissionId = @SubmissionId AND IsDeleted = 0),
+        ModifiedDateUtc = SYSUTCDATETIME()
+    WHERE SubmissionId = @SubmissionId;
+END;
+";
+
+    private const string Migration0169_CarrierAppetiteTravelersInsuranceSeed = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM') EXEC(N'CREATE SCHEMA CRM');
+
+IF OBJECT_ID(N'CRM.MarketAppetite', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.MarketAppetite
+    (
+        MarketAppetiteId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CRM_MarketAppetite_0169 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierName NVARCHAR(200) NOT NULL,
+        CarrierNaic NVARCHAR(20) NULL,
+        LobCode NVARCHAR(50) NOT NULL,
+        AppetiteLevelCode NVARCHAR(50) NOT NULL,
+        MinPremium DECIMAL(18,2) NULL,
+        MaxPremium DECIMAL(18,2) NULL,
+        StateCode NVARCHAR(10) NULL,
+        Notes NVARCHAR(1000) NULL,
+        Priority INT NOT NULL CONSTRAINT DF_MarketAppetite_Priority_0169 DEFAULT 10,
+        IsActive BIT NOT NULL CONSTRAINT DF_MarketAppetite_IsActive_0169 DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_MarketAppetite_Created_0169 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_MarketAppetite_IsDeleted_0169 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'CRM.MarketAppetite', N'TenantId') IS NULL ALTER TABLE CRM.MarketAppetite ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_MarketAppetite_TenantId_0169 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'CRM.MarketAppetite', N'CarrierName') IS NULL ALTER TABLE CRM.MarketAppetite ADD CarrierName NVARCHAR(200) NOT NULL CONSTRAINT DF_MarketAppetite_CarrierName_0169 DEFAULT N'Carrier';
+IF COL_LENGTH(N'CRM.MarketAppetite', N'CarrierNaic') IS NULL ALTER TABLE CRM.MarketAppetite ADD CarrierNaic NVARCHAR(20) NULL;
+IF COL_LENGTH(N'CRM.MarketAppetite', N'LobCode') IS NULL ALTER TABLE CRM.MarketAppetite ADD LobCode NVARCHAR(50) NOT NULL CONSTRAINT DF_MarketAppetite_LobCode_0169 DEFAULT N'Commercial';
+IF COL_LENGTH(N'CRM.MarketAppetite', N'AppetiteLevelCode') IS NULL ALTER TABLE CRM.MarketAppetite ADD AppetiteLevelCode NVARCHAR(50) NOT NULL CONSTRAINT DF_MarketAppetite_Appetite_0169 DEFAULT N'Acceptable';
+IF COL_LENGTH(N'CRM.MarketAppetite', N'MinPremium') IS NULL ALTER TABLE CRM.MarketAppetite ADD MinPremium DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'CRM.MarketAppetite', N'MaxPremium') IS NULL ALTER TABLE CRM.MarketAppetite ADD MaxPremium DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'CRM.MarketAppetite', N'StateCode') IS NULL ALTER TABLE CRM.MarketAppetite ADD StateCode NVARCHAR(10) NULL;
+IF COL_LENGTH(N'CRM.MarketAppetite', N'Notes') IS NULL ALTER TABLE CRM.MarketAppetite ADD Notes NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'CRM.MarketAppetite', N'Priority') IS NULL ALTER TABLE CRM.MarketAppetite ADD Priority INT NOT NULL CONSTRAINT DF_MarketAppetite_Priority_0169b DEFAULT 10;
+IF COL_LENGTH(N'CRM.MarketAppetite', N'IsActive') IS NULL ALTER TABLE CRM.MarketAppetite ADD IsActive BIT NOT NULL CONSTRAINT DF_MarketAppetite_IsActive_0169b DEFAULT 1;
+IF COL_LENGTH(N'CRM.MarketAppetite', N'CreatedDateUtc') IS NULL ALTER TABLE CRM.MarketAppetite ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_MarketAppetite_Created_0169b DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'CRM.MarketAppetite', N'CreatedByUserId') IS NULL ALTER TABLE CRM.MarketAppetite ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.MarketAppetite', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.MarketAppetite ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'CRM.MarketAppetite', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.MarketAppetite ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.MarketAppetite', N'IsDeleted') IS NULL ALTER TABLE CRM.MarketAppetite ADD IsDeleted BIT NOT NULL CONSTRAINT DF_MarketAppetite_IsDeleted_0169b DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.MarketAppetite') AND name = N'IX_MarketAppetite_Tenant_Reference_0169')
+    CREATE INDEX IX_MarketAppetite_Tenant_Reference_0169 ON CRM.MarketAppetite(TenantId, IsDeleted, CarrierName, LobCode, AppetiteLevelCode, Priority);
+
+DECLARE @TenantId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted, 0) = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000001');
+DECLARE @AdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId AND ISNULL(IsDeleted, 0) = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+
+DECLARE @TravelersSeed TABLE
+(
+    LobCode NVARCHAR(50),
+    AppetiteLevelCode NVARCHAR(50),
+    MinPremium DECIMAL(18,2) NULL,
+    MaxPremium DECIMAL(18,2) NULL,
+    StateCode NVARCHAR(10) NULL,
+    Notes NVARCHAR(1000),
+    Priority INT
+);
+
+INSERT INTO @TravelersSeed VALUES
+(N'Commercial Property', N'Preferred', 5000, 750000, N'ALL', N'Enterprise preferred appetite for sprinklered commercial property, strong controls, complete COPE data, and clean loss history.', 5),
+(N'General Liability', N'Preferred', 2500, 500000, N'ALL', N'Preferred GL appetite for established commercial accounts with contractual risk transfer and favorable loss experience.', 8),
+(N'Commercial Auto', N'Acceptable', 7500, 350000, N'ALL', N'Acceptable auto appetite when driver controls, MVR review, telematics, and radius details are complete.', 18),
+(N'Workers Comp', N'Avoid', NULL, NULL, N'ALL', N'Use underwriting exception review for higher hazard workers compensation classes or accounts with adverse experience modification.', 44),
+(N'Cyber', N'Acceptable', 2500, 150000, N'ALL', N'Cyber appetite requires MFA, endpoint controls, backup verification, and completed security questionnaire.', 22),
+(N'Umbrella', N'Preferred', 5000, 250000, N'ALL', N'Preferred umbrella companion opportunity for accounts with Travelers-controlled underlying schedules and clean loss development.', 12),
+(N'Professional Liability', N'Declined', NULL, NULL, N'ALL', N'Professional liability is outside current Travelers Insurance reference appetite for this tenant routing matrix.', 88);
+
+INSERT INTO CRM.MarketAppetite
+(MarketAppetiteId, TenantId, CarrierName, CarrierNaic, LobCode, AppetiteLevelCode, MinPremium, MaxPremium, StateCode, Notes, Priority, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @TenantId, N'Travelers Insurance', N'25658', s.LobCode, s.AppetiteLevelCode, s.MinPremium, s.MaxPremium, s.StateCode, s.Notes, s.Priority, 1, SYSUTCDATETIME(), @AdminUserId, 0
+FROM @TravelersSeed s
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM CRM.MarketAppetite existing
+    WHERE existing.TenantId = @TenantId
+      AND existing.CarrierName = N'Travelers Insurance'
+      AND existing.LobCode = s.LobCode
+      AND ISNULL(existing.StateCode, N'ALL') = ISNULL(s.StateCode, N'ALL')
+      AND existing.IsDeleted = 0
+);
+
+UPDATE existing
+SET CarrierNaic = COALESCE(NULLIF(existing.CarrierNaic, N''), N'25658'),
+    AppetiteLevelCode = s.AppetiteLevelCode,
+    MinPremium = s.MinPremium,
+    MaxPremium = s.MaxPremium,
+    Notes = s.Notes,
+    Priority = s.Priority,
+    IsActive = 1,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @AdminUserId
+FROM CRM.MarketAppetite existing
+JOIN @TravelersSeed s ON s.LobCode = existing.LobCode AND ISNULL(s.StateCode, N'ALL') = ISNULL(existing.StateCode, N'ALL')
+WHERE existing.TenantId = @TenantId
+  AND existing.CarrierName = N'Travelers Insurance'
+  AND existing.IsDeleted = 0;
 ";
 }

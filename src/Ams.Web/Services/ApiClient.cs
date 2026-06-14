@@ -2115,6 +2115,9 @@ public sealed partial class ApiClient
     public Task<PagedResult<CommissionTransactionDto>?> SearchCommissionTransactionsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<CommissionTransactionDto>>($"api/commissions/transactions?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
+    public Task<IReadOnlyList<CommissionLedgerRowDto>?> SearchCommissionLedgerAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<CommissionLedgerRowDto>>($"api/commissions/ledger?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+
     public async Task<Guid> CreateCommissionTransactionAsync(CreateCommissionTransactionRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync("api/commissions/transactions", request, cancellationToken);

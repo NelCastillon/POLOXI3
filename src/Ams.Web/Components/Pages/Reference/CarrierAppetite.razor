@@ -1,264 +1,544 @@
 @page "/admin/reference/carrier-appetite"
 @namespace Ams.Web.Components.Pages.ReferenceAdmin
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
 
-<PageTitle>Carrier Appetite Matrix — Reference Data</PageTitle>
+<PageTitle>@CarrierTitle — Carrier Appetite</PageTitle>
 
-<AppPageHeader Title="Carrier Appetite Matrix"
-               Subtitle="Cross-reference of carrier writing appetite by line of business and risk class"
-               Icon="bi-grid-3x3">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
-            <i class="bi bi-download" aria-hidden="true"></i> Export
-        </button>
-    </Actions>
-</AppPageHeader>
+@if (_toastVisible)
+{
+    <div class="ca-toast ca-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
 
-<!-- Legend -->
-<div class="ca-legend-strip">
-    <span class="ca-legend-label">Appetite key:</span>
-    <span class="ca-appetite ca-appetite--preferred"><i class="bi bi-star-fill" aria-hidden="true"></i> Preferred</span>
-    <span class="ca-appetite ca-appetite--standard"><i class="bi bi-check-circle" aria-hidden="true"></i> Standard</span>
-    <span class="ca-appetite ca-appetite--limited"><i class="bi bi-dash-circle" aria-hidden="true"></i> Limited</span>
-    <span class="ca-appetite ca-appetite--declined"><i class="bi bi-x-circle-fill" aria-hidden="true"></i> Declined</span>
-    <span class="ca-appetite ca-appetite--na"><i class="bi bi-slash-circle" aria-hidden="true"></i> N/A</span>
-</div>
+@if (_showForm)
+{
+    <div class="ca-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="ca-modal" role="dialog" aria-modal="true" aria-labelledby="carrierAppetiteFormTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="ca-modal-head">
+                    <span><i class="bi bi-grid-3x3-gap" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 id="carrierAppetiteFormTitle">@(_editId.HasValue ? "Edit appetite rule" : "Add appetite rule")</h2>
+                        <p>Persist carrier appetite, premium bands, state scope, and routing priority to CRM.MarketAppetite.</p>
+                    </div>
+                    <button type="button" class="ca-icon-btn" @onclick="CloseForm" disabled="@_saving" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                </div>
+                <div class="ca-modal-body">
+                    <div class="ca-form-grid">
+                        <label>Carrier name <span>*</span><InputText class="ca-input" @bind-Value="_form.CarrierName" /></label>
+                        <label>NAIC<InputText class="ca-input" @bind-Value="_form.CarrierNaic" /></label>
+                        <label>Line of business <span>*</span><InputSelect class="ca-input" @bind-Value="_form.LobCode">@foreach (var lob in LobChoices) { <option value="@lob">@lob</option> }</InputSelect></label>
+                        <label>Appetite <span>*</span><InputSelect class="ca-input" @bind-Value="_form.AppetiteLevelCode">@foreach (var level in AppetiteChoices) { <option value="@level">@level</option> }</InputSelect></label>
+                        <label>State<InputText class="ca-input" @bind-Value="_form.StateCode" placeholder="ALL, TX, CA" /></label>
+                        <label>Priority <span>*</span><InputNumber class="ca-input" @bind-Value="_form.Priority" /></label>
+                        <label>Minimum premium<InputNumber class="ca-input" @bind-Value="_form.MinPremium" /></label>
+                        <label>Maximum premium<InputNumber class="ca-input" @bind-Value="_form.MaxPremium" /></label>
+                        <label class="ca-wide">Notes<InputTextArea class="ca-input" rows="4" @bind-Value="_form.Notes" /></label>
+                        <label class="ca-check ca-wide"><InputCheckbox @bind-Value="_form.IsActive" /><span><strong>Active appetite rule</strong><small>Active records are used by routing, KPIs, and table actions.</small></span></label>
+                    </div>
+                    <ValidationSummary />
+                    @if (!string.IsNullOrWhiteSpace(_formError))
+                    {
+                        <div class="ca-form-error"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_formError</div>
+                    }
+                </div>
+                <div class="ca-modal-foot">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_saving">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        @(_editId.HasValue ? "Save changes" : "Create rule")
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
 
-<!-- Filter toolbar -->
-<AppFilterPanel @bind-SearchValue="_search"
-                OnSearch="OnSearchAsync"
-                SearchPlaceholder="Search carrier…">
-    <Filters>
-        <SfDropDownList TValue="string" TItem="LabelValue"
-                        DataSource="_lobFilterOptions"
-                        Placeholder="All Lines"
-                        ShowClearButton="true"
-                        Width="180px"
-                        Value="_filterLob"
-                        ValueChanged="@((string v) => { _filterLob = v; ApplyFilters(); })">
-            <DropDownListFieldSettings Value="Value" Text="Label" />
-        </SfDropDownList>
+@if (_deleteTarget is not null)
+{
+    <div class="ca-modal-backdrop" role="presentation" @onclick="CancelDelete">
+        <div class="ca-confirm" role="dialog" aria-modal="true" aria-labelledby="deleteCarrierAppetiteTitle" @onclick:stopPropagation="true">
+            <span><i class="bi bi-trash3-fill" aria-hidden="true"></i></span>
+            <h2 id="deleteCarrierAppetiteTitle">Delete appetite rule?</h2>
+            <p>This will deactivate and soft-delete <strong>@_deleteTarget.CarrierName</strong> for <strong>@_deleteTarget.LobCode</strong>.</p>
+            <div>
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete" disabled="@_saving">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="DeleteAsync" disabled="@_saving">Delete</button>
+            </div>
+        </div>
+    </div>
+}
 
-        <SfDropDownList TValue="string" TItem="LabelValue"
-                        DataSource="_appetiteFilterOptions"
-                        Placeholder="Any Appetite"
-                        ShowClearButton="true"
-                        Width="160px"
-                        Value="_filterAppetite"
-                        ValueChanged="@((string v) => { _filterAppetite = v; ApplyFilters(); })">
-            <DropDownListFieldSettings Value="Value" Text="Label" />
-        </SfDropDownList>
-    </Filters>
-</AppFilterPanel>
+<div class="ca-page">
+    <section class="ca-hero">
+        <div class="ca-hero-copy">
+            <span class="ca-hero-kicker"><i class="bi bi-database-check" aria-hidden="true"></i> Live reference data</span>
+            <h1>@CarrierTitle appetite command center</h1>
+            <p>Distinct carrier appetite governance for LOB fit, state scope, premium thresholds, restrictions, routing priority, and underwriting notes.</p>
+            <div class="ca-hero-tags">
+                <span><i class="bi bi-shield-check" aria-hidden="true"></i> Tenant scoped</span>
+                <span><i class="bi bi-grid-3x3-gap" aria-hidden="true"></i> Native enterprise UI</span>
+                <span><i class="bi bi-stars" aria-hidden="true"></i> Actionable routing</span>
+            </div>
+        </div>
+        <div class="ca-hero-panel">
+            <span>Carrier focus</span>
+            <strong>@CarrierTitle</strong>
+            <small>@FilteredRows.Count.ToString("N0", CultureInfo.CurrentCulture) visible of @_allItems.Count.ToString("N0", CultureInfo.CurrentCulture) synced appetite rules</small>
+            <div>
+                <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Rule</button>
+                <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Sync</button>
+                <a class="um-btn um-btn-ghost" href="@ExportDataUri" download="carrier-appetite.csv"><i class="bi bi-download" aria-hidden="true"></i> Export</a>
+            </div>
+        </div>
+    </section>
 
-<!-- Matrix grid -->
-<div class="um-grid-card app-datagrid ca-matrix-card">
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <section class="ca-alert" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></section>
+    }
+
+    <section class="ca-kpis" aria-label="Carrier appetite KPI filters">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricClass(metric)" @onclick="@(() => SetQuickFilter(metric.Filter))">
+                <span><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                <strong>@metric.Value</strong>
+                <em>@metric.Label</em>
+                <small>@metric.Caption</small>
+            </button>
+        }
+    </section>
+
+    <section class="ca-toolbar">
+        <label class="ca-search"><i class="bi bi-search" aria-hidden="true"></i><span>Search</span><input value="@_search" @oninput="OnSearchChanged" placeholder="Carrier, NAIC, LOB, state, appetite, premium, notes..." /></label>
+        <label>LOB<select value="@_lobFilter" @onchange="OnLobChanged"><option value="">All LOBs</option>@foreach (var lob in LobOptions) { <option value="@lob">@lob</option> }</select></label>
+        <label>State<select value="@_stateFilter" @onchange="OnStateChanged"><option value="">All states</option>@foreach (var state in StateOptions) { <option value="@state">@state</option> }</select></label>
+        <label>Appetite<select value="@_appetiteFilter" @onchange="OnAppetiteChanged"><option value="">Any appetite</option>@foreach (var level in AppetiteChoices) { <option value="@level">@level</option> }</select></label>
+        <label>Status<select value="@_statusFilter" @onchange="OnStatusChanged"><option value="">Any status</option><option value="active">Active</option><option value="inactive">Inactive</option></select></label>
+        <label>Sort<select value="@_sort" @onchange="OnSortChanged"><option value="importance">Importance</option><option value="priority">Priority</option><option value="appetite">Appetite</option><option value="premium">Premium band</option><option value="lob">LOB</option></select></label>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+        <span class="ca-count"><strong>@FilteredRows.Count.ToString("N0", CultureInfo.CurrentCulture)</strong> shown</span>
+    </section>
+
     @if (_loading)
     {
-        <div class="um-loading-overlay" aria-live="polite">
-            <div class="um-spinner" aria-hidden="true"></div>
-            <span>Loading…</span>
-        </div>
+        <section class="ca-loading"><span class="um-spinner" aria-hidden="true"></span><strong>Loading carrier appetite</strong><small>Syncing CRM.MarketAppetite records.</small></section>
     }
-    <SfGrid TValue="AppetiteRow"
-            DataSource="_entries"
-            AllowPaging="true"
-            AllowSorting="true"
-            EnableHover="true"
-            RowHeight="52">
-        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
-        <GridColumns>
-            <GridColumn Field="@nameof(AppetiteRow.CarrierName)" HeaderText="Carrier" Width="200">
-                <Template>
-                    @{ var e = (AppetiteRow)context; }
-                    <div class="ca-carrier-cell">
-                        <span class="ca-carrier-icon" aria-hidden="true"><i class="bi bi-building"></i></span>
-                        <div>
-                            <div class="ca-carrier-name">@e.CarrierName</div>
-                            <div class="ca-carrier-naic ca-mono">@e.NaicCode</div>
-                        </div>
-                    </div>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(AppetiteRow.LobName)" HeaderText="Line of Business" Width="180" />
-            <GridColumn Field="@nameof(AppetiteRow.AppetiteLevel)" HeaderText="Appetite" Width="130">
-                <Template>
-                    @{ var e = (AppetiteRow)context; }
-                    <span class="@AppetiteClass(e.AppetiteLevel)">
-                        <i class="@AppetiteIcon(e.AppetiteLevel)" aria-hidden="true"></i> @e.AppetiteLevel
-                    </span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(AppetiteRow.MinPremium)" HeaderText="Min Premium" Width="130">
-                <Template>
-                    @{ var e = (AppetiteRow)context; }
-                    <span class="ca-mono">@(e.MinPremium.HasValue ? e.MinPremium.Value.ToString("C0") : "—")</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(AppetiteRow.MaxPremium)" HeaderText="Max Premium" Width="130">
-                <Template>
-                    @{ var e = (AppetiteRow)context; }
-                    <span class="ca-mono">@(e.MaxPremium.HasValue ? e.MaxPremium.Value.ToString("C0") : "—")</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(AppetiteRow.Notes)" HeaderText="Notes" Width="220">
-                <Template>
-                    @{ var e = (AppetiteRow)context; }
-                    @if (!string.IsNullOrWhiteSpace(e.Notes))
-                    {
-                        <span class="ca-notes" title="@e.Notes">@e.Notes</span>
-                    }
-                    else
-                    {
-                        <span class="ca-no-notes">—</span>
-                    }
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(AppetiteRow.LastReviewedDate)" HeaderText="Last Reviewed" Width="140">
-                <Template>
-                    @{ var e = (AppetiteRow)context; }
-                    <span>@(e.LastReviewedDate.HasValue ? e.LastReviewedDate.Value.ToString("d") : "—")</span>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
+    else if (_allItems.Count == 0)
+    {
+        <section class="ca-empty"><i class="bi bi-grid-3x3-gap" aria-hidden="true"></i><strong>No carrier appetite records found</strong><span>Add a market appetite rule or run migrations to seed CRM.MarketAppetite.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">Create first rule</button></section>
+    }
+    else
+    {
+        <section class="ca-layout">
+            <main class="ca-card">
+                <div class="ca-section-head">
+                    <div><h2>Appetite operating table</h2><p>Native sortable/filterable table with edit, activate/deactivate, delete, export, and KPI drill-in actions.</p></div>
+                    <div class="ca-view-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetQuickFilter("Preferred")'>Preferred</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => SetQuickFilter("restricted")'>Restricted</button></div>
+                </div>
+                <div class="ca-table-wrap">
+                    <table class="ca-table">
+                        <thead><tr><th>Carrier</th><th>LOB</th><th>Appetite</th><th>State</th><th>Premium band</th><th>Priority</th><th>Status</th><th>Actions</th></tr></thead>
+                        <tbody>
+                        @foreach (var item in FilteredRows)
+                        {
+                            <tr class="@(IsSelected(item) ? "ca-row-selected" : null)" @onclick="@(() => Select(item))">
+                                <td><div class="ca-carrier-cell"><span><i class="bi @MarketIcon(item)" aria-hidden="true"></i></span><div><strong>@item.CarrierName</strong><small>@(item.CarrierNaic ?? "No NAIC")</small></div></div></td>
+                                <td><span class="ca-pill ca-pill-soft">@item.LobCode</span></td>
+                                <td><span class="ca-pill @AppetiteClass(item.AppetiteLevelCode)">@item.AppetiteLevelCode</span><small class="ca-note">@(item.Notes ?? "No notes")</small></td>
+                                <td>@StateText(item)</td>
+                                <td>@PremiumBand(item)</td>
+                                <td><strong>P@item.Priority</strong></td>
+                                <td><span class="ca-pill @(item.IsActive ? "ca-pill-active" : "ca-pill-muted")">@(item.IsActive ? "Active" : "Inactive")</span></td>
+                                <td><div class="ca-row-actions"><button type="button" title="Edit" @onclick="@(() => OpenEdit(item))" @onclick:stopPropagation="true"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" title="Toggle active" @onclick="@(() => ToggleActiveAsync(item))" @onclick:stopPropagation="true"><i class="bi @(item.IsActive ? "bi-pause" : "bi-play")" aria-hidden="true"></i></button><button type="button" title="Delete" @onclick="@(() => ConfirmDelete(item))" @onclick:stopPropagation="true"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+            </main>
+
+            <aside class="ca-detail">
+                @if (_selected is null)
+                {
+                    <div class="ca-detail-empty"><i class="bi bi-arrow-left-circle" aria-hidden="true"></i><strong>Select a rule</strong><span>Choose an appetite row to inspect routing guidance and available actions.</span></div>
+                }
+                else
+                {
+                    <div class="ca-detail-head"><span><i class="bi @MarketIcon(_selected)" aria-hidden="true"></i> @StateText(_selected) market</span><h2>@_selected.CarrierName</h2><p>@(_selected.CarrierNaic ?? "No NAIC") · @_selected.LobCode</p><span class="ca-pill @AppetiteClass(_selected.AppetiteLevelCode)">@_selected.AppetiteLevelCode</span></div>
+                    <div class="ca-detail-grid"><div><small>Premium</small><strong>@PremiumBand(_selected)</strong></div><div><small>Priority</small><strong>P@_selected.Priority</strong></div><div><small>Status</small><strong>@(_selected.IsActive ? "Active" : "Inactive")</strong></div><div><small>Created</small><strong>@_selected.CreatedDateUtc.ToLocalTime().ToString("MMM d", CultureInfo.CurrentCulture)</strong></div></div>
+                    <div class="ca-guidance"><h3>Routing guidance</h3>@foreach (var action in RecommendedActions(_selected)) { <p><i class="bi bi-check2-circle" aria-hidden="true"></i><span>@action</span></p> }</div>
+                    <div class="ca-notes-card"><h3>Underwriting notes</h3><p>@(_selected.Notes ?? "No appetite notes recorded.")</p></div>
+                    <div class="ca-detail-actions"><button type="button" class="um-btn um-btn-ghost" @onclick="@(() => OpenEdit(_selected))">Edit</button><button type="button" class="um-btn um-btn-ghost" @onclick="@(() => ToggleActiveAsync(_selected))">@(_selected.IsActive ? "Deactivate" : "Activate")</button><button type="button" class="um-btn um-btn-danger" @onclick="@(() => ConfirmDelete(_selected))">Delete</button></div>
+                }
+            </aside>
+        </section>
+    }
 </div>
 
-<EnterpriseToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true" />
-
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
+    [SupplyParameterFromQuery(Name = "carrier")] public string? Carrier { get; set; }
+
     private Guid _tenantId;
-    private EnterpriseToast? _toast;
+    private Guid _tenantAdminUserId;
+    private readonly string[] AppetiteChoices = ["Preferred", "Acceptable", "Avoid", "Declined"];
+    private readonly string[] LobChoices = ["Commercial Property", "Commercial Liability", "General Liability", "Workers Comp", "Commercial Auto", "Commercial Package", "Professional Liability", "Cyber", "Umbrella", "Specialty"];
+    private List<MarketAppetiteDto> _allItems = [];
+    private MarketAppetiteDto? _selected;
+    private MarketAppetiteDto? _deleteTarget;
+    private AppetiteForm _form = new();
+    private Guid? _editId;
+    private bool _loading = true;
+    private bool _saving;
+    private bool _showForm;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private string _search = string.Empty;
+    private string _lobFilter = string.Empty;
+    private string _stateFilter = string.Empty;
+    private string _appetiteFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _quickFilter = "all";
+    private string _sort = "importance";
 
-    private List<AppetiteRow> _allEntries = [];
-    private List<AppetiteRow> _entries    = [];
-
-    private bool _loading = false;
-
-    private string _search          = string.Empty;
-    private string _filterLob       = string.Empty;
-    private string _filterAppetite  = string.Empty;
-
-    private static readonly List<LabelValue> _lobFilterOptions =
-    [
-        new("BOP",  "BOP"),
-        new("GL",   "General Liability"),
-        new("WC",   "Workers Comp"),
-        new("CA",   "Commercial Auto"),
-        new("CPP",  "Commercial Package"),
-        new("PL",   "Professional Liability"),
-        new("CY",   "Cyber"),
-        new("IM",   "Inland Marine"),
-    ];
-
-    private static readonly List<LabelValue> _appetiteFilterOptions =
-    [
-        new("Preferred", "Preferred"),
-        new("Standard",  "Standard"),
-        new("Limited",   "Limited"),
-        new("Declined",  "Declined"),
-    ];
+    private string CarrierTitle => string.IsNullOrWhiteSpace(Carrier) ? "Carrier" : Carrier!;
+    private string ToastIcon => _toastKind == "danger" ? "bi-exclamation-triangle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-check-circle-fill";
+    private IEnumerable<string> LobOptions => _allItems.Select(x => x.LobCode).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private IEnumerable<string> StateOptions => _allItems.Select(StateText).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private IReadOnlyList<MarketAppetiteDto> FilteredRows => ApplyFilters().ToList();
+    private int PreferredCount => _allItems.Count(x => x.AppetiteLevelCode == "Preferred");
+    private int AcceptableCount => _allItems.Count(x => x.AppetiteLevelCode == "Acceptable");
+    private int RestrictedCount => _allItems.Count(x => x.AppetiteLevelCode is "Avoid" or "Declined");
+    private int ActiveCount => _allItems.Count(x => x.IsActive);
+    private int PremiumCount => _allItems.Count(x => x.MinPremium.HasValue || x.MaxPremium.HasValue);
+    private IReadOnlyList<Metric> Metrics => [new("all", _allItems.Count.ToString("N0", CultureInfo.CurrentCulture), "Rules", "All synced records", "bi-grid-3x3-gap", "blue"), new("active", ActiveCount.ToString("N0", CultureInfo.CurrentCulture), "Active", "Ready for routing", "bi-check-circle", "green"), new("Preferred", PreferredCount.ToString("N0", CultureInfo.CurrentCulture), "Preferred", "Prioritize first", "bi-star-fill", "emerald"), new("Acceptable", AcceptableCount.ToString("N0", CultureInfo.CurrentCulture), "Acceptable", "Viable markets", "bi-check2-circle", "cyan"), new("restricted", RestrictedCount.ToString("N0", CultureInfo.CurrentCulture), "Restricted", "Avoid or declined", "bi-exclamation-triangle", "amber"), new("premium", PremiumCount.ToString("N0", CultureInfo.CurrentCulture), "Premium", "Band governed", "bi-cash-stack", "purple")];
+    private string ExportDataUri => "data:text/csv;charset=utf-8," + Uri.EscapeDataString(BuildCsv());
 
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(
-            new("Home",             "/"),
-            new("Reference Data",   "/admin/reference/carriers"),
-            new("Appetite Matrix",  "/admin/reference/carrier-appetite"));
-
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+        _search = Carrier ?? string.Empty;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Reference Data", "/admin/reference/carriers"), new("Carrier Appetite", "/admin/reference/carrier-appetite"));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
         _loading = true;
-        StateHasChanged();
+        _loadError = null;
         try
         {
-            // TODO: replace with Api.GetCarrierAppetiteMatrixAsync(_tenantId)
-            await Task.Delay(0);
-            _allEntries = [];
-            ApplyFilters();
+            var result = await Api.SearchMarketAppetiteAsync(_tenantId, pageSize: 500);
+            var rows = result?.Items?.ToList() ?? [];
+            if (!string.IsNullOrWhiteSpace(Carrier))
+            {
+                rows = rows.Where(x => CarrierMatches(x.CarrierName, Carrier!)).ToList();
+            }
+            _allItems = rows;
+            _selected = _selected is null ? FilteredRows.FirstOrDefault() : _allItems.FirstOrDefault(x => x.MarketAppetiteId == _selected.MarketAppetiteId) ?? FilteredRows.FirstOrDefault();
+            ShowToast("Carrier appetite synced from CRM.MarketAppetite.", "success");
         }
-        finally { _loading = false; }
+        catch (Exception ex)
+        {
+            _allItems = [];
+            _selected = null;
+            _loadError = $"Failed to load carrier appetite: {ex.Message}";
+            ShowToast(_loadError, "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    private async Task OnSearchAsync(string _) => await LoadAsync();
-
-    private void ApplyFilters()
+    private IEnumerable<MarketAppetiteDto> ApplyFilters()
     {
-        _entries = _allEntries.Where(e =>
-            (string.IsNullOrEmpty(_filterLob)      || e.LobCode == _filterLob) &&
-            (string.IsNullOrEmpty(_filterAppetite) || e.AppetiteLevel == _filterAppetite) &&
-            (string.IsNullOrEmpty(_search) ||
-             e.CarrierName.Contains(_search, StringComparison.OrdinalIgnoreCase))
-        ).ToList();
-
-        StateHasChanged();
+        var query = _allItems.AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var term = _search.Trim();
+            query = query.Where(x => Contains(x.CarrierName, term) || Contains(x.CarrierNaic, term) || Contains(x.LobCode, term) || Contains(x.AppetiteLevelCode, term) || Contains(x.StateCode, term) || Contains(x.Notes, term) || PremiumBand(x).Contains(term, StringComparison.OrdinalIgnoreCase));
+        }
+        if (!string.IsNullOrWhiteSpace(_lobFilter)) query = query.Where(x => x.LobCode.Equals(_lobFilter, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(_stateFilter)) query = query.Where(x => StateText(x).Equals(_stateFilter, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(_appetiteFilter)) query = query.Where(x => x.AppetiteLevelCode.Equals(_appetiteFilter, StringComparison.OrdinalIgnoreCase));
+        if (_statusFilter == "active") query = query.Where(x => x.IsActive);
+        if (_statusFilter == "inactive") query = query.Where(x => !x.IsActive);
+        query = _quickFilter switch
+        {
+            "active" => query.Where(x => x.IsActive),
+            "Preferred" or "Acceptable" or "Avoid" or "Declined" => query.Where(x => x.AppetiteLevelCode == _quickFilter),
+            "restricted" => query.Where(x => x.AppetiteLevelCode is "Avoid" or "Declined"),
+            "premium" => query.Where(x => x.MinPremium.HasValue || x.MaxPremium.HasValue),
+            _ => query
+        };
+        return _sort switch
+        {
+            "priority" => query.OrderBy(x => x.Priority).ThenBy(x => x.CarrierName),
+            "appetite" => query.OrderByDescending(AppetiteScore).ThenBy(x => x.Priority),
+            "premium" => query.OrderByDescending(x => x.MaxPremium ?? x.MinPremium ?? 0).ThenBy(x => x.Priority),
+            "lob" => query.OrderBy(x => x.LobCode).ThenBy(x => x.Priority),
+            _ => query.OrderByDescending(ImportanceScore).ThenBy(x => x.Priority).ThenBy(x => x.LobCode)
+        };
     }
 
-    private async Task ExportAsync() =>
-        await ShowToastAsync("Export: not yet implemented.", "e-toast-info");
+    private void SetQuickFilter(string filter) { _quickFilter = _quickFilter == filter && filter != "all" ? "all" : filter; _selected = FilteredRows.FirstOrDefault() ?? _allItems.FirstOrDefault(); }
+    private void ResetFilters() { _search = Carrier ?? string.Empty; _lobFilter = _stateFilter = _appetiteFilter = _statusFilter = string.Empty; _quickFilter = "all"; _sort = "importance"; _selected = FilteredRows.FirstOrDefault() ?? _allItems.FirstOrDefault(); }
+    private void Select(MarketAppetiteDto item) => _selected = item;
+    private void OnSearchChanged(BlazorChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _allItems.FirstOrDefault(); }
+    private void OnLobChanged(BlazorChangeEventArgs e) { _lobFilter = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _allItems.FirstOrDefault(); }
+    private void OnStateChanged(BlazorChangeEventArgs e) { _stateFilter = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _allItems.FirstOrDefault(); }
+    private void OnAppetiteChanged(BlazorChangeEventArgs e) { _appetiteFilter = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _allItems.FirstOrDefault(); }
+    private void OnStatusChanged(BlazorChangeEventArgs e) { _statusFilter = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault() ?? _allItems.FirstOrDefault(); }
+    private void OnSortChanged(BlazorChangeEventArgs e) { _sort = e.Value?.ToString() ?? "importance"; _selected = FilteredRows.FirstOrDefault() ?? _allItems.FirstOrDefault(); }
 
-    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    private void OpenCreate() { _editId = null; _form = new() { CarrierName = string.IsNullOrWhiteSpace(Carrier) ? string.Empty : Carrier!, LobCode = LobChoices[0], AppetiteLevelCode = "Acceptable", Priority = 10, IsActive = true }; _formError = null; _showForm = true; }
+    private void OpenEdit(MarketAppetiteDto item) { _selected = item; _editId = item.MarketAppetiteId; _form = new() { CarrierName = item.CarrierName, CarrierNaic = item.CarrierNaic, LobCode = item.LobCode, AppetiteLevelCode = item.AppetiteLevelCode, MinPremium = item.MinPremium, MaxPremium = item.MaxPremium, StateCode = item.StateCode, Notes = item.Notes, Priority = item.Priority, IsActive = item.IsActive }; _formError = null; _showForm = true; }
+    private void CloseForm() { if (_saving) return; _showForm = false; _form = new(); _editId = null; _formError = null; }
+    private void ConfirmDelete(MarketAppetiteDto item) => _deleteTarget = item;
+    private void CancelDelete() { if (!_saving) _deleteTarget = null; }
+    private void HideToast() => _toastVisible = false;
+
+    private async Task SaveAsync()
     {
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+        _saving = true;
+        _formError = null;
+        try
+        {
+            if (_form.MaxPremium.HasValue && _form.MinPremium.HasValue && _form.MaxPremium < _form.MinPremium) { _formError = "Maximum premium cannot be less than minimum premium."; return; }
+            var request = new UpsertMarketAppetiteRequest { TenantId = _tenantId, CarrierName = _form.CarrierName.Trim(), CarrierNaic = Normalize(_form.CarrierNaic), LobCode = _form.LobCode.Trim(), AppetiteLevelCode = _form.AppetiteLevelCode.Trim(), MinPremium = _form.MinPremium, MaxPremium = _form.MaxPremium, StateCode = Normalize(_form.StateCode)?.ToUpperInvariant(), Notes = Normalize(_form.Notes), Priority = _form.Priority, IsActive = _form.IsActive, UserId = _tenantAdminUserId };
+            if (_editId.HasValue) await Api.UpdateMarketAppetiteAsync(_editId.Value, request); else await Api.CreateMarketAppetiteAsync(request);
+            CloseForm();
+            await LoadAsync();
+            ShowToast("Carrier appetite rule saved.", "success");
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast(_formError, "danger");
+        }
+        finally { _saving = false; }
     }
 
-    private static string AppetiteClass(string level) => level switch
+    private async Task ToggleActiveAsync(MarketAppetiteDto item)
     {
-        "Preferred" => "ca-appetite ca-appetite--preferred",
-        "Standard"  => "ca-appetite ca-appetite--standard",
-        "Limited"   => "ca-appetite ca-appetite--limited",
-        "Declined"  => "ca-appetite ca-appetite--declined",
-        _           => "ca-appetite ca-appetite--na",
-    };
-
-    private static string AppetiteIcon(string level) => level switch
-    {
-        "Preferred" => "bi bi-star-fill",
-        "Standard"  => "bi bi-check-circle",
-        "Limited"   => "bi bi-dash-circle",
-        "Declined"  => "bi bi-x-circle-fill",
-        _           => "bi bi-slash-circle",
-    };
-
-    private sealed record LabelValue(string Value, string Label);
-
-    private sealed record AppetiteRow
-    {
-        public Guid     RowId            { get; init; } = Guid.NewGuid();
-        public string   CarrierName      { get; init; } = string.Empty;
-        public string   NaicCode         { get; init; } = string.Empty;
-        public string   LobCode          { get; init; } = string.Empty;
-        public string   LobName          { get; init; } = string.Empty;
-        public string   AppetiteLevel    { get; init; } = "Standard";  // Preferred | Standard | Limited | Declined | N/A
-        public decimal? MinPremium       { get; init; }
-        public decimal? MaxPremium       { get; init; }
-        public string?  Notes            { get; init; }
-        public DateTime? LastReviewedDate { get; init; }
+        _saving = true;
+        try
+        {
+            await Api.UpdateMarketAppetiteAsync(item.MarketAppetiteId, new UpsertMarketAppetiteRequest { TenantId = _tenantId, CarrierName = item.CarrierName, CarrierNaic = item.CarrierNaic, LobCode = item.LobCode, AppetiteLevelCode = item.AppetiteLevelCode, MinPremium = item.MinPremium, MaxPremium = item.MaxPremium, StateCode = item.StateCode, Notes = item.Notes, Priority = item.Priority, IsActive = !item.IsActive, UserId = _tenantAdminUserId });
+            await LoadAsync();
+            ShowToast($"{item.CarrierName} {(item.IsActive ? "deactivated" : "activated")}.", "success");
+        }
+        catch (Exception ex) { ShowToast($"Status update failed: {ex.Message}", "danger"); }
+        finally { _saving = false; }
     }
 
-    async Task ResolveCurrentUserContextAsync()
+    private async Task DeleteAsync()
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            var name = _deleteTarget.CarrierName;
+            await Api.DeleteMarketAppetiteAsync(_deleteTarget.MarketAppetiteId, _tenantAdminUserId);
+            _deleteTarget = null;
+            await LoadAsync();
+            ShowToast($"{name} appetite rule deleted.", "success");
+        }
+        catch (Exception ex) { ShowToast($"Delete failed: {ex.Message}", "danger"); }
+        finally { _saving = false; }
+    }
+
+    private string BuildCsv()
+    {
+        var lines = new List<string> { "Carrier,NAIC,LOB,Appetite,State,MinPremium,MaxPremium,Priority,Status,Notes" };
+        lines.AddRange(FilteredRows.Select(x => string.Join(',', new[]
+        {
+            Csv(x.CarrierName),
+            Csv(x.CarrierNaic),
+            Csv(x.LobCode),
+            Csv(x.AppetiteLevelCode),
+            Csv(StateText(x)),
+            Csv(x.MinPremium?.ToString(CultureInfo.InvariantCulture)),
+            Csv(x.MaxPremium?.ToString(CultureInfo.InvariantCulture)),
+            x.Priority.ToString(CultureInfo.InvariantCulture),
+            Csv(x.IsActive ? "Active" : "Inactive"),
+            Csv(x.Notes)
+        })));
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private void ShowToast(string message, string kind)
+    {
+        _toastMessage = message.Length > 160 ? $"{message[..157]}..." : message;
+        _toastKind = kind == "danger" || kind == "warning" ? kind : "success";
+        _toastVisible = true;
+    }
+
+    private bool IsSelected(MarketAppetiteDto item)
+    {
+        return _selected?.MarketAppetiteId == item.MarketAppetiteId;
+    }
+
+    private string MetricClass(Metric metric)
+    {
+        var activeClass = _quickFilter == metric.Filter ? "ca-kpi-active" : string.Empty;
+        return $"ca-kpi ca-kpi-{metric.Tone} {activeClass}";
+    }
+
+    private static bool CarrierMatches(string rowCarrier, string carrier)
+    {
+        return rowCarrier.Contains(carrier, StringComparison.OrdinalIgnoreCase)
+            || carrier.Contains(rowCarrier, StringComparison.OrdinalIgnoreCase)
+            || NormalizeCarrier(rowCarrier) == NormalizeCarrier(carrier);
+    }
+
+    private static string NormalizeCarrier(string value)
+    {
+        return value
+            .Replace("Insurance", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace("Company", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace(" ", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Trim()
+            .ToUpperInvariant();
+    }
+
+    private static bool Contains(string? value, string term)
+    {
+        return !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string StateText(MarketAppetiteDto item)
+    {
+        return string.IsNullOrWhiteSpace(item.StateCode) ? "ALL" : item.StateCode.ToUpperInvariant();
+    }
+
+    private static string PremiumText(decimal? value)
+    {
+        return value.HasValue ? value.Value.ToString("C0", CultureInfo.CurrentCulture) : "—";
+    }
+
+    private static string PremiumBand(MarketAppetiteDto item)
+    {
+        var maxPremium = item.MaxPremium.HasValue ? PremiumText(item.MaxPremium) : "Unlimited";
+        return $"{PremiumText(item.MinPremium)} - {maxPremium}";
+    }
+
+    private static decimal AppetiteScore(MarketAppetiteDto item)
+    {
+        return item.AppetiteLevelCode switch
+        {
+            "Preferred" => 60m,
+            "Acceptable" => 42m,
+            "Avoid" => 18m,
+            "Declined" => 5m,
+            _ => 0m
+        };
+    }
+
+    private static decimal ImportanceScore(MarketAppetiteDto item)
+    {
+        var activeScore = item.IsActive ? 20m : 0m;
+        var premiumBandScore = item.MinPremium.HasValue || item.MaxPremium.HasValue ? 12m : 0m;
+        var priorityScore = Math.Max(0, 30 - item.Priority);
+
+        return AppetiteScore(item) + activeScore + premiumBandScore + priorityScore;
+    }
+
+    private static string MarketIcon(MarketAppetiteDto item)
+    {
+        return item.AppetiteLevelCode switch
+        {
+            "Preferred" => "bi-star-fill",
+            "Acceptable" => "bi-check2-circle",
+            "Avoid" => "bi-exclamation-triangle",
+            "Declined" => "bi-x-octagon",
+            _ => "bi-grid-3x3-gap"
+        };
+    }
+
+    private static string AppetiteClass(string level)
+    {
+        return level switch
+        {
+            "Preferred" => "ca-pill-preferred",
+            "Acceptable" => "ca-pill-acceptable",
+            "Avoid" => "ca-pill-avoid",
+            "Declined" => "ca-pill-declined",
+            _ => "ca-pill-muted"
+        };
+    }
+
+    private static string? Normalize(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+    private static string Csv(string? value)
+    {
+        const char quote = (char)34;
+        var text = (value ?? string.Empty).Replace(quote.ToString(), new string(quote, 2));
+        return quote + text + quote;
+    }
+    private static IEnumerable<string> RecommendedActions(MarketAppetiteDto item)
+    {
+        if (item.AppetiteLevelCode == "Preferred")
+        {
+            yield return "Route matching submissions to this market first when state and premium fit apply.";
+        }
+
+        if (item.AppetiteLevelCode == "Acceptable")
+        {
+            yield return "Use as a viable alternate when preferred markets are unavailable.";
+        }
+
+        if (item.AppetiteLevelCode == "Avoid" || item.AppetiteLevelCode == "Declined")
+        {
+            yield return "Block automatic routing unless underwriting approves an exception.";
+        }
+
+        if (item.MinPremium.HasValue || item.MaxPremium.HasValue)
+        {
+            yield return "Validate target premium against this configured appetite band.";
+        }
+
+        if (!item.IsActive)
+        {
+            yield return "Reactivate only after confirming current carrier appetite.";
+        }
+
+        yield return "Keep LOB, state, notes, and priority aligned with carrier guidance.";
+    }
+
+    private sealed record Metric(string Filter, string Value, string Label, string Caption, string Icon, string Tone);
+
+    private sealed class AppetiteForm
+    {
+        [Required, StringLength(200)] public string CarrierName { get; set; } = string.Empty;
+        [StringLength(20)] public string? CarrierNaic { get; set; }
+        [Required, StringLength(50)] public string LobCode { get; set; } = "Commercial Property";
+        [Required, StringLength(50)] public string AppetiteLevelCode { get; set; } = "Acceptable";
+        [Range(0, 999999)] public decimal? MinPremium { get; set; }
+        [Range(0, 999999999)] public decimal? MaxPremium { get; set; }
+        [StringLength(10)] public string? StateCode { get; set; }
+        [StringLength(1000)] public string? Notes { get; set; }
+        [Range(1, 999)] public int Priority { get; set; } = 10;
+        public bool IsActive { get; set; } = true;
     }
 }

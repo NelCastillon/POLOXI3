@@ -51,6 +51,10 @@ public sealed class CommissionsController : ControllerBase
     public async Task<IActionResult> SearchTransactions([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 25, CancellationToken cancellationToken = default)
         => Ok(await _service.SearchTransactionsAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken));
 
+    [HttpGet("ledger")]
+    public async Task<IActionResult> SearchLedger([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, CancellationToken cancellationToken = default)
+        => Ok(await _service.SearchLedgerAsync(tenantId, searchTerm, cancellationToken));
+
     [HttpPost("transactions")]
     public async Task<IActionResult> CreateTransaction([FromBody] CreateCommissionTransactionRequest request, CancellationToken cancellationToken)
         => Ok(await _service.CreateTransactionAsync(request, cancellationToken));

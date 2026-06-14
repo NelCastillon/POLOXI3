@@ -5,264 +5,446 @@
 
 <PageTitle>Certificates Hub — AMS</PageTitle>
 
-<EnterpriseToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true" />
+<EnterpriseToast @ref="_toast" ShowCloseButton="true" Timeout="3500" NewestOnTop="true" />
 
-<SfContextMenu @ref="_ctx" TValue="CtxItem" Items="_ctxItems" ItemSelected="OnCtxSelected">
-    <MenuFieldSettings Text="Text" IconCss="IconCss" />
-</SfContextMenu>
-
-<AppPageHeader Title="Certificates Hub"
-               Subtitle="Issue, track and manage ACORD certificates of insurance"
-               Icon="bi-award">
-    <Actions>
-        <div class="ch-filter-row">
-            <select class="e-input ch-filter-sel" @bind="_filterStatus">
-                <option value="">All Statuses</option>
-                <option>Issued</option>
-                <option>Pending</option>
-                <option>Expired</option>
-                <option>Revoked</option>
-            </select>
-            <select class="e-input ch-filter-sel" @bind="_filterType">
-                <option value="">All Types</option>
-                <option>ACORD 25</option>
-                <option>ACORD 27</option>
-                <option>ACORD 28</option>
-                <option>Custom</option>
-            </select>
+<div class="ch-enterprise-page">
+    <section class="ch-hero">
+        <div class="ch-hero-icon"><i class="bi bi-award" aria-hidden="true"></i></div>
+        <div class="ch-hero-main">
+            <span class="ch-eyebrow"><i class="bi bi-shield-check" aria-hidden="true"></i> Policy servicing workspace</span>
+            <h1>Certificates Hub</h1>
+            <p>Issue, track, renew, revoke, and deliver ACORD certificates with one enterprise-native certificate register.</p>
+            @if (!string.IsNullOrWhiteSpace(Certificate))
+            {
+                <span class="ch-query-pill"><i class="bi bi-link-45deg" aria-hidden="true"></i> Deep link: @Certificate</span>
+            }
         </div>
-        <button class="um-btn um-btn-primary" @onclick='() => _showIssue = true'>
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> Issue Certificate
-        </button>
-    </Actions>
-</AppPageHeader>
+        <div class="ch-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/policies")'><i class="bi bi-shield" aria-hidden="true"></i> Policies</button>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button>
+            <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenIssue"><i class="bi bi-plus-lg" aria-hidden="true"></i> Issue Certificate</button>
+        </div>
+    </section>
 
-<!-- KPI strip -->
-<div class="ch-kpi-strip">
-    @KpiCard("bi-award-fill",  "Issued",   _rows.Count(r=>r.Status=="Issued").ToString(),  "ch-kpi-issued")
-    @KpiCard("bi-hourglass",   "Pending",  _rows.Count(r=>r.Status=="Pending").ToString(), "ch-kpi-pending")
-    @KpiCard("bi-clock",       "Expiring", ExpiringCount.ToString(),                        "ch-kpi-exp")
-    @KpiCard("bi-x-circle",    "Expired",  _rows.Count(r=>r.Status=="Expired").ToString(), "ch-kpi-expired")
-    @KpiCard("bi-person-badge","Holders",  _rows.Select(r=>r.HolderName).Distinct().Count().ToString(), "ch-kpi-hold")
-</div>
+    <section class="ch-kpi-strip" aria-label="Certificate KPI filters">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="ch-kpi-card @kpi.CssClass @(_activeKpi == kpi.Filter ? "ch-kpi-card--active" : null)" title="@kpi.Title" @onclick="() => ApplyKpi(kpi.Filter)">
+                <span class="ch-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span><strong>@kpi.Value</strong><small>@kpi.Label</small><em>@kpi.Caption</em></span>
+            </button>
+        }
+    </section>
 
-<!-- Grid -->
-<div class="ch-grid-wrap">
-    <SfGrid DataSource="@Filtered" AllowSorting="true" AllowPaging="true" AllowResizing="true" RowHeight="40">
-        <GridPageSettings PageSize="20" />
-        <GridColumns>
-            <GridColumn Field="CertNo"      HeaderText="Cert #"         Width="140" />
-            <GridColumn Field="PolicyNo"    HeaderText="Policy #"       Width="140" />
-            <GridColumn Field="Account"     HeaderText="Account"        Width="180" />
-            <GridColumn Field="HolderName"  HeaderText="Certificate Holder" Width="200" />
-            <GridColumn Field="CertType"    HeaderText="Form"           Width="100"
-                        Template="@(ctx => TypeBadge(((CertRow)ctx).CertType))" />
-            <GridColumn Field="IssuedDate"  HeaderText="Issued"         Width="110" Format="MM/dd/yyyy" />
-            <GridColumn Field="ExpDate"     HeaderText="Expiry"         Width="110"
-                        Template="@(ctx => ExpCell(((CertRow)ctx).ExpDate))" />
-            <GridColumn Field="Lob"         HeaderText="LOB"            Width="150" />
-            <GridColumn Field="IssuedBy"    HeaderText="Issued By"      Width="130" />
-            <GridColumn Field="Status"      HeaderText="Status"         Width="110"
-                        Template="@(ctx => StatusChip(((CertRow)ctx).Status))" />
-            <GridColumn HeaderText="" Width="50" AllowSorting="false"
-                        Template="@(ctx => CtxBtn((CertRow)ctx))" />
-        </GridColumns>
-    </SfGrid>
-</div>
+    <section class="ch-command-bar" aria-label="Certificate filters">
+        <div class="ch-search-wrap">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input type="search" placeholder="Search cert #, policy, account, holder, LOB, issuer..." @bind="SearchText" @bind:event="oninput" />
+        </div>
+        <select class="form-select ch-filter-select" @bind="StatusFilter" aria-label="Status filter">
+            <option value="">All statuses</option>
+            @foreach (var status in Statuses)
+            {
+                <option value="@status">@status</option>
+            }
+        </select>
+        <select class="form-select ch-filter-select" @bind="TypeFilter" aria-label="Type filter">
+            <option value="">All forms</option>
+            @foreach (var type in _certTypes)
+            {
+                <option value="@type">@type</option>
+            }
+        </select>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ExportVisibleAsync"><i class="bi bi-download" aria-hidden="true"></i> Export visible</button>
+        <div class="ch-result-chip"><strong>@Filtered.Count</strong><span>Visible</span></div>
+    </section>
 
-<!-- Issue dialog -->
-<SfDialog @bind-Visible="_showIssue" Width="560px" IsModal="true" ShowCloseIcon="true" Header="Issue Certificate">
-    <DialogTemplates>
-        <Content>
-            <div class="ch-dlg-fields">
-                <div class="ch-dlg-field">
-                    <label class="ch-dlg-lbl">Policy Number <span class="ch-req">*</span></label>
-                    <input class="e-input" @bind="_issForm.PolicyNo" placeholder="POL-2025-…" />
+    <section class="ch-layout">
+        <div class="enterprise-grid-card ch-table-card">
+            <div class="sr-grid-toolbar">
+                <div>
+                    <strong>Certificate register</strong>
+                    <span class="sr-filter-note">@Filtered.Count enterprise certificate row(s)</span>
                 </div>
-                <div class="ch-dlg-field">
-                    <label class="ch-dlg-lbl">Certificate Form</label>
-                    <SfDropDownList TItem="string" TValue="string"
-                        DataSource="@_certTypes" @bind-Value="_issForm.CertType" />
-                </div>
-                <div class="ch-dlg-field ch-dlg-full">
-                    <label class="ch-dlg-lbl">Certificate Holder Name <span class="ch-req">*</span></label>
-                    <input class="e-input" @bind="_issForm.HolderName" placeholder="Legal name of certificate holder" />
-                </div>
-                <div class="ch-dlg-field ch-dlg-full">
-                    <label class="ch-dlg-lbl">Holder Address</label>
-                    <input class="e-input" @bind="_issForm.HolderAddress" />
-                </div>
-                <div class="ch-dlg-field">
-                    <label class="ch-dlg-lbl">Additional Insured?</label>
-                    <SfCheckBox @bind-Checked="_issForm.AdditionalInsured" Label="Yes — add as additional insured" />
-                </div>
-                <div class="ch-dlg-field">
-                    <label class="ch-dlg-lbl">Waiver of Subrogation?</label>
-                    <SfCheckBox @bind-Checked="_issForm.WaiverSubrogation" Label="Include waiver" />
-                </div>
-                <div class="ch-dlg-field">
-                    <label class="ch-dlg-lbl">Effective Date</label>
-                    <SfDatePicker TValue="DateTime" @bind-Value="_issForm.IssuedDate" Format="MM/dd/yyyy" />
-                </div>
-                <div class="ch-dlg-field">
-                    <label class="ch-dlg-lbl">Expiry Date</label>
-                    <SfDatePicker TValue="DateTime" @bind-Value="_issForm.ExpDate" Format="MM/dd/yyyy" />
-                </div>
-                <div class="ch-dlg-field ch-dlg-full">
-                    <label class="ch-dlg-lbl">Description of Operations</label>
-                    <textarea class="e-input" rows="2" @bind="_issForm.Description"></textarea>
+                <div class="tset-row-actions">
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ShowPending"><i class="bi bi-hourglass" aria-hidden="true"></i> Pending</button>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ShowExpiring"><i class="bi bi-clock" aria-hidden="true"></i> Expiring</button>
+                    <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenIssue"><i class="bi bi-plus-lg" aria-hidden="true"></i> Issue</button>
                 </div>
             </div>
-        </Content>
-        <FooterTemplate>
-            <button class="um-btn um-btn-ghost"   @onclick='() => _showIssue = false'>Cancel</button>
-            <button class="um-btn um-btn-secondary" @onclick="SaveDraft">Save Draft</button>
-            <button class="um-btn um-btn-primary"  @onclick="IssueCert">Issue</button>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+
+            @if (!Filtered.Any())
+            {
+                <div class="sr-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No certificates found</strong><span>Clear filters or issue a new certificate.</span><button type="button" class="um-btn um-btn-primary" @onclick="ResetFilters">Show all certificates</button></div>
+            }
+            else
+            {
+                <div class="sr-table-scroll">
+                    <table class="sr-table ch-table">
+                        <thead>
+                            <tr>
+                                <th>Certificate</th>
+                                <th>Policy / account</th>
+                                <th>Holder</th>
+                                <th>Form</th>
+                                <th>Issued</th>
+                                <th>Expiry</th>
+                                <th>LOB</th>
+                                <th>Issued by</th>
+                                <th>Status</th>
+                                <th class="sr-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in Filtered)
+                            {
+                                <tr class="sr-table-row @(row.CertNo == _selected?.CertNo ? "ma-table-row--selected" : null)" @onclick="() => SelectRow(row)">
+                                    <td><span class="ch-cert-link">@row.CertNo</span><small>@(row.AdditionalInsured ? "Additional insured" : "Standard holder")</small></td>
+                                    <td><strong>@row.PolicyNo</strong><small>@row.Account</small></td>
+                                    <td><strong>@row.HolderName</strong><small>@row.HolderAddress</small></td>
+                                    <td><span class="ch-type-badge">@row.CertType</span></td>
+                                    <td>@row.IssuedDate.ToString("MM/dd/yyyy")</td>
+                                    <td><span class="@ExpiryClass(row)">@row.ExpDate.ToString("MM/dd/yyyy")</span></td>
+                                    <td>@row.Lob</td>
+                                    <td>@row.IssuedBy</td>
+                                    <td><span class="ch-status ch-status-@CssToken(row.Status)">@row.Status</span></td>
+                                    <td class="sr-actions-col">
+                                        <button type="button" class="um-btn um-btn-primary um-btn-xs" @onclick:stopPropagation="true" @onclick="() => DownloadAsync(row)"><i class="bi bi-file-earmark-pdf" aria-hidden="true"></i> PDF</button>
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => EmailAsync(row)"><i class="bi bi-envelope" aria-hidden="true"></i></button>
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => RevokeAsync(row)" disabled="@IsRevoked(row)"><i class="bi bi-x-circle" aria-hidden="true"></i></button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <aside class="ch-detail-panel" aria-label="Selected certificate detail">
+            @if (_selected is null)
+            {
+                <div class="ch-side-empty"><i class="bi bi-cursor" aria-hidden="true"></i><h2>Select a certificate</h2><p>Choose a row to inspect holder, policy, form, expiry, delivery, and available servicing actions.</p></div>
+            }
+            else
+            {
+                <div class="ch-detail-head">
+                    <span class="ch-eyebrow"><i class="bi bi-award" aria-hidden="true"></i> Selected certificate</span>
+                    <h2>@_selected.CertNo</h2>
+                    <span class="ch-status ch-status-@CssToken(_selected.Status)">@_selected.Status</span>
+                </div>
+                <div class="ch-detail-list">
+                    <div><span>Policy</span><strong>@_selected.PolicyNo</strong></div>
+                    <div><span>Account</span><strong>@_selected.Account</strong></div>
+                    <div><span>Holder</span><strong>@_selected.HolderName</strong></div>
+                    <div><span>Form</span><strong>@_selected.CertType</strong></div>
+                    <div><span>Expires</span><strong>@_selected.ExpDate.ToString("MM/dd/yyyy")</strong></div>
+                    <div><span>Issued by</span><strong>@_selected.IssuedBy</strong></div>
+                </div>
+                <div class="ch-coverage-card">
+                    <strong><i class="bi bi-card-text" aria-hidden="true"></i> Description of operations</strong>
+                    <p>@_selected.Description</p>
+                    <div class="ch-flag-row">
+                        <span class="@(_selected.AdditionalInsured ? "ch-flag-on" : "ch-flag-off")"><i class="bi bi-person-plus" aria-hidden="true"></i> Additional insured</span>
+                        <span class="@(_selected.WaiverSubrogation ? "ch-flag-on" : "ch-flag-off")"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Waiver</span>
+                    </div>
+                </div>
+                <div class="ch-detail-actions">
+                    <button type="button" class="um-btn um-btn-primary" @onclick="() => DownloadAsync(_selected)"><i class="bi bi-file-earmark-pdf" aria-hidden="true"></i> Download PDF</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => EmailAsync(_selected)"><i class="bi bi-envelope" aria-hidden="true"></i> Email holder</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="OpenSelectedPolicy"><i class="bi bi-shield" aria-hidden="true"></i> View policy</button>
+                    <button type="button" class="um-btn um-btn-danger" @onclick="() => RevokeAsync(_selected)" disabled="@IsRevoked(_selected)"><i class="bi bi-x-circle" aria-hidden="true"></i> Revoke</button>
+                </div>
+            }
+        </aside>
+    </section>
+</div>
+
+@if (_showIssue)
+{
+    <div class="ch-modal-backdrop" role="presentation" @onclick="CloseIssue">
+        <div class="ch-modal" role="dialog" aria-modal="true" aria-labelledby="issueCertTitle" @onclick:stopPropagation="true">
+            <div class="ch-modal-header">
+                <div><span class="ch-eyebrow"><i class="bi bi-plus-circle" aria-hidden="true"></i> Certificate issuance</span><h2 id="issueCertTitle">Issue Certificate</h2></div>
+                <button type="button" class="ch-modal-close" @onclick="CloseIssue" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="ch-dlg-fields">
+                <label class="ch-dlg-field">Policy Number <span class="ch-req">*</span><input class="form-control" @bind="_issForm.PolicyNo" placeholder="POL-2025-…" /></label>
+                <label class="ch-dlg-field">Certificate Form<select class="form-select" @bind="_issForm.CertType">@foreach (var type in _certTypes){<option value="@type">@type</option>}</select></label>
+                <label class="ch-dlg-field ch-dlg-full">Certificate Holder Name <span class="ch-req">*</span><input class="form-control" @bind="_issForm.HolderName" placeholder="Legal name of certificate holder" /></label>
+                <label class="ch-dlg-field ch-dlg-full">Holder Address<input class="form-control" @bind="_issForm.HolderAddress" /></label>
+                <label class="ch-check-row"><input type="checkbox" @bind="_issForm.AdditionalInsured" /> Add as additional insured</label>
+                <label class="ch-check-row"><input type="checkbox" @bind="_issForm.WaiverSubrogation" /> Include waiver of subrogation</label>
+                <label class="ch-dlg-field">Effective Date<input class="form-control" type="date" @bind="_issForm.IssuedDate" /></label>
+                <label class="ch-dlg-field">Expiry Date<input class="form-control" type="date" @bind="_issForm.ExpDate" /></label>
+                <label class="ch-dlg-field ch-dlg-full">Description of Operations<textarea class="form-control" rows="3" @bind="_issForm.Description"></textarea></label>
+            </div>
+            <div class="ch-modal-actions">
+                <button class="um-btn um-btn-ghost" @onclick="CloseIssue">Cancel</button>
+                <button class="um-btn um-btn-secondary" @onclick="SaveDraftAsync">Save Draft</button>
+                <button class="um-btn um-btn-primary" @onclick="IssueCertAsync">Issue</button>
+            </div>
+        </div>
+    </div>
+}
 
 @code {
-    EnterpriseToast _toast = default!;
-    SfContextMenu<CtxItem> _ctx = default!;
+    [SupplyParameterFromQuery(Name = "certificate")]
+    public string? Certificate { get; set; }
 
-    string  _filterStatus = "";
-    string  _filterType   = "";
-    bool    _showIssue    = false;
-    CertRow _selected     = new();
+    private EnterpriseToast _toast = default!;
+    private string _filterStatus = string.Empty;
+    private string _filterType = string.Empty;
+    private string _searchTerm = string.Empty;
+    private string _activeKpi = "all";
+    private bool _showIssue;
+    private CertRow? _selected;
+    private IssueForm _issForm = new();
+    private readonly string[] _certTypes = ["ACORD 25", "ACORD 27", "ACORD 28", "Custom"];
+    private readonly List<CertRow> _rows = [];
 
-    IEnumerable<CertRow> Filtered => _rows
-        .Where(r => (string.IsNullOrEmpty(_filterStatus) || r.Status   == _filterStatus)
-                 && (string.IsNullOrEmpty(_filterType)   || r.CertType == _filterType));
+    private string SearchText { get => _searchTerm; set { _searchTerm = value; SelectFallback(); } }
+    private string StatusFilter { get => _filterStatus; set { _filterStatus = value; _activeKpi = string.IsNullOrWhiteSpace(value) ? "all" : value.ToLowerInvariant(); SelectFallback(); } }
+    private string TypeFilter { get => _filterType; set { _filterType = value; SelectFallback(); } }
 
-    int ExpiringCount => _rows.Count(r => r.Status == "Issued"
-        && r.ExpDate >= DateTime.Today && r.ExpDate <= DateTime.Today.AddDays(30));
+    private List<CertRow> Filtered => _rows
+        .Where(MatchesKpi)
+        .Where(r => string.IsNullOrWhiteSpace(_filterStatus) || r.Status == _filterStatus)
+        .Where(r => string.IsNullOrWhiteSpace(_filterType) || r.CertType == _filterType)
+        .Where(MatchesSearch)
+        .OrderBy(r => r.Status == "Pending" ? 0 : r.IsExpiring ? 1 : r.Status == "Issued" ? 2 : 3)
+        .ThenBy(r => r.ExpDate)
+        .ToList();
 
-    readonly string[] _certTypes = new[]{ "ACORD 25","ACORD 27","ACORD 28","Custom" };
+    private IReadOnlyList<string> Statuses => _rows.Select(r => r.Status).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+    private int ExpiringCount => _rows.Count(r => r.IsExpiring);
+    private int ActiveIssuedCount => _rows.Count(r => r.Status == "Issued");
 
-    IssueForm _issForm = new();
-
-    sealed class IssueForm
-    {
-        public string   PolicyNo         { get; set; } = "";
-        public string   CertType         { get; set; } = "ACORD 25";
-        public string   HolderName       { get; set; } = "";
-        public string   HolderAddress    { get; set; } = "";
-        public bool     AdditionalInsured{ get; set; }
-        public bool     WaiverSubrogation{ get; set; }
-        public DateTime IssuedDate       { get; set; } = DateTime.Today;
-        public DateTime ExpDate          { get; set; } = DateTime.Today.AddYears(1);
-        public string   Description      { get; set; } = "";
-    }
-
-    sealed class CertRow
-    {
-        public string   CertNo      { get; set; } = "";
-        public string   PolicyNo    { get; set; } = "";
-        public string   Account     { get; set; } = "";
-        public string   HolderName  { get; set; } = "";
-        public string   CertType    { get; set; } = "";
-        public DateTime IssuedDate  { get; set; }
-        public DateTime ExpDate     { get; set; }
-        public string   Lob         { get; set; } = "";
-        public string   IssuedBy    { get; set; } = "";
-        public string   Status      { get; set; } = "";
-    }
-
-    sealed record CtxItem(string Text, string IconCss);
-
-    List<CtxItem> _ctxItems = new()
-    {
-        new("Download PDF",  "bi bi-file-earmark-pdf"),
-        new("Email Holder",  "bi bi-envelope"       ),
-        new("View Policy",   "bi bi-shield"         ),
-        new("Revoke",        "bi bi-x-circle"       ),
-    };
-
-    readonly List<CertRow> _rows = new();
+    private IReadOnlyList<KpiModel> Kpis =>
+    [
+        new("all", "All", _rows.Count.ToString("N0"), "Total register", "bi-grid", "ch-kpi-all", "Show all certificates"),
+        new("issued", "Issued", ActiveIssuedCount.ToString("N0"), "Active proof", "bi-award-fill", "ch-kpi-issued", "Show issued certificates"),
+        new("pending", "Pending", _rows.Count(r => r.Status == "Pending").ToString("N0"), "Needs issuance", "bi-hourglass", "ch-kpi-pending", "Show pending certificates"),
+        new("expiring", "Expiring", ExpiringCount.ToString("N0"), "Next 30 days", "bi-clock", "ch-kpi-exp", "Show expiring certificates"),
+        new("expired", "Expired", _rows.Count(r => r.Status == "Expired").ToString("N0"), "Past expiry", "bi-x-circle", "ch-kpi-expired", "Show expired certificates"),
+        new("holders", "Holders", _rows.Select(r => r.HolderName).Distinct(StringComparer.OrdinalIgnoreCase).Count().ToString("N0"), "Unique holders", "bi-person-badge", "ch-kpi-hold", "Show all certificate holders")
+    ];
 
     protected override void OnInitialized()
     {
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Policies","/policies"), new("Certificates","/policies/certificates"));
-        BuildStub();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policies", "/policies"), new("Certificates", "/policies/certificates"));
+        BuildSeed();
+        SelectQueryCertificate();
     }
 
-    void BuildStub()
+    protected override void OnParametersSet()
     {
-        var rng      = new Random(13);
-        var types    = _certTypes;
-        var statuses = new[]{"Issued","Pending","Expired","Revoked"};
-        var lobs     = new[]{"General Liability","Commercial Property","Commercial Auto"};
-        var accounts = new[]{"Sullivan Mfg. LLC","Bridgewater Hotels","Metro Freight Co.","PineCrest Builders","Nguyen, Minh T."};
-        var holders  = new[]{"City of Houston","ABC Contractors LLC","First National Bank","TXDOT","Whole Foods Market","Amazon.com LLC","State Farm (as AI)","Harris County"};
-        var people   = new[]{"Maria Santos","James Patel","Chen Li","Aisha Williams"};
-
-        for (int i = 1; i <= 50; i++)
+        if (_rows.Count > 0)
         {
-            var iss    = DateTime.Today.AddDays(-rng.Next(0,365));
-            var status = statuses[rng.Next(statuses.Length)];
-            _rows.Add(new CertRow
-            {
-                CertNo     = $"CERT-2025-{i:D4}",
-                PolicyNo   = $"POL-2025-{rng.Next(10000,99999)}",
-                Account    = accounts[rng.Next(accounts.Length)],
-                HolderName = holders[rng.Next(holders.Length)],
-                CertType   = types[rng.Next(types.Length)],
-                IssuedDate = iss,
-                ExpDate    = iss.AddYears(1),
-                Lob        = lobs[rng.Next(lobs.Length)],
-                IssuedBy   = people[rng.Next(people.Length)],
-                Status     = status,
-            });
+            SelectQueryCertificate();
         }
     }
 
-    void SaveDraft() { _rows.Insert(0, BuildCertRow("Pending")); _showIssue = false; _issForm = new(); }
-    void IssueCert() { _rows.Insert(0, BuildCertRow("Issued")); _showIssue = false; _issForm = new(); }
-
-    CertRow BuildCertRow(string status) => new()
+    private void BuildSeed()
     {
-        CertNo     = $"CERT-2025-{_rows.Count+1:D4}",
-        PolicyNo   = _issForm.PolicyNo,
-        Account    = "—",
-        HolderName = _issForm.HolderName,
-        CertType   = _issForm.CertType,
-        IssuedDate = _issForm.IssuedDate,
-        ExpDate    = _issForm.ExpDate,
-        Lob        = "—",
-        IssuedBy   = "Current User",
-        Status     = status,
+        if (_rows.Count > 0) return;
+
+        _rows.AddRange(
+        [
+            new("CERT-2024-1001", "POL-2024-44821", "Sullivan Mfg. LLC", "City of Houston", "901 Bagby St, Houston, TX", "ACORD 25", DateTime.Today.AddDays(-42), DateTime.Today.AddDays(18), "General Liability", "Maria Santos", "Issued", true, true, "Evidence of GL coverage for municipal vendor access, including additional insured and waiver endorsements."),
+            new("CERT-2024-1002", "POL-2024-44821", "Sullivan Mfg. LLC", "ABC Contractors LLC", "2100 Commerce Dr, Austin, TX", "ACORD 25", DateTime.Today.AddDays(-35), DateTime.Today.AddDays(72), "General Liability", "James Patel", "Issued", true, false, "Certificate for jobsite access and standard contract compliance."),
+            new("CERT-2024-1003", "POL-2024-44821", "Sullivan Mfg. LLC", "First National Bank", "100 Main St, Dallas, TX", "ACORD 28", DateTime.Today.AddDays(-180), DateTime.Today.AddDays(-5), "Commercial Property", "Chen Li", "Expired", false, false, "Evidence of property coverage for lender file."),
+            new("CERT-2024-1004", "POL-2025-77120", "Bridgewater Hotels", "Whole Foods Market", "550 Bowie St, Austin, TX", "ACORD 25", DateTime.Today.AddDays(-8), DateTime.Today.AddDays(21), "Commercial Auto", "Aisha Williams", "Pending", true, true, "Pending holder verification and contract language review."),
+            new("CERT-2024-1005", "POL-2025-55291", "Metro Freight Co.", "TXDOT", "125 E 11th St, Austin, TX", "ACORD 25", DateTime.Today.AddDays(-16), DateTime.Today.AddDays(240), "Commercial Auto", "Maria Santos", "Issued", true, true, "Auto liability proof for state transportation contract."),
+            new("CERT-2024-1006", "POL-2025-33410", "PineCrest Builders", "Harris County", "1001 Preston St, Houston, TX", "Custom", DateTime.Today.AddDays(-22), DateTime.Today.AddDays(11), "General Liability", "James Patel", "Issued", true, false, "Custom certificate package for public works bid submission."),
+            new("CERT-2024-1007", "POL-2025-62991", "Nguyen, Minh T.", "Amazon.com LLC", "410 Terry Ave N, Seattle, WA", "ACORD 27", DateTime.Today.AddDays(-60), DateTime.Today.AddDays(320), "Commercial Property", "Chen Li", "Revoked", false, false, "Revoked after holder relationship ended."),
+            new("CERT-2024-1008", "POL-2025-77120", "Bridgewater Hotels", "State Farm (as AI)", "1 State Farm Plaza, Bloomington, IL", "ACORD 25", DateTime.Today.AddDays(-4), DateTime.Today.AddDays(365), "Umbrella", "Aisha Williams", "Pending", false, false, "Draft pending umbrella wording approval.")
+        ]);
+    }
+
+    private void SelectQueryCertificate()
+    {
+        if (!string.IsNullOrWhiteSpace(Certificate))
+        {
+            _selected = _rows.FirstOrDefault(r => string.Equals(r.CertNo, Certificate.Trim(), StringComparison.OrdinalIgnoreCase)) ?? _rows.FirstOrDefault();
+            if (_selected is not null)
+            {
+                _searchTerm = _selected.CertNo;
+            }
+        }
+
+        SelectFallback();
+    }
+
+    private void SelectFallback()
+    {
+        if (_selected is null || !Filtered.Any(r => r.CertNo == _selected.CertNo))
+        {
+            _selected = Filtered.FirstOrDefault() ?? _rows.FirstOrDefault();
+        }
+    }
+
+    private bool MatchesKpi(CertRow row) => _activeKpi switch
+    {
+        "issued" => row.Status == "Issued",
+        "pending" => row.Status == "Pending",
+        "expiring" => row.IsExpiring,
+        "expired" => row.Status == "Expired",
+        _ => true
     };
 
-    void OnCtxSelected(MenuEventArgs<CtxItem> args)
+    private bool MatchesSearch(CertRow row)
     {
-        if (args.Item.Text == "View Policy") Nav.NavigateTo($"/policies/{Guid.NewGuid()}");
-        if (args.Item.Text == "Revoke") _selected.Status = "Revoked";
+        if (string.IsNullOrWhiteSpace(_searchTerm)) return true;
+        var term = _searchTerm.Trim();
+        return Contains(row.CertNo, term) || Contains(row.PolicyNo, term) || Contains(row.Account, term) || Contains(row.HolderName, term) || Contains(row.HolderAddress, term) || Contains(row.Lob, term) || Contains(row.IssuedBy, term);
     }
 
-    RenderFragment TypeBadge(string t) =>
-        @<span class="ch-type-badge">@t</span>;
-
-    RenderFragment ExpCell(DateTime d)
+    private void ApplyKpi(string filter)
     {
-        var days = (d - DateTime.Today).TotalDays;
-        var css  = days < 0 ? "ch-exp-past" : days <= 30 ? "ch-exp-soon" : "";
-        return @<span class="@css">@d.ToString("MM/dd/yyyy")</span>;
+        _activeKpi = _activeKpi == filter && filter != "all" ? "all" : filter;
+        if (filter is "issued" or "pending" or "expired")
+        {
+            _filterStatus = char.ToUpperInvariant(filter[0]) + filter[1..];
+        }
+        else if (filter == "all" || filter == "holders" || filter == "expiring")
+        {
+            _filterStatus = string.Empty;
+        }
+        SelectFallback();
     }
 
-    RenderFragment StatusChip(string s) =>
-        @<span class="ch-status ch-status-@s.ToLower()">@s</span>;
+    private void SelectTabAction(string action)
+    {
+        _activeKpi = action;
+        _filterStatus = action == "pending" ? "Pending" : string.Empty;
+        SelectFallback();
+    }
 
-    RenderFragment CtxBtn(CertRow row) =>
-        @<button class="um-btn um-btn-ghost um-btn-xs"
-                 @onclick:stopPropagation="true"
-                 @onclick="(e) => { _selected = row; _ctx.Open(e.ClientX, e.ClientY); }">
-            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
-        </button>;
+    private void ShowPending() => SelectTabAction("pending");
+    private void ShowExpiring() => SelectTabAction("expiring");
 
-    RenderFragment KpiCard(string icon, string label, string val, string css) =>
-        @<div class="ch-kpi-card @css">
-            <div class="ch-kpi-val">@val</div>
-            <div class="ch-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
-        </div>;
+    private void OpenSelectedPolicy()
+    {
+        if (_selected is not null)
+        {
+            Nav.NavigateTo($"/policies?searchTerm={Uri.EscapeDataString(_selected.PolicyNo)}");
+        }
+    }
+
+    private void ResetFilters()
+    {
+        _activeKpi = "all";
+        _filterStatus = string.Empty;
+        _filterType = string.Empty;
+        _searchTerm = string.Empty;
+        SelectQueryCertificate();
+    }
+
+    private void SelectRow(CertRow row) => _selected = row;
+    private void OpenIssue() => _showIssue = true;
+    private void CloseIssue() => _showIssue = false;
+
+    private async Task SaveDraftAsync()
+    {
+        _rows.Insert(0, BuildCertRow("Pending"));
+        _selected = _rows[0];
+        _showIssue = false;
+        _issForm = new();
+        await _toast.ShowAsync(new ToastModel { Title = "Certificate draft", Content = "Certificate draft saved to the pending queue.", CssClass = "e-toast-success" });
+    }
+
+    private async Task IssueCertAsync()
+    {
+        _rows.Insert(0, BuildCertRow("Issued"));
+        _selected = _rows[0];
+        _showIssue = false;
+        _issForm = new();
+        await _toast.ShowAsync(new ToastModel { Title = "Certificate issued", Content = "Certificate was issued and added to the register.", CssClass = "e-toast-success" });
+    }
+
+    private CertRow BuildCertRow(string status) => new(
+        $"CERT-{DateTime.Today:yyyy}-{_rows.Count + 1001:D4}",
+        string.IsNullOrWhiteSpace(_issForm.PolicyNo) ? "POL-2025-SEED" : _issForm.PolicyNo,
+        "New certificate account",
+        string.IsNullOrWhiteSpace(_issForm.HolderName) ? "Pending holder" : _issForm.HolderName,
+        _issForm.HolderAddress,
+        _issForm.CertType,
+        _issForm.IssuedDate,
+        _issForm.ExpDate,
+        "General Liability",
+        "Current User",
+        status,
+        _issForm.AdditionalInsured,
+        _issForm.WaiverSubrogation,
+        string.IsNullOrWhiteSpace(_issForm.Description) ? "Certificate generated from enterprise issuance workflow." : _issForm.Description);
+
+    private async Task DownloadAsync(CertRow row) => await _toast.ShowAsync(new ToastModel { Title = "PDF ready", Content = $"{row.CertNo} PDF download prepared.", CssClass = "e-toast-success" });
+    private async Task EmailAsync(CertRow row) => await _toast.ShowAsync(new ToastModel { Title = "Email queued", Content = $"{row.CertNo} queued for {row.HolderName}.", CssClass = "e-toast-success" });
+    private async Task ExportVisibleAsync() => await _toast.ShowAsync(new ToastModel { Title = "Export", Content = $"Exported {Filtered.Count} visible certificate row(s).", CssClass = "e-toast-success" });
+
+    private async Task RevokeAsync(CertRow row)
+    {
+        row.Status = "Revoked";
+        _selected = row;
+        await _toast.ShowAsync(new ToastModel { Title = "Certificate revoked", Content = $"{row.CertNo} was marked revoked.", CssClass = "e-toast-warning" });
+        SelectFallback();
+    }
+
+    private static bool IsRevoked(CertRow row) => row.Status == "Revoked";
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static string CssToken(string value) => string.IsNullOrWhiteSpace(value) ? "none" : value.ToLowerInvariant().Replace(" ", "-");
+    private static string ExpiryClass(CertRow row) => row.ExpDate < DateTime.Today ? "ch-exp-past" : row.IsExpiring ? "ch-exp-soon" : string.Empty;
+
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string CssClass, string Title);
+
+    private sealed class IssueForm
+    {
+        public string PolicyNo { get; set; } = "POL-2024-44821";
+        public string CertType { get; set; } = "ACORD 25";
+        public string HolderName { get; set; } = string.Empty;
+        public string HolderAddress { get; set; } = string.Empty;
+        public bool AdditionalInsured { get; set; }
+        public bool WaiverSubrogation { get; set; }
+        public DateTime IssuedDate { get; set; } = DateTime.Today;
+        public DateTime ExpDate { get; set; } = DateTime.Today.AddYears(1);
+        public string Description { get; set; } = string.Empty;
+    }
+
+    private sealed class CertRow
+    {
+        public CertRow(string certNo, string policyNo, string account, string holderName, string holderAddress, string certType, DateTime issuedDate, DateTime expDate, string lob, string issuedBy, string status, bool additionalInsured, bool waiverSubrogation, string description)
+        {
+            CertNo = certNo;
+            PolicyNo = policyNo;
+            Account = account;
+            HolderName = holderName;
+            HolderAddress = holderAddress;
+            CertType = certType;
+            IssuedDate = issuedDate;
+            ExpDate = expDate;
+            Lob = lob;
+            IssuedBy = issuedBy;
+            Status = status;
+            AdditionalInsured = additionalInsured;
+            WaiverSubrogation = waiverSubrogation;
+            Description = description;
+        }
+
+        public string CertNo { get; set; }
+        public string PolicyNo { get; set; }
+        public string Account { get; set; }
+        public string HolderName { get; set; }
+        public string HolderAddress { get; set; }
+        public string CertType { get; set; }
+        public DateTime IssuedDate { get; set; }
+        public DateTime ExpDate { get; set; }
+        public string Lob { get; set; }
+        public string IssuedBy { get; set; }
+        public string Status { get; set; }
+        public bool AdditionalInsured { get; set; }
+        public bool WaiverSubrogation { get; set; }
+        public string Description { get; set; }
+        public bool IsExpiring => Status == "Issued" && ExpDate >= DateTime.Today && ExpDate <= DateTime.Today.AddDays(30);
+    }
 }

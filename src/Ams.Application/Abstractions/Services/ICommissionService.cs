@@ -13,6 +13,7 @@ public interface ICommissionService
     Task EnsureSeedAsync(Guid tenantId, Guid? createdByUserId = null, CancellationToken cancellationToken = default);
     Task<CommissionTransactionDto?> GetTransactionByIdAsync(Guid id, CancellationToken cancellationToken = default);
     Task<PagedResult<CommissionTransactionDto>> SearchTransactionsAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<CommissionLedgerRowDto>> SearchLedgerAsync(Guid tenantId, string? searchTerm, CancellationToken cancellationToken = default);
     Task<Guid> CreateTransactionAsync(CreateCommissionTransactionRequest request, CancellationToken cancellationToken = default);
     Task UpdateTransactionAsync(Guid id, UpdateCommissionTransactionRequest request, CancellationToken cancellationToken = default);
     Task<CommissionPayoutDto?> GetPayoutByIdAsync(Guid id, CancellationToken cancellationToken = default);

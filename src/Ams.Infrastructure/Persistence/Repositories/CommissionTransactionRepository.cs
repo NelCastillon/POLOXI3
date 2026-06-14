@@ -30,6 +30,48 @@ public sealed class CommissionTransactionRepository : ICommissionTransactionRepo
         return new PagedResult<CommissionTransactionDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
     }
 
+    public async Task<IReadOnlyList<CommissionLedgerRowDto>> SearchLedgerAsync(Guid tenantId, string? searchTerm, CancellationToken cancellationToken = default)
+    {
+        await EnsureSchemaAndSeedAsync(tenantId, cancellationToken);
+
+        const string sql = @"
+SELECT CommissionId,
+       TenantId,
+       PolicyNumber,
+       Period,
+       BusinessType,
+       Producer,
+       AccountName,
+       LineOfBusiness,
+       Carrier,
+       GrossAmount,
+       CommissionPct,
+       AgencyAmount,
+       ProducerAmount,
+       Status,
+       StatementNumber,
+       PayoutBatch,
+       TransactionDate,
+       PaidDate
+FROM Commission.CommissionLedger
+WHERE TenantId = @TenantId
+  AND IsDeleted = 0
+  AND (@SearchTerm IS NULL OR @SearchTerm = N''
+       OR PolicyNumber LIKE N'%' + @SearchTerm + N'%'
+       OR Producer LIKE N'%' + @SearchTerm + N'%'
+       OR AccountName LIKE N'%' + @SearchTerm + N'%'
+       OR Carrier LIKE N'%' + @SearchTerm + N'%'
+       OR StatementNumber LIKE N'%' + @SearchTerm + N'%'
+       OR PayoutBatch LIKE N'%' + @SearchTerm + N'%'
+       OR BusinessType LIKE N'%' + @SearchTerm + N'%'
+       OR Period LIKE N'%' + @SearchTerm + N'%')
+ORDER BY TransactionDate DESC, PolicyNumber;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows = await cn.QueryAsync<CommissionLedgerRowDto>(new CommandDefinition(sql, new { TenantId = tenantId, SearchTerm = searchTerm }, cancellationToken: cancellationToken));
+        return rows.AsList();
+    }
+
     public async Task<Guid> CreateAsync(CreateCommissionTransactionRequest request, CancellationToken cancellationToken = default)
     {
         await EnsureSchemaAndSeedAsync(request.TenantId, cancellationToken);
