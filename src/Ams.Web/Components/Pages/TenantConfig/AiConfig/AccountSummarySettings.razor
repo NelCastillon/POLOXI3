@@ -1,2 +1,661 @@
 @page "/tenant/ai/summaries"
-<AiConfigPage Kind="AccountSummarySetting" Title="Account Summary Settings" Subtitle="Configure AI-generated account summaries, context sources, and approval behavior" Icon="bi bi-person-vcard" />
+@namespace Ams.Web.Components.Pages.TenantConfig.AiConfig
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using System.Text.Json
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.AiConfig
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Account Summary AI</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="ais-toast ais-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ais-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="ais-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="ais-summary-modal" role="dialog" aria-modal="true" aria-labelledby="aiSummaryFormTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="ais-modal-header">
+                    <div class="ais-modal-title">
+                        <span class="ais-modal-icon"><i class="bi bi-person-vcard" aria-hidden="true"></i></span>
+                        <div>
+                            <h2 id="aiSummaryFormTitle">@(_editId.HasValue ? "Edit account summary" : "Add account summary")</h2>
+                            <p>Configure context sources, explainability, approval, and delivery controls.</p>
+                        </div>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_saving"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="ais-modal-body">
+                    <div class="ais-form-banner">
+                        <i class="bi bi-shield-check" aria-hidden="true"></i>
+                        <div>
+                            <strong>Tenant Admin scoped AI control</strong>
+                            <span>Changes are saved to AI.AiConfigItem for this tenant and reflected in account summary workflows.</span>
+                        </div>
+                    </div>
+                    <div class="ais-form-grid">
+                        <div class="ais-field">
+                            <label for="aisCode">Code <span>*</span></label>
+                            <InputText id="aisCode" class="ais-input" @bind-Value="_form.Code" />
+                            <ValidationMessage For="() => _form.Code" class="text-danger" />
+                        </div>
+                        <div class="ais-field">
+                            <label for="aisName">Name <span>*</span></label>
+                            <InputText id="aisName" class="ais-input" @bind-Value="_form.Name" />
+                            <ValidationMessage For="() => _form.Name" class="text-danger" />
+                        </div>
+                        <div class="ais-field">
+                            <label for="aisCategory">Category <span>*</span></label>
+                            <InputSelect id="aisCategory" class="ais-input" @bind-Value="_form.Category">
+                                @foreach (var category in _categoryOptions)
+                                {
+                                    <option value="@category">@category</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.Category" class="text-danger" />
+                        </div>
+                        <div class="ais-field">
+                            <label for="aisSortOrder">Sort order</label>
+                            <InputNumber id="aisSortOrder" class="ais-input" @bind-Value="_form.SortOrder" />
+                            <ValidationMessage For="() => _form.SortOrder" class="text-danger" />
+                        </div>
+                        <div class="ais-field ais-field-wide">
+                            <label for="aisDescription">Description</label>
+                            <InputTextArea id="aisDescription" class="ais-input" rows="3" @bind-Value="_form.Description" />
+                            <ValidationMessage For="() => _form.Description" class="text-danger" />
+                        </div>
+                        <div class="ais-field ais-field-wide">
+                            <label for="aisConfiguration">Configuration JSON</label>
+                            <InputTextArea id="aisConfiguration" class="ais-input ais-code-input" rows="8" @bind-Value="_form.ConfigurationJson" />
+                            <ValidationMessage For="() => _form.ConfigurationJson" class="text-danger" />
+                        </div>
+                        <div class="ais-field ais-check-row">
+                            <label><InputCheckbox @bind-Value="_form.IsActive" /> Active summary</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="ais-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_saving">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        @(_editId.HasValue ? "Save changes" : "Create summary")
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showDelete)
+{
+    <div class="ais-modal-backdrop" role="presentation" @onclick="CancelDelete">
+        <div class="ais-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="deleteSummaryTitle" @onclick:stopPropagation="true">
+            <div class="ais-confirm-icon ais-confirm-danger"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
+            <h2 id="deleteSummaryTitle">Delete account summary?</h2>
+            <p>Delete <strong>@_deleteTarget?.Name</strong>? This removes the summary setting from active tenant AI workflows.</p>
+            <div class="ais-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete" disabled="@_saving">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="ais-enterprise-page">
+    <section class="ais-hero">
+        <div class="ais-hero-left">
+            <span class="ais-hero-icon"><i class="bi bi-stars" aria-hidden="true"></i></span>
+            <div>
+                <div class="ais-title-row">
+                    <h1>Account Summary AI</h1>
+                    <span><i class="bi bi-shield-check" aria-hidden="true"></i> Tenant Admin User</span>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> Live AI configuration</span>
+                </div>
+                <p>Manage account summary context sources, governed generation, approval workflow, and tenant usage readiness.</p>
+            </div>
+        </div>
+        <div class="ais-hero-actions">
+            <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_loading" title="Refresh account summary settings"><i class="bi @(_loading ? "bi-arrow-repeat ais-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button class="um-btn um-btn-ghost" type="button" @onclick="ExportAsync"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button class="um-btn um-btn-ghost" type="button" @onclick='() => Nav.NavigateTo("/tenant/ai/features")'><i class="bi bi-grid-1x2" aria-hidden="true"></i> AI Center</button>
+            <button class="um-btn um-btn-primary" type="button" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Summary</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger ais-error-banner" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    <section class="ais-kpi-strip" aria-label="account summary KPI filters">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricCardClass(metric)" @onclick="() => SetFilter(metric.Filter)" title="@metric.Tooltip" aria-pressed="@(metric.Filter == _activeFilter)">
+                <span class="ais-kpi-icon @metric.Tone"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                <div>
+                    <span class="ais-kpi-val">@metric.Value</span>
+                    <span class="ais-kpi-lbl">@metric.Label</span>
+                    <small>@metric.Caption</small>
+                </div>
+            </button>
+        }
+    </section>
+
+    <section class="ais-workflow-strip" aria-label="AI settings workflows">
+        @foreach (var workflow in _workflows)
+        {
+            <button type="button" class="ais-workflow-card" @onclick="() => OpenWorkflow(workflow)">
+                <i class="bi @workflow.Icon" aria-hidden="true"></i>
+                <span><strong>@workflow.Title</strong><span>@workflow.Text</span></span>
+            </button>
+        }
+    </section>
+
+    <section class="ais-search-panel" aria-label="account summary filters">
+        <div class="ais-search-wrap">
+            <span class="ais-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="ais-search-body">
+                <label for="aiSummarySearch">Search summaries</label>
+                <input id="aiSummarySearch" class="ais-search-input" value="@_search" @oninput="OnSearchChanged" placeholder="Search code, name, category, workflow, or JSON..." />
+                <span class="ais-search-hint">Filters apply instantly to the active tab and KPI selection.</span>
+            </div>
+        </div>
+        <select class="ais-filter-select" value="@_categoryFilter" @onchange="OnCategoryChanged" aria-label="Category filter">
+            <option value="">All categories</option>
+            @foreach (var category in Categories)
+            {
+                <option value="@category">@category</option>
+            }
+        </select>
+        <select class="ais-filter-select" value="@_activeFilter" @onchange="OnStatusChanged" aria-label="Status filter">
+            <option value="">All statuses</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+            <option value="guardrail">Guardrails</option>
+            <option value="pilot">Pilot</option>
+        </select>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-circle" aria-hidden="true"></i> Reset</button>
+        <div class="ais-search-result"><strong>@FilteredItems.Count</strong><span>shown</span></div>
+    </section>
+
+    <div class="ais-view-tabs" role="tablist" aria-label="account summary views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="@TabClass(tab.Id)" role="tab" aria-selected="@(tab.Id == _activeTab)" @onclick="() => SetTab(tab.Id)"><i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label <span>@TabCount(tab.Id)</span></button>
+        }
+    </div>
+
+    <section class="ais-content-layout">
+        <main class="ais-main-card">
+            @if (_loading)
+            {
+                <div class="ais-loading"><i class="bi bi-arrow-repeat ais-spin" aria-hidden="true"></i><strong>Loading account summaries...</strong><span>Syncing tenant AI configuration and workflow readiness.</span></div>
+            }
+            else if (_activeTab == "board")
+            {
+                <div class="ais-board">
+                    @foreach (var category in BoardCategories)
+                    {
+                        <section class="ais-board-col">
+                            <header><span>@category</span><strong>@FilteredItems.Count(x => x.CategoryLabel == category)</strong></header>
+                            @foreach (var item in FilteredItems.Where(x => x.CategoryLabel == category))
+                            {
+                                @SummaryCard(item)
+                            }
+                        </section>
+                    }
+                </div>
+            }
+            else if (_activeTab == "governance")
+            {
+                <div class="ais-governance-grid">
+                    @foreach (var item in FilteredItems.Where(IsGovernanceSummary))
+                    {
+                        @SummaryCard(item)
+                    }
+                    @if (!FilteredItems.Any(IsGovernanceSummary))
+                    {
+                        @EmptyState("bi-shield-check", "No governance summaries match", "Adjust filters or add safety, approval, or audit controls.")
+                    }
+                </div>
+            }
+            else if (_activeTab == "analytics")
+            {
+                <div class="ais-analytics-grid">
+                    <section><h3>Category distribution</h3>@foreach (var row in CategoryDistribution) { @AnalyticsRowTemplate(row) }</section>
+                    <section><h3>Rollout status</h3>@foreach (var row in StatusDistribution) { @AnalyticsRowTemplate(row) }</section>
+                    <section><h3>Workflow readiness</h3>@foreach (var row in WorkflowDistribution) { @AnalyticsRowTemplate(row) }</section>
+                    <section><h3>Governance coverage</h3>@foreach (var row in GovernanceDistribution) { @AnalyticsRowTemplate(row) }</section>
+                </div>
+            }
+            else
+            {
+                <div class="ais-table-scroll">
+                    @if (FilteredItems.Count == 0)
+                    {
+                        @EmptyState("bi-stars", "No account summaries match", "Adjust filters, refresh the page, or add a new account summary setting.")
+                    }
+                    else
+                    {
+                        <table class="ais-table">
+                            <thead><tr><th>Summary</th><th>Category</th><th>Status</th><th>Rollout</th><th>Limits</th><th>Workflow</th><th></th></tr></thead>
+                            <tbody>
+                                @foreach (var item in FilteredItems)
+                                {
+                                    <tr class="@(SelectedItem?.AiConfigItemId == item.AiConfigItemId ? "ais-row-selected" : string.Empty)" @onclick="() => SelectItem(item)">
+                                        <td><div class="ais-name-cell"><span class="ais-avatar @AvatarClass(item)"><i class="bi @SummaryIcon(item)" aria-hidden="true"></i></span><div><strong>@item.Name</strong><small>@item.Code</small></div></div></td>
+                                        <td><span class="ais-lob">@item.CategoryLabel</span></td>
+                                        <td><span class="@StatusBadge(item)">@(item.IsActive ? "Active" : "Inactive")</span></td>
+                                        <td>@item.RolloutLabel</td>
+                                        <td>@item.LimitLabel</td>
+                                        <td><span class="@WorkflowBadge(item)">@item.WorkflowLabel</span></td>
+                                        <td><div class="ais-row-actions" @onclick:stopPropagation="true"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ToggleActiveAsync(item)" title="@(item.IsActive ? "Disable" : "Enable")"><i class="bi @(item.IsActive ? "bi-pause-circle" : "bi-play-circle")" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(item)" title="Delete"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </div>
+            }
+        </main>
+
+        <aside class="ais-detail-card">
+            @if (SelectedItem is not null)
+            {
+                <div class="ais-detail-head">
+                    <div><span class="ais-detail-eyebrow"><i class="bi @SummaryIcon(SelectedItem)" aria-hidden="true"></i> @SelectedItem.CategoryLabel</span><h2>@SelectedItem.Name</h2><p>@SelectedItem.Code · @SelectedItem.CreatedDateUtc.ToString("MMM d, yyyy", CultureInfo.CurrentCulture)</p></div>
+                    <span class="@StatusBadge(SelectedItem)">@(SelectedItem.IsActive ? "Active" : "Inactive")</span>
+                </div>
+                <div class="ais-detail-body">
+                    <div class="ais-detail-summary">
+                        <div><span>Rollout</span><strong>@SelectedItem.RolloutLabel</strong></div>
+                        <div><span>Workflow</span><strong>@SelectedItem.WorkflowLabel</strong></div>
+                        <div><span>Daily limit</span><strong>@SelectedItem.LimitLabel</strong></div>
+                        <div><span>Sort order</span><strong>@SelectedItem.SortOrder</strong></div>
+                    </div>
+                    <div class="ais-contact-card"><strong>Configuration summary</strong><span>@SelectedItem.DescriptionText</span></div>
+                    <div class="ais-json-card"><strong>Configuration JSON</strong><pre>@SelectedItem.ConfigurationJson</pre></div>
+                    <div class="ais-detail-actions">
+                        <div class="ais-detail-actions-row">
+                            <button type="button" class="um-btn um-btn-ghost" @onclick="() => OpenEdit(SelectedItem)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                            <button type="button" class="um-btn um-btn-ghost" @onclick="() => DuplicateSummary(SelectedItem)"><i class="bi bi-copy" aria-hidden="true"></i> Duplicate</button>
+                            <button type="button" class="um-btn um-btn-ghost" @onclick="() => ToggleActiveAsync(SelectedItem)"><i class="bi @(SelectedItem.IsActive ? "bi-pause-circle" : "bi-play-circle")" aria-hidden="true"></i> @(SelectedItem.IsActive ? "Disable" : "Enable")</button>
+                        </div>
+                        <button type="button" class="um-btn um-btn-primary ais-detail-open-btn" @onclick="OpenRelatedSettings"><i class="bi bi-diagram-3" aria-hidden="true"></i> Open related AI workflow</button>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="ais-detail-empty"><i class="bi bi-stars" aria-hidden="true"></i><strong>Select an account summary</strong><span>Review rollout, governance, workflow readiness, and configuration JSON.</span></div>
+            }
+        </aside>
+    </section>
+</div>
+
+@code {
+    private const string SummaryKind = "AccountSummarySetting";
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private bool _loading;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string _search = string.Empty;
+    private string _activeFilter = string.Empty;
+    private string _categoryFilter = string.Empty;
+    private string _activeTab = "list";
+    private string? _loadError;
+    private Guid? _editId;
+    private AiSummaryVm? _deleteTarget;
+    private List<AiConfigItemDto> _items = [];
+    private AiSummaryVm? _selectedItem;
+    private FormModel _form = new();
+
+    private readonly string[] _categoryOptions = ["Account Context", "CRM", "Policy", "Claims", "Billing", "Service", "Governance", "Automation"];
+    private readonly List<ViewTab> _tabs = [new("list", "List", "bi-list-ul"), new("board", "Board", "bi-kanban"), new("governance", "Governance", "bi-shield-check"), new("analytics", "Analytics", "bi-bar-chart")];
+    private readonly List<WorkflowLink> _workflows = [new("Context Sources", "CRM, policy, claims, billing, and service signals", "/tenant/ai/summaries", "bi-diagram-3"), new("Approval Queue", "Tenant Admin review and publishing controls", "/tenant/ai/summaries", "bi-check2-square"), new("Prompt Governance", "Reusable prompt templates and output rules", "/tenant/ai/prompts", "bi-chat-left-text"), new("Usage Monitoring", "Summary volume, limits, and audit readiness", "/tenant/ai/usage", "bi-speedometer2")];
+
+    private string ToastIconClass => _toastKind == "danger" ? "bi-exclamation-triangle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-check-circle-fill";
+    private List<AiSummaryVm> AllSummaries => _items.Select(MapSummary).ToList();
+    private List<AiSummaryVm> FilteredItems => AllSummaries.Where(MatchesFilters).OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToList();
+    private AiSummaryVm? SelectedItem => _selectedItem is null ? FilteredItems.FirstOrDefault() : FilteredItems.FirstOrDefault(x => x.AiConfigItemId == _selectedItem.AiConfigItemId) ?? FilteredItems.FirstOrDefault();
+    private IEnumerable<string> Categories => AllSummaries.Select(x => x.CategoryLabel).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().OrderBy(x => x);
+    private IEnumerable<string> BoardCategories => Categories.Any() ? Categories : _categoryOptions;
+    private IReadOnlyList<KpiMetric> Metrics => [new("", "Total", AllSummaries.Count.ToString("N0"), "All summary controls", "bi-person-vcard", "ais-blue", "Show all account summary settings"), new("active", "Active", AllSummaries.Count(x => x.IsActive).ToString("N0"), "Enabled for generation", "bi-check-circle-fill", "ais-green", "Show active summary settings"), new("inactive", "Inactive", AllSummaries.Count(x => !x.IsActive).ToString("N0"), "Disabled controls", "bi-pause-circle", "ais-muted", "Show inactive summary settings"), new("guardrail", "Guardrails", AllSummaries.Count(IsGovernanceSummary).ToString("N0"), "Safety and approval", "bi-shield-check", "ais-red", "Show governance summary controls"), new("pilot", "Pilot", AllSummaries.Count(x => x.RolloutLabel.Contains("Pilot", StringComparison.OrdinalIgnoreCase)).ToString("N0"), "Pilot rollout", "bi-rocket-takeoff", "ais-purple", "Show pilot summary settings"), new("limits", "Limited", AllSummaries.Count(x => !x.LimitLabel.Equals("No limit", StringComparison.OrdinalIgnoreCase)).ToString("N0"), "Usage limits set", "bi-speedometer2", "ais-amber", "Show limited summary settings")];
+    private IReadOnlyList<AnalyticsRow> CategoryDistribution => BuildAnalytics(AllSummaries.GroupBy(x => x.CategoryLabel).Select(g => new AnalyticsSeed(g.Key, g.Count(), "ais-dist-blue")));
+    private IReadOnlyList<AnalyticsRow> StatusDistribution => BuildAnalytics([new("Active", AllSummaries.Count(x => x.IsActive), "ais-dist-green"), new("Inactive", AllSummaries.Count(x => !x.IsActive), "ais-dist-amber")]);
+    private IReadOnlyList<AnalyticsRow> WorkflowDistribution => BuildAnalytics(AllSummaries.GroupBy(x => x.WorkflowLabel).Select(g => new AnalyticsSeed(g.Key, g.Count(), "ais-dist-purple")));
+    private IReadOnlyList<AnalyticsRow> GovernanceDistribution => BuildAnalytics([new("Guardrails", AllSummaries.Count(IsGovernanceSummary), "ais-dist-red"), new("Standard", AllSummaries.Count(x => !IsGovernanceSummary(x)), "ais-dist-blue")]);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("AI Settings", "/tenant/ai/summaries"), new("Summary Settings", null));
+        await ResolveCurrentUserContextAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchAiConfigItemsAsync(_tenantId, SummaryKind, _search, pageSize: 250);
+            _items = result?.Items.ToList() ?? [];
+            SyncSelection();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load account summary settings: {ex.Message}";
+            ShowToast(_loadError, "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+    }
+
+    private void SyncSelection()
+    {
+        _selectedItem = _selectedItem is null ? FilteredItems.FirstOrDefault() : FilteredItems.FirstOrDefault(x => x.AiConfigItemId == _selectedItem.AiConfigItemId) ?? FilteredItems.FirstOrDefault();
+    }
+
+    private bool MatchesFilters(AiSummaryVm item)
+    {
+        var textMatch = string.IsNullOrWhiteSpace(_search) || new[] { item.Code, item.Name, item.CategoryLabel, item.DescriptionText, item.ConfigurationJson, item.WorkflowLabel, item.RolloutLabel }.Any(v => !string.IsNullOrWhiteSpace(v) && v.Contains(_search, StringComparison.OrdinalIgnoreCase));
+        var categoryMatch = string.IsNullOrWhiteSpace(_categoryFilter) || item.CategoryLabel.Equals(_categoryFilter, StringComparison.OrdinalIgnoreCase);
+        var filterMatch = _activeFilter switch
+        {
+            "active" => item.IsActive,
+            "inactive" => !item.IsActive,
+            "guardrail" => IsGovernanceSummary(item),
+            "pilot" => item.RolloutLabel.Contains("Pilot", StringComparison.OrdinalIgnoreCase),
+            "limits" => !item.LimitLabel.Equals("No limit", StringComparison.OrdinalIgnoreCase),
+            _ => true
+        };
+        return textMatch && categoryMatch && filterMatch;
+    }
+
+    private void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _search = e.Value?.ToString() ?? string.Empty;
+        SyncSelection();
+    }
+
+    private void OnCategoryChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _categoryFilter = e.Value?.ToString() ?? string.Empty;
+        SyncSelection();
+    }
+
+    private void OnStatusChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _activeFilter = e.Value?.ToString() ?? string.Empty;
+        SyncSelection();
+    }
+
+    private void SetFilter(string filter)
+    {
+        _activeFilter = filter;
+        SyncSelection();
+    }
+
+    private void SetTab(string tab)
+    {
+        _activeTab = tab;
+        SyncSelection();
+    }
+
+    private void ResetFilters()
+    {
+        _search = string.Empty;
+        _categoryFilter = string.Empty;
+        _activeFilter = string.Empty;
+        SyncSelection();
+    }
+
+    private void SelectItem(AiSummaryVm item) => _selectedItem = item;
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+    private Task ExportAsync() { ShowToast($"Export prepared for {FilteredItems.Count} account summary setting(s)."); return Task.CompletedTask; }
+    private void OpenWorkflow(WorkflowLink workflow) => Nav.NavigateTo(workflow.Url);
+    private void OpenRelatedSettings() => Nav.NavigateTo(SelectedItem?.WorkflowUrl ?? "/tenant/ai/summaries");
+
+    private void OpenCreate()
+    {
+        _editId = null;
+        _form = new()
+        {
+            Code = BuildNextSummaryCode(),
+            Name = "New Account Summary",
+            Category = "Account Context",
+            Description = "Tenant-controlled account summary generation setting.",
+            ConfigurationJson = BuildDefaultJson("AccountSummary", "Pilot", 100, true),
+            SortOrder = AllSummaries.Count == 0 ? 10 : AllSummaries.Max(x => x.SortOrder) + 10,
+            IsActive = true
+        };
+        _showForm = true;
+    }
+
+    private void OpenEdit(AiSummaryVm item)
+    {
+        _editId = item.AiConfigItemId;
+        _form = new()
+        {
+            Code = item.Code,
+            Name = item.Name,
+            Category = item.CategoryLabel,
+            Description = item.Description,
+            ConfigurationJson = item.ConfigurationJson,
+            SortOrder = item.SortOrder,
+            IsActive = item.IsActive
+        };
+        _showForm = true;
+    }
+
+    private void DuplicateSummary(AiSummaryVm item)
+    {
+        _editId = null;
+        _form = new()
+        {
+            Code = $"{item.Code}-COPY",
+            Name = $"{item.Name} Copy",
+            Category = item.CategoryLabel,
+            Description = item.Description,
+            ConfigurationJson = item.ConfigurationJson,
+            SortOrder = item.SortOrder + 1,
+            IsActive = false
+        };
+        _showForm = true;
+    }
+
+    private void CloseForm()
+    {
+        if (_saving) return;
+        _showForm = false;
+        _editId = null;
+        _form = new();
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            ValidateJson(_form.ConfigurationJson);
+            if (_editId.HasValue)
+            {
+                await Api.UpdateAiConfigItemAsync(_editId.Value, new(_form.Code.Trim(), _form.Name.Trim(), _form.Category?.Trim(), _form.Description?.Trim(), NormalizeJson(_form.ConfigurationJson), _form.IsActive, _form.SortOrder));
+                ShowToast("Account summary updated.");
+            }
+            else
+            {
+                var id = await Api.CreateAiConfigItemAsync(new(_tenantId, SummaryKind, _form.Code.Trim(), _form.Name.Trim(), _form.Category?.Trim(), _form.Description?.Trim(), NormalizeJson(_form.ConfigurationJson), _form.SortOrder));
+                _editId = id;
+                ShowToast("Account summary created.");
+            }
+
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ToggleActiveAsync(AiSummaryVm item)
+    {
+        _saving = true;
+        try
+        {
+            await Api.UpdateAiConfigItemAsync(item.AiConfigItemId, new(item.Code, item.Name, item.CategoryLabel, item.Description, item.ConfigurationJson, !item.IsActive, item.SortOrder));
+            ShowToast($"{item.Name} {(item.IsActive ? "disabled" : "enabled")}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void ConfirmDelete(AiSummaryVm item)
+    {
+        _deleteTarget = item;
+        _showDelete = true;
+    }
+
+    private void CancelDelete()
+    {
+        if (_saving) return;
+        _showDelete = false;
+        _deleteTarget = null;
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteAiConfigItemAsync(_deleteTarget.AiConfigItemId);
+            _showDelete = false;
+            ShowToast("Account summary deleted.");
+            _deleteTarget = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private RenderFragment SummaryCard(AiSummaryVm item) => @<article class="ais-summary-card @(SelectedItem?.AiConfigItemId == item.AiConfigItemId ? "ais-summary-selected" : string.Empty)" @onclick="() => SelectItem(item)"><div class="ais-card-top"><span class="ais-avatar @AvatarClass(item)"><i class="bi @SummaryIcon(item)" aria-hidden="true"></i></span><div><strong>@item.Name</strong><span>@item.Code</span></div></div><p>@item.DescriptionText</p><div class="ais-item-meta"><span class="ais-lob">@item.CategoryLabel</span><span class="@StatusBadge(item)">@(item.IsActive ? "Active" : "Inactive")</span><span class="@WorkflowBadge(item)">@item.WorkflowLabel</span></div><div class="ais-item-footer"><span>@item.RolloutLabel</span><strong>@item.LimitLabel</strong></div><div class="ais-row-actions" @onclick:stopPropagation="true"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ToggleActiveAsync(item)"><i class="bi @(item.IsActive ? "bi-pause-circle" : "bi-play-circle")" aria-hidden="true"></i></button></div></article>;
+    private RenderFragment EmptyState(string icon, string title, string text) => @<div class="ais-empty-state"><i class="bi @icon" aria-hidden="true"></i><strong>@title</strong><span>@text</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">Add Summary</button></div>;
+    private RenderFragment AnalyticsRowTemplate(AnalyticsRow row) => @<button type="button" class="ais-analytics-row"><span>@row.Label</span><div><i class="@row.Tone" style="width:@row.WidthPercent%"></i></div><strong>@row.Count</strong><small>@row.Percent.ToString("F0")%</small></button>;
+
+    private static AiSummaryVm MapSummary(AiConfigItemDto item)
+    {
+        var json = ParseJson(item.ConfigurationJson);
+        var rollout = GetJsonValue(json, "rollout", item.IsActive ? "General" : "Disabled");
+        var workflow = GetJsonValue(json, "workflow", item.Category ?? "Core");
+        var limit = GetJsonValue(json, "dailyLimit", string.Empty);
+        var workflowUrl = GetJsonValue(json, "workflowUrl", MapWorkflowUrl(workflow, item.Category));
+        return new()
+        {
+            AiConfigItemId = item.AiConfigItemId,
+            Code = item.Code,
+            Name = item.Name,
+            CategoryLabel = string.IsNullOrWhiteSpace(item.Category) ? "Core" : item.Category!,
+            Description = item.Description,
+            DescriptionText = string.IsNullOrWhiteSpace(item.Description) ? "No description configured." : item.Description!,
+            ConfigurationJson = string.IsNullOrWhiteSpace(item.ConfigurationJson) ? "{}" : item.ConfigurationJson!,
+            IsActive = item.IsActive,
+            SortOrder = item.SortOrder,
+            CreatedDateUtc = item.CreatedDateUtc,
+            RolloutLabel = rollout,
+            WorkflowLabel = workflow,
+            WorkflowUrl = workflowUrl,
+            LimitLabel = string.IsNullOrWhiteSpace(limit) ? "No limit" : $"{limit}/day"
+        };
+    }
+
+    private static Dictionary<string, string> ParseJson(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                ? doc.RootElement.EnumerateObject().ToDictionary(x => x.Name, x => x.Value.ValueKind == JsonValueKind.String ? x.Value.GetString() ?? string.Empty : x.Value.ToString(), StringComparer.OrdinalIgnoreCase)
+                : [];
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private static string GetJsonValue(Dictionary<string, string> values, string key, string fallback) => values.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value : fallback;
+    private static void ValidateJson(string? value) { if (string.IsNullOrWhiteSpace(value)) return; using var _ = JsonDocument.Parse(value); }
+    private static string? NormalizeJson(string? value) => string.IsNullOrWhiteSpace(value) ? "{}" : value.Trim();
+    private static string BuildDefaultJson(string workflow, string rollout, int dailyLimit, bool approvalRequired) => $"{{\"workflow\":\"{workflow}\",\"rollout\":\"{rollout}\",\"dailyLimit\":{dailyLimit},\"approvalRequired\":{approvalRequired.ToString().ToLowerInvariant()},\"workflowUrl\":\"/tenant/ai/summaries\"}}";
+    private string BuildNextSummaryCode() => $"AI-SUMMARY-{AllSummaries.Count + 1:000}";
+    private int TabCount(string id) => id switch { "governance" => FilteredItems.Count(IsGovernanceSummary), "analytics" => AllSummaries.Count, _ => FilteredItems.Count };
+    private string MetricCardClass(KpiMetric metric) => $"ais-kpi-card {(metric.Filter == _activeFilter ? "ais-kpi-card-active" : string.Empty)}";
+    private string TabClass(string id) => $"ais-view-btn {(id == _activeTab ? "ais-view-btn-active" : string.Empty)}";
+    private static bool IsGovernanceSummary(AiSummaryVm item) => item.CategoryLabel.Contains("Governance", StringComparison.OrdinalIgnoreCase) || item.Name.Contains("Approval", StringComparison.OrdinalIgnoreCase) || item.Name.Contains("Guardrail", StringComparison.OrdinalIgnoreCase) || item.ConfigurationJson.Contains("approval", StringComparison.OrdinalIgnoreCase) || item.ConfigurationJson.Contains("audit", StringComparison.OrdinalIgnoreCase) || item.ConfigurationJson.Contains("safety", StringComparison.OrdinalIgnoreCase);
+    private static string StatusBadge(AiSummaryVm item) => $"ais-stage {(item.IsActive ? "ais-stage-active" : "ais-stage-inactive")}";
+    private static string WorkflowBadge(AiSummaryVm item) => $"ais-stage ais-stage-{item.WorkflowLabel.ToLowerInvariant().Replace(" ", "-").Replace("/", "-")}";
+    private static string AvatarClass(AiSummaryVm item) => item.CategoryLabel switch { "Governance" => "ais-av-red", "Billing" => "ais-av-purple", "CRM" => "ais-av-blue", "Claims" => "ais-av-green", "Service" => "ais-av-amber", "Policy" => "ais-av-cyan", _ => "ais-av-blue" };
+    private static string SummaryIcon(AiSummaryVm item) => item.CategoryLabel switch { "Governance" => "bi-shield-check", "Billing" => "bi-receipt", "CRM" => "bi-people", "Claims" => "bi-clipboard2-pulse", "Service" => "bi-headset", "Policy" => "bi-file-earmark-text", "Automation" => "bi-diagram-3", _ => "bi-person-vcard" };
+    private static string MapWorkflowUrl(string? workflow, string? category) => (workflow ?? category) switch { "AccountSummary" or "Summaries" or "ContextSources" or "Context Sources" => "/tenant/ai/summaries", "Approval" or "Approval Queue" or "Governance" => "/tenant/ai/summaries", "PromptTemplate" or "Prompts" or "Prompt Governance" => "/tenant/ai/prompts", "Usage" or "Usage Monitoring" => "/tenant/ai/usage", "Feedback" => "/tenant/ai/feedback", "RenewalRisk" or "Renewal Risk" => "/tenant/ai/renewal-risk", _ => "/tenant/ai/summaries" };
+    private static IReadOnlyList<AnalyticsRow> BuildAnalytics(IEnumerable<AnalyticsSeed> seeds) { var rows = seeds.Where(x => x.Count > 0).ToList(); var total = Math.Max(1, rows.Sum(x => x.Count)); return rows.Select(x => new AnalyticsRow(x.Label, x.Count, x.Tone, x.Count * 100m / total, Math.Max(5m, x.Count * 100m / total))).ToList(); }
+
+    private sealed record KpiMetric(string Filter, string Label, string Value, string Caption, string Icon, string Tone, string Tooltip);
+    private sealed record ViewTab(string Id, string Label, string Icon);
+    private sealed record WorkflowLink(string Title, string Text, string Url, string Icon);
+    private sealed record AnalyticsSeed(string Label, int Count, string Tone);
+    private sealed record AnalyticsRow(string Label, int Count, string Tone, decimal Percent, decimal WidthPercent);
+    private sealed class AiSummaryVm { public Guid AiConfigItemId { get; set; } public string Code { get; set; } = string.Empty; public string Name { get; set; } = string.Empty; public string CategoryLabel { get; set; } = "Core"; public string? Description { get; set; } public string DescriptionText { get; set; } = string.Empty; public string ConfigurationJson { get; set; } = "{}"; public bool IsActive { get; set; } public int SortOrder { get; set; } public DateTime CreatedDateUtc { get; set; } public string RolloutLabel { get; set; } = "General"; public string WorkflowLabel { get; set; } = "Core"; public string WorkflowUrl { get; set; } = "/tenant/ai/summaries"; public string LimitLabel { get; set; } = "No limit"; }
+    private sealed class FormModel { [Required, StringLength(80)] public string Code { get; set; } = string.Empty; [Required, StringLength(200)] public string Name { get; set; } = string.Empty; [Required, StringLength(120)] public string? Category { get; set; } = "Core"; [StringLength(500)] public string? Description { get; set; } [StringLength(4000)] public string? ConfigurationJson { get; set; } = "{}"; [Range(0, 9999)] public int SortOrder { get; set; } public bool IsActive { get; set; } = true; }
+}
+

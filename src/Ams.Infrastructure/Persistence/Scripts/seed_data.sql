@@ -748,6 +748,212 @@ IF NOT EXISTS (SELECT 1 FROM DMS.DocumentRetentionPolicy WHERE RetentionPolicyId
          'Agency compliance documents must be retained permanently for regulatory audit purposes.', 1, '2024-01-01', @Now, 0);
 
 -- =============================================================================
+-- TENANT AI FEATURE SETTINGS
+-- =============================================================================
+IF OBJECT_ID(N'AI.AiConfigItem', N'U') IS NOT NULL
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AiFeatureSetting' AND Code = 'AI-ACCOUNT-SUMMARY')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AiFeatureSetting', 'AI-ACCOUNT-SUMMARY', 'Account AI Summary', 'CRM', 'Generate governed account summaries using policy, activity, claim, billing, and relationship context.', '{"workflow":"Summaries","rollout":"General","dailyLimit":250,"approvalRequired":false,"safety":"PII redaction","workflowUrl":"/tenant/ai/summaries"}', 1, 10, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AiFeatureSetting' AND Code = 'AI-NEXT-BEST-ACTION')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AiFeatureSetting', 'AI-NEXT-BEST-ACTION', 'Next Best Action', 'Producer', 'Recommend producer and service actions from pipeline, renewal, claims, and engagement signals.', '{"workflow":"Next Best Action","rollout":"Pilot - Producer Team","dailyLimit":150,"approvalRequired":true,"audit":"Action rationale required","workflowUrl":"/tenant/ai/nba"}', 1, 20, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AiFeatureSetting' AND Code = 'AI-RENEWAL-RISK')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AiFeatureSetting', 'AI-RENEWAL-RISK', 'Renewal Risk Scoring', 'Analytics', 'Score renewal retention risk using service volume, payment status, loss activity, and producer touchpoints.', '{"workflow":"Renewal Risk","rollout":"General","dailyLimit":100,"approvalRequired":false,"signals":"service,payment,claims,activity","workflowUrl":"/tenant/ai/renewal-risk"}', 1, 30, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AiFeatureSetting' AND Code = 'AI-CROSS-SELL')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AiFeatureSetting', 'AI-CROSS-SELL', 'Cross-sell Opportunity AI', 'CRM', 'Identify coverage gaps and recommended cross-sell opportunities from active accounts and policies.', '{"workflow":"CrossSell","rollout":"Pilot - Tenant Admin Review","dailyLimit":75,"approvalRequired":true,"safety":"No automatic outreach","workflowUrl":"/tenant/ai/cross-sell"}', 1, 40, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AiFeatureSetting' AND Code = 'AI-SERVICE-TRIAGE')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AiFeatureSetting', 'AI-SERVICE-TRIAGE', 'Service Request Triage', 'Service', 'Classify incoming service requests, suggest priority, and route work to the right service queue.', '{"workflow":"Service Triage","rollout":"Pilot - CSR Team","dailyLimit":200,"approvalRequired":true,"audit":"Routing changes tracked","workflowUrl":"/workbench/service"}', 1, 50, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AiFeatureSetting' AND Code = 'AI-GUARDRAILS')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AiFeatureSetting', 'AI-GUARDRAILS', 'Tenant AI Guardrails', 'Governance', 'Enforce tenant approval, audit, prompt safety, privacy controls, and human-in-the-loop requirements.', '{"workflow":"Governance","rollout":"General","dailyLimit":0,"approvalRequired":true,"safety":"Required","audit":"Full","workflowUrl":"/tenant/ai/features"}', 1, 60, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AiFeatureSetting' AND Code = 'AI-PROMPT-LIBRARY')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AiFeatureSetting', 'AI-PROMPT-LIBRARY', 'Prompt Template Library', 'Governance', 'Manage reusable prompts, system instructions, output format controls, and approval workflow.', '{"workflow":"Prompts","rollout":"General","dailyLimit":0,"approvalRequired":true,"audit":"Template versioning","workflowUrl":"/tenant/ai/prompts"}', 1, 70, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AiFeatureSetting' AND Code = 'AI-USAGE-MONITORING')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AiFeatureSetting', 'AI-USAGE-MONITORING', 'AI Usage Monitoring', 'Governance', 'Track AI usage limits, adoption, feedback, quality review, and tenant-level governance metrics.', '{"workflow":"Usage","rollout":"General","dailyLimit":0,"approvalRequired":false,"audit":"Usage analytics","workflowUrl":"/tenant/ai/usage"}', 1, 80, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AccountSummarySetting' AND Code = 'AI-SUMMARY-CONTEXT')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AccountSummarySetting', 'AI-SUMMARY-CONTEXT', 'Account Context Summary', 'Account Context', 'Generate Tenant Admin governed account summaries from account, contact, opportunity, submission, quote, policy, activity, and service context.', '{"workflow":"AccountSummary","rollout":"General","dailyLimit":250,"approvalRequired":false,"contextSources":"account,contacts,opportunities,submissions,quotes,activities,service","safety":"PII redaction","workflowUrl":"/tenant/ai/summaries"}', 1, 10, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AccountSummarySetting' AND Code = 'AI-SUMMARY-CRM')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AccountSummarySetting', 'AI-SUMMARY-CRM', 'CRM Relationship Summary', 'CRM', 'Summarize relationship health from lead history, opportunity pipeline, producer activity, contact roles, and recent touchpoints.', '{"workflow":"AccountSummary","rollout":"General","dailyLimit":200,"approvalRequired":false,"contextSources":"leads,opportunities,contacts,activities","explainability":"source citations required","workflowUrl":"/tenant/ai/summaries"}', 1, 20, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AccountSummarySetting' AND Code = 'AI-SUMMARY-POLICY')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AccountSummarySetting', 'AI-SUMMARY-POLICY', 'Policy and Coverage Summary', 'Policy', 'Highlight active coverage, carrier relationships, renewal dates, coverage gaps, and quote/submission movement for account reviews.', '{"workflow":"AccountSummary","rollout":"Pilot - Tenant Admin Review","dailyLimit":150,"approvalRequired":true,"contextSources":"submissions,quotes,carriers,linesOfBusiness","audit":"coverage assumptions must cite source records","workflowUrl":"/tenant/ai/summaries"}', 1, 30, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AccountSummarySetting' AND Code = 'AI-SUMMARY-CLAIMS')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AccountSummarySetting', 'AI-SUMMARY-CLAIMS', 'Claims and Risk Summary', 'Claims', 'Summarize account risk posture from loss-run requests, claims documents, service activity, underwriting notes, and renewal risk indicators.', '{"workflow":"AccountSummary","rollout":"Pilot - Claims Review","dailyLimit":75,"approvalRequired":true,"contextSources":"lossRuns,claimsDocuments,serviceRequests,activities","safety":"sensitive claim notes require review","workflowUrl":"/tenant/ai/summaries"}', 1, 40, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AccountSummarySetting' AND Code = 'AI-SUMMARY-BILLING')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AccountSummarySetting', 'AI-SUMMARY-BILLING', 'Billing and Payment Summary', 'Billing', 'Surface invoice status, payment behavior, overdue balance, renewal billing exposure, and financial service actions for account summaries.', '{"workflow":"AccountSummary","rollout":"General","dailyLimit":125,"approvalRequired":false,"contextSources":"invoices,payments,balance,serviceRequests","audit":"financial values must match Billing schema","workflowUrl":"/tenant/ai/summaries"}', 1, 50, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AccountSummarySetting' AND Code = 'AI-SUMMARY-GUARDRAILS')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AccountSummarySetting', 'AI-SUMMARY-GUARDRAILS', 'Summary Approval Guardrails', 'Governance', 'Enforce Tenant Admin approval, source citation, audit capture, PII redaction, and human review rules before publishing sensitive summaries.', '{"workflow":"Approval Queue","rollout":"General","dailyLimit":0,"approvalRequired":true,"safety":"Required","audit":"Full summary generation trace","workflowUrl":"/tenant/ai/summaries"}', 1, 60, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'RenewalRiskSetting' AND Code = 'AI-RENEWAL-RISK-SIGNALS')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'RenewalRiskSetting', 'AI-RENEWAL-RISK-SIGNALS', 'Renewal Signal Weight Model', 'Signal Weights', 'Score retention risk using service volume, payment status, claims activity, producer touchpoints, open opportunities, and renewal timing.', '{"workflow":"RenewalRisk","rollout":"General","dailyLimit":250,"approvalRequired":false,"signals":"service,payment,claims,activity,opportunity,renewalDate","weights":"service:25,payment:20,claims:20,activity:15,opportunity:10,renewalDate:10","workflowUrl":"/tenant/ai/renewal-risk"}', 1, 10, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'RenewalRiskSetting' AND Code = 'AI-RENEWAL-RISK-THRESHOLDS')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'RenewalRiskSetting', 'AI-RENEWAL-RISK-THRESHOLDS', 'Risk Threshold Bands', 'Thresholds', 'Define low, moderate, high, and critical renewal-risk bands used by dashboards, account summaries, and producer workflows.', '{"workflow":"RenewalRisk","rollout":"General","dailyLimit":0,"approvalRequired":true,"low":"0-39","moderate":"40-64","high":"65-84","critical":"85-100","workflowUrl":"/tenant/ai/renewal-risk"}', 1, 20, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'RenewalRiskSetting' AND Code = 'AI-RENEWAL-RISK-ALERTS')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'RenewalRiskSetting', 'AI-RENEWAL-RISK-ALERTS', 'Renewal Alert Routing', 'Alerts', 'Route high-risk renewals to Tenant Admin review, producer follow-up, CSR service triage, and next-best-action workflows.', '{"workflow":"Threshold Alerts","rollout":"Pilot - Tenant Admin Review","dailyLimit":150,"approvalRequired":true,"routes":"tenantAdmin,producer,csr,nextBestAction","notifyBeforeDays":90,"workflowUrl":"/tenant/ai/renewal-risk"}', 1, 30, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'RenewalRiskSetting' AND Code = 'AI-RENEWAL-RISK-SERVICE')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'RenewalRiskSetting', 'AI-RENEWAL-RISK-SERVICE', 'Service Friction Signals', 'Service', 'Track unresolved service requests, high-priority endorsements, COI requests, and aging support items as renewal retention risk inputs.', '{"workflow":"RenewalRisk","rollout":"General","dailyLimit":200,"approvalRequired":false,"signals":"openServiceRequests,highPriorityRequests,agedRequests,endorsements,lossRuns","workflowUrl":"/tenant/ai/renewal-risk"}', 1, 40, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'RenewalRiskSetting' AND Code = 'AI-RENEWAL-RISK-BILLING')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'RenewalRiskSetting', 'AI-RENEWAL-RISK-BILLING', 'Billing Risk Signals', 'Billing', 'Use overdue invoices, unpaid balances, late payment behavior, and payment method history as renewal-risk inputs.', '{"workflow":"RenewalRisk","rollout":"General","dailyLimit":125,"approvalRequired":false,"signals":"overdueInvoices,balanceAmount,paymentStatus,paymentMethod","audit":"financial values must match Billing schema","workflowUrl":"/tenant/ai/renewal-risk"}', 1, 50, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'RenewalRiskSetting' AND Code = 'AI-RENEWAL-RISK-GOVERNANCE')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'RenewalRiskSetting', 'AI-RENEWAL-RISK-GOVERNANCE', 'Risk Scoring Governance', 'Governance', 'Require Tenant Admin approval, source traceability, threshold audit, and human review for high-impact renewal risk score changes.', '{"workflow":"Governance","rollout":"General","dailyLimit":0,"approvalRequired":true,"safety":"Required","audit":"Full renewal risk scoring trace","workflowUrl":"/tenant/ai/renewal-risk"}', 1, 60, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'NextBestActionRule' AND Code = 'AI-NBA-PRODUCER-LEAD')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'NextBestActionRule', 'AI-NBA-PRODUCER-LEAD', 'Producer Lead Follow-up', 'Producer', 'Recommend next producer actions from lead status, score, priority, recent contact activity, and opportunity linkage.', '{"workflow":"NextBestAction","rollout":"General","dailyLimit":250,"approvalRequired":false,"signals":"leadScore,priority,lastContact,opportunityStage,owner","actions":"call,email,assign,convert","workflowUrl":"/tenant/ai/nba"}', 1, 10, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'NextBestActionRule' AND Code = 'AI-NBA-SERVICE-TRIAGE')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'NextBestActionRule', 'AI-NBA-SERVICE-TRIAGE', 'Service Request Triage Actions', 'Service', 'Recommend CSR next steps from open service requests, priority, account status, engagement, and unresolved workflow age.', '{"workflow":"Service Routing","rollout":"Pilot - CSR Team","dailyLimit":200,"approvalRequired":true,"signals":"openServiceRequests,priority,age,engagement,status","actions":"route,escalate,requestInfo,complete","workflowUrl":"/workbench/service"}', 1, 20, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'NextBestActionRule' AND Code = 'AI-NBA-RENEWAL-RETENTION')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'NextBestActionRule', 'AI-NBA-RENEWAL-RETENTION', 'Renewal Retention Playbook', 'Retention', 'Recommend retention actions from renewal risk, payment status, service friction, producer touchpoints, and opportunity pipeline.', '{"workflow":"RenewalRisk","rollout":"General","dailyLimit":150,"approvalRequired":false,"signals":"renewalRisk,paymentStatus,serviceFriction,producerTouchpoints,opportunity","actions":"scheduleReview,logContact,createTask,escalate","workflowUrl":"/tenant/ai/renewal-risk"}', 1, 30, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'NextBestActionRule' AND Code = 'AI-NBA-CROSS-SELL')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'NextBestActionRule', 'AI-NBA-CROSS-SELL', 'Coverage Gap Cross-sell Actions', 'Cross-sell', 'Recommend governed cross-sell actions from account industry, active opportunities, quotes, submissions, lines of business, and coverage gaps.', '{"workflow":"NextBestAction","rollout":"Pilot - Tenant Admin Review","dailyLimit":75,"approvalRequired":true,"signals":"industry,opportunities,quotes,submissions,linesOfBusiness,coverageGaps","actions":"createOpportunity,prepareSummary,producerReview","workflowUrl":"/tenant/ai/nba"}', 1, 40, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'NextBestActionRule' AND Code = 'AI-NBA-PRIORITY-SCORING')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'NextBestActionRule', 'AI-NBA-PRIORITY-SCORING', 'Action Priority Scoring', 'Priority', 'Prioritize recommendations using urgency, revenue impact, customer risk, service impact, and Tenant Admin workflow readiness.', '{"workflow":"NextBestAction","rollout":"General","dailyLimit":0,"approvalRequired":false,"weights":"urgency:30,revenue:25,risk:20,service:15,readiness:10","priorityBands":"low,normal,high,critical","workflowUrl":"/tenant/ai/nba"}', 1, 50, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'NextBestActionRule' AND Code = 'AI-NBA-GOVERNANCE')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'NextBestActionRule', 'AI-NBA-GOVERNANCE', 'Next Best Action Guardrails', 'Governance', 'Require Tenant Admin governance, audit traceability, human review, and no automatic outreach for sensitive next-best-action recommendations.', '{"workflow":"Governance","rollout":"General","dailyLimit":0,"approvalRequired":true,"safety":"Required","audit":"Full next best action trace","humanReview":"Sensitive recommendations","workflowUrl":"/tenant/ai/nba"}', 1, 60, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'CrossSellAiSetting' AND Code = 'AI-CROSS-SELL-GAP-DETECTION')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'CrossSellAiSetting', 'AI-CROSS-SELL-GAP-DETECTION', 'Coverage Gap Detection', 'Coverage Gaps', 'Detect cross-sell opportunities from account industry, current opportunities, submissions, quotes, carriers, and missing lines of business.', '{"workflow":"CrossSell","rollout":"General","dailyLimit":250,"approvalRequired":false,"signals":"industry,opportunities,submissions,quotes,carriers,linesOfBusiness","target":"coverageGaps","workflowUrl":"/tenant/ai/cross-sell"}', 1, 10, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'CrossSellAiSetting' AND Code = 'AI-CROSS-SELL-ELIGIBILITY')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'CrossSellAiSetting', 'AI-CROSS-SELL-ELIGIBILITY', 'Account Eligibility Rules', 'Eligibility', 'Control eligible accounts and prospects using lifecycle stage, account status, recent activity, active policies, and revenue tier.', '{"workflow":"CrossSell","rollout":"General","dailyLimit":0,"approvalRequired":false,"eligibleStages":"Customer,Prospect","excludeStatuses":"Inactive,Disqualified","signals":"lifecycleStage,status,activity,policy,revenue","workflowUrl":"/tenant/ai/cross-sell"}', 1, 20, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'CrossSellAiSetting' AND Code = 'AI-CROSS-SELL-SUPPRESSION')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'CrossSellAiSetting', 'AI-CROSS-SELL-SUPPRESSION', 'Suppression and Cooldown Controls', 'Suppression', 'Prevent duplicate or inappropriate recommendations using recent outreach, open opportunities, declined quotes, and tenant suppression windows.', '{"workflow":"CrossSell","rollout":"General","dailyLimit":0,"approvalRequired":true,"cooldownDays":45,"suppressWhen":"openOpportunity,declinedQuote,recentOutreach,doNotMarket","workflowUrl":"/tenant/ai/cross-sell"}', 1, 30, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'CrossSellAiSetting' AND Code = 'AI-CROSS-SELL-TARGET-LOB')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'CrossSellAiSetting', 'AI-CROSS-SELL-TARGET-LOB', 'Target Line of Business Model', 'Target LOB', 'Prioritize target lines of business from industry appetite, account size, existing coverage, quote history, and producer specialization.', '{"workflow":"CrossSell","rollout":"Pilot - Producer Team","dailyLimit":125,"approvalRequired":true,"targets":"Cyber,Workers Comp,Professional Liability,Commercial Auto,Umbrella","ranking":"appetite,accountSize,coverageGap,quoteHistory,producerSpecialty","workflowUrl":"/tenant/ai/cross-sell"}', 1, 40, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'CrossSellAiSetting' AND Code = 'AI-CROSS-SELL-OPPORTUNITY-SYNC')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'CrossSellAiSetting', 'AI-CROSS-SELL-OPPORTUNITY-SYNC', 'Marketing Opportunity Sync', 'Opportunity Sync', 'Sync approved cross-sell recommendations into marketing and CRM workflows for producer review and opportunity creation.', '{"workflow":"Marketing Cross-Sell","rollout":"Pilot - Tenant Admin Review","dailyLimit":100,"approvalRequired":true,"syncTargets":"marketingCrossSell,crmOpportunity,nextBestAction","workflowUrl":"/marketing/cross-sell"}', 1, 50, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'CrossSellAiSetting' AND Code = 'AI-CROSS-SELL-GOVERNANCE')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'CrossSellAiSetting', 'AI-CROSS-SELL-GOVERNANCE', 'Cross-Sell AI Guardrails', 'Governance', 'Require Tenant Admin approval, source traceability, no automatic outreach, and audit controls for cross-sell recommendations.', '{"workflow":"Governance","rollout":"General","dailyLimit":0,"approvalRequired":true,"safety":"No automatic outreach","audit":"Full cross-sell trace","humanReview":"Required before producer action","workflowUrl":"/tenant/ai/cross-sell"}', 1, 60, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'PromptTemplate' AND Code = 'AI-PROMPT-SYSTEM-GUARDRAILS')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'PromptTemplate', 'AI-PROMPT-SYSTEM-GUARDRAILS', 'Tenant System Guardrail Prompt', 'System Instruction', 'Reusable Tenant Admin system instruction template that enforces tenant scope, privacy, source citation, and human review rules.', '{"workflow":"PromptTemplate","rollout":"General","dailyLimit":0,"approvalRequired":true,"templateType":"system","safety":"Required","audit":"Template versioning","workflowUrl":"/tenant/ai/prompts"}', 1, 10, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'PromptTemplate' AND Code = 'AI-PROMPT-ACCOUNT-SUMMARY')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'PromptTemplate', 'AI-PROMPT-ACCOUNT-SUMMARY', 'Account Summary Prompt', 'Account Summary', 'Prompt template for account summaries using account, contacts, opportunities, submissions, quotes, service, billing, and activity context.', '{"workflow":"AccountSummary","rollout":"General","dailyLimit":250,"approvalRequired":false,"contextSources":"account,contacts,opportunities,submissions,quotes,activities,service,billing","outputFormat":"executiveSummary","workflowUrl":"/tenant/ai/summaries"}', 1, 20, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'PromptTemplate' AND Code = 'AI-PROMPT-RENEWAL-RISK')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'PromptTemplate', 'AI-PROMPT-RENEWAL-RISK', 'Renewal Risk Explanation Prompt', 'Renewal Risk', 'Prompt template that explains renewal risk scores with service, payment, claims, producer touchpoint, opportunity, and renewal timing evidence.', '{"workflow":"RenewalRisk","rollout":"General","dailyLimit":150,"approvalRequired":false,"signals":"service,payment,claims,activity,opportunity,renewalDate","outputFormat":"riskNarrative","workflowUrl":"/tenant/ai/renewal-risk"}', 1, 30, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'PromptTemplate' AND Code = 'AI-PROMPT-NBA-RATIONALE')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'PromptTemplate', 'AI-PROMPT-NBA-RATIONALE', 'Next Best Action Rationale Prompt', 'Next Best Action', 'Prompt template for producing explainable next-best-action recommendations for producer, service, renewal, and cross-sell workflows.', '{"workflow":"NextBestAction","rollout":"Pilot - Producer Team","dailyLimit":150,"approvalRequired":true,"outputFormat":"actionRationale","audit":"Action rationale required","workflowUrl":"/tenant/ai/nba"}', 1, 40, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'PromptTemplate' AND Code = 'AI-PROMPT-CROSS-SELL')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'PromptTemplate', 'AI-PROMPT-CROSS-SELL', 'Cross-sell Recommendation Prompt', 'Cross-sell', 'Prompt template for identifying coverage gaps and preparing governed cross-sell recommendations for Tenant Admin and producer review.', '{"workflow":"CrossSell","rollout":"Pilot - Tenant Admin Review","dailyLimit":75,"approvalRequired":true,"safety":"No automatic outreach","outputFormat":"coverageGapRecommendation","workflowUrl":"/tenant/ai/cross-sell"}', 1, 50, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'PromptTemplate' AND Code = 'AI-PROMPT-OUTPUT-STANDARD')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'PromptTemplate', 'AI-PROMPT-OUTPUT-STANDARD', 'Enterprise Output Format Prompt', 'Output Format', 'Prompt template that standardizes concise executive output, source citations, action labels, risk flags, and Tenant Admin approval notes.', '{"workflow":"PromptTemplate","rollout":"General","dailyLimit":0,"approvalRequired":true,"templateType":"outputFormat","audit":"Output format versioning","workflowUrl":"/tenant/ai/prompts"}', 1, 60, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AiUsageSetting' AND Code = 'AI-USAGE-DAILY-LIMITS')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AiUsageSetting', 'AI-USAGE-DAILY-LIMITS', 'Tenant Daily Usage Limits', 'Limits', 'Set tenant-wide daily AI usage limits for summaries, prompts, renewal risk scoring, next-best-action recommendations, and cross-sell workflows.', '{"workflow":"Usage","rollout":"General","dailyLimit":500,"approvalRequired":false,"limits":"summaries:250,prompts:300,renewalRisk:150,nextBestAction:150,crossSell:75","workflowUrl":"/tenant/ai/usage"}', 1, 10, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AiUsageSetting' AND Code = 'AI-USAGE-MONITORING-THRESHOLDS')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AiUsageSetting', 'AI-USAGE-MONITORING-THRESHOLDS', 'Usage Monitoring Thresholds', 'Monitoring', 'Monitor tenant AI activity, adoption, limit utilization, quality-review queue volume, and workflow readiness metrics.', '{"workflow":"Usage Monitoring","rollout":"General","dailyLimit":0,"approvalRequired":false,"thresholds":"warning:75,critical:90,blocked:100","signals":"requests,tokens,workflow,qualityReview,feedback","workflowUrl":"/tenant/ai/usage"}', 1, 20, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AiUsageSetting' AND Code = 'AI-USAGE-ALERT-ROUTING')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AiUsageSetting', 'AI-USAGE-ALERT-ROUTING', 'Usage Alert Routing', 'Alerts', 'Route high usage, quality review backlog, failed workflow sync, and governance exceptions to Tenant Admin review.', '{"workflow":"Usage Monitoring","rollout":"Pilot - Tenant Admin Review","dailyLimit":0,"approvalRequired":true,"routes":"tenantAdmin,governance,qualityReview","alerts":"limitWarning,limitCritical,workflowFailure,reviewBacklog","workflowUrl":"/tenant/ai/usage"}', 1, 30, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AiUsageSetting' AND Code = 'AI-USAGE-RETENTION')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AiUsageSetting', 'AI-USAGE-RETENTION', 'Usage Audit Retention', 'Retention', 'Control AI usage audit retention windows for prompt execution metadata, feedback, approvals, and tenant governance evidence.', '{"workflow":"Usage","rollout":"General","dailyLimit":0,"approvalRequired":true,"retentionDays":365,"audit":"promptMetadata,workflowEvents,approvals,feedback","workflowUrl":"/tenant/ai/usage"}', 1, 40, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AiUsageSetting' AND Code = 'AI-USAGE-COST-CONTROL')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AiUsageSetting', 'AI-USAGE-COST-CONTROL', 'AI Cost Control Model', 'Cost Control', 'Track high-volume workflows, tenant budget guardrails, daily request caps, and administrative review triggers.', '{"workflow":"Usage Monitoring","rollout":"General","dailyLimit":0,"approvalRequired":false,"budgetGuardrail":"enabled","signals":"workflowVolume,requestCaps,reviewTriggers","workflowUrl":"/tenant/ai/usage"}', 1, 50, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AiUsageSetting' AND Code = 'AI-USAGE-GOVERNANCE')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AiUsageSetting', 'AI-USAGE-GOVERNANCE', 'Usage Governance Controls', 'Governance', 'Require Tenant Admin audit review, traceability, quality review, and exception handling for AI usage governance.', '{"workflow":"Governance","rollout":"General","dailyLimit":0,"approvalRequired":true,"safety":"Required","audit":"Full usage trace","humanReview":"Usage exceptions","workflowUrl":"/tenant/ai/usage"}', 1, 60, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AiFeedbackSetting' AND Code = 'AI-FEEDBACK-CAPTURE')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AiFeedbackSetting', 'AI-FEEDBACK-CAPTURE', 'AI Feedback Capture', 'Feedback Capture', 'Capture tenant user ratings, correction notes, low-confidence flags, and workflow-specific feedback for AI outputs.', '{"workflow":"Feedback","rollout":"General","dailyLimit":500,"approvalRequired":false,"capture":"rating,comment,correction,workflow,confidence","workflowUrl":"/tenant/ai/feedback"}', 1, 10, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AiFeedbackSetting' AND Code = 'AI-FEEDBACK-QUALITY-REVIEW')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AiFeedbackSetting', 'AI-FEEDBACK-QUALITY-REVIEW', 'Quality Review Queue', 'Quality Review', 'Route negative feedback, low-confidence responses, and user corrections into a Tenant Admin quality review queue.', '{"workflow":"Feedback Review","rollout":"General","dailyLimit":150,"approvalRequired":true,"queue":"tenantAdminQualityReview","signals":"negativeRating,lowConfidence,userCorrection,missingCitation","workflowUrl":"/tenant/ai/feedback"}', 1, 20, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AiFeedbackSetting' AND Code = 'AI-FEEDBACK-ESCALATION')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AiFeedbackSetting', 'AI-FEEDBACK-ESCALATION', 'Feedback Escalation Routing', 'Escalation', 'Escalate sensitive, repeated, or high-impact AI feedback to Tenant Admin governance and workflow owners.', '{"workflow":"Feedback Review","rollout":"Pilot - Tenant Admin Review","dailyLimit":100,"approvalRequired":true,"routes":"tenantAdmin,governance,workflowOwner","triggers":"sensitive,repeated,highImpact,compliance","workflowUrl":"/tenant/ai/feedback"}', 1, 30, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AiFeedbackSetting' AND Code = 'AI-FEEDBACK-IMPROVEMENT-BACKLOG')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AiFeedbackSetting', 'AI-FEEDBACK-IMPROVEMENT-BACKLOG', 'Prompt Improvement Backlog', 'Improvement Backlog', 'Convert approved feedback into prompt template improvements, feature tuning, and workflow backlog items.', '{"workflow":"Feedback","rollout":"Pilot - Tenant Admin Review","dailyLimit":75,"approvalRequired":true,"syncTargets":"promptLibrary,aiFeatures,usageMonitoring","workflowUrl":"/tenant/ai/feedback"}', 1, 40, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AiFeedbackSetting' AND Code = 'AI-FEEDBACK-DRIFT-SIGNALS')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AiFeedbackSetting', 'AI-FEEDBACK-DRIFT-SIGNALS', 'Model Drift Feedback Signals', 'Model Drift', 'Track feedback trends that suggest outdated prompts, weak context sources, incorrect citations, or degraded recommendation quality.', '{"workflow":"Feedback Review","rollout":"General","dailyLimit":0,"approvalRequired":false,"signals":"trend,incorrectCitation,staleContext,irrelevantRecommendation,lowSatisfaction","workflowUrl":"/tenant/ai/feedback"}', 1, 50, 0, @Now);
+
+    IF NOT EXISTS (SELECT 1 FROM AI.AiConfigItem WHERE TenantId = @TenantId AND Kind = 'AiFeedbackSetting' AND Code = 'AI-FEEDBACK-GOVERNANCE')
+        INSERT INTO AI.AiConfigItem (AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, IsDeleted, CreatedDateUtc)
+        VALUES (NEWID(), @TenantId, 'AiFeedbackSetting', 'AI-FEEDBACK-GOVERNANCE', 'Feedback Governance Controls', 'Governance', 'Require Tenant Admin traceability, audit review, privacy controls, and human review for AI feedback workflows.', '{"workflow":"Governance","rollout":"General","dailyLimit":0,"approvalRequired":true,"safety":"Required","audit":"Full feedback trace","humanReview":"Sensitive feedback","workflowUrl":"/tenant/ai/feedback"}', 1, 60, 0, @Now);
+END
+
+-- =============================================================================
 PRINT 'Seed data applied successfully.';
 GO
 

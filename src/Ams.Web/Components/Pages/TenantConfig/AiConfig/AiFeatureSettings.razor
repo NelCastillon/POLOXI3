@@ -1,2 +1,660 @@
 @page "/tenant/ai/features"
-<AiConfigPage Kind="AiFeatureSetting" Title="AI Feature Settings" Subtitle="Configure enabled AI features, pilot groups, limits, and rollout controls" Icon="bi bi-toggles" />
+@namespace Ams.Web.Components.Pages.TenantConfig.AiConfig
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using System.Text.Json
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.AiConfig
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>AI Feature Settings</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="aif-toast aif-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="aif-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="aif-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="aif-feature-modal" role="dialog" aria-modal="true" aria-labelledby="aiFeatureFormTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="aif-modal-header">
+                    <div class="aif-modal-title">
+                        <span class="aif-modal-icon"><i class="bi bi-toggles" aria-hidden="true"></i></span>
+                        <div>
+                            <h2 id="aiFeatureFormTitle">@(_editId.HasValue ? "Edit AI feature" : "Add AI feature")</h2>
+                            <p>Configure rollout, governance, usage limits, and workflow controls.</p>
+                        </div>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_saving"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="aif-modal-body">
+                    <div class="aif-form-banner">
+                        <i class="bi bi-shield-check" aria-hidden="true"></i>
+                        <div>
+                            <strong>Tenant Admin scoped AI control</strong>
+                            <span>Changes are saved to AI.AiConfigItem for this tenant and reflected in AI feature workflows.</span>
+                        </div>
+                    </div>
+                    <div class="aif-form-grid">
+                        <div class="aif-field">
+                            <label for="aifCode">Code <span>*</span></label>
+                            <InputText id="aifCode" class="aif-input" @bind-Value="_form.Code" />
+                            <ValidationMessage For="() => _form.Code" class="text-danger" />
+                        </div>
+                        <div class="aif-field">
+                            <label for="aifName">Name <span>*</span></label>
+                            <InputText id="aifName" class="aif-input" @bind-Value="_form.Name" />
+                            <ValidationMessage For="() => _form.Name" class="text-danger" />
+                        </div>
+                        <div class="aif-field">
+                            <label for="aifCategory">Category <span>*</span></label>
+                            <InputSelect id="aifCategory" class="aif-input" @bind-Value="_form.Category">
+                                @foreach (var category in _categoryOptions)
+                                {
+                                    <option value="@category">@category</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.Category" class="text-danger" />
+                        </div>
+                        <div class="aif-field">
+                            <label for="aifSortOrder">Sort order</label>
+                            <InputNumber id="aifSortOrder" class="aif-input" @bind-Value="_form.SortOrder" />
+                            <ValidationMessage For="() => _form.SortOrder" class="text-danger" />
+                        </div>
+                        <div class="aif-field aif-field-wide">
+                            <label for="aifDescription">Description</label>
+                            <InputTextArea id="aifDescription" class="aif-input" rows="3" @bind-Value="_form.Description" />
+                            <ValidationMessage For="() => _form.Description" class="text-danger" />
+                        </div>
+                        <div class="aif-field aif-field-wide">
+                            <label for="aifConfiguration">Configuration JSON</label>
+                            <InputTextArea id="aifConfiguration" class="aif-input aif-code-input" rows="8" @bind-Value="_form.ConfigurationJson" />
+                            <ValidationMessage For="() => _form.ConfigurationJson" class="text-danger" />
+                        </div>
+                        <div class="aif-field aif-check-row">
+                            <label><InputCheckbox @bind-Value="_form.IsActive" /> Active feature</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="aif-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_saving">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        @(_editId.HasValue ? "Save changes" : "Create feature")
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showDelete)
+{
+    <div class="aif-modal-backdrop" role="presentation" @onclick="CancelDelete">
+        <div class="aif-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="deleteFeatureTitle" @onclick:stopPropagation="true">
+            <div class="aif-confirm-icon aif-confirm-danger"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
+            <h2 id="deleteFeatureTitle">Delete AI feature?</h2>
+            <p>Delete <strong>@_deleteTarget?.Name</strong>? This removes the feature setting from active tenant AI workflows.</p>
+            <div class="aif-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete" disabled="@_saving">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="aif-enterprise-page">
+    <section class="aif-hero">
+        <div class="aif-hero-left">
+            <span class="aif-hero-icon"><i class="bi bi-stars" aria-hidden="true"></i></span>
+            <div>
+                <div class="aif-title-row">
+                    <h1>AI Feature Settings</h1>
+                    <span><i class="bi bi-shield-check" aria-hidden="true"></i> Tenant Admin User</span>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> Live AI configuration</span>
+                </div>
+                <p>Manage feature rollout, governance, usage limits, safety controls, and AI workflow readiness across the tenant.</p>
+            </div>
+        </div>
+        <div class="aif-hero-actions">
+            <button class="um-btn um-btn-ghost" type="button" @onclick="LoadAsync" disabled="@_loading" title="Refresh AI feature settings"><i class="bi @(_loading ? "bi-arrow-repeat aif-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button class="um-btn um-btn-ghost" type="button" @onclick="ExportAsync"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button class="um-btn um-btn-ghost" type="button" @onclick='() => Nav.NavigateTo("/tenant/ai/features2")'><i class="bi bi-grid-1x2" aria-hidden="true"></i> AI Center</button>
+            <button class="um-btn um-btn-primary" type="button" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Feature</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger aif-error-banner" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError</div>
+    }
+
+    <section class="aif-kpi-strip" aria-label="AI feature KPI filters">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricCardClass(metric)" @onclick="() => SetFilter(metric.Filter)" title="@metric.Tooltip" aria-pressed="@(metric.Filter == _activeFilter)">
+                <span class="aif-kpi-icon @metric.Tone"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                <div>
+                    <span class="aif-kpi-val">@metric.Value</span>
+                    <span class="aif-kpi-lbl">@metric.Label</span>
+                    <small>@metric.Caption</small>
+                </div>
+            </button>
+        }
+    </section>
+
+    <section class="aif-workflow-strip" aria-label="AI settings workflows">
+        @foreach (var workflow in _workflows)
+        {
+            <button type="button" class="aif-workflow-card" @onclick="() => OpenWorkflow(workflow)">
+                <i class="bi @workflow.Icon" aria-hidden="true"></i>
+                <span><strong>@workflow.Title</strong><span>@workflow.Text</span></span>
+            </button>
+        }
+    </section>
+
+    <section class="aif-search-panel" aria-label="AI feature filters">
+        <div class="aif-search-wrap">
+            <span class="aif-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="aif-search-body">
+                <label for="aiFeatureSearch">Search features</label>
+                <input id="aiFeatureSearch" class="aif-search-input" value="@_search" @oninput="OnSearchChanged" placeholder="Search code, name, category, workflow, or JSON..." />
+                <span class="aif-search-hint">Filters apply instantly to the active tab and KPI selection.</span>
+            </div>
+        </div>
+        <select class="aif-filter-select" value="@_categoryFilter" @onchange="OnCategoryChanged" aria-label="Category filter">
+            <option value="">All categories</option>
+            @foreach (var category in Categories)
+            {
+                <option value="@category">@category</option>
+            }
+        </select>
+        <select class="aif-filter-select" value="@_activeFilter" @onchange="OnStatusChanged" aria-label="Status filter">
+            <option value="">All statuses</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+            <option value="guardrail">Guardrails</option>
+            <option value="pilot">Pilot</option>
+        </select>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x-circle" aria-hidden="true"></i> Reset</button>
+        <div class="aif-search-result"><strong>@FilteredItems.Count</strong><span>shown</span></div>
+    </section>
+
+    <div class="aif-view-tabs" role="tablist" aria-label="AI feature views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="@TabClass(tab.Id)" role="tab" aria-selected="@(tab.Id == _activeTab)" @onclick="() => SetTab(tab.Id)"><i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label <span>@TabCount(tab.Id)</span></button>
+        }
+    </div>
+
+    <section class="aif-content-layout">
+        <main class="aif-main-card">
+            @if (_loading)
+            {
+                <div class="aif-loading"><i class="bi bi-arrow-repeat aif-spin" aria-hidden="true"></i><strong>Loading AI features...</strong><span>Syncing tenant AI configuration and workflow readiness.</span></div>
+            }
+            else if (_activeTab == "board")
+            {
+                <div class="aif-board">
+                    @foreach (var category in BoardCategories)
+                    {
+                        <section class="aif-board-col">
+                            <header><span>@category</span><strong>@FilteredItems.Count(x => x.CategoryLabel == category)</strong></header>
+                            @foreach (var item in FilteredItems.Where(x => x.CategoryLabel == category))
+                            {
+                                @FeatureCard(item)
+                            }
+                        </section>
+                    }
+                </div>
+            }
+            else if (_activeTab == "governance")
+            {
+                <div class="aif-governance-grid">
+                    @foreach (var item in FilteredItems.Where(IsGovernanceFeature))
+                    {
+                        @FeatureCard(item)
+                    }
+                    @if (!FilteredItems.Any(IsGovernanceFeature))
+                    {
+                        @EmptyState("bi-shield-check", "No governance features match", "Adjust filters or add safety, approval, or audit controls.")
+                    }
+                </div>
+            }
+            else if (_activeTab == "analytics")
+            {
+                <div class="aif-analytics-grid">
+                    <section><h3>Category distribution</h3>@foreach (var row in CategoryDistribution) { @AnalyticsRowTemplate(row) }</section>
+                    <section><h3>Rollout status</h3>@foreach (var row in StatusDistribution) { @AnalyticsRowTemplate(row) }</section>
+                    <section><h3>Workflow readiness</h3>@foreach (var row in WorkflowDistribution) { @AnalyticsRowTemplate(row) }</section>
+                    <section><h3>Governance coverage</h3>@foreach (var row in GovernanceDistribution) { @AnalyticsRowTemplate(row) }</section>
+                </div>
+            }
+            else
+            {
+                <div class="aif-table-scroll">
+                    @if (FilteredItems.Count == 0)
+                    {
+                        @EmptyState("bi-stars", "No AI features match", "Adjust filters, refresh the page, or add a new AI feature setting.")
+                    }
+                    else
+                    {
+                        <table class="aif-table">
+                            <thead><tr><th>Feature</th><th>Category</th><th>Status</th><th>Rollout</th><th>Limits</th><th>Workflow</th><th></th></tr></thead>
+                            <tbody>
+                                @foreach (var item in FilteredItems)
+                                {
+                                    <tr class="@(SelectedItem?.AiConfigItemId == item.AiConfigItemId ? "aif-row-selected" : string.Empty)" @onclick="() => SelectItem(item)">
+                                        <td><div class="aif-name-cell"><span class="aif-avatar @AvatarClass(item)"><i class="bi @FeatureIcon(item)" aria-hidden="true"></i></span><div><strong>@item.Name</strong><small>@item.Code</small></div></div></td>
+                                        <td><span class="aif-lob">@item.CategoryLabel</span></td>
+                                        <td><span class="@StatusBadge(item)">@(item.IsActive ? "Active" : "Inactive")</span></td>
+                                        <td>@item.RolloutLabel</td>
+                                        <td>@item.LimitLabel</td>
+                                        <td><span class="@WorkflowBadge(item)">@item.WorkflowLabel</span></td>
+                                        <td><div class="aif-row-actions" @onclick:stopPropagation="true"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ToggleActiveAsync(item)" title="@(item.IsActive ? "Disable" : "Enable")"><i class="bi @(item.IsActive ? "bi-pause-circle" : "bi-play-circle")" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(item)" title="Delete"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </div>
+            }
+        </main>
+
+        <aside class="aif-detail-card">
+            @if (SelectedItem is not null)
+            {
+                <div class="aif-detail-head">
+                    <div><span class="aif-detail-eyebrow"><i class="bi @FeatureIcon(SelectedItem)" aria-hidden="true"></i> @SelectedItem.CategoryLabel</span><h2>@SelectedItem.Name</h2><p>@SelectedItem.Code · @SelectedItem.CreatedDateUtc.ToString("MMM d, yyyy", CultureInfo.CurrentCulture)</p></div>
+                    <span class="@StatusBadge(SelectedItem)">@(SelectedItem.IsActive ? "Active" : "Inactive")</span>
+                </div>
+                <div class="aif-detail-body">
+                    <div class="aif-detail-summary">
+                        <div><span>Rollout</span><strong>@SelectedItem.RolloutLabel</strong></div>
+                        <div><span>Workflow</span><strong>@SelectedItem.WorkflowLabel</strong></div>
+                        <div><span>Daily limit</span><strong>@SelectedItem.LimitLabel</strong></div>
+                        <div><span>Sort order</span><strong>@SelectedItem.SortOrder</strong></div>
+                    </div>
+                    <div class="aif-contact-card"><strong>Configuration summary</strong><span>@SelectedItem.DescriptionText</span></div>
+                    <div class="aif-json-card"><strong>Configuration JSON</strong><pre>@SelectedItem.ConfigurationJson</pre></div>
+                    <div class="aif-detail-actions">
+                        <div class="aif-detail-actions-row">
+                            <button type="button" class="um-btn um-btn-ghost" @onclick="() => OpenEdit(SelectedItem)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                            <button type="button" class="um-btn um-btn-ghost" @onclick="() => DuplicateFeature(SelectedItem)"><i class="bi bi-copy" aria-hidden="true"></i> Duplicate</button>
+                            <button type="button" class="um-btn um-btn-ghost" @onclick="() => ToggleActiveAsync(SelectedItem)"><i class="bi @(SelectedItem.IsActive ? "bi-pause-circle" : "bi-play-circle")" aria-hidden="true"></i> @(SelectedItem.IsActive ? "Disable" : "Enable")</button>
+                        </div>
+                        <button type="button" class="um-btn um-btn-primary aif-detail-open-btn" @onclick="OpenRelatedSettings"><i class="bi bi-diagram-3" aria-hidden="true"></i> Open related AI workflow</button>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="aif-detail-empty"><i class="bi bi-stars" aria-hidden="true"></i><strong>Select an AI feature</strong><span>Review rollout, governance, workflow readiness, and configuration JSON.</span></div>
+            }
+        </aside>
+    </section>
+</div>
+
+@code {
+    private const string FeatureKind = "AiFeatureSetting";
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private bool _loading;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string _search = string.Empty;
+    private string _activeFilter = string.Empty;
+    private string _categoryFilter = string.Empty;
+    private string _activeTab = "list";
+    private string? _loadError;
+    private Guid? _editId;
+    private AiFeatureVm? _deleteTarget;
+    private List<AiConfigItemDto> _items = [];
+    private AiFeatureVm? _selectedItem;
+    private FormModel _form = new();
+
+    private readonly string[] _categoryOptions = ["Core", "CRM", "Producer", "Service", "Governance", "Analytics", "Automation"];
+    private readonly List<ViewTab> _tabs = [new("list", "List", "bi-list-ul"), new("board", "Board", "bi-kanban"), new("governance", "Governance", "bi-shield-check"), new("analytics", "Analytics", "bi-bar-chart")];
+    private readonly List<WorkflowLink> _workflows = [new("Summaries", "Account context and explainability", "/tenant/ai/summaries", "bi-person-vcard"), new("Next Best Action", "Recommendations and producer actions", "/tenant/ai/nba", "bi-lightning-charge"), new("Renewal Risk", "Retention scoring and alerts", "/tenant/ai/renewal-risk", "bi-arrow-clockwise"), new("Prompts", "Reusable prompt templates", "/tenant/ai/prompts", "bi-chat-left-text")];
+
+    private string ToastIconClass => _toastKind == "danger" ? "bi-exclamation-triangle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-check-circle-fill";
+    private List<AiFeatureVm> AllFeatures => _items.Select(MapFeature).ToList();
+    private List<AiFeatureVm> FilteredItems => AllFeatures.Where(MatchesFilters).OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToList();
+    private AiFeatureVm? SelectedItem => _selectedItem is null ? FilteredItems.FirstOrDefault() : FilteredItems.FirstOrDefault(x => x.AiConfigItemId == _selectedItem.AiConfigItemId) ?? FilteredItems.FirstOrDefault();
+    private IEnumerable<string> Categories => AllFeatures.Select(x => x.CategoryLabel).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().OrderBy(x => x);
+    private IEnumerable<string> BoardCategories => Categories.Any() ? Categories : _categoryOptions;
+    private IReadOnlyList<KpiMetric> Metrics => [new("", "Total", AllFeatures.Count.ToString("N0"), "All AI features", "bi-stars", "aif-blue", "Show all AI features"), new("active", "Active", AllFeatures.Count(x => x.IsActive).ToString("N0"), "Enabled for workflow", "bi-check-circle-fill", "aif-green", "Show active features"), new("inactive", "Inactive", AllFeatures.Count(x => !x.IsActive).ToString("N0"), "Disabled controls", "bi-pause-circle", "aif-muted", "Show inactive features"), new("guardrail", "Guardrails", AllFeatures.Count(IsGovernanceFeature).ToString("N0"), "Safety and approval", "bi-shield-check", "aif-red", "Show governance features"), new("pilot", "Pilot", AllFeatures.Count(x => x.RolloutLabel.Contains("Pilot", StringComparison.OrdinalIgnoreCase)).ToString("N0"), "Pilot rollout", "bi-rocket-takeoff", "aif-purple", "Show pilot features"), new("limits", "Limited", AllFeatures.Count(x => !x.LimitLabel.Equals("No limit", StringComparison.OrdinalIgnoreCase)).ToString("N0"), "Usage limits set", "bi-speedometer2", "aif-amber", "Show limited features")];
+    private IReadOnlyList<AnalyticsRow> CategoryDistribution => BuildAnalytics(AllFeatures.GroupBy(x => x.CategoryLabel).Select(g => new AnalyticsSeed(g.Key, g.Count(), "aif-dist-blue")));
+    private IReadOnlyList<AnalyticsRow> StatusDistribution => BuildAnalytics([new("Active", AllFeatures.Count(x => x.IsActive), "aif-dist-green"), new("Inactive", AllFeatures.Count(x => !x.IsActive), "aif-dist-amber")]);
+    private IReadOnlyList<AnalyticsRow> WorkflowDistribution => BuildAnalytics(AllFeatures.GroupBy(x => x.WorkflowLabel).Select(g => new AnalyticsSeed(g.Key, g.Count(), "aif-dist-purple")));
+    private IReadOnlyList<AnalyticsRow> GovernanceDistribution => BuildAnalytics([new("Guardrails", AllFeatures.Count(IsGovernanceFeature), "aif-dist-red"), new("Standard", AllFeatures.Count(x => !IsGovernanceFeature(x)), "aif-dist-blue")]);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("AI Settings", "/tenant/ai/features"), new("Feature Settings", null));
+        await ResolveCurrentUserContextAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchAiConfigItemsAsync(_tenantId, FeatureKind, _search, pageSize: 250);
+            _items = result?.Items.ToList() ?? [];
+            SyncSelection();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load AI feature settings: {ex.Message}";
+            ShowToast(_loadError, "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+    }
+
+    private void SyncSelection()
+    {
+        _selectedItem = _selectedItem is null ? FilteredItems.FirstOrDefault() : FilteredItems.FirstOrDefault(x => x.AiConfigItemId == _selectedItem.AiConfigItemId) ?? FilteredItems.FirstOrDefault();
+    }
+
+    private bool MatchesFilters(AiFeatureVm item)
+    {
+        var textMatch = string.IsNullOrWhiteSpace(_search) || new[] { item.Code, item.Name, item.CategoryLabel, item.DescriptionText, item.ConfigurationJson, item.WorkflowLabel, item.RolloutLabel }.Any(v => !string.IsNullOrWhiteSpace(v) && v.Contains(_search, StringComparison.OrdinalIgnoreCase));
+        var categoryMatch = string.IsNullOrWhiteSpace(_categoryFilter) || item.CategoryLabel.Equals(_categoryFilter, StringComparison.OrdinalIgnoreCase);
+        var filterMatch = _activeFilter switch
+        {
+            "active" => item.IsActive,
+            "inactive" => !item.IsActive,
+            "guardrail" => IsGovernanceFeature(item),
+            "pilot" => item.RolloutLabel.Contains("Pilot", StringComparison.OrdinalIgnoreCase),
+            "limits" => !item.LimitLabel.Equals("No limit", StringComparison.OrdinalIgnoreCase),
+            _ => true
+        };
+        return textMatch && categoryMatch && filterMatch;
+    }
+
+    private void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _search = e.Value?.ToString() ?? string.Empty;
+        SyncSelection();
+    }
+
+    private void OnCategoryChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _categoryFilter = e.Value?.ToString() ?? string.Empty;
+        SyncSelection();
+    }
+
+    private void OnStatusChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _activeFilter = e.Value?.ToString() ?? string.Empty;
+        SyncSelection();
+    }
+
+    private void SetFilter(string filter)
+    {
+        _activeFilter = filter;
+        SyncSelection();
+    }
+
+    private void SetTab(string tab)
+    {
+        _activeTab = tab;
+        SyncSelection();
+    }
+
+    private void ResetFilters()
+    {
+        _search = string.Empty;
+        _categoryFilter = string.Empty;
+        _activeFilter = string.Empty;
+        SyncSelection();
+    }
+
+    private void SelectItem(AiFeatureVm item) => _selectedItem = item;
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+    private Task ExportAsync() { ShowToast($"Export prepared for {FilteredItems.Count} AI feature setting(s)."); return Task.CompletedTask; }
+    private void OpenWorkflow(WorkflowLink workflow) => Nav.NavigateTo(workflow.Url);
+    private void OpenRelatedSettings() => Nav.NavigateTo(SelectedItem?.WorkflowUrl ?? "/tenant/ai/features2");
+
+    private void OpenCreate()
+    {
+        _editId = null;
+        _form = new()
+        {
+            Code = BuildNextFeatureCode(),
+            Name = "New AI Feature",
+            Category = "Core",
+            Description = "Tenant-controlled AI feature setting.",
+            ConfigurationJson = BuildDefaultJson("TenantControlled", "Pilot", 100, true),
+            SortOrder = AllFeatures.Count == 0 ? 10 : AllFeatures.Max(x => x.SortOrder) + 10,
+            IsActive = true
+        };
+        _showForm = true;
+    }
+
+    private void OpenEdit(AiFeatureVm item)
+    {
+        _editId = item.AiConfigItemId;
+        _form = new()
+        {
+            Code = item.Code,
+            Name = item.Name,
+            Category = item.CategoryLabel,
+            Description = item.Description,
+            ConfigurationJson = item.ConfigurationJson,
+            SortOrder = item.SortOrder,
+            IsActive = item.IsActive
+        };
+        _showForm = true;
+    }
+
+    private void DuplicateFeature(AiFeatureVm item)
+    {
+        _editId = null;
+        _form = new()
+        {
+            Code = $"{item.Code}-COPY",
+            Name = $"{item.Name} Copy",
+            Category = item.CategoryLabel,
+            Description = item.Description,
+            ConfigurationJson = item.ConfigurationJson,
+            SortOrder = item.SortOrder + 1,
+            IsActive = false
+        };
+        _showForm = true;
+    }
+
+    private void CloseForm()
+    {
+        if (_saving) return;
+        _showForm = false;
+        _editId = null;
+        _form = new();
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            ValidateJson(_form.ConfigurationJson);
+            if (_editId.HasValue)
+            {
+                await Api.UpdateAiConfigItemAsync(_editId.Value, new(_form.Code.Trim(), _form.Name.Trim(), _form.Category?.Trim(), _form.Description?.Trim(), NormalizeJson(_form.ConfigurationJson), _form.IsActive, _form.SortOrder));
+                ShowToast("AI feature updated.");
+            }
+            else
+            {
+                var id = await Api.CreateAiConfigItemAsync(new(_tenantId, FeatureKind, _form.Code.Trim(), _form.Name.Trim(), _form.Category?.Trim(), _form.Description?.Trim(), NormalizeJson(_form.ConfigurationJson), _form.SortOrder));
+                _editId = id;
+                ShowToast("AI feature created.");
+            }
+
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ToggleActiveAsync(AiFeatureVm item)
+    {
+        _saving = true;
+        try
+        {
+            await Api.UpdateAiConfigItemAsync(item.AiConfigItemId, new(item.Code, item.Name, item.CategoryLabel, item.Description, item.ConfigurationJson, !item.IsActive, item.SortOrder));
+            ShowToast($"{item.Name} {(item.IsActive ? "disabled" : "enabled")}.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void ConfirmDelete(AiFeatureVm item)
+    {
+        _deleteTarget = item;
+        _showDelete = true;
+    }
+
+    private void CancelDelete()
+    {
+        if (_saving) return;
+        _showDelete = false;
+        _deleteTarget = null;
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteAiConfigItemAsync(_deleteTarget.AiConfigItemId);
+            _showDelete = false;
+            ShowToast("AI feature deleted.");
+            _deleteTarget = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private RenderFragment FeatureCard(AiFeatureVm item) => @<article class="aif-feature-card @(SelectedItem?.AiConfigItemId == item.AiConfigItemId ? "aif-feature-selected" : string.Empty)" @onclick="() => SelectItem(item)"><div class="aif-card-top"><span class="aif-avatar @AvatarClass(item)"><i class="bi @FeatureIcon(item)" aria-hidden="true"></i></span><div><strong>@item.Name</strong><span>@item.Code</span></div></div><p>@item.DescriptionText</p><div class="aif-item-meta"><span class="aif-lob">@item.CategoryLabel</span><span class="@StatusBadge(item)">@(item.IsActive ? "Active" : "Inactive")</span><span class="@WorkflowBadge(item)">@item.WorkflowLabel</span></div><div class="aif-item-footer"><span>@item.RolloutLabel</span><strong>@item.LimitLabel</strong></div><div class="aif-row-actions" @onclick:stopPropagation="true"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ToggleActiveAsync(item)"><i class="bi @(item.IsActive ? "bi-pause-circle" : "bi-play-circle")" aria-hidden="true"></i></button></div></article>;
+    private RenderFragment EmptyState(string icon, string title, string text) => @<div class="aif-empty-state"><i class="bi @icon" aria-hidden="true"></i><strong>@title</strong><span>@text</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">Add Feature</button></div>;
+    private RenderFragment AnalyticsRowTemplate(AnalyticsRow row) => @<button type="button" class="aif-analytics-row"><span>@row.Label</span><div><i class="@row.Tone" style="width:@row.WidthPercent%"></i></div><strong>@row.Count</strong><small>@row.Percent.ToString("F0")%</small></button>;
+
+    private static AiFeatureVm MapFeature(AiConfigItemDto item)
+    {
+        var json = ParseJson(item.ConfigurationJson);
+        var rollout = GetJsonValue(json, "rollout", item.IsActive ? "General" : "Disabled");
+        var workflow = GetJsonValue(json, "workflow", item.Category ?? "Core");
+        var limit = GetJsonValue(json, "dailyLimit", string.Empty);
+        var workflowUrl = GetJsonValue(json, "workflowUrl", MapWorkflowUrl(workflow, item.Category));
+        return new()
+        {
+            AiConfigItemId = item.AiConfigItemId,
+            Code = item.Code,
+            Name = item.Name,
+            CategoryLabel = string.IsNullOrWhiteSpace(item.Category) ? "Core" : item.Category!,
+            Description = item.Description,
+            DescriptionText = string.IsNullOrWhiteSpace(item.Description) ? "No description configured." : item.Description!,
+            ConfigurationJson = string.IsNullOrWhiteSpace(item.ConfigurationJson) ? "{}" : item.ConfigurationJson!,
+            IsActive = item.IsActive,
+            SortOrder = item.SortOrder,
+            CreatedDateUtc = item.CreatedDateUtc,
+            RolloutLabel = rollout,
+            WorkflowLabel = workflow,
+            WorkflowUrl = workflowUrl,
+            LimitLabel = string.IsNullOrWhiteSpace(limit) ? "No limit" : $"{limit}/day"
+        };
+    }
+
+    private static Dictionary<string, string> ParseJson(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                ? doc.RootElement.EnumerateObject().ToDictionary(x => x.Name, x => x.Value.ValueKind == JsonValueKind.String ? x.Value.GetString() ?? string.Empty : x.Value.ToString(), StringComparer.OrdinalIgnoreCase)
+                : [];
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private static string GetJsonValue(Dictionary<string, string> values, string key, string fallback) => values.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value : fallback;
+    private static void ValidateJson(string? value) { if (string.IsNullOrWhiteSpace(value)) return; using var _ = JsonDocument.Parse(value); }
+    private static string? NormalizeJson(string? value) => string.IsNullOrWhiteSpace(value) ? "{}" : value.Trim();
+    private static string BuildDefaultJson(string workflow, string rollout, int dailyLimit, bool approvalRequired) => $"{{\"workflow\":\"{workflow}\",\"rollout\":\"{rollout}\",\"dailyLimit\":{dailyLimit},\"approvalRequired\":{approvalRequired.ToString().ToLowerInvariant()},\"workflowUrl\":\"/tenant/ai/features\"}}";
+    private string BuildNextFeatureCode() => $"AI-FEATURE-{AllFeatures.Count + 1:000}";
+    private int TabCount(string id) => id switch { "governance" => FilteredItems.Count(IsGovernanceFeature), "analytics" => AllFeatures.Count, _ => FilteredItems.Count };
+    private string MetricCardClass(KpiMetric metric) => $"aif-kpi-card {(metric.Filter == _activeFilter ? "aif-kpi-card-active" : string.Empty)}";
+    private string TabClass(string id) => $"aif-view-btn {(id == _activeTab ? "aif-view-btn-active" : string.Empty)}";
+    private static bool IsGovernanceFeature(AiFeatureVm item) => item.CategoryLabel.Contains("Governance", StringComparison.OrdinalIgnoreCase) || item.Name.Contains("Approval", StringComparison.OrdinalIgnoreCase) || item.Name.Contains("Guardrail", StringComparison.OrdinalIgnoreCase) || item.ConfigurationJson.Contains("approval", StringComparison.OrdinalIgnoreCase) || item.ConfigurationJson.Contains("audit", StringComparison.OrdinalIgnoreCase) || item.ConfigurationJson.Contains("safety", StringComparison.OrdinalIgnoreCase);
+    private static string StatusBadge(AiFeatureVm item) => $"aif-stage {(item.IsActive ? "aif-stage-active" : "aif-stage-inactive")}";
+    private static string WorkflowBadge(AiFeatureVm item) => $"aif-stage aif-stage-{item.WorkflowLabel.ToLowerInvariant().Replace(" ", "-").Replace("/", "-")}";
+    private static string AvatarClass(AiFeatureVm item) => item.CategoryLabel switch { "Governance" => "aif-av-red", "Analytics" => "aif-av-purple", "CRM" => "aif-av-blue", "Producer" => "aif-av-green", "Service" => "aif-av-amber", _ => "aif-av-cyan" };
+    private static string FeatureIcon(AiFeatureVm item) => item.CategoryLabel switch { "Governance" => "bi-shield-check", "Analytics" => "bi-bar-chart", "CRM" => "bi-people", "Producer" => "bi-person-badge", "Service" => "bi-headset", "Automation" => "bi-diagram-3", _ => "bi-stars" };
+    private static string MapWorkflowUrl(string? workflow, string? category) => (workflow ?? category) switch { "Summaries" or "AccountSummary" => "/tenant/ai/summaries", "NextBestAction" or "Next Best Action" => "/tenant/ai/nba", "RenewalRisk" or "Renewal Risk" => "/tenant/ai/renewal-risk", "PromptTemplate" or "Prompts" => "/tenant/ai/prompts", "Usage" => "/tenant/ai/usage", "Feedback" => "/tenant/ai/feedback", "CrossSell" or "Cross-sell" => "/tenant/ai/cross-sell", _ => "/tenant/ai/features" };
+    private static IReadOnlyList<AnalyticsRow> BuildAnalytics(IEnumerable<AnalyticsSeed> seeds) { var rows = seeds.Where(x => x.Count > 0).ToList(); var total = Math.Max(1, rows.Sum(x => x.Count)); return rows.Select(x => new AnalyticsRow(x.Label, x.Count, x.Tone, x.Count * 100m / total, Math.Max(5m, x.Count * 100m / total))).ToList(); }
+
+    private sealed record KpiMetric(string Filter, string Label, string Value, string Caption, string Icon, string Tone, string Tooltip);
+    private sealed record ViewTab(string Id, string Label, string Icon);
+    private sealed record WorkflowLink(string Title, string Text, string Url, string Icon);
+    private sealed record AnalyticsSeed(string Label, int Count, string Tone);
+    private sealed record AnalyticsRow(string Label, int Count, string Tone, decimal Percent, decimal WidthPercent);
+    private sealed class AiFeatureVm { public Guid AiConfigItemId { get; set; } public string Code { get; set; } = string.Empty; public string Name { get; set; } = string.Empty; public string CategoryLabel { get; set; } = "Core"; public string? Description { get; set; } public string DescriptionText { get; set; } = string.Empty; public string ConfigurationJson { get; set; } = "{}"; public bool IsActive { get; set; } public int SortOrder { get; set; } public DateTime CreatedDateUtc { get; set; } public string RolloutLabel { get; set; } = "General"; public string WorkflowLabel { get; set; } = "Core"; public string WorkflowUrl { get; set; } = "/tenant/ai/features"; public string LimitLabel { get; set; } = "No limit"; }
+    private sealed class FormModel { [Required, StringLength(80)] public string Code { get; set; } = string.Empty; [Required, StringLength(200)] public string Name { get; set; } = string.Empty; [Required, StringLength(120)] public string? Category { get; set; } = "Core"; [StringLength(500)] public string? Description { get; set; } [StringLength(4000)] public string? ConfigurationJson { get; set; } = "{}"; [Range(0, 9999)] public int SortOrder { get; set; } public bool IsActive { get; set; } = true; }
+}
