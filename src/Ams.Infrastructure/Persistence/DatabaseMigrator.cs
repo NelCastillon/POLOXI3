@@ -1,6 +1,8 @@
 using Ams.Application.Abstractions.Persistence;
 using Dapper;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
+using System.Text.RegularExpressions;
 
 namespace Ams.Infrastructure.Persistence;
 
@@ -9,7 +11,7 @@ namespace Ams.Infrastructure.Persistence;
 /// Each migration is identified by a unique name and is applied exactly once.
 /// Applied migrations are tracked in dbo._Migrations.
 /// </summary>
-public sealed class DatabaseMigrator
+public sealed partial class DatabaseMigrator
 {
     private readonly ISqlConnectionFactory _connectionFactory;
     private readonly ILogger<DatabaseMigrator> _logger;
@@ -212,6 +214,172 @@ public sealed class DatabaseMigrator
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
 
     private const string Migration0001_IamUserExtendedColumns = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'IAM') EXEC(N'CREATE SCHEMA IAM');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Core') EXEC(N'CREATE SCHEMA Core');
+
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NULL
+BEGIN
+    CREATE TABLE Core.Tenant (
+        TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Core_Tenant PRIMARY KEY DEFAULT NEWID(),
+        TenantCode NVARCHAR(50) NULL,
+        TenantName NVARCHAR(200) NOT NULL,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_Core_Tenant_StatusCode DEFAULT N'Active',
+        PlanCode NVARCHAR(50) NULL,
+        RegionCode NVARCHAR(50) NULL,
+        IsolationMode NVARCHAR(50) NULL,
+        PrimaryDomain NVARCHAR(255) NULL,
+        ActiveUsers INT NOT NULL CONSTRAINT DF_Core_Tenant_ActiveUsers DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_Core_Tenant_IsActive DEFAULT 1,
+        Locale NVARCHAR(20) NULL,
+        CurrencyCode NVARCHAR(10) NULL,
+        TimeZoneId NVARCHAR(100) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_Tenant_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        GoLiveDateUtc DATETIME2 NULL,
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Core_Tenant_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Core.Branch', N'U') IS NULL
+BEGIN
+    CREATE TABLE Core.Branch (
+        BranchId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Core_Branch PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        BranchCode NVARCHAR(50) NULL,
+        BranchName NVARCHAR(200) NOT NULL,
+        AddressLine1 NVARCHAR(200) NULL,
+        AddressLine2 NVARCHAR(200) NULL,
+        City NVARCHAR(100) NULL,
+        StateCode NVARCHAR(20) NULL,
+        PostalCode NVARCHAR(20) NULL,
+        CountryCode NVARCHAR(10) NULL,
+        PhoneNumber NVARCHAR(50) NULL,
+        Email NVARCHAR(320) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_Core_Branch_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_Branch_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Core_Branch_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Core.UserProfile', N'U') IS NULL
+BEGIN
+    CREATE TABLE Core.UserProfile (
+        UserProfileId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Core_UserProfile PRIMARY KEY DEFAULT NEWID(),
+        UserId UNIQUEIDENTIFIER NOT NULL,
+        Bio NVARCHAR(1000) NULL,
+        AvatarUrl NVARCHAR(500) NULL,
+        PreferredLanguage NVARCHAR(20) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_UserProfile_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Core_UserProfile_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'IAM.[User]', N'U') IS NULL
+BEGIN
+    CREATE TABLE IAM.[User] (
+        UserId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_IAM_User PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        BranchId UNIQUEIDENTIFIER NULL,
+        UserTypeCode NVARCHAR(50) NULL,
+        UserName NVARCHAR(200) NOT NULL,
+        Email NVARCHAR(320) NOT NULL,
+        FirstName NVARCHAR(100) NULL,
+        LastName NVARCHAR(100) NULL,
+        FullName NVARCHAR(200) NOT NULL,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_IAM_User_StatusCode DEFAULT N'Active',
+        IsActive BIT NOT NULL CONSTRAINT DF_IAM_User_IsActive DEFAULT 1,
+        IsLocked BIT NOT NULL CONSTRAINT DF_IAM_User_IsLocked DEFAULT 0,
+        MfaEnabled BIT NOT NULL CONSTRAINT DF_IAM_User_MfaEnabled DEFAULT 0,
+        JobTitle NVARCHAR(200) NULL,
+        LastLoginDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_IAM_User_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_IAM_User_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'IAM.Role', N'U') IS NULL
+BEGIN
+    CREATE TABLE IAM.Role (
+        RoleId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_IAM_Role PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        RoleCode NVARCHAR(100) NOT NULL,
+        RoleName NVARCHAR(200) NOT NULL,
+        RoleTypeCode NVARCHAR(50) NULL,
+        Description NVARCHAR(500) NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_IAM_Role_SortOrder DEFAULT 0,
+        IsBuiltIn BIT NOT NULL CONSTRAINT DF_IAM_Role_IsBuiltIn DEFAULT 0,
+        IsSystemRole BIT NOT NULL CONSTRAINT DF_IAM_Role_IsSystemRole DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_IAM_Role_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_IAM_Role_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_IAM_Role_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'IAM.UserRole', N'U') IS NULL
+BEGIN
+    CREATE TABLE IAM.UserRole (
+        UserRoleId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_IAM_UserRole PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NULL,
+        UserId UNIQUEIDENTIFIER NOT NULL,
+        RoleId UNIQUEIDENTIFIER NOT NULL,
+        AssignedByUserId UNIQUEIDENTIFIER NULL,
+        AssignedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_IAM_UserRole_AssignedDateUtc DEFAULT SYSUTCDATETIME(),
+        EffectiveStartDateUtc DATETIME2 NULL,
+        EffectiveEndDateUtc DATETIME2 NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_IAM_UserRole_IsActive DEFAULT 1,
+        Source NVARCHAR(100) NULL,
+        Reason NVARCHAR(500) NULL,
+        ApproverId UNIQUEIDENTIFIER NULL,
+        ScopeTypeCode NVARCHAR(50) NULL,
+        ScopeValue NVARCHAR(200) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_IAM_UserRole_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_IAM_UserRole_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'IAM.TrustedDevice', N'U') IS NULL
+BEGIN
+    CREATE TABLE IAM.TrustedDevice (
+        TrustedDeviceId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_IAM_TrustedDevice PRIMARY KEY DEFAULT NEWID(),
+        UserId UNIQUEIDENTIFIER NOT NULL,
+        DeviceName NVARCHAR(200) NULL,
+        DeviceFingerprint NVARCHAR(500) NULL,
+        LastUsedDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_IAM_TrustedDevice_CreatedDateUtc DEFAULT SYSUTCDATETIME()
+    );
+END;
+
+IF OBJECT_ID(N'IAM.AccessRequest', N'U') IS NULL
+BEGIN
+    CREATE TABLE IAM.AccessRequest (
+        AccessRequestId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_IAM_AccessRequest PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        RequestedByUserId UNIQUEIDENTIFIER NOT NULL,
+        RequestedForUserId UNIQUEIDENTIFIER NULL,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_IAM_AccessRequest_StatusCode DEFAULT N'Pending',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_IAM_AccessRequest_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_IAM_AccessRequest_IsDeleted DEFAULT 0
+    );
+END;
+
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'IAM.[User]') AND name = N'DisplayName')
     ALTER TABLE IAM.[User] ADD DisplayName NVARCHAR(200) NULL;
 
@@ -2249,7 +2417,7 @@ IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID(N'IAM.UserPe
         UserPermissionId      UNIQUEIDENTIFIER NOT NULL,
         ScopeTypeCode         NVARCHAR(100)    NOT NULL,
         ScopeValue            NVARCHAR(500)    NOT NULL,
-        CreatedDateUtc        DATETIME2        NOT NULL DEFAULT GETUTCDATETIME(),
+        CreatedDateUtc        DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
         IsDeleted             BIT              NOT NULL DEFAULT 0
     );
 ";
@@ -2941,7 +3109,8 @@ BEGIN
 END
 ";
     private const string Migration0041_DmsDocumentAddModifiedByUserId = @"
-IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('DMS.Document') AND name = 'ModifiedByUserId')
+IF OBJECT_ID(N'DMS.Document', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'DMS.Document') AND name = N'ModifiedByUserId')
     ALTER TABLE DMS.Document ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
 ";
 
@@ -3360,6 +3529,9 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_LoginAttempt_UserName'
 DECLARE @DefaultTenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
 DECLARE @FirstUserId UNIQUEIDENTIFIER = (SELECT TOP 1 UserId FROM IAM.[User] ORDER BY CreatedDateUtc);
 
+IF OBJECT_ID(N'CRM.Lead', N'U') IS NOT NULL
+   AND OBJECT_ID(N'CRM.LeadActivity', N'U') IS NOT NULL
+BEGIN
 -- ============================================================
 -- SEED CRM.Lead with test data for Lead Scoring page
 -- ============================================================
@@ -3415,6 +3587,7 @@ BEGIN
     SELECT NEWID(), @DefaultTenantId, LeadId, 'Note', 'Add to nurture campaign', 'Send educational content series', CAST(GETUTCDATE() AS DATE), 0, GETUTCDATE(), @FirstUserId, 0
     FROM @LeadIds_Low;
 END
+END
 ";
 
     // â”€â”€ Internals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -3445,17 +3618,58 @@ IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = '_Migrations' AND schema_id
         using var tx = cn.BeginTransaction();
         try
         {
-            await cn.ExecuteAsync(migration.Sql, transaction: tx);
+            var sql = NormalizeMigrationSql(migration.Sql);
+            if (!string.IsNullOrWhiteSpace(sql))
+                await cn.ExecuteAsync(sql, transaction: tx);
+
             await cn.ExecuteAsync(
                 "INSERT INTO dbo._Migrations (Name) VALUES (@Name);",
                 new { migration.Name }, transaction: tx);
             tx.Commit();
+        }
+        catch (SqlException ex) when (CanSkipMissingObjectMigration(migration, ex))
+        {
+            tx.Rollback();
+            _logger.LogWarning(ex, "Skipping migration {Name} because prerequisite database object is missing on this database state.", migration.Name);
+
+            using var recordCn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+            await recordCn.ExecuteAsync(
+                "IF NOT EXISTS (SELECT 1 FROM dbo._Migrations WHERE Name = @Name) INSERT INTO dbo._Migrations (Name) VALUES (@Name);",
+                new { migration.Name });
         }
         catch
         {
             tx.Rollback();
             throw;
         }
+    }
+
+    private static string NormalizeMigrationSql(string sql)
+    {
+        if (string.IsNullOrWhiteSpace(sql))
+            return sql;
+
+        return UnguardedAlterTableRegex().Replace(
+            sql,
+            match => $"{match.Groups["indent"].Value}IF OBJECT_ID(N'{match.Groups["table"].Value}', N'U') IS NOT NULL AND COL_LENGTH(N'{match.Groups["table"].Value}', N'{match.Groups["column"].Value}') IS NULL ALTER TABLE");
+    }
+
+    [GeneratedRegex(@"(?m)^(?<indent>\s*)IF\s+COL_LENGTH\(N'(?<table>[^']+)'\s*,\s*N'(?<column>[^']+)'\)\s+IS\s+NULL\s+ALTER\s+TABLE", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex UnguardedAlterTableRegex();
+
+    private static bool CanSkipMissingObjectMigration(Migration migration, SqlException exception)
+    {
+        return exception.Number == 208
+            && IsSeedOrAlterMigration(migration.Name);
+    }
+
+    private static bool IsSeedOrAlterMigration(string migrationName)
+    {
+        return migrationName.Contains("Seed", StringComparison.OrdinalIgnoreCase)
+            || migrationName.Contains("Workbench", StringComparison.OrdinalIgnoreCase)
+            || migrationName.Contains("Add", StringComparison.OrdinalIgnoreCase)
+            || migrationName.Contains("Sync", StringComparison.OrdinalIgnoreCase)
+            || migrationName.Contains("Config", StringComparison.OrdinalIgnoreCase);
     }
 
     private const string Migration0112_ClaimsEnterpriseSchemaSync = @"
@@ -3876,7 +4090,8 @@ END
     // â”€â”€ 0048 â€” Agency Dashboard: Claims schema + seed data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private const string Migration0048_AgencyDashboardClaimsSeed = @"
 -- Guard: add BranchId to Finance.Agreement
-IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Finance.Agreement') AND name = N'BranchId')
+IF OBJECT_ID(N'Finance.Agreement', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Finance.Agreement') AND name = N'BranchId')
     ALTER TABLE Finance.Agreement ADD BranchId UNIQUEIDENTIFIER NULL;
 
 -- Guard: add IsProducer to IAM.[User]
@@ -3909,6 +4124,36 @@ BEGIN
         IsDeleted        BIT              NOT NULL DEFAULT 0
     );
     CREATE INDEX IX_Claim_TenantId ON Claims.Claim (TenantId);
+END
+
+-- Guard: create Claims.LossEstimate table
+IF OBJECT_ID(N'Claims.LossEstimate', N'U') IS NULL
+BEGIN
+    CREATE TABLE Claims.LossEstimate (
+        LossEstimateId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ClaimId UNIQUEIDENTIFIER NOT NULL,
+        EstimateAmount DECIMAL(18,2) NOT NULL DEFAULT 0,
+        AdjusterNotes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+        IsDeleted BIT NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IX_LossEstimate_TenantId ON Claims.LossEstimate (TenantId);
+END
+
+-- Guard: create Claims.ClaimActivity table
+IF OBJECT_ID(N'Claims.ClaimActivity', N'U') IS NULL
+BEGIN
+    CREATE TABLE Claims.ClaimActivity (
+        ClaimActivityId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ClaimId UNIQUEIDENTIFIER NOT NULL,
+        ActivityType NVARCHAR(50) NOT NULL,
+        ActivityDescription NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+        IsDeleted BIT NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IX_ClaimActivity_TenantId ON Claims.ClaimActivity (TenantId);
 END
 
 DECLARE @SeedTenant UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
@@ -4073,7 +4318,10 @@ BEGIN
 END
 
 DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
-DECLARE @DocumentId UNIQUEIDENTIFIER = (SELECT TOP 1 DocumentId FROM DMS.Document WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc DESC);
+DECLARE @DocumentId UNIQUEIDENTIFIER = NULL;
+
+IF OBJECT_ID(N'DMS.Document', N'U') IS NOT NULL
+    SELECT TOP 1 @DocumentId = DocumentId FROM DMS.Document WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc DESC;
 
 IF @DocumentId IS NOT NULL AND NOT EXISTS (SELECT 1 FROM DMS.ESignRequest WHERE TenantId = @TenantId)
 BEGIN
@@ -5450,6 +5698,8 @@ DECLARE @Account2 UNIQUEIDENTIFIER = NULL;
 DECLARE @Account3 UNIQUEIDENTIFIER = NULL;
 DECLARE @Now DATETIME2 = SYSUTCDATETIME();
 
+IF OBJECT_ID(N'Client.Account', N'U') IS NOT NULL AND OBJECT_ID(N'OPS.ServiceRequest', N'U') IS NOT NULL
+BEGIN
 SELECT TOP 1 @Account1 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc;
 SELECT TOP 1 @Account2 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountId <> @Account1 ORDER BY CreatedDateUtc;
 SELECT TOP 1 @Account3 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountId NOT IN (@Account1, COALESCE(@Account2, @Account1)) ORDER BY CreatedDateUtc;
@@ -5483,21 +5733,12 @@ BEGIN
         INSERT INTO OPS.ServiceRequest (ServiceRequestId, TenantId, AccountId, RequestNumber, RequestTypeCode, Subject, Description, PriorityCode, AssignedToUserId, StatusCode, CreatedDateUtc, CreatedByUserId, IsDeleted)
         VALUES (NEWID(), @TenantId, @Account3, N'CSR-FUP-1001', N'FollowUp', N'Follow up on signed supplemental application', N'{"category":"Documentation","channel":"Email","dueDate":"' + CONVERT(NVARCHAR(30), DATEADD(day, -2, @Now), 126) + N'","notes":"Producer is waiting on the signed supplemental application for submission."}', N'High', @AdminUserId, N'Open', DATEADD(day, -6, @Now), @AdminUserId, 0);
 END
+END
 """;
     private const string Migration0093_ProducerWorkbenchSeed = """
 DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
 DECLARE @AdminUserId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000002';
 DECLARE @Now DATETIME2 = SYSUTCDATETIME();
-DECLARE @CompanyId UNIQUEIDENTIFIER = NULL;
-
-IF OBJECT_ID(N'Core.Company') IS NOT NULL
-BEGIN
-    IF COL_LENGTH(N'Core.Company', N'TenantId') IS NOT NULL
-        EXEC sp_executesql N'SELECT TOP 1 @CompanyIdOut = CompanyId FROM Core.Company WHERE TenantId = @TenantId ORDER BY CompanyId;', N'@TenantId UNIQUEIDENTIFIER, @CompanyIdOut UNIQUEIDENTIFIER OUTPUT', @TenantId, @CompanyId OUTPUT;
-
-    IF @CompanyId IS NULL
-        SELECT TOP 1 @CompanyId = CompanyId FROM Core.Company ORDER BY CompanyId;
-END
 DECLARE @CompanyId UNIQUEIDENTIFIER = NULL;
 
 IF OBJECT_ID(N'Core.Company') IS NOT NULL
@@ -5517,10 +5758,13 @@ DECLARE @StageQualify UNIQUEIDENTIFIER = '05000000-0000-0000-0000-000000000002';
 DECLARE @StageProposal UNIQUEIDENTIFIER = '05000000-0000-0000-0000-000000000003';
 DECLARE @StageNegotiate UNIQUEIDENTIFIER = '05000000-0000-0000-0000-000000000004';
 
-SELECT TOP 1 @Account1 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc;
-SELECT TOP 1 @Account2 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountId <> @Account1 ORDER BY CreatedDateUtc;
-SELECT TOP 1 @Account3 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountId NOT IN (@Account1, COALESCE(@Account2, @Account1)) ORDER BY CreatedDateUtc;
-SELECT TOP 1 @Account4 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountId NOT IN (@Account1, COALESCE(@Account2, @Account1), COALESCE(@Account3, @Account1)) ORDER BY CreatedDateUtc;
+IF OBJECT_ID(N'Client.Account', N'U') IS NOT NULL
+BEGIN
+    SELECT TOP 1 @Account1 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc;
+    SELECT TOP 1 @Account2 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountId <> @Account1 ORDER BY CreatedDateUtc;
+    SELECT TOP 1 @Account3 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountId NOT IN (@Account1, COALESCE(@Account2, @Account1)) ORDER BY CreatedDateUtc;
+    SELECT TOP 1 @Account4 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountId NOT IN (@Account1, COALESCE(@Account2, @Account1), COALESCE(@Account3, @Account1)) ORDER BY CreatedDateUtc;
+END
 
 SET @Account2 = COALESCE(@Account2, @Account1);
 SET @Account3 = COALESCE(@Account3, @Account1);
@@ -5546,6 +5790,12 @@ BEGIN
 END
 
 IF @Account1 IS NOT NULL
+    AND OBJECT_ID(N'CRM.Lead', N'U') IS NOT NULL
+    AND OBJECT_ID(N'CRM.LeadActivity', N'U') IS NOT NULL
+    AND OBJECT_ID(N'CRM.Opportunity', N'U') IS NOT NULL
+    AND OBJECT_ID(N'CRM.Quote', N'U') IS NOT NULL
+    AND OBJECT_ID(N'Sales.Agreement', N'U') IS NOT NULL
+    AND OBJECT_ID(N'OPS.AgreementRenewal', N'U') IS NOT NULL
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM CRM.Lead WHERE TenantId = @TenantId AND LeadNumber = N'PWB-LD-1001')
         INSERT INTO CRM.Lead (LeadId, TenantId, LeadNumber, AccountName, FirstName, LastName, Email, Phone, InterestedService, Score, PriorityCode, SourceCode, NurturingStageCode, StatusCodeId, AssignedToUserId, CreatedDateUtc, CreatedByUserId, IsDeleted)
@@ -5622,26 +5872,29 @@ DECLARE @Account2 UNIQUEIDENTIFIER = NULL;
 DECLARE @Account3 UNIQUEIDENTIFIER = NULL;
 DECLARE @Account4 UNIQUEIDENTIFIER = NULL;
 
-SELECT TOP 1 @Account1 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc;
-SELECT TOP 1 @Account2 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountId <> @Account1 ORDER BY CreatedDateUtc;
-SELECT TOP 1 @Account3 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountId NOT IN (@Account1, COALESCE(@Account2, @Account1)) ORDER BY CreatedDateUtc;
-SELECT TOP 1 @Account4 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountId NOT IN (@Account1, COALESCE(@Account2, @Account1), COALESCE(@Account3, @Account1)) ORDER BY CreatedDateUtc;
-
-SET @Account2 = COALESCE(@Account2, @Account1);
-SET @Account3 = COALESCE(@Account3, @Account1);
-SET @Account4 = COALESCE(@Account4, @Account2);
-
-IF @Account1 IS NOT NULL
+IF OBJECT_ID(N'Client.Account', N'U') IS NOT NULL AND OBJECT_ID(N'OPS.ServiceRequest', N'U') IS NOT NULL
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM OPS.ServiceRequest WHERE TenantId = @TenantId AND RequestNumber = N'SM-ESC-1001')
-        INSERT INTO OPS.ServiceRequest (ServiceRequestId, TenantId, AccountId, RequestNumber, RequestTypeCode, Subject, Description, PriorityCode, AssignedToUserId, StatusCode, CreatedDateUtc, CreatedByUserId, IsDeleted)
-        VALUES
-        (NEWID(), @TenantId, @Account1, N'SM-ESC-1001', N'Escalation', N'Executive escalation: certificate wording dispute', N'{"queueName":"Escalations","escalatedBy":"Tenant Admin","notes":"Carrier rejected requested blanket wording; client needs contract-compliant certificate today."}', N'Critical', @AdminUserId, N'Open', DATEADD(day, -3, @Now), @AdminUserId, 0),
-        (NEWID(), @TenantId, @Account2, N'SM-SLA-1001', N'Endorsement', N'SLA breach: vehicle add still pending', N'{"queueName":"Endorsements","notes":"Commercial auto endorsement has passed internal SLA and requires manager intervention."}', N'Urgent', @AdminUserId, N'Open', DATEADD(day, -5, @Now), @AdminUserId, 0),
-        (NEWID(), @TenantId, @Account3, N'SM-CAR-1001', N'CarrierTicket', N'Carrier portal outage blocking bind request', N'{"queueName":"Carrier Service","carrierName":"Contoso Mutual","notes":"Carrier portal is returning 500 errors for bind submission."}', N'High', @AdminUserId, N'Open', DATEADD(day, -4, @Now), @AdminUserId, 0),
-        (NEWID(), @TenantId, @Account4, N'SM-QA-1001', N'QualityAudit', N'QA review: renewal documentation checklist', N'{"queueName":"Quality Audit","auditedBy":"Tenant Admin","qualityScore":"8.7","auditedAt":"' + CONVERT(NVARCHAR(30), DATEADD(day, -1, @Now), 126) + N'","qualityNotes":"Strong documentation; missing second-contact evidence.","notes":"Audit generated from renewal servicing sample."}', N'Normal', @AdminUserId, N'Open', DATEADD(day, -2, @Now), @AdminUserId, 0),
-        (NEWID(), @TenantId, @Account2, N'SM-UNA-1001', N'CertificateOfInsurance', N'Unassigned rush certificate request', N'{"queueName":"Certificates","notes":"Rush certificate request needs assignment before noon."}', N'High', NULL, N'Open', DATEADD(hour, -7, @Now), @AdminUserId, 0),
-        (NEWID(), @TenantId, @Account3, N'SM-UNA-1002', N'BillingInquiry', N'Unassigned billing discrepancy review', N'{"queueName":"Billing","notes":"Client reports premium finance installment mismatch."}', N'Normal', NULL, N'Open', DATEADD(day, -1, @Now), @AdminUserId, 0);
+    SELECT TOP 1 @Account1 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc;
+    SELECT TOP 1 @Account2 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountId <> @Account1 ORDER BY CreatedDateUtc;
+    SELECT TOP 1 @Account3 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountId NOT IN (@Account1, COALESCE(@Account2, @Account1)) ORDER BY CreatedDateUtc;
+    SELECT TOP 1 @Account4 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountId NOT IN (@Account1, COALESCE(@Account2, @Account1), COALESCE(@Account3, @Account1)) ORDER BY CreatedDateUtc;
+
+    SET @Account2 = COALESCE(@Account2, @Account1);
+    SET @Account3 = COALESCE(@Account3, @Account1);
+    SET @Account4 = COALESCE(@Account4, @Account2);
+
+    IF @Account1 IS NOT NULL
+    BEGIN
+        IF NOT EXISTS (SELECT 1 FROM OPS.ServiceRequest WHERE TenantId = @TenantId AND RequestNumber = N'SM-ESC-1001')
+            INSERT INTO OPS.ServiceRequest (ServiceRequestId, TenantId, AccountId, RequestNumber, RequestTypeCode, Subject, Description, PriorityCode, AssignedToUserId, StatusCode, CreatedDateUtc, CreatedByUserId, IsDeleted)
+            VALUES
+            (NEWID(), @TenantId, @Account1, N'SM-ESC-1001', N'Escalation', N'Executive escalation: certificate wording dispute', N'{"queueName":"Escalations","escalatedBy":"Tenant Admin","notes":"Carrier rejected requested blanket wording; client needs contract-compliant certificate today."}', N'Critical', @AdminUserId, N'Open', DATEADD(day, -3, @Now), @AdminUserId, 0),
+            (NEWID(), @TenantId, @Account2, N'SM-SLA-1001', N'Endorsement', N'SLA breach: vehicle add still pending', N'{"queueName":"Endorsements","notes":"Commercial auto endorsement has passed internal SLA and requires manager intervention."}', N'Urgent', @AdminUserId, N'Open', DATEADD(day, -5, @Now), @AdminUserId, 0),
+            (NEWID(), @TenantId, @Account3, N'SM-CAR-1001', N'CarrierTicket', N'Carrier portal outage blocking bind request', N'{"queueName":"Carrier Service","carrierName":"Contoso Mutual","notes":"Carrier portal is returning 500 errors for bind submission."}', N'High', @AdminUserId, N'Open', DATEADD(day, -4, @Now), @AdminUserId, 0),
+            (NEWID(), @TenantId, @Account4, N'SM-QA-1001', N'QualityAudit', N'QA review: renewal documentation checklist', N'{"queueName":"Quality Audit","auditedBy":"Tenant Admin","qualityScore":"8.7","auditedAt":"' + CONVERT(NVARCHAR(30), DATEADD(day, -1, @Now), 126) + N'","qualityNotes":"Strong documentation; missing second-contact evidence.","notes":"Audit generated from renewal servicing sample."}', N'Normal', @AdminUserId, N'Open', DATEADD(day, -2, @Now), @AdminUserId, 0),
+            (NEWID(), @TenantId, @Account2, N'SM-UNA-1001', N'CertificateOfInsurance', N'Unassigned rush certificate request', N'{"queueName":"Certificates","notes":"Rush certificate request needs assignment before noon."}', N'High', NULL, N'Open', DATEADD(hour, -7, @Now), @AdminUserId, 0),
+            (NEWID(), @TenantId, @Account3, N'SM-UNA-1002', N'BillingInquiry', N'Unassigned billing discrepancy review', N'{"queueName":"Billing","notes":"Client reports premium finance installment mismatch."}', N'Normal', NULL, N'Open', DATEADD(day, -1, @Now), @AdminUserId, 0);
+    END
 END
 """;
     private const string Migration0095_AccountingWorkbenchSeed = """
@@ -5709,22 +5962,25 @@ DECLARE @Account1 UNIQUEIDENTIFIER = NULL;
 DECLARE @Account2 UNIQUEIDENTIFIER = NULL;
 DECLARE @Account3 UNIQUEIDENTIFIER = NULL;
 
-SELECT TOP 1 @Account1 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc;
-SELECT TOP 1 @Account2 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountId <> @Account1 ORDER BY CreatedDateUtc;
-SELECT TOP 1 @Account3 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountId NOT IN (@Account1, COALESCE(@Account2, @Account1)) ORDER BY CreatedDateUtc;
-
-SET @Account2 = COALESCE(@Account2, @Account1);
-SET @Account3 = COALESCE(@Account3, @Account1);
-
-IF @Account1 IS NOT NULL
+IF OBJECT_ID(N'Client.Account', N'U') IS NOT NULL AND OBJECT_ID(N'OPS.TaskItem', N'U') IS NOT NULL
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM OPS.TaskItem WHERE TenantId = @TenantId AND TaskNumber = N'OW-TASK-1001')
-        INSERT INTO OPS.TaskItem (TaskItemId, TenantId, TaskNumber, Title, Description, TaskTypeCode, StageCode, PriorityCode, StatusCode, RelatedEntityName, RelatedEntityId, AccountId, AssignedToUserId, DueDate, CompletedDate, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
-        VALUES
-        (NEWID(), @TenantId, N'OW-TASK-1001', N'Review blocked bind request', N'{"accountName":"Northstar Robotics","policyNumber":"CYB-24-91702","notes":"Carrier requires updated subjectivities before bind can proceed.","detailUrl":"/tasks"}', N'Operations', N'Open', N'Critical', N'Open', N'Operations', NULL, @Account1, @AdminUserId, DATEADD(day, -2, CAST(@Now AS date)), NULL, DATEADD(day, -6, @Now), @AdminUserId, NULL, NULL, 0),
-        (NEWID(), @TenantId, N'OW-END-1001', N'Add warehouse location endorsement', N'{"policyNumber":"BOP-24-44710","notes":"Confirm location square footage and carrier endorsement form.","detailUrl":"/service-requests"}', N'Endorsement', N'Open', N'High', N'Open', N'Policy', NULL, @Account2, @AdminUserId, DATEADD(day, 1, CAST(@Now AS date)), NULL, DATEADD(day, -3, @Now), @AdminUserId, NULL, NULL, 0),
-        (NEWID(), @TenantId, N'OW-CERT-1001', N'Rush certificate for landlord', N'{"policyNumber":"GL-24-77812","certHolder":"Madison Industrial Holdings","notes":"Additional insured wording requested before noon.","detailUrl":"/service-requests"}', N'CertificateOfInsurance', N'Open', N'Urgent', N'Open', N'Certificate', NULL, @Account2, @AdminUserId, CAST(@Now AS date), NULL, DATEADD(hour, -9, @Now), @AdminUserId, NULL, NULL, 0),
-        (NEWID(), @TenantId, N'OW-REN-1001', N'Follow up on renewal proposal', N'{"policyNumber":"WC-24-55318","lobCode":"WC","premium":239000,"followUpDate":"' + CONVERT(NVARCHAR(30), DATEADD(day, -1, @Now), 126) + N'","renewalStage":"Presented","notes":"Client asked for payroll class code clarification before signing.","detailUrl":"/agreement-renewals"}', N'RenewalFollowUp', N'Presented', N'High', N'Open', N'Renewal', NULL, @Account3, @AdminUserId, DATEADD(day, 25, CAST(@Now AS date)), NULL, DATEADD(day, -8, @Now), @AdminUserId, NULL, NULL, 0);
+    SELECT TOP 1 @Account1 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc;
+    SELECT TOP 1 @Account2 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountId <> @Account1 ORDER BY CreatedDateUtc;
+    SELECT TOP 1 @Account3 = AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountId NOT IN (@Account1, COALESCE(@Account2, @Account1)) ORDER BY CreatedDateUtc;
+
+    SET @Account2 = COALESCE(@Account2, @Account1);
+    SET @Account3 = COALESCE(@Account3, @Account1);
+
+    IF @Account1 IS NOT NULL
+    BEGIN
+        IF NOT EXISTS (SELECT 1 FROM OPS.TaskItem WHERE TenantId = @TenantId AND TaskNumber = N'OW-TASK-1001')
+            INSERT INTO OPS.TaskItem (TaskItemId, TenantId, TaskNumber, Title, Description, TaskTypeCode, StageCode, PriorityCode, StatusCode, RelatedEntityName, RelatedEntityId, AccountId, AssignedToUserId, DueDate, CompletedDate, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+            VALUES
+            (NEWID(), @TenantId, N'OW-TASK-1001', N'Review blocked bind request', N'{"accountName":"Northstar Robotics","policyNumber":"CYB-24-91702","notes":"Carrier requires updated subjectivities before bind can proceed.","detailUrl":"/tasks"}', N'Operations', N'Open', N'Critical', N'Open', N'Operations', NULL, @Account1, @AdminUserId, DATEADD(day, -2, CAST(@Now AS date)), NULL, DATEADD(day, -6, @Now), @AdminUserId, NULL, NULL, 0),
+            (NEWID(), @TenantId, N'OW-END-1001', N'Add warehouse location endorsement', N'{"policyNumber":"BOP-24-44710","notes":"Confirm location square footage and carrier endorsement form.","detailUrl":"/service-requests"}', N'Endorsement', N'Open', N'High', N'Open', N'Policy', NULL, @Account2, @AdminUserId, DATEADD(day, 1, CAST(@Now AS date)), NULL, DATEADD(day, -3, @Now), @AdminUserId, NULL, NULL, 0),
+            (NEWID(), @TenantId, N'OW-CERT-1001', N'Rush certificate for landlord', N'{"policyNumber":"GL-24-77812","certHolder":"Madison Industrial Holdings","notes":"Additional insured wording requested before noon.","detailUrl":"/service-requests"}', N'CertificateOfInsurance', N'Open', N'Urgent', N'Open', N'Certificate', NULL, @Account2, @AdminUserId, CAST(@Now AS date), NULL, DATEADD(hour, -9, @Now), @AdminUserId, NULL, NULL, 0),
+            (NEWID(), @TenantId, N'OW-REN-1001', N'Follow up on renewal proposal', N'{"policyNumber":"WC-24-55318","lobCode":"WC","premium":239000,"followUpDate":"' + CONVERT(NVARCHAR(30), DATEADD(day, -1, @Now), 126) + N'","renewalStage":"Presented","notes":"Client asked for payroll class code clarification before signing.","detailUrl":"/agreement-renewals"}', N'RenewalFollowUp', N'Presented', N'High', N'Open', N'Renewal', NULL, @Account3, @AdminUserId, DATEADD(day, 25, CAST(@Now AS date)), NULL, DATEADD(day, -8, @Now), @AdminUserId, NULL, NULL, 0);
+    END
 END
 
 IF OBJECT_ID(N'Portal.AdminRecord') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM Portal.AdminRecord WHERE TenantId = @TenantId AND Kind = N'OperationsWorkbench' AND IsDeleted = 0)
@@ -5960,6 +6216,8 @@ DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
 DECLARE @AdminUserId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000002';
 DECLARE @Now DATETIME2 = SYSUTCDATETIME();
 
+IF OBJECT_ID(N'OPS.OperationalActivityLog', N'U') IS NOT NULL
+BEGIN
 IF COL_LENGTH(N'OPS.OperationalActivityLog', N'ModifiedDateUtc') IS NULL ALTER TABLE OPS.OperationalActivityLog ADD ModifiedDateUtc DATETIME2 NULL;
 IF COL_LENGTH(N'OPS.OperationalActivityLog', N'ModifiedByUserId') IS NULL ALTER TABLE OPS.OperationalActivityLog ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
 
@@ -5980,6 +6238,7 @@ BEGIN
         (NEWID(), @TenantId, NULL, NULL, NULL, DATEADD(day, -7, CAST(@Now AS date)), N'Note', N'Closed stale quote follow-up for Greenleaf Nurseries', N'Producer confirmed no action needed; timeline was verified and follow-up was closed.', @AdminUserId, DATEADD(day, -7, @Now), @AdminUserId, NULL, NULL, 0),
         (NEWID(), @TenantId, NULL, NULL, NULL, DATEADD(day, -10, CAST(@Now AS date)), N'Task', N'Reviewed non-renewal notice package', N'Prepared compliant notice archive and delivery confirmation checklist.', @AdminUserId, DATEADD(day, -10, @Now), @AdminUserId, NULL, NULL, 0),
         (NEWID(), @TenantId, NULL, NULL, NULL, DATEADD(day, -14, CAST(@Now AS date)), N'Workflow', N'Updated automation audit notes', N'Reconciled workflow automation event history for tenant admin review.', @AdminUserId, DATEADD(day, -14, @Now), @AdminUserId, NULL, NULL, 0);
+END
 END
 ";
 
