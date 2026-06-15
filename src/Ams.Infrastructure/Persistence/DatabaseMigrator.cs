@@ -2083,6 +2083,24 @@ BEGIN
         VALUES (@AdminRoleId, @TenantId, 'SYSTEM_ADMIN', 'System Administrator', 'Internal', 'Full platform, tenant, IAM, and module access', 1, 1, 1, 1, SYSUTCDATETIME(), 0);
 END;
 
+IF OBJECT_ID(N'IAM.RolePermission', N'U') IS NULL
+BEGIN
+    CREATE TABLE IAM.RolePermission
+    (
+        RolePermissionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_IAM_RolePermission PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NULL,
+        RoleId UNIQUEIDENTIFIER NOT NULL,
+        PermissionId UNIQUEIDENTIFIER NOT NULL,
+        PermissionCode NVARCHAR(200) NULL,
+        GrantedByUserId UNIQUEIDENTIFIER NULL,
+        GrantedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_IAM_RolePermission_GrantedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_IAM_RolePermission_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_IAM_RolePermission_IsDeleted DEFAULT 0
+    );
+END;
+
 DECLARE @Permissions TABLE (PermissionCode NVARCHAR(200), PermissionName NVARCHAR(200), ResourceCode NVARCHAR(100), ActionCode NVARCHAR(50), ModuleCode NVARCHAR(100), Description NVARCHAR(500));
 INSERT INTO @Permissions VALUES
 ('NAV_ALL', 'All navigation', 'Navigation', 'View', 'Platform', 'Access all navigation sections and pages'),
@@ -2791,14 +2809,16 @@ BEGIN
         CREATE NONCLUSTERED INDEX IX_ContactWorkflowEvent_ContactId_Date ON Client.ContactWorkflowEvent(ContactId, IsDeleted, EventDateUtc DESC, CreatedDateUtc DESC);
 
     IF OBJECT_ID(N'Client.Contact', N'U') IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_ContactWorkflowEvent_Contact')
-       AND NOT EXISTS (
-            SELECT 1
-            FROM Client.ContactWorkflowEvent e
-            LEFT JOIN Client.Contact c ON c.ContactId = e.ContactId
-            WHERE c.ContactId IS NULL
-       )
-        ALTER TABLE Client.ContactWorkflowEvent ADD CONSTRAINT FK_ContactWorkflowEvent_Contact FOREIGN KEY (ContactId) REFERENCES Client.Contact(ContactId);
+        EXEC(N'
+            IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N''FK_ContactWorkflowEvent_Contact'')
+               AND NOT EXISTS (
+                    SELECT 1
+                    FROM Client.ContactWorkflowEvent e
+                    LEFT JOIN Client.Contact c ON c.ContactId = e.ContactId
+                    WHERE c.ContactId IS NULL
+               )
+                ALTER TABLE Client.ContactWorkflowEvent ADD CONSTRAINT FK_ContactWorkflowEvent_Contact FOREIGN KEY (ContactId) REFERENCES Client.Contact(ContactId);
+        ');
 END;
 ";
     private const string Migration0123B_ClientContactRolesSeed = @"
@@ -6040,10 +6060,25 @@ IF OBJECT_ID(N'Core.Branch') IS NOT NULL
    AND NOT EXISTS (SELECT 1 FROM Core.Branch WHERE TenantId=@TenantId AND BranchCode=N'GC')
    AND (COL_LENGTH(N'Core.Branch', N'CompanyId') IS NULL OR @CompanyId IS NOT NULL)
 BEGIN
-    DECLARE @BranchColumns NVARCHAR(MAX) = N'BranchId, TenantId, BranchCode, BranchName, City, StateProvince, CountryCode, IsActive, CreatedDateUtc, IsDeleted';
-    DECLARE @BranchSelect1 NVARCHAR(MAX) = N'''b1000000-0000-0000-0000-000000000001'', @TenantId, N''GC'', N''Gulf Coast'', N''Houston'', N''TX'', N''US'', 1, @Now, 0';
-    DECLARE @BranchSelect2 NVARCHAR(MAX) = N'''b1000000-0000-0000-0000-000000000002'', @TenantId, N''NTX'', N''North Texas'', N''Dallas'', N''TX'', N''US'', 1, @Now, 0';
-    DECLARE @BranchSelect3 NVARCHAR(MAX) = N'''b1000000-0000-0000-0000-000000000003'', @TenantId, N''NE'', N''Northeast'', N''New York'', N''NY'', N''US'', 1, @Now, 0';
+    DECLARE @BranchColumns NVARCHAR(MAX) = N'BranchId, TenantId, BranchCode, BranchName, City, CountryCode, IsActive, CreatedDateUtc, IsDeleted';
+    DECLARE @BranchSelect1 NVARCHAR(MAX) = N'''b1000000-0000-0000-0000-000000000001'', @TenantId, N''GC'', N''Gulf Coast'', N''Houston'', N''US'', 1, @Now, 0';
+    DECLARE @BranchSelect2 NVARCHAR(MAX) = N'''b1000000-0000-0000-0000-000000000002'', @TenantId, N''NTX'', N''North Texas'', N''Dallas'', N''US'', 1, @Now, 0';
+    DECLARE @BranchSelect3 NVARCHAR(MAX) = N'''b1000000-0000-0000-0000-000000000003'', @TenantId, N''NE'', N''Northeast'', N''New York'', N''US'', 1, @Now, 0';
+
+    IF COL_LENGTH(N'Core.Branch', N'StateCode') IS NOT NULL
+    BEGIN
+        SET @BranchColumns += N', StateCode';
+        SET @BranchSelect1 += N', N''TX''';
+        SET @BranchSelect2 += N', N''TX''';
+        SET @BranchSelect3 += N', N''NY''';
+    END
+    ELSE IF COL_LENGTH(N'Core.Branch', N'StateProvince') IS NOT NULL
+    BEGIN
+        SET @BranchColumns += N', StateProvince';
+        SET @BranchSelect1 += N', N''TX''';
+        SET @BranchSelect2 += N', N''TX''';
+        SET @BranchSelect3 += N', N''NY''';
+    END
 
     IF COL_LENGTH(N'Core.Branch', N'CompanyId') IS NOT NULL
     BEGIN
@@ -6298,16 +6333,16 @@ DECLARE @Now DATETIME2 = SYSUTCDATETIME();
 IF OBJECT_ID(N'Core.Notification') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM Core.Notification WHERE TenantId = @TenantId AND RecipientUserId = @AdminUserId AND Subject = N'[Alert] Urgent binder exception requires review')
 BEGIN
     INSERT INTO Core.Notification
-        (NotificationId, TenantId, RecipientUserId, TemplateId, ChannelCode, Subject, Body, EntityName, EntityId, StatusCode, IsRead, ReadDateUtc, SentDateUtc, ErrorMessage, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        (NotificationId, TenantId, RecipientUserId, TemplateId, ChannelCode, Subject, Body, EntityName, EntityId, StatusCode, IsRead, ReadDateUtc, SentDateUtc, ErrorMessage, CreatedDateUtc, IsDeleted)
     VALUES
-        (NEWID(), @TenantId, @AdminUserId, NULL, N'InApp', N'[Alert] Urgent binder exception requires review', N'Northstar Robotics has an open subjectivity and requires tenant admin approval before binding.', N'Alert', NULL, N'Delivered', 0, NULL, DATEADD(minute, -20, @Now), NULL, DATEADD(minute, -20, @Now), @AdminUserId, 0),
-        (NEWID(), @TenantId, @AdminUserId, NULL, N'InApp', N'[Approval] Quote release pending', N'A $47,500 annual premium quote for Laredo Steel Works is pending your release to the client.', N'Approval', NULL, N'Delivered', 0, NULL, DATEADD(hour, -1, @Now), NULL, DATEADD(hour, -1, @Now), @AdminUserId, 0),
-        (NEWID(), @TenantId, @AdminUserId, NULL, N'Email', N'[Reminder] Renewal strategy meeting today', N'Apex Medical Group renewal strategy meeting starts at 3:00 PM. Review quote comparison and expiring terms.', N'Reminder', NULL, N'Sent', 0, NULL, DATEADD(hour, -3, @Now), NULL, DATEADD(hour, -3, @Now), @AdminUserId, 0),
-        (NEWID(), @TenantId, @AdminUserId, NULL, N'InApp', N'[System] Workflow automation audit completed', N'Workflow automation audit completed successfully with no failed actions in the last 24 hours.', N'System', NULL, N'Delivered', 1, DATEADD(hour, -4, @Now), DATEADD(hour, -5, @Now), NULL, DATEADD(hour, -5, @Now), @AdminUserId, 0),
-        (NEWID(), @TenantId, @AdminUserId, NULL, N'SMS', N'[Alert] Certificate rush request due today', N'Metro Freight certificate package must be issued before noon for landlord compliance.', N'Alert', NULL, N'Sent', 0, NULL, DATEADD(hour, -8, @Now), NULL, DATEADD(hour, -8, @Now), @AdminUserId, 0),
-        (NEWID(), @TenantId, @AdminUserId, NULL, N'Email', N'[Info] Carrier rate update published', N'Hartford filed a commercial auto rate change effective next renewal cycle. Review impacted accounts.', N'Info', NULL, N'Sent', 1, DATEADD(day, -1, @Now), DATEADD(day, -1, @Now), NULL, DATEADD(day, -1, @Now), @AdminUserId, 0),
-        (NEWID(), @TenantId, @AdminUserId, NULL, N'InApp', N'[Approval] Billing plan exception requested', N'Billing requested approval for a custom payment schedule on a renewal invoice.', N'Approval', NULL, N'Delivered', 0, NULL, DATEADD(day, -2, @Now), NULL, DATEADD(day, -2, @Now), @AdminUserId, 0),
-        (NEWID(), @TenantId, @AdminUserId, NULL, N'Email', N'[Reminder] Open enrollment communication deadline', N'Client portal open enrollment communication deadline is approaching. Confirm notification schedule.', N'Reminder', NULL, N'Failed', 0, NULL, NULL, N'SMTP timeout while sending reminder.', DATEADD(day, -3, @Now), @AdminUserId, 0);
+        (NEWID(), @TenantId, @AdminUserId, NULL, N'InApp', N'[Alert] Urgent binder exception requires review', N'Northstar Robotics has an open subjectivity and requires tenant admin approval before binding.', N'Alert', NULL, N'Delivered', 0, NULL, DATEADD(minute, -20, @Now), NULL, DATEADD(minute, -20, @Now), 0),
+        (NEWID(), @TenantId, @AdminUserId, NULL, N'InApp', N'[Approval] Quote release pending', N'A $47,500 annual premium quote for Laredo Steel Works is pending your release to the client.', N'Approval', NULL, N'Delivered', 0, NULL, DATEADD(hour, -1, @Now), NULL, DATEADD(hour, -1, @Now), 0),
+        (NEWID(), @TenantId, @AdminUserId, NULL, N'Email', N'[Reminder] Renewal strategy meeting today', N'Apex Medical Group renewal strategy meeting starts at 3:00 PM. Review quote comparison and expiring terms.', N'Reminder', NULL, N'Sent', 0, NULL, DATEADD(hour, -3, @Now), NULL, DATEADD(hour, -3, @Now), 0),
+        (NEWID(), @TenantId, @AdminUserId, NULL, N'InApp', N'[System] Workflow automation audit completed', N'Workflow automation audit completed successfully with no failed actions in the last 24 hours.', N'System', NULL, N'Delivered', 1, DATEADD(hour, -4, @Now), DATEADD(hour, -5, @Now), NULL, DATEADD(hour, -5, @Now), 0),
+        (NEWID(), @TenantId, @AdminUserId, NULL, N'SMS', N'[Alert] Certificate rush request due today', N'Metro Freight certificate package must be issued before noon for landlord compliance.', N'Alert', NULL, N'Sent', 0, NULL, DATEADD(hour, -8, @Now), NULL, DATEADD(hour, -8, @Now), 0),
+        (NEWID(), @TenantId, @AdminUserId, NULL, N'Email', N'[Info] Carrier rate update published', N'Hartford filed a commercial auto rate change effective next renewal cycle. Review impacted accounts.', N'Info', NULL, N'Sent', 1, DATEADD(day, -1, @Now), DATEADD(day, -1, @Now), NULL, DATEADD(day, -1, @Now), 0),
+        (NEWID(), @TenantId, @AdminUserId, NULL, N'InApp', N'[Approval] Billing plan exception requested', N'Billing requested approval for a custom payment schedule on a renewal invoice.', N'Approval', NULL, N'Delivered', 0, NULL, DATEADD(day, -2, @Now), NULL, DATEADD(day, -2, @Now), 0),
+        (NEWID(), @TenantId, @AdminUserId, NULL, N'Email', N'[Reminder] Open enrollment communication deadline', N'Client portal open enrollment communication deadline is approaching. Confirm notification schedule.', N'Reminder', NULL, N'Failed', 0, NULL, NULL, N'SMTP timeout while sending reminder.', DATEADD(day, -3, @Now), 0);
 END
 ";
 
@@ -11725,8 +11760,23 @@ JOIN Integration.CarrierDownloadBatch b ON b.CarrierDownloadBatchId = i.CarrierD
 
 DECLARE @TenantId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted, 0) = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000001');
 DECLARE @AdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId AND ISNULL(IsDeleted, 0) = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
-DECLARE @CarrierId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 CarrierId FROM Core.Carrier WHERE TenantId = @TenantId AND ISNULL(IsDeleted, 0) = 0 ORDER BY CarrierName), '9e3a20d9-3db1-4b5a-9f9e-4c7c5d940601');
-DECLARE @CarrierName NVARCHAR(200) = COALESCE((SELECT TOP 1 CarrierName FROM Core.Carrier WHERE CarrierId = @CarrierId), N'Travelers Insurance');
+DECLARE @CarrierId UNIQUEIDENTIFIER = '9e3a20d9-3db1-4b5a-9f9e-4c7c5d940601';
+DECLARE @CarrierName NVARCHAR(200) = N'Travelers Insurance';
+
+IF OBJECT_ID(N'Core.Carrier', N'U') IS NOT NULL
+BEGIN
+    EXEC sp_executesql N'
+        SELECT TOP 1 @CarrierIdOut = CarrierId,
+                     @CarrierNameOut = CarrierName
+        FROM Core.Carrier
+        WHERE TenantId = @TenantId AND ISNULL(IsDeleted, 0) = 0
+        ORDER BY CarrierName;',
+        N'@TenantId UNIQUEIDENTIFIER, @CarrierIdOut UNIQUEIDENTIFIER OUTPUT, @CarrierNameOut NVARCHAR(200) OUTPUT',
+        @TenantId, @CarrierId OUTPUT, @CarrierName OUTPUT;
+
+    SET @CarrierId = COALESCE(@CarrierId, '9e3a20d9-3db1-4b5a-9f9e-4c7c5d940601');
+    SET @CarrierName = COALESCE(@CarrierName, N'Travelers Insurance');
+END
 
 DECLARE @Batch1 UNIQUEIDENTIFIER = 'bd170000-0000-0000-0000-000000000001';
 DECLARE @Batch2 UNIQUEIDENTIFIER = 'bd170000-0000-0000-0000-000000000002';

@@ -18,6 +18,71 @@ public sealed class AuthRepository : IAuthRepository
         const string sql = @"
 DECLARE @PermissionHasIsDeleted BIT = CASE WHEN COL_LENGTH('IAM.Permission', 'IsDeleted') IS NULL THEN 0 ELSE 1 END;
 DECLARE @PermissionHasIsActive BIT = CASE WHEN COL_LENGTH('IAM.Permission', 'IsActive') IS NULL THEN 0 ELSE 1 END;
+DECLARE @RolePermissionHasIsDeleted BIT = CASE WHEN COL_LENGTH('IAM.RolePermission', 'IsDeleted') IS NULL THEN 0 ELSE 1 END;
+DECLARE @UserPermissionHasIsGranted BIT = CASE WHEN COL_LENGTH('IAM.UserPermission', 'IsGranted') IS NULL THEN 0 ELSE 1 END;
+DECLARE @UserPermissionHasIsDeleted BIT = CASE WHEN COL_LENGTH('IAM.UserPermission', 'IsDeleted') IS NULL THEN 0 ELSE 1 END;
+DECLARE @UserPermissionHasExpiresDateUtc BIT = CASE WHEN COL_LENGTH('IAM.UserPermission', 'ExpiresDateUtc') IS NULL THEN 0 ELSE 1 END;
+
+CREATE TABLE #EffectivePermissions
+(
+    UserId UNIQUEIDENTIFIER NOT NULL,
+    TenantId UNIQUEIDENTIFIER NOT NULL,
+    PermissionCode NVARCHAR(200) NOT NULL
+);
+
+IF OBJECT_ID(N'IAM.RolePermission', N'U') IS NOT NULL AND OBJECT_ID(N'IAM.Permission', N'U') IS NOT NULL
+BEGIN
+    DECLARE @RolePermissionSql NVARCHAR(MAX) = N'
+INSERT INTO #EffectivePermissions (UserId, TenantId, PermissionCode)
+SELECT DISTINCT ur.UserId, ur.TenantId, p.PermissionCode
+FROM IAM.[User] u
+INNER JOIN IAM.UserRole ur ON ur.UserId = u.UserId AND ur.TenantId = u.TenantId
+INNER JOIN IAM.RolePermission rp ON rp.RoleId = ur.RoleId
+INNER JOIN IAM.Permission p ON p.PermissionId = rp.PermissionId
+WHERE u.TenantId = @TenantId
+  AND u.IsDeleted = 0
+  AND (LOWER(u.Email) = LOWER(@UserNameOrEmail) OR LOWER(u.UserName) = LOWER(@UserNameOrEmail))
+  AND ur.IsActive = 1
+  AND ur.IsDeleted = 0
+  AND (ur.EffectiveEndDateUtc IS NULL OR ur.EffectiveEndDateUtc > SYSUTCDATETIME())'
+        + CASE WHEN @RolePermissionHasIsDeleted = 1 THEN N'
+  AND rp.IsDeleted = 0' ELSE N'' END
+        + CASE WHEN @PermissionHasIsActive = 1 THEN N'
+  AND p.IsActive = 1' ELSE N'' END
+        + CASE WHEN @PermissionHasIsDeleted = 1 THEN N'
+  AND p.IsDeleted = 0' ELSE N'' END;
+
+    EXEC sp_executesql @RolePermissionSql,
+        N'@TenantId UNIQUEIDENTIFIER, @UserNameOrEmail NVARCHAR(320)',
+        @TenantId, @UserNameOrEmail;
+END;
+
+IF OBJECT_ID(N'IAM.UserPermission', N'U') IS NOT NULL AND OBJECT_ID(N'IAM.Permission', N'U') IS NOT NULL
+BEGIN
+    DECLARE @UserPermissionSql NVARCHAR(MAX) = N'
+INSERT INTO #EffectivePermissions (UserId, TenantId, PermissionCode)
+SELECT DISTINCT up.UserId, up.TenantId, p.PermissionCode
+FROM IAM.[User] u
+INNER JOIN IAM.UserPermission up ON up.UserId = u.UserId AND up.TenantId = u.TenantId
+INNER JOIN IAM.Permission p ON p.PermissionId = up.PermissionId
+WHERE u.TenantId = @TenantId
+  AND u.IsDeleted = 0
+  AND (LOWER(u.Email) = LOWER(@UserNameOrEmail) OR LOWER(u.UserName) = LOWER(@UserNameOrEmail))'
+        + CASE WHEN @UserPermissionHasIsGranted = 1 THEN N'
+  AND up.IsGranted = 1' ELSE N'' END
+        + CASE WHEN @UserPermissionHasIsDeleted = 1 THEN N'
+  AND up.IsDeleted = 0' ELSE N'' END
+        + CASE WHEN @UserPermissionHasExpiresDateUtc = 1 THEN N'
+  AND (up.ExpiresDateUtc IS NULL OR up.ExpiresDateUtc > SYSUTCDATETIME())' ELSE N'' END
+        + CASE WHEN @PermissionHasIsActive = 1 THEN N'
+  AND p.IsActive = 1' ELSE N'' END
+        + CASE WHEN @PermissionHasIsDeleted = 1 THEN N'
+  AND p.IsDeleted = 0' ELSE N'' END;
+
+    EXEC sp_executesql @UserPermissionSql,
+        N'@TenantId UNIQUEIDENTIFIER, @UserNameOrEmail NVARCHAR(320)',
+        @TenantId, @UserNameOrEmail;
+END;
 
 SELECT TOP 1
     u.UserId,
@@ -54,31 +119,13 @@ SELECT TOP 1
        AND (ur.EffectiveEndDateUtc IS NULL OR ur.EffectiveEndDateUtc > SYSUTCDATETIME())
        AND r.IsActive = 1
        AND r.IsDeleted = 0) AS AssignedRoleNames,
-    (SELECT STRING_AGG(x.PermissionCode, ',')
-     FROM (
-        SELECT DISTINCT p.PermissionCode
-        FROM IAM.UserRole ur
-        INNER JOIN IAM.RolePermission rp ON rp.RoleId = ur.RoleId AND rp.IsDeleted = 0
-        INNER JOIN IAM.Permission p ON p.PermissionId = rp.PermissionId
-        WHERE ur.UserId = u.UserId
-          AND ur.TenantId = u.TenantId
-          AND ur.IsActive = 1
-          AND ur.IsDeleted = 0
-          AND (ur.EffectiveEndDateUtc IS NULL OR ur.EffectiveEndDateUtc > SYSUTCDATETIME())
-          AND (@PermissionHasIsActive = 0 OR p.IsActive = 1)
-          AND (@PermissionHasIsDeleted = 0 OR p.IsDeleted = 0)
-        UNION
-        SELECT DISTINCT p.PermissionCode
-        FROM IAM.UserPermission up
-        INNER JOIN IAM.Permission p ON p.PermissionId = up.PermissionId
-        WHERE up.UserId = u.UserId
-          AND up.TenantId = u.TenantId
-          AND up.IsGranted = 1
-          AND up.IsDeleted = 0
-          AND (up.ExpiresDateUtc IS NULL OR up.ExpiresDateUtc > SYSUTCDATETIME())
-          AND (@PermissionHasIsActive = 0 OR p.IsActive = 1)
-          AND (@PermissionHasIsDeleted = 0 OR p.IsDeleted = 0)
-     ) x) AS EffectivePermissionCodes
+     (SELECT STRING_AGG(x.PermissionCode, ',')
+      FROM (
+         SELECT DISTINCT ep.PermissionCode
+         FROM #EffectivePermissions ep
+         WHERE ep.UserId = u.UserId
+           AND ep.TenantId = u.TenantId
+      ) x) AS EffectivePermissionCodes
 FROM IAM.[User] u
 WHERE u.TenantId = @TenantId
   AND u.IsDeleted = 0
