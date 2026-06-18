@@ -3153,8 +3153,30 @@ public sealed partial class ApiClient
     public Task<PagedResult<TenantBrandingDto>?> SearchTenantBrandingAsync(string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<TenantBrandingDto>>($"api/platform/branding?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
-    public Task<TenantBrandingDto?> GetTenantBrandingAsync(Guid tenantId, CancellationToken cancellationToken = default)
-        => _httpClient.GetFromJsonAsync<TenantBrandingDto>($"api/platform/branding/tenant/{tenantId}", cancellationToken);
+    public async Task<TenantBrandingDto?> GetTenantBrandingAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        var branding = await _httpClient.GetFromJsonAsync<TenantBrandingDto>($"api/platform/branding/tenant/{tenantId}", cancellationToken);
+        if (branding is null)
+        {
+            return null;
+        }
+
+        branding.WhiteLabelName = CleanTenantBrandingValue(branding.WhiteLabelName);
+        branding.LogoUrl = CleanTenantBrandingValue(branding.LogoUrl);
+        branding.FaviconUrl = CleanTenantBrandingValue(branding.FaviconUrl);
+        branding.CustomDomain = CleanTenantBrandingValue(branding.CustomDomain);
+        branding.CustomCssUrl = CleanTenantBrandingValue(branding.CustomCssUrl);
+        branding.SupportEmail = CleanTenantBrandingValue(branding.SupportEmail);
+        branding.SupportPhone = CleanTenantBrandingValue(branding.SupportPhone);
+        branding.FooterText = CleanTenantBrandingValue(branding.FooterText);
+        return branding;
+    }
+
+    private static string? CleanTenantBrandingValue(string? value)
+    {
+        var trimmed = value?.Trim();
+        return string.IsNullOrWhiteSpace(trimmed) || !trimmed.Any(char.IsLetterOrDigit) ? null : trimmed;
+    }
 
     public async Task UpdateTenantBrandingAsync(Guid tenantId, UpdateTenantBrandingRequest request, CancellationToken cancellationToken = default)
     {
