@@ -25,5 +25,7 @@ public sealed class UpdateContactRequest
     public string? PreferredContactMethod { get; set; }
     [Required, StringLength(50)]
     public string StatusCode { get; set; } = "Active";
+    [Range(1, int.MaxValue)]
+    public int StatusCodeId { get; set; } = 1;
     public Guid? ModifiedByUserId { get; set; }
 }

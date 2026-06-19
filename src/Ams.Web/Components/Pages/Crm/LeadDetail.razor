@@ -1,0 +1,1662 @@
+@page "/crm/leads/{LeadId:guid}"
+@page "/leads/{LeadId:guid}"
+@namespace Ams.Web.Components.Pages.Crm
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Common.Validation
+@using Ams.Application.Features.LeadActivities
+@using Ams.Application.Features.Accounts
+@using Ams.Application.Features.Contacts
+@using Ams.Application.Features.Leads
+@using Ams.Application.Features.Opportunities
+@using Microsoft.AspNetCore.Components.Forms
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
+
+<PageTitle>@(_lead is null ? "Lead Detail" : $"{LeadDisplayName} - Lead Detail")</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="ldd-toast ldd-toast--@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ldd-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showEdit)
+{
+    <div class="ldd-modal-backdrop" role="presentation" @onclick="CloseEdit">
+        <div class="ldd-enterprise-modal ldd-enterprise-modal--wide" role="dialog" aria-modal="true" aria-labelledby="leadEditTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_editForm" OnValidSubmit="SaveEditAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-header">
+                    <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                    <span id="leadEditTitle">Edit lead</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseEdit" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>First name</label><InputText class="um-input" @bind-Value="_editForm.FirstName" /><ValidationMessage For="() => _editForm.FirstName" class="text-danger" /></div>
+                        <div class="um-field"><label>Last name</label><InputText class="um-input" @bind-Value="_editForm.LastName" /><ValidationMessage For="() => _editForm.LastName" class="text-danger" /></div>
+                        <div class="um-field um-field-wide"><label>Company</label><InputText class="um-input" @bind-Value="_editForm.AccountName" /><ValidationMessage For="() => _editForm.AccountName" class="text-danger" /></div>
+                        <div class="um-field"><label>Email</label><InputText class="um-input" type="email" @bind-Value="_editForm.Email" /><ValidationMessage For="() => _editForm.Email" class="text-danger" /></div>
+                        <div class="um-field"><label>Phone</label><InputText class="um-input" type="tel" @bind-Value="_editForm.Phone" /><ValidationMessage For="() => _editForm.Phone" class="text-danger" /></div>
+                        <div class="um-field"><label>Source</label><InputSelect class="um-input" @bind-Value="_editForm.SourceCode">@foreach (var source in _sourceOptions) { <option value="@source">@source</option> }</InputSelect><ValidationMessage For="() => _editForm.SourceCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Stage</label><InputSelect class="um-input" @bind-Value="_editForm.NurturingStageCode">@foreach (var stage in _stageOptions) { <option value="@stage">@stage</option> }</InputSelect><ValidationMessage For="() => _editForm.NurturingStageCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Priority</label><InputSelect class="um-input" @bind-Value="_editForm.PriorityCode">@foreach (var priority in _priorityOptions) { <option value="@priority">@priority</option> }</InputSelect><ValidationMessage For="() => _editForm.PriorityCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Estimated premium</label><InputNumber class="um-input" @bind-Value="_editForm.AnnualRevenue" /><ValidationMessage For="() => _editForm.AnnualRevenue" class="text-danger" /></div>
+                        <div class="um-field"><label>Score</label><InputNumber class="um-input" @bind-Value="_editForm.Score" /><ValidationMessage For="() => _editForm.Score" class="text-danger" /></div>
+                        <div class="um-field"><label>Owner</label><InputSelect class="um-input" @bind-Value="_editForm.AssignedToUserId"><option value="">Unassigned</option>@foreach (var owner in _ownerOptions) { <option value="@owner.Value">@owner.Label</option> }</InputSelect><ValidationMessage For="() => _editForm.AssignedToUserId" class="text-danger" /></div>
+                        <div class="um-field um-field-wide"><label>Interested service / notes</label><InputTextArea class="um-input" rows="4" @bind-Value="_editForm.InterestedService" /><ValidationMessage For="() => _editForm.InterestedService" class="text-danger" /></div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseEdit" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy"><i class="bi bi-check2" aria-hidden="true"></i> Save lead</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showAssign)
+{
+    <div class="ldd-modal-backdrop" role="presentation" @onclick="CloseAssign">
+        <div class="ldd-enterprise-modal" role="dialog" aria-modal="true" aria-labelledby="leadAssignTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_assignForm" OnValidSubmit="SaveAssignAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-header">
+                    <i class="bi bi-person-check" aria-hidden="true"></i>
+                    <span id="leadAssignTitle">Assign lead</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseAssign" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field um-field-wide"><label>Owner</label><InputSelect class="um-input" @bind-Value="_assignForm.AssignedToUserId"><option value="">Select owner</option>@foreach (var owner in _ownerOptions) { <option value="@owner.Value">@owner.Label</option> }</InputSelect><ValidationMessage For="() => _assignForm.AssignedToUserId" class="text-danger" /></div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseAssign" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy"><i class="bi bi-person-check" aria-hidden="true"></i> Assign</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showTabForm)
+{
+    <div class="ldd-modal-backdrop" role="presentation">
+        <div class="ldd-enterprise-modal ldd-enterprise-modal--wide" role="dialog" aria-modal="true" aria-labelledby="leadTabFormTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_tabForm" OnValidSubmit="SaveTabItemAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-header">
+                    <i class="bi @TabFormIcon" aria-hidden="true"></i>
+                    <span id="leadTabFormTitle">@TabFormTitle</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseTabForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        @if (_tabForm.Kind == LeadTabItemKind.Contact)
+                        {
+                            <div class="um-field"><label>First name <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_tabForm.FirstName" /></div>
+                            <div class="um-field"><label>Last name <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_tabForm.LastName" /></div>
+                            <div class="um-field"><label>Title</label><InputText class="um-input" @bind-Value="_tabForm.Title" /><ValidationMessage For="() => _tabForm.Title" class="text-danger" /></div>
+                            <div class="um-field"><label>Email</label><InputText class="um-input" type="email" @bind-Value="_tabForm.Email" /><ValidationMessage For="() => _tabForm.Email" class="text-danger" /></div>
+                            <div class="um-field"><label>Phone</label><InputText class="um-input" type="tel" @bind-Value="_tabForm.Phone" /><ValidationMessage For="() => _tabForm.Phone" class="text-danger" /></div>
+                            <div class="um-field"><label><InputCheckbox @bind-Value="_tabForm.IsPrimary" /> Primary contact</label></div>
+                        }
+                        else if (_tabForm.Kind == LeadTabItemKind.InterestLine)
+                        {
+                            <div class="um-field"><label>Line of business <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_tabForm.LineOfBusiness" /></div>
+                            <div class="um-field"><label>Target carrier</label><InputText class="um-input" @bind-Value="_tabForm.Carrier" /></div>
+                            <div class="um-field"><label>Current carrier</label><InputText class="um-input" @bind-Value="_tabForm.CurrentCarrier" /></div>
+                            <div class="um-field"><label>Estimated premium</label><InputNumber class="um-input" @bind-Value="_tabForm.EstPremium" /></div>
+                            <div class="um-field"><label>Expiration</label><InputDate class="um-input" @bind-Value="_tabForm.ExpiryDate" /></div>
+                            <div class="um-field"><label>Priority <span class="text-danger">*</span></label><InputSelect class="um-input" @bind-Value="_tabForm.Priority"><option>High</option><option>Medium</option><option>Low</option></InputSelect></div>
+                            <div class="um-field um-field-wide"><label>Notes</label><InputTextArea class="um-input" rows="4" @bind-Value="_tabForm.Notes" /></div>
+                        }
+                        else if (_tabForm.Kind == LeadTabItemKind.Activity)
+                        {
+                            <div class="um-field"><label>Type <span class="text-danger">*</span></label><InputSelect class="um-input" @bind-Value="_tabForm.ActivityTypeCode"><option>Call</option><option>Email</option><option>Meeting</option><option>Task</option><option>Note</option><option>Follow-up</option></InputSelect></div>
+                            <div class="um-field"><label>Activity date <span class="text-danger">*</span></label><InputDate class="um-input" @bind-Value="_tabForm.ActivityDate" /></div>
+                            <div class="um-field um-field-wide"><label>Subject <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_tabForm.Subject" /></div>
+                            <div class="um-field"><label>Duration minutes</label><InputNumber class="um-input" @bind-Value="_tabForm.DurationMinutes" /></div>
+                            <div class="um-field"><label>Outcome</label><InputText class="um-input" @bind-Value="_tabForm.OutcomeCode" /></div>
+                            <div class="um-field"><label><InputCheckbox @bind-Value="_tabForm.IsCompleted" /> Completed</label></div>
+                            <div class="um-field um-field-wide"><label>Notes</label><InputTextArea class="um-input" rows="4" @bind-Value="_tabForm.Notes" /></div>
+                        }
+                        else if (_tabForm.Kind == LeadTabItemKind.Communication)
+                        {
+                            <div class="um-field"><label>Channel <span class="text-danger">*</span></label><InputSelect class="um-input" @bind-Value="_tabForm.Channel"><option>Email</option><option>Phone</option><option>SMS</option><option>Workflow</option><option>Portal</option></InputSelect><ValidationMessage For="() => _tabForm.Channel" class="text-danger" /></div>
+                            <div class="um-field"><label>Sent at <span class="text-danger">*</span></label><InputDate class="um-input" @bind-Value="_tabForm.SentAt" /></div>
+                            <div class="um-field um-field-wide"><label>Subject <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_tabForm.Subject" /></div>
+                            <div class="um-field"><label><InputCheckbox @bind-Value="_tabForm.Opened" /> Opened</label></div>
+                            <div class="um-field"><label><InputCheckbox @bind-Value="_tabForm.Clicked" /> Clicked</label></div>
+                            <div class="um-field um-field-wide"><label>Preview <span class="text-danger">*</span></label><InputTextArea class="um-input" rows="4" @bind-Value="_tabForm.Preview" /></div>
+                        }
+                        else if (_tabForm.Kind == LeadTabItemKind.Campaign)
+                        {
+                            <div class="um-field um-field-wide"><label>Campaign name <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_tabForm.CampaignName" /></div>
+                            <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect class="um-input" @bind-Value="_tabForm.CampaignStatus"><option>Active</option><option>Paused</option><option>Completed</option></InputSelect></div>
+                            <div class="um-field"><label>Enrolled at <span class="text-danger">*</span></label><InputDate class="um-input" @bind-Value="_tabForm.EnrolledAt" /></div>
+                            <div class="um-field"><label>Last touch</label><InputDate class="um-input" @bind-Value="_tabForm.LastTouch" /></div>
+                            <div class="um-field"><label>Emails sent</label><InputNumber class="um-input" @bind-Value="_tabForm.EmailsSent" /></div>
+                            <div class="um-field"><label>Emails opened</label><InputNumber class="um-input" @bind-Value="_tabForm.EmailsOpen" /></div>
+                            <div class="um-field"><label>Clicks</label><InputNumber class="um-input" @bind-Value="_tabForm.Clicks" /></div>
+                        }
+                        else if (_tabForm.Kind == LeadTabItemKind.Document)
+                        {
+                            @if (!_editingTabItemId.HasValue)
+                            {
+                                <div class="um-field um-field-wide"><label>Document file <span class="text-danger">*</span></label><InputFile class="um-input" OnChange="OnLeadDocumentSelected" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.png,.jpg,.jpeg,.txt" />@if (_selectedDocumentFile is not null) { <small class="ldd-text-muted">@_selectedDocumentFile.Name (@SizeText((int)Math.Ceiling(_selectedDocumentFile.Size / 1024m))) selected</small> }<ValidationMessage For="() => _tabForm.FileName" class="text-danger" /></div>
+                            }
+                            <div class="um-field um-field-wide"><label>File name <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_tabForm.FileName" /><ValidationMessage For="() => _tabForm.FileName" class="text-danger" /></div>
+                            <div class="um-field"><label>Extension <span class="text-danger">*</span></label><InputSelect class="um-input" @bind-Value="_tabForm.Extension"><option value="">Select type</option>@foreach (var extension in _documentExtensionOptions) { <option value="@extension">@extension.ToUpperInvariant()</option> }</InputSelect><ValidationMessage For="() => _tabForm.Extension" class="text-danger" /></div>
+                            <div class="um-field"><label>Category <span class="text-danger">*</span></label><InputSelect class="um-input" @bind-Value="_tabForm.Category"><option value="">Select category</option>@foreach (var category in _documentCategoryOptions) { <option value="@category">@category</option> }</InputSelect><ValidationMessage For="() => _tabForm.Category" class="text-danger" /></div>
+                            <div class="um-field"><label>Size KB</label><InputNumber class="um-input" @bind-Value="_tabForm.SizeKb" disabled="@(_selectedDocumentFile is not null)" /><ValidationMessage For="() => _tabForm.SizeKb" class="text-danger" /></div>
+                            <div class="um-field"><label>Uploaded at <span class="text-danger">*</span></label><InputDate class="um-input" @bind-Value="_tabForm.UploadedAt" /><ValidationMessage For="() => _tabForm.UploadedAt" class="text-danger" /></div>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseTabForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy"><i class="bi bi-check2" aria-hidden="true"></i> @(_editingTabItemId.HasValue ? "Save item" : "Create item")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_confirmAction is not null)
+{
+    <div class="ldd-modal-backdrop" role="presentation" @onclick="CloseConfirm">
+        <div class="ldd-enterprise-modal" role="dialog" aria-modal="true" aria-labelledby="leadConfirmTitle" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi @_confirmAction.Icon" aria-hidden="true"></i>
+                <span id="leadConfirmTitle">@_confirmAction.Title</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseConfirm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="um-modal-body"><p class="ldd-notes">@_confirmAction.Message</p></div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseConfirm" disabled="@_busy">Cancel</button>
+                <button type="button" class="um-btn @_confirmAction.ButtonClass" @onclick="ExecuteConfirmedAsync" disabled="@_busy">@_confirmAction.ButtonText</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_loading)
+{
+    <div class="ldd-page-shell">
+        <div class="ldd-loading"><span class="um-spin" aria-hidden="true"></span><span>Loading lead detail...</span></div>
+    </div>
+}
+else if (_lead is null)
+{
+    <div class="ldd-page-shell">
+        <div class="ldd-not-found">
+            <i class="bi bi-person-x ldd-not-found-icon" aria-hidden="true"></i>
+            <h2>Lead not found</h2>
+            <p>The selected CRM lead could not be loaded from the existing lead workflow.</p>
+            <button type="button" class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/crm/leads")'><i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Leads</button>
+        </div>
+    </div>
+}
+else
+{
+    <div class="ldd-page-shell">
+        <AppPageHeader Title="@LeadDisplayName" Subtitle="@LeadHeaderSubtitle" Icon="bi-person-lines-fill" ReturnUrl="/crm/leads" ReturnLabel="Back to Leads">
+            <Actions>
+                <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+            </Actions>
+        </AppPageHeader>
+
+        @if (_loadError is not null)
+        {
+            <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+                <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                <span>@_loadError</span>
+            </div>
+        }
+
+        <section class="ldd-id-strip" aria-label="Lead identity">
+            <span class="ldd-avatar @AvatarClass(LeadDisplayName)">@Initials(LeadDisplayName)</span>
+            <div class="ldd-id-meta">
+                <span class="ldd-meta-chip ldd-mono"><i class="bi bi-hash" aria-hidden="true"></i> @Safe(_lead.LeadNumber, "Unnumbered")</span>
+                <span class="@StageBadge(_lead.NurturingStageCode)">@StageLabel</span>
+                <span class="@PriorityBadge(_lead.PriorityCode)">@PriorityLabel</span>
+                <span class="ldd-source-chip"><i class="bi bi-megaphone" aria-hidden="true"></i> @Safe(_lead.SourceCode, "Unknown source")</span>
+                <span class="ldd-meta-chip"><i class="bi bi-building" aria-hidden="true"></i> @Safe(_lead.AccountName, "No account")</span>
+                <span class="ldd-meta-chip"><i class="bi bi-calendar3" aria-hidden="true"></i> Created @_lead.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</span>
+            </div>
+        </section>
+
+        <section class="ldd-command-center" aria-label="Lead command center">
+            <article class="ldd-command-card ldd-command-card--primary">
+                <span class="ldd-command-eyebrow">Conversion readiness</span>
+                <div class="ldd-readiness-row"><strong>@ReadinessPercent%</strong><span>@ReadinessLabel</span></div>
+                <div class="ldd-progress-track"><div class="ldd-progress-fill" style="width:@ReadinessPercent%"></div></div>
+                <small>@ReadinessDetail</small>
+            </article>
+            <article class="ldd-command-card">
+                <span class="ldd-command-label">Lead score</span>
+                <strong>@ScoreDisplay</strong>
+                <small>@MatchedScoreFactors of @_scoreFactors.Count score factor(s) matched</small>
+            </article>
+            <article class="ldd-command-card">
+                <span class="ldd-command-label">Estimated premium</span>
+                <strong>@Money(_lead.AnnualRevenue)</strong>
+                <small>@_interestLines.Count line(s) of interest totaling @Money(_interestLines.Sum(l => l.EstPremium))</small>
+            </article>
+            <article class="ldd-command-card">
+                <span class="ldd-command-label">Last touch</span>
+                <strong>@LastTouchText</strong>
+                <small>@_activities.Count activity item(s), @_communications.Count communication(s)</small>
+            </article>
+        </section>
+
+        <section class="ldd-kpi-strip" aria-label="Lead detail KPI filters">
+            <button type="button" class="@KpiClass(0)" title="Show lead overview" @onclick="() => SetTab(0)"><span class="ldd-kpi-icon ldd-kpi-icon--blue"><i class="bi bi-person-vcard" aria-hidden="true"></i></span><span class="ldd-kpi-label">Overview</span><strong>@ReadinessPercent%</strong><small>Lead readiness</small></button>
+            <button type="button" class="@KpiClass(1)" title="Show contacts" @onclick="() => SetTab(1)"><span class="ldd-kpi-icon ldd-kpi-icon--green"><i class="bi bi-people" aria-hidden="true"></i></span><span class="ldd-kpi-label">Contacts</span><strong>@_contacts.Count</strong><small>@PrimaryContactText</small></button>
+            <button type="button" class="@KpiClass(2)" title="Show coverage interest" @onclick="() => SetTab(2)"><span class="ldd-kpi-icon ldd-kpi-icon--purple"><i class="bi bi-shield-plus" aria-hidden="true"></i></span><span class="ldd-kpi-label">Interest</span><strong>@_interestLines.Count</strong><small>@Money(_interestLines.Sum(l => l.EstPremium)) total</small></button>
+            <button type="button" class="@KpiClass(3)" title="Show activities" @onclick="() => SetTab(3)"><span class="ldd-kpi-icon ldd-kpi-icon--amber"><i class="bi bi-lightning-charge" aria-hidden="true"></i></span><span class="ldd-kpi-label">Activity</span><strong>@_activities.Count</strong><small>@CompletedActivityText</small></button>
+            <button type="button" class="@KpiClass(4)" title="Show communications and campaigns" @onclick="() => SetTab(4)"><span class="ldd-kpi-icon ldd-kpi-icon--teal"><i class="bi bi-broadcast" aria-hidden="true"></i></span><span class="ldd-kpi-label">Engagement</span><strong>@EngagementScoreDisplay</strong><small>@EngagementLevel</small></button>
+            <button type="button" class="@KpiClass(5)" title="Show documents" @onclick="() => SetTab(5)"><span class="ldd-kpi-icon ldd-kpi-icon--slate"><i class="bi bi-folder2-open" aria-hidden="true"></i></span><span class="ldd-kpi-label">Documents</span><strong>@_documents.Count</strong><small>@DocumentSizeText</small></button>
+        </section>
+
+        <div class="ldd-layout">
+            <main class="ldd-tabs-col">
+                <section class="ldd-native-tabs" role="tablist" aria-label="Lead detail sections">
+                    @foreach (var tab in _tabs)
+                    {
+                        <button type="button" class="@TabClass(tab.Index)" role="tab" aria-selected="@(_activeTab == tab.Index)" @onclick="() => SetTab(tab.Index)">
+                            <i class="bi @tab.Icon" aria-hidden="true"></i>
+                            <span>@tab.Label</span>
+                            <strong>@TabCount(tab.Key)</strong>
+                        </button>
+                    }
+                </section>
+
+                <section class="ldd-native-panels">
+                    @if (_activeTab == 0)
+                    {
+                        <div class="ldd-tab-body">
+                            <div class="ldd-info-card">
+                                <h2 class="ldd-section-hdr">Lead profile</h2>
+                                <div class="ldd-field-grid">
+                                    @DetailField("Lead #", Safe(_lead.LeadNumber, "-"))
+                                    @DetailField("Status", StatusLabel(_lead.StatusCode))
+                                    @DetailField("Stage", StageLabel)
+                                    @DetailField("Priority", PriorityLabel)
+                                    @DetailField("Source", Safe(_lead.SourceCode, "-"))
+                                    @DetailField("Company", Safe(_lead.AccountName, "-"))
+                                    @DetailField("Email", Safe(_lead.Email, "-"))
+                                    @DetailField("Phone", Safe(_lead.Phone, "-"))
+                                    @DetailField("Assigned User", OwnerName)
+                                    @DetailField("Qualified", _lead.QualifiedDate?.ToLocalTime().ToString("MMM d, yyyy") ?? "Not qualified")
+                                    @DetailField("Created", _lead.CreatedDateUtc.ToLocalTime().ToString("f"))
+                                    @DetailField("Modified", _lead.ModifiedDateUtc?.ToLocalTime().ToString("f") ?? "-")
+                                </div>
+                            </div>
+                            <div class="ldd-info-card">
+                                <h2 class="ldd-section-hdr">Interested service / notes</h2>
+                                <p class="ldd-notes">@Safe(_lead.InterestedService, "No service interest or notes have been captured for this lead.")</p>
+                            </div>
+                            <div class="ldd-info-card">
+                                <h2 class="ldd-section-hdr">Conversion checklist</h2>
+                                <div class="ldd-field-grid">
+                                    @ChecklistField("Identity", HasIdentity, "Name, company, and contact detail")
+                                    @ChecklistField("Primary contact", _contacts.Any(c => c.IsPrimary), "A decision-maker marked primary")
+                                    @ChecklistField("Coverage interest", _interestLines.Count > 0, "At least one line of business")
+                                    @ChecklistField("Engagement", TotalEngagementEvents > 0, "Activities, communications, or campaigns")
+                                    @ChecklistField("Documents", _documents.Count > 0, "Supporting files attached")
+                                    @ChecklistField("Qualified", _lead.QualifiedDate.HasValue || string.Equals(_lead.NurturingStageCode, "Qualified", StringComparison.OrdinalIgnoreCase), "Ready for opportunity workflow")
+                                </div>
+                            </div>
+                        </div>
+                    }
+                    else if (_activeTab == 1)
+                    {
+                        <div class="ldd-tab-body">
+                            <div class="ldd-tab-toolbar"><span class="ldd-tab-count">@_contacts.Count contact(s)</span><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenCreateTabItem(LeadTabItemKind.Contact)"><i class="bi bi-person-plus" aria-hidden="true"></i> Add contact</button></div>
+                            @if (_contacts.Count == 0)
+                            {
+                                @EmptyState("bi-person-plus", "No contacts", "Add stakeholders and decision makers from the lead workflow to complete the profile.")
+                            }
+                            else
+                            {
+                                <div class="ldd-contact-list">
+                                    @foreach (var contact in _contacts.OrderByDescending(c => c.IsPrimary).ThenBy(c => c.LastName).ThenBy(c => c.FirstName))
+                                    {
+                                        <article class="ldd-contact-card">
+                                            <span class="ldd-contact-avatar @AvatarClass(ContactName(contact))">@Initials(ContactName(contact))</span>
+                                            <div class="ldd-contact-body">
+                                                <div class="ldd-contact-name">@ContactName(contact)</div>
+                                                <div class="ldd-contact-title">@Safe(contact.Title, "Stakeholder")</div>
+                                                <div class="ldd-contact-links">
+                                                    @if (!string.IsNullOrWhiteSpace(contact.Email))
+                                                    {
+                                                        <a class="ldd-contact-link" href="mailto:@contact.Email"><i class="bi bi-envelope" aria-hidden="true"></i>@contact.Email</a>
+                                                    }
+                                                    @if (!string.IsNullOrWhiteSpace(contact.Phone))
+                                                    {
+                                                        <a class="ldd-contact-link" href="tel:@contact.Phone"><i class="bi bi-telephone" aria-hidden="true"></i>@contact.Phone</a>
+                                                    }
+                                                </div>
+                                            </div>
+                                            @if (contact.IsPrimary)
+                                            {
+                                                <span class="ldd-primary-badge">Primary</span>
+                                            }
+                                            <div class="d-flex gap-2">
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditTabItem(contact)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDeleteTabItem(LeadTabItemKind.Contact, contact.ContactId, ContactName(contact))"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                            </div>
+                                        </article>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                    else if (_activeTab == 2)
+                    {
+                        <div class="ldd-tab-body">
+                            <div class="ldd-tab-toolbar"><span class="ldd-tab-count">@_interestLines.Count line(s) of interest</span><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenCreateTabItem(LeadTabItemKind.InterestLine)"><i class="bi bi-shield-plus" aria-hidden="true"></i> Add interest</button></div>
+                            @if (_interestLines.Count == 0)
+                            {
+                                @EmptyState("bi-shield-plus", "No coverage interest", "Capture lines of business, current carriers, premium, and expiration dates for this lead.")
+                            }
+                            else
+                            {
+                                <div class="ldd-table-wrap"><table class="ldd-enterprise-table"><thead><tr><th>Line</th><th>Target carrier</th><th>Current carrier</th><th>Expiration</th><th>Priority</th><th class="ldd-text-end">Est. premium</th><th class="ldd-text-end">Actions</th></tr></thead><tbody>
+                                    @foreach (var line in _interestLines.OrderByDescending(l => l.EstPremium))
+                                    {
+                                        <tr><td><strong>@line.LineOfBusiness</strong><div class="ldd-text-muted">@Safe(line.Notes, "-")</div></td><td>@Safe(line.Carrier, "-")</td><td>@Safe(line.CurrentCarrier, "-")</td><td class="@ExpiryClass(line.ExpiryDate)">@DateOrDash(line.ExpiryDate)</td><td><span class="@LinePriorityBadge(line.Priority)">@line.Priority</span></td><td class="ldd-text-end ldd-mono ldd-bold">@Money(line.EstPremium)</td><td class="ldd-text-end"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditTabItem(line)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDeleteTabItem(LeadTabItemKind.InterestLine, line.InterestLineId, line.LineOfBusiness)"><i class="bi bi-trash" aria-hidden="true"></i></button></td></tr>
+                                    }
+                                </tbody></table></div>
+                            }
+                        </div>
+                    }
+                    else if (_activeTab == 3)
+                    {
+                        <div class="ldd-tab-body">
+                            <div class="ldd-tab-toolbar"><span class="ldd-tab-count">@_activities.Count activit@(_activities.Count == 1 ? "y" : "ies")</span><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenCreateTabItem(LeadTabItemKind.Activity)"><i class="bi bi-lightning-charge" aria-hidden="true"></i> Add activity</button></div>
+                            @if (_activities.Count == 0)
+                            {
+                                @EmptyState("bi-lightning-charge", "No activities", "Lead calls, meetings, notes, and follow-ups will appear here.")
+                            }
+                            else
+                            {
+                                <div class="ldd-timeline">
+                                    @foreach (var activity in _activities.OrderByDescending(a => a.ActivityDate))
+                                    {
+                                        <article class="ldd-tl-item">
+                                            <span class="ldd-tl-icon @ActivityIconClass(activity.ActivityTypeCode)"><i class="bi @ActivityIcon(activity.ActivityTypeCode)" aria-hidden="true"></i></span>
+                                            <div class="ldd-tl-body">
+                                                <div class="ldd-tl-hdr"><span class="ldd-tl-type">@activity.ActivityTypeCode</span><span class="ldd-tl-by">@Safe(activity.ProducerName, "Unassigned")</span><span class="ldd-tl-when">@activity.ActivityDate.ToLocalTime().ToString("g")</span></div>
+                                                <div class="ldd-tl-subject">@activity.Subject</div>
+                                                @if (!string.IsNullOrWhiteSpace(activity.Notes))
+                                                {
+                                                    <p class="ldd-tl-notes">@activity.Notes</p>
+                                                }
+                                                <div class="ldd-tl-follow"><i class="bi @(activity.IsCompleted ? "bi-check-circle" : "bi-clock")" aria-hidden="true"></i>@(activity.IsCompleted ? "Completed" : "Open")@DurationText(activity)</div>
+                                                <div class="d-flex gap-2 mt-2"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditTabItem(activity)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDeleteTabItem(LeadTabItemKind.Activity, activity.ActivityId, activity.Subject)"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button></div>
+                                            </div>
+                                        </article>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                    else if (_activeTab == 4)
+                    {
+                        <div class="ldd-tab-body">
+                            <div class="ldd-tab-toolbar"><span class="ldd-tab-count">@_communications.Count communication(s), @_campaigns.Count campaign(s)</span><div class="d-flex gap-2"><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenCreateTabItem(LeadTabItemKind.Communication)"><i class="bi bi-chat-dots" aria-hidden="true"></i> Add communication</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenCreateTabItem(LeadTabItemKind.Campaign)"><i class="bi bi-megaphone" aria-hidden="true"></i> Add campaign</button></div></div>
+                            <div class="ldd-info-card">
+                                <h2 class="ldd-section-hdr">Communications</h2>
+                                @if (_communications.Count == 0)
+                                {
+                                    @EmptyState("bi-chat-dots", "No communications", "Email, phone, SMS, and workflow communications will appear here.")
+                                }
+                                else
+                                {
+                                    <div class="ldd-comms-list">
+                                        @foreach (var comm in _communications.OrderByDescending(c => c.SentAt))
+                                        {
+                                            <article class="ldd-comm-row">
+                                                <span class="ldd-comm-icon @CommunicationIconClass(comm.Channel)"><i class="bi @CommunicationIcon(comm.Channel)" aria-hidden="true"></i></span>
+                                                <div class="ldd-comm-body"><div class="ldd-comm-hdr"><span class="ldd-comm-subject">@comm.Subject</span><span class="ldd-comm-channel">@comm.Channel</span></div><div class="ldd-comm-preview">@comm.Preview</div><div class="ldd-comm-meta"><span>@Safe(comm.SentByName, "System")</span><span>@comm.SentAt.ToLocalTime().ToString("g")</span>@if (comm.Opened) { <span class="ldd-comm-opened"><i class="bi bi-envelope-open" aria-hidden="true"></i>Opened</span> }@if (comm.Clicked) { <span class="ldd-comm-clicked"><i class="bi bi-cursor" aria-hidden="true"></i>Clicked</span> }</div><div class="d-flex gap-2 mt-2"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditTabItem(comm)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDeleteTabItem(LeadTabItemKind.Communication, comm.CommunicationId, comm.Subject)"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button></div></div>
+                                            </article>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                            <div class="ldd-info-card">
+                                <h2 class="ldd-section-hdr">Campaign enrollment</h2>
+                                @if (_campaigns.Count == 0)
+                                {
+                                    @EmptyState("bi-megaphone", "No campaign enrollments", "Marketing campaign enrollment and response metrics will appear here.")
+                                }
+                                else
+                                {
+                                    <div class="ldd-table-wrap"><table class="ldd-enterprise-table"><thead><tr><th>Campaign</th><th>Status</th><th>Enrolled</th><th>Last touch</th><th class="ldd-text-end">Sent</th><th class="ldd-text-end">Open</th><th class="ldd-text-end">Clicks</th><th class="ldd-text-end">Actions</th></tr></thead><tbody>
+                                        @foreach (var campaign in _campaigns.OrderByDescending(c => c.LastTouch ?? c.EnrolledAt))
+                                        {
+                                            <tr><td><strong>@campaign.CampaignName</strong></td><td><span class="@CampaignStatusBadge(campaign.Status)">@campaign.Status</span></td><td>@campaign.EnrolledAt.ToLocalTime().ToString("MMM d, yyyy")</td><td>@DateOrDash(campaign.LastTouch)</td><td class="ldd-text-end ldd-mono">@campaign.EmailsSent</td><td class="ldd-text-end ldd-mono">@campaign.EmailsOpen</td><td class="ldd-text-end ldd-mono">@campaign.Clicks</td><td class="ldd-text-end"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditTabItem(campaign)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDeleteTabItem(LeadTabItemKind.Campaign, campaign.EnrollmentId, campaign.CampaignName)"><i class="bi bi-trash" aria-hidden="true"></i></button></td></tr>
+                                        }
+                                    </tbody></table></div>
+                                }
+                            </div>
+                        </div>
+                    }
+                    else if (_activeTab == 5)
+                    {
+                        <div class="ldd-tab-body">
+                            <div class="ldd-tab-toolbar"><span class="ldd-tab-count">@_documents.Count document(s)</span><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenCreateTabItem(LeadTabItemKind.Document)"><i class="bi bi-folder-plus" aria-hidden="true"></i> Add document</button></div>
+                            @if (_documents.Count == 0)
+                            {
+                                @EmptyState("bi-folder2-open", "No documents", "Applications, statements, loss runs, and supporting lead documents will appear here.")
+                            }
+                            else
+                            {
+                                <div class="ldd-table-wrap"><table class="ldd-enterprise-table"><thead><tr><th>File</th><th>Category</th><th>Uploaded by</th><th>Uploaded</th><th class="ldd-text-end">Size</th><th class="ldd-text-end">Actions</th></tr></thead><tbody>
+                                    @foreach (var doc in _documents.OrderByDescending(d => d.UploadedAt))
+                                    {
+                                        <tr><td><span class="ldd-doc-name"><i class="bi @DocumentIcon(doc.Extension)" aria-hidden="true"></i><strong>@doc.FileName</strong></span><div class="ldd-text-muted">@doc.Extension.ToUpperInvariant()</div></td><td>@doc.Category</td><td>@Safe(doc.UploadedByName, "System")</td><td>@doc.UploadedAt.ToLocalTime().ToString("g")</td><td class="ldd-text-end ldd-mono">@SizeText(doc.SizeKb)</td><td class="ldd-text-end"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditTabItem(doc)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDeleteTabItem(LeadTabItemKind.Document, doc.DocumentId, doc.FileName)"><i class="bi bi-trash" aria-hidden="true"></i></button></td></tr>
+                                    }
+                                </tbody></table></div>
+                            }
+                        </div>
+                    }
+                </section>
+            </main>
+
+            <aside class="ldd-right-panel" aria-label="Lead intelligence panel">
+                <section class="ldd-panel-card ldd-panel-card--nba">
+                    <div class="ldd-panel-card-hdr"><i class="bi bi-stars ldd-panel-icon ldd-pi--nba" aria-hidden="true"></i><span class="ldd-panel-title">Lead actions</span><span class="ldd-ai-chip"><i class="bi bi-cpu" aria-hidden="true"></i> AI</span></div>
+                    <div class="ldd-action-row">
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenEdit"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenAssign"><i class="bi bi-person-check" aria-hidden="true"></i> Assign</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ConfirmDisqualify"><i class="bi bi-x-circle" aria-hidden="true"></i> Disqualify</button>
+                    </div>
+                    <button type="button" class="um-btn um-btn-primary w-100 justify-content-center mt-2" @onclick="OpenConvertWorkflow"><i class="bi bi-arrow-up-right-circle" aria-hidden="true"></i> Convert Lead</button>
+                </section>
+
+                <section class="ldd-panel-card">
+                    <div class="ldd-panel-card-hdr"><i class="bi bi-speedometer2 ldd-panel-icon ldd-pi--score" aria-hidden="true"></i><span class="ldd-panel-title">Score factors</span><span class="ldd-score-num">@ScoreDisplay</span></div>
+                    <div class="ldd-score-bar-track"><div class="ldd-score-bar-fill" style="width:@ScorePercent%;background:@ScoreColor"></div></div>
+                    @if (_scoreFactors.Count == 0)
+                    {
+                        <p class="ldd-nba-empty">No score factor details are available for this lead.</p>
+                    }
+                    else
+                    {
+                        <div class="ldd-score-breakdown">
+                            @foreach (var factor in _scoreFactors.OrderByDescending(f => Math.Abs(f.Points)).Take(6))
+                            {
+                                <div class="ldd-sf-row"><span class="ldd-sf-lbl" title="@factor.RuleName">@factor.RuleName</span><span class="ldd-sf-track"><span class="ldd-sf-fill @(factor.Points >= 0 ? "ldd-sf--pos" : "ldd-sf--neg")" style="width:@FactorWidth(factor.Points)%"></span></span><span class="ldd-sf-pts @(factor.Points >= 0 ? "ldd-pts--pos" : "ldd-pts--neg")">@(factor.Points >= 0 ? "+" : "")@factor.Points</span></div>
+                            }
+                        </div>
+                    }
+                </section>
+
+                <section class="ldd-panel-card">
+                    <div class="ldd-panel-card-hdr"><i class="bi bi-broadcast ldd-panel-icon ldd-pi--engage" aria-hidden="true"></i><span class="ldd-panel-title">Engagement</span><span class="@EngagementBadgeClass">@EngagementLevel</span></div>
+                    <div class="ldd-engage-metrics">
+                        <div class="ldd-em-row"><i class="bi bi-envelope ldd-em-icon" aria-hidden="true"></i><span class="ldd-em-lbl">Emails sent</span><span class="ldd-em-val">@(_engagement?.EmailsSent ?? _campaigns.Sum(c => c.EmailsSent))</span></div>
+                        <div class="ldd-em-row"><i class="bi bi-envelope-open ldd-em-icon" aria-hidden="true"></i><span class="ldd-em-lbl">Emails opened</span><span class="ldd-em-val">@(_engagement?.EmailsOpened ?? _campaigns.Sum(c => c.EmailsOpen))</span></div>
+                        <div class="ldd-em-row"><i class="bi bi-cursor ldd-em-icon" aria-hidden="true"></i><span class="ldd-em-lbl">Clicks</span><span class="ldd-em-val">@(_engagement?.Clicks ?? _campaigns.Sum(c => c.Clicks))</span></div>
+                        <div class="ldd-em-row"><i class="bi bi-clock-history ldd-em-icon" aria-hidden="true"></i><span class="ldd-em-lbl">Days since touch</span><span class="ldd-em-val">@(_engagement?.DaysSinceTouch.ToString(CultureInfo.InvariantCulture) ?? DaysSinceLastTouch.ToString(CultureInfo.InvariantCulture))</span></div>
+                    </div>
+                </section>
+
+                <section class="ldd-panel-card ldd-panel-card--nba">
+                    <div class="ldd-panel-card-hdr"><i class="bi bi-magic ldd-panel-icon ldd-pi--nba" aria-hidden="true"></i><span class="ldd-panel-title">Next best action</span></div>
+                    <div class="ldd-nba-list">
+                        @foreach (var action in NextActions)
+                        {
+                            <article class="ldd-nba-item @(action.IsHigh ? "ldd-nba-item--high" : string.Empty)"><span class="ldd-nba-icon @action.IconClass"><i class="bi @action.Icon" aria-hidden="true"></i></span><div class="ldd-nba-body"><div class="ldd-nba-action">@action.Title</div><div class="ldd-nba-reason">@action.Reason</div><div class="ldd-nba-due @(action.IsHigh ? "ldd-nba-due--urgent" : string.Empty)"><i class="bi bi-calendar-event" aria-hidden="true"></i>@action.DueText</div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm ldd-nba-act-btn" @onclick="() => SetTab(action.TabIndex)">Open</button></article>
+                        }
+                    </div>
+                </section>
+            </aside>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid LeadId { get; set; }
+
+    private LeadDto? _lead;
+    private List<LeadContactDto> _contacts = [];
+    private List<LeadInterestLineDto> _interestLines = [];
+    private List<LeadActivityDto> _activities = [];
+    private List<LeadCommunicationDto> _communications = [];
+    private List<LeadCampaignEnrollmentDto> _campaigns = [];
+    private List<LeadDocumentDto> _documents = [];
+    private List<LeadScoreFactorDto> _scoreFactors = [];
+    private LeadEngagementSummaryDto? _engagement;
+    private Guid _tenantId;
+    private Guid _currentUserId;
+    private bool _loading = true;
+    private bool _busy;
+    private bool _showEdit;
+    private bool _showAssign;
+    private bool _showTabForm;
+    private string? _loadError;
+    private int _activeTab;
+    private bool _toastVisible;
+    private string _toastKind = "success";
+    private string _toastMessage = string.Empty;
+    private ConfirmAction? _confirmAction;
+    private LeadEditForm _editForm = new();
+    private LeadAssignForm _assignForm = new();
+    private LeadTabItemForm _tabForm = new();
+    private IBrowserFile? _selectedDocumentFile;
+    private Guid? _editingTabItemId;
+    private List<OwnerOption> _ownerOptions = [];
+
+    private static readonly string[] _stageOptions = ["New", "Contacted", "Qualified", "Proposal", "Negotiation", "Converted", "Lost"];
+    private static readonly string[] _sourceOptions = ["Referral", "Website", "Cold Call", "Social", "Email", "Event", "Partner", "Inbound"];
+    private static readonly string[] _priorityOptions = ["Hot", "Warm", "Cold", "High", "Medium", "Low", "Normal"];
+    private static readonly string[] _documentCategoryOptions = ["Application", "Statement", "Loss Run", "Certificate", "Financial", "Correspondence", "Proposal", "Other"];
+    private static readonly string[] _documentExtensionOptions = [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".png", ".jpg", ".jpeg", ".txt"];
+
+    private readonly TabDefinition[] _tabs =
+    [
+        new(0, "overview", "Overview", "bi-person-vcard"),
+        new(1, "contacts", "Contacts", "bi-people"),
+        new(2, "interest", "Interest", "bi-shield-plus"),
+        new(3, "activities", "Activities", "bi-lightning-charge"),
+        new(4, "engagement", "Engagement", "bi-broadcast"),
+        new(5, "documents", "Documents", "bi-folder2-open")
+    ];
+
+    protected override async Task OnParametersSetAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Leads", "/crm/leads"), new("Lead Detail", $"/crm/leads/{LeadId}"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+
+        try
+        {
+            if (_tenantId == Guid.Empty || _currentUserId == Guid.Empty)
+            {
+                var currentUser = await CurrentUser.RequireAsync();
+                _tenantId = currentUser.TenantId;
+                _currentUserId = currentUser.UserId;
+            }
+
+            _lead = await Api.GetLeadByIdAsync(LeadId);
+            if (_lead is null)
+            {
+                ClearRelatedData();
+                return;
+            }
+
+            var usersTask = _tenantId == Guid.Empty ? Task.FromResult<PagedResult<UserDto>?>(null) : Api.SearchUsersAsync(_tenantId);
+            var contactsTask = Api.GetLeadContactsAsync(LeadId);
+            var interestTask = Api.GetLeadInterestLinesAsync(LeadId);
+            var activitiesTask = Api.GetLeadActivitiesByLeadIdAsync(LeadId);
+            var communicationsTask = Api.GetLeadCommunicationsAsync(LeadId);
+            var campaignsTask = Api.GetLeadCampaignsAsync(LeadId);
+            var documentsTask = Api.GetLeadDocumentsAsync(LeadId);
+            var scoresTask = Api.GetLeadScoreFactorsAsync(LeadId);
+            var engagementTask = Api.GetLeadEngagementSummaryAsync(LeadId);
+
+            await Task.WhenAll(usersTask, contactsTask, interestTask, activitiesTask, communicationsTask, campaignsTask, documentsTask, scoresTask, engagementTask);
+
+            _ownerOptions = usersTask.Result?.Items?
+                .Where(u => string.Equals(u.StatusCode, "Active", StringComparison.OrdinalIgnoreCase))
+                .Select(u => new OwnerOption(u.UserId.ToString(), Safe(u.DisplayName, Safe(u.FullName, u.Email))))
+                .Where(o => !string.IsNullOrWhiteSpace(o.Label))
+                .OrderBy(o => o.Label)
+                .ToList() ?? [];
+            _contacts = contactsTask.Result?.ToList() ?? [];
+            _interestLines = interestTask.Result?.ToList() ?? [];
+            _activities = activitiesTask.Result?.ToList() ?? [];
+            _communications = communicationsTask.Result?.ToList() ?? [];
+            _campaigns = campaignsTask.Result?.ToList() ?? [];
+            _documents = documentsTask.Result?.ToList() ?? [];
+            _scoreFactors = scoresTask.Result?.ToList() ?? [];
+            _engagement = engagementTask.Result;
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Lead detail failed to load: {ex.Message}";
+            ShowToast("danger", _loadError);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ClearRelatedData()
+    {
+        _contacts = [];
+        _interestLines = [];
+        _activities = [];
+        _communications = [];
+        _campaigns = [];
+        _documents = [];
+        _scoreFactors = [];
+        _engagement = null;
+    }
+
+    private string LeadDisplayName => _lead is null ? "Lead" : Safe($"{_lead.FirstName} {_lead.LastName}".Trim(), Safe(_lead.AccountName, "Lead"));
+    private string LeadHeaderSubtitle => _lead is null ? "Enterprise CRM lead detail" : $"{Safe(_lead.AccountName, "No company")} • {Safe(_lead.Email, "No email")} • {Safe(_lead.Phone, "No phone")}";
+    private string OwnerName => _lead?.AssignedToUserId is { } ownerId ? _ownerOptions.FirstOrDefault(o => string.Equals(o.Value, ownerId.ToString(), StringComparison.OrdinalIgnoreCase))?.Label ?? "Assigned" : "Unassigned";
+    private string StageLabel => Safe(_lead?.NurturingStageCode, StatusLabel(_lead?.StatusCode ?? 0));
+    private string PriorityLabel => Safe(_lead?.PriorityCode, "Normal");
+    private string ScoreDisplay => (_lead?.Score ?? _engagement?.Score ?? 0).ToString(CultureInfo.InvariantCulture);
+    private int ScorePercent => Math.Clamp(_lead?.Score ?? _engagement?.Score ?? 0, 0, 100);
+    private string ScoreColor => ScorePercent >= 75 ? "#16a34a" : ScorePercent >= 45 ? "#f59e0b" : "#dc2626";
+    private int MatchedScoreFactors => _scoreFactors.Count(f => f.Matched);
+    private string EngagementLevel => Safe(_engagement?.Level, ScorePercent >= 70 ? "High" : ScorePercent >= 40 ? "Medium" : "Low");
+    private string EngagementScoreDisplay => (_engagement?.Score ?? TotalEngagementEvents).ToString(CultureInfo.InvariantCulture);
+    private int TotalEngagementEvents => _activities.Count + _communications.Count + _campaigns.Count;
+    private bool HasIdentity => _lead is not null && !string.IsNullOrWhiteSpace(_lead.FirstName) && !string.IsNullOrWhiteSpace(_lead.LastName) && !string.IsNullOrWhiteSpace(_lead.AccountName) && (!string.IsNullOrWhiteSpace(_lead.Email) || !string.IsNullOrWhiteSpace(_lead.Phone));
+    private int ReadinessPercent => Math.Clamp((HasIdentity ? 20 : 0) + (_contacts.Any(c => c.IsPrimary) ? 15 : 0) + (_interestLines.Count > 0 ? 20 : 0) + (TotalEngagementEvents > 0 ? 15 : 0) + (_documents.Count > 0 ? 10 : 0) + ((_lead?.QualifiedDate.HasValue ?? false) || string.Equals(_lead?.NurturingStageCode, "Qualified", StringComparison.OrdinalIgnoreCase) ? 20 : 0), 0, 100);
+    private string ReadinessLabel => ReadinessPercent >= 80 ? "Opportunity ready" : ReadinessPercent >= 55 ? "Nurture active" : "Needs enrichment";
+    private string ReadinessDetail => ReadinessPercent >= 80 ? "Lead has the core data needed to convert." : "Complete missing contacts, coverage, engagement, and document signals.";
+    private string PrimaryContactText => _contacts.FirstOrDefault(c => c.IsPrimary) is { } primary ? ContactName(primary) : "No primary contact";
+    private string CompletedActivityText => $"{_activities.Count(a => a.IsCompleted)} completed";
+    private string DocumentSizeText => SizeText(_documents.Sum(d => d.SizeKb));
+    private int DaysSinceLastTouch => LastTouchDate is { } last ? Math.Max(0, (int)(DateTime.UtcNow.Date - last.ToUniversalTime().Date).TotalDays) : 999;
+    private string LastTouchText => LastTouchDate?.ToLocalTime().ToString("MMM d") ?? "No touch";
+    private DateTime? LastTouchDate => new[]
+    {
+        _activities.Count > 0 ? _activities.Max(a => a.ActivityDate) : (DateTime?)null,
+        _communications.Count > 0 ? _communications.Max(c => c.SentAt) : (DateTime?)null,
+        _campaigns.Count > 0 ? _campaigns.Max(c => c.LastTouch ?? c.EnrolledAt) : (DateTime?)null
+    }.Where(d => d.HasValue).Max();
+    private string EngagementBadgeClass => EngagementLevel.Equals("High", StringComparison.OrdinalIgnoreCase) ? "ldd-engage-badge ldd-engage--high" : EngagementLevel.Equals("Medium", StringComparison.OrdinalIgnoreCase) || EngagementLevel.Equals("Mid", StringComparison.OrdinalIgnoreCase) ? "ldd-engage-badge ldd-engage--mid" : "ldd-engage-badge ldd-engage--low";
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
+    private string TabFormTitle => $"{(_editingTabItemId.HasValue ? "Edit" : "Add")} {TabItemLabel(_tabForm.Kind)}";
+    private string TabFormIcon => _tabForm.Kind switch
+    {
+        LeadTabItemKind.Contact => "bi-person-plus",
+        LeadTabItemKind.InterestLine => "bi-shield-plus",
+        LeadTabItemKind.Activity => "bi-lightning-charge",
+        LeadTabItemKind.Communication => "bi-chat-dots",
+        LeadTabItemKind.Campaign => "bi-megaphone",
+        LeadTabItemKind.Document => "bi-folder-plus",
+        _ => "bi-plus-circle"
+    };
+
+    private IEnumerable<NextAction> NextActions
+    {
+        get
+        {
+            if (!_contacts.Any(c => c.IsPrimary)) yield return new("Add primary contact", "Decision maker is missing from the lead profile.", "Due now", "bi-person-plus", "ldd-nba-ic--contact", 1, true);
+            if (_interestLines.Count == 0) yield return new("Capture coverage interest", "No lines of business are attached to this lead.", "Before qualification", "bi-shield-plus", "ldd-nba-ic--document", 2, true);
+            if (DaysSinceLastTouch > 7) yield return new("Schedule follow-up", $"Last touch was {LastTouchText}.", "Within 1 business day", "bi-telephone", "ldd-nba-ic--call", 3, true);
+            if (_documents.Count == 0) yield return new("Request supporting documents", "No applications, statements, or loss runs are attached.", "Before conversion", "bi-folder-plus", "ldd-nba-ic--document", 5, false);
+            if (ReadinessPercent >= 80) yield return new("Convert to opportunity", "Lead has enough readiness signals for the opportunity workflow.", "Ready now", "bi-arrow-up-right-circle", "ldd-nba-ic--qualify", 0, true);
+        }
+    }
+
+    private void SetTab(int index) => _activeTab = index;
+    private void HideToast() => _toastVisible = false;
+    private void CloseTabForm()
+    {
+        _showTabForm = false;
+        _selectedDocumentFile = null;
+    }
+
+    private void OpenCreateTabItem(LeadTabItemKind kind)
+    {
+        _editingTabItemId = null;
+        _selectedDocumentFile = null;
+        _tabForm = new LeadTabItemForm
+        {
+            Kind = kind,
+            Priority = "Medium",
+            ActivityTypeCode = "Note",
+            ActivityDate = DateTime.UtcNow,
+            Channel = "Email",
+            SentAt = DateTime.UtcNow,
+            CampaignStatus = "Active",
+            EnrolledAt = DateTime.UtcNow,
+            Category = "Application",
+            UploadedAt = DateTime.UtcNow
+        };
+        _showTabForm = true;
+    }
+
+    private void OpenEditTabItem(LeadContactDto item)
+    {
+        _editingTabItemId = item.ContactId;
+        _tabForm = new LeadTabItemForm { Kind = LeadTabItemKind.Contact, FirstName = item.FirstName, LastName = item.LastName, Title = item.Title, Email = item.Email, Phone = item.Phone, IsPrimary = item.IsPrimary };
+        _showTabForm = true;
+    }
+
+    private void OpenEditTabItem(LeadInterestLineDto item)
+    {
+        _editingTabItemId = item.InterestLineId;
+        _tabForm = new LeadTabItemForm { Kind = LeadTabItemKind.InterestLine, LineOfBusiness = item.LineOfBusiness, Carrier = item.Carrier, CurrentCarrier = item.CurrentCarrier, EstPremium = item.EstPremium, ExpiryDate = item.ExpiryDate, Priority = item.Priority, Notes = item.Notes };
+        _showTabForm = true;
+    }
+
+    private void OpenEditTabItem(LeadActivityDto item)
+    {
+        _editingTabItemId = item.ActivityId;
+        _tabForm = new LeadTabItemForm { Kind = LeadTabItemKind.Activity, ActivityTypeCode = item.ActivityTypeCode, Subject = item.Subject, Notes = item.Notes, ActivityDate = item.ActivityDate, DurationMinutes = item.DurationMinutes, OutcomeCode = item.OutcomeCode, IsCompleted = item.IsCompleted };
+        _showTabForm = true;
+    }
+
+    private void OpenEditTabItem(LeadCommunicationDto item)
+    {
+        _editingTabItemId = item.CommunicationId;
+        _tabForm = new LeadTabItemForm { Kind = LeadTabItemKind.Communication, Channel = item.Channel, Subject = item.Subject, Preview = item.Preview, SentAt = item.SentAt, Opened = item.Opened, Clicked = item.Clicked };
+        _showTabForm = true;
+    }
+
+    private void OpenEditTabItem(LeadCampaignEnrollmentDto item)
+    {
+        _editingTabItemId = item.EnrollmentId;
+        _tabForm = new LeadTabItemForm { Kind = LeadTabItemKind.Campaign, CampaignName = item.CampaignName, CampaignStatus = item.Status, EnrolledAt = item.EnrolledAt, EmailsSent = item.EmailsSent, EmailsOpen = item.EmailsOpen, Clicks = item.Clicks, LastTouch = item.LastTouch };
+        _showTabForm = true;
+    }
+
+    private void OpenEditTabItem(LeadDocumentDto item)
+    {
+        _editingTabItemId = item.DocumentId;
+        _selectedDocumentFile = null;
+        _tabForm = new LeadTabItemForm { Kind = LeadTabItemKind.Document, FileName = item.FileName, Extension = item.Extension, Category = item.Category, SizeKb = item.SizeKb, UploadedAt = item.UploadedAt };
+        _showTabForm = true;
+    }
+
+    private void OnLeadDocumentSelected(InputFileChangeEventArgs args)
+    {
+        _selectedDocumentFile = args.File;
+        if (_selectedDocumentFile is null) return;
+
+        _tabForm.FileName = _selectedDocumentFile.Name;
+        _tabForm.Extension = NormalizeExtension(Path.GetExtension(_selectedDocumentFile.Name));
+        _tabForm.SizeKb = Math.Max(1, (int)Math.Ceiling(_selectedDocumentFile.Size / 1024m));
+        _tabForm.UploadedAt = DateTime.UtcNow;
+    }
+
+    private void ConfirmDeleteTabItem(LeadTabItemKind kind, Guid id, string label)
+    {
+        _confirmAction = new($"Delete {TabItemLabel(kind)}", $"Remove {label}? This will sync the deletion to the existing {TabItemLabel(kind)} module.", "Delete", "um-btn-danger", "bi-trash", () => DeleteTabItemAsync(kind, id));
+    }
+
+    private async Task SaveTabItemAsync()
+    {
+        if (_lead is null) return;
+        _busy = true;
+        try
+        {
+            if (_editingTabItemId.HasValue)
+            {
+                await UpdateTabItemAsync(_editingTabItemId.Value);
+            }
+            else
+            {
+                await CreateTabItemAsync();
+            }
+
+            _showTabForm = false;
+            await LoadAsync();
+            ShowToast("success", $"{TabItemLabel(_tabForm.Kind)} saved.");
+        }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Save failed: {ex.Message}");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CreateTabItemAsync()
+    {
+        if (_lead is null) return;
+        switch (_tabForm.Kind)
+        {
+            case LeadTabItemKind.Contact:
+                await Api.CreateLeadContactAsync(LeadId, BuildCreateContactRequest());
+                if (_lead.AccountId is { } createAccountId)
+                {
+                    await SyncLeadContactFormToAccountAsync(createAccountId);
+                }
+                break;
+            case LeadTabItemKind.InterestLine:
+                await Api.CreateLeadInterestLineAsync(LeadId, BuildCreateInterestLineRequest());
+                break;
+            case LeadTabItemKind.Activity:
+                await Api.CreateLeadActivityAsync(BuildCreateActivityRequest());
+                break;
+            case LeadTabItemKind.Communication:
+                await Api.CreateLeadCommunicationAsync(LeadId, BuildCreateCommunicationRequest());
+                break;
+            case LeadTabItemKind.Campaign:
+                await Api.CreateLeadCampaignAsync(LeadId, BuildCreateCampaignRequest());
+                break;
+            case LeadTabItemKind.Document:
+                await UploadLeadDocumentFileAsync();
+                await Api.CreateLeadDocumentAsync(LeadId, BuildCreateDocumentRequest());
+                break;
+        }
+    }
+
+    private async Task UpdateTabItemAsync(Guid id)
+    {
+        switch (_tabForm.Kind)
+        {
+            case LeadTabItemKind.Contact:
+                await Api.UpdateLeadContactAsync(LeadId, id, BuildUpdateContactRequest(id));
+                if (_lead?.AccountId is { } updateAccountId)
+                {
+                    await SyncLeadContactFormToAccountAsync(updateAccountId);
+                }
+                break;
+            case LeadTabItemKind.InterestLine:
+                await Api.UpdateLeadInterestLineAsync(LeadId, id, BuildUpdateInterestLineRequest(id));
+                break;
+            case LeadTabItemKind.Activity:
+                await Api.UpdateLeadActivityAsync(id, BuildUpdateActivityRequest(id));
+                break;
+            case LeadTabItemKind.Communication:
+                await Api.UpdateLeadCommunicationAsync(LeadId, id, BuildUpdateCommunicationRequest(id));
+                break;
+            case LeadTabItemKind.Campaign:
+                await Api.UpdateLeadCampaignAsync(LeadId, id, BuildUpdateCampaignRequest(id));
+                break;
+            case LeadTabItemKind.Document:
+                await Api.UpdateLeadDocumentAsync(LeadId, id, BuildUpdateDocumentRequest(id));
+                break;
+        }
+    }
+
+    private async Task DeleteTabItemAsync(LeadTabItemKind kind, Guid id)
+    {
+        switch (kind)
+        {
+            case LeadTabItemKind.Contact:
+                await Api.DeleteLeadContactAsync(id, _currentUserId == Guid.Empty ? null : _currentUserId);
+                break;
+            case LeadTabItemKind.InterestLine:
+                await Api.DeleteLeadInterestLineAsync(id, _currentUserId == Guid.Empty ? null : _currentUserId);
+                break;
+            case LeadTabItemKind.Activity:
+                await Api.DeleteLeadActivityAsync(id, _currentUserId == Guid.Empty ? null : _currentUserId);
+                break;
+            case LeadTabItemKind.Communication:
+                await Api.DeleteLeadCommunicationAsync(id, _currentUserId == Guid.Empty ? null : _currentUserId);
+                break;
+            case LeadTabItemKind.Campaign:
+                await Api.DeleteLeadCampaignAsync(id, _currentUserId == Guid.Empty ? null : _currentUserId);
+                break;
+            case LeadTabItemKind.Document:
+                await Api.DeleteLeadDocumentAsync(id, _currentUserId == Guid.Empty ? null : _currentUserId);
+                break;
+        }
+
+        _confirmAction = null;
+        await LoadAsync();
+        ShowToast("success", $"{TabItemLabel(kind)} removed.");
+    }
+
+    private CreateLeadContactRequest BuildCreateContactRequest() => new()
+    {
+        TenantId = _lead?.TenantId ?? _tenantId,
+        LeadId = LeadId,
+        FirstName = _tabForm.FirstName.Trim(),
+        LastName = _tabForm.LastName.Trim(),
+        Title = TrimOrNull(_tabForm.Title),
+        Email = TrimOrNull(_tabForm.Email),
+        Phone = TrimOrNull(_tabForm.Phone),
+        IsPrimary = _tabForm.IsPrimary,
+        CreatedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId
+    };
+
+    private UpdateLeadContactRequest BuildUpdateContactRequest(Guid id) => new()
+    {
+        ContactId = id,
+        TenantId = _lead?.TenantId ?? _tenantId,
+        LeadId = LeadId,
+        FirstName = _tabForm.FirstName.Trim(),
+        LastName = _tabForm.LastName.Trim(),
+        Title = TrimOrNull(_tabForm.Title),
+        Email = TrimOrNull(_tabForm.Email),
+        Phone = TrimOrNull(_tabForm.Phone),
+        IsPrimary = _tabForm.IsPrimary,
+        ModifiedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId
+    };
+
+    private Task SyncLeadContactFormToAccountAsync(Guid accountId)
+    {
+        var contact = new LeadContactDto
+        {
+            TenantId = _lead?.TenantId ?? _tenantId,
+            LeadId = LeadId,
+            FirstName = _tabForm.FirstName.Trim(),
+            LastName = _tabForm.LastName.Trim(),
+            Title = TrimOrNull(_tabForm.Title),
+            Email = TrimOrNull(_tabForm.Email),
+            Phone = TrimOrNull(_tabForm.Phone),
+            IsPrimary = _tabForm.IsPrimary
+        };
+
+        return SyncLeadContactToAccountAsync(contact, accountId);
+    }
+
+    private async Task SyncLeadContactToAccountAsync(LeadContactDto contact, Guid accountId)
+    {
+        if (string.IsNullOrWhiteSpace(contact.FirstName) || string.IsNullOrWhiteSpace(contact.LastName)) return;
+
+        var accountContacts = await Api.GetAccountContactsAsync(accountId) ?? [];
+        var existing = FindMatchingAccountContact(accountContacts, contact);
+        if (existing is null)
+        {
+            await Api.CreateContactAsync(new CreateContactRequest
+            {
+                TenantId = _lead?.TenantId ?? _tenantId,
+                AccountId = accountId,
+                FirstName = contact.FirstName.Trim(),
+                LastName = contact.LastName.Trim(),
+                Email = TrimOrNull(contact.Email),
+                Phone = TrimOrNull(contact.Phone),
+                JobTitle = TrimOrNull(contact.Title),
+                ContactTypeCode = contact.IsPrimary ? "Primary" : "Business",
+                IsKeyContact = contact.IsPrimary,
+                IsServiceContact = !contact.IsPrimary,
+                PreferredContactMethod = string.IsNullOrWhiteSpace(contact.Email) ? (string.IsNullOrWhiteSpace(contact.Phone) ? null : "Phone") : "Email",
+                StatusCode = "Active",
+                StatusCodeId = 1,
+                CreatedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId
+            });
+            return;
+        }
+
+        await Api.UpdateContactAsync(existing.ContactId, new UpdateContactRequest
+        {
+            FirstName = contact.FirstName.Trim(),
+            LastName = contact.LastName.Trim(),
+            Email = TrimOrNull(contact.Email),
+            Phone = TrimOrNull(contact.Phone),
+            JobTitle = TrimOrNull(contact.Title),
+            ContactTypeCode = contact.IsPrimary ? "Primary" : Safe(existing.ContactTypeCode, "Business"),
+            IsBillingContact = existing.IsBillingContact,
+            IsServiceContact = existing.IsServiceContact || !contact.IsPrimary,
+            IsPortalUser = existing.IsPortalUser,
+            IsKeyContact = existing.IsKeyContact || contact.IsPrimary,
+            PreferredContactMethod = string.IsNullOrWhiteSpace(contact.Email) ? existing.PreferredContactMethod : "Email",
+            StatusCode = "Active",
+            StatusCodeId = 1,
+            ModifiedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId
+        });
+    }
+
+    private static ContactDto? FindMatchingAccountContact(IEnumerable<ContactDto> accountContacts, LeadContactDto leadContact)
+    {
+        if (!string.IsNullOrWhiteSpace(leadContact.Email))
+        {
+            var byEmail = accountContacts.FirstOrDefault(c => string.Equals(c.Email, leadContact.Email, StringComparison.OrdinalIgnoreCase));
+            if (byEmail is not null) return byEmail;
+        }
+
+        return accountContacts.FirstOrDefault(c =>
+            string.Equals(c.FirstName, leadContact.FirstName, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(c.LastName, leadContact.LastName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private CreateLeadInterestLineRequest BuildCreateInterestLineRequest() => new()
+    {
+        TenantId = _lead?.TenantId ?? _tenantId,
+        LeadId = LeadId,
+        LineOfBusiness = _tabForm.LineOfBusiness.Trim(),
+        Carrier = TrimOrNull(_tabForm.Carrier),
+        CurrentCarrier = TrimOrNull(_tabForm.CurrentCarrier),
+        EstPremium = _tabForm.EstPremium,
+        ExpiryDate = _tabForm.ExpiryDate,
+        Priority = _tabForm.Priority,
+        Notes = TrimOrNull(_tabForm.Notes),
+        CreatedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId
+    };
+
+    private UpdateLeadInterestLineRequest BuildUpdateInterestLineRequest(Guid id) => new()
+    {
+        InterestLineId = id,
+        TenantId = _lead?.TenantId ?? _tenantId,
+        LeadId = LeadId,
+        LineOfBusiness = _tabForm.LineOfBusiness.Trim(),
+        Carrier = TrimOrNull(_tabForm.Carrier),
+        CurrentCarrier = TrimOrNull(_tabForm.CurrentCarrier),
+        EstPremium = _tabForm.EstPremium,
+        ExpiryDate = _tabForm.ExpiryDate,
+        Priority = _tabForm.Priority,
+        Notes = TrimOrNull(_tabForm.Notes),
+        ModifiedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId
+    };
+
+    private CreateLeadActivityRequest BuildCreateActivityRequest() => new()
+    {
+        TenantId = _lead?.TenantId ?? _tenantId,
+        LeadId = LeadId,
+        ActivityTypeCode = _tabForm.ActivityTypeCode,
+        Subject = _tabForm.Subject.Trim(),
+        Notes = TrimOrNull(_tabForm.Notes),
+        ActivityDate = _tabForm.ActivityDate,
+        DurationMinutes = _tabForm.DurationMinutes,
+        OutcomeCode = TrimOrNull(_tabForm.OutcomeCode),
+        CreatedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId
+    };
+
+    private UpdateLeadActivityRequest BuildUpdateActivityRequest(Guid id) => new()
+    {
+        ActivityId = id,
+        LeadId = LeadId,
+        ActivityTypeCode = _tabForm.ActivityTypeCode,
+        Subject = _tabForm.Subject.Trim(),
+        Notes = TrimOrNull(_tabForm.Notes),
+        ActivityDate = _tabForm.ActivityDate,
+        DurationMinutes = _tabForm.DurationMinutes,
+        OutcomeCode = TrimOrNull(_tabForm.OutcomeCode),
+        IsCompleted = _tabForm.IsCompleted,
+        ModifiedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId
+    };
+
+    private CreateLeadCommunicationRequest BuildCreateCommunicationRequest() => new()
+    {
+        TenantId = _lead?.TenantId ?? _tenantId,
+        LeadId = LeadId,
+        Channel = _tabForm.Channel,
+        Subject = _tabForm.Subject.Trim(),
+        Preview = _tabForm.Preview.Trim(),
+        SentByUserId = _currentUserId == Guid.Empty ? null : _currentUserId,
+        SentAt = _tabForm.SentAt,
+        Opened = _tabForm.Opened,
+        Clicked = _tabForm.Clicked
+    };
+
+    private UpdateLeadCommunicationRequest BuildUpdateCommunicationRequest(Guid id) => new()
+    {
+        CommunicationId = id,
+        TenantId = _lead?.TenantId ?? _tenantId,
+        LeadId = LeadId,
+        Channel = _tabForm.Channel,
+        Subject = _tabForm.Subject.Trim(),
+        Preview = _tabForm.Preview.Trim(),
+        SentByUserId = _currentUserId == Guid.Empty ? null : _currentUserId,
+        SentAt = _tabForm.SentAt,
+        Opened = _tabForm.Opened,
+        Clicked = _tabForm.Clicked,
+        ModifiedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId
+    };
+
+    private CreateLeadCampaignEnrollmentRequest BuildCreateCampaignRequest() => new()
+    {
+        TenantId = _lead?.TenantId ?? _tenantId,
+        LeadId = LeadId,
+        CampaignName = _tabForm.CampaignName.Trim(),
+        Status = _tabForm.CampaignStatus,
+        EnrolledAt = _tabForm.EnrolledAt,
+        EmailsSent = _tabForm.EmailsSent,
+        EmailsOpen = _tabForm.EmailsOpen,
+        Clicks = _tabForm.Clicks,
+        LastTouch = _tabForm.LastTouch,
+        CreatedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId
+    };
+
+    private UpdateLeadCampaignEnrollmentRequest BuildUpdateCampaignRequest(Guid id) => new()
+    {
+        EnrollmentId = id,
+        TenantId = _lead?.TenantId ?? _tenantId,
+        LeadId = LeadId,
+        CampaignName = _tabForm.CampaignName.Trim(),
+        Status = _tabForm.CampaignStatus,
+        EnrolledAt = _tabForm.EnrolledAt,
+        EmailsSent = _tabForm.EmailsSent,
+        EmailsOpen = _tabForm.EmailsOpen,
+        Clicks = _tabForm.Clicks,
+        LastTouch = _tabForm.LastTouch,
+        ModifiedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId
+    };
+
+    private CreateLeadDocumentRequest BuildCreateDocumentRequest() => new()
+    {
+        TenantId = _lead?.TenantId ?? _tenantId,
+        LeadId = LeadId,
+        FileName = _tabForm.FileName.Trim(),
+        Extension = _tabForm.Extension.Trim(),
+        Category = _tabForm.Category,
+        SizeKb = _tabForm.SizeKb,
+        UploadedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId,
+        UploadedAt = _tabForm.UploadedAt
+    };
+
+    private UpdateLeadDocumentRequest BuildUpdateDocumentRequest(Guid id) => new()
+    {
+        DocumentId = id,
+        TenantId = _lead?.TenantId ?? _tenantId,
+        LeadId = LeadId,
+        FileName = _tabForm.FileName.Trim(),
+        Extension = _tabForm.Extension.Trim(),
+        Category = _tabForm.Category,
+        SizeKb = _tabForm.SizeKb,
+        UploadedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId,
+        UploadedAt = _tabForm.UploadedAt,
+        ModifiedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId
+    };
+
+    private async Task UploadLeadDocumentFileAsync()
+    {
+        if (_selectedDocumentFile is null) return;
+
+        await using var stream = _selectedDocumentFile.OpenReadStream(20 * 1024 * 1024);
+        await Api.UploadDocumentAsync(new ApiClient.UploadDocumentRequest
+        {
+            TenantId = _lead?.TenantId ?? _tenantId,
+            DocumentTypeCode = "Lead",
+            CategoryCode = _tabForm.Category,
+            FileName = _tabForm.FileName.Trim(),
+            OriginalFileName = _selectedDocumentFile.Name,
+            EntityName = "CRM.Lead",
+            EntityId = LeadId,
+            Description = $"Lead document for {LeadDisplayName}",
+            Tags = "Lead,CRM",
+            UploadedByName = OwnerName,
+            CreatedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId,
+            Content = stream
+        });
+    }
+
+    private static string NormalizeExtension(string? extension)
+    {
+        if (string.IsNullOrWhiteSpace(extension)) return string.Empty;
+        var normalized = extension.Trim().ToLowerInvariant();
+        return normalized.StartsWith('.') ? normalized : $".{normalized}";
+    }
+
+    private static string? TrimOrNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private void OpenEdit()
+    {
+        if (_lead is null) return;
+        _editForm = new LeadEditForm
+        {
+            FirstName = _lead.FirstName,
+            LastName = _lead.LastName,
+            AccountName = _lead.AccountName ?? string.Empty,
+            Email = _lead.Email ?? string.Empty,
+            Phone = _lead.Phone ?? string.Empty,
+            SourceCode = Safe(_lead.SourceCode, "Inbound"),
+            NurturingStageCode = Safe(_lead.NurturingStageCode, "New"),
+            PriorityCode = Safe(_lead.PriorityCode, "Warm"),
+            AnnualRevenue = _lead.AnnualRevenue,
+            Score = _lead.Score,
+            AssignedToUserId = _lead.AssignedToUserId?.ToString() ?? string.Empty,
+            InterestedService = _lead.InterestedService ?? string.Empty
+        };
+        _showEdit = true;
+    }
+
+    private void CloseEdit() => _showEdit = false;
+
+    private void OpenAssign()
+    {
+        _assignForm = new LeadAssignForm { AssignedToUserId = _lead?.AssignedToUserId?.ToString() ?? string.Empty };
+        _showAssign = true;
+    }
+
+    private void CloseAssign() => _showAssign = false;
+
+    private void CloseConfirm() => _confirmAction = null;
+
+    private async Task SaveEditAsync()
+    {
+        if (_lead is null) return;
+        _busy = true;
+        try
+        {
+            await Api.UpdateLeadAsync(LeadId, BuildUpdateRequest(_editForm.AssignedGuid));
+            _showEdit = false;
+            await LoadAsync();
+            ShowToast("success", "Lead saved.");
+        }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Save failed: {ex.Message}");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SaveAssignAsync()
+    {
+        if (_lead is null) return;
+        _busy = true;
+        try
+        {
+            await Api.UpdateLeadAsync(LeadId, BuildUpdateRequest(_assignForm.AssignedGuid));
+            await Api.CreateLeadCommunicationAsync(LeadId, new CreateLeadCommunicationRequest
+            {
+                TenantId = _lead.TenantId,
+                LeadId = LeadId,
+                Channel = "Workflow",
+                Subject = "Lead assigned",
+                Preview = $"Lead assigned to {OwnerLabel(_assignForm.AssignedToUserId)} from Lead Detail.",
+                SentByUserId = _currentUserId == Guid.Empty ? null : _currentUserId,
+                SentAt = DateTime.UtcNow,
+                Opened = true,
+                Clicked = false
+            });
+            _showAssign = false;
+            await LoadAsync();
+            ShowToast("success", $"Assigned to {OwnerLabel(_assignForm.AssignedToUserId)}.");
+        }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Assign failed: {ex.Message}");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void ConfirmDisqualify()
+    {
+        _confirmAction = new("Disqualify lead", $"Disqualify {LeadDisplayName}? This will move the lead to Lost/Disqualified workflow state.", "Disqualify", "um-btn-danger", "bi-x-octagon", DisqualifyAsync);
+    }
+
+    private async Task DisqualifyAsync()
+    {
+        if (_lead is null) return;
+        await Api.UpdateLeadAsync(LeadId, BuildUpdateRequest(_lead.AssignedToUserId, "Lost", 5, _lead.PriorityCode, _lead.Score));
+        await Api.CreateLeadCommunicationAsync(LeadId, new CreateLeadCommunicationRequest
+        {
+            TenantId = _lead.TenantId,
+            LeadId = LeadId,
+            Channel = "Workflow",
+            Subject = "Lead disqualified",
+            Preview = "Lead was disqualified from Lead Detail.",
+            SentByUserId = _currentUserId == Guid.Empty ? null : _currentUserId,
+            SentAt = DateTime.UtcNow,
+            Opened = true,
+            Clicked = false
+        });
+        _confirmAction = null;
+        await LoadAsync();
+        ShowToast("success", "Lead disqualified.");
+    }
+
+    private void ShowToast(string kind, string message)
+    {
+        _toastKind = kind;
+        _toastMessage = message;
+        _toastVisible = true;
+    }
+
+    private void OpenConvertWorkflow()
+    {
+        _confirmAction = new("Convert lead", $"Convert {LeadDisplayName} to a Prospect account and opportunity?", "Convert", "um-btn-primary", "bi-trophy", ConvertAsync);
+    }
+
+    private async Task ConvertAsync()
+    {
+        if (_lead is null) return;
+        var tenantId = _lead.TenantId;
+        var stamp = DateTime.UtcNow.ToString("yyyyMMddHHmmssfff", CultureInfo.InvariantCulture);
+        var accountName = Safe(_lead.AccountName, LeadDisplayName);
+        var accountId = _lead.AccountId;
+
+        if (!accountId.HasValue)
+        {
+            accountId = await Api.CreateAccountAsync(new CreateAccountRequest
+            {
+                TenantId = tenantId,
+                AccountNumber = $"ACC-{stamp}",
+                AccountName = accountName,
+                AccountTypeCode = "Prospect",
+                MainEmail = string.IsNullOrWhiteSpace(_lead.Email) ? null : _lead.Email,
+                MainPhone = string.IsNullOrWhiteSpace(_lead.Phone) ? null : _lead.Phone,
+                StatusCode = "Active",
+                LifecycleStageCode = "Prospect",
+                AnnualRevenue = _lead.AnnualRevenue,
+                OwnerUserId = _lead.AssignedToUserId,
+                CreatedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId
+            });
+        }
+
+        var opportunityId = await Api.CreateOpportunityAsync(new CreateOpportunityRequest
+        {
+            TenantId = tenantId,
+            OpportunityNumber = $"OPP-{stamp}",
+            AccountId = accountId.Value,
+            OpportunityName = $"{accountName} Opportunity",
+            EstimatedAmount = _lead.AnnualRevenue ?? _interestLines.Sum(l => l.EstPremium),
+            OwnerUserId = _lead.AssignedToUserId,
+            CloseDate = DateTime.UtcNow.Date.AddDays(30),
+            LeadId = LeadId,
+            WinProbability = 50,
+            ForecastCategoryCode = "Pipeline",
+            CreatedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId
+        });
+
+        foreach (var contact in _contacts)
+        {
+            await SyncLeadContactToAccountAsync(contact, accountId.Value);
+        }
+
+        await Api.UpdateLeadAsync(LeadId, BuildUpdateRequest(_lead.AssignedToUserId, "Converted", 4, "Hot", Math.Max(_lead.Score ?? 0, 85), DateTime.UtcNow, accountId));
+        await Api.CreateLeadCommunicationAsync(LeadId, new CreateLeadCommunicationRequest
+        {
+            TenantId = tenantId,
+            LeadId = LeadId,
+            Channel = "Workflow",
+            Subject = "Lead converted",
+            Preview = "Lead converted to Prospect account and opportunity from Lead Detail.",
+            SentByUserId = _currentUserId == Guid.Empty ? null : _currentUserId,
+            SentAt = DateTime.UtcNow,
+            Opened = true,
+            Clicked = false
+        });
+
+        _confirmAction = null;
+        ShowToast("success", "Lead converted.");
+        Nav.NavigateTo($"/crm/opportunities/{opportunityId}");
+    }
+
+    private async Task ExecuteConfirmedAsync()
+    {
+        if (_confirmAction is null) return;
+        _busy = true;
+        try
+        {
+            await _confirmAction.ExecuteAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Action failed: {ex.Message}");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private UpdateLeadRequest BuildUpdateRequest(Guid? assignedToUserId, string? stage = null, int? statusCode = null, string? priorityCode = null, int? score = null, DateTime? qualifiedDate = null, Guid? accountId = null)
+    {
+        var source = _showEdit ? _editForm : null;
+        return new()
+        {
+            LeadId = LeadId,
+            AccountName = source?.AccountName?.Trim() ?? _lead?.AccountName,
+            FirstName = source?.FirstName?.Trim() ?? _lead?.FirstName,
+            LastName = source?.LastName?.Trim() ?? _lead?.LastName,
+            Email = source?.Email?.Trim() ?? _lead?.Email,
+            Phone = source?.Phone?.Trim() ?? _lead?.Phone,
+            InterestedService = source?.InterestedService ?? _lead?.InterestedService,
+            AnnualRevenue = source?.AnnualRevenue ?? _lead?.AnnualRevenue,
+            Score = score ?? source?.Score ?? _lead?.Score,
+            PriorityCode = priorityCode ?? source?.PriorityCode ?? _lead?.PriorityCode,
+            SourceCode = source?.SourceCode ?? _lead?.SourceCode,
+            NurturingStageCode = stage ?? source?.NurturingStageCode ?? _lead?.NurturingStageCode,
+            StatusCode = statusCode ?? StageToStatusCode(stage ?? source?.NurturingStageCode ?? _lead?.NurturingStageCode),
+            QualifiedDate = qualifiedDate ?? _lead?.QualifiedDate,
+            AccountId = accountId ?? _lead?.AccountId,
+            AssignedToUserId = assignedToUserId,
+            UpdatedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId
+        };
+    }
+
+    private string OwnerLabel(string? ownerId) => string.IsNullOrWhiteSpace(ownerId) ? "Unassigned" : _ownerOptions.FirstOrDefault(o => string.Equals(o.Value, ownerId, StringComparison.OrdinalIgnoreCase))?.Label ?? "selected owner";
+    private static int StageToStatusCode(string? stage) => stage switch { "Contacted" => 2, "Qualified" => 3, "Converted" => 4, "Lost" => 5, _ => 1 };
+
+    private int TabCount(string key) => key switch
+    {
+        "contacts" => _contacts.Count,
+        "interest" => _interestLines.Count,
+        "activities" => _activities.Count,
+        "engagement" => _communications.Count + _campaigns.Count,
+        "documents" => _documents.Count,
+        _ => ReadinessPercent
+    };
+
+    private string KpiClass(int index) => _activeTab == index ? "ldd-kpi-card ldd-kpi-card--active" : "ldd-kpi-card";
+    private string TabClass(int index) => _activeTab == index ? "ldd-native-tab ldd-native-tab--active" : "ldd-native-tab";
+    private string StatusLabel(int statusCode) => statusCode switch { 1 => "Open", 2 => "Qualified", 3 => "Converted", 4 => "Lost", 5 => "Disqualified", _ => "Open" };
+    private static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private static string Money(decimal? value) => value.HasValue ? value.Value.ToString("C0", CultureInfo.CurrentCulture) : "-";
+    private static string DateOrDash(DateTime? value) => value.HasValue ? value.Value.ToLocalTime().ToString("MMM d, yyyy") : "-";
+    private static string ContactName(LeadContactDto contact) => Safe($"{contact.FirstName} {contact.LastName}".Trim(), "Unnamed contact");
+    private static string Initials(string value) => string.Join(string.Empty, value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(p => char.ToUpperInvariant(p[0]))).PadRight(2, 'L')[..2];
+    private static string SizeText(int sizeKb) => sizeKb >= 1024 ? $"{sizeKb / 1024m:N1} MB" : $"{sizeKb:N0} KB";
+    private static int FactorWidth(int points) => Math.Clamp(Math.Abs(points) * 10, 8, 100);
+    private static string DurationText(LeadActivityDto activity) => activity.DurationMinutes is > 0 ? $" • {activity.DurationMinutes} min" : string.Empty;
+    private static string ExpiryClass(DateTime? expiryDate) => expiryDate.HasValue && expiryDate.Value.Date < DateTime.UtcNow.Date ? "ldd-expired" : string.Empty;
+    private static string AvatarClass(string value) => $"ld-av{Math.Abs(value.GetHashCode()) % 6 + 1}";
+    private static string StageBadge(string? stage) => Safe(stage, string.Empty).ToLowerInvariant() switch { "contacted" => "ld-stage ld-stage--contacted", "qualified" => "ld-stage ld-stage--qualified", "proposal" => "ld-stage ld-stage--proposal", "negotiation" => "ld-stage ld-stage--negotiation", "converted" => "ld-stage ld-stage--converted", "lost" or "disqualified" => "ld-stage ld-stage--lost", _ => "ld-stage ld-stage--new" };
+    private static string PriorityBadge(string? priority) => Safe(priority, string.Empty).ToLowerInvariant() switch { "hot" or "high" => "ld-rating ld-rating--hot", "warm" or "medium" => "ld-rating ld-rating--warm", "cold" or "low" => "ld-rating ld-rating--cold", _ => "ld-pri ld-pri--normal" };
+    private static string LinePriorityBadge(string priority) => priority.ToLowerInvariant() switch { "high" => "ld-pri ld-pri--high", "low" => "ld-pri ld-pri--low", _ => "ld-pri ld-pri--normal" };
+    private static string CampaignStatusBadge(string status) => status.ToLowerInvariant() switch { "active" => "ld-status ld-status--approved", "paused" => "ld-status ld-status--pending", "complete" or "completed" => "ld-status ld-status--open", _ => "ld-status ld-status--pending" };
+    private static string ActivityIconClass(string type) => type.ToLowerInvariant() switch { var t when t.Contains("call") || t.Contains("phone") => "ldd-tl-ic--call", var t when t.Contains("email") => "ldd-tl-ic--email", var t when t.Contains("meeting") => "ldd-tl-ic--meeting", var t when t.Contains("task") || t.Contains("follow") => "ldd-tl-ic--task", var t when t.Contains("note") => "ldd-tl-ic--note", _ => "ldd-tl-ic--other" };
+    private static string ActivityIcon(string type) => type.ToLowerInvariant() switch { var t when t.Contains("call") || t.Contains("phone") => "bi-telephone", var t when t.Contains("email") => "bi-envelope", var t when t.Contains("meeting") => "bi-calendar-event", var t when t.Contains("task") || t.Contains("follow") => "bi-check2-square", var t when t.Contains("note") => "bi-sticky", _ => "bi-activity" };
+    private static string CommunicationIconClass(string channel) => channel.ToLowerInvariant() switch { var c when c.Contains("email") => "ldd-comm-ic--email", var c when c.Contains("phone") || c.Contains("call") => "ldd-comm-ic--phone", var c when c.Contains("sms") || c.Contains("text") => "ldd-comm-ic--sms", _ => "ldd-comm-ic--other" };
+    private static string CommunicationIcon(string channel) => channel.ToLowerInvariant() switch { var c when c.Contains("email") => "bi-envelope", var c when c.Contains("phone") || c.Contains("call") => "bi-telephone", var c when c.Contains("sms") || c.Contains("text") => "bi-chat-left-text", _ => "bi-broadcast" };
+    private static string DocumentIcon(string extension) => extension.ToLowerInvariant() switch { ".pdf" or "pdf" => "bi-file-earmark-pdf", ".doc" or ".docx" or "doc" or "docx" => "bi-file-earmark-word", ".xls" or ".xlsx" or "xls" or "xlsx" => "bi-file-earmark-excel", ".png" or ".jpg" or ".jpeg" or "png" or "jpg" or "jpeg" => "bi-file-earmark-image", _ => "bi-file-earmark" };
+
+    private RenderFragment DetailField(string label, string value) => @<div class="ldd-field-group"><span class="ldd-field-lbl">@label</span><span class="ldd-field-val">@value</span></div>;
+    private RenderFragment ChecklistField(string label, bool complete, string detail) => @<div class="ldd-field-group"><span class="ldd-field-lbl"><i class="bi @(complete ? "bi-check-circle-fill text-success" : "bi-exclamation-circle-fill text-warning")" aria-hidden="true"></i> @label</span><span class="ldd-field-val">@detail</span></div>;
+    private RenderFragment EmptyState(string icon, string title, string subtitle) => @<div class="ldd-empty"><i class="bi @icon ldd-empty-icon" aria-hidden="true"></i><span class="ldd-empty-title">@title</span><span class="ldd-empty-sub">@subtitle</span></div>;
+
+    private sealed record TabDefinition(int Index, string Key, string Label, string Icon);
+    private sealed record NextAction(string Title, string Reason, string DueText, string Icon, string IconClass, int TabIndex, bool IsHigh);
+    private sealed record OwnerOption(string Value, string Label);
+    private sealed record ConfirmAction(string Title, string Message, string ButtonText, string ButtonClass, string Icon, Func<Task> ExecuteAsync);
+    private enum LeadTabItemKind { Contact, InterestLine, Activity, Communication, Campaign, Document }
+
+    private static string TabItemLabel(LeadTabItemKind kind) => kind switch
+    {
+        LeadTabItemKind.Contact => "contact",
+        LeadTabItemKind.InterestLine => "coverage interest",
+        LeadTabItemKind.Activity => "activity",
+        LeadTabItemKind.Communication => "communication",
+        LeadTabItemKind.Campaign => "campaign enrollment",
+        LeadTabItemKind.Document => "document",
+        _ => "item"
+    };
+
+    private sealed class LeadAssignForm
+    {
+        [Required]
+        public string AssignedToUserId { get; set; } = string.Empty;
+
+        public Guid? AssignedGuid => Guid.TryParse(AssignedToUserId, out var id) ? id : null;
+    }
+
+    private sealed class LeadEditForm
+    {
+        [Required, StringLength(100)]
+        public string FirstName { get; set; } = string.Empty;
+
+        [Required, StringLength(100)]
+        public string LastName { get; set; } = string.Empty;
+
+        [Required, StringLength(200)]
+        public string AccountName { get; set; } = string.Empty;
+
+        [AmsEmailAddress, StringLength(200)]
+        public string? Email { get; set; }
+
+        [AmsPhone, StringLength(30)]
+        public string? Phone { get; set; }
+
+        [Required, StringLength(50)]
+        public string SourceCode { get; set; } = "Inbound";
+
+        [Required, StringLength(50)]
+        public string NurturingStageCode { get; set; } = "New";
+
+        [Required, StringLength(50)]
+        public string PriorityCode { get; set; } = "Warm";
+
+        [Range(0, 999999999999)]
+        public decimal? AnnualRevenue { get; set; }
+
+        [Range(0, 100)]
+        public int? Score { get; set; }
+
+        public string AssignedToUserId { get; set; } = string.Empty;
+
+        [StringLength(1000)]
+        public string? InterestedService { get; set; }
+
+        public Guid? AssignedGuid => Guid.TryParse(AssignedToUserId, out var id) ? id : null;
+    }
+
+    private sealed class LeadTabItemForm : IValidatableObject
+    {
+        public LeadTabItemKind Kind { get; set; }
+
+        [StringLength(150)]
+        public string FirstName { get; set; } = string.Empty;
+
+        [StringLength(150)]
+        public string LastName { get; set; } = string.Empty;
+
+        [StringLength(200)]
+        public string? Title { get; set; }
+
+        [AmsEmailAddress, StringLength(300)]
+        public string? Email { get; set; }
+
+        [AmsPhone, StringLength(50)]
+        public string? Phone { get; set; }
+
+        public bool IsPrimary { get; set; }
+
+        [StringLength(100)]
+        public string LineOfBusiness { get; set; } = string.Empty;
+
+        [StringLength(200)]
+        public string? Carrier { get; set; }
+
+        [StringLength(200)]
+        public string? CurrentCarrier { get; set; }
+
+        [Range(0, 999999999)]
+        public decimal EstPremium { get; set; }
+
+        public DateTime? ExpiryDate { get; set; }
+
+        [StringLength(50)]
+        public string Priority { get; set; } = "Medium";
+
+        [StringLength(2000)]
+        public string? Notes { get; set; }
+
+        [StringLength(50)]
+        public string ActivityTypeCode { get; set; } = "Note";
+
+        [StringLength(200)]
+        public string Subject { get; set; } = string.Empty;
+
+        public DateTime ActivityDate { get; set; } = DateTime.UtcNow;
+
+        [Range(0, 1440)]
+        public int? DurationMinutes { get; set; }
+
+        [StringLength(50)]
+        public string? OutcomeCode { get; set; }
+
+        public bool IsCompleted { get; set; }
+
+        [StringLength(50)]
+        public string Channel { get; set; } = "Email";
+
+        [StringLength(2000)]
+        public string Preview { get; set; } = string.Empty;
+
+        public DateTime SentAt { get; set; } = DateTime.UtcNow;
+        public bool Opened { get; set; }
+        public bool Clicked { get; set; }
+
+        [StringLength(200)]
+        public string CampaignName { get; set; } = string.Empty;
+
+        [StringLength(50)]
+        public string CampaignStatus { get; set; } = "Active";
+
+        public DateTime EnrolledAt { get; set; } = DateTime.UtcNow;
+
+        [Range(0, int.MaxValue)]
+        public int EmailsSent { get; set; }
+
+        [Range(0, int.MaxValue)]
+        public int EmailsOpen { get; set; }
+
+        [Range(0, int.MaxValue)]
+        public int Clicks { get; set; }
+
+        public DateTime? LastTouch { get; set; }
+
+        [StringLength(260)]
+        public string FileName { get; set; } = string.Empty;
+
+        [StringLength(20)]
+        public string Extension { get; set; } = string.Empty;
+
+        [StringLength(100)]
+        public string Category { get; set; } = "Application";
+
+        [Range(0, int.MaxValue)]
+        public int SizeKb { get; set; }
+
+        public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
+
+        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+        {
+            if (Kind == LeadTabItemKind.Contact)
+            {
+                if (string.IsNullOrWhiteSpace(FirstName)) yield return new("First name is required.", [nameof(FirstName)]);
+                if (string.IsNullOrWhiteSpace(LastName)) yield return new("Last name is required.", [nameof(LastName)]);
+            }
+            else if (Kind == LeadTabItemKind.InterestLine)
+            {
+                if (string.IsNullOrWhiteSpace(LineOfBusiness)) yield return new("Line of business is required.", [nameof(LineOfBusiness)]);
+                if (string.IsNullOrWhiteSpace(Priority)) yield return new("Priority is required.", [nameof(Priority)]);
+            }
+            else if (Kind == LeadTabItemKind.Activity)
+            {
+                if (string.IsNullOrWhiteSpace(ActivityTypeCode)) yield return new("Activity type is required.", [nameof(ActivityTypeCode)]);
+                if (string.IsNullOrWhiteSpace(Subject)) yield return new("Subject is required.", [nameof(Subject)]);
+            }
+            else if (Kind == LeadTabItemKind.Communication)
+            {
+                if (string.IsNullOrWhiteSpace(Channel)) yield return new("Channel is required.", [nameof(Channel)]);
+                if (string.IsNullOrWhiteSpace(Subject)) yield return new("Subject is required.", [nameof(Subject)]);
+                if (string.IsNullOrWhiteSpace(Preview)) yield return new("Preview is required.", [nameof(Preview)]);
+            }
+            else if (Kind == LeadTabItemKind.Campaign)
+            {
+                if (string.IsNullOrWhiteSpace(CampaignName)) yield return new("Campaign name is required.", [nameof(CampaignName)]);
+                if (string.IsNullOrWhiteSpace(CampaignStatus)) yield return new("Status is required.", [nameof(CampaignStatus)]);
+            }
+            else if (Kind == LeadTabItemKind.Document)
+            {
+                if (string.IsNullOrWhiteSpace(FileName)) yield return new("File name is required.", [nameof(FileName)]);
+                if (string.IsNullOrWhiteSpace(Extension)) yield return new("Extension is required.", [nameof(Extension)]);
+                if (string.IsNullOrWhiteSpace(Category)) yield return new("Category is required.", [nameof(Category)]);
+            }
+        }
+    }
+}

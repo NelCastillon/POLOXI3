@@ -30,5 +30,6 @@ public sealed class ContactDto
     public string? PreferredContactMethod { get; set; }
     [Required, StringLength(50)]
     public string StatusCode { get; set; } = string.Empty;
+    public int StatusCodeId { get; set; }
     public DateTime CreatedDateUtc { get; set; }
 }

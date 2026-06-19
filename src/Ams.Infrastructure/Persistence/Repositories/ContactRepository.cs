@@ -19,13 +19,13 @@ INSERT INTO Client.Contact
 (
     ContactId, TenantId, AccountId, FirstName, LastName, Email, Phone, JobTitle,
     ContactTypeCode, IsBillingContact, IsPortalUser, IsKeyContact, IsServiceContact,
-    PreferredContactMethod, ParentContactId, StatusCode, CreatedDateUtc, CreatedByUserId, IsDeleted
+    PreferredContactMethod, ParentContactId, StatusCode, StatusCodeId, CreatedDateUtc, CreatedByUserId, IsDeleted
 )
 VALUES
 (
     @ContactId, @TenantId, @AccountId, @FirstName, @LastName, @Email, @Phone, @JobTitle,
     @ContactTypeCode, @IsBillingContact, @IsPortalUser, @IsKeyContact, @IsServiceContact,
-    @PreferredContactMethod, @ParentContactId, @StatusCode, SYSUTCDATETIME(), @CreatedByUserId, 0
+    @PreferredContactMethod, @ParentContactId, @StatusCode, @StatusCodeId, SYSUTCDATETIME(), @CreatedByUserId, 0
 );";
 
         var id = Guid.NewGuid();
@@ -48,6 +48,7 @@ VALUES
             request.PreferredContactMethod,
             request.ParentContactId,
             request.StatusCode,
+            StatusCodeId = StatusCodeIdFor(request.StatusCode, request.StatusCodeId),
             request.CreatedByUserId
         }, cancellationToken: cancellationToken));
 
@@ -61,7 +62,7 @@ SELECT c.ContactId, c.TenantId, c.AccountId, a.AccountName,
        c.FirstName, c.LastName, c.Email, c.Phone, c.JobTitle,
        c.ContactTypeCode, c.IsBillingContact, c.IsPortalUser,
        c.IsKeyContact, c.IsServiceContact, c.ParentContactId, c.PreferredContactMethod,
-       c.StatusCode, c.CreatedDateUtc
+       c.StatusCode, c.StatusCodeId, c.CreatedDateUtc
 FROM Client.Contact c
 LEFT JOIN Client.Account a ON a.AccountId = c.AccountId
 WHERE c.ContactId = @Id AND c.IsDeleted = 0;";
@@ -79,7 +80,7 @@ WHERE c.ContactId = @Id AND c.IsDeleted = 0;";
            c.FirstName, c.LastName, c.Email, c.Phone, c.JobTitle,
            c.ContactTypeCode, c.IsBillingContact, c.IsPortalUser,
            c.IsKeyContact, c.IsServiceContact, c.ParentContactId, c.PreferredContactMethod,
-           c.StatusCode, c.CreatedDateUtc
+            c.StatusCode, c.StatusCodeId, c.CreatedDateUtc
     FROM Client.Contact c
     LEFT JOIN Client.Account a ON a.AccountId = c.AccountId
     WHERE c.TenantId = @TenantId AND c.IsDeleted = 0
@@ -132,7 +133,7 @@ WHERE c.TenantId = @TenantId AND c.IsDeleted = 0
            c.FirstName, c.LastName, c.Email, c.Phone, c.JobTitle,
            c.ContactTypeCode, c.IsBillingContact, c.IsPortalUser,
            c.IsKeyContact, c.IsServiceContact, c.ParentContactId, c.PreferredContactMethod,
-           c.StatusCode, c.CreatedDateUtc
+            c.StatusCode, c.StatusCodeId, c.CreatedDateUtc
     FROM Client.Contact c
     LEFT JOIN Client.Account a ON a.AccountId = c.AccountId
     WHERE c.AccountId = @AccountId AND c.IsDeleted = 0
@@ -259,6 +260,7 @@ SET FirstName = @FirstName,
     IsServiceContact = @IsServiceContact,
     PreferredContactMethod = @PreferredContactMethod,
     StatusCode = @StatusCode,
+    StatusCodeId = @StatusCodeId,
     ModifiedDateUtc = SYSUTCDATETIME(),
     ModifiedByUserId = @ModifiedByUserId
 WHERE ContactId = @Id AND IsDeleted = 0;";
@@ -279,6 +281,7 @@ WHERE ContactId = @Id AND IsDeleted = 0;";
             request.IsServiceContact,
             request.PreferredContactMethod,
             request.StatusCode,
+            StatusCodeId = StatusCodeIdFor(request.StatusCode, request.StatusCodeId),
             request.ModifiedByUserId
         }, cancellationToken: cancellationToken));
     }
@@ -289,11 +292,29 @@ WHERE ContactId = @Id AND IsDeleted = 0;";
 UPDATE Client.Contact
 SET IsDeleted = 1,
     StatusCode = 'Inactive',
+    StatusCodeId = 2,
     ModifiedDateUtc = SYSUTCDATETIME(),
     ModifiedByUserId = @UserId
 WHERE ContactId = @Id AND IsDeleted = 0;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, UserId = userId }, cancellationToken: cancellationToken));
+    }
+
+    private static int StatusCodeIdFor(string? statusCode, int statusCodeId)
+    {
+        if (statusCodeId > 0)
+        {
+            return statusCodeId;
+        }
+
+        return statusCode?.Trim().ToLowerInvariant() switch
+        {
+            "inactive" => 2,
+            "converted" => 3,
+            "lost" => 4,
+            "disqualified" => 5,
+            _ => 1
+        };
     }
 }
