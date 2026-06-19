@@ -26,7 +26,7 @@ public sealed class DocumentsController : ControllerBase
     }
 
     [HttpGet("{id:guid}/download")]
-    public async Task<IActionResult> Download(Guid id, CancellationToken cancellationToken)
+    public async Task<IActionResult> Download(Guid id, [FromQuery] bool inline = false, CancellationToken cancellationToken = default)
     {
         var item = await _service.GetByIdAsync(id, cancellationToken);
         if (item is null) return NotFound();
@@ -34,8 +34,28 @@ public sealed class DocumentsController : ControllerBase
         var download = await _storageService.DownloadAsync(item.StoragePath, cancellationToken);
         if (download is null) return NotFound();
 
-        await _service.LogAccessAsync(item.TenantId, item.DocumentId, GetCurrentUserId(), null, "Download", HttpContext.Connection.RemoteIpAddress?.ToString(), cancellationToken);
-        return File(download.Content, download.ContentType ?? item.ContentType ?? "application/octet-stream", item.FileName);
+        await _service.LogAccessAsync(item.TenantId, item.DocumentId, GetCurrentUserId(), null, inline ? "Preview" : "Download", HttpContext.Connection.RemoteIpAddress?.ToString(), cancellationToken);
+        var contentType = download.ContentType ?? item.ContentType ?? "application/octet-stream";
+        return inline ? File(download.Content, contentType) : File(download.Content, contentType, item.FileName);
+    }
+
+    [HttpGet("{id:guid}/preview")]
+    public async Task<IActionResult> Preview(Guid id, CancellationToken cancellationToken)
+    {
+        var item = await _service.GetByIdAsync(id, cancellationToken);
+        if (item is null) return NotFound();
+
+        var download = await _storageService.DownloadAsync(item.StoragePath, cancellationToken);
+        if (download is null) return NotFound();
+
+        var contentType = download.ContentType ?? item.ContentType ?? "application/octet-stream";
+        if (!contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+        {
+            return BadRequest("Only image documents can be previewed inline.");
+        }
+
+        await _service.LogAccessAsync(item.TenantId, item.DocumentId, GetCurrentUserId(), null, "Preview", HttpContext.Connection.RemoteIpAddress?.ToString(), cancellationToken);
+        return File(download.Content, contentType);
     }
 
     [HttpGet]

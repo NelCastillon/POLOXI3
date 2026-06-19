@@ -2600,8 +2600,11 @@ public sealed partial class ApiClient
     public Task<DocumentDto?> GetDocumentByIdAsync(Guid documentId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<DocumentDto>($"api/documents/{documentId}", cancellationToken);
 
-    public string GetDocumentDownloadUrl(Guid documentId)
-        => new Uri(_httpClient.BaseAddress!, $"api/documents/{documentId}/download").ToString();
+    public string GetDocumentDownloadUrl(Guid documentId, bool inline = false)
+        => new Uri(_httpClient.BaseAddress!, $"api/documents/{documentId}/download{(inline ? "?inline=true" : string.Empty)}").ToString();
+
+    public string GetDocumentPreviewUrl(Guid documentId)
+        => GetDocumentDownloadUrl(documentId, inline: true);
 
     public async Task<Guid> CreateDocumentAsync(CreateDocumentRequest request, CancellationToken cancellationToken = default)
     {

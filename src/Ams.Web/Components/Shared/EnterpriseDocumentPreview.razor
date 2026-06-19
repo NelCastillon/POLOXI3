@@ -1,0 +1,108 @@
+@namespace Ams.Web.Components.Shared
+@inject ApiClient Api
+@inject NavigationManager Nav
+
+@if (_visible)
+{
+    <div class="edp-backdrop" role="presentation" @onclick="Close">
+        <div class="edp-modal" role="dialog" aria-modal="true" aria-labelledby="enterpriseDocumentPreviewTitle" @onclick:stopPropagation="true">
+            <div class="edp-header">
+                <span class="edp-icon"><i class="bi @DocumentIcon" aria-hidden="true"></i></span>
+                <div class="edp-title-block">
+                    <span id="enterpriseDocumentPreviewTitle">Document preview</span>
+                    <strong title="@_fileName">@_fileName</strong>
+                </div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="Close" aria-label="Close preview">
+                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                </button>
+            </div>
+            <div class="edp-body">
+                @if (IsImage)
+                {
+                    <div class="edp-preview-frame edp-preview-frame--image">
+                        <img src="@PreviewUrl" alt="Preview of @_fileName" />
+                    </div>
+                }
+                else if (IsPdf || IsText)
+                {
+                    <div class="edp-preview-frame">
+                        <iframe src="@PreviewUrl" title="Preview of @_fileName"></iframe>
+                    </div>
+                }
+                else
+                {
+                    <div class="edp-unavailable">
+                        <i class="bi @DocumentIcon" aria-hidden="true"></i>
+                        <h3>Preview unavailable</h3>
+                        <p>This file type cannot be previewed inline. Download the document to open it in a compatible application.</p>
+                    </div>
+                }
+            </div>
+            <div class="edp-footer">
+                <span class="edp-meta"><i class="bi @DocumentIcon" aria-hidden="true"></i> @PreviewTypeLabel</span>
+                <button type="button" class="um-btn um-btn-ghost" @onclick="Close">Close</button>
+                <button type="button" class="um-btn um-btn-primary" @onclick="Download"><i class="bi bi-download" aria-hidden="true"></i> Download</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private bool _visible;
+    private Guid _documentId;
+    private string _fileName = "Document";
+    private string? _extension;
+    private string? _contentType;
+
+    private string PreviewUrl => _documentId == Guid.Empty ? string.Empty : Api.GetDocumentDownloadUrl(_documentId, inline: true);
+    private string DownloadUrl => _documentId == Guid.Empty ? string.Empty : Api.GetDocumentDownloadUrl(_documentId);
+
+    private string NormalizedExtension => NormalizeExtension(_extension ?? Path.GetExtension(_fileName));
+    private bool IsImage => IsImageType(_contentType, NormalizedExtension);
+    private bool IsPdf => string.Equals(_contentType, "application/pdf", StringComparison.OrdinalIgnoreCase) || NormalizedExtension == ".pdf";
+    private bool IsText => (_contentType?.StartsWith("text/", StringComparison.OrdinalIgnoreCase) ?? false) || NormalizedExtension is ".txt" or ".csv";
+    private string DocumentIcon => NormalizedExtension switch
+    {
+        ".pdf" => "bi-file-earmark-pdf",
+        ".doc" or ".docx" => "bi-file-earmark-word",
+        ".xls" or ".xlsx" or ".csv" => "bi-file-earmark-excel",
+        ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp" => "bi-file-earmark-image",
+        ".txt" => "bi-file-earmark-text",
+        _ => "bi-file-earmark"
+    };
+
+    private string PreviewTypeLabel => IsImage ? "Image preview" : IsPdf ? "PDF preview" : IsText ? "Text preview" : "Download required";
+
+    public Task OpenAsync(Guid documentId, string fileName, string? extension = null, string? contentType = null)
+    {
+        _documentId = documentId;
+        _fileName = string.IsNullOrWhiteSpace(fileName) ? "Document" : fileName;
+        _extension = extension;
+        _contentType = contentType;
+        _visible = true;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    public void Close()
+    {
+        _visible = false;
+        _documentId = Guid.Empty;
+    }
+
+    private void Download()
+    {
+        if (_documentId == Guid.Empty) return;
+        Nav.NavigateTo(DownloadUrl, forceLoad: true);
+    }
+
+    private static bool IsImageType(string? contentType, string extension)
+        => (contentType?.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ?? false) || extension is ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp";
+
+    private static string NormalizeExtension(string? extension)
+    {
+        if (string.IsNullOrWhiteSpace(extension)) return string.Empty;
+        var normalized = extension.Trim().ToLowerInvariant();
+        return normalized.StartsWith('.') ? normalized : $".{normalized}";
+    }
+}

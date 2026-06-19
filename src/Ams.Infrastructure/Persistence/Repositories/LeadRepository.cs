@@ -363,7 +363,7 @@ AND COL_LENGTH('CRM.Lead', 'AccountId') IS NULL
 
     public async Task<Guid> CreateDocumentAsync(CreateLeadDocumentRequest request, CancellationToken cancellationToken = default)
     {
-        var id = Guid.NewGuid();
+        var id = request.DocumentId.GetValueOrDefault(Guid.NewGuid());
         const string sql = @"INSERT INTO CRM.LeadDocument (DocumentId,TenantId,LeadId,FileName,Extension,Category,SizeKb,UploadedByUserId,UploadedAt,CreatedDateUtc,IsDeleted) VALUES (@DocumentId,@TenantId,@LeadId,@FileName,@Extension,@Category,@SizeKb,@UploadedByUserId,@UploadedAt,SYSUTCDATETIME(),0);";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { DocumentId = id, request.TenantId, request.LeadId, request.FileName, request.Extension, request.Category, request.SizeKb, request.UploadedByUserId, request.UploadedAt }, cancellationToken: cancellationToken));

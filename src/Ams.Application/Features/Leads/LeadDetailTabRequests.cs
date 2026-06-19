@@ -127,6 +127,7 @@ public sealed class UpdateLeadCampaignEnrollmentRequest : CreateLeadCampaignEnro
 
 public class CreateLeadDocumentRequest
 {
+    public Guid? DocumentId { get; set; }
     public Guid TenantId { get; set; }
     public Guid LeadId { get; set; }
 
