@@ -488,6 +488,8 @@ public static class ServiceCollectionExtensions
         // ── Policy Config repositories & services ────────────────────
         services.AddScoped<ICoverageTypeRepository, CoverageTypeRepository>();
         services.AddScoped<ICoverageTypeService, CoverageTypeService>();
+        services.AddScoped<IPolicyCoverageRepository, PolicyCoverageRepository>();
+        services.AddScoped<IPolicyCoverageService, PolicyCoverageService>();
         services.AddScoped<IPolicyStatusRepository, PolicyStatusRepository>();
         services.AddScoped<IPolicyStatusService, PolicyStatusService>();
         services.AddScoped<IEndorsementTypeRepository, EndorsementTypeRepository>();

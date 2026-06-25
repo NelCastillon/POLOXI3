@@ -24,21 +24,10 @@
     </div>
     <div class="commcfg-hero-grid">
         <button type="button" class="commcfg-quick-action" @onclick="() => Nav.NavigateTo(PolicyUrl)"><i class="bi bi-shield-check" aria-hidden="true"></i> Policy</button>
-        <button type="button" class="commcfg-quick-action" @onclick='() => Nav.NavigateTo("/commissions/statements")'><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements</button>
-        <button type="button" class="commcfg-quick-action" @onclick='() => Nav.NavigateTo("/commissions/producer-ledger")'><i class="bi bi-journal-text" aria-hidden="true"></i> Producer ledger</button>
+        <button type="button" class="commcfg-quick-action" @onclick="() => Nav.NavigateTo(StatementsUrl)"><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements</button>
+        <button type="button" class="commcfg-quick-action" @onclick="() => Nav.NavigateTo(ProducerLedgerUrl)"><i class="bi bi-journal-text" aria-hidden="true"></i> Producer ledger</button>
     </div>
 </div>
-
-@if (HasQuery)
-{
-    <div class="commcfg-policy-card">
-        <strong><i class="bi bi-link-45deg" aria-hidden="true"></i> Opened from Policy Detail</strong>
-        <span><i class="bi bi-shield-check" aria-hidden="true"></i> @PolicyFilter</span>
-        <span><i class="bi bi-calendar3" aria-hidden="true"></i> @PeriodFilter</span>
-        <span><i class="bi bi-briefcase" aria-hidden="true"></i> @TypeFilter</span>
-        <span><i class="bi bi-person-badge" aria-hidden="true"></i> @ProducerFilter</span>
-    </div>
-}
 
 <section class="commcfg-kpi-grid" aria-label="Commission metrics">
     @foreach (var kpi in Kpis)
@@ -86,8 +75,8 @@
             </div>
             <div class="tset-row-actions">
                 <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/commissions/plans")'><i class="bi bi-clipboard-check" aria-hidden="true"></i> Plans</button>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/commissions/exceptions2")'><i class="bi bi-exclamation-circle" aria-hidden="true"></i> Exceptions</button>
-                <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/commissions/payout-batches")'><i class="bi bi-box-seam" aria-hidden="true"></i> Payouts</button>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => Nav.NavigateTo(ExceptionsUrl)"><i class="bi bi-exclamation-circle" aria-hidden="true"></i> Exceptions</button>
+                <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => Nav.NavigateTo(PayoutBatchesUrl)"><i class="bi bi-box-seam" aria-hidden="true"></i> Payouts</button>
             </div>
         </div>
         @if (_loading)
@@ -214,7 +203,12 @@
     public string? ProducerFilter { get; set; }
 
     private bool HasQuery => !string.IsNullOrWhiteSpace(PolicyFilter) || !string.IsNullOrWhiteSpace(PeriodFilter) || !string.IsNullOrWhiteSpace(TypeFilter) || !string.IsNullOrWhiteSpace(ProducerFilter);
-    private string PolicyUrl => _selected is null ? "/policies" : $"/policies?searchTerm={Uri.EscapeDataString(_selected.PolicyNumber)}";
+    private CommissionLedgerRow? CurrentContextRow => _selected ?? QueryMatches.FirstOrDefault() ?? _filtered.FirstOrDefault() ?? _items.FirstOrDefault();
+    private string PolicyUrl => CurrentContextRow is { } row ? $"/policies?searchTerm={Uri.EscapeDataString(row.PolicyNumber)}" : BuildQueryUrl("/policies", "searchTerm", PolicyFilter);
+    private string StatementsUrl => CurrentContextRow is { } row ? $"/commissions/statements?producer={Uri.EscapeDataString(row.Producer)}&period={Uri.EscapeDataString(row.Period)}" : BuildQueryUrl("/commissions/statements", "producer", ProducerFilter);
+    private string ProducerLedgerUrl => CurrentContextRow is { } row ? $"/commissions/producer-ledger?producer={Uri.EscapeDataString(row.Producer)}" : BuildQueryUrl("/commissions/producer-ledger", "producer", ProducerFilter);
+    private string ExceptionsUrl => CurrentContextRow is { } row ? $"/commissions/exceptions2?policy={Uri.EscapeDataString(row.PolicyNumber)}" : BuildQueryUrl("/commissions/exceptions2", "policy", PolicyFilter);
+    private string PayoutBatchesUrl => CurrentContextRow is { } row ? $"/commissions/payout-batches?batch={Uri.EscapeDataString(row.PayoutBatch)}" : "/commissions/payout-batches";
     private decimal TotalProducer => _filtered.Sum(x => x.ProducerAmount);
     private decimal TotalAgency => _filtered.Sum(x => x.AgencyAmount);
     private IReadOnlyList<string> Statuses => _items.Select(x => x.Status).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
@@ -228,7 +222,7 @@
         new("producer", "Producer total", FormatMoney(TotalProducer), "Current filter", "bi-person-badge", "Show producer totals"),
         new("agency", "Agency total", FormatMoney(TotalAgency), "Current filter", "bi-building-check", "Show agency totals")
     };
-    private List<CommissionLedgerRow> QueryMatches => _items.Where(MatchesQuery).ToList();
+    private List<CommissionLedgerRow> QueryMatches => BestQueryMatches().ToList();
 
     private string SearchText { get => _searchTerm; set { _searchTerm = value; ApplyFilters(); } }
     private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(); } }
@@ -295,7 +289,8 @@
 
         if (_activeFilter == "query" && HasQuery)
         {
-            query = query.Where(MatchesQuery);
+            var queryIds = QueryMatches.Select(x => x.CommissionId).ToHashSet();
+            query = query.Where(x => queryIds.Contains(x.CommissionId));
         }
         else if (_activeFilter == "payable")
         {
@@ -352,8 +347,8 @@
         if (HasQuery)
         {
             _activeFilter = "query";
-            _selected = QueryMatches.FirstOrDefault() ?? _filtered.FirstOrDefault();
             ApplyFilters();
+            _selected = _filtered.FirstOrDefault(x => _selected?.CommissionId == x.CommissionId) ?? _filtered.FirstOrDefault();
         }
         else
         {
@@ -361,14 +356,31 @@
         }
     }
 
-    private bool MatchesQuery(CommissionLedgerRow row)
-        => MatchesOptional(row.PolicyNumber, PolicyFilter)
-            && MatchesOptional(row.Period, PeriodFilter)
-            && MatchesOptional(row.BusinessType, TypeFilter)
-            && MatchesOptional(row.Producer, ProducerFilter);
+    private IEnumerable<CommissionLedgerRow> BestQueryMatches()
+    {
+        if (!HasQuery)
+        {
+            return _items;
+        }
 
-    private static bool MatchesOptional(string value, string? filter)
-        => string.IsNullOrWhiteSpace(filter) || string.Equals(value, filter.Trim(), StringComparison.OrdinalIgnoreCase);
+        IEnumerable<CommissionLedgerRow> query = _items;
+        query = ConstrainWhenPossible(query, PolicyFilter, row => row.PolicyNumber);
+        query = ConstrainWhenPossible(query, ProducerFilter, row => row.Producer);
+        query = ConstrainWhenPossible(query, PeriodFilter, row => row.Period);
+        query = ConstrainWhenPossible(query, TypeFilter, row => row.BusinessType);
+        return query;
+    }
+
+    private static IEnumerable<CommissionLedgerRow> ConstrainWhenPossible(IEnumerable<CommissionLedgerRow> source, string? filter, Func<CommissionLedgerRow, string> selector)
+    {
+        if (string.IsNullOrWhiteSpace(filter))
+        {
+            return source;
+        }
+
+        var matches = source.Where(row => string.Equals(selector(row), filter.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
+        return matches.Any() ? matches : source;
+    }
 
     private static bool Contains(string? value, string term)
         => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
@@ -377,6 +389,9 @@
         => value.ToString("C0", CultureInfo.CurrentCulture);
 
     private static string StatusClass(string status) => $"status-{status.ToLowerInvariant().Replace(' ', '-')}";
+
+    private static string BuildQueryUrl(string path, string key, string? value)
+        => string.IsNullOrWhiteSpace(value) ? path : $"{path}?{key}={Uri.EscapeDataString(value.Trim())}";
 
     private static IReadOnlyList<RelatedLink> RelatedLinks(CommissionLedgerRow row) => new List<RelatedLink>
     {

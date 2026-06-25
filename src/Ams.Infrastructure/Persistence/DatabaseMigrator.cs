@@ -209,6 +209,8 @@ public sealed partial class DatabaseMigrator
         new("0171_AutomationJobScheduling_EnterpriseSchemaSeedSync", Migration0171_AutomationJobSchedulingEnterpriseSchemaSeedSync),
         new("0172_AutomationJobScheduling_BaseFieldsHardening", Migration0172_AutomationJobSchedulingBaseFieldsHardening),
         new("0173_CarrierSettings_DynamicSeed", Migration0173_CarrierSettingsDynamicSeed),
+        new("0174_PolicyCoverageDetail_EnterpriseSchemaSeedSync", Migration0174_PolicyCoverageDetailEnterpriseSchemaSeedSync),
+        new("0175_PolicyCoverageDetailTemplate_CreateSeed", Migration0175_PolicyCoverageDetailTemplateCreateSeed),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -12363,5 +12365,324 @@ WHERE jd.JobCode = N''CARRIER_DOWNLOAD_INGESTION''
   AND js.IsDeleted = 0
   AND (js.DynamicFieldSchemaJson IS NULL OR js.DynamicFieldSchemaJson = N''[]'');
 ');
+";
+
+    private const string Migration0174_PolicyCoverageDetailEnterpriseSchemaSeedSync = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Policy') EXEC(N'CREATE SCHEMA Policy');
+
+IF OBJECT_ID(N'Policy.PolicyCoverageDetail', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyCoverageDetail
+    (
+        CoverageDetailId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PolicyCoverageDetail_0174 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        PolicyNumber NVARCHAR(80) NOT NULL,
+        CoverageTypeId UNIQUEIDENTIFIER NULL,
+        CoverageCode NVARCHAR(50) NOT NULL,
+        CoverageName NVARCHAR(80) NOT NULL,
+        LineOfBusinessCode NVARCHAR(50) NOT NULL,
+        CoverageCategoryCode NVARCHAR(50) NOT NULL,
+        CoverageFormCode NVARCHAR(50) NOT NULL,
+        CoverageTriggerCode NVARCHAR(50) NOT NULL,
+        ValuationBasisCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Valuation_0174 DEFAULT N'',
+        TerritoryCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Territory_0174 DEFAULT N'',
+        OccurrenceLimit DECIMAL(18,2) NULL,
+        AggregateLimit DECIMAL(18,2) NULL,
+        Sublimit DECIMAL(18,2) NULL,
+        Deductible DECIMAL(18,2) NULL,
+        Retention DECIMAL(18,2) NULL,
+        Premium DECIMAL(18,2) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Premium_0174 DEFAULT 0,
+        Rate DECIMAL(18,6) NULL,
+        ExposureBase DECIMAL(18,2) NULL,
+        ExposureBasisCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_ExposureBasis_0174 DEFAULT N'',
+        EffectiveDate DATETIME2 NOT NULL,
+        ExpirationDate DATETIME2 NOT NULL,
+        CarrierName NVARCHAR(120) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Carrier_0174 DEFAULT N'',
+        WritingCompanyName NVARCHAR(120) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_WritingCompany_0174 DEFAULT N'',
+        UnderwriterName NVARCHAR(120) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Underwriter_0174 DEFAULT N'',
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Status_0174 DEFAULT N'Active',
+        IsIncluded BIT NOT NULL CONSTRAINT DF_PolicyCoverageDetail_IsIncluded_0174 DEFAULT 1,
+        IsAuditable BIT NOT NULL CONSTRAINT DF_PolicyCoverageDetail_IsAuditable_0174 DEFAULT 0,
+        IsClaimsMade BIT NOT NULL CONSTRAINT DF_PolicyCoverageDetail_IsClaimsMade_0174 DEFAULT 0,
+        RequiresSchedule BIT NOT NULL CONSTRAINT DF_PolicyCoverageDetail_RequiresSchedule_0174 DEFAULT 0,
+        RequiresCertificateReview BIT NOT NULL CONSTRAINT DF_PolicyCoverageDetail_CertificateReview_0174 DEFAULT 0,
+        FormsAndEndorsements NVARCHAR(1000) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Forms_0174 DEFAULT N'',
+        CoinsuranceClause NVARCHAR(1000) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Coinsurance_0174 DEFAULT N'',
+        BlanketOrSpecificCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Blanket_0174 DEFAULT N'',
+        CoveredOperations NVARCHAR(2000) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Operations_0174 DEFAULT N'',
+        Exclusions NVARCHAR(2000) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Exclusions_0174 DEFAULT N'',
+        Conditions NVARCHAR(2000) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Conditions_0174 DEFAULT N'',
+        RatingNotes NVARCHAR(2000) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_RatingNotes_0174 DEFAULT N'',
+        ServiceInstructions NVARCHAR(2000) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Service_0174 DEFAULT N'',
+        AuditInstructions NVARCHAR(2000) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Audit_0174 DEFAULT N'',
+        CertificateInstructions NVARCHAR(2000) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Cert_0174 DEFAULT N'',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Created_0174 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyCoverageDetail_IsDeleted_0174 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'TenantId') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyCoverageDetail_TenantId_0174 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'PolicyId') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD PolicyId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyCoverageDetail_PolicyId_0174 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'PolicyNumber') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD PolicyNumber NVARCHAR(80) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_PolicyNumber_0174 DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'CoverageTypeId') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD CoverageTypeId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'CoverageCode') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD CoverageCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Code_0174 DEFAULT N'COV';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'CoverageName') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD CoverageName NVARCHAR(80) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Name_0174 DEFAULT N'Coverage';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'LineOfBusinessCode') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD LineOfBusinessCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Lob_0174 DEFAULT N'Commercial';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'CoverageCategoryCode') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD CoverageCategoryCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Category_0174 DEFAULT N'Primary';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'CoverageFormCode') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD CoverageFormCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Form_0174 DEFAULT N'Occurrence';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'CoverageTriggerCode') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD CoverageTriggerCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Trigger_0174 DEFAULT N'Occurrence';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'ValuationBasisCode') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD ValuationBasisCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Valuation_0174b DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'TerritoryCode') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD TerritoryCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Territory_0174b DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'OccurrenceLimit') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD OccurrenceLimit DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'AggregateLimit') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD AggregateLimit DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'Sublimit') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD Sublimit DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'Deductible') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD Deductible DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'Retention') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD Retention DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'Premium') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD Premium DECIMAL(18,2) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Premium_0174b DEFAULT 0;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'Rate') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD Rate DECIMAL(18,6) NULL;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'ExposureBase') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD ExposureBase DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'ExposureBasisCode') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD ExposureBasisCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_ExposureBasis_0174b DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'EffectiveDate') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD EffectiveDate DATETIME2 NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Effective_0174 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'ExpirationDate') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD ExpirationDate DATETIME2 NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Expiration_0174 DEFAULT DATEADD(year, 1, SYSUTCDATETIME());
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'CarrierName') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD CarrierName NVARCHAR(120) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Carrier_0174b DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'WritingCompanyName') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD WritingCompanyName NVARCHAR(120) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_WritingCompany_0174b DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'UnderwriterName') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD UnderwriterName NVARCHAR(120) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Underwriter_0174b DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'StatusCode') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Status_0174b DEFAULT N'Active';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'IsIncluded') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD IsIncluded BIT NOT NULL CONSTRAINT DF_PolicyCoverageDetail_IsIncluded_0174b DEFAULT 1;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'IsAuditable') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD IsAuditable BIT NOT NULL CONSTRAINT DF_PolicyCoverageDetail_IsAuditable_0174b DEFAULT 0;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'IsClaimsMade') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD IsClaimsMade BIT NOT NULL CONSTRAINT DF_PolicyCoverageDetail_IsClaimsMade_0174b DEFAULT 0;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'RequiresSchedule') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD RequiresSchedule BIT NOT NULL CONSTRAINT DF_PolicyCoverageDetail_RequiresSchedule_0174b DEFAULT 0;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'RequiresCertificateReview') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD RequiresCertificateReview BIT NOT NULL CONSTRAINT DF_PolicyCoverageDetail_CertificateReview_0174b DEFAULT 0;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'FormsAndEndorsements') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD FormsAndEndorsements NVARCHAR(1000) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Forms_0174b DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'CoinsuranceClause') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD CoinsuranceClause NVARCHAR(1000) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Coinsurance_0174b DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'BlanketOrSpecificCode') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD BlanketOrSpecificCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Blanket_0174b DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'CoveredOperations') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD CoveredOperations NVARCHAR(2000) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Operations_0174b DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'Exclusions') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD Exclusions NVARCHAR(2000) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Exclusions_0174b DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'Conditions') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD Conditions NVARCHAR(2000) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Conditions_0174b DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'RatingNotes') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD RatingNotes NVARCHAR(2000) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_RatingNotes_0174b DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'ServiceInstructions') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD ServiceInstructions NVARCHAR(2000) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Service_0174b DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'AuditInstructions') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD AuditInstructions NVARCHAR(2000) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Audit_0174b DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'CertificateInstructions') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD CertificateInstructions NVARCHAR(2000) NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Cert_0174b DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'CreatedDateUtc') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyCoverageDetail_Created_0174b DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'CreatedByUserId') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'ModifiedDateUtc') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'ModifiedByUserId') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetail', N'IsDeleted') IS NULL ALTER TABLE Policy.PolicyCoverageDetail ADD IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyCoverageDetail_IsDeleted_0174b DEFAULT 0;
+
+IF OBJECT_ID(N'Policy.PolicyCoverageDetailField', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyCoverageDetailField
+    (
+        FieldId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PolicyCoverageDetailField_0174 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CoverageDetailId UNIQUEIDENTIFIER NOT NULL,
+        FieldGroupCode NVARCHAR(50) NOT NULL,
+        FieldCode NVARCHAR(80) NOT NULL,
+        FieldLabel NVARCHAR(160) NOT NULL,
+        FieldValue NVARCHAR(1000) NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_Value_0174 DEFAULT N'',
+        FieldValueTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_ValueType_0174 DEFAULT N'Text',
+        UnitOfMeasureCode NVARCHAR(40) NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_Unit_0174 DEFAULT N'',
+        IsRequired BIT NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_Required_0174 DEFAULT 0,
+        IsRatingField BIT NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_Rating_0174 DEFAULT 0,
+        IsScheduleField BIT NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_Schedule_0174 DEFAULT 0,
+        SortOrder INT NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_Sort_0174 DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_Created_0174 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_IsDeleted_0174 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Policy.PolicyCoverageDetailField', N'TenantId') IS NULL ALTER TABLE Policy.PolicyCoverageDetailField ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_TenantId_0174 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetailField', N'CoverageDetailId') IS NULL ALTER TABLE Policy.PolicyCoverageDetailField ADD CoverageDetailId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_DetailId_0174 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetailField', N'FieldGroupCode') IS NULL ALTER TABLE Policy.PolicyCoverageDetailField ADD FieldGroupCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_Group_0174 DEFAULT N'General';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetailField', N'FieldCode') IS NULL ALTER TABLE Policy.PolicyCoverageDetailField ADD FieldCode NVARCHAR(80) NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_Code_0174 DEFAULT N'FIELD';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetailField', N'FieldLabel') IS NULL ALTER TABLE Policy.PolicyCoverageDetailField ADD FieldLabel NVARCHAR(160) NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_Label_0174 DEFAULT N'Field';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetailField', N'FieldValue') IS NULL ALTER TABLE Policy.PolicyCoverageDetailField ADD FieldValue NVARCHAR(1000) NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_Value_0174b DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetailField', N'FieldValueTypeCode') IS NULL ALTER TABLE Policy.PolicyCoverageDetailField ADD FieldValueTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_ValueType_0174b DEFAULT N'Text';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetailField', N'UnitOfMeasureCode') IS NULL ALTER TABLE Policy.PolicyCoverageDetailField ADD UnitOfMeasureCode NVARCHAR(40) NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_Unit_0174b DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCoverageDetailField', N'IsRequired') IS NULL ALTER TABLE Policy.PolicyCoverageDetailField ADD IsRequired BIT NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_Required_0174b DEFAULT 0;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetailField', N'IsRatingField') IS NULL ALTER TABLE Policy.PolicyCoverageDetailField ADD IsRatingField BIT NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_Rating_0174b DEFAULT 0;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetailField', N'IsScheduleField') IS NULL ALTER TABLE Policy.PolicyCoverageDetailField ADD IsScheduleField BIT NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_Schedule_0174b DEFAULT 0;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetailField', N'SortOrder') IS NULL ALTER TABLE Policy.PolicyCoverageDetailField ADD SortOrder INT NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_Sort_0174b DEFAULT 0;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetailField', N'CreatedDateUtc') IS NULL ALTER TABLE Policy.PolicyCoverageDetailField ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_Created_0174b DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Policy.PolicyCoverageDetailField', N'CreatedByUserId') IS NULL ALTER TABLE Policy.PolicyCoverageDetailField ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetailField', N'ModifiedDateUtc') IS NULL ALTER TABLE Policy.PolicyCoverageDetailField ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetailField', N'ModifiedByUserId') IS NULL ALTER TABLE Policy.PolicyCoverageDetailField ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Policy.PolicyCoverageDetailField', N'IsDeleted') IS NULL ALTER TABLE Policy.PolicyCoverageDetailField ADD IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyCoverageDetailField_IsDeleted_0174b DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyCoverageDetail') AND name = N'IX_PolicyCoverageDetail_Policy_0174')
+    CREATE INDEX IX_PolicyCoverageDetail_Policy_0174 ON Policy.PolicyCoverageDetail(TenantId, PolicyId, IsDeleted, LineOfBusinessCode, CoverageCategoryCode, CoverageName);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyCoverageDetail') AND name = N'IX_PolicyCoverageDetail_Code_0174')
+    CREATE INDEX IX_PolicyCoverageDetail_Code_0174 ON Policy.PolicyCoverageDetail(TenantId, PolicyId, CoverageCode, IsDeleted);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyCoverageDetailField') AND name = N'IX_PolicyCoverageDetailField_Detail_0174')
+    CREATE INDEX IX_PolicyCoverageDetailField_Detail_0174 ON Policy.PolicyCoverageDetailField(CoverageDetailId, IsDeleted, FieldGroupCode, SortOrder, FieldLabel);
+";
+
+    private const string Migration0175_PolicyCoverageDetailTemplateCreateSeed = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Policy') EXEC(N'CREATE SCHEMA Policy');
+
+IF OBJECT_ID(N'Policy.PolicyCoverageDetailTemplate', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyCoverageDetailTemplate
+    (
+        TemplateId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PolicyCoverageDetailTemplate_0175 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CoverageTypeId UNIQUEIDENTIFIER NULL,
+        CoverageCode NVARCHAR(50) NOT NULL,
+        CoverageName NVARCHAR(80) NOT NULL,
+        LineOfBusinessCode NVARCHAR(50) NOT NULL,
+        CoverageCategoryCode NVARCHAR(50) NOT NULL,
+        CoverageFormCode NVARCHAR(50) NOT NULL,
+        CoverageTriggerCode NVARCHAR(50) NOT NULL,
+        ValuationBasisCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Valuation_0175 DEFAULT N'',
+        TerritoryCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Territory_0175 DEFAULT N'',
+        DefaultOccurrenceLimit DECIMAL(18,2) NULL,
+        DefaultAggregateLimit DECIMAL(18,2) NULL,
+        DefaultSublimit DECIMAL(18,2) NULL,
+        DefaultDeductible DECIMAL(18,2) NULL,
+        DefaultRetention DECIMAL(18,2) NULL,
+        DefaultPremium DECIMAL(18,2) NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Premium_0175 DEFAULT 0,
+        DefaultRate DECIMAL(18,6) NULL,
+        DefaultExposureBase DECIMAL(18,2) NULL,
+        ExposureBasisCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CoverageDetailTemplate_ExposureBasis_0175 DEFAULT N'',
+        CarrierName NVARCHAR(120) NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Carrier_0175 DEFAULT N'',
+        WritingCompanyName NVARCHAR(120) NOT NULL CONSTRAINT DF_CoverageDetailTemplate_WritingCompany_0175 DEFAULT N'',
+        UnderwriterName NVARCHAR(120) NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Underwriter_0175 DEFAULT N'',
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Status_0175 DEFAULT N'Active',
+        IsIncluded BIT NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Included_0175 DEFAULT 1,
+        IsAuditable BIT NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Auditable_0175 DEFAULT 0,
+        IsClaimsMade BIT NOT NULL CONSTRAINT DF_CoverageDetailTemplate_ClaimsMade_0175 DEFAULT 0,
+        RequiresSchedule BIT NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Schedule_0175 DEFAULT 0,
+        RequiresCertificateReview BIT NOT NULL CONSTRAINT DF_CoverageDetailTemplate_CertReview_0175 DEFAULT 0,
+        FormsAndEndorsements NVARCHAR(1000) NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Forms_0175 DEFAULT N'',
+        CoinsuranceClause NVARCHAR(1000) NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Coinsurance_0175 DEFAULT N'',
+        BlanketOrSpecificCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Blanket_0175 DEFAULT N'',
+        CoveredOperations NVARCHAR(2000) NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Operations_0175 DEFAULT N'',
+        Exclusions NVARCHAR(2000) NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Exclusions_0175 DEFAULT N'',
+        Conditions NVARCHAR(2000) NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Conditions_0175 DEFAULT N'',
+        RatingNotes NVARCHAR(2000) NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Rating_0175 DEFAULT N'',
+        ServiceInstructions NVARCHAR(2000) NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Service_0175 DEFAULT N'',
+        AuditInstructions NVARCHAR(2000) NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Audit_0175 DEFAULT N'',
+        CertificateInstructions NVARCHAR(2000) NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Cert_0175 DEFAULT N'',
+        SortOrder INT NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Sort_0175 DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Active_0175 DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CoverageDetailTemplate_Created_0175 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CoverageDetailTemplate_IsDeleted_0175 DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.PolicyCoverageDetailTemplateField', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyCoverageDetailTemplateField
+    (
+        TemplateFieldId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PolicyCoverageDetailTemplateField_0175 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        TemplateId UNIQUEIDENTIFIER NOT NULL,
+        FieldGroupCode NVARCHAR(50) NOT NULL,
+        FieldCode NVARCHAR(80) NOT NULL,
+        FieldLabel NVARCHAR(160) NOT NULL,
+        DefaultValue NVARCHAR(1000) NOT NULL CONSTRAINT DF_CoverageDetailTemplateField_Value_0175 DEFAULT N'',
+        FieldValueTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CoverageDetailTemplateField_Type_0175 DEFAULT N'Text',
+        UnitOfMeasureCode NVARCHAR(40) NOT NULL CONSTRAINT DF_CoverageDetailTemplateField_Unit_0175 DEFAULT N'',
+        IsRequired BIT NOT NULL CONSTRAINT DF_CoverageDetailTemplateField_Required_0175 DEFAULT 0,
+        IsRatingField BIT NOT NULL CONSTRAINT DF_CoverageDetailTemplateField_Rating_0175 DEFAULT 0,
+        IsScheduleField BIT NOT NULL CONSTRAINT DF_CoverageDetailTemplateField_Schedule_0175 DEFAULT 0,
+        SortOrder INT NOT NULL CONSTRAINT DF_CoverageDetailTemplateField_Sort_0175 DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CoverageDetailTemplateField_Created_0175 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CoverageDetailTemplateField_IsDeleted_0175 DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyCoverageDetailTemplate') AND name = N'UX_CoverageDetailTemplate_Tenant_Code_0175')
+    CREATE UNIQUE INDEX UX_CoverageDetailTemplate_Tenant_Code_0175 ON Policy.PolicyCoverageDetailTemplate(TenantId, CoverageCode) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyCoverageDetailTemplate') AND name = N'IX_CoverageDetailTemplate_Tenant_Active_0175')
+    CREATE INDEX IX_CoverageDetailTemplate_Tenant_Active_0175 ON Policy.PolicyCoverageDetailTemplate(TenantId, IsDeleted, IsActive, SortOrder, CoverageName);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyCoverageDetailTemplateField') AND name = N'IX_CoverageDetailTemplateField_Template_0175')
+    CREATE INDEX IX_CoverageDetailTemplateField_Template_0175 ON Policy.PolicyCoverageDetailTemplateField(TemplateId, IsDeleted, FieldGroupCode, SortOrder, FieldLabel);
+
+DECLARE @TenantId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted, 0) = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000001');
+DECLARE @AdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId AND ISNULL(IsDeleted, 0) = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+
+DECLARE @CoverageTemplates TABLE
+(
+    CoverageCode NVARCHAR(50), CoverageName NVARCHAR(80), LineOfBusinessCode NVARCHAR(50), CoverageCategoryCode NVARCHAR(50), CoverageFormCode NVARCHAR(50), CoverageTriggerCode NVARCHAR(50),
+    ValuationBasisCode NVARCHAR(50), TerritoryCode NVARCHAR(50), DefaultOccurrenceLimit DECIMAL(18,2), DefaultAggregateLimit DECIMAL(18,2), DefaultSublimit DECIMAL(18,2), DefaultDeductible DECIMAL(18,2),
+    DefaultRetention DECIMAL(18,2), DefaultPremium DECIMAL(18,2), DefaultRate DECIMAL(18,6), DefaultExposureBase DECIMAL(18,2), ExposureBasisCode NVARCHAR(50), CarrierName NVARCHAR(120),
+    WritingCompanyName NVARCHAR(120), UnderwriterName NVARCHAR(120), StatusCode NVARCHAR(50), IsIncluded BIT, IsAuditable BIT, IsClaimsMade BIT, RequiresSchedule BIT, RequiresCertificateReview BIT,
+    FormsAndEndorsements NVARCHAR(1000), CoinsuranceClause NVARCHAR(1000), BlanketOrSpecificCode NVARCHAR(50), CoveredOperations NVARCHAR(2000), Exclusions NVARCHAR(2000), Conditions NVARCHAR(2000),
+    RatingNotes NVARCHAR(2000), ServiceInstructions NVARCHAR(2000), AuditInstructions NVARCHAR(2000), CertificateInstructions NVARCHAR(2000), SortOrder INT
+);
+
+INSERT INTO @CoverageTemplates VALUES
+(N'GL', N'General Liability', N'Commercial Lines', N'Primary', N'Occurrence', N'Occurrence', N'Legal Liability', N'All States', 1000000, 2000000, 100000, 2500, NULL, 42500, 0.012500, 3400000, N'Gross Sales', N'Travelers Insurance', N'Travelers Indemnity Company', N'Commercial UW Desk', N'Active', 1, 1, 0, 0, 1, N'CG 00 01; CG 20 10; CG 20 37', N'', N'Blanket', N'Premises, operations, products, completed operations, contractual liability, and additional insured workflows.', N'Expected exclusions include intentional injury, pollution, aircraft, auto, and professional services unless endorsed.', N'Subject to audit, contractual risk transfer, and certificate wording review.', N'Rate on gross sales and payroll using selected class codes; verify minimum premium and experience modifiers.', N'Confirm additional insured wording, waiver of subrogation, primary/non-contributory language, and completed operations requirements.', N'Annual premium audit required; retain payroll and sales worksheets.', N'Certificate review required for all construction, lease, and vendor requests.', 10),
+(N'PROP', N'Commercial Property', N'Commercial Lines', N'Primary', N'Special Form', N'Direct Physical Loss', N'Replacement Cost', N'Scheduled Locations', 2500000, 5000000, 500000, 10000, NULL, 61200, 0.004250, 14400000, N'Total Insured Value', N'Chubb', N'Federal Insurance Company', N'Property UW Desk', N'Active', 1, 0, 0, 1, 1, N'CP 00 10; CP 10 30; Equipment Breakdown', N'80% coinsurance applies unless waived by agreed value endorsement.', N'Specific', N'Buildings, business personal property, business income, extra expense, and scheduled equipment.', N'Flood, earthquake, ordinance or law, wear and tear, vacancy, and protective safeguard exclusions may apply.', N'Subject to statement of values, COPE review, protective safeguards, and valuation updates.', N'Rate by construction, occupancy, protection, exposure, and catastrophe score.', N'Validate location schedule, values, lender clauses, and protective safeguard warranties.', N'Review statement of values annually and after acquisitions or renovations.', N'Evidence of property insurance and lender certificates require location and mortgagee validation.', 20),
+(N'AUTO', N'Commercial Auto', N'Commercial Lines', N'Primary', N'Business Auto', N'Accident', N'Actual Cash Value', N'Fleet Territory', 1000000, 1000000, 50000, 1000, NULL, 96500, 0.018000, 5361111, N'Fleet Premium Basis', N'The Hartford', N'Hartford Fire Insurance Company', N'Auto UW Desk', N'Active', 1, 1, 0, 1, 1, N'CA 00 01; Hired and Non-Owned Auto; Waiver where required', N'', N'Scheduled', N'Owned, hired, non-owned, and scheduled fleet units with driver qualification controls.', N'Expected exclusions include racing, intentional acts, employee injury, pollution, and contractual exclusions.', N'Subject to driver MVR review, vehicle schedule accuracy, radius, and fleet safety program.', N'Rate by vehicle class, radius, garaging, driver history, and loss experience.', N'Validate VINs, garaging, drivers, hired/non-owned use, and certificate holder requirements.', N'Quarterly fleet schedule reconciliation recommended.', N'Certificate issuance requires vehicle schedule and coverage symbol review.', 30),
+(N'WC', N'Workers Compensation', N'Commercial Lines', N'Statutory', N'Standard', N'Injury by Accident', N'Statutory', N'Jurisdiction', NULL, NULL, NULL, NULL, NULL, 184500, 0.026000, 7096154, N'Payroll', N'Travelers Insurance', N'Travelers Property Casualty Company', N'WC UW Desk', N'Active', 1, 1, 0, 1, 0, N'WC 00 00 00; Employers Liability', N'', N'Blanket', N'Statutory workers compensation and employers liability by scheduled state and class code.', N'Exclusions and state-specific endorsements apply by jurisdiction.', N'Subject to payroll audit, class code validation, experience modification, and officer inclusion/exclusion.', N'Rate by class code payroll, state, experience mod, schedule credits/debits, and loss history.', N'Confirm payroll estimates, included/excluded officers, state exposure, and waiver requirements.', N'Annual audit required; reconcile class codes and payroll changes.', N'Certificates require state, waiver, and alternate employer wording review when requested.', 40),
+(N'UMB', N'Commercial Umbrella', N'Commercial Lines', N'Excess', N'Follow Form', N'Underlying Exhaustion', N'Follow Form', N'Underlying Schedule', 5000000, 5000000, NULL, 10000, NULL, 52000, 0.006500, 8000000, N'Underlying Premium', N'Liberty Mutual', N'Liberty Mutual Insurance Company', N'Umbrella UW Desk', N'Active', 1, 0, 0, 0, 1, N'CU 00 01; Follow form endorsements; Exclusion schedule', N'', N'Blanket', N'Excess liability over scheduled GL, auto, and employers liability coverage.', N'Exclusions may include professional, pollution, EPL, cyber, and uncovered underlying hazards.', N'Subject to underlying limits, attachment points, exposure growth, and loss history.', N'Rate by underlying premium, limits, attachment, industry hazard, and loss experience.', N'Validate all underlying schedules and certificate excess wording.', N'Review underlying policy changes before renewal and endorsement.', N'Certificates require underlying schedule and excess limit validation.', 50),
+(N'CYBER', N'Cyber Liability', N'Commercial Lines', N'Specialty', N'Claims Made', N'Claim Reported', N'Limit of Liability', N'Global', 1000000, 1000000, 250000, 10000, 25000, 18900, 0.003200, 5906250, N'Revenue', N'Coalition', N'Coalition Insurance Solutions', N'Cyber UW Desk', N'Active', 1, 0, 1, 0, 0, N'Cyber Coverage Form; Breach Response; Funds Transfer Fraud', N'', N'Blanket', N'Network security, privacy liability, breach response, business interruption, cyber extortion, and crime extensions.', N'Prior known events, war, bodily injury/property damage, and unsupported systems exclusions may apply.', N'Subject to MFA, EDR, backups, encryption, endpoint inventory, and security questionnaire accuracy.', N'Rate by revenue, records count, controls, industry, and claims history.', N'Confirm security control attestations and incident response contacts.', N'Review security questionnaire and control changes annually.', N'Certificates typically require cyber limit and retroactive date review.', 60);
+
+INSERT INTO Policy.PolicyCoverageDetailTemplate
+(TemplateId, TenantId, CoverageTypeId, CoverageCode, CoverageName, LineOfBusinessCode, CoverageCategoryCode, CoverageFormCode, CoverageTriggerCode, ValuationBasisCode, TerritoryCode, DefaultOccurrenceLimit, DefaultAggregateLimit, DefaultSublimit, DefaultDeductible, DefaultRetention, DefaultPremium, DefaultRate, DefaultExposureBase, ExposureBasisCode, CarrierName, WritingCompanyName, UnderwriterName, StatusCode, IsIncluded, IsAuditable, IsClaimsMade, RequiresSchedule, RequiresCertificateReview, FormsAndEndorsements, CoinsuranceClause, BlanketOrSpecificCode, CoveredOperations, Exclusions, Conditions, RatingNotes, ServiceInstructions, AuditInstructions, CertificateInstructions, SortOrder, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @TenantId, ct.CoverageTypeId, s.CoverageCode, s.CoverageName, s.LineOfBusinessCode, s.CoverageCategoryCode, s.CoverageFormCode, s.CoverageTriggerCode, s.ValuationBasisCode, s.TerritoryCode, s.DefaultOccurrenceLimit, s.DefaultAggregateLimit, s.DefaultSublimit, s.DefaultDeductible, s.DefaultRetention, s.DefaultPremium, s.DefaultRate, s.DefaultExposureBase, s.ExposureBasisCode, s.CarrierName, s.WritingCompanyName, s.UnderwriterName, s.StatusCode, s.IsIncluded, s.IsAuditable, s.IsClaimsMade, s.RequiresSchedule, s.RequiresCertificateReview, s.FormsAndEndorsements, s.CoinsuranceClause, s.BlanketOrSpecificCode, s.CoveredOperations, s.Exclusions, s.Conditions, s.RatingNotes, s.ServiceInstructions, s.AuditInstructions, s.CertificateInstructions, s.SortOrder, 1, SYSUTCDATETIME(), @AdminUserId, 0
+FROM @CoverageTemplates s
+OUTER APPLY (SELECT TOP 1 CoverageTypeId FROM Policy.CoverageType WHERE TenantId = @TenantId AND CoverageCode = s.CoverageCode AND IsDeleted = 0 ORDER BY SortOrder, CoverageName) ct
+WHERE NOT EXISTS (SELECT 1 FROM Policy.PolicyCoverageDetailTemplate t WHERE t.TenantId = @TenantId AND t.CoverageCode = s.CoverageCode AND t.IsDeleted = 0);
+
+UPDATE t
+SET CoverageTypeId = COALESCE(t.CoverageTypeId, ct.CoverageTypeId),
+    CoverageName = s.CoverageName,
+    LineOfBusinessCode = s.LineOfBusinessCode,
+    CoverageCategoryCode = s.CoverageCategoryCode,
+    CoverageFormCode = s.CoverageFormCode,
+    CoverageTriggerCode = s.CoverageTriggerCode,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @AdminUserId
+FROM Policy.PolicyCoverageDetailTemplate t
+JOIN @CoverageTemplates s ON s.CoverageCode = t.CoverageCode
+OUTER APPLY (SELECT TOP 1 CoverageTypeId FROM Policy.CoverageType WHERE TenantId = @TenantId AND CoverageCode = s.CoverageCode AND IsDeleted = 0 ORDER BY SortOrder, CoverageName) ct
+WHERE t.TenantId = @TenantId AND t.IsDeleted = 0;
+
+DECLARE @TemplateFields TABLE (CoverageCode NVARCHAR(50), FieldGroupCode NVARCHAR(50), FieldCode NVARCHAR(80), FieldLabel NVARCHAR(160), DefaultValue NVARCHAR(1000), FieldValueTypeCode NVARCHAR(50), UnitOfMeasureCode NVARCHAR(40), IsRequired BIT, IsRatingField BIT, IsScheduleField BIT, SortOrder INT);
+INSERT INTO @TemplateFields VALUES
+(N'GL', N'Rating', N'CLASS_CODE', N'Primary class code', N'91585', N'Text', N'', 1, 1, 0, 10),
+(N'GL', N'Rating', N'GROSS_SALES', N'Gross sales basis', N'3400000', N'Decimal', N'USD', 1, 1, 0, 20),
+(N'GL', N'Certificate', N'AI_REQUIRED', N'Additional insured likely required', N'True', N'Boolean', N'', 0, 0, 0, 30),
+(N'PROP', N'Schedule', N'LOCATION_COUNT', N'Number of covered locations', N'1', N'Number', N'', 1, 0, 1, 10),
+(N'PROP', N'Rating', N'TIV', N'Total insured value', N'14400000', N'Decimal', N'USD', 1, 1, 1, 20),
+(N'PROP', N'Service', N'COPE_REQUIRED', N'COPE data required', N'True', N'Boolean', N'', 1, 0, 1, 30),
+(N'AUTO', N'Schedule', N'VEHICLE_COUNT', N'Scheduled vehicles', N'12', N'Number', N'', 1, 1, 1, 10),
+(N'AUTO', N'Rating', N'RADIUS', N'Operating radius', N'100 miles', N'Text', N'', 1, 1, 0, 20),
+(N'AUTO', N'Service', N'MVR_REQUIRED', N'MVR review required', N'True', N'Boolean', N'', 1, 0, 0, 30),
+(N'WC', N'Rating', N'PAYROLL', N'Estimated payroll', N'7096154', N'Decimal', N'USD', 1, 1, 0, 10),
+(N'WC', N'Rating', N'EXPERIENCE_MOD', N'Experience modification', N'1.00', N'Decimal', N'', 1, 1, 0, 20),
+(N'WC', N'Audit', N'AUDIT_REQUIRED', N'Premium audit required', N'True', N'Boolean', N'', 1, 0, 0, 30),
+(N'UMB', N'Underlying', N'UNDERLYING_LIMITS', N'Underlying limits validated', N'False', N'Boolean', N'', 1, 0, 1, 10),
+(N'UMB', N'Rating', N'UNDERLYING_PREMIUM', N'Underlying premium basis', N'8000000', N'Decimal', N'USD', 1, 1, 0, 20),
+(N'CYBER', N'Security', N'MFA_ENABLED', N'MFA enabled', N'True', N'Boolean', N'', 1, 1, 0, 10),
+(N'CYBER', N'Security', N'EDR_ENABLED', N'Endpoint detection response', N'True', N'Boolean', N'', 1, 1, 0, 20),
+(N'CYBER', N'Rating', N'ANNUAL_REVENUE', N'Annual revenue', N'5906250', N'Decimal', N'USD', 1, 1, 0, 30);
+
+INSERT INTO Policy.PolicyCoverageDetailTemplateField
+(TemplateFieldId, TenantId, TemplateId, FieldGroupCode, FieldCode, FieldLabel, DefaultValue, FieldValueTypeCode, UnitOfMeasureCode, IsRequired, IsRatingField, IsScheduleField, SortOrder, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @TenantId, t.TemplateId, f.FieldGroupCode, f.FieldCode, f.FieldLabel, f.DefaultValue, f.FieldValueTypeCode, f.UnitOfMeasureCode, f.IsRequired, f.IsRatingField, f.IsScheduleField, f.SortOrder, SYSUTCDATETIME(), @AdminUserId, 0
+FROM @TemplateFields f
+JOIN Policy.PolicyCoverageDetailTemplate t ON t.TenantId = @TenantId AND t.CoverageCode = f.CoverageCode AND t.IsDeleted = 0
+WHERE NOT EXISTS (SELECT 1 FROM Policy.PolicyCoverageDetailTemplateField existing WHERE existing.TemplateId = t.TemplateId AND existing.FieldCode = f.FieldCode AND existing.IsDeleted = 0);
 ";
 }
