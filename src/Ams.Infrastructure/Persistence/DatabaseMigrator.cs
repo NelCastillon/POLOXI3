@@ -211,6 +211,7 @@ public sealed partial class DatabaseMigrator
         new("0173_CarrierSettings_DynamicSeed", Migration0173_CarrierSettingsDynamicSeed),
         new("0174_PolicyCoverageDetail_EnterpriseSchemaSeedSync", Migration0174_PolicyCoverageDetailEnterpriseSchemaSeedSync),
         new("0175_PolicyCoverageDetailTemplate_CreateSeed", Migration0175_PolicyCoverageDetailTemplateCreateSeed),
+        new("0176_PolicyCertificates_CreateSeed", Migration0176_PolicyCertificatesCreateSeed),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -11353,43 +11354,67 @@ END;
 IF NOT EXISTS (SELECT 1 FROM @LedgerTenants)
     INSERT INTO @LedgerTenants VALUES ('00000000-0000-0000-0000-000000000001');
 
-DECLARE @CommissionLedgerSeed TABLE
-(
-    CommissionId UNIQUEIDENTIFIER NOT NULL,
-    PolicyNumber NVARCHAR(50) NOT NULL,
-    Period NVARCHAR(50) NOT NULL,
-    BusinessType NVARCHAR(100) NOT NULL,
-    Producer NVARCHAR(200) NOT NULL,
-    AccountName NVARCHAR(200) NOT NULL,
-    LineOfBusiness NVARCHAR(100) NOT NULL,
-    Carrier NVARCHAR(200) NOT NULL,
-    GrossAmount DECIMAL(18,2) NOT NULL,
-    CommissionPct DECIMAL(9,4) NOT NULL,
-    AgencyAmount DECIMAL(18,2) NOT NULL,
-    ProducerAmount DECIMAL(18,2) NOT NULL,
-    Status NVARCHAR(50) NOT NULL,
-    StatementNumber NVARCHAR(80) NOT NULL,
-    PayoutBatch NVARCHAR(80) NOT NULL,
-    TransactionDate DATE NOT NULL,
-    PaidDate DATE NULL
-);
-
-INSERT INTO @CommissionLedgerSeed VALUES
-('2b11d31a-1be1-46a1-9d94-33e39a0f6d01', N'POL-2024-001847', N'Jun 2024', N'New Business', N'James Miller', N'Acme Manufacturing Group', N'Workers Compensation', N'Travelers', 125000, 12, 15000, 9000, N'Approved', N'STM-2024-06-JM', N'PAY-2024-06-02', '2024-06-28', '2024-07-05'),
-('3c7bdf16-f81f-4b18-9a7f-48a2502f6d22', N'POL-2024-001847', N'Jul 2024', N'Endorsement', N'James Miller', N'Acme Manufacturing Group', N'Workers Compensation', N'Travelers', 18000, 12, 2160, 1296, N'Pending', N'STM-2024-07-JM', N'PAY-2024-07-01', '2024-07-22', NULL),
-('407d1ad5-24d5-4f9b-871f-f92022ee29d5', N'POL-2024-001611', N'Jun 2024', N'Renewal', N'James Miller', N'Northwind Logistics', N'Commercial Auto', N'The Hartford', 94200, 10, 9420, 5652, N'Paid', N'STM-2024-06-JM', N'PAY-2024-06-02', '2024-06-17', '2024-07-05'),
-('c98d9015-c8a8-4331-a4fe-b49f01919d31', N'POL-2024-001702', N'Jun 2024', N'New Business', N'Sarah Chen', N'Blue Harbor Foods', N'General Liability', N'Chubb', 216000, 11, 23760, 11880, N'Approved', N'STM-2024-06-SC', N'PAY-2024-06-02', '2024-06-24', '2024-07-05'),
-('7af6ab4e-55fe-4688-bc12-f49fbbd8c0fd', N'POL-2024-001534', N'May 2024', N'Renewal', N'Michael Thompson', N'Evergreen Retail Partners', N'Business Owner Policy', N'CNA', 78500, 9, 7065, 3532.50, N'Paid', N'STM-2024-05-MT', N'PAY-2024-05-02', '2024-05-19', '2024-06-03'),
-('75977d2b-2d15-4dd3-a524-8a903d69bb75', N'POL-2024-001889', N'Jun 2024', N'New Business', N'Olivia Grant', N'Summit Professional Services', N'Professional Liability', N'AIG', 166400, 13, 21632, 12979.20, N'In Review', N'STM-2024-06-OG', N'PAY-2024-06-HOLD', '2024-06-30', NULL),
-('c2c02c41-8e0e-43b4-8c2b-1b96d999a6b8', N'POL-2024-001433', N'Jun 2024', N'Rewrite', N'James Miller', N'Crescent Medical Group', N'Cyber Liability', N'Coalition', 63500, 14, 8890, 5334, N'Approved', N'STM-2024-06-JM', N'PAY-2024-06-02', '2024-06-26', '2024-07-05'),
-('ec8a7b02-6090-444b-9dc0-d4cf55549c81', N'POL-2024-001920', N'Jul 2024', N'New Business', N'Sarah Chen', N'Pioneer Design Studio', N'Umbrella', N'Liberty Mutual', 52000, 8, 4160, 2080, N'Pending', N'STM-2024-07-SC', N'PAY-2024-07-01', '2024-07-03', NULL);
-
-INSERT INTO Commission.CommissionLedger
-(CommissionId, TenantId, PolicyNumber, Period, BusinessType, Producer, AccountName, LineOfBusiness, Carrier, GrossAmount, CommissionPct, AgencyAmount, ProducerAmount, Status, StatementNumber, PayoutBatch, TransactionDate, PaidDate, CreatedDateUtc, IsDeleted)
-SELECT s.CommissionId, t.TenantId, s.PolicyNumber, s.Period, s.BusinessType, s.Producer, s.AccountName, s.LineOfBusiness, s.Carrier, s.GrossAmount, s.CommissionPct, s.AgencyAmount, s.ProducerAmount, s.Status, s.StatementNumber, s.PayoutBatch, s.TransactionDate, s.PaidDate, SYSUTCDATETIME(), 0
-FROM (SELECT TOP (1) TenantId FROM @LedgerTenants ORDER BY TenantId) t
-CROSS JOIN @CommissionLedgerSeed s
-WHERE NOT EXISTS (SELECT 1 FROM Commission.CommissionLedger l WHERE l.CommissionId = s.CommissionId);
+IF OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL
+   AND OBJECT_ID(N'Submissions.Submission', N'U') IS NOT NULL
+   AND OBJECT_ID(N'Client.Account', N'U') IS NOT NULL
+   AND OBJECT_ID(N'Core.Carrier', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Commission.CommissionLedger
+    (CommissionId, TenantId, PolicyNumber, Period, BusinessType, Producer, AccountName, LineOfBusiness, Carrier, GrossAmount, CommissionPct, AgencyAmount, ProducerAmount, Status, StatementNumber, PayoutBatch, TransactionDate, PaidDate, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(),
+           p.TenantId,
+           p.PolicyNumber,
+           FORMAT(COALESCE(p.BoundDateUtc, p.EffectiveDate, SYSUTCDATETIME()), N'MMM yyyy'),
+           CASE WHEN p.BoundDateUtc IS NOT NULL AND p.BoundDateUtc >= DATEADD(day, -120, SYSUTCDATETIME()) THEN N'New Business' ELSE N'Renewal' END,
+           COALESCE(NULLIF(u.FullName, N''), NULLIF(u.DisplayName, N''), NULLIF(u.UserName, N''), N'Unassigned Producer'),
+           COALESCE(NULLIF(a.AccountName, N''), NULLIF(s.SubmissionNumber, N''), p.PolicyNumber),
+           COALESCE(NULLIF(s.LineOfBusiness, N''), N'General Liability'),
+           COALESCE(NULLIF(c.CarrierName, N''), N'Bound Carrier'),
+           p.AnnualPremium,
+           CASE
+               WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Cyber%' THEN 14
+               WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Professional%' THEN 13
+               WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Workers%' THEN 12
+               WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Auto%' THEN 10
+               ELSE 11
+           END,
+           ROUND(p.AnnualPremium * (CASE
+               WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Cyber%' THEN 14
+               WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Professional%' THEN 13
+               WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Workers%' THEN 12
+               WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Auto%' THEN 10
+               ELSE 11
+           END) / 100.0, 2),
+           ROUND(p.AnnualPremium * (CASE
+               WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Cyber%' THEN 14
+               WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Professional%' THEN 13
+               WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Workers%' THEN 12
+               WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Auto%' THEN 10
+               ELSE 11
+           END) / 100.0 * 0.6, 2),
+           CASE WHEN p.Status IN (N'Bound', N'Active') THEN N'Approved' ELSE p.Status END,
+           CONCAT(N'STM-', FORMAT(COALESCE(p.BoundDateUtc, p.EffectiveDate, SYSUTCDATETIME()), N'yyyy-MM'), N'-', LEFT(REPLACE(COALESCE(NULLIF(u.UserName, N''), NULLIF(u.FullName, N''), N'PROD'), N' ', N''), 12)),
+           CONCAT(N'PAY-', FORMAT(COALESCE(p.BoundDateUtc, p.EffectiveDate, SYSUTCDATETIME()), N'yyyy-MM')),
+           CONVERT(date, COALESCE(p.BoundDateUtc, p.EffectiveDate, SYSUTCDATETIME())),
+           NULL,
+           SYSUTCDATETIME(),
+           0
+    FROM Submissions.BoundPolicy p
+    LEFT JOIN Submissions.Submission s ON s.SubmissionId = p.SubmissionId AND ISNULL(s.IsDeleted, 0) = 0
+    LEFT JOIN Client.Account a ON a.AccountId = p.AccountId AND ISNULL(a.IsDeleted, 0) = 0
+    LEFT JOIN Core.Carrier c ON c.CarrierId = p.CarrierId AND ISNULL(c.IsDeleted, 0) = 0
+    LEFT JOIN IAM.[User] u ON u.UserId = s.AssignedToUserId AND ISNULL(u.IsDeleted, 0) = 0
+    WHERE ISNULL(p.IsDeleted, 0) = 0
+      AND p.AnnualPremium <> 0
+      AND NOT EXISTS (
+          SELECT 1
+          FROM Commission.CommissionLedger l
+          WHERE l.TenantId = p.TenantId
+            AND l.PolicyNumber = p.PolicyNumber
+            AND l.BusinessType IN (N'New Business', N'Renewal')
+            AND ISNULL(l.IsDeleted, 0) = 0
+      );
+END;
 
 IF OBJECT_ID(N'Client.Account', N'U') IS NOT NULL AND OBJECT_ID(N'CRM.Opportunity', N'U') IS NOT NULL AND OBJECT_ID(N'Core.Carrier', N'U') IS NOT NULL AND OBJECT_ID(N'Submissions.Submission', N'U') IS NOT NULL AND OBJECT_ID(N'Submissions.SubmissionMarket', N'U') IS NOT NULL AND OBJECT_ID(N'Submissions.Quote', N'U') IS NOT NULL
 BEGIN
@@ -12684,5 +12709,118 @@ SELECT NEWID(), @TenantId, t.TemplateId, f.FieldGroupCode, f.FieldCode, f.FieldL
 FROM @TemplateFields f
 JOIN Policy.PolicyCoverageDetailTemplate t ON t.TenantId = @TenantId AND t.CoverageCode = f.CoverageCode AND t.IsDeleted = 0
 WHERE NOT EXISTS (SELECT 1 FROM Policy.PolicyCoverageDetailTemplateField existing WHERE existing.TemplateId = t.TemplateId AND existing.FieldCode = f.FieldCode AND existing.IsDeleted = 0);
+";
+
+    private const string Migration0176_PolicyCertificatesCreateSeed = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Policy') EXEC(N'CREATE SCHEMA Policy');
+
+IF OBJECT_ID(N'Policy.PolicyCertificate', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyCertificate
+    (
+        CertificateId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PolicyCertificate PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NULL,
+        CertificateNumber NVARCHAR(40) NOT NULL,
+        PolicyNumber NVARCHAR(80) NOT NULL,
+        AccountName NVARCHAR(200) NOT NULL,
+        HolderName NVARCHAR(200) NOT NULL,
+        HolderAddress NVARCHAR(300) NOT NULL CONSTRAINT DF_PolicyCertificate_HolderAddress DEFAULT N'',
+        CertificateType NVARCHAR(50) NOT NULL,
+        IssuedDate DATE NOT NULL,
+        ExpirationDate DATE NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        IssuedBy NVARCHAR(150) NOT NULL,
+        Status NVARCHAR(30) NOT NULL CONSTRAINT DF_PolicyCertificate_Status DEFAULT N'Pending',
+        AdditionalInsured BIT NOT NULL CONSTRAINT DF_PolicyCertificate_AdditionalInsured DEFAULT 0,
+        WaiverSubrogation BIT NOT NULL CONSTRAINT DF_PolicyCertificate_WaiverSubrogation DEFAULT 0,
+        Description NVARCHAR(2000) NOT NULL CONSTRAINT DF_PolicyCertificate_Description DEFAULT N'',
+        LastDeliveredDateUtc DATETIME2 NULL,
+        RevokedDateUtc DATETIME2 NULL,
+        RevokedByUserId UNIQUEIDENTIFIER NULL,
+        RevokeReason NVARCHAR(500) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyCertificate_CreatedDate DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyCertificate_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'TenantId') IS NULL ALTER TABLE Policy.PolicyCertificate ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyCertificate_TenantId_0176 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'PolicyId') IS NULL ALTER TABLE Policy.PolicyCertificate ADD PolicyId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'CertificateNumber') IS NULL ALTER TABLE Policy.PolicyCertificate ADD CertificateNumber NVARCHAR(40) NOT NULL CONSTRAINT DF_PolicyCertificate_Number_0176 DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'PolicyNumber') IS NULL ALTER TABLE Policy.PolicyCertificate ADD PolicyNumber NVARCHAR(80) NOT NULL CONSTRAINT DF_PolicyCertificate_PolicyNumber_0176 DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'AccountName') IS NULL ALTER TABLE Policy.PolicyCertificate ADD AccountName NVARCHAR(200) NOT NULL CONSTRAINT DF_PolicyCertificate_AccountName_0176 DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'HolderName') IS NULL ALTER TABLE Policy.PolicyCertificate ADD HolderName NVARCHAR(200) NOT NULL CONSTRAINT DF_PolicyCertificate_HolderName_0176 DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'HolderAddress') IS NULL ALTER TABLE Policy.PolicyCertificate ADD HolderAddress NVARCHAR(300) NOT NULL CONSTRAINT DF_PolicyCertificate_HolderAddress_0176 DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'CertificateType') IS NULL ALTER TABLE Policy.PolicyCertificate ADD CertificateType NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCertificate_Type_0176 DEFAULT N'ACORD 25';
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'IssuedDate') IS NULL ALTER TABLE Policy.PolicyCertificate ADD IssuedDate DATE NOT NULL CONSTRAINT DF_PolicyCertificate_IssuedDate_0176 DEFAULT CAST(SYSUTCDATETIME() AS date);
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'ExpirationDate') IS NULL ALTER TABLE Policy.PolicyCertificate ADD ExpirationDate DATE NOT NULL CONSTRAINT DF_PolicyCertificate_ExpirationDate_0176 DEFAULT DATEADD(year, 1, CAST(SYSUTCDATETIME() AS date));
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'LineOfBusiness') IS NULL ALTER TABLE Policy.PolicyCertificate ADD LineOfBusiness NVARCHAR(100) NOT NULL CONSTRAINT DF_PolicyCertificate_Lob_0176 DEFAULT N'General Liability';
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'IssuedBy') IS NULL ALTER TABLE Policy.PolicyCertificate ADD IssuedBy NVARCHAR(150) NOT NULL CONSTRAINT DF_PolicyCertificate_IssuedBy_0176 DEFAULT N'Tenant Admin';
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'Status') IS NULL ALTER TABLE Policy.PolicyCertificate ADD Status NVARCHAR(30) NOT NULL CONSTRAINT DF_PolicyCertificate_Status_0176 DEFAULT N'Pending';
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'AdditionalInsured') IS NULL ALTER TABLE Policy.PolicyCertificate ADD AdditionalInsured BIT NOT NULL CONSTRAINT DF_PolicyCertificate_AdditionalInsured_0176 DEFAULT 0;
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'WaiverSubrogation') IS NULL ALTER TABLE Policy.PolicyCertificate ADD WaiverSubrogation BIT NOT NULL CONSTRAINT DF_PolicyCertificate_Waiver_0176 DEFAULT 0;
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'Description') IS NULL ALTER TABLE Policy.PolicyCertificate ADD Description NVARCHAR(2000) NOT NULL CONSTRAINT DF_PolicyCertificate_Description_0176 DEFAULT N'';
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'LastDeliveredDateUtc') IS NULL ALTER TABLE Policy.PolicyCertificate ADD LastDeliveredDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'RevokedDateUtc') IS NULL ALTER TABLE Policy.PolicyCertificate ADD RevokedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'RevokedByUserId') IS NULL ALTER TABLE Policy.PolicyCertificate ADD RevokedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'RevokeReason') IS NULL ALTER TABLE Policy.PolicyCertificate ADD RevokeReason NVARCHAR(500) NULL;
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'CreatedDateUtc') IS NULL ALTER TABLE Policy.PolicyCertificate ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyCertificate_CreatedDate_0176 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'CreatedByUserId') IS NULL ALTER TABLE Policy.PolicyCertificate ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'ModifiedDateUtc') IS NULL ALTER TABLE Policy.PolicyCertificate ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'ModifiedByUserId') IS NULL ALTER TABLE Policy.PolicyCertificate ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'IsDeleted') IS NULL ALTER TABLE Policy.PolicyCertificate ADD IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyCertificate_IsDeleted_0176 DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyCertificate') AND name = N'UX_PolicyCertificate_Tenant_Number_0176')
+    CREATE UNIQUE INDEX UX_PolicyCertificate_Tenant_Number_0176 ON Policy.PolicyCertificate(TenantId, CertificateNumber) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyCertificate') AND name = N'IX_PolicyCertificate_Tenant_Status_0176')
+    CREATE INDEX IX_PolicyCertificate_Tenant_Status_0176 ON Policy.PolicyCertificate(TenantId, Status, IsDeleted, ExpirationDate);
+
+DECLARE @TenantId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted, 0) = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000001');
+DECLARE @AdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId AND ISNULL(IsDeleted, 0) = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+DECLARE @PolicyId UNIQUEIDENTIFIER = NULL;
+DECLARE @PolicyNumber NVARCHAR(80) = N'POL-2024-44821';
+DECLARE @AccountName NVARCHAR(200) = N'Sullivan Mfg. LLC';
+DECLARE @LineOfBusiness NVARCHAR(100) = N'General Liability';
+
+SELECT TOP 1
+    @PolicyId = p.PolicyId,
+    @PolicyNumber = p.PolicyNumber,
+    @AccountName = COALESCE(a.AccountName, s.SubmissionNumber, p.PolicyNumber),
+    @LineOfBusiness = COALESCE(NULLIF(s.LineOfBusiness, N''), N'General Liability')
+FROM Submissions.BoundPolicy p
+LEFT JOIN Client.Account a ON a.AccountId = p.AccountId
+LEFT JOIN Submissions.Submission s ON s.SubmissionId = p.SubmissionId AND s.IsDeleted = 0
+WHERE p.TenantId = @TenantId AND p.IsDeleted = 0
+ORDER BY p.BoundDateUtc, p.PolicyNumber;
+
+DECLARE @Certificates TABLE
+(
+    CertificateNumber NVARCHAR(40), HolderName NVARCHAR(200), HolderAddress NVARCHAR(300), CertificateType NVARCHAR(50),
+    IssuedOffset INT, ExpirationOffset INT, IssuedBy NVARCHAR(150), Status NVARCHAR(30), AdditionalInsured BIT, WaiverSubrogation BIT, Description NVARCHAR(2000)
+);
+
+INSERT INTO @Certificates VALUES
+(N'CERT-2024-1001', N'City of Houston', N'901 Bagby St, Houston, TX', N'ACORD 25', -42, 18, N'Maria Santos', N'Issued', 1, 1, N'Evidence of GL coverage for municipal vendor access, including additional insured and waiver endorsements.'),
+(N'CERT-2024-1002', N'ABC Contractors LLC', N'2100 Commerce Dr, Austin, TX', N'ACORD 25', -35, 72, N'James Patel', N'Issued', 1, 0, N'Certificate for jobsite access and standard contract compliance.'),
+(N'CERT-2024-1003', N'First National Bank', N'100 Main St, Dallas, TX', N'ACORD 28', -180, -5, N'Chen Li', N'Expired', 0, 0, N'Evidence of property coverage for lender file.'),
+(N'CERT-2024-1004', N'Whole Foods Market', N'550 Bowie St, Austin, TX', N'ACORD 25', -8, 21, N'Aisha Williams', N'Pending', 1, 1, N'Pending holder verification and contract language review.'),
+(N'CERT-2024-1005', N'TXDOT', N'125 E 11th St, Austin, TX', N'ACORD 25', -16, 240, N'Maria Santos', N'Issued', 1, 1, N'Auto liability proof for state transportation contract.'),
+(N'CERT-2024-1006', N'Harris County', N'1001 Preston St, Houston, TX', N'Custom', -22, 11, N'James Patel', N'Issued', 1, 0, N'Custom certificate package for public works bid submission.'),
+(N'CERT-2024-1007', N'Amazon.com LLC', N'410 Terry Ave N, Seattle, WA', N'ACORD 27', -60, 320, N'Chen Li', N'Revoked', 0, 0, N'Revoked after holder relationship ended.'),
+(N'CERT-2024-1008', N'State Farm (as AI)', N'1 State Farm Plaza, Bloomington, IL', N'ACORD 25', -4, 365, N'Aisha Williams', N'Pending', 0, 0, N'Draft pending umbrella wording approval.');
+
+INSERT INTO Policy.PolicyCertificate
+(CertificateId, TenantId, PolicyId, CertificateNumber, PolicyNumber, AccountName, HolderName, HolderAddress, CertificateType, IssuedDate, ExpirationDate, LineOfBusiness, IssuedBy, Status, AdditionalInsured, WaiverSubrogation, Description, RevokedDateUtc, RevokedByUserId, RevokeReason, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @TenantId, @PolicyId, s.CertificateNumber, @PolicyNumber, @AccountName, s.HolderName, s.HolderAddress, s.CertificateType, DATEADD(day, s.IssuedOffset, CAST(SYSUTCDATETIME() AS date)), DATEADD(day, s.ExpirationOffset, CAST(SYSUTCDATETIME() AS date)), @LineOfBusiness, s.IssuedBy, s.Status, s.AdditionalInsured, s.WaiverSubrogation, s.Description,
+       CASE WHEN s.Status = N'Revoked' THEN DATEADD(day, -14, SYSUTCDATETIME()) ELSE NULL END,
+       CASE WHEN s.Status = N'Revoked' THEN @AdminUserId ELSE NULL END,
+       CASE WHEN s.Status = N'Revoked' THEN N'Holder relationship ended.' ELSE NULL END,
+       SYSUTCDATETIME(), @AdminUserId, 0
+FROM @Certificates s
+WHERE NOT EXISTS (SELECT 1 FROM Policy.PolicyCertificate c WHERE c.TenantId = @TenantId AND c.CertificateNumber = s.CertificateNumber AND c.IsDeleted = 0);
 ";
 }

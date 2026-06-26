@@ -544,17 +544,19 @@ ORDER BY ar.AppetiteScore DESC;";
            (SELECT COUNT(1) FROM Compliance.PolicyDocument d WHERE d.TenantId = p.TenantId AND d.IsDeleted = 0 AND d.PolicyCode = p.PolicyNumber) AS DocumentCount,
            (SELECT COUNT(1) FROM Submissions.SubmissionActionLog al WHERE al.TenantId = p.TenantId AND al.SubmissionId = p.SubmissionId AND al.IsDeleted = 0) AS ActivityCount,
            (SELECT COUNT(1) FROM Policy.PolicyEndorsement e WHERE e.TenantId = p.TenantId AND e.PolicyNumber = p.PolicyNumber AND e.IsDeleted = 0) AS EndorsementCount,
-           CASE
-               WHEN DATEDIFF(day, SYSUTCDATETIME(), p.ExpirationDate) BETWEEN 0 AND 90 THEN N'Pre-Renewal'
-               WHEN p.ExpirationDate < SYSUTCDATETIME() THEN N'Expired'
-               ELSE N'Not Started'
-           END AS RenewalStage,
-           CONCAT(N'Policy bound ', CONVERT(nvarchar(10), p.BoundDateUtc, 101), N' from submission ', COALESCE(s.SubmissionNumber, N'')) AS LastAction
+            COALESCE(NULLIF(lastRenewal.Notes, N''), CASE
+                WHEN DATEDIFF(day, SYSUTCDATETIME(), p.ExpirationDate) BETWEEN 0 AND 90 THEN N'Pre-Renewal'
+                WHEN p.ExpirationDate < SYSUTCDATETIME() THEN N'Expired'
+                ELSE N'Not Started'
+            END) AS RenewalStage,
+            COALESCE(lastAction.Notes, CONCAT(N'Policy bound ', CONVERT(nvarchar(10), p.BoundDateUtc, 101), N' from submission ', COALESCE(s.SubmissionNumber, N''))) AS LastAction
     FROM   Submissions.BoundPolicy p
     LEFT JOIN Submissions.Submission s ON s.SubmissionId = p.SubmissionId AND s.IsDeleted = 0
     LEFT JOIN Client.Account a ON a.AccountId = p.AccountId
     LEFT JOIN Core.Carrier c ON c.CarrierId = p.CarrierId
     LEFT JOIN IAM.[User] u ON u.UserId = s.AssignedToUserId
+    OUTER APPLY (SELECT TOP 1 al.Notes FROM Submissions.SubmissionActionLog al WHERE al.TenantId = p.TenantId AND al.SubmissionId = p.SubmissionId AND al.IsDeleted = 0 ORDER BY al.CreatedDateUtc DESC) lastAction
+    OUTER APPLY (SELECT TOP 1 al.Notes FROM Submissions.SubmissionActionLog al WHERE al.TenantId = p.TenantId AND al.SubmissionId = p.SubmissionId AND al.IsDeleted = 0 AND al.ActionCode = N'RenewalStage' ORDER BY al.CreatedDateUtc DESC) lastRenewal
     WHERE  p.TenantId = @TenantId
       AND  p.IsDeleted = 0
       AND  (@SearchTerm IS NULL OR @SearchTerm = N'' OR p.PolicyNumber LIKE N'%' + @SearchTerm + N'%' OR a.AccountName LIKE N'%' + @SearchTerm + N'%' OR c.CarrierName LIKE N'%' + @SearchTerm + N'%' OR s.LineOfBusiness LIKE N'%' + @SearchTerm + N'%')
@@ -605,6 +607,244 @@ SELECT COUNT(1) FROM Filtered;";
         var items = (await multi.ReadAsync<PolicyRegisterDto>()).AsList();
         var total = await multi.ReadSingleAsync<int>();
         return new PagedResult<PolicyRegisterDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
+    }
+
+    public async Task<PolicyRegisterDto?> GetPolicyByIdAsync(Guid policyId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT TOP 1 p.PolicyId,
+       p.SubmissionId,
+       p.QuoteId,
+       p.TenantId,
+       p.AccountId,
+       COALESCE(a.AccountName, s.SubmissionNumber, p.PolicyNumber) AS AccountName,
+       N'Commercial' AS AccountType,
+       p.CarrierId,
+       COALESCE(c.CarrierName, N'Bound Carrier') AS CarrierName,
+       p.PolicyNumber,
+       CASE WHEN p.Status = N'Bound' THEN N'Active' ELSE p.Status END AS Status,
+       COALESCE(NULLIF(s.LineOfBusiness, N''), N'General Liability') AS LineOfBusiness,
+       COALESCE(NULLIF(s.Priority, N''), N'Normal') AS Priority,
+       p.AnnualPremium,
+       p.AnnualPremium AS WrittenPremium,
+       p.EffectiveDate,
+       p.ExpirationDate,
+       p.BoundDateUtc,
+       s.AssignedToUserId,
+       COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin') AS AssignedToUserName,
+       COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin') AS ProducerName,
+       COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin') AS CsrName,
+       N'HQ' AS Branch,
+       (SELECT COUNT(1) FROM Compliance.PolicyDocument d WHERE d.TenantId = p.TenantId AND d.IsDeleted = 0 AND d.PolicyCode = p.PolicyNumber) AS DocumentCount,
+       (SELECT COUNT(1) FROM Submissions.SubmissionActionLog al WHERE al.TenantId = p.TenantId AND al.SubmissionId = p.SubmissionId AND al.IsDeleted = 0) AS ActivityCount,
+       (SELECT COUNT(1) FROM Policy.PolicyEndorsement e WHERE e.TenantId = p.TenantId AND e.PolicyNumber = p.PolicyNumber AND e.IsDeleted = 0) AS EndorsementCount,
+       COALESCE(NULLIF(lastRenewal.Notes, N''), CASE
+           WHEN DATEDIFF(day, SYSUTCDATETIME(), p.ExpirationDate) BETWEEN 0 AND 90 THEN N'Pre-Renewal'
+           WHEN p.ExpirationDate < SYSUTCDATETIME() THEN N'Expired'
+           ELSE N'Not Started'
+       END) AS RenewalStage,
+       COALESCE(lastAction.Notes, CONCAT(N'Policy bound ', CONVERT(nvarchar(10), p.BoundDateUtc, 101), N' from submission ', COALESCE(s.SubmissionNumber, N''))) AS LastAction
+FROM Submissions.BoundPolicy p
+LEFT JOIN Submissions.Submission s ON s.SubmissionId = p.SubmissionId AND s.IsDeleted = 0
+LEFT JOIN Client.Account a ON a.AccountId = p.AccountId
+LEFT JOIN Core.Carrier c ON c.CarrierId = p.CarrierId
+LEFT JOIN IAM.[User] u ON u.UserId = s.AssignedToUserId
+OUTER APPLY (SELECT TOP 1 al.Notes FROM Submissions.SubmissionActionLog al WHERE al.TenantId = p.TenantId AND al.SubmissionId = p.SubmissionId AND al.IsDeleted = 0 ORDER BY al.CreatedDateUtc DESC) lastAction
+OUTER APPLY (SELECT TOP 1 al.Notes FROM Submissions.SubmissionActionLog al WHERE al.TenantId = p.TenantId AND al.SubmissionId = p.SubmissionId AND al.IsDeleted = 0 AND al.ActionCode = N'RenewalStage' ORDER BY al.CreatedDateUtc DESC) lastRenewal
+WHERE p.PolicyId = @PolicyId AND p.IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await cn.QuerySingleOrDefaultAsync<PolicyRegisterDto>(new CommandDefinition(sql, new { PolicyId = policyId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<Guid> CreatePolicyRegisterAsync(UpsertPolicyRegisterRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+DECLARE @CarrierId UNIQUEIDENTIFIER = (SELECT TOP 1 CarrierId FROM Core.Carrier WHERE TenantId = @TenantId AND CarrierName = @CarrierName AND IsDeleted = 0 ORDER BY CreatedDateUtc);
+IF @CarrierId IS NULL
+BEGIN
+    SET @CarrierId = NEWID();
+    INSERT INTO Core.Carrier (CarrierId, TenantId, CarrierCode, CarrierName, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (@CarrierId, @TenantId, LEFT(REPLACE(UPPER(@CarrierName), N' ', N''), 50), @CarrierName, 1, SYSUTCDATETIME(), @ModifiedByUserId, 0);
+END;
+
+DECLARE @SubmissionId UNIQUEIDENTIFIER = NEWID();
+DECLARE @QuoteId UNIQUEIDENTIFIER = NEWID();
+DECLARE @SubmissionNumber NVARCHAR(50) = CONCAT(N'SUB-', FORMAT(GETUTCDATE(), 'yyyyMMdd'), N'-', RIGHT('00000' + CAST(NEXT VALUE FOR Submissions.SubmissionSeq AS VARCHAR), 5));
+
+INSERT INTO Submissions.Submission
+    (SubmissionId, TenantId, AccountId, OpportunityId, SubmissionNumber, LineOfBusiness, Status, Priority, AssignedToUserId, EffectiveDate, ExpirationDate, TargetPremium, MarketCount, QuoteCount, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+    (@SubmissionId, @TenantId, @AccountId, NULL, @SubmissionNumber, @LineOfBusiness, CASE WHEN @Status IN (N'Active', N'Bound') THEN N'Bound' ELSE @Status END, N'Normal', @ModifiedByUserId, @EffectiveDate, @ExpirationDate, NULLIF(@AnnualPremium, 0), 0, 1, SYSUTCDATETIME(), @ModifiedByUserId, 0);
+
+INSERT INTO Submissions.Quote
+    (QuoteId, SubmissionId, CarrierId, QuoteNumber, Status, AnnualPremium, Deductible, [Limit], CoverageNotes, QuotedDateUtc, ExpiresDateUtc, CreatedDateUtc, IsDeleted)
+VALUES
+    (@QuoteId, @SubmissionId, @CarrierId, CONCAT(N'QT-', FORMAT(GETUTCDATE(), 'yyyyMMdd'), N'-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), @PolicyId), N'-', N''), 6)), N'Presented', @AnnualPremium, NULL, NULL, @Notes, SYSUTCDATETIME(), DATEADD(day, 30, SYSUTCDATETIME()), SYSUTCDATETIME(), 0);
+
+INSERT INTO Submissions.BoundPolicy
+    (PolicyId, SubmissionId, QuoteId, TenantId, AccountId, CarrierId, PolicyNumber, Status, AnnualPremium, EffectiveDate, ExpirationDate, BoundDateUtc, IsDeleted)
+VALUES
+    (@PolicyId, @SubmissionId, @QuoteId, @TenantId, @AccountId, @CarrierId, @PolicyNumber, CASE WHEN @Status = N'Active' THEN N'Bound' ELSE @Status END, @AnnualPremium, @EffectiveDate, @ExpirationDate, SYSUTCDATETIME(), 0);
+
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, N'PolicyCreated', CONCAT(N'Policy created from register. ', COALESCE(@Notes, N'')), SYSUTCDATETIME(), 0);";
+        var id = Guid.NewGuid();
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            PolicyId = id,
+            request.TenantId,
+            request.AccountId,
+            request.PolicyNumber,
+            request.CarrierName,
+            request.LineOfBusiness,
+            request.Status,
+            request.EffectiveDate,
+            request.ExpirationDate,
+            request.AnnualPremium,
+            request.Notes,
+            request.ModifiedByUserId,
+        }, cancellationToken: cancellationToken));
+        return id;
+    }
+
+    public async Task UpdatePolicyRegisterAsync(Guid policyId, UpsertPolicyRegisterRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+DECLARE @SubmissionId UNIQUEIDENTIFIER;
+DECLARE @CarrierId UNIQUEIDENTIFIER = (SELECT TOP 1 CarrierId FROM Core.Carrier WHERE TenantId = @TenantId AND CarrierName = @CarrierName AND IsDeleted = 0 ORDER BY CreatedDateUtc);
+IF @CarrierId IS NULL
+BEGIN
+    SET @CarrierId = NEWID();
+    INSERT INTO Core.Carrier (CarrierId, TenantId, CarrierCode, CarrierName, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (@CarrierId, @TenantId, LEFT(REPLACE(UPPER(@CarrierName), N' ', N''), 50), @CarrierName, 1, SYSUTCDATETIME(), @ModifiedByUserId, 0);
+END;
+
+UPDATE Submissions.BoundPolicy
+SET PolicyNumber = @PolicyNumber,
+    CarrierId = @CarrierId,
+    Status = CASE WHEN @Status = N'Active' THEN N'Bound' ELSE @Status END,
+    AnnualPremium = @AnnualPremium,
+    EffectiveDate = @EffectiveDate,
+    ExpirationDate = @ExpirationDate,
+    @SubmissionId = SubmissionId
+WHERE PolicyId = @PolicyId AND TenantId = @TenantId AND IsDeleted = 0;
+
+UPDATE Submissions.Submission
+SET AccountId = @AccountId,
+    LineOfBusiness = @LineOfBusiness,
+    Status = CASE WHEN @Status = N'Active' THEN N'Bound' ELSE @Status END,
+    EffectiveDate = @EffectiveDate,
+    ExpirationDate = @ExpirationDate,
+    TargetPremium = NULLIF(@AnnualPremium, 0),
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0;
+
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, N'PolicyUpdated', CONCAT(N'Policy edited from register. ', COALESCE(@Notes, N'')), SYSUTCDATETIME(), 0);";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            PolicyId = policyId,
+            request.TenantId,
+            request.AccountId,
+            request.PolicyNumber,
+            request.CarrierName,
+            request.LineOfBusiness,
+            request.Status,
+            request.EffectiveDate,
+            request.ExpirationDate,
+            request.AnnualPremium,
+            request.Notes,
+            request.ModifiedByUserId,
+        }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<SubmissionActionResult> ExecutePolicyRegisterActionAsync(Guid policyId, PolicyRegisterActionRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+DECLARE @SubmissionId UNIQUEIDENTIFIER;
+DECLARE @QuoteId UNIQUEIDENTIFIER;
+DECLARE @AccountId UNIQUEIDENTIFIER;
+DECLARE @CarrierId UNIQUEIDENTIFIER;
+DECLARE @PolicyNumber NVARCHAR(50);
+DECLARE @AccountName NVARCHAR(200);
+DECLARE @LineOfBusiness NVARCHAR(100);
+DECLARE @CarrierName NVARCHAR(200);
+DECLARE @AnnualPremium DECIMAL(18,2);
+DECLARE @EffectiveDate DATETIME2;
+DECLARE @ExpirationDate DATETIME2;
+
+SELECT @SubmissionId = p.SubmissionId,
+       @QuoteId = p.QuoteId,
+       @AccountId = p.AccountId,
+       @CarrierId = p.CarrierId,
+       @PolicyNumber = p.PolicyNumber,
+       @AccountName = COALESCE(a.AccountName, p.PolicyNumber),
+       @LineOfBusiness = COALESCE(NULLIF(s.LineOfBusiness, N''), N'General Liability'),
+       @CarrierName = COALESCE(c.CarrierName, N'Carrier'),
+       @AnnualPremium = p.AnnualPremium,
+       @EffectiveDate = p.EffectiveDate,
+       @ExpirationDate = p.ExpirationDate
+FROM Submissions.BoundPolicy p
+LEFT JOIN Submissions.Submission s ON s.SubmissionId = p.SubmissionId AND s.IsDeleted = 0
+LEFT JOIN Client.Account a ON a.AccountId = p.AccountId
+LEFT JOIN Core.Carrier c ON c.CarrierId = p.CarrierId
+WHERE p.PolicyId = @PolicyId AND p.TenantId = @TenantId AND p.IsDeleted = 0;
+
+IF @SubmissionId IS NULL THROW 51000, 'Policy was not found.', 1;
+
+DECLARE @ActionCode NVARCHAR(80) = REPLACE(@Action, N' ', N'');
+DECLARE @Message NVARCHAR(500) = CONCAT(@Action, N' completed for ', @PolicyNumber, N'.');
+
+IF @Action = N'Cancel Policy'
+BEGIN
+    UPDATE Submissions.BoundPolicy SET Status = N'Cancelled' WHERE PolicyId = @PolicyId AND TenantId = @TenantId AND IsDeleted = 0;
+    UPDATE Submissions.Submission SET Status = N'Cancelled', ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ModifiedByUserId WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0;
+    INSERT INTO Policy.PolicyCancellation (CancellationId, TenantId, PolicyId, AccountId, CancellationNumber, PolicyNumber, AccountName, LineOfBusiness, Carrier, CancellationReason, CancellationType, RequestType, RequestDateUtc, EffectiveDate, CancellationDate, ReturnPremium, PremiumDue, Status, Priority, RequestedByName, AssignedToName, Notes, WorkflowStage, DueDate, IsUrgent, IsArchived, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (NEWID(), @TenantId, @PolicyId, @AccountId, CONCAT(N'CAN-', FORMAT(SYSUTCDATETIME(), N'yyyy'), N'-', FORMAT(ISNULL((SELECT COUNT(1) + 1 FROM Policy.PolicyCancellation WHERE TenantId = @TenantId), 1), N'0000')), @PolicyNumber, @AccountName, @LineOfBusiness, @CarrierName, COALESCE(NULLIF(@Notes, N''), N'Policy cancelled from register'), N'Pro-Rata', N'Cancellation', SYSUTCDATETIME(), COALESCE(@ActionDate, SYSUTCDATETIME()), COALESCE(@ActionDate, SYSUTCDATETIME()), 0, 0, N'Pending', N'Normal', N'Current User', N'Current User', @Notes, N'Cancellation Intake', DATEADD(day, 7, SYSUTCDATETIME()), 0, 0, SYSUTCDATETIME(), @ModifiedByUserId, 0);
+END
+ELSE IF @Action = N'Renew'
+BEGIN
+    DECLARE @RenewalPolicyId UNIQUEIDENTIFIER = NEWID();
+    DECLARE @RenewalQuoteId UNIQUEIDENTIFIER = NEWID();
+    DECLARE @RenewalEffective DATETIME2 = COALESCE(@ActionDate, @ExpirationDate);
+    DECLARE @RenewalPremium DECIMAL(18,2) = COALESCE(NULLIF(@Premium, 0), @AnnualPremium);
+    INSERT INTO Submissions.Quote (QuoteId, SubmissionId, CarrierId, QuoteNumber, Status, AnnualPremium, CoverageNotes, QuotedDateUtc, ExpiresDateUtc, CreatedDateUtc, IsDeleted)
+    VALUES (@RenewalQuoteId, @SubmissionId, @CarrierId, CONCAT(N'QT-REN-', FORMAT(GETUTCDATE(), 'yyyyMMdd'), N'-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), @RenewalPolicyId), N'-', N''), 6)), N'Presented', @RenewalPremium, @Notes, SYSUTCDATETIME(), DATEADD(day, 30, SYSUTCDATETIME()), SYSUTCDATETIME(), 0);
+    INSERT INTO Submissions.BoundPolicy (PolicyId, SubmissionId, QuoteId, TenantId, AccountId, CarrierId, PolicyNumber, Status, AnnualPremium, EffectiveDate, ExpirationDate, BoundDateUtc, IsDeleted)
+    VALUES (@RenewalPolicyId, @SubmissionId, @RenewalQuoteId, @TenantId, @AccountId, @CarrierId, CONCAT(@PolicyNumber, N'-REN-', FORMAT(GETUTCDATE(), 'yyMMdd')), N'Pending', @RenewalPremium, @RenewalEffective, DATEADD(year, 1, @RenewalEffective), SYSUTCDATETIME(), 0);
+    SET @Message = CONCAT(N'Renewal policy created for ', @PolicyNumber, N'.');
+END
+ELSE IF @Action = N'Endorse'
+BEGIN
+    INSERT INTO Policy.PolicyEndorsement (EndorsementId, TenantId, PolicyId, AccountId, EndorsementNumber, PolicyNumber, AccountName, LineOfBusiness, Carrier, EndorsementType, Description, EffectiveDate, RequestedDateUtc, PremiumDelta, Status, Priority, RequestedByName, AssignedToName, WorkflowStage, IsUrgent, IsArchived, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (NEWID(), @TenantId, @PolicyId, @AccountId, CONCAT(N'END-', FORMAT(SYSUTCDATETIME(), N'yyyy'), N'-', FORMAT(ISNULL((SELECT COUNT(1) + 1 FROM Policy.PolicyEndorsement WHERE TenantId = @TenantId), 1), N'0000')), @PolicyNumber, @AccountName, @LineOfBusiness, @CarrierName, N'Change Endorsement', COALESCE(NULLIF(@Notes, N''), N'Policy endorsement requested from register'), COALESCE(@ActionDate, SYSUTCDATETIME()), COALESCE(@ActionDate, SYSUTCDATETIME()), COALESCE(@Premium, 0), N'Pending', N'Normal', N'Current User', N'Current User', N'Intake', 0, 0, SYSUTCDATETIME(), @ModifiedByUserId, 0);
+END
+ELSE IF @Action = N'Add Document'
+BEGIN
+    INSERT INTO Compliance.PolicyDocument (PolicyDocumentId, TenantId, PolicyCode, PolicyTitle, PolicyTypeCode, Version, EffectiveDateUtc, IsActive, StatusCode, Description, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (NEWID(), @TenantId, @PolicyNumber, COALESCE(NULLIF(@DocumentTitle, N''), CONCAT(N'Policy Document - ', @PolicyNumber)), N'Policy', N'1.0', COALESCE(@ActionDate, SYSUTCDATETIME()), 1, N'Published', @Notes, SYSUTCDATETIME(), @ModifiedByUserId, 0);
+END
+
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, @ActionCode, COALESCE(NULLIF(@Notes, N''), @Message), SYSUTCDATETIME(), 0);
+
+SELECT @Message;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var message = await cn.QuerySingleAsync<string>(new CommandDefinition(sql, new
+        {
+            PolicyId = policyId,
+            request.TenantId,
+            request.Action,
+            ActionDate = request.EffectiveDate,
+            request.Premium,
+            request.DocumentTitle,
+            request.Notes,
+            request.ModifiedByUserId,
+        }, cancellationToken: cancellationToken));
+        return new SubmissionActionResult(policyId, message);
     }
 
     public async Task<PolicyBindDto?> GetPolicyBySubmissionAsync(Guid submissionId, CancellationToken cancellationToken = default)

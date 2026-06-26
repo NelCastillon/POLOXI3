@@ -114,6 +114,31 @@ public sealed class SubmissionsController : ControllerBase
         CancellationToken cancellationToken = default)
         => Ok(await _service.SearchPoliciesAsync(tenantId, searchTerm, status, lineOfBusiness, pageNumber, pageSize, cancellationToken));
 
+    [HttpGet("policies/{policyId:guid}")]
+    public async Task<IActionResult> GetPolicyById(Guid policyId, CancellationToken cancellationToken)
+    {
+        var policy = await _service.GetPolicyByIdAsync(policyId, cancellationToken);
+        return policy is null ? NotFound() : Ok(policy);
+    }
+
+    [HttpPost("policies")]
+    public async Task<IActionResult> CreatePolicyRegister([FromBody] UpsertPolicyRegisterRequest request, CancellationToken cancellationToken)
+    {
+        var id = await _service.CreatePolicyRegisterAsync(request, cancellationToken);
+        return CreatedAtAction(nameof(GetPolicyById), new { policyId = id }, new { id });
+    }
+
+    [HttpPut("policies/{policyId:guid}")]
+    public async Task<IActionResult> UpdatePolicyRegister(Guid policyId, [FromBody] UpsertPolicyRegisterRequest request, CancellationToken cancellationToken)
+    {
+        await _service.UpdatePolicyRegisterAsync(policyId, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPost("policies/{policyId:guid}/actions")]
+    public async Task<IActionResult> ExecutePolicyRegisterAction(Guid policyId, [FromBody] PolicyRegisterActionRequest request, CancellationToken cancellationToken)
+        => Ok(await _service.ExecutePolicyRegisterActionAsync(policyId, request, cancellationToken));
+
     [HttpGet("{id:guid}/quotes")]
     public async Task<IActionResult> GetQuotes(Guid id, CancellationToken cancellationToken)
         => Ok(await _service.GetQuoteComparisonAsync(id, cancellationToken));

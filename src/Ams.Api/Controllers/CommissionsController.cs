@@ -55,6 +55,17 @@ public sealed class CommissionsController : ControllerBase
     public async Task<IActionResult> SearchLedger([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, CancellationToken cancellationToken = default)
         => Ok(await _service.SearchLedgerAsync(tenantId, searchTerm, cancellationToken));
 
+    [HttpGet("ledger/{id:guid}")]
+    public async Task<IActionResult> GetLedgerById(Guid id, [FromQuery] Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        var item = await _service.GetLedgerByIdAsync(tenantId, id, cancellationToken);
+        return item is null ? NotFound() : Ok(item);
+    }
+
+    [HttpPost("ledger")]
+    public async Task<IActionResult> CreateLedger([FromBody] CreateCommissionLedgerRequest request, CancellationToken cancellationToken)
+        => Ok(await _service.CreateLedgerAsync(request, cancellationToken));
+
     [HttpPost("transactions")]
     public async Task<IActionResult> CreateTransaction([FromBody] CreateCommissionTransactionRequest request, CancellationToken cancellationToken)
         => Ok(await _service.CreateTransactionAsync(request, cancellationToken));

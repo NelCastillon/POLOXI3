@@ -36,7 +36,9 @@ public sealed class CommissionService : ICommissionService
     }
     public Task<CommissionTransactionDto?> GetTransactionByIdAsync(Guid id, CancellationToken cancellationToken = default) => _txRepo.GetByIdAsync(id, cancellationToken);
     public Task<PagedResult<CommissionTransactionDto>> SearchTransactionsAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => _txRepo.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
+    public Task<CommissionLedgerRowDto?> GetLedgerByIdAsync(Guid tenantId, Guid commissionId, CancellationToken cancellationToken = default) => _txRepo.GetLedgerByIdAsync(tenantId, commissionId, cancellationToken);
     public Task<IReadOnlyList<CommissionLedgerRowDto>> SearchLedgerAsync(Guid tenantId, string? searchTerm, CancellationToken cancellationToken = default) => _txRepo.SearchLedgerAsync(tenantId, searchTerm, cancellationToken);
+    public Task<Guid> CreateLedgerAsync(CreateCommissionLedgerRequest request, CancellationToken cancellationToken = default) => _txRepo.CreateLedgerAsync(request, cancellationToken);
     public Task<Guid> CreateTransactionAsync(CreateCommissionTransactionRequest request, CancellationToken cancellationToken = default) => _txRepo.CreateAsync(request, cancellationToken);
     public Task UpdateTransactionAsync(Guid id, UpdateCommissionTransactionRequest request, CancellationToken cancellationToken = default) => _txRepo.UpdateAsync(id, request, cancellationToken);
     public Task<CommissionPayoutDto?> GetPayoutByIdAsync(Guid id, CancellationToken cancellationToken = default) => _payoutRepo.GetByIdAsync(id, cancellationToken);

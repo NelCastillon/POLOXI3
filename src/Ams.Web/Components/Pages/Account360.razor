@@ -367,6 +367,10 @@ else
                             <span class="a360-tab-count">@_documents.Count document(s)</span>
                             <button class="a360-btn a360-btn-ghost a360-btn-sm" @onclick="OpenUpload"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Upload</button>
                         </div>
+                        @if (!string.IsNullOrWhiteSpace(_documentLoadError))
+                        {
+                            <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">Document load failed: @_documentLoadError</div>
+                        }
                         @if (_documents.Count == 0) { @AEmpty("bi-folder2","No documents","Upload loss runs, financials, policy documents or correspondence.") }
                         else
                         {
@@ -796,8 +800,27 @@ else
         <EditForm Model="_documentForm" OnValidSubmit="CommitUploadAsync">
             <DataAnnotationsValidator />
             <div class="a360-modal-body"><div class="a360-form-grid">
-                <div class="a360-field"><label>Category <span class="a360-text-danger">*</span></label><InputSelect @bind-Value="_documentForm.Category" class="a360-input">@foreach (var option in _docCats) { <option value="@option.Value">@option.Label</option> }</InputSelect></div>
-                <div class="a360-field a360-field--full"><label>Document File <span class="a360-text-danger">*</span></label><InputFile OnChange="OnUploadFileSelected" class="a360-input" accept=".pdf,.docx,.xlsx,.csv,.png,.jpg" />@if (_selectedUploadFile is not null) { <small class="a360-help-text">@_selectedUploadFile.Name (@((_selectedUploadFile.Size / 1024m).ToString("N0")) KB)</small> }</div>
+                <div class="a360-field"><label>Category <span class="a360-text-danger">*</span></label><InputSelect @bind-Value="_documentForm.Category" class="a360-input">@foreach (var option in _docCats) { <option value="@option.Value">@option.Label</option> }</InputSelect><ValidationMessage For="() => _documentForm.Category" class="text-danger" /></div>
+                <div class="a360-field a360-field--full">
+                    <label>Document File <span class="a360-text-danger">*</span></label>
+                    <div class="@UploadDropClass" @ondragenter="SetUploadDragActive" @ondragover="SetUploadDragActive" @ondragleave="ClearUploadDragActive" @ondrop="ClearUploadDragActive" @ondragover:preventDefault="true">
+                        <InputFile OnChange="OnUploadFileSelected" class="a360-upload-input" accept=".pdf,.docx,.xlsx,.csv,.png,.jpg" />
+                        <div class="a360-upload-content">
+                            <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i>
+                            <strong>Browse or drag and drop a document</strong>
+                            <span>PDF, Word, Excel, CSV, PNG, or JPG up to 100 MB</span>
+                            <span class="a360-upload-browse">Choose file</span>
+                        </div>
+                    </div>
+                    @if (_selectedUploadFile is not null)
+                    {
+                        <div class="a360-selected-file"><i class="bi @DocIcon(Path.GetExtension(_selectedUploadFile.Name))" aria-hidden="true"></i><span>@_selectedUploadFile.Name</span><strong>@((_selectedUploadFile.Size / 1024m).ToString("N0")) KB</strong></div>
+                    }
+                    else
+                    {
+                        <small class="a360-help-text text-danger">Select a file by browsing or dropping it into the upload box.</small>
+                    }
+                </div>
             </div></div>
             <div class="a360-modal-footer"><button type="button" class="a360-btn a360-btn-ghost" @onclick="CloseUploadDialog">Cancel</button><button type="submit" class="a360-btn a360-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Upload</button></div>
         </EditForm>
@@ -983,6 +1006,8 @@ else
     private CommunicationForm _communicationForm = new();
     private DocumentForm  _documentForm  = new();
     private IBrowserFile? _selectedUploadFile;
+    private string?       _documentLoadError;
+    private bool          _uploadDragActive;
     private ClaimForm     _claimForm     = new();
     private RelationshipForm _relationshipForm = new();
     private CampaignForm  _campaignForm  = new();
@@ -1043,6 +1068,7 @@ else
             _acct = BuildAccountModel(account);
             ClearTabData();
             await LoadContactsAsync();
+            await LoadDocumentsAsync();
             BuildRightPanel();
             Breadcrumbs.SetCrumbs(new("Home", "/"), new("Accounts", "/accounts"), new(_acct.AccountName, $"/accounts/{AccountId}"));
             NavContext.SetAccount(AccountId, _acct.AccountName);
@@ -1090,6 +1116,38 @@ else
         Email = contact.Email,
         Phone = contact.Phone,
         IsPrimary = contact.IsKeyContact || contact.IsServiceContact || contact.IsBillingContact
+    };
+
+    private async Task LoadDocumentsAsync()
+    {
+        _documentLoadError = null;
+
+        if (_acct is null)
+            return;
+
+        try
+        {
+            var tenantId = _userContext?.TenantId != Guid.Empty ? _userContext?.TenantId : _acct.TenantId;
+            var documents = await Api.GetDocumentsByEntityAsync(tenantId ?? _acct.TenantId, "Account", AccountId) ?? [];
+            _documents = documents.Select(MapDocument).ToList();
+        }
+        catch (Exception ex)
+        {
+            _documents = [];
+            _documentLoadError = ex.Message;
+            await ShowToast($"Document load failed: {ex.Message}", "a360-toast-danger");
+        }
+    }
+
+    private static DocRow MapDocument(DocumentDto document) => new()
+    {
+        DocumentId = document.DocumentId,
+        FileName = document.FileName,
+        Extension = Path.GetExtension(document.FileName),
+        Category = string.IsNullOrWhiteSpace(document.CategoryCode) ? "Other" : document.CategoryCode,
+        SizeKb = document.FileSizeBytes.HasValue ? Math.Max(1, (int)Math.Ceiling(document.FileSizeBytes.Value / 1024m)) : 0,
+        UploadedBy = string.IsNullOrWhiteSpace(document.UploadedByName) ? "System" : document.UploadedByName,
+        UploadedAt = document.CreatedDateUtc
     };
 
     private void BuildRightPanel()
@@ -1293,16 +1351,52 @@ else
 
     private async Task CommitUploadAsync()
     {
+        if (_acct is null)
+            return;
+
         if (_selectedUploadFile is null)
         {
             await ShowToast("Upload failed: select a document file.", "a360-toast-danger");
             return;
         }
 
-        await ShowToast("Upload failed: DB-backed document endpoint is not available for Account 360.", "a360-toast-danger");
+        _saving = true;
+        try
+        {
+            await using var stream = _selectedUploadFile.OpenReadStream(104_857_600);
+            await Api.UploadDocumentAsync(new ApiClient.UploadDocumentRequest
+            {
+                TenantId = _userContext?.TenantId != Guid.Empty ? _userContext?.TenantId ?? _acct.TenantId : _acct.TenantId,
+                DocumentTypeCode = "Account",
+                CategoryCode = Normalize(_documentForm.Category) ?? "Other",
+                FileName = _selectedUploadFile.Name,
+                OriginalFileName = _selectedUploadFile.Name,
+                EntityName = "Account",
+                EntityId = AccountId,
+                UploadedByName = _userContext?.TenantName,
+                CreatedByUserId = _userContext?.UserId,
+                Content = stream
+            });
+
+            CloseUploadDialog();
+            await LoadDocumentsAsync();
+            await ShowToast("Document uploaded.");
+        }
+        catch (Exception ex)
+        {
+            await ShowToast($"Upload failed: {ex.Message}", "a360-toast-danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
     }
 
-    private Task DownloadDocumentAsync(DocRow row) => ShowToast("Download failed: DB-backed document endpoint is not available for Account 360.", "a360-toast-danger");
+    private Task DownloadDocumentAsync(DocRow row)
+    {
+        Nav.NavigateTo(Api.GetDocumentDownloadUrl(row.DocumentId), forceLoad: true);
+        return Task.CompletedTask;
+    }
     private async Task MarkCommunicationOpenedAsync(CommRow row) => await ShowToast("Update failed: DB-backed communication endpoint is not available for Account 360.", "a360-toast-danger");
 
     private void OpenAddContact() { _editingContact = null; _contactForm = new(); _showAddContact = true; }
@@ -1315,8 +1409,10 @@ else
     private void OpenEditCommunication(CommRow row) { _editingCommunication = row; _communicationForm = new() { Channel = row.Channel, Subject = row.Subject, Preview = row.Preview }; _showCompose = true; }
     private void CloseCommunicationDialog() { _showCompose = false; _editingCommunication = null; _communicationForm = new(); }
     private void OpenUpload() { _documentForm = new() { Category = "Other" }; _selectedUploadFile = null; _showUpload = true; }
-    private void CloseUploadDialog() { _showUpload = false; _documentForm = new(); _selectedUploadFile = null; }
-    private void OnUploadFileSelected(InputFileChangeEventArgs args) => _selectedUploadFile = args.File;
+    private void CloseUploadDialog() { _showUpload = false; _documentForm = new(); _selectedUploadFile = null; _uploadDragActive = false; }
+    private void OnUploadFileSelected(InputFileChangeEventArgs args) { _selectedUploadFile = args.File; _uploadDragActive = false; }
+    private void SetUploadDragActive() => _uploadDragActive = true;
+    private void ClearUploadDragActive() => _uploadDragActive = false;
     private void OpenFnol() { _editingClaim = null; _claimForm = new() { LossDate = DateTime.UtcNow }; _showFnol = true; }
     private void OpenEditClaim(ClaimRow row) { _editingClaim = row; _claimForm = new() { PolicyNumber = row.ClaimNumber, LineOfBusiness = row.LineOfBusiness, LossDate = row.LossDate, Adjuster = row.Adjuster }; _showFnol = true; }
     private void CloseClaimDialog() { _showFnol = false; _editingClaim = null; _claimForm = new(); }
@@ -1334,7 +1430,7 @@ else
     private void ConfirmDeleteContact(ContactRow row) => ConfirmDelete("Delete Contact", $"Delete contact {row.FullName}?", async () => { await Api.DeleteContactAsync(row.ContactId); await LoadContactsAsync(); await ShowToast("Contact deleted."); });
     private void ConfirmDeleteSubmission(SubmissionRow row) => ConfirmDelete("Delete Submission", $"Delete submission {row.SubmissionNumber}?", async () => await ShowToast("Delete failed: DB-backed submission endpoint is not available for Account 360.", "a360-toast-danger"));
     private void ConfirmDeleteClaim(ClaimRow row) => ConfirmDelete("Delete Claim", $"Delete claim {row.ClaimNumber}?", async () => await ShowToast("Delete failed: DB-backed claims endpoint is not available for Account 360.", "a360-toast-danger"));
-    private void ConfirmDeleteDocument(DocRow row) => ConfirmDelete("Delete Document", $"Delete document {row.FileName}?", async () => await ShowToast("Delete failed: DB-backed document endpoint is not available for Account 360.", "a360-toast-danger"));
+    private void ConfirmDeleteDocument(DocRow row) => ConfirmDelete("Delete Document", $"Delete document {row.FileName}?", async () => { await Api.DeleteDocumentAsync(row.DocumentId, _userContext?.UserId); await LoadDocumentsAsync(); await ShowToast("Document deleted."); });
     private void ConfirmDeleteActivity(ActivityRow row) => ConfirmDelete("Delete Activity", $"Delete activity {row.Subject}?", async () => await ShowToast("Delete failed: DB-backed activity endpoint is not available for Account 360.", "a360-toast-danger"));
     private void ConfirmDeleteCommunication(CommRow row) => ConfirmDelete("Delete Communication", $"Delete communication {row.Subject}?", async () => await ShowToast("Delete failed: DB-backed communication endpoint is not available for Account 360.", "a360-toast-danger"));
     private void ConfirmDeleteCampaign(CampaignRow row) => ConfirmDelete("Remove Campaign", $"Remove campaign enrollment {row.CampaignName}?", async () => await ShowToast("Delete failed: DB-backed campaign endpoint is not available for Account 360.", "a360-toast-danger"));
@@ -1446,6 +1542,7 @@ else
     private static string CommIcon(string c) => c switch { "Email"=>"bi-envelope","Phone"=>"bi-telephone","SMS"=>"bi-chat-dots",_=>"bi-globe" };
     private static string CommColor(string c) => c switch { "Email"=>"a360-comm-ic--email","Phone"=>"a360-comm-ic--phone",_=>"a360-comm-ic--other" };
     private static string DocIcon(string ext) => ext.ToLower() switch { ".pdf"=>"bi-file-earmark-pdf",".docx"=>"bi-file-earmark-word",".xlsx"=>"bi-file-earmark-excel",_=>"bi-file-earmark" };
+    private string UploadDropClass => _uploadDragActive ? "a360-upload-drop a360-upload-drop--active" : "a360-upload-drop";
     private static string TimelineIcon(string cat) => cat switch { "Policy"=>"bi-shield-check","Claim"=>"bi-exclamation-triangle","Billing"=>"bi-receipt","Activity"=>"bi-lightning","Marketing"=>"bi-megaphone","Note"=>"bi-sticky",_=>"bi-circle" };
     private static string TimelineColor(string cat) => cat switch { "Policy"=>"a360-tle--policy","Claim"=>"a360-tle--claim","Billing"=>"a360-tle--billing","Activity"=>"a360-tle--activity","Marketing"=>"a360-tle--marketing",_=>"a360-tle--default" };
     private static string AvatarColor(string name) { var c=new[]{"a360-av1","a360-av2","a360-av3","a360-av4","a360-av5","a360-av6"}; return c[Math.Abs(name.GetHashCode())%c.Length]; }
@@ -1696,7 +1793,7 @@ else
     private sealed class ClaimRow       { public string ClaimNumber { get; set; }=string.Empty; public string LineOfBusiness { get; set; }=string.Empty; public DateTime LossDate { get; set; }=DateTime.UtcNow; public string Status { get; set; }="Open"; public decimal ReserveAmount { get; set; } public decimal PaidAmount { get; set; } public string Adjuster { get; set; }=string.Empty; }
     private sealed class BillingRow     { public string InvoiceNumber { get; set; }=string.Empty; public string PolicyNumber { get; set; }=string.Empty; public decimal Amount { get; set; } public decimal Balance { get; set; } public string Status { get; set; }="Pending"; public DateTime DueDate { get; set; }=DateTime.UtcNow; public string? PaymentMethod { get; set; } }
     private sealed class CommissionRow  { public string PolicyNumber { get; set; }=string.Empty; public string LineOfBusiness { get; set; }=string.Empty; public decimal GrossPremium { get; set; } public decimal CommissionRate { get; set; } public decimal CommissionAmount { get; set; } public string Status { get; set; }="Pending"; public DateTime? PaidDate { get; set; } public string Producer { get; set; }=string.Empty; }
-    private sealed class DocRow         { public string FileName { get; set; }=string.Empty; public string Extension { get; set; }=string.Empty; public string Category { get; set; }=string.Empty; public int SizeKb { get; set; } public string UploadedBy { get; set; }=string.Empty; public DateTime UploadedAt { get; set; }=DateTime.UtcNow; }
+    private sealed class DocRow         { public Guid DocumentId { get; set; } public string FileName { get; set; }=string.Empty; public string Extension { get; set; }=string.Empty; public string Category { get; set; }=string.Empty; public int SizeKb { get; set; } public string UploadedBy { get; set; }=string.Empty; public DateTime UploadedAt { get; set; }=DateTime.UtcNow; }
     private sealed class ActivityRow    { public string Type { get; set; }=string.Empty; public string Subject { get; set; }=string.Empty; public string? Notes { get; set; } public string By { get; set; }=string.Empty; public DateTime OccurredAt { get; set; }=DateTime.UtcNow; }
     private sealed class CommRow        { public string Channel { get; set; }=string.Empty; public string Subject { get; set; }=string.Empty; public string Preview { get; set; }=string.Empty; public string SentBy { get; set; }=string.Empty; public DateTime SentAt { get; set; }=DateTime.UtcNow; public bool Opened { get; set; } }
     private sealed class CampaignRow    { public string CampaignName { get; set; }=string.Empty; public string Status { get; set; }="Active"; public DateTime EnrolledAt { get; set; }=DateTime.UtcNow; public int EmailsSent { get; set; } public int Opens { get; set; } public int Clicks { get; set; } }

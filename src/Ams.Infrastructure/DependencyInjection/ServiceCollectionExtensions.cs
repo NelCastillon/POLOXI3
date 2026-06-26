@@ -431,6 +431,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPolicyCancellationRepository, PolicyCancellationRepository>();
         services.AddScoped<IPolicyCancellationService, PolicyCancellationService>();
 
+        // ── Policy Certificates Workflow ─────────────────────────────
+        services.AddScoped<IPolicyCertificateRepository, PolicyCertificateRepository>();
+        services.AddScoped<IPolicyCertificateService, PolicyCertificateService>();
+
         // ── Documents — E-Sign (Epic 11) ─────────────────────────────
         services.AddScoped<IESignRepository, ESignRepository>();
         services.AddScoped<IESignService, ESignService>();

@@ -1,0 +1,1063 @@
+@page "/policies/{PolicyId:guid}/coverages/new"
+@page "/policies/{PolicyId:guid}/coverages/{CoverageDetailId:guid}/edit"
+@namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.PolicyCoverages
+@using Microsoft.AspNetCore.Components.Forms
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+@implements IDisposable
+
+<PageTitle>@PageTitleText</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="pd-toast pd-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="pd-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_loading)
+{
+    <div class="pd-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading coverage workspace…</span></div>
+}
+else if (_policy is null)
+{
+    <div class="pd-not-found">
+        <i class="bi bi-shield-x pd-nf-icon" aria-hidden="true"></i>
+        <h2>Policy not found</h2>
+        <button class="um-btn um-btn-ghost" @onclick="BackToPolicy"><i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Policy</button>
+    </div>
+}
+else
+{
+    <div class="pd-enterprise-page">
+        <div class="pd-header">
+            <div class="pd-header-left">
+                <div class="pd-lob-icon pd-lob-coverage-form"><i class="bi bi-shield-plus" aria-hidden="true"></i></div>
+                <div class="pd-header-info">
+                    <div class="pd-title-row">
+                        <h1 class="pd-pol-num">@PageTitleText</h1>
+                        <span class="pd-status pd-status-active">DB-backed</span>
+                        <span class="pd-lob-badge pd-lob-coverage-form">@_policy.PolicyNumber</span>
+                    </div>
+                    <div class="pd-sub-row">
+                        <button class="pd-acct-link" @onclick="BackToPolicy"><i class="bi bi-arrow-left" aria-hidden="true"></i>Back to policy file</button>
+                        <span class="pd-sub-chip"><i class="bi bi-building" aria-hidden="true"></i>@_policy.AccountName</span>
+                        <span class="pd-sub-chip"><i class="bi bi-calendar" aria-hidden="true"></i>@_policy.EffectiveDate.ToString("MM/dd/yyyy") - @_policy.ExpirationDate.ToString("MM/dd/yyyy")</span>
+                    </div>
+                </div>
+            </div>
+            <div class="pd-header-actions">
+                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="BackToPolicy"><i class="bi bi-x-lg" aria-hidden="true"></i> Cancel</button>
+                <button class="um-btn um-btn-primary um-btn-sm" @onclick="SaveCoverageAsync" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_saving ? "Saving..." : "Save Coverage")</button>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(_loadError))
+        {
+            <div class="alert alert-danger pd-load-error" role="alert"><i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError</div>
+        }
+
+        <div class="pd-command-strip" aria-label="Coverage setup summary">
+            <div class="pd-command-card pd-command-card--info"><span class="pd-command-icon"><i class="bi bi-database-check" aria-hidden="true"></i></span><div><span>Data Source</span><strong>Policy coverage DB</strong><small>Saved to Policy.PolicyCoverageDetail</small></div></div>
+            <div class="pd-command-card"><span class="pd-command-icon"><i class="bi bi-card-checklist" aria-hidden="true"></i></span><div><span>Selected Coverage</span><strong>@EmptyDash(_coverageForm.CovCode)</strong><small>@EmptyDash(_coverageForm.CovName)</small></div></div>
+            <div class="pd-command-card"><span class="pd-command-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></span><div><span>Premium / Limit</span><strong>@_coverageForm.Premium.ToString("C2")</strong><small>@PrimaryLimitText</small></div></div>
+            <div class="pd-command-card @(_coverageForm.IsIncluded ? "pd-command-card--success" : "pd-command-card--attention")"><span class="pd-command-icon"><i class="bi bi-ui-checks" aria-hidden="true"></i></span><div><span>Coverage Status</span><strong>@EmptyDash(_coverageForm.StatusCode)</strong><small>@(_coverageForm.IsIncluded ? "Included on policy" : "Not included")</small></div></div>
+        </div>
+
+        <div class="pd-enterprise-banner">
+            <i class="bi bi-shield-check" aria-hidden="true"></i>
+            <div>
+                <strong>Complete coverage synchronization enabled</strong>
+                <span>Identity, limits, rating, carrier, servicing, notes, flags, and dynamic fields are validated and saved through the policy coverage database APIs.</span>
+            </div>
+        </div>
+
+        <div class="pd-sync-grid" aria-label="Coverage completion summary">
+            <div class="pd-sync-card pd-sync-card--primary"><span><i class="bi bi-check2-square" aria-hidden="true"></i></span><div><strong>@CompletedRequiredCount / @RequiredFieldCount</strong><small>required sections completed</small></div></div>
+            <div class="pd-sync-card"><span><i class="bi bi-diagram-3" aria-hidden="true"></i></span><div><strong>@TemplateSyncText</strong><small>template and policy defaults</small></div></div>
+            <div class="pd-sync-card @(_coverageForm.Fields.Count == 0 ? "" : "pd-sync-card--primary")"><span><i class="bi bi-ui-checks-grid" aria-hidden="true"></i></span><div><strong>@_coverageForm.Fields.Count dynamic</strong><small>@DynamicFieldSyncText</small></div></div>
+            <div class="pd-sync-card @(ValidationIssues.Count == 0 ? "pd-sync-card--success" : "pd-sync-card--warning")"><span><i class="bi @(ValidationIssues.Count == 0 ? "bi-shield-check" : "bi-exclamation-triangle")" aria-hidden="true"></i></span><div><strong>@(ValidationIssues.Count == 0 ? "Ready" : $"{ValidationIssues.Count} issue(s)")</strong><small>save validation status</small></div></div>
+        </div>
+
+        <EditForm EditContext="_editContext" OnValidSubmit="SaveCoverageAsync" OnInvalidSubmit="NotifyValidationAsync">
+            <DataAnnotationsValidator />
+            <ValidationSummary class="pd-validation-summary" />
+            <section class="pd-workspace-panel" aria-label="Coverage form workspace">
+                <div class="pd-native-tabs" role="tablist" aria-label="Coverage form sections">
+                    @foreach (var tab in _tabs)
+                    {
+                        <button type="button" class="pd-native-tab @(_tab == tab.Index ? "pd-native-tab--active" : null) @TabStateClass(tab.Index)" role="tab" aria-selected="@(_tab == tab.Index)" @onclick="() => _tab = tab.Index"><i class="bi @tab.Icon" aria-hidden="true"></i><span>@tab.Label</span><small>@TabCompletionText(tab.Index)</small></button>
+                    }
+                </div>
+            </section>
+
+            <div class="pd-tab-body">
+                @switch (_tab)
+                {
+                    case 0:
+                        <div class="pd-summary-grid">
+                            <div class="pd-info-card">
+                                <div class="pd-card-title-row"><div><h3 class="pd-card-hdr">Coverage Identity</h3><p>Choose a DB-backed coverage template; code, name, LOB, defaults, flags, and dynamic fields stay synchronized.</p></div>@if (!_coverageForm.IsEdit && !string.IsNullOrWhiteSpace(_coverageForm.CovCode)) { <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="SyncCoverageTemplate"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Sync template</button> }</div>
+                                <div class="um-form-grid">
+                                    <div class="um-field"><label>Coverage Code <span class="text-danger">*</span></label><InputSelect TValue="string" class="form-select" Value="_coverageForm.CovCode" ValueChanged="OnCoverageLookupValueChanged" ValueExpression="() => _coverageForm.CovCode" disabled="@_coverageForm.IsEdit"><option value="">Select coverage code</option>@foreach (var option in CoverageLookupOptions) { <option value="@option.CovCode">@option.CodeLabel</option> }</InputSelect><ValidationMessage For="() => _coverageForm.CovCode" class="text-danger" />@if (_coverageForm.IsEdit) { <small>Coverage code is read-only after creation.</small> }</div>
+                                    <div class="um-field"><label>Coverage Name <span class="text-danger">*</span></label>@if (_coverageForm.IsEdit) { <InputText class="form-control" @bind-Value="_coverageForm.CovName" /> } else { <InputSelect TValue="string" class="form-select" Value="_coverageForm.CovCode" ValueChanged="OnCoverageLookupValueChanged" ValueExpression="() => _coverageForm.CovCode"><option value="">Select coverage name</option>@foreach (var option in CoverageLookupOptions) { <option value="@option.CovCode">@option.NameLabel</option> }</InputSelect> }<ValidationMessage For="() => _coverageForm.CovName" class="text-danger" /></div>
+                                    <div class="um-field"><label>Line of Business <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_coverageForm.LineOfBusinessCode" disabled="@_coverageForm.IsEdit" /><ValidationMessage For="() => _coverageForm.LineOfBusinessCode" class="text-danger" />@if (_coverageForm.IsEdit) { <small>Line of business is controlled by the saved coverage record.</small> }</div>
+                                    <div class="um-field"><label>Category <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_coverageForm.CoverageCategoryCode"><option value="">Select category</option>@foreach (var option in CoverageCategoryOptions) { <option value="@option">@option</option> }</InputSelect><ValidationMessage For="() => _coverageForm.CoverageCategoryCode" class="text-danger" /></div>
+                                    <div class="um-field"><label>Coverage Form <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_coverageForm.CoverageFormCode" /><ValidationMessage For="() => _coverageForm.CoverageFormCode" class="text-danger" /></div>
+                                    <div class="um-field"><label>Coverage Trigger <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_coverageForm.CoverageTriggerCode" /><ValidationMessage For="() => _coverageForm.CoverageTriggerCode" class="text-danger" /></div>
+                                    <div class="um-field"><label>Valuation Basis</label><InputText class="form-control" @bind-Value="_coverageForm.ValuationBasisCode" /></div>
+                                    <div class="um-field"><label>Territory</label><InputText class="form-control" @bind-Value="_coverageForm.TerritoryCode" /></div>
+                                </div>
+                            </div>
+                        </div>
+                        break;
+                    case 1:
+                        <div class="pd-summary-grid">
+                            <div class="pd-info-card">
+                                <div class="pd-card-title-row"><div><h3 class="pd-card-hdr">Limits, Premium & Rating</h3><p>Premium, limits, deductible, retention, rate, and exposure values are persisted with the coverage detail.</p></div></div>
+                                <div class="um-form-grid">
+                                    <div class="um-field"><label>Premium</label><InputNumber class="form-control" @bind-Value="_coverageForm.Premium" /><ValidationMessage For="() => _coverageForm.Premium" class="text-danger" /></div>
+                                    <div class="um-field"><label>Rate</label><InputNumber class="form-control" @bind-Value="_coverageForm.Rate" /><ValidationMessage For="() => _coverageForm.Rate" class="text-danger" /></div>
+                                    <div class="um-field"><label>Occurrence Limit</label><InputNumber class="form-control" @bind-Value="_coverageForm.OccurrenceLimit" /></div>
+                                    <div class="um-field"><label>Aggregate Limit</label><InputNumber class="form-control" @bind-Value="_coverageForm.AggregateLimit" /></div>
+                                    <div class="um-field"><label>Sublimit</label><InputNumber class="form-control" @bind-Value="_coverageForm.Sublimit" /></div>
+                                    <div class="um-field"><label>Deductible</label><InputNumber class="form-control" @bind-Value="_coverageForm.Deductible" /></div>
+                                    <div class="um-field"><label>Retention</label><InputNumber class="form-control" @bind-Value="_coverageForm.Retention" /></div>
+                                    <div class="um-field"><label>Exposure Base</label><InputNumber class="form-control" @bind-Value="_coverageForm.ExposureBase" /></div>
+                                    <div class="um-field"><label>Exposure Basis</label><InputText class="form-control" @bind-Value="_coverageForm.ExposureBasisCode" /></div>
+                                </div>
+                            </div>
+                        </div>
+                        break;
+                    case 2:
+                        <div class="pd-summary-grid">
+                            <div class="pd-info-card">
+                                <div class="pd-card-title-row"><div><h3 class="pd-card-hdr">Term & Carrier Servicing</h3><p>Term and servicing fields can be aligned to the parent policy or manually adjusted for coverage-specific handling.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="SyncPolicyDefaults"><i class="bi bi-link-45deg" aria-hidden="true"></i> Sync policy defaults</button></div>
+                                <div class="um-form-grid">
+                                    <div class="um-field"><label>Effective Date <span class="text-danger">*</span></label><InputDate class="form-control" @bind-Value="_coverageForm.EffectiveDate" /><ValidationMessage For="() => _coverageForm.EffectiveDate" class="text-danger" /></div>
+                                    <div class="um-field"><label>Expiration Date <span class="text-danger">*</span></label><InputDate class="form-control" @bind-Value="_coverageForm.ExpirationDate" /><ValidationMessage For="() => _coverageForm.ExpirationDate" class="text-danger" /></div>
+                                    <div class="um-field"><label>Carrier <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_coverageForm.CarrierName" /><ValidationMessage For="() => _coverageForm.CarrierName" class="text-danger" /></div>
+                                    <div class="um-field"><label>Writing Company</label><InputText class="form-control" @bind-Value="_coverageForm.WritingCompanyName" /></div>
+                                    <div class="um-field"><label>Underwriter</label><InputText class="form-control" @bind-Value="_coverageForm.UnderwriterName" /></div>
+                                    <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_coverageForm.StatusCode"><option value="">Select status</option>@foreach (var option in CoverageStatusOptions) { <option value="@option">@option</option> }</InputSelect><ValidationMessage For="() => _coverageForm.StatusCode" class="text-danger" /></div>
+                                </div>
+                            </div>
+                            <div class="pd-info-card">
+                                <h3 class="pd-card-hdr">Coverage Flags</h3>
+                                <div class="pd-check-grid">
+                                    <label><InputCheckbox @bind-Value="_coverageForm.IsIncluded" /> Included</label>
+                                    <label><InputCheckbox @bind-Value="_coverageForm.IsAuditable" /> Auditable</label>
+                                    <label><InputCheckbox @bind-Value="_coverageForm.IsClaimsMade" /> Claims Made</label>
+                                    <label><InputCheckbox @bind-Value="_coverageForm.RequiresSchedule" /> Schedule Required</label>
+                                    <label><InputCheckbox @bind-Value="_coverageForm.RequiresCertificateReview" /> Certificate Review</label>
+                                </div>
+                            </div>
+                        </div>
+                        break;
+                    case 3:
+                        <div class="pd-summary-grid">
+                            <div class="pd-info-card">
+                                <div class="pd-card-title-row"><div><h3 class="pd-card-hdr">Forms, Instructions & Notes</h3><p>Forms, endorsements, operations, exclusions, conditions, rating notes, and servicing instructions sync to the coverage record.</p></div></div>
+                                <div class="um-form-grid">
+                                    <div class="um-field um-field--full"><label>Forms & Endorsements</label><InputTextArea class="form-control" rows="3" @bind-Value="_coverageForm.FormsAndEndorsements" /><ValidationMessage For="() => _coverageForm.FormsAndEndorsements" class="text-danger" /></div>
+                                    <div class="um-field"><label>Coinsurance Clause</label><InputText class="form-control" @bind-Value="_coverageForm.CoinsuranceClause" /><ValidationMessage For="() => _coverageForm.CoinsuranceClause" class="text-danger" /></div>
+                                    <div class="um-field"><label>Blanket / Specific</label><InputText class="form-control" @bind-Value="_coverageForm.BlanketOrSpecificCode" /><ValidationMessage For="() => _coverageForm.BlanketOrSpecificCode" class="text-danger" /></div>
+                                    <div class="um-field um-field--full"><label>Covered Operations</label><InputTextArea class="form-control" rows="3" @bind-Value="_coverageForm.CoveredOperations" /><ValidationMessage For="() => _coverageForm.CoveredOperations" class="text-danger" /></div>
+                                    <div class="um-field um-field--full"><label>Exclusions</label><InputTextArea class="form-control" rows="3" @bind-Value="_coverageForm.Exclusions" /><ValidationMessage For="() => _coverageForm.Exclusions" class="text-danger" /></div>
+                                    <div class="um-field um-field--full"><label>Conditions</label><InputTextArea class="form-control" rows="3" @bind-Value="_coverageForm.Conditions" /><ValidationMessage For="() => _coverageForm.Conditions" class="text-danger" /></div>
+                                    <div class="um-field um-field--full"><label>Rating Notes</label><InputTextArea class="form-control" rows="3" @bind-Value="_coverageForm.RatingNotes" /><ValidationMessage For="() => _coverageForm.RatingNotes" class="text-danger" /></div>
+                                    <div class="um-field um-field--full"><label>Service Instructions</label><InputTextArea class="form-control" rows="3" @bind-Value="_coverageForm.ServiceInstructions" /><ValidationMessage For="() => _coverageForm.ServiceInstructions" class="text-danger" /></div>
+                                    <div class="um-field um-field--full"><label>Audit Instructions</label><InputTextArea class="form-control" rows="3" @bind-Value="_coverageForm.AuditInstructions" /><ValidationMessage For="() => _coverageForm.AuditInstructions" class="text-danger" /></div>
+                                    <div class="um-field um-field--full"><label>Certificate Instructions</label><InputTextArea class="form-control" rows="3" @bind-Value="_coverageForm.CertificateInstructions" /><ValidationMessage For="() => _coverageForm.CertificateInstructions" class="text-danger" /></div>
+                                </div>
+                            </div>
+                        </div>
+                        break;
+                    case 4:
+                        <div class="pd-summary-grid">
+                            <div class="pd-info-card">
+                                <div class="pd-card-title-row"><div><h3 class="pd-card-hdr">Dynamic Coverage Fields</h3><p>Template-specific fields are created, updated, or removed against the coverage detail during save.</p></div></div>
+                                <div class="pd-dynamic-toolbar">
+                                    <span>@_coverageForm.Fields.Count field(s) synced with coverage detail</span>
+                                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="AddDynamicField"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Field</button>
+                                </div>
+                                @if (_coverageForm.Fields.Count == 0)
+                                {
+                                    <div class="pd-empty-state"><i class="bi bi-ui-checks" aria-hidden="true"></i><strong>No dynamic fields for this coverage.</strong><span>Select a DB-backed template with configured fields to populate this section.</span></div>
+                                }
+                                else
+                                {
+                                    <div class="pd-field-editor-list">
+                                        @foreach (var coverageField in _coverageForm.Fields.OrderBy(x => x.SortOrder).ThenBy(x => x.FieldLabel).ToList())
+                                        {
+                                            <div class="pd-field-editor-card">
+                                                <div class="pd-field-editor-head">
+                                                    <strong>@EmptyDash(coverageField.FieldLabel)</strong>
+                                                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => RemoveDynamicField(coverageField)"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                                </div>
+                                                <div class="um-form-grid um-form-grid--compact">
+                                                    <div class="um-field"><label>Group <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="coverageField.FieldGroupCode" /><ValidationMessage For="() => coverageField.FieldGroupCode" class="text-danger" /></div>
+                                                    <div class="um-field"><label>Code <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="coverageField.FieldCode" /><ValidationMessage For="() => coverageField.FieldCode" class="text-danger" /></div>
+                                                    <div class="um-field"><label>Label <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="coverageField.FieldLabel" /><ValidationMessage For="() => coverageField.FieldLabel" class="text-danger" /></div>
+                                                    <div class="um-field"><label>Value Type <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="coverageField.FieldValueTypeCode">@foreach (var type in FieldValueTypeOptions) { <option value="@type">@type</option> }</InputSelect><ValidationMessage For="() => coverageField.FieldValueTypeCode" class="text-danger" /></div>
+                                                    <div class="um-field um-field--full"><label>Value @if (coverageField.IsRequired) { <span class="text-danger">*</span> }</label><InputTextArea class="form-control" rows="2" @bind-Value="coverageField.FieldValue" /><ValidationMessage For="() => coverageField.FieldValue" class="text-danger" /></div>
+                                                    <div class="um-field"><label>Unit</label><InputText class="form-control" @bind-Value="coverageField.UnitOfMeasureCode" /><ValidationMessage For="() => coverageField.UnitOfMeasureCode" class="text-danger" /></div>
+                                                    <div class="um-field"><label>Sort Order</label><InputNumber class="form-control" @bind-Value="coverageField.SortOrder" /><ValidationMessage For="() => coverageField.SortOrder" class="text-danger" /></div>
+                                                </div>
+                                                <div class="pd-check-grid pd-check-grid--inline">
+                                                    <label><InputCheckbox @bind-Value="coverageField.IsRequired" /> Required</label>
+                                                    <label><InputCheckbox @bind-Value="coverageField.IsRatingField" /> Rating Field</label>
+                                                    <label><InputCheckbox @bind-Value="coverageField.IsScheduleField" /> Schedule Field</label>
+                                                </div>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                        break;
+                }
+            </div>
+
+            <div class="um-modal-footer pd-sticky-actions">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="BackToPolicy">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_saving ? "Saving coverage..." : "Save Coverage")</button>
+            </div>
+        </EditForm>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid PolicyId { get; set; }
+    [Parameter] public Guid? CoverageDetailId { get; set; }
+
+    private bool _loading = true;
+    private bool _saving;
+    private bool _toastVisible;
+    private string? _loadError;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "info";
+    private int _tab;
+    private Guid _tenantId;
+    private Guid? _currentUserId;
+    private CancellationTokenSource? _toastCts;
+    private PolicyRegisterDto? _policy;
+    private PolicyCoverageDetailDto? _existingCoverage;
+    private CoverageForm _coverageForm = new();
+    private EditContext _editContext = new(new CoverageForm());
+    private List<CoverageLookup> _coverageLookups = [];
+    private List<PolicyCoverageDetailTemplateDto> _coverageTemplates = [];
+    private List<string> _coverageCategories = [];
+    private List<string> _coverageStatuses = [];
+
+    private readonly DetailTab[] _tabs =
+    [
+        new(0, "Identity", "bi-card-checklist"),
+        new(1, "Limits & Rating", "bi-cash-coin"),
+        new(2, "Term & Flags", "bi-calendar2-week"),
+        new(3, "Forms & Notes", "bi-text-paragraph"),
+        new(4, "Dynamic Fields", "bi-ui-checks"),
+    ];
+
+    private bool IsEdit => CoverageDetailId.HasValue;
+    private string PageTitleText => IsEdit ? "Edit Coverage Details" : "Add Coverage Details";
+    private string PrimaryLimitText => _coverageForm.OccurrenceLimit.HasValue ? $"Occurrence {_coverageForm.OccurrenceLimit.Value:C0}" : _coverageForm.AggregateLimit.HasValue ? $"Aggregate {_coverageForm.AggregateLimit.Value:C0}" : $"Rate {(_coverageForm.Rate ?? 0m):0.####}%";
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-octagon", "warning" => "bi-exclamation-triangle", "success" => "bi-check2-circle", _ => "bi-info-circle" };
+    private int RequiredFieldCount => 9 + _coverageForm.Fields.Count(x => x.IsRequired);
+    private int CompletedRequiredCount => RequiredFieldCount - ValidationIssues.Count;
+    private string TemplateSyncText => string.IsNullOrWhiteSpace(_coverageForm.CovCode) ? "Not selected" : _coverageTemplates.Any(x => string.Equals(x.CoverageCode, _coverageForm.CovCode, StringComparison.OrdinalIgnoreCase)) ? "Template synced" : "Lookup synced";
+    private string DynamicFieldSyncText => _coverageForm.Fields.Count == 0 ? "no template fields" : DynamicRequiredMissing == 0 ? "all required values complete" : $"{DynamicRequiredMissing} required value(s) missing";
+    private int DynamicRequiredMissing => _coverageForm.Fields.Count(coverageField => coverageField.IsRequired && string.IsNullOrWhiteSpace(coverageField.FieldValue));
+    private IReadOnlyList<string> ValidationIssues => BuildValidationIssues();
+    private IReadOnlyList<CoverageLookup> CoverageLookupOptions => _coverageLookups;
+    private IReadOnlyList<string> CoverageCategoryOptions => CoverageValueOptions(_coverageForm.CoverageCategoryCode, _coverageCategories);
+    private IReadOnlyList<string> CoverageStatusOptions => CoverageValueOptions(_coverageForm.StatusCode, _coverageStatuses, ["Active", "Pending", "Issued", "Cancelled"]);
+    private static readonly string[] FieldValueTypeOptions = ["Text", "Number", "Currency", "Percent", "Date", "Boolean", "List"];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _currentUserId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policies", "/policies"), new("Coverage", Nav.Uri));
+        await LoadAsync();
+    }
+
+    public void Dispose()
+    {
+        _toastCts?.Cancel();
+        _toastCts?.Dispose();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _policy = await Api.GetPolicyRegisterByIdAsync(PolicyId);
+            if (_policy is null)
+                return;
+
+            var coverageTypes = await Api.SearchCoverageTypesAsync(_tenantId, null, pageSize: 500);
+            _coverageTemplates = (await Api.GetPolicyCoverageDetailTemplatesAsync(_tenantId) ?? []).OrderBy(x => x.SortOrder).ThenBy(x => x.CoverageName).ToList();
+            _coverageLookups = (coverageTypes?.Items ?? [])
+                .Where(x => x.IsActive)
+                .OrderBy(x => x.SortOrder)
+                .ThenBy(x => x.CoverageName)
+                .Select(x => new CoverageLookup(x.CoverageCode, x.CoverageName, x.CoverageTypeId, x.LobCode ?? _coverageTemplates.FirstOrDefault(t => string.Equals(t.CoverageCode, x.CoverageCode, StringComparison.OrdinalIgnoreCase))?.LineOfBusinessCode ?? string.Empty))
+                .DistinctBy(x => x.CovCode)
+                .ToList();
+
+            foreach (var template in _coverageTemplates.Where(template => !_coverageLookups.Any(x => string.Equals(x.CovCode, template.CoverageCode, StringComparison.OrdinalIgnoreCase))))
+            {
+                _coverageLookups.Add(new CoverageLookup(template.CoverageCode, template.CoverageName, template.CoverageTypeId, template.LineOfBusinessCode));
+            }
+
+            _coverageCategories = _coverageTemplates.Select(x => x.CoverageCategoryCode).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+            _coverageStatuses = _coverageTemplates.Select(x => x.StatusCode).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+
+            if (IsEdit && CoverageDetailId.HasValue)
+            {
+                _existingCoverage = await Api.GetPolicyCoverageDetailByIdAsync(_tenantId, CoverageDetailId.Value);
+                if (_existingCoverage is null)
+                {
+                    _loadError = "Coverage detail was not found.";
+                    return;
+                }
+
+                _coverageForm = CoverageForm.FromDetail(_existingCoverage);
+            }
+            else
+            {
+                _coverageForm = new CoverageForm
+                {
+                    EffectiveDate = _policy.EffectiveDate,
+                    ExpirationDate = _policy.ExpirationDate,
+                    CarrierName = _policy.CarrierName,
+                    WritingCompanyName = _policy.CarrierName,
+                    LineOfBusinessCode = _policy.LineOfBusiness,
+                    StatusCode = "Active",
+                    IsIncluded = true
+                };
+            }
+
+            _editContext = new EditContext(_coverageForm);
+            Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policies", "/policies"), new(_policy.PolicyNumber, $"/policies/{PolicyId}"), new(PageTitleText, Nav.Uri));
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+            await ShowErrorToast($"Coverage workspace load failed: {ex.Message}");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void OnCoverageLookupValueChanged(string? coverageCode)
+    {
+        _coverageForm.CovCode = coverageCode ?? string.Empty;
+        ApplyCoverageLookup(_coverageForm.CovCode);
+    }
+
+    private void ApplyCoverageLookup(string? coverageCode)
+    {
+        if (string.IsNullOrWhiteSpace(coverageCode))
+        {
+            _coverageForm.CovCode = string.Empty;
+            _coverageForm.CovName = string.Empty;
+            _coverageForm.CoverageTypeId = null;
+            NotifyCoverageLookupFieldsChanged();
+            return;
+        }
+
+        var lookup = CoverageLookupOptions.FirstOrDefault(x => string.Equals(x.CovCode, coverageCode, StringComparison.OrdinalIgnoreCase));
+        if (lookup is null)
+            return;
+
+        _coverageForm.CovCode = lookup.CovCode;
+        _coverageForm.CovName = lookup.CovName;
+        _coverageForm.CoverageTypeId = lookup.CoverageTypeId;
+        if (!string.IsNullOrWhiteSpace(lookup.LineOfBusinessCode))
+            _coverageForm.LineOfBusinessCode = lookup.LineOfBusinessCode;
+
+        ApplyCoverageTemplateDefaults(lookup.CovCode);
+        NotifyCoverageLookupFieldsChanged();
+    }
+
+    private void SyncCoverageTemplate()
+    {
+        if (string.IsNullOrWhiteSpace(_coverageForm.CovCode))
+            return;
+
+        ApplyCoverageTemplateDefaults(_coverageForm.CovCode, overwriteExistingValues: true);
+        NotifyAllCoverageFieldsChanged();
+    }
+
+    private void SyncPolicyDefaults()
+    {
+        if (_policy is null)
+            return;
+
+        _coverageForm.EffectiveDate = _policy.EffectiveDate;
+        _coverageForm.ExpirationDate = _policy.ExpirationDate;
+        _coverageForm.CarrierName = _policy.CarrierName;
+        if (string.IsNullOrWhiteSpace(_coverageForm.WritingCompanyName))
+        {
+            _coverageForm.WritingCompanyName = _policy.CarrierName;
+        }
+
+        NotifyAllCoverageFieldsChanged();
+    }
+
+    private void NotifyCoverageLookupFieldsChanged()
+    {
+        _editContext.NotifyFieldChanged(new FieldIdentifier(_coverageForm, nameof(CoverageForm.CovCode)));
+        _editContext.NotifyFieldChanged(new FieldIdentifier(_coverageForm, nameof(CoverageForm.CovName)));
+        _editContext.NotifyFieldChanged(new FieldIdentifier(_coverageForm, nameof(CoverageForm.LineOfBusinessCode)));
+    }
+
+    private void NotifyAllCoverageFieldsChanged()
+    {
+        foreach (var property in typeof(CoverageForm).GetProperties().Where(x => x.Name != nameof(CoverageForm.Fields)))
+        {
+            _editContext.NotifyFieldChanged(new FieldIdentifier(_coverageForm, property.Name));
+        }
+
+        foreach (var coverageField in _coverageForm.Fields)
+        {
+            _editContext.NotifyFieldChanged(new FieldIdentifier(coverageField, nameof(CoverageFieldForm.FieldValue)));
+        }
+    }
+
+    private void ApplyCoverageTemplateDefaults(string coverageCode, bool overwriteExistingValues = false)
+    {
+        if (_coverageForm.IsEdit)
+            return;
+
+        var template = _coverageTemplates.FirstOrDefault(x => string.Equals(x.CoverageCode, coverageCode, StringComparison.OrdinalIgnoreCase));
+        if (template is null)
+            return;
+
+        _coverageForm.CoverageTypeId = template.CoverageTypeId ?? _coverageForm.CoverageTypeId;
+        _coverageForm.CovCode = template.CoverageCode;
+        _coverageForm.CovName = template.CoverageName;
+        _coverageForm.LineOfBusinessCode = FirstNonEmpty(template.LineOfBusinessCode, _coverageForm.LineOfBusinessCode) ?? string.Empty;
+        _coverageForm.CoverageCategoryCode = SyncText(_coverageForm.CoverageCategoryCode, template.CoverageCategoryCode, overwriteExistingValues);
+        _coverageForm.CoverageFormCode = SyncText(_coverageForm.CoverageFormCode, template.CoverageFormCode, overwriteExistingValues);
+        _coverageForm.CoverageTriggerCode = SyncText(_coverageForm.CoverageTriggerCode, template.CoverageTriggerCode, overwriteExistingValues);
+        _coverageForm.ValuationBasisCode = SyncText(_coverageForm.ValuationBasisCode, template.ValuationBasisCode, overwriteExistingValues);
+        _coverageForm.TerritoryCode = SyncText(_coverageForm.TerritoryCode, template.TerritoryCode, overwriteExistingValues);
+        _coverageForm.OccurrenceLimit = SyncNullable(_coverageForm.OccurrenceLimit, template.DefaultOccurrenceLimit, overwriteExistingValues);
+        _coverageForm.AggregateLimit = SyncNullable(_coverageForm.AggregateLimit, template.DefaultAggregateLimit, overwriteExistingValues);
+        _coverageForm.Sublimit = SyncNullable(_coverageForm.Sublimit, template.DefaultSublimit, overwriteExistingValues);
+        _coverageForm.Deductible = SyncNullable(_coverageForm.Deductible, template.DefaultDeductible, overwriteExistingValues);
+        _coverageForm.Retention = SyncNullable(_coverageForm.Retention, template.DefaultRetention, overwriteExistingValues);
+        _coverageForm.Premium = overwriteExistingValues || _coverageForm.Premium == 0 ? template.DefaultPremium : _coverageForm.Premium;
+        _coverageForm.Rate = SyncNullable(_coverageForm.Rate, template.DefaultRate, overwriteExistingValues);
+        _coverageForm.ExposureBase = SyncNullable(_coverageForm.ExposureBase, template.DefaultExposureBase, overwriteExistingValues);
+        _coverageForm.ExposureBasisCode = SyncText(_coverageForm.ExposureBasisCode, template.ExposureBasisCode, overwriteExistingValues);
+        _coverageForm.CarrierName = FirstNonEmpty(template.CarrierName, _coverageForm.CarrierName) ?? string.Empty;
+        _coverageForm.WritingCompanyName = FirstNonEmpty(template.WritingCompanyName, _coverageForm.WritingCompanyName) ?? string.Empty;
+        _coverageForm.UnderwriterName = SyncText(_coverageForm.UnderwriterName, template.UnderwriterName, overwriteExistingValues);
+        _coverageForm.StatusCode = SyncText(_coverageForm.StatusCode, template.StatusCode, overwriteExistingValues);
+        _coverageForm.IsIncluded = template.IsIncluded;
+        _coverageForm.IsAuditable = template.IsAuditable;
+        _coverageForm.IsClaimsMade = template.IsClaimsMade;
+        _coverageForm.RequiresSchedule = template.RequiresSchedule;
+        _coverageForm.RequiresCertificateReview = template.RequiresCertificateReview;
+        _coverageForm.FormsAndEndorsements = SyncText(_coverageForm.FormsAndEndorsements, template.FormsAndEndorsements, overwriteExistingValues);
+        _coverageForm.CoinsuranceClause = SyncText(_coverageForm.CoinsuranceClause, template.CoinsuranceClause, overwriteExistingValues);
+        _coverageForm.BlanketOrSpecificCode = SyncText(_coverageForm.BlanketOrSpecificCode, template.BlanketOrSpecificCode, overwriteExistingValues);
+        _coverageForm.CoveredOperations = SyncText(_coverageForm.CoveredOperations, template.CoveredOperations, overwriteExistingValues);
+        _coverageForm.Exclusions = SyncText(_coverageForm.Exclusions, template.Exclusions, overwriteExistingValues);
+        _coverageForm.Conditions = SyncText(_coverageForm.Conditions, template.Conditions, overwriteExistingValues);
+        _coverageForm.RatingNotes = SyncText(_coverageForm.RatingNotes, template.RatingNotes, overwriteExistingValues);
+        _coverageForm.ServiceInstructions = SyncText(_coverageForm.ServiceInstructions, template.ServiceInstructions, overwriteExistingValues);
+        _coverageForm.AuditInstructions = SyncText(_coverageForm.AuditInstructions, template.AuditInstructions, overwriteExistingValues);
+        _coverageForm.CertificateInstructions = SyncText(_coverageForm.CertificateInstructions, template.CertificateInstructions, overwriteExistingValues);
+        _coverageForm.Fields = template.Fields.OrderBy(x => x.SortOrder).ThenBy(x => x.FieldLabel).Select(CoverageFieldForm.FromTemplate).ToList();
+    }
+
+    private async Task SaveCoverageAsync()
+    {
+        if (_policy is null || _saving)
+            return;
+
+        if (!_editContext.Validate())
+        {
+            _tab = FirstInvalidTab();
+            await NotifyValidationAsync(_editContext);
+            return;
+        }
+
+        if (!ValidateCoverageBeforeSave())
+            return;
+
+        _saving = true;
+        try
+        {
+            if (_coverageForm.IsEdit)
+            {
+                if (!_coverageForm.CoverageDetailId.HasValue)
+                {
+                    await ShowErrorToast("Coverage detail id is required for updates.");
+                    return;
+                }
+
+                var coverageDetailId = _coverageForm.CoverageDetailId.Value;
+                await Api.UpdatePolicyCoverageDetailAsync(coverageDetailId, BuildUpdateCoverageRequest(coverageDetailId));
+                await PersistCoverageFieldsAsync(coverageDetailId);
+                await ShowToast("Coverage details updated.");
+                Nav.NavigateTo($"/policies/{PolicyId}/coverages/{coverageDetailId}");
+            }
+            else
+            {
+                var coverageDetailId = await Api.CreatePolicyCoverageDetailAsync(BuildCreateCoverageRequest());
+                await ShowToast("Coverage details added.");
+                Nav.NavigateTo($"/policies/{PolicyId}/coverages/{coverageDetailId}");
+            }
+        }
+        catch (Exception ex)
+        {
+            await ShowErrorToast($"Coverage save failed: {ex.Message}");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private CreatePolicyCoverageDetailRequest BuildCreateCoverageRequest() => new()
+    {
+        TenantId = _tenantId,
+        PolicyId = PolicyId,
+        PolicyNumber = _policy?.PolicyNumber ?? string.Empty,
+        CoverageTypeId = _coverageForm.CoverageTypeId,
+        CoverageCode = _coverageForm.CovCode.Trim(),
+        CoverageName = _coverageForm.CovName.Trim(),
+        LineOfBusinessCode = _coverageForm.LineOfBusinessCode.Trim(),
+        CoverageCategoryCode = _coverageForm.CoverageCategoryCode.Trim(),
+        CoverageFormCode = _coverageForm.CoverageFormCode.Trim(),
+        CoverageTriggerCode = _coverageForm.CoverageTriggerCode.Trim(),
+        ValuationBasisCode = _coverageForm.ValuationBasisCode.Trim(),
+        TerritoryCode = _coverageForm.TerritoryCode.Trim(),
+        OccurrenceLimit = _coverageForm.OccurrenceLimit,
+        AggregateLimit = _coverageForm.AggregateLimit,
+        Sublimit = _coverageForm.Sublimit,
+        Deductible = _coverageForm.Deductible,
+        Retention = _coverageForm.Retention,
+        Premium = _coverageForm.Premium,
+        Rate = _coverageForm.Rate,
+        ExposureBase = _coverageForm.ExposureBase,
+        ExposureBasisCode = _coverageForm.ExposureBasisCode.Trim(),
+        EffectiveDate = _coverageForm.EffectiveDate,
+        ExpirationDate = _coverageForm.ExpirationDate,
+        CarrierName = _coverageForm.CarrierName.Trim(),
+        WritingCompanyName = _coverageForm.WritingCompanyName.Trim(),
+        UnderwriterName = _coverageForm.UnderwriterName.Trim(),
+        StatusCode = _coverageForm.StatusCode.Trim(),
+        IsIncluded = _coverageForm.IsIncluded,
+        IsAuditable = _coverageForm.IsAuditable,
+        IsClaimsMade = _coverageForm.IsClaimsMade,
+        RequiresSchedule = _coverageForm.RequiresSchedule,
+        RequiresCertificateReview = _coverageForm.RequiresCertificateReview,
+        FormsAndEndorsements = _coverageForm.FormsAndEndorsements.Trim(),
+        CoinsuranceClause = _coverageForm.CoinsuranceClause.Trim(),
+        BlanketOrSpecificCode = _coverageForm.BlanketOrSpecificCode.Trim(),
+        CoveredOperations = _coverageForm.CoveredOperations.Trim(),
+        Exclusions = _coverageForm.Exclusions.Trim(),
+        Conditions = _coverageForm.Conditions.Trim(),
+        RatingNotes = _coverageForm.RatingNotes.Trim(),
+        ServiceInstructions = _coverageForm.ServiceInstructions.Trim(),
+        AuditInstructions = _coverageForm.AuditInstructions.Trim(),
+        CertificateInstructions = _coverageForm.CertificateInstructions.Trim(),
+        CreatedByUserId = _currentUserId,
+        Fields = _coverageForm.Fields.Select(field => new CreatePolicyCoverageFieldRequest
+        {
+            TenantId = _tenantId,
+            FieldGroupCode = field.FieldGroupCode.Trim(),
+            FieldCode = field.FieldCode.Trim(),
+            FieldLabel = field.FieldLabel.Trim(),
+            FieldValue = field.FieldValue.Trim(),
+            FieldValueTypeCode = field.FieldValueTypeCode.Trim(),
+            UnitOfMeasureCode = field.UnitOfMeasureCode.Trim(),
+            IsRequired = field.IsRequired,
+            IsRatingField = field.IsRatingField,
+            IsScheduleField = field.IsScheduleField,
+            SortOrder = field.SortOrder,
+            CreatedByUserId = _currentUserId,
+        }).ToList(),
+    };
+
+    private UpdatePolicyCoverageDetailRequest BuildUpdateCoverageRequest(Guid coverageDetailId) => new()
+    {
+        TenantId = _tenantId,
+        CoverageDetailId = coverageDetailId,
+        CoverageName = _coverageForm.CovName.Trim(),
+        CoverageCategoryCode = _coverageForm.CoverageCategoryCode.Trim(),
+        CoverageFormCode = _coverageForm.CoverageFormCode.Trim(),
+        CoverageTriggerCode = _coverageForm.CoverageTriggerCode.Trim(),
+        ValuationBasisCode = _coverageForm.ValuationBasisCode.Trim(),
+        TerritoryCode = _coverageForm.TerritoryCode.Trim(),
+        OccurrenceLimit = _coverageForm.OccurrenceLimit,
+        AggregateLimit = _coverageForm.AggregateLimit,
+        Sublimit = _coverageForm.Sublimit,
+        Deductible = _coverageForm.Deductible,
+        Retention = _coverageForm.Retention,
+        Premium = _coverageForm.Premium,
+        Rate = _coverageForm.Rate,
+        ExposureBase = _coverageForm.ExposureBase,
+        ExposureBasisCode = _coverageForm.ExposureBasisCode.Trim(),
+        EffectiveDate = _coverageForm.EffectiveDate,
+        ExpirationDate = _coverageForm.ExpirationDate,
+        CarrierName = _coverageForm.CarrierName.Trim(),
+        WritingCompanyName = _coverageForm.WritingCompanyName.Trim(),
+        UnderwriterName = _coverageForm.UnderwriterName.Trim(),
+        StatusCode = _coverageForm.StatusCode.Trim(),
+        IsIncluded = _coverageForm.IsIncluded,
+        IsAuditable = _coverageForm.IsAuditable,
+        IsClaimsMade = _coverageForm.IsClaimsMade,
+        RequiresSchedule = _coverageForm.RequiresSchedule,
+        RequiresCertificateReview = _coverageForm.RequiresCertificateReview,
+        FormsAndEndorsements = _coverageForm.FormsAndEndorsements.Trim(),
+        CoinsuranceClause = _coverageForm.CoinsuranceClause.Trim(),
+        BlanketOrSpecificCode = _coverageForm.BlanketOrSpecificCode.Trim(),
+        CoveredOperations = _coverageForm.CoveredOperations.Trim(),
+        Exclusions = _coverageForm.Exclusions.Trim(),
+        Conditions = _coverageForm.Conditions.Trim(),
+        RatingNotes = _coverageForm.RatingNotes.Trim(),
+        ServiceInstructions = _coverageForm.ServiceInstructions.Trim(),
+        AuditInstructions = _coverageForm.AuditInstructions.Trim(),
+        CertificateInstructions = _coverageForm.CertificateInstructions.Trim(),
+        ModifiedByUserId = _currentUserId,
+    };
+
+    private async Task PersistCoverageFieldsAsync(Guid coverageDetailId)
+    {
+        NormalizeDynamicFields();
+        var current = _existingCoverage?.Fields ?? [];
+        var submittedIds = _coverageForm.Fields.Where(x => x.FieldId.HasValue).Select(x => x.FieldId!.Value).ToHashSet();
+        foreach (var field in current.Where(x => !submittedIds.Contains(x.FieldId)))
+        {
+            await Api.DeletePolicyCoverageFieldAsync(_tenantId, field.FieldId, _currentUserId);
+        }
+
+        foreach (var field in _coverageForm.Fields)
+        {
+            if (field.FieldId.HasValue)
+            {
+                await Api.UpdatePolicyCoverageFieldAsync(field.FieldId.Value, new UpdatePolicyCoverageFieldRequest
+                {
+                    TenantId = _tenantId,
+                    FieldId = field.FieldId.Value,
+                    FieldGroupCode = field.FieldGroupCode.Trim(),
+                    FieldCode = field.FieldCode.Trim(),
+                    FieldLabel = field.FieldLabel.Trim(),
+                    FieldValue = field.FieldValue.Trim(),
+                    FieldValueTypeCode = field.FieldValueTypeCode.Trim(),
+                    UnitOfMeasureCode = field.UnitOfMeasureCode.Trim(),
+                    IsRequired = field.IsRequired,
+                    IsRatingField = field.IsRatingField,
+                    IsScheduleField = field.IsScheduleField,
+                    SortOrder = field.SortOrder,
+                    ModifiedByUserId = _currentUserId,
+                });
+                continue;
+            }
+
+            await Api.CreatePolicyCoverageFieldAsync(new CreatePolicyCoverageFieldRequest
+            {
+                TenantId = _tenantId,
+                CoverageDetailId = coverageDetailId,
+                FieldGroupCode = field.FieldGroupCode.Trim(),
+                FieldCode = field.FieldCode.Trim(),
+                FieldLabel = field.FieldLabel.Trim(),
+                FieldValue = field.FieldValue.Trim(),
+                FieldValueTypeCode = field.FieldValueTypeCode.Trim(),
+                UnitOfMeasureCode = field.UnitOfMeasureCode.Trim(),
+                IsRequired = field.IsRequired,
+                IsRatingField = field.IsRatingField,
+                IsScheduleField = field.IsScheduleField,
+                SortOrder = field.SortOrder,
+                CreatedByUserId = _currentUserId,
+            });
+        }
+    }
+
+    private bool ValidateCoverageBeforeSave()
+    {
+        NormalizeCoverageForm();
+        NormalizeDynamicFields();
+
+        if (_coverageForm.ExpirationDate < _coverageForm.EffectiveDate)
+        {
+            _ = ShowErrorToast("Expiration date must be on or after the effective date.");
+            _tab = 2;
+            return false;
+        }
+
+        var invalidField = _coverageForm.Fields.FirstOrDefault(field =>
+            string.IsNullOrWhiteSpace(field.FieldGroupCode) ||
+            string.IsNullOrWhiteSpace(field.FieldCode) ||
+            string.IsNullOrWhiteSpace(field.FieldLabel) ||
+            string.IsNullOrWhiteSpace(field.FieldValueTypeCode) ||
+            (field.IsRequired && string.IsNullOrWhiteSpace(field.FieldValue)));
+
+        if (invalidField is not null)
+        {
+            _ = ShowErrorToast($"Complete dynamic field '{EmptyDash(invalidField.FieldLabel)}' before saving.");
+            _tab = 4;
+            return false;
+        }
+
+        return true;
+    }
+
+    private void NormalizeCoverageForm()
+    {
+        _coverageForm.CovCode = _coverageForm.CovCode.Trim();
+        _coverageForm.CovName = _coverageForm.CovName.Trim();
+        _coverageForm.LineOfBusinessCode = _coverageForm.LineOfBusinessCode.Trim();
+        _coverageForm.CoverageCategoryCode = _coverageForm.CoverageCategoryCode.Trim();
+        _coverageForm.CoverageFormCode = _coverageForm.CoverageFormCode.Trim();
+        _coverageForm.CoverageTriggerCode = _coverageForm.CoverageTriggerCode.Trim();
+        _coverageForm.ValuationBasisCode = _coverageForm.ValuationBasisCode.Trim();
+        _coverageForm.TerritoryCode = _coverageForm.TerritoryCode.Trim();
+        _coverageForm.ExposureBasisCode = _coverageForm.ExposureBasisCode.Trim();
+        _coverageForm.CarrierName = _coverageForm.CarrierName.Trim();
+        _coverageForm.WritingCompanyName = _coverageForm.WritingCompanyName.Trim();
+        _coverageForm.UnderwriterName = _coverageForm.UnderwriterName.Trim();
+        _coverageForm.StatusCode = _coverageForm.StatusCode.Trim();
+    }
+
+    private void NormalizeDynamicFields()
+    {
+        var sortOrder = 10;
+        foreach (var field in _coverageForm.Fields)
+        {
+            field.FieldGroupCode = field.FieldGroupCode.Trim();
+            field.FieldCode = field.FieldCode.Trim();
+            field.FieldLabel = field.FieldLabel.Trim();
+            field.FieldValue = field.FieldValue.Trim();
+            field.FieldValueTypeCode = string.IsNullOrWhiteSpace(field.FieldValueTypeCode) ? "Text" : field.FieldValueTypeCode.Trim();
+            field.UnitOfMeasureCode = field.UnitOfMeasureCode.Trim();
+            if (field.SortOrder <= 0)
+            {
+                field.SortOrder = sortOrder;
+            }
+
+            sortOrder = Math.Max(sortOrder + 10, field.SortOrder + 10);
+        }
+    }
+
+    private void AddDynamicField()
+    {
+        var next = _coverageForm.Fields.Count == 0 ? 10 : _coverageForm.Fields.Max(x => x.SortOrder) + 10;
+        _coverageForm.Fields.Add(new CoverageFieldForm
+        {
+            FieldGroupCode = "General",
+            FieldCode = $"FIELD_{next}",
+            FieldLabel = "New Coverage Field",
+            FieldValueTypeCode = "Text",
+            SortOrder = next,
+        });
+    }
+
+    private void RemoveDynamicField(CoverageFieldForm field)
+        => _coverageForm.Fields.Remove(field);
+
+    private IReadOnlyList<string> BuildValidationIssues()
+    {
+        var issues = new List<string>();
+        AddMissing(issues, _coverageForm.CovCode, "coverage code");
+        AddMissing(issues, _coverageForm.CovName, "coverage name");
+        AddMissing(issues, _coverageForm.LineOfBusinessCode, "line of business");
+        AddMissing(issues, _coverageForm.CoverageCategoryCode, "category");
+        AddMissing(issues, _coverageForm.CoverageFormCode, "coverage form");
+        AddMissing(issues, _coverageForm.CoverageTriggerCode, "coverage trigger");
+        AddMissing(issues, _coverageForm.CarrierName, "carrier");
+        AddMissing(issues, _coverageForm.StatusCode, "status");
+        if (_coverageForm.ExpirationDate < _coverageForm.EffectiveDate)
+        {
+            issues.Add("expiration date must be on or after effective date");
+        }
+
+        foreach (var field in _coverageForm.Fields.Where(x => x.IsRequired && string.IsNullOrWhiteSpace(x.FieldValue)))
+        {
+            issues.Add($"{EmptyDash(field.FieldLabel)} value");
+        }
+
+        return issues;
+    }
+
+    private static void AddMissing(List<string> issues, string? value, string label)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            issues.Add(label);
+        }
+    }
+
+    private string TabCompletionText(int tab) => tab switch
+    {
+        0 => IsIdentityComplete ? "Complete" : "Required",
+        1 => "Synced",
+        2 => IsTermComplete ? "Complete" : "Required",
+        3 => "Synced",
+        4 => DynamicRequiredMissing == 0 ? $"{_coverageForm.Fields.Count} field(s)" : $"{DynamicRequiredMissing} missing",
+        _ => string.Empty
+    };
+
+    private string TabStateClass(int tab) => tab switch
+    {
+        0 when IsIdentityComplete => "pd-native-tab--complete",
+        0 => "pd-native-tab--needs-attention",
+        2 when IsTermComplete => "pd-native-tab--complete",
+        2 => "pd-native-tab--needs-attention",
+        4 when DynamicRequiredMissing > 0 => "pd-native-tab--needs-attention",
+        _ => string.Empty
+    };
+
+    private bool IsIdentityComplete =>
+        !string.IsNullOrWhiteSpace(_coverageForm.CovCode) &&
+        !string.IsNullOrWhiteSpace(_coverageForm.CovName) &&
+        !string.IsNullOrWhiteSpace(_coverageForm.LineOfBusinessCode) &&
+        !string.IsNullOrWhiteSpace(_coverageForm.CoverageCategoryCode) &&
+        !string.IsNullOrWhiteSpace(_coverageForm.CoverageFormCode) &&
+        !string.IsNullOrWhiteSpace(_coverageForm.CoverageTriggerCode);
+
+    private bool IsTermComplete =>
+        !string.IsNullOrWhiteSpace(_coverageForm.CarrierName) &&
+        !string.IsNullOrWhiteSpace(_coverageForm.StatusCode) &&
+        _coverageForm.ExpirationDate >= _coverageForm.EffectiveDate;
+
+    private int FirstInvalidTab()
+    {
+        if (!IsIdentityComplete) return 0;
+        if (!IsTermComplete) return 2;
+        if (DynamicRequiredMissing > 0) return 4;
+        return _tab;
+    }
+
+    private static string SyncText(string currentValue, string? templateValue, bool overwriteExistingValues)
+    {
+        if (string.IsNullOrWhiteSpace(templateValue))
+        {
+            return overwriteExistingValues ? string.Empty : currentValue;
+        }
+
+        return overwriteExistingValues || string.IsNullOrWhiteSpace(currentValue) ? templateValue : currentValue;
+    }
+
+    private static decimal? SyncNullable(decimal? currentValue, decimal? templateValue, bool overwriteExistingValues)
+        => overwriteExistingValues || !currentValue.HasValue ? templateValue : currentValue;
+
+    private Task NotifyValidationAsync(EditContext _)
+        => ShowErrorToast("Please correct the highlighted validation errors.");
+
+    private void BackToPolicy()
+        => Nav.NavigateTo($"/policies/{PolicyId}");
+
+    private async Task ShowToast(string msg)
+    {
+        ShowNativeToast(msg, "success");
+        await Task.CompletedTask;
+    }
+
+    private async Task ShowErrorToast(string msg)
+    {
+        ShowNativeToast(msg, "danger");
+        await Task.CompletedTask;
+    }
+
+    private void ShowNativeToast(string message, string kind = "info")
+    {
+        _toastCts?.Cancel();
+        _toastCts?.Dispose();
+        _toastCts = new CancellationTokenSource();
+        _toastMessage = message.Length <= 120 ? message : $"{message[..117]}...";
+        _toastKind = ToastKind(kind);
+        _toastVisible = true;
+        StateHasChanged();
+        _ = HideToastAfterDelayAsync(_toastCts.Token, _toastKind == "danger" ? 5200 : 3200);
+    }
+
+    private async Task HideToastAfterDelayAsync(CancellationToken cancellationToken, int delayMs)
+    {
+        try
+        {
+            await Task.Delay(delayMs, cancellationToken);
+            _toastVisible = false;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (TaskCanceledException)
+        {
+        }
+    }
+
+    private void HideToast()
+    {
+        _toastCts?.Cancel();
+        _toastVisible = false;
+    }
+
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : value.Contains("success", StringComparison.OrdinalIgnoreCase) ? "success" : "info";
+
+    private static string EmptyDash(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
+    private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+    private static IReadOnlyList<string> CoverageValueOptions(string? currentValue, params IEnumerable<string?>[] sources)
+        => sources.SelectMany(x => x).Append(currentValue).Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(value => value).ToList();
+
+    private sealed record DetailTab(int Index, string Label, string Icon);
+    private sealed record CoverageLookup(string CovCode, string CovName, Guid? CoverageTypeId, string LineOfBusinessCode)
+    {
+        public string CodeLabel => $"{CovCode} - {CovName}";
+        public string NameLabel => $"{CovName} - {CovCode}";
+    }
+
+    private sealed class CoverageForm
+    {
+        public bool IsEdit { get; set; }
+        public Guid? CoverageDetailId { get; set; }
+        public Guid? CoverageTypeId { get; set; }
+        [Required, StringLength(50)] public string CovCode { get; set; } = string.Empty;
+        [Required, StringLength(80)] public string CovName { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string LineOfBusinessCode { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string CoverageCategoryCode { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string CoverageFormCode { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string CoverageTriggerCode { get; set; } = string.Empty;
+        [StringLength(50)] public string ValuationBasisCode { get; set; } = string.Empty;
+        [StringLength(50)] public string TerritoryCode { get; set; } = string.Empty;
+        [Range(0, 999999999)] public decimal? OccurrenceLimit { get; set; }
+        [Range(0, 999999999)] public decimal? AggregateLimit { get; set; }
+        [Range(0, 999999999)] public decimal? Sublimit { get; set; }
+        [Range(0, 999999999)] public decimal? Deductible { get; set; }
+        [Range(0, 999999999)] public decimal? Retention { get; set; }
+        [Range(-999999999, 999999999)] public decimal Premium { get; set; }
+        [Range(0, 999999999)] public decimal? Rate { get; set; }
+        [Range(0, 999999999)] public decimal? ExposureBase { get; set; }
+        [StringLength(50)] public string ExposureBasisCode { get; set; } = string.Empty;
+        [Required] public DateTime EffectiveDate { get; set; } = DateTime.Today;
+        [Required] public DateTime ExpirationDate { get; set; } = DateTime.Today.AddYears(1);
+        [Required, StringLength(120)] public string CarrierName { get; set; } = string.Empty;
+        [StringLength(120)] public string WritingCompanyName { get; set; } = string.Empty;
+        [StringLength(120)] public string UnderwriterName { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string StatusCode { get; set; } = string.Empty;
+        public bool IsIncluded { get; set; } = true;
+        public bool IsAuditable { get; set; }
+        public bool IsClaimsMade { get; set; }
+        public bool RequiresSchedule { get; set; }
+        public bool RequiresCertificateReview { get; set; }
+        [StringLength(1000)] public string FormsAndEndorsements { get; set; } = string.Empty;
+        [StringLength(1000)] public string CoinsuranceClause { get; set; } = string.Empty;
+        [StringLength(50)] public string BlanketOrSpecificCode { get; set; } = string.Empty;
+        [StringLength(2000)] public string CoveredOperations { get; set; } = string.Empty;
+        [StringLength(2000)] public string Exclusions { get; set; } = string.Empty;
+        [StringLength(2000)] public string Conditions { get; set; } = string.Empty;
+        [StringLength(2000)] public string RatingNotes { get; set; } = string.Empty;
+        [StringLength(2000)] public string ServiceInstructions { get; set; } = string.Empty;
+        [StringLength(2000)] public string AuditInstructions { get; set; } = string.Empty;
+        [StringLength(2000)] public string CertificateInstructions { get; set; } = string.Empty;
+        public List<CoverageFieldForm> Fields { get; set; } = [];
+
+        public static CoverageForm FromDetail(PolicyCoverageDetailDto detail) => new()
+        {
+            IsEdit = true,
+            CoverageDetailId = detail.CoverageDetailId,
+            CoverageTypeId = detail.CoverageTypeId,
+            CovCode = detail.CoverageCode,
+            CovName = detail.CoverageName,
+            LineOfBusinessCode = detail.LineOfBusinessCode,
+            CoverageCategoryCode = detail.CoverageCategoryCode,
+            CoverageFormCode = detail.CoverageFormCode,
+            CoverageTriggerCode = detail.CoverageTriggerCode,
+            ValuationBasisCode = detail.ValuationBasisCode,
+            TerritoryCode = detail.TerritoryCode,
+            OccurrenceLimit = detail.OccurrenceLimit,
+            AggregateLimit = detail.AggregateLimit,
+            Sublimit = detail.Sublimit,
+            Deductible = detail.Deductible,
+            Retention = detail.Retention,
+            Premium = detail.Premium,
+            Rate = detail.Rate,
+            ExposureBase = detail.ExposureBase,
+            ExposureBasisCode = detail.ExposureBasisCode,
+            EffectiveDate = detail.EffectiveDate,
+            ExpirationDate = detail.ExpirationDate,
+            CarrierName = detail.CarrierName,
+            WritingCompanyName = detail.WritingCompanyName,
+            UnderwriterName = detail.UnderwriterName,
+            StatusCode = detail.StatusCode,
+            IsIncluded = detail.IsIncluded,
+            IsAuditable = detail.IsAuditable,
+            IsClaimsMade = detail.IsClaimsMade,
+            RequiresSchedule = detail.RequiresSchedule,
+            RequiresCertificateReview = detail.RequiresCertificateReview,
+            FormsAndEndorsements = detail.FormsAndEndorsements,
+            CoinsuranceClause = detail.CoinsuranceClause,
+            BlanketOrSpecificCode = detail.BlanketOrSpecificCode,
+            CoveredOperations = detail.CoveredOperations,
+            Exclusions = detail.Exclusions,
+            Conditions = detail.Conditions,
+            RatingNotes = detail.RatingNotes,
+            ServiceInstructions = detail.ServiceInstructions,
+            AuditInstructions = detail.AuditInstructions,
+            CertificateInstructions = detail.CertificateInstructions,
+            Fields = detail.Fields.Select(CoverageFieldForm.FromField).ToList(),
+        };
+    }
+
+    private sealed class CoverageFieldForm
+    {
+        public Guid? FieldId { get; set; }
+        [Required, StringLength(50)] public string FieldGroupCode { get; set; } = string.Empty;
+        [Required, StringLength(80)] public string FieldCode { get; set; } = string.Empty;
+        [Required, StringLength(160)] public string FieldLabel { get; set; } = string.Empty;
+        [StringLength(1000)] public string FieldValue { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string FieldValueTypeCode { get; set; } = "Text";
+        [StringLength(40)] public string UnitOfMeasureCode { get; set; } = string.Empty;
+        public bool IsRequired { get; set; }
+        public bool IsRatingField { get; set; }
+        public bool IsScheduleField { get; set; }
+        [Range(0, 10000)] public int SortOrder { get; set; }
+
+        public static CoverageFieldForm FromField(PolicyCoverageDetailFieldDto field) => new()
+        {
+            FieldId = field.FieldId,
+            FieldGroupCode = field.FieldGroupCode,
+            FieldCode = field.FieldCode,
+            FieldLabel = field.FieldLabel,
+            FieldValue = field.FieldValue,
+            FieldValueTypeCode = string.IsNullOrWhiteSpace(field.FieldValueTypeCode) ? "Text" : field.FieldValueTypeCode,
+            UnitOfMeasureCode = field.UnitOfMeasureCode,
+            IsRequired = field.IsRequired,
+            IsRatingField = field.IsRatingField,
+            IsScheduleField = field.IsScheduleField,
+            SortOrder = field.SortOrder,
+        };
+
+        public static CoverageFieldForm FromTemplate(PolicyCoverageDetailTemplateFieldDto field) => new()
+        {
+            FieldGroupCode = field.FieldGroupCode,
+            FieldCode = field.FieldCode,
+            FieldLabel = field.FieldLabel,
+            FieldValue = field.DefaultValue,
+            FieldValueTypeCode = string.IsNullOrWhiteSpace(field.FieldValueTypeCode) ? "Text" : field.FieldValueTypeCode,
+            UnitOfMeasureCode = field.UnitOfMeasureCode,
+            IsRequired = field.IsRequired,
+            IsRatingField = field.IsRatingField,
+            IsScheduleField = field.IsScheduleField,
+            SortOrder = field.SortOrder,
+        };
+    }
+}

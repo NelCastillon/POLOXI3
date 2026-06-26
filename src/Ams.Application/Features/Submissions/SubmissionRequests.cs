@@ -105,3 +105,81 @@ public sealed record BindPolicyRequest(
     decimal AnnualPremium,
     DateTime EffectiveDate,
     DateTime ExpirationDate);
+
+public sealed class UpsertPolicyRegisterRequest
+{
+    [Required]
+    public Guid TenantId { get; set; }
+
+    [Required, StringLength(80)]
+    public string PolicyNumber { get; set; } = string.Empty;
+
+    [Required]
+    public Guid AccountId { get; set; }
+
+    [Required, StringLength(200)]
+    public string AccountName { get; set; } = string.Empty;
+
+    [Required, StringLength(40)]
+    public string AccountType { get; set; } = "Commercial";
+
+    [Required, StringLength(160)]
+    public string CarrierName { get; set; } = string.Empty;
+
+    [Required, StringLength(100)]
+    public string LineOfBusiness { get; set; } = string.Empty;
+
+    [Required, StringLength(40)]
+    public string Status { get; set; } = "Active";
+
+    [Required]
+    public DateTime EffectiveDate { get; set; }
+
+    [Required]
+    public DateTime ExpirationDate { get; set; }
+
+    [Range(0, 999999999999)]
+    public decimal WrittenPremium { get; set; }
+
+    [Range(0, 999999999999)]
+    public decimal AnnualPremium { get; set; }
+
+    [StringLength(120)]
+    public string? ProducerName { get; set; }
+
+    [StringLength(120)]
+    public string? CsrName { get; set; }
+
+    [StringLength(80)]
+    public string? Branch { get; set; }
+
+    [StringLength(80)]
+    public string? RenewalStage { get; set; }
+
+    [StringLength(1000)]
+    public string? Notes { get; set; }
+
+    public Guid? ModifiedByUserId { get; set; }
+}
+
+public sealed class PolicyRegisterActionRequest
+{
+    [Required]
+    public Guid TenantId { get; set; }
+
+    [Required, StringLength(60)]
+    public string Action { get; set; } = string.Empty;
+
+    public DateTime? EffectiveDate { get; set; }
+
+    [Range(-10000000, 10000000)]
+    public decimal? Premium { get; set; }
+
+    [StringLength(200)]
+    public string? DocumentTitle { get; set; }
+
+    [StringLength(1000)]
+    public string? Notes { get; set; }
+
+    public Guid? ModifiedByUserId { get; set; }
+}

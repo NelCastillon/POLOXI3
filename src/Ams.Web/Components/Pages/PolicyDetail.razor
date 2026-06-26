@@ -1,6 +1,7 @@
 @page "/policies/{PolicyId:guid}"
 @namespace Ams.Web.Components.Pages
 @using System.ComponentModel.DataAnnotations
+@using System.Globalization
 @using Ams.Application.Features.PolicyCoverages
 @using Microsoft.AspNetCore.Components.Forms
 @inject ApiClient Api
@@ -265,14 +266,14 @@ else
                             </div>
                             @foreach (var c in _coverages)
                             {
-                                <button type="button" class="pd-list-row pd-list-row--coverage" @ondblclick="() => OpenDetails(c)">
+                                <button type="button" class="pd-list-row pd-list-row--coverage" @ondblclick="() => OpenCoverageDetails(c)">
                                     <span class="pd-mono">@c.CovCode</span>
                                     <span><strong>@c.CovName</strong><small>@(c.Notes ?? "Coverage schedule")</small></span>
                                     <span class="pd-cov-type">@EmptyDash(c.CoverageCategoryCode)</span>
                                     <span class="pd-mono">@(c.Limit.HasValue ? c.Limit.Value.ToString("C0") : "Occurrence")</span>
                                     <span class="pd-mono">@c.Premium.ToString("C2")</span>
                                     <span><i class="bi @(c.IsIncluded ? "bi-check-circle-fill pd-chk-yes" : "bi-dash-circle pd-chk-no")" aria-hidden="true"></i></span>
-                                    <span class="pd-open-cell pd-row-actions">@OpenDetailsLink(c) @CoverageComparisonLink(c)</span>
+                                    <span class="pd-open-cell pd-row-actions">@CoverageOpenLink(c) @CoverageComparisonLink(c)</span>
                                 </button>
                             }
                         </div>
@@ -617,10 +618,24 @@ else
         case 11:
             <!-- 11 -- COMMISSIONS --------------------------------------------- -->
                     <div class="pd-tab-body">
+                        <div class="pd-enterprise-hero pd-enterprise-hero--commissions">
+                            <div>
+                                <span class="pd-hero-eyebrow"><i class="bi bi-percent" aria-hidden="true"></i> DB-backed commission ledger</span>
+                                <h3>Policy commission earnings, producer split, statements, and payout status synchronized from the ledger</h3>
+                            </div>
+                            <div class="pd-ren-actions">
+                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadPolicyCommissionsAsync">
+                                    <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+                                </button>
+                                <button class="um-btn um-btn-primary um-btn-sm" @onclick="SyncPolicyCommissionsAsync">
+                                    <i class="bi bi-database-check" aria-hidden="true"></i> Sync Commission Data
+                                </button>
+                            </div>
+                        </div>
                         <div class="pd-billing-summary">
                             <div class="pd-bill-kpi pd-bill-kpi--prem">
                                 <div class="pd-bill-val">@_commissions.Sum(c => c.GrossAmt).ToString("C2")</div>
-                                <div class="pd-bill-lbl">Gross Commission</div>
+                                <div class="pd-bill-lbl">Ledger Gross</div>
                             </div>
                             <div class="pd-bill-kpi pd-bill-kpi--paid">
                                 <div class="pd-bill-val">@_commissions.Sum(c => c.AgencyAmt).ToString("C2")</div>
@@ -631,24 +646,32 @@ else
                                 <div class="pd-bill-lbl">Producer Split</div>
                             </div>
                             <div class="pd-bill-kpi">
-                                <div class="pd-bill-val">@(_commissions.Count > 0 ? $"{_commissions.Average(c => c.CommPct):P1}" : "?")</div>
-                                <div class="pd-bill-lbl">Avg Comm %</div>
+                                <div class="pd-bill-val">@(_commissions.Count > 0 ? $"{_commissions.Average(c => c.CommPct):P1}" : "—")</div>
+                                <div class="pd-bill-lbl">Avg DB Rate</div>
                             </div>
                         </div>
 
                         <div class="pd-enterprise-list">
                             <div class="pd-list-head pd-list-head--commissions">
-                                <span>Period</span><span>Type</span><span>Producer</span><span>Comm %</span><span>Gross</span><span>Agency Net</span><span>Status</span><span></span>
+                                <span>Period</span><span>Type</span><span>Producer</span><span>Comm %</span><span>Gross</span><span>Agency Net</span><span>Status</span><span>Open</span>
                             </div>
+                            @if (_commissions.Count == 0)
+                            {
+                                <div class="pd-empty-state">
+                                    <i class="bi bi-database-x" aria-hidden="true"></i>
+                                    <strong>No commission ledger rows found for this policy.</strong>
+                                    <span>Use Sync Commission Data to create policy commission ledger rows from DB-backed coverage detail records.</span>
+                                </div>
+                            }
                             @foreach (var c in _commissions)
                             {
-                                <button type="button" class="pd-list-row pd-list-row--commissions" @ondblclick="() => OpenDetails(c)" @onclick="() => OpenDetails(c)">
-                                    <span>@c.Period</span>
-                                    <span>@c.Type</span>
-                                    <span>@c.Producer</span>
+                                <button type="button" class="pd-list-row pd-list-row--commissions" @ondblclick="() => OpenDetails(c)">
+                                    <span><strong>@c.Period</strong><small>@c.TransactionDate.ToString("MM/dd/yyyy")</small></span>
+                                    <span><strong>@c.Type</strong><small>@EmptyDash(c.LineOfBusiness)</small></span>
+                                    <span><strong>@c.Producer</strong><small>@EmptyDash(c.Carrier)</small></span>
                                     <span class="pd-mono">@c.CommPct.ToString("P1")</span>
                                     <span class="pd-mono">@c.GrossAmt.ToString("C2")</span>
-                                    <span><strong class="pd-mono">@c.AgencyAmt.ToString("C2")</strong><small>@c.ProducerAmt.ToString("C2") producer</small></span>
+                                    <span><strong class="pd-mono">@c.AgencyAmt.ToString("C2")</strong><small>@c.ProducerAmt.ToString("C2") producer · @EmptyDash(c.StatementNumber)</small></span>
                                     <span class="pd-inv-status pd-inv-@c.Status.ToLower()">@c.Status</span>
                                     <span class="pd-open-cell">@OpenDetailsLink(c)</span>
                                 </button>
@@ -1839,10 +1862,17 @@ else
         StateHasChanged();
         try
         {
-            await Task.Delay(0);
-            BuildStubData();
+            await LoadPolicyRecordAsync();
+            if (_policy is null)
+            {
+                ClearPolicyDetailCollections();
+                return;
+            }
+
+            await LoadPolicyRelatedDataAsync();
             await LoadPolicyCoveragesAsync();
             await LoadCoverageLookupsAsync();
+            await LoadPolicyCommissionsAsync();
         }
         catch (Exception ex)
         {
@@ -1855,6 +1885,234 @@ else
         }
     }
 
+    private async Task LoadPolicyRecordAsync()
+    {
+        var registerPolicy = await Api.GetPolicyRegisterByIdAsync(PolicyId);
+        _policy = registerPolicy is null ? null : MapPolicyRecord(registerPolicy);
+        if (_policy is not null)
+        {
+            Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policies", "/policies"), new(_policy.PolicyNumber, $"/policies/{PolicyId}"));
+        }
+    }
+
+    private async Task LoadPolicyRelatedDataAsync()
+    {
+        if (_policy is null) return;
+
+        var endorsementsTask = Api.GetPolicyEndorsementCenterAsync(_tenantId);
+        var cancellationsTask = Api.GetPolicyCancellationCenterAsync(_tenantId);
+        var certificatesTask = Api.SearchPolicyCertificatesAsync(_tenantId, _policy.PolicyNumber, pageSize: 200);
+        var documentsTask = Api.SearchPolicyDocumentsAsync(_tenantId, _policy.PolicyNumber, pageSize: 200);
+        var submissionsTask = Api.SearchSubmissionsAsync(_tenantId, _policy.SubmissionRef, pageSize: 25);
+
+        await Task.WhenAll(endorsementsTask, cancellationsTask, certificatesTask, documentsTask, submissionsTask);
+
+        var endorsements = endorsementsTask.Result?.Endorsements
+            .Where(x => x.PolicyId == PolicyId || string.Equals(x.PolicyNumber, _policy.PolicyNumber, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(x => x.RequestedDateUtc)
+            .ToList() ?? [];
+        _endorsements = endorsements.Select(MapEndorsementRow).ToList();
+
+        var cancellationActivities = cancellationsTask.Result?.Activities ?? [];
+        var cancellations = cancellationsTask.Result?.Cancellations
+            .Where(x => x.PolicyId == PolicyId || string.Equals(x.PolicyNumber, _policy.PolicyNumber, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(x => x.RequestDateUtc)
+            .ToList() ?? [];
+
+        _certificates = (certificatesTask.Result?.Items ?? [])
+            .Where(x => x.PolicyId == PolicyId || string.Equals(x.PolicyNumber, _policy.PolicyNumber, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(x => x.IssuedDate)
+            .Select(MapCertificateRow)
+            .ToList();
+
+        _documents = (documentsTask.Result?.Items ?? [])
+            .Where(x => string.Equals(x.PolicyCode, _policy.PolicyNumber, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(x => x.CreatedDateUtc)
+            .Select(MapDocumentRow)
+            .ToList();
+
+        _submissions = (submissionsTask.Result?.Items ?? [])
+            .Where(x => x.SubmissionId.ToString().Equals(_policy.SubmissionRef, StringComparison.OrdinalIgnoreCase) || string.Equals(x.SubmissionNumber, _policy.SubmissionRef, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(x => x.CreatedDateUtc)
+            .Select(MapSubmissionRow)
+            .ToList();
+
+        _activities = BuildActivityRows(cancellations, cancellationActivities, endorsements);
+        _auditLog = BuildAuditRows();
+        BuildDerivedPolicyRows(cancellations);
+    }
+
+    private void ClearPolicyDetailCollections()
+    {
+        _coverages = [];
+        _riskItems = [];
+        _drivers = [];
+        _locations = [];
+        _documents = [];
+        _activities = [];
+        _comms = [];
+        _invoices = [];
+        _claims = [];
+        _endorsements = [];
+        _renewal = null;
+        _renewalHistory = [];
+        _commissions = [];
+        _auditLog = [];
+        _certificates = [];
+        _compliance = [];
+        _serviceTasks = [];
+        _submissions = [];
+        _carrierUw = [];
+        _relationships = [];
+        _reinsurance = [];
+    }
+
+    private static PolicyRecord MapPolicyRecord(PolicyRegisterDto row)
+    {
+        var termMonths = Math.Max(1, ((row.ExpirationDate.Year - row.EffectiveDate.Year) * 12) + row.ExpirationDate.Month - row.EffectiveDate.Month);
+        return new PolicyRecord
+        {
+            PolicyNumber = row.PolicyNumber,
+            Account = row.AccountName,
+            AccountId = row.AccountId,
+            Carrier = row.CarrierName,
+            Lob = row.LineOfBusiness,
+            Status = row.Status,
+            PolicyType = row.LineOfBusiness,
+            Program = row.LineOfBusiness,
+            IsPackage = row.LineOfBusiness.Contains("Package", StringComparison.OrdinalIgnoreCase),
+            EffDate = row.EffectiveDate,
+            ExpDate = row.ExpirationDate,
+            IssueDate = row.BoundDateUtc,
+            BindDate = row.BoundDateUtc,
+            TermMonths = termMonths,
+            WrittenPremium = row.WrittenPremium,
+            AnnualPremium = row.AnnualPremium,
+            AgencyFee = 0m,
+            TaxesFees = 0m,
+            BalanceDue = 0m,
+            BillingPlan = "Agency Bill",
+            PaymentMethod = "Account billing",
+            PrimaryInsured = row.AccountName,
+            InsuredType = row.AccountType,
+            Producer = row.ProducerName,
+            Csr = row.CsrName,
+            Branch = row.Branch,
+            AccountManager = row.AssignedToUserName,
+            Source = "Bound policy workflow",
+            SubmissionRef = row.SubmissionId == Guid.Empty ? null : row.SubmissionId.ToString(),
+            QuoteNumber = row.QuoteId == Guid.Empty ? null : row.QuoteId.ToString(),
+            CreatedBy = row.AssignedToUserName ?? row.ProducerName,
+            CreatedAt = row.BoundDateUtc,
+            OpenClaims = 0,
+        };
+    }
+
+    private static EndorsementRow MapEndorsementRow(PolicyEndorsementDto endorsement) => new()
+    {
+        EndNum = endorsement.EndorsementNumber,
+        EffDate = endorsement.EffectiveDate,
+        Type = endorsement.EndorsementType,
+        Description = endorsement.Description,
+        PremChange = endorsement.PremiumDelta,
+        Status = endorsement.Status,
+        IssuedBy = endorsement.RequestedByName
+    };
+
+    private static CertificateRow MapCertificateRow(PolicyCertificateDto certificate) => new()
+    {
+        CertificateNum = certificate.CertificateNumber,
+        Holder = certificate.HolderName,
+        Type = certificate.CertificateType,
+        IssuedDate = certificate.IssuedDate,
+        ExpirationDate = certificate.ExpirationDate,
+        Status = certificate.Status,
+        RequestedBy = certificate.IssuedBy,
+        Delivery = certificate.LastDeliveredDateUtc.HasValue ? "Delivered" : "Pending"
+    };
+
+    private static DocRow MapDocumentRow(PolicyDocumentDto document) => new()
+    {
+        DocumentId = document.PolicyDocumentId,
+        Name = document.PolicyTitle,
+        Category = document.PolicyTypeCode,
+        FileType = "Record",
+        FileSize = document.Version,
+        UploadedAt = document.CreatedDateUtc,
+        UploadedBy = document.OwnedByFullName ?? "System"
+    };
+
+    private static SubmissionLinkRow MapSubmissionRow(SubmissionDto submission) => new()
+    {
+        SubmissionId = submission.SubmissionId,
+        SubmissionNo = submission.SubmissionNumber,
+        Opportunity = submission.OpportunityName,
+        Market = submission.LineOfBusiness,
+        Stage = submission.Status,
+        SubmittedOn = submission.CreatedDateUtc,
+        QuotedPremium = submission.TargetPremium ?? 0m,
+        Outcome = submission.Status
+    };
+
+    private static List<ActivityRow> BuildActivityRows(IReadOnlyList<PolicyCancellationDto> cancellations, IReadOnlyList<PolicyCancellationActivityDto> cancellationActivities, IReadOnlyList<PolicyEndorsementDto> endorsements)
+    {
+        var activities = new List<ActivityRow>();
+        activities.AddRange(endorsements.Select(e => new ActivityRow { Subject = $"Endorsement {e.EndorsementNumber}", Category = "Endorsement", Channel = "Workflow", Outcome = e.Status, ActivityDate = e.RequestedDateUtc.ToLocalTime(), Notes = e.Description, CreatedBy = e.RequestedByName }));
+        activities.AddRange(cancellations.Select(c => new ActivityRow { Subject = $"{c.RequestType} {c.CancellationNumber}", Category = "Cancellation", Channel = "Workflow", Outcome = c.Status, ActivityDate = c.RequestDateUtc.ToLocalTime(), Notes = c.Notes, CreatedBy = c.RequestedByName }));
+        activities.AddRange(cancellationActivities.Select(a => new ActivityRow { Subject = a.Subject, Category = a.ActivityType, Channel = "Workflow", Outcome = "Completed", ActivityDate = a.ActivityDateUtc.ToLocalTime(), Notes = a.Notes, CreatedBy = a.CreatedByName }));
+        return activities.OrderByDescending(x => x.ActivityDate).ToList();
+    }
+
+    private List<AuditEntry> BuildAuditRows() => _activities.Select(a => new AuditEntry
+    {
+        Timestamp = a.ActivityDate,
+        Action = a.Subject,
+        Field = a.Category,
+        OldValue = string.Empty,
+        NewValue = a.Outcome,
+        ChangedBy = a.CreatedBy,
+        IpAddress = string.Empty
+    }).ToList();
+
+    private void BuildDerivedPolicyRows(IReadOnlyList<PolicyCancellationDto> cancellations)
+    {
+        if (_policy is null) return;
+
+        var installment = _policy.WrittenPremium <= 0 ? 0 : Math.Round(_policy.WrittenPremium / 12m, 2);
+        _invoices = installment <= 0 ? [] : Enumerable.Range(0, 12).Select(i => new InvoiceRow
+        {
+            InvoiceNum = $"INV-{_policy.PolicyNumber}-{i + 1:00}",
+            DueDate = _policy.EffDate.AddMonths(i),
+            Amount = installment,
+            AmountPaid = 0m,
+            Balance = installment,
+            Status = _policy.EffDate.AddMonths(i) < DateTime.Today ? "Due" : "Scheduled"
+        }).ToList();
+
+        _renewal = new RenewalPipeline
+        {
+            Status = DaysLabel(_policy.ExpDate).Contains("Expired", StringComparison.OrdinalIgnoreCase) ? "Expired" : "In Progress",
+            QuotedPremium = _policy.AnnualPremium,
+            Remarketed = _activities.Any(a => a.Subject.Contains("Remarket", StringComparison.OrdinalIgnoreCase)),
+            CarriersQuoted = _submissions.Count,
+            FollowUpDate = _policy.ExpDate.AddDays(-60),
+            AssignedTo = _policy.Csr
+        };
+
+        _renewalHistory = _submissions.Select(s => new RenewalHistRow { PolicyNum = _policy.PolicyNumber, EffDate = _policy.EffDate, ExpDate = _policy.ExpDate, Carrier = _policy.Carrier, Premium = s.QuotedPremium, Change = 0m, Outcome = s.Outcome }).ToList();
+        _commissions = [];
+        _compliance = _documents.Select(d => new ComplianceRow { ComplianceDocumentId = d.DocumentId, Requirement = d.Name, Category = d.Category, Status = "On File", DueDate = d.UploadedAt, Owner = d.UploadedBy, Evidence = d.FileSize }).ToList();
+        _serviceTasks = cancellations.Where(c => !string.Equals(c.Status, "Completed", StringComparison.OrdinalIgnoreCase)).Select(c => new ServiceTaskRow { TaskNumber = c.CancellationNumber, Title = c.CancellationReason, Type = c.RequestType, Priority = c.Priority, Status = c.Status, DueDate = c.DueDate ?? c.EffectiveDate, AssignedTo = c.AssignedToName, RelatedTo = c.PolicyNumber }).ToList();
+        _relationships = [new RelationshipRow { Entity = _policy.Account, Role = "Named Insured", Relationship = "Policy owner", Contact = _policy.PrimaryInsured, Status = _policy.Status, Route = $"/accounts/{_policy.AccountId}" }, new RelationshipRow { Entity = _policy.Carrier, Role = "Carrier", Relationship = "Issuing carrier", Contact = _policy.Underwriter ?? _policy.Carrier, Status = "Active", Route = $"/admin/reference/carriers?carrier={Uri.EscapeDataString(_policy.Carrier)}" }];
+        _carrierUw = [new CarrierUwRow { Item = _policy.Carrier, Type = "Carrier", Status = "Active", Owner = _policy.Underwriter ?? _policy.Carrier, LastUpdate = _policy.BindDate ?? _policy.CreatedAt, Notes = _policy.Lob }];
+        _riskItems = [];
+        _drivers = [];
+        _locations = [];
+        _claims = [];
+        _comms = [];
+        _reinsurance = [];
+    }
+
     private async Task LoadPolicyCoveragesAsync()
     {
         var coverageDetails = await Api.GetPolicyCoverageDetailsAsync(_tenantId, PolicyId);
@@ -1865,6 +2123,107 @@ else
             .Select(MapCoverageRow)
             .ToList();
     }
+
+    private async Task LoadPolicyCommissionsAsync()
+    {
+        if (_policy is null)
+        {
+            _commissions = [];
+            return;
+        }
+
+        var ledgerRows = await Api.SearchCommissionLedgerAsync(_tenantId, _policy.PolicyNumber);
+        _commissions = (ledgerRows ?? [])
+            .Where(x => string.Equals(x.PolicyNumber, _policy.PolicyNumber, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(x => x.TransactionDate)
+            .Select(MapCommissionRow)
+            .ToList();
+    }
+
+    private async Task SyncPolicyCommissionsAsync()
+    {
+        if (_policy is null)
+        {
+            _commissions = [];
+            return;
+        }
+
+        var existingRows = _commissions.Count == 0
+            ? (await Api.SearchCommissionLedgerAsync(_tenantId, _policy.PolicyNumber) ?? [])
+                .Where(x => string.Equals(x.PolicyNumber, _policy.PolicyNumber, StringComparison.OrdinalIgnoreCase))
+                .Select(MapCommissionRow)
+                .ToList()
+            : _commissions;
+
+        foreach (var coverage in _coverages.Where(x => x.Premium != 0m))
+        {
+            if (HasMatchingCommission(existingRows, coverage))
+            {
+                continue;
+            }
+
+            await Api.CreateCommissionLedgerAsync(BuildCommissionLedgerRequest(coverage));
+        }
+
+        await LoadPolicyCommissionsAsync();
+    }
+
+    private bool HasMatchingCommission(IEnumerable<CommissionRow> rows, CoverageRow coverage)
+    {
+        var period = coverage.EffectiveDate.ToString("MMM yyyy", CultureInfo.CurrentCulture);
+        var type = FirstNonEmpty(coverage.CoverageCategoryCode, coverage.LineOfBusinessCode, "Coverage") ?? "Coverage";
+        return rows.Any(row =>
+            string.Equals(row.Period, period, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(row.Type, type, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(row.Producer, _policy?.Producer ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
+            row.GrossAmt == coverage.Premium);
+    }
+
+    private CreateCommissionLedgerRequest BuildCommissionLedgerRequest(CoverageRow coverage)
+    {
+        var rate = coverage.Rate ?? 0m;
+        var agencyAmount = Math.Round(coverage.Premium * rate / 100m, 2);
+        var status = FirstNonEmpty(coverage.StatusCode, _policy?.Status, "Pending") ?? "Pending";
+        return new CreateCommissionLedgerRequest
+        {
+            TenantId = _tenantId,
+            PolicyNumber = _policy?.PolicyNumber ?? string.Empty,
+            Period = coverage.EffectiveDate.ToString("MMM yyyy", CultureInfo.CurrentCulture),
+            BusinessType = FirstNonEmpty(coverage.CoverageCategoryCode, coverage.LineOfBusinessCode, "Coverage") ?? "Coverage",
+            Producer = _policy?.Producer ?? string.Empty,
+            AccountName = _policy?.Account ?? string.Empty,
+            LineOfBusiness = FirstNonEmpty(coverage.LineOfBusinessCode, _policy?.Lob) ?? string.Empty,
+            Carrier = FirstNonEmpty(coverage.CarrierName, _policy?.Carrier) ?? string.Empty,
+            GrossAmount = coverage.Premium,
+            CommissionPct = rate,
+            AgencyAmount = agencyAmount,
+            ProducerAmount = 0m,
+            Status = status,
+            TransactionDate = DateOnly.FromDateTime(coverage.EffectiveDate),
+            CreatedByUserId = _currentUserId,
+        };
+    }
+
+    private static CommissionRow MapCommissionRow(CommissionLedgerRowDto row) => new()
+    {
+        CommissionId = row.CommissionId,
+        PolicyNumber = row.PolicyNumber,
+        Period = row.Period,
+        Type = row.BusinessType,
+        Producer = row.Producer,
+        AccountName = row.AccountName,
+        LineOfBusiness = row.LineOfBusiness,
+        Carrier = row.Carrier,
+        CommPct = row.CommissionPct / 100m,
+        GrossAmt = row.GrossAmount,
+        AgencyAmt = row.AgencyAmount,
+        ProducerAmt = row.ProducerAmount,
+        Status = row.Status,
+        StatementNumber = row.StatementNumber,
+        PayoutBatch = row.PayoutBatch,
+        TransactionDate = row.TransactionDate.ToDateTime(TimeOnly.MinValue),
+        PaidDate = row.PaidDate.HasValue ? row.PaidDate.Value.ToDateTime(TimeOnly.MinValue) : null,
+    };
 
     private static CoverageRow MapCoverageRow(PolicyCoverageDetailDto detail)
     {
@@ -2132,25 +2491,40 @@ else
 
     private void OpenCoverageForm()
     {
-        var effectiveDate = _policy?.EffDate ?? DateTime.Today;
-        var expirationDate = _policy?.ExpDate ?? effectiveDate.AddYears(1);
-        _coverageForm = new CoverageForm
-        {
-            EffectiveDate = effectiveDate,
-            ExpirationDate = expirationDate,
-            CarrierName = _policy?.Carrier ?? string.Empty,
-            WritingCompanyName = _policy?.Carrier ?? string.Empty,
-            UnderwriterName = _policy?.Underwriter ?? string.Empty,
-            LineOfBusinessCode = _policy?.Lob ?? string.Empty,
-            IsIncluded = true
-        };
-        _coverageEditContext = new EditContext(_coverageForm);
-        _showCovForm = true;
+        Nav.NavigateTo($"/policies/{PolicyId}/coverages/new");
     }
 
     private void OpenCoverageDetails(CoverageRow coverage)
     {
         _selectedCoverage = coverage;
+    }
+
+    private async Task OpenCoverageDetailPageAsync(CoverageRow coverage)
+    {
+        if (_policy is null)
+            return;
+
+        try
+        {
+            var coverageDetailId = await EnsureCoverageDetailExistsAsync(coverage);
+            Nav.NavigateTo($"/policies/{PolicyId}/coverages/{coverageDetailId}");
+        }
+        catch (Exception ex)
+        {
+            await ShowErrorToast($"Unable to open coverage detail: {ex.Message}");
+        }
+    }
+
+    private async Task<Guid> EnsureCoverageDetailExistsAsync(CoverageRow coverage)
+    {
+        if (coverage.CoverageDetailId != Guid.Empty)
+            return coverage.CoverageDetailId;
+
+        _coverageForm = CoverageForm.FromCoverage(coverage);
+        var coverageDetailId = await Api.CreatePolicyCoverageDetailAsync(BuildCreateCoverageRequest());
+        await LoadPolicyCoveragesAsync();
+        await LoadPolicyCommissionsAsync();
+        return coverageDetailId;
     }
 
     private void CloseCoverageDetails()
@@ -2160,10 +2534,8 @@ else
 
     private void OpenCoverageEdit(CoverageRow coverage)
     {
-        _coverageForm = CoverageForm.FromCoverage(coverage);
-        _coverageEditContext = new EditContext(_coverageForm);
         _selectedCoverage = null;
-        _showCovForm = true;
+        Nav.NavigateTo($"/policies/{PolicyId}/coverages/{coverage.CoverageDetailId}/edit");
     }
 
     private void OpenCoverageComparison(CoverageRow? coverage)
@@ -2295,6 +2667,7 @@ else
                 await Api.UpdatePolicyCoverageDetailAsync(coverageDetailId, BuildUpdateCoverageRequest(coverageDetailId));
                 await PersistCoverageFieldsAsync(coverageDetailId);
                 await LoadPolicyCoveragesAsync();
+                await LoadPolicyCommissionsAsync();
                 _showCovForm = false;
                 await ShowToast("Coverage details updated.");
             }
@@ -2302,6 +2675,7 @@ else
             {
                 var coverageDetailId = await Api.CreatePolicyCoverageDetailAsync(BuildCreateCoverageRequest());
                 await LoadPolicyCoveragesAsync();
+                await LoadPolicyCommissionsAsync();
                 _showCovForm = false;
                 await ShowToast("Coverage details added.");
             }
@@ -2486,6 +2860,7 @@ else
             await Api.DeletePolicyCoverageDetailAsync(_tenantId, coverage.CoverageDetailId, _currentUserId);
             _selectedCoverage = null;
             await LoadPolicyCoveragesAsync();
+            await LoadPolicyCommissionsAsync();
             await ShowToast("Coverage details deleted.");
         }
         catch (Exception ex)
@@ -2599,7 +2974,13 @@ else
     {
         if (item is CoverageRow coverage)
         {
-            OpenCoverageDetails(coverage);
+            _ = OpenCoverageDetailPageAsync(coverage);
+            return;
+        }
+
+        if (item is CommissionRow commission)
+        {
+            _ = OpenCommissionDetailPageAsync(commission);
             return;
         }
 
@@ -2613,11 +2994,43 @@ else
     private RenderFragment OpenDetailsLink(object item) => __builder =>
     {
         var url = DetailUrl(item);
+        if (item is CommissionRow commission && commission.CommissionId.HasValue)
+        {
+            __builder.OpenElement(0, "a");
+            __builder.AddAttribute(1, "class", "pd-open-action");
+            __builder.AddAttribute(2, "title", "Open commission detail");
+            __builder.AddAttribute(3, "href", url);
+            __builder.AddEventStopPropagationAttribute(4, "onclick", true);
+            __builder.AddContent(5, "Open");
+            __builder.OpenElement(6, "i");
+            __builder.AddAttribute(7, "class", "bi bi-arrow-right-short");
+            __builder.AddAttribute(8, "aria-hidden", "true");
+            __builder.CloseElement();
+            __builder.CloseElement();
+            return;
+        }
+
         __builder.OpenElement(0, "button");
         __builder.AddAttribute(1, "type", "button");
         __builder.AddAttribute(2, "class", "pd-open-action");
         __builder.AddAttribute(3, "title", "Open details");
         __builder.AddAttribute(4, "onclick", EventCallback.Factory.Create(this, () => OpenDetails(item)));
+        __builder.AddEventStopPropagationAttribute(5, "onclick", true);
+        __builder.AddContent(6, "Open");
+        __builder.OpenElement(7, "i");
+        __builder.AddAttribute(8, "class", "bi bi-arrow-right-short");
+        __builder.AddAttribute(9, "aria-hidden", "true");
+        __builder.CloseElement();
+        __builder.CloseElement();
+    };
+
+    private RenderFragment CoverageOpenLink(CoverageRow coverage) => __builder =>
+    {
+        __builder.OpenElement(0, "button");
+        __builder.AddAttribute(1, "type", "button");
+        __builder.AddAttribute(2, "class", "pd-open-action");
+        __builder.AddAttribute(3, "title", "Open coverage details");
+        __builder.AddAttribute(4, "onclick", EventCallback.Factory.Create(this, () => OpenCoverageDetails(coverage)));
         __builder.AddEventStopPropagationAttribute(5, "onclick", true);
         __builder.AddContent(6, "Open");
         __builder.OpenElement(7, "i");
@@ -2646,9 +3059,58 @@ else
     private string CoverageComparisonUrl(CoverageRow coverage)
         => $"/policies/{PolicyId}/compare?coverage={Uri.EscapeDataString(coverage.CovCode)}";
 
+    private async Task OpenCommissionDetailPageAsync(CommissionRow commission)
+    {
+        try
+        {
+            var commissionId = await EnsureCommissionLedgerExistsAsync(commission);
+            Nav.NavigateTo($"/commissions/{commissionId}");
+        }
+        catch (Exception ex)
+        {
+            await ShowErrorToast($"Unable to open commission detail: {ex.Message}");
+        }
+    }
+
+    private async Task<Guid> EnsureCommissionLedgerExistsAsync(CommissionRow commission)
+    {
+        if (commission.CommissionId.HasValue && commission.CommissionId.Value != Guid.Empty)
+            return commission.CommissionId.Value;
+
+        var commissionId = await Api.CreateCommissionLedgerAsync(BuildCommissionLedgerRequest(commission));
+        await LoadPolicyCommissionsAsync();
+        return commissionId;
+    }
+
+    private CreateCommissionLedgerRequest BuildCommissionLedgerRequest(CommissionRow commission)
+    {
+        var rate = commission.CommPct * 100m;
+        return new CreateCommissionLedgerRequest
+        {
+            TenantId = _tenantId,
+            PolicyNumber = FirstNonEmpty(commission.PolicyNumber, _policy?.PolicyNumber) ?? string.Empty,
+            Period = commission.Period,
+            BusinessType = commission.Type,
+            Producer = commission.Producer,
+            AccountName = FirstNonEmpty(commission.AccountName, _policy?.Account) ?? string.Empty,
+            LineOfBusiness = FirstNonEmpty(commission.LineOfBusiness, _policy?.Lob) ?? string.Empty,
+            Carrier = FirstNonEmpty(commission.Carrier, _policy?.Carrier) ?? string.Empty,
+            GrossAmount = commission.GrossAmt,
+            CommissionPct = rate,
+            AgencyAmount = commission.AgencyAmt,
+            ProducerAmount = commission.ProducerAmt,
+            Status = FirstNonEmpty(commission.Status, "Pending") ?? "Pending",
+            StatementNumber = commission.StatementNumber,
+            PayoutBatch = commission.PayoutBatch,
+            TransactionDate = DateOnly.FromDateTime(commission.TransactionDate == default ? DateTime.Today : commission.TransactionDate),
+            PaidDate = commission.PaidDate.HasValue ? DateOnly.FromDateTime(commission.PaidDate.Value) : null,
+            CreatedByUserId = _currentUserId,
+        };
+    }
+
     private string DetailUrl(object? item) => item switch
     {
-        CoverageRow => string.Empty,
+        CoverageRow c => c.CoverageDetailId == Guid.Empty ? string.Empty : $"/policies/{PolicyId}/coverages/{c.CoverageDetailId}",
         RiskItem r => r.ItemType.Equals("Location", StringComparison.OrdinalIgnoreCase)
             ? $"/policies/{PolicyId}/locations?item={Uri.EscapeDataString(r.Description)}"
             : $"/policies/{PolicyId}/risk-items?item={Uri.EscapeDataString(r.Description)}",
@@ -2660,7 +3122,7 @@ else
         InvoiceRow i => $"/billing/invoices?invoice={Uri.EscapeDataString(i.InvoiceNum)}",
         ClaimRow c => c.ClaimId.HasValue ? $"/claims/{c.ClaimId.Value}" : "/claims",
         EndorsementRow e => $"/policies/endorsements?endorsement={Uri.EscapeDataString(e.EndNum)}",
-        CommissionRow c => $"/commissions?policy={Uri.EscapeDataString(_policy?.PolicyNumber ?? string.Empty)}&period={Uri.EscapeDataString(c.Period)}&type={Uri.EscapeDataString(c.Type)}&producer={Uri.EscapeDataString(c.Producer)}",
+        CommissionRow c => c.CommissionId.HasValue ? $"/commissions/{c.CommissionId.Value}" : string.Empty,
         CertificateRow c => $"/policies/certificates?certificate={Uri.EscapeDataString(c.CertificateNum)}",
         ComplianceRow c => c.ComplianceDocumentId.HasValue ? $"/policies/compliance/{c.ComplianceDocumentId.Value}" : $"/policies/compliance?requirement={Uri.EscapeDataString(c.Requirement)}",
         ServiceTaskRow t => $"/tasks?task={Uri.EscapeDataString(t.TaskNumber)}",
@@ -2980,250 +3442,6 @@ else
         __builder.CloseElement();
     };
 
-    // -- Stub data ------------------------------------------------------------
-    private void BuildStubData()
-    {
-        _policy = new PolicyRecord
-        {
-            PolicyNumber    = "POL-2024-001847",
-            Account         = "Sullivan Manufacturing LLC",
-            AccountId       = PolicyId,
-            Carrier         = "Travelers Insurance",
-            Lob             = "General Liability",
-            Status          = "Active",
-            PolicyType      = "Occurrence",
-            Program         = "Commercial Lines Package",
-            IsPackage       = true,
-            EffDate         = new DateTime(2024, 6, 1),
-            ExpDate         = new DateTime(2025, 6, 1),
-            IssueDate       = new DateTime(2024, 5, 28),
-            BindDate        = new DateTime(2024, 5, 26),
-            TermMonths      = 12,
-            WrittenPremium  = 42_500m,
-            AnnualPremium   = 42_500m,
-            AgencyFee       = 250m,
-            TaxesFees       = 1_870m,
-            BalanceDue      = 4_250m,
-            BillingPlan     = "10-Pay",
-            PaymentMethod   = "ACH",
-            PrimaryInsured  = "Sullivan Manufacturing LLC",
-            InsuredType     = "Commercial",
-            InsuredAddress  = "1422 Industrial Blvd",
-            InsuredCity     = "Chicago",
-            InsuredState    = "IL",
-            InsuredZip      = "60601",
-            InsuredTaxId    = "36-2987441",
-            EntityType      = "LLC",
-            SicCode         = "3462",
-            Producer        = "James Miller",
-            Csr             = "Amy Scott",
-            Branch          = "Midwest",
-            AccountManager  = "Sarah Chen",
-            Underwriter     = "Mark Reynolds",
-            UwEmail         = "mreynolds@travelers.com",
-            UwPhone         = "(800) 555-0142",
-            Source          = "Direct Solicitation",
-            SubmissionRef   = "SUB-2024-09812",
-            PriorCarrier    = "Hartford Insurance",
-            PriorPremium    = 39_200m,
-            QuoteNumber     = "QT-2024-04412",
-            AcordForm       = "ACORD 125",
-            CreatedBy       = "James Miller",
-            CreatedAt       = new DateTime(2024, 5, 10),
-            OpenClaims      = 1,
-        };
-
-        _coverages = [];
-
-        _riskItems =
-        [
-            new() { ItemType="Equipment",  Description="CNC Milling Machine #1",  Year=2019, Make="Haas VF-2",     Vin="HM-019-4421", Value=125_000m, Location="Plant A", IsActive=true },
-            new() { ItemType="Equipment",  Description="CNC Milling Machine #2",  Year=2021, Make="Haas VF-4",     Vin="HM-021-6109", Value=148_000m, Location="Plant A", IsActive=true },
-            new() { ItemType="Equipment",  Description="Forklift ? Clark C30",    Year=2018, Make="Clark C30",     Vin="CLK-018-8812", Value=28_000m, Location="Warehouse", IsActive=true },
-            new() { ItemType="Vehicle",    Description="Delivery Van",            Year=2022, Make="Ford Transit",  Vin="1FTBR1Y82NKA12345", Value=38_500m, Location="Fleet", IsActive=true },
-            new() { ItemType="Location",   Description="Primary Manufacturing Plant", Year=null, Make=null, Vin=null, Value=2_400_000m, Location="1422 Industrial Blvd", IsActive=true },
-            new() { ItemType="Location",   Description="Warehouse & Distribution",   Year=null, Make=null, Vin=null, Value=850_000m,   Location="1600 Commerce Dr",     IsActive=true },
-        ];
-
-        _drivers =
-        [
-            new() { Name="Robert Sullivan", LicenseNum="S612-4891-20", State="IL", Dob=new DateTime(1968,4,12), YearsExp=35, Type="Primary",     Violations=0, IsExcluded=false },
-            new() { Name="Mike Torres",     LicenseNum="T312-8821-19", State="IL", Dob=new DateTime(1985,9,22), YearsExp=18, Type="Fleet Driver", Violations=1, IsExcluded=false },
-            new() { Name="Sandra Webb",     LicenseNum="W221-4419-21", State="IL", Dob=new DateTime(1991,3,7),  YearsExp=12, Type="Fleet Driver", Violations=0, IsExcluded=false },
-        ];
-
-        _locations =
-        [
-            new() { LocNumber=1, Description="Primary Manufacturing Plant",  Address="1422 Industrial Blvd", City="Chicago", State="IL", Zip="60601", Building=2_400_000m, Contents=650_000m, IsPrimary=true  },
-            new() { LocNumber=2, Description="Warehouse & Distribution Hub", Address="1600 Commerce Dr",     City="Chicago", State="IL", Zip="60607", Building=850_000m,   Contents=320_000m, IsPrimary=false },
-            new() { LocNumber=3, Description="Administrative Office",        Address="200 N LaSalle St",     City="Chicago", State="IL", Zip="60601", Building=null,        Contents=85_000m,  IsPrimary=false },
-        ];
-
-        _documents =
-        [
-            new() { DocumentId=Guid.Parse("6b2a10d9-3db1-4b5a-9f9e-4c7c5d940101"), Name="Dec Page ? GL Policy",           Category="Dec Page",    FileType="PDF",  FileSize="412 KB", UploadedAt=new DateTime(2024,6,1),  UploadedBy="System" },
-            new() { DocumentId=Guid.Parse("6b2a10d9-3db1-4b5a-9f9e-4c7c5d940102"), Name="ACORD 125 ? Commercial App",     Category="Application", FileType="PDF",  FileSize="1.2 MB", UploadedAt=new DateTime(2024,5,26), UploadedBy="James Miller" },
-            new() { DocumentId=Guid.Parse("6b2a10d9-3db1-4b5a-9f9e-4c7c5d940103"), Name="Bind Confirmation",              Category="Bind",        FileType="PDF",  FileSize="98 KB",  UploadedAt=new DateTime(2024,5,26), UploadedBy="James Miller" },
-            new() { DocumentId=Guid.Parse("6b2a10d9-3db1-4b5a-9f9e-4c7c5d940104"), Name="Certificate of Insurance #1001", Category="Certificate", FileType="PDF",  FileSize="145 KB", UploadedAt=new DateTime(2024,6,15), UploadedBy="Amy Scott" },
-            new() { DocumentId=Guid.Parse("6b2a10d9-3db1-4b5a-9f9e-4c7c5d940105"), Name="Endorsement END-001",            Category="Endorsement", FileType="PDF",  FileSize="210 KB", UploadedAt=new DateTime(2024,8,10), UploadedBy="Amy Scott" },
-            new() { DocumentId=Guid.Parse("6b2a10d9-3db1-4b5a-9f9e-4c7c5d940106"), Name="Loss Runs ? Prior 5 Years",      Category="Loss Runs",   FileType="PDF",  FileSize="3.1 MB", UploadedAt=new DateTime(2024,5,10), UploadedBy="James Miller" },
-            new() { DocumentId=Guid.Parse("6b2a10d9-3db1-4b5a-9f9e-4c7c5d940107"), Name="Schedule of Values",             Category="Valuation",   FileType="XLSX", FileSize="88 KB",  UploadedAt=new DateTime(2024,5,15), UploadedBy="James Miller" },
-        ];
-
-        var today = DateTime.Today;
-        _activities =
-        [
-            new() { Subject="Renewal review call",           Category="Call",        Channel="Phone",  Outcome="Completed",         ActivityDate=today.AddDays(-5),  Notes="Discussed upcoming renewal. Client wants to remarket Workers Comp.", CreatedBy="Amy Scott" },
-            new() { Subject="Sent renewal questionnaire",    Category="Email",       Channel="Email",  Outcome="Completed",         ActivityDate=today.AddDays(-12), Notes="ACORD 125 renewal questionnaire sent to insured.",                   CreatedBy="Amy Scott" },
-            new() { Subject="Claim follow-up CLM-2024-0312", Category="Claim",       Channel="Phone",  Outcome="Pending",           ActivityDate=today.AddDays(-18), Notes="Adjuster update pending. Reserve set at $18,500.",                   CreatedBy="Amy Scott" },
-            new() { Subject="Certificate issued #1001",      Category="Endorsement", Channel="Portal", Outcome="Completed",         ActivityDate=today.AddDays(-30), Notes="ACORD 25 certificate issued for ABC Contractor.",                    CreatedBy="Amy Scott" },
-            new() { Subject="Mid-term review meeting",       Category="Meeting",     Channel="In-Person", Outcome="Completed",      ActivityDate=today.AddDays(-60), Notes="Reviewed coverage adequacy. Recommended umbrella limit increase.",   CreatedBy="James Miller" },
-            new() { Subject="Policy bound",                  Category="Note",        Channel="Portal", Outcome="Completed",         ActivityDate=new DateTime(2024,5,26), Notes="Policy bound with Travelers. Binder issued.",                  CreatedBy="James Miller" },
-        ];
-
-        _comms =
-        [
-            new() { ThreadId="policy-renewal-questionnaire", SentAt=today.AddDays(-5),  Channel="Email", Direction="Outbound", Subject="Renewal Questionnaire",          From="amy.scott@agency.com",          To="rsullivan@sullivanmfg.com", Status="Delivered" },
-            new() { ThreadId="certificate-request",           SentAt=today.AddDays(-12), Channel="Email", Direction="Inbound",  Subject="RE: Certificate Request",        From="rsullivan@sullivanmfg.com",      To="amy.scott@agency.com",     Status="Read" },
-            new() { ThreadId="claim-status-update",           SentAt=today.AddDays(-18), Channel="SMS",   Direction="Outbound", Subject="Claim status update",            From="+13125550142",                   To="+13125550198",             Status="Delivered" },
-            new() { ThreadId="certificate-1001",              SentAt=today.AddDays(-30), Channel="Email", Direction="Outbound", Subject="Certificate of Insurance #1001", From="amy.scott@agency.com",          To="rsullivan@sullivanmfg.com", Status="Delivered" },
-            new() { ThreadId="policy-issuance-package",       SentAt=today.AddDays(-90), Channel="Letter",Direction="Outbound", Subject="Policy Issuance Package",        From="Agency",                         To="1422 Industrial Blvd, Chicago IL 60601", Status="Sent" },
-        ];
-
-        decimal installAmt = Math.Round(_policy.WrittenPremium / 10, 2);
-        _invoices = Enumerable.Range(0, 10).Select(i =>
-        {
-            var due   = _policy.EffDate.AddMonths(i);
-            var isPaid= i < 9;
-            return new InvoiceRow
-            {
-                InvoiceNum = $"INV-{2024:0000}-{i + 1:000}",
-                DueDate    = due,
-                Amount     = installAmt,
-                AmountPaid = isPaid ? installAmt : 0m,
-                Balance    = isPaid ? 0m : installAmt,
-                Status     = due < today && !isPaid ? "Overdue" : isPaid ? "Paid" : due == today ? "Due" : "Scheduled",
-                PaidDate   = isPaid ? due.AddDays(2) : null,
-            };
-        }).ToList();
-
-        _claims =
-        [
-            new() { ClaimId=Guid.Parse("7c3a20d9-3db1-4b5a-9f9e-4c7c5d940201"), ClaimNum="CLM-2024-0312", LossDate=new DateTime(2024,10,4), LossType="General Liability", Description="Slip and fall ? visitor on premises",  Status="Open",   Reserve=45_000m, Paid=12_500m, Adjuster="TravClaims-Unit4", ClosedDate=null },
-            new() { ClaimId=Guid.Parse("7c3a20d9-3db1-4b5a-9f9e-4c7c5d940202"), ClaimNum="CLM-2023-1148", LossDate=new DateTime(2023,7,18), LossType="Property Damage",   Description="Fire suppression system activation",   Status="Closed", Reserve=0m,      Paid=28_400m, Adjuster="TravClaims-Unit2", ClosedDate=new DateTime(2024,1,12) },
-            new() { ClaimId=Guid.Parse("7c3a20d9-3db1-4b5a-9f9e-4c7c5d940203"), ClaimNum="CLM-2022-0891", LossDate=new DateTime(2022,3,2),  LossType="General Liability", Description="Third-party property damage ? loading", Status="Closed", Reserve=0m,      Paid=9_200m,  Adjuster="TravClaims-Unit4", ClosedDate=new DateTime(2022,9,30) },
-        ];
-
-        _endorsements =
-        [
-            new() { EndNum="END-001", EffDate=new DateTime(2024,8,1),  Type="Add Additional Insured",   Description="Added ABC Contractor as Additional Insured",      PremChange=0m,     Status="Issued",  IssuedBy="Amy Scott"    },
-            new() { EndNum="END-002", EffDate=new DateTime(2024,9,15), Type="Schedule Change",          Description="Added CNC Milling Machine #2 to Schedule of Items",PremChange=1_200m, Status="Issued",  IssuedBy="Amy Scott"    },
-            new() { EndNum="END-003", EffDate=new DateTime(2024,11,1), Type="Coverage Change",          Description="Added Hired & Non-Owned Auto endorsement",         PremChange=2_150m, Status="Pending", IssuedBy="James Miller" },
-        ];
-
-        _renewal = new RenewalPipeline
-        {
-            Status         = "In Progress",
-            QuotedPremium  = null,
-            Remarketed     = false,
-            CarriersQuoted = 0,
-            FollowUpDate   = today.AddDays(14),
-            AssignedTo     = "Amy Scott",
-        };
-
-        _renewalHistory =
-        [
-            new() { PolicyNum="POL-2023-001847", EffDate=new DateTime(2023,6,1), ExpDate=new DateTime(2024,6,1), Carrier="Travelers Insurance",    Premium=39_200m, Change=0m,     Outcome="Renewed" },
-            new() { PolicyNum="POL-2022-001847", EffDate=new DateTime(2022,6,1), ExpDate=new DateTime(2023,6,1), Carrier="Travelers Insurance",    Premium=36_800m, Change=2_400m, Outcome="Renewed" },
-            new() { PolicyNum="POL-2021-001847", EffDate=new DateTime(2021,6,1), ExpDate=new DateTime(2022,6,1), Carrier="Hartford Insurance",     Premium=34_200m, Change=-2_600m,Outcome="Renewed" },
-            new() { PolicyNum="POL-2020-001847", EffDate=new DateTime(2020,6,1), ExpDate=new DateTime(2021,6,1), Carrier="Hartford Insurance",     Premium=36_800m, Change=0m,     Outcome="Renewed" },
-        ];
-
-        _commissions = Enumerable.Range(0, 10).Select(i =>
-        {
-            var gross = Math.Round(_policy.WrittenPremium / 10 * 0.12m, 2);
-            return new CommissionRow
-            {
-                Period      = _policy.EffDate.AddMonths(i).ToString("MMM yyyy"),
-                Type        = i == 0 ? "New Business" : "Renewal",
-                Producer    = _policy.Producer,
-                CommPct     = 0.12m,
-                GrossAmt    = gross,
-                AgencyAmt   = Math.Round(gross * 0.6m, 2),
-                ProducerAmt = Math.Round(gross * 0.4m, 2),
-                Status      = i < 9 ? "Paid" : "Pending",
-                PaidDate    = i < 9 ? _policy.EffDate.AddMonths(i).AddDays(15) : null,
-            };
-        }).ToList();
-
-        _auditLog =
-        [
-            new() { Timestamp=today.AddDays(-5),  Action="Activity Logged",  Field="Activities",     OldValue="?",       NewValue="Renewal review call",          ChangedBy="Amy Scott",    IpAddress="10.0.1.42" },
-            new() { Timestamp=today.AddDays(-30), Action="Endorsement Added",Field="Endorsements",   OldValue="1",       NewValue="2",                            ChangedBy="Amy Scott",    IpAddress="10.0.1.42" },
-            new() { Timestamp=today.AddDays(-60), Action="Coverage Changed", Field="Limit (GL-OCCUR)",OldValue="$500,000",NewValue="$1,000,000",                  ChangedBy="James Miller", IpAddress="10.0.1.11" },
-            new() { Timestamp=new DateTime(2024,5,26), Action="Policy Bound",Field="Status",          OldValue="Quoted",  NewValue="Active",                      ChangedBy="James Miller", IpAddress="10.0.1.11" },
-            new() { Timestamp=new DateTime(2024,5,10), Action="Policy Created",Field="?",             OldValue="?",       NewValue="POL-2024-001847",             ChangedBy="James Miller", IpAddress="10.0.1.11" },
-        ];
-
-        _certificates =
-        [
-            new() { CertificateNum="CERT-2024-1001", Holder="ABC Contractor LLC", Type="ACORD 25", IssuedDate=today.AddDays(-30), ExpirationDate=_policy.ExpDate, Status="Active", RequestedBy="Robert Sullivan", Delivery="Portal" },
-            new() { CertificateNum="CERT-2024-1002", Holder="City of Chicago Procurement", Type="ACORD 25", IssuedDate=today.AddDays(-18), ExpirationDate=_policy.ExpDate, Status="Active", RequestedBy="Sandra Webb", Delivery="Email" },
-            new() { CertificateNum="CERT-2024-1003", Holder="Midwest Industrial Park", Type="ACORD 28", IssuedDate=today.AddDays(-7), ExpirationDate=today.AddDays(25), Status="Review", RequestedBy="Amy Scott", Delivery="Email" },
-            new() { CertificateNum="CERT-2023-0977", Holder="Legacy Vendor Services", Type="ACORD 25", IssuedDate=new DateTime(2023,8,12), ExpirationDate=new DateTime(2024,6,1), Status="Expired", RequestedBy="James Miller", Delivery="Letter" },
-        ];
-
-        _compliance =
-        [
-            new() { ComplianceDocumentId=Guid.Parse("8d3a20d9-3db1-4b5a-9f9e-4c7c5d940301"), Requirement="Signed UM/UIM rejection form", Category="Coverage Election", Status="Compliant", DueDate=new DateTime(2024,6,1), Owner="Amy Scott", Evidence="Signed form in document vault" },
-            new() { ComplianceDocumentId=Guid.Parse("8d3a20d9-3db1-4b5a-9f9e-4c7c5d940302"), Requirement="Terrorism Risk Insurance Act disclosure", Category="Federal Notice", Status="Compliant", DueDate=new DateTime(2024,5,26), Owner="James Miller", Evidence="TRIA disclosure acknowledged" },
-            new() { ComplianceDocumentId=null, Requirement="Updated drivers list attestation", Category="Renewal Requirement", Status="Due", DueDate=today.AddDays(10), Owner="Amy Scott", Evidence="Awaiting insured response" },
-            new() { ComplianceDocumentId=null, Requirement="Additional insured blanket endorsement review", Category="Contract Review", Status="Exception", DueDate=today.AddDays(5), Owner="Sarah Chen", Evidence="Contract wording mismatch" },
-        ];
-
-        _serviceTasks =
-        [
-            new() { TaskNumber="TSK-2024-7712", Title="Follow up on renewal questionnaire", Type="Renewal", Priority="High", Status="In Progress", DueDate=today.AddDays(2), AssignedTo="Amy Scott", RelatedTo="Renewal" },
-            new() { TaskNumber="TSK-2024-7688", Title="Resolve overdue final installment", Type="Billing", Priority="Critical", Status="Open", DueDate=today.AddDays(1), AssignedTo="CSR Queue", RelatedTo="Invoice INV-2024-010" },
-            new() { TaskNumber="TSK-2024-7610", Title="Validate certificate holder wording", Type="Certificate", Priority="Medium", Status="Review", DueDate=today.AddDays(7), AssignedTo="Sarah Chen", RelatedTo="CERT-2024-1003" },
-            new() { TaskNumber="TSK-2024-7420", Title="Claim reserve follow-up with adjuster", Type="Claim", Priority="High", Status="Waiting", DueDate=today.AddDays(4), AssignedTo="Amy Scott", RelatedTo="CLM-2024-0312" },
-        ];
-
-        _submissions =
-        [
-            new() { SubmissionId=Guid.Parse("9e3a20d9-3db1-4b5a-9f9e-4c7c5d940401"), SubmissionNo="SUB-2024-09812", Opportunity="2024 GL Renewal", Market="Travelers Insurance", Stage="Bound", SubmittedOn=new DateTime(2024,5,10), QuotedPremium=42_500m, Outcome="Bound" },
-            new() { SubmissionId=Guid.Parse("9e3a20d9-3db1-4b5a-9f9e-4c7c5d940402"), SubmissionNo="SUB-2024-09813", Opportunity="Umbrella Cross-Sell", Market="CNA", Stage="Quoted", SubmittedOn=new DateTime(2024,5,12), QuotedPremium=8_700m, Outcome="Quoted" },
-            new() { SubmissionId=Guid.Parse("9e3a20d9-3db1-4b5a-9f9e-4c7c5d940403"), SubmissionNo="SUB-2024-09814", Opportunity="Pollution Liability", Market="Chubb", Stage="Declined", SubmittedOn=new DateTime(2024,5,13), QuotedPremium=0m, Outcome="Declined" },
-        ];
-
-        _carrierUw =
-        [
-            new() { Item="Travelers middle-market manufacturing appetite", Type="Appetite", Status="Preferred", Owner="Mark Reynolds", LastUpdate=today.AddDays(-14), Notes="GL and property acceptable; umbrella requires updated loss runs." },
-            new() { Item="Underwriter contact: Mark Reynolds", Type="Contact", Status="Active", Owner="Travelers Insurance", LastUpdate=today.AddDays(-21), Notes="mreynolds@travelers.com ? (800) 555-0142" },
-            new() { Item="Carrier appointment Midwest branch", Type="Appointment", Status="Active", Owner="Agency Ops", LastUpdate=today.AddDays(-45), Notes="Commercial lines binding authority active through year-end." },
-            new() { Item="Download mapping for policy transactions", Type="Download", Status="Mapped", Owner="Operations", LastUpdate=today.AddDays(-3), Notes="Policy, billing, and claims downloads reconcile nightly." },
-        ];
-
-        _relationships =
-        [
-            new() { Entity="Sullivan Manufacturing LLC", Role="Named Insured", Relationship="Policy owner", Contact="Robert Sullivan", Status="Active", Route=$"/accounts/{_policy.AccountId}" },
-            new() { Entity="Robert Sullivan", Role="Decision Maker", Relationship="Owner / President", Contact="rsullivan@sullivanmfg.com", Status="Active", Route="/contacts" },
-            new() { Entity="ABC Contractor LLC", Role="Additional Insured", Relationship="Contract requirement", Contact="contracts@abccontractor.com", Status="Active", Route="/policies/certificates?certificate=CERT-2024-1001" },
-            new() { Entity="Midwest Industrial Park", Role="Certificate Holder", Relationship="Landlord", Contact="risk@midwestindustrial.com", Status="Review", Route="/policies/certificates?certificate=CERT-2024-1003" },
-            new() { Entity="First Midwest Bank", Role="Lienholder", Relationship="Equipment lender", Contact="insurance@firstmidwest.example", Status="Active", Route=$"/accounts/{_policy.AccountId}/relationships" },
-            new() { Entity="Travelers Insurance", Role="Carrier", Relationship="Issuing carrier", Contact="Mark Reynolds", Status="Active", Route="/admin/reference/carriers" },
-            new() { Entity="James Miller", Role="Producer", Relationship="Revenue owner", Contact="james.miller@agency.com", Status="Active", Route="/tenant/agency/producers" },
-            new() { Entity="Amy Scott", Role="CSR", Relationship="Service owner", Contact="amy.scott@agency.com", Status="Active", Route="/tenant/agency/csrs" },
-        ];
-
-        _reinsurance =
-        [
-            new() { Treaty="GL Casualty Quota Share 2024", Layer="Primary 20% QS", Attachment=0m, Limit=1_000_000m, CededPct=.20m, Reinsurer="Munich Re", Status="Bound" },
-            new() { Treaty="Casualty XOL 2024", Layer="$1M xs $1M", Attachment=1_000_000m, Limit=4_000_000m, CededPct=1m, Reinsurer="Swiss Re", Status="Bound" },
-            new() { Treaty="Property CAT Aggregate", Layer="$5M xs $2.5M", Attachment=2_500_000m, Limit=5_000_000m, CededPct=.75m, Reinsurer="Lloyd's Syndicate", Status="Monitored" },
-        ];
-    }
-
     // -- Models ---------------------------------------------------------------
     private sealed class PolicyRecord
     {
@@ -3463,14 +3681,23 @@ else
 
     private sealed class CommissionRow
     {
+        public Guid?     CommissionId { get; set; }
+        public Guid?     CoverageDetailId { get; set; }
+        public string    PolicyNumber { get; set; } = string.Empty;
         public string    Period      { get; set; } = string.Empty;
         public string    Type        { get; set; } = string.Empty;
         public string    Producer    { get; set; } = string.Empty;
+        public string    AccountName { get; set; } = string.Empty;
+        public string    LineOfBusiness { get; set; } = string.Empty;
+        public string    Carrier     { get; set; } = string.Empty;
         public decimal   CommPct     { get; set; }
         public decimal   GrossAmt    { get; set; }
         public decimal   AgencyAmt   { get; set; }
         public decimal   ProducerAmt { get; set; }
         public string    Status      { get; set; } = string.Empty;
+        public string    StatementNumber { get; set; } = string.Empty;
+        public string    PayoutBatch { get; set; } = string.Empty;
+        public DateTime  TransactionDate { get; set; }
         public DateTime? PaidDate    { get; set; }
     }
 

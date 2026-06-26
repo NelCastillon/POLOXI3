@@ -1,0 +1,310 @@
+@page "/commissions/{CommissionId:guid}"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+@implements IDisposable
+
+<PageTitle>@(_commission is null ? "Commission Detail" : $"Commission {_commission.PolicyNumber}")</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="cd-toast cd-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="cd-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_loading)
+{
+    <div class="pd-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading commission detail…</span></div>
+}
+else if (_commission is null)
+{
+    <div class="pd-not-found">
+        <i class="bi bi-cash-coin pd-nf-icon" aria-hidden="true"></i>
+        <h2>Commission detail not found</h2>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions2")'>
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Commissions
+        </button>
+    </div>
+}
+else
+{
+    <div class="pd-enterprise-page">
+        <div class="pd-header">
+            <div class="pd-header-left">
+                <div class="pd-lob-icon pd-lob-commission">
+                    <i class="bi bi-percent" aria-hidden="true"></i>
+                </div>
+                <div class="pd-header-info">
+                    <div class="pd-title-row">
+                        <h1 class="pd-pol-num">Commission Detail</h1>
+                        <span class="pd-status pd-status-@CssKey(_commission.Status)">@_commission.Status</span>
+                        <span class="pd-lob-badge pd-lob-commission">@_commission.BusinessType</span>
+                    </div>
+                    <div class="pd-sub-row">
+                        <button class="pd-acct-link" @onclick='() => Nav.NavigateTo($"/policies?search={Uri.EscapeDataString(_commission.PolicyNumber)}")'>
+                            <i class="bi bi-shield-check" aria-hidden="true"></i>@_commission.PolicyNumber
+                        </button>
+                        <span class="pd-sub-chip"><i class="bi bi-person-badge" aria-hidden="true"></i>@_commission.Producer</span>
+                        <span class="pd-sub-chip"><i class="bi bi-building-fill" aria-hidden="true"></i>@_commission.Carrier</span>
+                        <span class="pd-sub-chip"><i class="bi bi-calendar" aria-hidden="true"></i>@_commission.TransactionDate.ToString("MM/dd/yyyy")</span>
+                    </div>
+                </div>
+            </div>
+            <div class="pd-header-actions">
+                <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/commissions2")'>
+                    <i class="bi bi-arrow-left" aria-hidden="true"></i> Commission Center
+                </button>
+                <button class="um-btn um-btn-primary um-btn-sm" @onclick="LoadAsync">
+                    <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Sync Detail
+                </button>
+            </div>
+        </div>
+
+        <div class="pd-command-strip" aria-label="Commission executive summary">
+            <div class="pd-command-card pd-command-card--success">
+                <span class="pd-command-icon"><i class="bi bi-cash-stack" aria-hidden="true"></i></span>
+                <div>
+                    <span>Gross Premium / Revenue</span>
+                    <strong>@_commission.GrossAmount.ToString("C2")</strong>
+                    <small>Source amount from commission ledger</small>
+                </div>
+            </div>
+            <div class="pd-command-card pd-command-card--info">
+                <span class="pd-command-icon"><i class="bi bi-percent" aria-hidden="true"></i></span>
+                <div>
+                    <span>Commission Rate</span>
+                    <strong>@(_commission.CommissionPct / 100m).ToString("P2")</strong>
+                    <small>@_commission.BusinessType</small>
+                </div>
+            </div>
+            <div class="pd-command-card pd-command-card--success">
+                <span class="pd-command-icon"><i class="bi bi-bank" aria-hidden="true"></i></span>
+                <div>
+                    <span>Agency Net</span>
+                    <strong>@_commission.AgencyAmount.ToString("C2")</strong>
+                    <small>Ledger-calculated agency commission</small>
+                </div>
+            </div>
+            <div class="pd-command-card @PayoutCardCss">
+                <span class="pd-command-icon"><i class="bi bi-wallet2" aria-hidden="true"></i></span>
+                <div>
+                    <span>Payout Status</span>
+                    <strong>@_commission.Status</strong>
+                    <small>@(_commission.PaidDate.HasValue ? $"Paid {_commission.PaidDate.Value:MM/dd/yyyy}" : "Awaiting payout closeout")</small>
+                </div>
+            </div>
+        </div>
+
+        @if (_loadError is not null)
+        {
+            <div class="alert alert-danger pd-load-error" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+                <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
+            </div>
+        }
+
+        <section class="pd-workspace-panel" aria-label="Commission detail workspace">
+            <div class="pd-native-tabs" role="tablist" aria-label="Commission detail sections">
+                <button type="button" class="pd-native-tab @(_tab == 0 ? "pd-native-tab--active" : null)" role="tab" aria-selected="@(_tab == 0)" @onclick="() => _tab = 0"><i class="bi bi-clipboard-data" aria-hidden="true"></i><span>Ledger Detail</span></button>
+                <button type="button" class="pd-native-tab @(_tab == 1 ? "pd-native-tab--active" : null)" role="tab" aria-selected="@(_tab == 1)" @onclick="() => _tab = 1"><i class="bi bi-diagram-3" aria-hidden="true"></i><span>Source & Payout</span></button>
+            </div>
+        </section>
+
+        @if (_tab == 0)
+        {
+            <div class="pd-tab-body">
+                <div class="pd-summary-grid">
+                    <div class="pd-info-card">
+                        <h3 class="pd-card-hdr">Commission Identity</h3>
+                        <div class="pd-field-grid">
+                            @F("Commission ID", _commission.CommissionId.ToString())
+                            @F("Policy Number", _commission.PolicyNumber)
+                            @F("Period", _commission.Period)
+                            @F("Business Type", _commission.BusinessType)
+                            @F("Status", _commission.Status)
+                            @F("Transaction Date", _commission.TransactionDate.ToString("MM/dd/yyyy"))
+                        </div>
+                    </div>
+                    <div class="pd-info-card">
+                        <h3 class="pd-card-hdr">Amounts</h3>
+                        <div class="pd-field-grid">
+                            @F("Gross Amount", _commission.GrossAmount.ToString("C2"))
+                            @F("Commission %", (_commission.CommissionPct / 100m).ToString("P2"))
+                            @F("Agency Amount", _commission.AgencyAmount.ToString("C2"))
+                            @F("Producer Amount", _commission.ProducerAmount.ToString("C2"))
+                        </div>
+                    </div>
+                    <div class="pd-info-card">
+                        <h3 class="pd-card-hdr">Parties</h3>
+                        <div class="pd-field-grid">
+                            @F("Account", _commission.AccountName)
+                            @F("Producer", _commission.Producer)
+                            @F("Carrier", _commission.Carrier)
+                            @F("Line of Business", _commission.LineOfBusiness)
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="pd-tab-body">
+                <div class="pd-summary-grid">
+                    <div class="pd-info-card">
+                        <h3 class="pd-card-hdr">Statement & Payout</h3>
+                        <div class="pd-field-grid">
+                            @F("Statement Number", EmptyDash(_commission.StatementNumber))
+                            @F("Payout Batch", EmptyDash(_commission.PayoutBatch))
+                            @F("Paid Date", _commission.PaidDate?.ToString("MM/dd/yyyy") ?? "—")
+                            @F("Status", _commission.Status)
+                        </div>
+                    </div>
+                    <div class="pd-info-card">
+                        <h3 class="pd-card-hdr">Data Sync</h3>
+                        <div class="pd-field-grid">
+                            @F("Tenant", TenantDisplayName)
+                            @F("Ledger Source", "Commission.CommissionLedger")
+                            @F("Last Sync", DateTime.Now.ToString("MM/dd/yyyy h:mm tt"))
+                            @F("Detail Route", $"/commissions/{_commission.CommissionId}")
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public Guid CommissionId { get; set; }
+
+    private bool _loading = true;
+    private bool _toastVisible;
+    private string? _loadError;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "info";
+    private string _tenantName = string.Empty;
+    private Guid _tenantId;
+    private int _tab;
+    private CancellationTokenSource? _toastCts;
+    private CommissionLedgerRowDto? _commission;
+
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-octagon", "warning" => "bi-exclamation-triangle", "success" => "bi-check2-circle", _ => "bi-info-circle" };
+    private string TenantDisplayName => string.IsNullOrWhiteSpace(_tenantName) ? "Tenant agency" : _tenantName;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantName = string.IsNullOrWhiteSpace(context.TenantName) ? context.TenantCode ?? string.Empty : context.TenantName;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Commissions", "/commissions2"), new("Commission Detail", $"/commissions/{CommissionId}"));
+        await LoadAsync();
+    }
+
+    public void Dispose()
+    {
+        _toastCts?.Cancel();
+        _toastCts?.Dispose();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _commission = await Api.GetCommissionLedgerByIdAsync(_tenantId, CommissionId);
+            if (_commission is not null)
+            {
+                await ResolveTenantDisplayNameAsync(_commission.TenantId);
+                Breadcrumbs.SetCrumbs(new("Home", "/"), new("Commissions", "/commissions2"), new(_commission.PolicyNumber, $"/commissions/{CommissionId}"));
+            }
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load commission detail: {ex.Message}";
+            ShowToast(_loadError, "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task ResolveTenantDisplayNameAsync(Guid tenantId)
+    {
+        if (tenantId == Guid.Empty || tenantId == _tenantId && !string.IsNullOrWhiteSpace(_tenantName))
+        {
+            return;
+        }
+
+        try
+        {
+            var tenant = await Api.GetTenantByIdAsync(tenantId);
+            _tenantName = string.IsNullOrWhiteSpace(tenant?.TenantName) ? tenant?.TenantCode ?? _tenantName : tenant.TenantName;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Tenant name lookup failed: {ex.Message}", "warning");
+        }
+    }
+
+    private string PayoutCardCss => _commission?.PaidDate is not null
+        ? "pd-command-card--success"
+        : _commission?.Status.Equals("Pending", StringComparison.OrdinalIgnoreCase) == true
+            ? "pd-command-card--attention"
+            : "pd-command-card--info";
+
+    private static string EmptyDash(string? value)
+        => string.IsNullOrWhiteSpace(value) ? "—" : value;
+
+    private static string CssKey(string value)
+        => value.ToLowerInvariant().Replace(" ", "-").Replace("/", "-").Replace("&", "and");
+
+    private void ShowToast(string message, string kind = "info")
+    {
+        _toastCts?.Cancel();
+        _toastCts?.Dispose();
+        _toastCts = new CancellationTokenSource();
+        _toastMessage = message.Length <= 120 ? message : $"{message[..117]}...";
+        _toastKind = ToastKind(kind);
+        _toastVisible = true;
+        StateHasChanged();
+        _ = HideToastAfterDelayAsync(_toastCts.Token, _toastKind == "danger" ? 5200 : 3200);
+    }
+
+    private async Task HideToastAfterDelayAsync(CancellationToken cancellationToken, int delayMs)
+    {
+        try
+        {
+            await Task.Delay(delayMs, cancellationToken);
+            _toastVisible = false;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (TaskCanceledException)
+        {
+        }
+    }
+
+    private void HideToast()
+    {
+        _toastCts?.Cancel();
+        _toastVisible = false;
+    }
+
+    private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : value.Contains("success", StringComparison.OrdinalIgnoreCase) ? "success" : "info";
+
+    private RenderFragment F(string label, string value) => __builder =>
+    {
+        __builder.OpenElement(0, "div"); __builder.AddAttribute(1, "class", "pd-field-row");
+        __builder.OpenElement(2, "div"); __builder.AddAttribute(3, "class", "pd-field-lbl"); __builder.AddContent(4, label); __builder.CloseElement();
+        __builder.OpenElement(5, "div"); __builder.AddAttribute(6, "class", "pd-field-val");
+        __builder.OpenElement(7, "strong"); __builder.AddContent(8, value); __builder.CloseElement();
+        __builder.CloseElement();
+        __builder.CloseElement();
+    };
+}

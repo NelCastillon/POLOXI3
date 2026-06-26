@@ -114,6 +114,18 @@ public sealed class SubmissionService : ISubmissionService
     public Task<PagedResult<PolicyRegisterDto>> SearchPoliciesAsync(Guid tenantId, string? searchTerm, string? status, string? lineOfBusiness, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _repository.SearchPoliciesAsync(tenantId, searchTerm, status, lineOfBusiness, pageNumber, pageSize, cancellationToken);
 
+    public Task<PolicyRegisterDto?> GetPolicyByIdAsync(Guid policyId, CancellationToken cancellationToken = default)
+        => _repository.GetPolicyByIdAsync(policyId, cancellationToken);
+
+    public Task<Guid> CreatePolicyRegisterAsync(UpsertPolicyRegisterRequest request, CancellationToken cancellationToken = default)
+        => _repository.CreatePolicyRegisterAsync(request, cancellationToken);
+
+    public Task UpdatePolicyRegisterAsync(Guid policyId, UpsertPolicyRegisterRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdatePolicyRegisterAsync(policyId, request, cancellationToken);
+
+    public Task<SubmissionActionResult> ExecutePolicyRegisterActionAsync(Guid policyId, PolicyRegisterActionRequest request, CancellationToken cancellationToken = default)
+        => _repository.ExecutePolicyRegisterActionAsync(policyId, request, cancellationToken);
+
     public async Task<Guid> BindPolicyAsync(BindPolicyRequest request, CancellationToken cancellationToken = default)
     {
         // Enterprise rule: binding a policy must trace back to a real submission within the

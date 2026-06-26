@@ -164,6 +164,28 @@ public class CreateCommissionTransactionRequest
     public Guid? CreatedByUserId { get; set; }
 }
 
+public sealed class CreateCommissionLedgerRequest
+{
+    [Required] public Guid TenantId { get; set; }
+    [Required, StringLength(80)] public string PolicyNumber { get; set; } = string.Empty;
+    [Required, StringLength(40)] public string Period { get; set; } = string.Empty;
+    [Required, StringLength(80)] public string BusinessType { get; set; } = string.Empty;
+    [Required, StringLength(160)] public string Producer { get; set; } = string.Empty;
+    [Required, StringLength(200)] public string AccountName { get; set; } = string.Empty;
+    [StringLength(100)] public string LineOfBusiness { get; set; } = string.Empty;
+    [StringLength(160)] public string Carrier { get; set; } = string.Empty;
+    [Range(-100000000, 100000000)] public decimal GrossAmount { get; set; }
+    [Range(0, 100)] public decimal CommissionPct { get; set; }
+    [Range(-100000000, 100000000)] public decimal AgencyAmount { get; set; }
+    [Range(-100000000, 100000000)] public decimal ProducerAmount { get; set; }
+    [Required, StringLength(50)] public string Status { get; set; } = "Pending";
+    [StringLength(80)] public string StatementNumber { get; set; } = string.Empty;
+    [StringLength(80)] public string PayoutBatch { get; set; } = string.Empty;
+    [Required] public DateOnly TransactionDate { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow);
+    public DateOnly? PaidDate { get; set; }
+    public Guid? CreatedByUserId { get; set; }
+}
+
 public sealed class UpdateCommissionTransactionRequest : CreateCommissionTransactionRequest
 {
     [Required] public Guid TransactionId { get; set; }

@@ -1,5 +1,9 @@
 @page "/policies/certificates"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.PolicyCertificates
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
@@ -21,7 +25,7 @@
         </div>
         <div class="ch-hero-actions">
             <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/policies")'><i class="bi bi-shield" aria-hidden="true"></i> Policies</button>
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFiltersAsync"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button>
             <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenIssue"><i class="bi bi-plus-lg" aria-hidden="true"></i> Issue Certificate</button>
         </div>
     </section>
@@ -56,7 +60,7 @@
             }
         </select>
         <button type="button" class="um-btn um-btn-ghost" @onclick="ExportVisibleAsync"><i class="bi bi-download" aria-hidden="true"></i> Export visible</button>
-        <div class="ch-result-chip"><strong>@Filtered.Count</strong><span>Visible</span></div>
+        <div class="ch-result-chip"><strong>@Filtered.Count</strong><span>@(_loading ? "Loading" : "Visible")</span></div>
     </section>
 
     <section class="ch-layout">
@@ -73,9 +77,13 @@
                 </div>
             </div>
 
-            @if (!Filtered.Any())
+            @if (_loading)
             {
-                <div class="sr-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No certificates found</strong><span>Clear filters or issue a new certificate.</span><button type="button" class="um-btn um-btn-primary" @onclick="ResetFilters">Show all certificates</button></div>
+                <div class="sr-empty-state"><i class="bi bi-arrow-repeat" aria-hidden="true"></i><strong>Loading certificates</strong><span>Reading the certificate register from the database.</span></div>
+            }
+            else if (!Filtered.Any())
+            {
+                <div class="sr-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No certificates found</strong><span>Clear filters or issue a new certificate.</span><button type="button" class="um-btn um-btn-primary" @onclick="ResetFiltersAsync">Show all certificates</button></div>
             }
             else
             {
@@ -111,7 +119,8 @@
                                     <td class="sr-actions-col">
                                         <button type="button" class="um-btn um-btn-primary um-btn-xs" @onclick:stopPropagation="true" @onclick="() => DownloadAsync(row)"><i class="bi bi-file-earmark-pdf" aria-hidden="true"></i> PDF</button>
                                         <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => EmailAsync(row)"><i class="bi bi-envelope" aria-hidden="true"></i></button>
-                                        <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => RevokeAsync(row)" disabled="@IsRevoked(row)"><i class="bi bi-x-circle" aria-hidden="true"></i></button>
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenEdit(row)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => ConfirmRevoke(row)" disabled="@IsRevoked(row)"><i class="bi bi-x-circle" aria-hidden="true"></i></button>
                                     </td>
                                 </tr>
                             }
@@ -153,7 +162,16 @@
                     <button type="button" class="um-btn um-btn-primary" @onclick="() => DownloadAsync(_selected)"><i class="bi bi-file-earmark-pdf" aria-hidden="true"></i> Download PDF</button>
                     <button type="button" class="um-btn um-btn-ghost" @onclick="() => EmailAsync(_selected)"><i class="bi bi-envelope" aria-hidden="true"></i> Email holder</button>
                     <button type="button" class="um-btn um-btn-ghost" @onclick="OpenSelectedPolicy"><i class="bi bi-shield" aria-hidden="true"></i> View policy</button>
-                    <button type="button" class="um-btn um-btn-danger" @onclick="() => RevokeAsync(_selected)" disabled="@IsRevoked(_selected)"><i class="bi bi-x-circle" aria-hidden="true"></i> Revoke</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                    @if (IsRevoked(_selected))
+                    {
+                        <button type="button" class="um-btn um-btn-secondary" @onclick="() => RestoreAsync(_selected)"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Restore</button>
+                    }
+                    else
+                    {
+                        <button type="button" class="um-btn um-btn-danger" @onclick="() => ConfirmRevoke(_selected)"><i class="bi bi-x-circle" aria-hidden="true"></i> Revoke</button>
+                    }
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
                 </div>
             }
         </aside>
@@ -165,12 +183,14 @@
     <div class="ch-modal-backdrop" role="presentation" @onclick="CloseIssue">
         <div class="ch-modal" role="dialog" aria-modal="true" aria-labelledby="issueCertTitle" @onclick:stopPropagation="true">
             <div class="ch-modal-header">
-                <div><span class="ch-eyebrow"><i class="bi bi-plus-circle" aria-hidden="true"></i> Certificate issuance</span><h2 id="issueCertTitle">Issue Certificate</h2></div>
+                <div><span class="ch-eyebrow"><i class="bi bi-plus-circle" aria-hidden="true"></i> Certificate issuance</span><h2 id="issueCertTitle">@(_editingCertificateId is null ? "Issue Certificate" : "Edit Certificate")</h2></div>
                 <button type="button" class="ch-modal-close" @onclick="CloseIssue" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
             </div>
             <div class="ch-dlg-fields">
                 <label class="ch-dlg-field">Policy Number <span class="ch-req">*</span><input class="form-control" @bind="_issForm.PolicyNo" placeholder="POL-2025-..." /></label>
+                <label class="ch-dlg-field">Account Name <span class="ch-req">*</span><input class="form-control" @bind="_issForm.Account" placeholder="Account name" /></label>
                 <label class="ch-dlg-field">Certificate Form<select class="form-select" @bind="_issForm.CertType">@foreach (var type in _certTypes){<option value="@type">@type</option>}</select></label>
+                <label class="ch-dlg-field">Line of Business <span class="ch-req">*</span><input class="form-control" @bind="_issForm.Lob" placeholder="General Liability" /></label>
                 <label class="ch-dlg-field ch-dlg-full">Certificate Holder Name <span class="ch-req">*</span><input class="form-control" @bind="_issForm.HolderName" placeholder="Legal name of certificate holder" /></label>
                 <label class="ch-dlg-field ch-dlg-full">Holder Address<input class="form-control" @bind="_issForm.HolderAddress" /></label>
                 <label class="ch-check-row"><input type="checkbox" @bind="_issForm.AdditionalInsured" /> Add as additional insured</label>
@@ -181,8 +201,47 @@
             </div>
             <div class="ch-modal-actions">
                 <button class="um-btn um-btn-ghost" @onclick="CloseIssue">Cancel</button>
-                <button class="um-btn um-btn-secondary" @onclick="SaveDraftAsync">Save Draft</button>
-                <button class="um-btn um-btn-primary" @onclick="IssueCertAsync">Issue</button>
+                <button class="um-btn um-btn-secondary" @onclick="SaveDraftAsync">@(_editingCertificateId is null ? "Save Draft" : "Save as Pending")</button>
+                <button class="um-btn um-btn-primary" @onclick="IssueCertAsync">@(_editingCertificateId is null ? "Issue" : "Save Issued")</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showDeleteConfirm && _deleteTarget is not null)
+{
+    <div class="ch-modal-backdrop" role="presentation" @onclick="CancelDelete">
+        <div class="ch-modal" role="dialog" aria-modal="true" aria-labelledby="deleteCertTitle" @onclick:stopPropagation="true">
+            <div class="ch-modal-header">
+                <div><span class="ch-eyebrow"><i class="bi bi-trash" aria-hidden="true"></i> Confirmation required</span><h2 id="deleteCertTitle">Delete @_deleteTarget.CertNo?</h2></div>
+                <button type="button" class="ch-modal-close" @onclick="CancelDelete" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="ch-dlg-fields">
+                <p class="ch-dlg-full">This will remove the certificate from the database-backed register.</p>
+            </div>
+            <div class="ch-modal-actions">
+                <button class="um-btn um-btn-ghost" @onclick="CancelDelete">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showRevokeConfirm && _revokeTarget is not null)
+{
+    <div class="ch-modal-backdrop" role="presentation" @onclick="CancelRevoke">
+        <div class="ch-modal" role="dialog" aria-modal="true" aria-labelledby="revokeCertTitle" @onclick:stopPropagation="true">
+            <div class="ch-modal-header">
+                <div><span class="ch-eyebrow"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Confirmation required</span><h2 id="revokeCertTitle">Revoke @_revokeTarget.CertNo?</h2></div>
+                <button type="button" class="ch-modal-close" @onclick="CancelRevoke" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="ch-dlg-fields">
+                <p class="ch-dlg-full">This will mark the certificate as revoked in the database. You can restore it later from this page.</p>
+                <label class="ch-dlg-field ch-dlg-full">Reason<textarea class="form-control" rows="3" @bind="_revokeReason" placeholder="Optional revoke reason"></textarea></label>
+            </div>
+            <div class="ch-modal-actions">
+                <button class="um-btn um-btn-ghost" @onclick="CancelRevoke">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ExecuteRevokeAsync"><i class="bi bi-x-circle" aria-hidden="true"></i> Revoke</button>
             </div>
         </div>
     </div>
@@ -198,6 +257,16 @@
     private string _searchTerm = string.Empty;
     private string _activeKpi = "all";
     private bool _showIssue;
+    private bool _loading;
+    private bool _showRevokeConfirm;
+    private bool _showDeleteConfirm;
+    private Guid _tenantId;
+    private Guid? _userId;
+    private Guid? _editingCertificateId;
+    private Guid? _editingPolicyId;
+    private CertRow? _revokeTarget;
+    private CertRow? _deleteTarget;
+    private string? _revokeReason;
     private CertRow? _selected;
     private IssueForm _issForm = new();
     private readonly string[] _certTypes = ["ACORD 25", "ACORD 27", "ACORD 28", "Custom"];
@@ -230,43 +299,87 @@
         new("holders", "Holders", _rows.Select(r => r.HolderName).Distinct(StringComparer.OrdinalIgnoreCase).Count().ToString("N0"), "Unique holders", "bi-person-badge", "ch-kpi-hold", "Show all certificate holders")
     ];
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policies", "/policies"), new("Certificates", "/policies/certificates"));
-        BuildSeed();
-        SelectQueryCertificate();
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _userId = context.UserId;
+        await LoadCertificatesAsync();
     }
 
-    protected override void OnParametersSet()
+    protected override async Task OnParametersSetAsync()
     {
-        if (_rows.Count > 0)
+        if (_rows.Count > 0 && !string.IsNullOrWhiteSpace(Certificate))
         {
-            SelectQueryCertificate();
+            try
+            {
+                await SelectQueryCertificateAsync();
+            }
+            catch (Exception ex)
+            {
+                await _toast.ShowAsync(new ToastModel { Title = "Certificate lookup failed", Content = $"Certificate lookup failed: {ex.Message}", CssClass = "e-toast-danger" });
+                SelectFallback();
+            }
         }
     }
 
-    private void BuildSeed()
+    private async Task LoadCertificatesAsync(bool preserveSelection = false)
     {
-        if (_rows.Count > 0) return;
-
-        _rows.AddRange(
-        [
-            new("CERT-2024-1001", "POL-2024-44821", "Sullivan Mfg. LLC", "City of Houston", "901 Bagby St, Houston, TX", "ACORD 25", DateTime.Today.AddDays(-42), DateTime.Today.AddDays(18), "General Liability", "Maria Santos", "Issued", true, true, "Evidence of GL coverage for municipal vendor access, including additional insured and waiver endorsements."),
-            new("CERT-2024-1002", "POL-2024-44821", "Sullivan Mfg. LLC", "ABC Contractors LLC", "2100 Commerce Dr, Austin, TX", "ACORD 25", DateTime.Today.AddDays(-35), DateTime.Today.AddDays(72), "General Liability", "James Patel", "Issued", true, false, "Certificate for jobsite access and standard contract compliance."),
-            new("CERT-2024-1003", "POL-2024-44821", "Sullivan Mfg. LLC", "First National Bank", "100 Main St, Dallas, TX", "ACORD 28", DateTime.Today.AddDays(-180), DateTime.Today.AddDays(-5), "Commercial Property", "Chen Li", "Expired", false, false, "Evidence of property coverage for lender file."),
-            new("CERT-2024-1004", "POL-2025-77120", "Bridgewater Hotels", "Whole Foods Market", "550 Bowie St, Austin, TX", "ACORD 25", DateTime.Today.AddDays(-8), DateTime.Today.AddDays(21), "Commercial Auto", "Aisha Williams", "Pending", true, true, "Pending holder verification and contract language review."),
-            new("CERT-2024-1005", "POL-2025-55291", "Metro Freight Co.", "TXDOT", "125 E 11th St, Austin, TX", "ACORD 25", DateTime.Today.AddDays(-16), DateTime.Today.AddDays(240), "Commercial Auto", "Maria Santos", "Issued", true, true, "Auto liability proof for state transportation contract."),
-            new("CERT-2024-1006", "POL-2025-33410", "PineCrest Builders", "Harris County", "1001 Preston St, Houston, TX", "Custom", DateTime.Today.AddDays(-22), DateTime.Today.AddDays(11), "General Liability", "James Patel", "Issued", true, false, "Custom certificate package for public works bid submission."),
-            new("CERT-2024-1007", "POL-2025-62991", "Nguyen, Minh T.", "Amazon.com LLC", "410 Terry Ave N, Seattle, WA", "ACORD 27", DateTime.Today.AddDays(-60), DateTime.Today.AddDays(320), "Commercial Property", "Chen Li", "Revoked", false, false, "Revoked after holder relationship ended."),
-            new("CERT-2024-1008", "POL-2025-77120", "Bridgewater Hotels", "State Farm (as AI)", "1 State Farm Plaza, Bloomington, IL", "ACORD 25", DateTime.Today.AddDays(-4), DateTime.Today.AddDays(365), "Umbrella", "Aisha Williams", "Pending", false, false, "Draft pending umbrella wording approval.")
-        ]);
+        _loading = true;
+        var selectedId = preserveSelection ? _selected?.CertificateId : null;
+        try
+        {
+            var result = await Api.SearchPolicyCertificatesAsync(_tenantId, pageSize: 500);
+            _rows.Clear();
+            _rows.AddRange((result?.Items ?? []).Select(CertRow.FromDto));
+            if (!string.IsNullOrWhiteSpace(Certificate))
+            {
+                await SelectQueryCertificateAsync();
+            }
+            else if (selectedId is not null)
+            {
+                _selected = _rows.FirstOrDefault(r => r.CertificateId == selectedId.Value);
+                SelectFallback();
+            }
+            else
+            {
+                SelectFallback();
+            }
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Title = "Certificate load failed", Content = $"Certificate load failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    private void SelectQueryCertificate()
+    private async Task SelectQueryCertificateAsync()
     {
         if (!string.IsNullOrWhiteSpace(Certificate))
         {
-            _selected = _rows.FirstOrDefault(r => string.Equals(r.CertNo, Certificate.Trim(), StringComparison.OrdinalIgnoreCase)) ?? _rows.FirstOrDefault();
+            _selected = _rows.FirstOrDefault(r => string.Equals(r.CertNo, Certificate.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (_selected is null)
+            {
+                var item = await Api.GetPolicyCertificateByNumberAsync(_tenantId, Certificate.Trim());
+                if (item is not null)
+                {
+                    _selected = CertRow.FromDto(item);
+                    if (!_rows.Any(r => r.CertificateId == _selected.CertificateId))
+                    {
+                        _rows.Insert(0, _selected);
+                    }
+                }
+            }
+
+            if (_selected is null)
+            {
+                await _toast.ShowAsync(new ToastModel { Title = "Certificate not found", Content = $"No database certificate was found for {Certificate.Trim()}.", CssClass = "e-toast-warning" });
+            }
+
             if (_selected is not null)
             {
                 _searchTerm = _selected.CertNo;
@@ -326,69 +439,243 @@
 
     private void OpenSelectedPolicy()
     {
-        if (_selected is not null)
+        if (_selected?.PolicyId is { } policyId && policyId != Guid.Empty)
         {
-            Nav.NavigateTo($"/policies?searchTerm={Uri.EscapeDataString(_selected.PolicyNo)}");
+            Nav.NavigateTo($"/policies/{policyId}");
+        }
+        else
+        {
+            _ = _toast.ShowAsync(new ToastModel { Title = "Policy link unavailable", Content = "This certificate is not linked to a specific policy record yet.", CssClass = "e-toast-warning" });
         }
     }
 
-    private void ResetFilters()
+    private async Task ResetFiltersAsync()
     {
         _activeKpi = "all";
         _filterStatus = string.Empty;
         _filterType = string.Empty;
         _searchTerm = string.Empty;
-        SelectQueryCertificate();
+        await LoadCertificatesAsync();
     }
 
     private void SelectRow(CertRow row) => _selected = row;
-    private void OpenIssue() => _showIssue = true;
-    private void CloseIssue() => _showIssue = false;
+    private void OpenIssue()
+    {
+        _editingCertificateId = null;
+        _editingPolicyId = null;
+        _issForm = new();
+        _showIssue = true;
+    }
+
+    private void OpenEdit(CertRow row)
+    {
+        _editingCertificateId = row.CertificateId;
+        _editingPolicyId = row.PolicyId;
+        _issForm = new IssueForm
+        {
+            PolicyNo = row.PolicyNo,
+            Account = row.Account,
+            CertType = row.CertType,
+            Lob = row.Lob,
+            HolderName = row.HolderName,
+            HolderAddress = row.HolderAddress,
+            AdditionalInsured = row.AdditionalInsured,
+            WaiverSubrogation = row.WaiverSubrogation,
+            IssuedDate = row.IssuedDate,
+            ExpDate = row.ExpDate,
+            Description = row.Description
+        };
+        _showIssue = true;
+    }
+
+    private void CloseIssue()
+    {
+        _showIssue = false;
+        _editingCertificateId = null;
+        _editingPolicyId = null;
+        _issForm = new();
+    }
 
     private async Task SaveDraftAsync()
     {
-        _rows.Insert(0, BuildCertRow("Pending"));
-        _selected = _rows[0];
-        _showIssue = false;
-        _issForm = new();
-        await _toast.ShowAsync(new ToastModel { Title = "Certificate draft", Content = "Certificate draft saved to the pending queue.", CssClass = "e-toast-success" });
+        await SaveCertificateAsync("Pending", "Certificate draft", "Certificate draft saved to the database.");
     }
 
     private async Task IssueCertAsync()
     {
-        _rows.Insert(0, BuildCertRow("Issued"));
-        _selected = _rows[0];
-        _showIssue = false;
-        _issForm = new();
-        await _toast.ShowAsync(new ToastModel { Title = "Certificate issued", Content = "Certificate was issued and added to the register.", CssClass = "e-toast-success" });
+        await SaveCertificateAsync("Issued", "Certificate issued", "Certificate was issued and saved to the database.");
     }
 
-    private CertRow BuildCertRow(string status) => new(
-        $"CERT-{DateTime.Today:yyyy}-{_rows.Count + 1001:D4}",
-        string.IsNullOrWhiteSpace(_issForm.PolicyNo) ? "POL-2025-SEED" : _issForm.PolicyNo,
-        "New certificate account",
-        string.IsNullOrWhiteSpace(_issForm.HolderName) ? "Pending holder" : _issForm.HolderName,
-        _issForm.HolderAddress,
-        _issForm.CertType,
-        _issForm.IssuedDate,
-        _issForm.ExpDate,
-        "General Liability",
-        "Current User",
-        status,
-        _issForm.AdditionalInsured,
-        _issForm.WaiverSubrogation,
-        string.IsNullOrWhiteSpace(_issForm.Description) ? "Certificate generated from enterprise issuance workflow." : _issForm.Description);
+    private async Task SaveCertificateAsync(string status, string toastTitle, string toastContent)
+    {
+        if (string.IsNullOrWhiteSpace(_issForm.PolicyNo) || string.IsNullOrWhiteSpace(_issForm.Account) || string.IsNullOrWhiteSpace(_issForm.HolderName) || string.IsNullOrWhiteSpace(_issForm.Lob))
+        {
+            await _toast.ShowAsync(new ToastModel { Title = "Required fields", Content = "Policy number, account, holder, and line of business are required.", CssClass = "e-toast-warning" });
+            return;
+        }
+
+        try
+        {
+            Guid id;
+            if (_editingCertificateId is { } editingId)
+            {
+                var request = new UpdatePolicyCertificateRequest(
+                    _tenantId,
+                    _editingPolicyId,
+                    _issForm.PolicyNo.Trim(),
+                    _issForm.Account.Trim(),
+                    _issForm.HolderName.Trim(),
+                    _issForm.HolderAddress.Trim(),
+                    _issForm.CertType,
+                    _issForm.IssuedDate,
+                    _issForm.ExpDate,
+                    _issForm.Lob.Trim(),
+                    "Tenant Admin",
+                    status,
+                    _issForm.AdditionalInsured,
+                    _issForm.WaiverSubrogation,
+                    string.IsNullOrWhiteSpace(_issForm.Description) ? "Certificate generated from enterprise issuance workflow." : _issForm.Description.Trim(),
+                    _userId);
+                await Api.UpdatePolicyCertificateAsync(editingId, request);
+                id = editingId;
+            }
+            else
+            {
+                var request = new CreatePolicyCertificateRequest(
+                    _tenantId,
+                    null,
+                    _issForm.PolicyNo.Trim(),
+                    _issForm.Account.Trim(),
+                    _issForm.HolderName.Trim(),
+                    _issForm.HolderAddress.Trim(),
+                    _issForm.CertType,
+                    _issForm.IssuedDate,
+                    _issForm.ExpDate,
+                    _issForm.Lob.Trim(),
+                    "Tenant Admin",
+                    status,
+                    _issForm.AdditionalInsured,
+                    _issForm.WaiverSubrogation,
+                    string.IsNullOrWhiteSpace(_issForm.Description) ? "Certificate generated from enterprise issuance workflow." : _issForm.Description.Trim(),
+                    _userId);
+                id = await Api.CreatePolicyCertificateAsync(request);
+            }
+
+            _showIssue = false;
+            _editingCertificateId = null;
+            _editingPolicyId = null;
+            _issForm = new();
+            await LoadCertificatesAsync();
+            _selected = _rows.FirstOrDefault(r => r.CertificateId == id) ?? _rows.FirstOrDefault();
+            await _toast.ShowAsync(new ToastModel { Title = toastTitle, Content = toastContent, CssClass = "e-toast-success" });
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Title = "Save failed", Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+    }
 
     private async Task DownloadAsync(CertRow row) => await _toast.ShowAsync(new ToastModel { Title = "PDF ready", Content = $"{row.CertNo} PDF download prepared.", CssClass = "e-toast-success" });
-    private async Task EmailAsync(CertRow row) => await _toast.ShowAsync(new ToastModel { Title = "Email queued", Content = $"{row.CertNo} queued for {row.HolderName}.", CssClass = "e-toast-success" });
+    private async Task EmailAsync(CertRow row)
+    {
+        try
+        {
+            await Api.MarkPolicyCertificateDeliveredAsync(row.CertificateId, new PolicyCertificateActionRequest(_tenantId, _userId));
+            await LoadCertificatesAsync(preserveSelection: true);
+            await _toast.ShowAsync(new ToastModel { Title = "Email queued", Content = $"{row.CertNo} queued for {row.HolderName}.", CssClass = "e-toast-success" });
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Title = "Email failed", Content = $"Email failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+    }
     private async Task ExportVisibleAsync() => await _toast.ShowAsync(new ToastModel { Title = "Export", Content = $"Exported {Filtered.Count} visible certificate row(s).", CssClass = "e-toast-success" });
 
-    private async Task RevokeAsync(CertRow row)
+    private void ConfirmRevoke(CertRow row)
     {
-        row.Status = "Revoked";
-        _selected = row;
-        await _toast.ShowAsync(new ToastModel { Title = "Certificate revoked", Content = $"{row.CertNo} was marked revoked.", CssClass = "e-toast-warning" });
-        SelectFallback();
+        _revokeTarget = row;
+        _revokeReason = string.Empty;
+        _showRevokeConfirm = true;
+    }
+
+    private void CancelRevoke()
+    {
+        _showRevokeConfirm = false;
+        _revokeTarget = null;
+        _revokeReason = null;
+    }
+
+    private async Task ExecuteRevokeAsync()
+    {
+        if (_revokeTarget is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await Api.RevokePolicyCertificateAsync(_revokeTarget.CertificateId, new RevokePolicyCertificateRequest(_tenantId, _userId, _revokeReason));
+            _showRevokeConfirm = false;
+            await LoadCertificatesAsync(preserveSelection: true);
+            await _toast.ShowAsync(new ToastModel { Title = "Certificate revoked", Content = $"{_revokeTarget.CertNo} was revoked in the database.", CssClass = "e-toast-warning" });
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Title = "Revoke failed", Content = $"Revoke failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _revokeTarget = null;
+            _revokeReason = null;
+        }
+    }
+
+    private async Task RestoreAsync(CertRow row)
+    {
+        try
+        {
+            await Api.RestorePolicyCertificateAsync(row.CertificateId, new RestorePolicyCertificateRequest(_tenantId, _userId));
+            await LoadCertificatesAsync(preserveSelection: true);
+            await _toast.ShowAsync(new ToastModel { Title = "Certificate restored", Content = $"{row.CertNo} was restored.", CssClass = "e-toast-success" });
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Title = "Restore failed", Content = $"Restore failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+    }
+
+    private void ConfirmDelete(CertRow row)
+    {
+        _deleteTarget = row;
+        _showDeleteConfirm = true;
+    }
+
+    private void CancelDelete()
+    {
+        _showDeleteConfirm = false;
+        _deleteTarget = null;
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var certNo = _deleteTarget.CertNo;
+            await Api.DeletePolicyCertificateAsync(_deleteTarget.CertificateId, _tenantId, _userId);
+            _showDeleteConfirm = false;
+            _deleteTarget = null;
+            await LoadCertificatesAsync();
+            await _toast.ShowAsync(new ToastModel { Title = "Certificate deleted", Content = $"{certNo} was removed from the register.", CssClass = "e-toast-success" });
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Title = "Delete failed", Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
     }
 
     private static bool IsRevoked(CertRow row) => row.Status == "Revoked";
@@ -401,7 +688,9 @@
     private sealed class IssueForm
     {
         public string PolicyNo { get; set; } = "POL-2024-44821";
+        public string Account { get; set; } = string.Empty;
         public string CertType { get; set; } = "ACORD 25";
+        public string Lob { get; set; } = "General Liability";
         public string HolderName { get; set; } = string.Empty;
         public string HolderAddress { get; set; } = string.Empty;
         public bool AdditionalInsured { get; set; }
@@ -413,8 +702,10 @@
 
     private sealed class CertRow
     {
-        public CertRow(string certNo, string policyNo, string account, string holderName, string holderAddress, string certType, DateTime issuedDate, DateTime expDate, string lob, string issuedBy, string status, bool additionalInsured, bool waiverSubrogation, string description)
+        public CertRow(Guid certificateId, Guid? policyId, string certNo, string policyNo, string account, string holderName, string holderAddress, string certType, DateTime issuedDate, DateTime expDate, string lob, string issuedBy, string status, bool additionalInsured, bool waiverSubrogation, string description)
         {
+            CertificateId = certificateId;
+            PolicyId = policyId;
             CertNo = certNo;
             PolicyNo = policyNo;
             Account = account;
@@ -431,6 +722,26 @@
             Description = description;
         }
 
+        public static CertRow FromDto(PolicyCertificateDto dto) => new(
+            dto.CertificateId,
+            dto.PolicyId,
+            dto.CertificateNumber,
+            dto.PolicyNumber,
+            dto.AccountName,
+            dto.HolderName,
+            dto.HolderAddress,
+            dto.CertificateType,
+            dto.IssuedDate,
+            dto.ExpirationDate,
+            dto.LineOfBusiness,
+            dto.IssuedBy,
+            dto.Status,
+            dto.AdditionalInsured,
+            dto.WaiverSubrogation,
+            dto.Description);
+
+        public Guid CertificateId { get; set; }
+        public Guid? PolicyId { get; set; }
         public string CertNo { get; set; }
         public string PolicyNo { get; set; }
         public string Account { get; set; }

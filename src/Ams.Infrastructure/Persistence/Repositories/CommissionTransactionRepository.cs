@@ -72,6 +72,76 @@ ORDER BY TransactionDate DESC, PolicyNumber;";
         return rows.AsList();
     }
 
+    public async Task<CommissionLedgerRowDto?> GetLedgerByIdAsync(Guid tenantId, Guid commissionId, CancellationToken cancellationToken = default)
+    {
+        await EnsureSchemaAndSeedAsync(tenantId, cancellationToken);
+
+        const string sql = @"
+SELECT CommissionId,
+       TenantId,
+       PolicyNumber,
+       Period,
+       BusinessType,
+       Producer,
+       AccountName,
+       LineOfBusiness,
+       Carrier,
+       GrossAmount,
+       CommissionPct,
+       AgencyAmount,
+       ProducerAmount,
+       Status,
+       StatementNumber,
+       PayoutBatch,
+       TransactionDate,
+       PaidDate
+FROM Commission.CommissionLedger
+WHERE TenantId = @TenantId
+  AND CommissionId = @CommissionId
+  AND IsDeleted = 0;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await cn.QuerySingleOrDefaultAsync<CommissionLedgerRowDto>(new CommandDefinition(sql, new { TenantId = tenantId, CommissionId = commissionId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<Guid> CreateLedgerAsync(CreateCommissionLedgerRequest request, CancellationToken cancellationToken = default)
+    {
+        await EnsureSchemaAndSeedAsync(request.TenantId, cancellationToken);
+
+        var id = Guid.NewGuid();
+        var agencyAmount = request.AgencyAmount != 0m ? request.AgencyAmount : Math.Round(request.GrossAmount * request.CommissionPct / 100m, 2);
+        const string sql = @"
+INSERT INTO Commission.CommissionLedger
+    (CommissionId, TenantId, PolicyNumber, Period, BusinessType, Producer, AccountName, LineOfBusiness, Carrier, GrossAmount, CommissionPct, AgencyAmount, ProducerAmount, Status, StatementNumber, PayoutBatch, TransactionDate, PaidDate, CreatedDateUtc, IsDeleted)
+VALUES
+    (@CommissionId, @TenantId, @PolicyNumber, @Period, @BusinessType, @Producer, @AccountName, @LineOfBusiness, @Carrier, @GrossAmount, @CommissionPct, @AgencyAmount, @ProducerAmount, @Status, @StatementNumber, @PayoutBatch, @TransactionDate, @PaidDate, SYSUTCDATETIME(), 0);";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            CommissionId = id,
+            request.TenantId,
+            PolicyNumber = request.PolicyNumber.Trim(),
+            Period = request.Period.Trim(),
+            BusinessType = request.BusinessType.Trim(),
+            Producer = request.Producer.Trim(),
+            AccountName = request.AccountName.Trim(),
+            LineOfBusiness = request.LineOfBusiness.Trim(),
+            Carrier = request.Carrier.Trim(),
+            request.GrossAmount,
+            request.CommissionPct,
+            AgencyAmount = agencyAmount,
+            request.ProducerAmount,
+            Status = request.Status.Trim(),
+            StatementNumber = request.StatementNumber.Trim(),
+            PayoutBatch = request.PayoutBatch.Trim(),
+            request.TransactionDate,
+            request.PaidDate,
+        }, cancellationToken: cancellationToken));
+
+        return id;
+    }
+
     public async Task<Guid> CreateAsync(CreateCommissionTransactionRequest request, CancellationToken cancellationToken = default)
     {
         await EnsureSchemaAndSeedAsync(request.TenantId, cancellationToken);
@@ -158,6 +228,38 @@ BEGIN
     IF COL_LENGTH(N'Commission.CommissionTransaction', N'IsDeleted') IS NULL ALTER TABLE Commission.CommissionTransaction ADD IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionTx_IsDeleted DEFAULT 0;
 END;
 
+IF OBJECT_ID(N'Commission.CommissionLedger', N'U') IS NULL
+BEGIN
+    CREATE TABLE Commission.CommissionLedger (CommissionId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY, TenantId UNIQUEIDENTIFIER NOT NULL, PolicyNumber NVARCHAR(80) NOT NULL, Period NVARCHAR(50) NOT NULL, BusinessType NVARCHAR(100) NOT NULL, Producer NVARCHAR(200) NOT NULL, AccountName NVARCHAR(200) NOT NULL, LineOfBusiness NVARCHAR(100) NOT NULL, Carrier NVARCHAR(200) NOT NULL, GrossAmount DECIMAL(18,2) NOT NULL DEFAULT 0, CommissionPct DECIMAL(9,4) NOT NULL DEFAULT 0, AgencyAmount DECIMAL(18,2) NOT NULL DEFAULT 0, ProducerAmount DECIMAL(18,2) NOT NULL DEFAULT 0, Status NVARCHAR(50) NOT NULL DEFAULT N'Pending', StatementNumber NVARCHAR(80) NOT NULL DEFAULT N'', PayoutBatch NVARCHAR(80) NOT NULL DEFAULT N'', TransactionDate DATE NOT NULL DEFAULT CONVERT(date, SYSUTCDATETIME()), PaidDate DATE NULL, CreatedDateUtc DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(), ModifiedDateUtc DATETIME2 NULL, IsDeleted BIT NOT NULL DEFAULT 0);
+END
+ELSE
+BEGIN
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'CommissionId') IS NULL ALTER TABLE Commission.CommissionLedger ADD CommissionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_CommissionLedger_Id DEFAULT NEWID();
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'TenantId') IS NULL ALTER TABLE Commission.CommissionLedger ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_CommissionLedger_Tenant DEFAULT '00000000-0000-0000-0000-000000000000';
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'PolicyNumber') IS NULL ALTER TABLE Commission.CommissionLedger ADD PolicyNumber NVARCHAR(80) NOT NULL CONSTRAINT DF_CommissionLedger_Policy DEFAULT N'';
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'Period') IS NULL ALTER TABLE Commission.CommissionLedger ADD Period NVARCHAR(50) NOT NULL CONSTRAINT DF_CommissionLedger_Period DEFAULT N'';
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'BusinessType') IS NULL ALTER TABLE Commission.CommissionLedger ADD BusinessType NVARCHAR(100) NOT NULL CONSTRAINT DF_CommissionLedger_BusinessType DEFAULT N'Policy';
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'Producer') IS NULL ALTER TABLE Commission.CommissionLedger ADD Producer NVARCHAR(200) NOT NULL CONSTRAINT DF_CommissionLedger_Producer DEFAULT N'';
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'AccountName') IS NULL ALTER TABLE Commission.CommissionLedger ADD AccountName NVARCHAR(200) NOT NULL CONSTRAINT DF_CommissionLedger_Account DEFAULT N'';
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'LineOfBusiness') IS NULL ALTER TABLE Commission.CommissionLedger ADD LineOfBusiness NVARCHAR(100) NOT NULL CONSTRAINT DF_CommissionLedger_Lob DEFAULT N'';
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'Carrier') IS NULL ALTER TABLE Commission.CommissionLedger ADD Carrier NVARCHAR(200) NOT NULL CONSTRAINT DF_CommissionLedger_Carrier DEFAULT N'';
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'GrossAmount') IS NULL ALTER TABLE Commission.CommissionLedger ADD GrossAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CommissionLedger_Gross DEFAULT 0;
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'CommissionPct') IS NULL ALTER TABLE Commission.CommissionLedger ADD CommissionPct DECIMAL(9,4) NOT NULL CONSTRAINT DF_CommissionLedger_Pct DEFAULT 0;
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'AgencyAmount') IS NULL ALTER TABLE Commission.CommissionLedger ADD AgencyAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CommissionLedger_Agency DEFAULT 0;
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'ProducerAmount') IS NULL ALTER TABLE Commission.CommissionLedger ADD ProducerAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CommissionLedger_ProducerAmount DEFAULT 0;
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'Status') IS NULL ALTER TABLE Commission.CommissionLedger ADD Status NVARCHAR(50) NOT NULL CONSTRAINT DF_CommissionLedger_Status DEFAULT N'Pending';
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'StatementNumber') IS NULL ALTER TABLE Commission.CommissionLedger ADD StatementNumber NVARCHAR(80) NOT NULL CONSTRAINT DF_CommissionLedger_Statement DEFAULT N'';
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'PayoutBatch') IS NULL ALTER TABLE Commission.CommissionLedger ADD PayoutBatch NVARCHAR(80) NOT NULL CONSTRAINT DF_CommissionLedger_Payout DEFAULT N'';
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'TransactionDate') IS NULL ALTER TABLE Commission.CommissionLedger ADD TransactionDate DATE NOT NULL CONSTRAINT DF_CommissionLedger_TxDate DEFAULT CONVERT(date, SYSUTCDATETIME());
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'PaidDate') IS NULL ALTER TABLE Commission.CommissionLedger ADD PaidDate DATE NULL;
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'CreatedDateUtc') IS NULL ALTER TABLE Commission.CommissionLedger ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionLedger_Created DEFAULT SYSUTCDATETIME();
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'ModifiedDateUtc') IS NULL ALTER TABLE Commission.CommissionLedger ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Commission.CommissionLedger', N'IsDeleted') IS NULL ALTER TABLE Commission.CommissionLedger ADD IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionLedger_IsDeleted DEFAULT 0;
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Commission.CommissionLedger') AND name = N'IX_CommissionLedger_Tenant_Search_Runtime')
+    CREATE INDEX IX_CommissionLedger_Tenant_Search_Runtime ON Commission.CommissionLedger(TenantId, IsDeleted, TransactionDate DESC) INCLUDE (PolicyNumber, Producer, AccountName, Carrier, Status, StatementNumber, PayoutBatch);
+
 IF @TenantId IS NOT NULL AND @TenantId <> '00000000-0000-0000-0000-000000000000'
 BEGIN
     EXEC sp_executesql N'
@@ -174,6 +276,78 @@ BEGIN
             (NEWID(), @SeedTenantId, @PayeeId, @Plan, N''Renewal POL-2024-09912'', NEWID(), DATEADD(day, -5, CONVERT(date, SYSUTCDATETIME())), 28000, 8, 2240, N''Earned'', SYSUTCDATETIME(), 0);
         END
     END', N'@SeedTenantId UNIQUEIDENTIFIER', @SeedTenantId = @TenantId;
+
+    IF OBJECT_ID(N'Policy.PolicyCoverageDetail', N'U') IS NOT NULL
+       AND OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL
+    BEGIN
+        INSERT INTO Commission.CommissionLedger
+        (CommissionId, TenantId, PolicyNumber, Period, BusinessType, Producer, AccountName, LineOfBusiness, Carrier, GrossAmount, CommissionPct, AgencyAmount, ProducerAmount, Status, StatementNumber, PayoutBatch, TransactionDate, PaidDate, CreatedDateUtc, IsDeleted)
+        SELECT NEWID(),
+               bp.TenantId,
+               bp.PolicyNumber,
+               FORMAT(cd.EffectiveDate, N'MMM yyyy'),
+               COALESCE(NULLIF(cd.CoverageCategoryCode, N''), NULLIF(cd.LineOfBusinessCode, N''), N'Coverage'),
+               COALESCE(NULLIF(u.FullName, N''), NULLIF(u.DisplayName, N''), NULLIF(u.UserName, N''), N'Unassigned Producer'),
+               COALESCE(NULLIF(a.AccountName, N''), bp.PolicyNumber),
+               COALESCE(NULLIF(cd.LineOfBusinessCode, N''), NULLIF(s.LineOfBusiness, N''), N'General Liability'),
+               COALESCE(NULLIF(cd.CarrierName, N''), NULLIF(c.CarrierName, N''), N'Bound Carrier'),
+               cd.Premium,
+               COALESCE(NULLIF(cd.Rate, 0), CASE WHEN COALESCE(NULLIF(cd.LineOfBusinessCode, N''), NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Cyber%' THEN 14 WHEN COALESCE(NULLIF(cd.LineOfBusinessCode, N''), NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Professional%' THEN 13 WHEN COALESCE(NULLIF(cd.LineOfBusinessCode, N''), NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Workers%' THEN 12 WHEN COALESCE(NULLIF(cd.LineOfBusinessCode, N''), NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Auto%' THEN 10 ELSE 11 END),
+               ROUND(cd.Premium * COALESCE(NULLIF(cd.Rate, 0), CASE WHEN COALESCE(NULLIF(cd.LineOfBusinessCode, N''), NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Cyber%' THEN 14 WHEN COALESCE(NULLIF(cd.LineOfBusinessCode, N''), NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Professional%' THEN 13 WHEN COALESCE(NULLIF(cd.LineOfBusinessCode, N''), NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Workers%' THEN 12 WHEN COALESCE(NULLIF(cd.LineOfBusinessCode, N''), NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Auto%' THEN 10 ELSE 11 END) / 100.0, 2),
+               ROUND(cd.Premium * COALESCE(NULLIF(cd.Rate, 0), CASE WHEN COALESCE(NULLIF(cd.LineOfBusinessCode, N''), NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Cyber%' THEN 14 WHEN COALESCE(NULLIF(cd.LineOfBusinessCode, N''), NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Professional%' THEN 13 WHEN COALESCE(NULLIF(cd.LineOfBusinessCode, N''), NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Workers%' THEN 12 WHEN COALESCE(NULLIF(cd.LineOfBusinessCode, N''), NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Auto%' THEN 10 ELSE 11 END) / 100.0 * 0.6, 2),
+               COALESCE(NULLIF(cd.StatusCode, N''), N'Pending'),
+               CONCAT(N'STM-', FORMAT(cd.EffectiveDate, N'yyyy-MM'), N'-', LEFT(REPLACE(COALESCE(NULLIF(u.UserName, N''), NULLIF(u.FullName, N''), N'PROD'), N' ', N''), 12)),
+               CONCAT(N'PAY-', FORMAT(cd.EffectiveDate, N'yyyy-MM')),
+               CONVERT(date, cd.EffectiveDate),
+               NULL,
+               SYSUTCDATETIME(),
+               0
+        FROM Policy.PolicyCoverageDetail cd
+        JOIN Submissions.BoundPolicy bp ON bp.TenantId = cd.TenantId AND bp.PolicyId = cd.PolicyId AND ISNULL(bp.IsDeleted, 0) = 0
+        LEFT JOIN Submissions.Submission s ON s.SubmissionId = bp.SubmissionId AND ISNULL(s.IsDeleted, 0) = 0
+        LEFT JOIN Client.Account a ON a.AccountId = bp.AccountId AND ISNULL(a.IsDeleted, 0) = 0
+        LEFT JOIN Core.Carrier c ON c.CarrierId = bp.CarrierId AND ISNULL(c.IsDeleted, 0) = 0
+        LEFT JOIN IAM.[User] u ON u.UserId = s.AssignedToUserId AND ISNULL(u.IsDeleted, 0) = 0
+        WHERE cd.TenantId = @TenantId
+          AND ISNULL(cd.IsDeleted, 0) = 0
+          AND cd.Premium <> 0
+          AND NOT EXISTS (SELECT 1 FROM Commission.CommissionLedger l WHERE l.TenantId = cd.TenantId AND l.PolicyNumber = bp.PolicyNumber AND l.BusinessType = COALESCE(NULLIF(cd.CoverageCategoryCode, N''), NULLIF(cd.LineOfBusinessCode, N''), N'Coverage') AND l.Period = FORMAT(cd.EffectiveDate, N'MMM yyyy') AND ISNULL(l.IsDeleted, 0) = 0);
+    END;
+
+    IF OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL
+    BEGIN
+        INSERT INTO Commission.CommissionLedger
+        (CommissionId, TenantId, PolicyNumber, Period, BusinessType, Producer, AccountName, LineOfBusiness, Carrier, GrossAmount, CommissionPct, AgencyAmount, ProducerAmount, Status, StatementNumber, PayoutBatch, TransactionDate, PaidDate, CreatedDateUtc, IsDeleted)
+        SELECT NEWID(),
+               bp.TenantId,
+               bp.PolicyNumber,
+               FORMAT(COALESCE(bp.BoundDateUtc, bp.EffectiveDate, SYSUTCDATETIME()), N'MMM yyyy'),
+               CASE WHEN bp.BoundDateUtc IS NOT NULL AND bp.BoundDateUtc >= DATEADD(day, -120, SYSUTCDATETIME()) THEN N'New Business' ELSE N'Renewal' END,
+               COALESCE(NULLIF(u.FullName, N''), NULLIF(u.DisplayName, N''), NULLIF(u.UserName, N''), N'Unassigned Producer'),
+               COALESCE(NULLIF(a.AccountName, N''), bp.PolicyNumber),
+               COALESCE(NULLIF(s.LineOfBusiness, N''), N'General Liability'),
+               COALESCE(NULLIF(c.CarrierName, N''), N'Bound Carrier'),
+               bp.AnnualPremium,
+               CASE WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Cyber%' THEN 14 WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Professional%' THEN 13 WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Workers%' THEN 12 WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Auto%' THEN 10 ELSE 11 END,
+               ROUND(bp.AnnualPremium * (CASE WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Cyber%' THEN 14 WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Professional%' THEN 13 WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Workers%' THEN 12 WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Auto%' THEN 10 ELSE 11 END) / 100.0, 2),
+               ROUND(bp.AnnualPremium * (CASE WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Cyber%' THEN 14 WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Professional%' THEN 13 WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Workers%' THEN 12 WHEN COALESCE(NULLIF(s.LineOfBusiness, N''), N'') LIKE N'%Auto%' THEN 10 ELSE 11 END) / 100.0 * 0.6, 2),
+               CASE WHEN bp.Status IN (N'Bound', N'Active') THEN N'Approved' ELSE bp.Status END,
+               CONCAT(N'STM-', FORMAT(COALESCE(bp.BoundDateUtc, bp.EffectiveDate, SYSUTCDATETIME()), N'yyyy-MM'), N'-', LEFT(REPLACE(COALESCE(NULLIF(u.UserName, N''), NULLIF(u.FullName, N''), N'PROD'), N' ', N''), 12)),
+               CONCAT(N'PAY-', FORMAT(COALESCE(bp.BoundDateUtc, bp.EffectiveDate, SYSUTCDATETIME()), N'yyyy-MM')),
+               CONVERT(date, COALESCE(bp.BoundDateUtc, bp.EffectiveDate, SYSUTCDATETIME())),
+               NULL,
+               SYSUTCDATETIME(),
+               0
+        FROM Submissions.BoundPolicy bp
+        LEFT JOIN Submissions.Submission s ON s.SubmissionId = bp.SubmissionId AND ISNULL(s.IsDeleted, 0) = 0
+        LEFT JOIN Client.Account a ON a.AccountId = bp.AccountId AND ISNULL(a.IsDeleted, 0) = 0
+        LEFT JOIN Core.Carrier c ON c.CarrierId = bp.CarrierId AND ISNULL(c.IsDeleted, 0) = 0
+        LEFT JOIN IAM.[User] u ON u.UserId = s.AssignedToUserId AND ISNULL(u.IsDeleted, 0) = 0
+        WHERE bp.TenantId = @TenantId
+          AND ISNULL(bp.IsDeleted, 0) = 0
+          AND bp.AnnualPremium <> 0
+          AND NOT EXISTS (SELECT 1 FROM Commission.CommissionLedger l WHERE l.TenantId = bp.TenantId AND l.PolicyNumber = bp.PolicyNumber AND ISNULL(l.IsDeleted, 0) = 0);
+    END;
 END;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);

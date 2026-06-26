@@ -4,6 +4,7 @@
 - **Number one priority for all pages:** build and verify in `Table/API/UI` order. Confirm the database table/schema first, then align API/backend contracts and persistence, then implement or update the UI.
 - Use the naming convention `ApiClients.CrmConfiguration*.cs` for CRM Configuration ApiClient sealed partial class files.
 - Use existing `enterprise.css` styles for UI; do not add workflow functionality unless explicitly requested. For UI fixes in this codebase, prefer native Blazor markup plus scoped Razor CSS so CSS isolation applies correctly. When removing or altering stylesheet rules or other UI dependencies, scope those removals/changes to the specific page requested; do not modify or remove global styles or shared UI dependencies unless the user explicitly requests a global change.
+- Do not use Syncfusion components or Syncfusion CSS in this repository; use native Blazor components and the existing enterprise CSS patterns instead.
 - Scope stylesheet or UI dependency removals to the specific page requested unless the user explicitly asks for a global change.
 - All pages must use the full available content width by default. Avoid narrow fixed-width page shells, centered max-width containers, or layouts that leave unused horizontal space; align page margins and responsive behavior with the enterprise full-width Submission and Submission Detail patterns unless the user explicitly requests a constrained layout.
 - Before creating DTO, check DB first if already exists; if yes, make DB the source of truth. If not, create a new DTO and add it to the DB. Always add the base fields to the DTO, and if any new fields are added, make sure to add them to the DB as well.
@@ -20,6 +21,7 @@
 - **Base fields for new tables**: All new tables added to the database must include all base fields: `TenantId`, `CreatedDateUtc`, `CreatedByUserId`, `ModifiedDateUtc`, `ModifiedByUserId`, `IsDeleted`.
 - For this AMS Blazor codebase, remove hardcoded mock/demo UI data and load records from database seed data through API-backed services wherever seeded data exists.
 - For fields with multiple predefined values, use dropdown lists rather than textboxes in Blazor forms.
+- For certificate View Policy navigation, treat `/policies/{guid}` as a route format and use the selected certificate's dynamic PolicyId rather than hardcoding a specific policy GUID.
 
 ## CRMConfiguration Guidelines
 - CRM Configuration pages are Blazor pages under `TenantConfig/CrmConfig` and should follow the established CRM Configuration page pattern used by Lead Sources, Lead Statuses, Opportunity Stages, Duplicate Rules, Assignment Rules, and CRM Custom Fields. Preserve existing functionality and add or polish features without removing them, following the `/crm/opportunities` layout pattern.

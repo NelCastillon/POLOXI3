@@ -64,7 +64,7 @@
                             <label>Carrier <span class="text-danger">*</span></label>
                             <InputSelect class="form-select" @bind-Value="_policyForm.Carrier">
                                 <option value="">Select carrier</option>
-                                @foreach (var carrier in Carriers)
+                                @foreach (var carrier in CarrierOptions)
                                 {
                                     <option value="@carrier">@carrier</option>
                                 }
@@ -148,7 +148,7 @@
                         <div class="um-field">
                             <label>Branch</label>
                             <InputSelect class="form-select" @bind-Value="_policyForm.Branch">
-                                @foreach (var branch in Branches)
+                                @foreach (var branch in BranchOptions)
                                 {
                                     <option value="@branch">@branch</option>
                                 }
@@ -453,7 +453,7 @@
                     <tbody>
                         @foreach (var row in PagedRows)
                         {
-                            <tr class="pr-table-row @(_selected.Id == row.Id ? "pr-row-selected" : null)" @onclick="() => SelectPolicy(row)">
+                            <tr class="pr-table-row @(_selected.Id == row.Id ? "pr-row-selected" : null)" @onclick="() => SelectPolicy(row)" @ondblclick="() => OpenPolicy(row)">
                                 <td>@PolicyNoLink(row)</td>
                                 <td>
                                     <div class="pr-account-cell">
@@ -536,8 +536,6 @@
 </div>
 
 @code {
-    internal static readonly Guid DemoPolicyId = Guid.Parse("11111111-1111-1111-1111-111111111111");
-
     Guid _tenantId;
     Guid _tenantAdminUserId;
     bool _loading;
@@ -575,8 +573,6 @@
 
     static readonly string[] PolicyStatuses = ["Active", "Pending", "Cancelled", "Expired", "Non-Renewed"];
     static readonly string[] LinesOfBusiness = ["Commercial Auto", "Commercial Property", "General Liability", "Workers Comp", "Professional Liability", "Umbrella", "Cyber", "Directors & Officers", "Personal Auto", "Homeowners", "Life", "Health", "Flood"];
-    static readonly string[] Carriers = ["Travelers", "Hartford", "CNA", "Liberty Mutual", "Zurich", "AIG", "Nationwide", "Cincinnati", "Chubb", "Berkshire Hathaway"];
-    static readonly string[] Branches = ["HQ", "Northeast", "Southeast", "Midwest", "West", "Southwest"];
     static readonly string[] RenewalStages = ["Not Started", "Pre-Renewal", "Marketing", "Quoted", "Bound", "Lost"];
 
     readonly TabDef[] _tabs =
@@ -630,6 +626,8 @@
     };
 
     IEnumerable<PolicyRow> FilteredRows => ApplyEnterpriseFilters(BaseTabRows);
+    IEnumerable<string> CarrierOptions => _rows.Select(r => r.Carrier).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    IEnumerable<string> BranchOptions => _rows.Select(r => r.Branch).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).DefaultIfEmpty("HQ").OrderBy(x => x);
     IEnumerable<AccountOption> FilteredAccountOptions
     {
         get
@@ -693,11 +691,8 @@
             _rows.Clear();
             _rows.AddRange((result?.Items ?? []).Select(MapRegisterPolicy));
             BuildAccountOptions(accounts?.Items ?? []);
-
-            if (_rows.Count == 0)
-                BuildStubData();
-
             BuildAccountOptionsFromRows();
+            RefreshSelectedPolicy();
 
             _page = Math.Min(_page, TotalPages);
         }
@@ -705,9 +700,6 @@
         {
             _loadError = $"Failed to load policies: {ex.Message}";
             ShowToast($"Load failed: {ex.Message}", "danger");
-            if (_rows.Count == 0)
-                BuildStubData();
-
             BuildAccountOptionsFromRows();
         }
         finally
@@ -765,44 +757,17 @@
         LastAction = string.IsNullOrWhiteSpace(p.LastAction) ? "Policy synchronized from bound policy workflow." : p.LastAction
     };
 
-    void BuildStubData()
+    void RefreshSelectedPolicy()
     {
-        var rng = new Random(42);
-        var accounts = new[] { "Sullivan Manufacturing LLC", "Lakeside Medical Group", "Apex Tech Solutions", "Green Valley Foods Inc", "Harbor Logistics Co", "Crestview Holdings", "Pinnacle Law Partners", "Sunrise Construction", "BlueRidge Energy LLC", "Cascade Retail Group" };
-        var producers = new[] { "James Miller", "Sarah Chen", "Robert Kim", "Linda Torres", "Mike Walsh" };
-        var csrs = new[] { "Amy Scott", "Dan Rivera", "Paula Ngo", "Chris Hall" };
-        var statuses = new[] { "Active", "Active", "Active", "Pending", "Cancelled", "Expired", "Non-Renewed" };
-
-        _rows.Clear();
-        for (var i = 1; i <= 36; i++)
+        if (_rows.Count == 0)
         {
-            var eff = DateTime.Today.AddDays(-rng.Next(45, 700));
-            var exp = DateTime.Today.AddDays(rng.Next(-45, 160));
-            var status = exp < DateTime.Today ? "Expired" : statuses[rng.Next(statuses.Length)];
-            _rows.Add(new PolicyRow
-            {
-                Id = Guid.Parse($"11111111-1111-1111-1111-{i:000000000000}"),
-                PolicyNumber = $"POL-2025-SEED-{i:D4}",
-                Account = accounts[rng.Next(accounts.Length)],
-                AccountType = i % 5 == 0 ? "Personal" : "Commercial",
-                AccountId = Guid.NewGuid(),
-                Carrier = Carriers[rng.Next(Carriers.Length)],
-                Lob = LinesOfBusiness[rng.Next(LinesOfBusiness.Length)],
-                Status = status,
-                EffDate = eff,
-                ExpDate = exp,
-                WrittenPremium = rng.Next(2500, 125000),
-                AnnualPremium = rng.Next(2500, 125000),
-                Producer = producers[rng.Next(producers.Length)],
-                Csr = csrs[rng.Next(csrs.Length)],
-                Branch = Branches[rng.Next(Branches.Length)],
-                Documents = rng.Next(1, 12),
-                Activities = rng.Next(1, 18),
-                Endorsements = rng.Next(0, 4),
-                RenewalStage = RenewalStages[rng.Next(RenewalStages.Length)],
-                LastAction = "Seeded fallback policy for enterprise register experience"
-            });
+            _selected = new();
+            return;
         }
+
+        _selected = _selected.Id == Guid.Empty
+            ? _rows[0]
+            : _rows.FirstOrDefault(r => r.Id == _selected.Id) ?? _rows[0];
     }
 
     IEnumerable<PolicyRow> ApplyEnterpriseFilters(IEnumerable<PolicyRow> rows)
@@ -937,8 +902,8 @@
             ExpDate = DateTime.Today.AddYears(1),
             Status = "Active",
             Lob = "General Liability",
-            Carrier = Carriers[0],
-            Branch = Branches[0],
+            Carrier = CarrierOptions.FirstOrDefault() ?? string.Empty,
+            Branch = BranchOptions.FirstOrDefault() ?? "HQ",
             RenewalStage = "Not Started",
             AccountId = firstAccount?.Id ?? Guid.Empty,
             Account = firstAccount?.Name ?? string.Empty,
@@ -990,19 +955,21 @@
         _actionBusy = true;
         try
         {
+            var request = ToUpsertRequest(_policyForm);
             if (_policyForm.Id == Guid.Empty)
             {
-                _rows.Insert(0, PolicyRow.From(_policyForm));
+                var id = await Api.CreatePolicyRegisterAsync(request);
+                _selected.Id = id;
             }
             else
             {
-                var existing = _rows.FirstOrDefault(r => r.Id == _policyForm.Id);
-                if (existing is not null)
-                    existing.Apply(_policyForm);
+                await Api.UpdatePolicyRegisterAsync(_policyForm.Id, request);
+                _selected.Id = _policyForm.Id;
             }
 
             _showForm = false;
             _page = 1;
+            await LoadAsync();
             ShowToast("Policy saved.");
         }
         catch (Exception ex)
@@ -1014,6 +981,28 @@
             _actionBusy = false;
         }
     }
+
+    UpsertPolicyRegisterRequest ToUpsertRequest(PolicyForm form) => new()
+    {
+        TenantId = _tenantId,
+        PolicyNumber = form.PolicyNumber.Trim(),
+        AccountId = form.AccountId,
+        AccountName = form.Account.Trim(),
+        AccountType = form.AccountType.Trim(),
+        CarrierName = form.Carrier.Trim(),
+        LineOfBusiness = form.Lob.Trim(),
+        Status = form.Status.Trim(),
+        EffectiveDate = form.EffDate,
+        ExpirationDate = form.ExpDate,
+        WrittenPremium = form.WrittenPremium,
+        AnnualPremium = form.AnnualPremium,
+        ProducerName = form.Producer,
+        CsrName = form.Csr,
+        Branch = form.Branch,
+        RenewalStage = form.RenewalStage,
+        Notes = form.Notes,
+        ModifiedByUserId = _tenantAdminUserId
+    };
 
     Task NotifyFormValidationAsync()
     {
@@ -1125,20 +1114,22 @@
         _actionBusy = true;
         try
         {
-            var message = _pendingAction switch
+            var result = await Api.ExecutePolicyRegisterActionAsync(_selected.Id, new PolicyRegisterActionRequest
             {
-                "Endorse" => EndorsePolicy(),
-                "Renew" => RenewPolicy(),
-                "Cancel Policy" => CancelPolicy(),
-                "Add Document" => AddPolicyDocument(),
-                "Log Activity" => LogPolicyActivity(),
-                _ => "No action executed."
-            };
+                TenantId = _tenantId,
+                Action = _pendingAction,
+                EffectiveDate = _actionForm.EffectiveDate,
+                Premium = _actionForm.Premium,
+                DocumentTitle = _actionForm.DocumentTitle,
+                Notes = _actionForm.Notes,
+                ModifiedByUserId = _tenantAdminUserId
+            });
 
             _showActionDialog = false;
             _showConfirmDialog = false;
             _page = 1;
-            ShowToast(message);
+            await LoadAsync();
+            ShowToast(result.Message);
         }
         catch (Exception ex)
         {
@@ -1148,52 +1139,6 @@
         {
             _actionBusy = false;
         }
-    }
-
-    string EndorsePolicy()
-    {
-        _selected.Endorsements++;
-        if (_actionForm.EffectiveDate is not null)
-            _selected.EffDate = _actionForm.EffectiveDate.Value;
-        if (_actionForm.Premium is > 0)
-        {
-            _selected.WrittenPremium = _actionForm.Premium.Value;
-            _selected.AnnualPremium = _actionForm.Premium.Value;
-        }
-        _selected.LastAction = $"Endorsement recorded: {_actionForm.Notes}";
-        return $"Endorsement recorded for {_selected.PolicyNumber}.";
-    }
-
-    string RenewPolicy()
-    {
-        var effective = _actionForm.EffectiveDate ?? _selected.ExpDate.Date;
-        var premium = _actionForm.Premium is > 0 ? _actionForm.Premium.Value : _selected.WrittenPremium;
-        var renewal = _selected.CloneForRenewal(effective, premium);
-        _rows.Insert(0, renewal);
-        _selected.RenewalStage = "Marketing";
-        _selected.LastAction = $"Renewal started: {renewal.PolicyNumber}";
-        return $"Renewal policy {renewal.PolicyNumber} created.";
-    }
-
-    string CancelPolicy()
-    {
-        _selected.Status = "Cancelled";
-        _selected.LastAction = string.IsNullOrWhiteSpace(_actionForm.Notes) ? "Policy cancelled from register." : $"Policy cancelled: {_actionForm.Notes}";
-        return $"Policy {_selected.PolicyNumber} cancelled.";
-    }
-
-    string AddPolicyDocument()
-    {
-        _selected.Documents++;
-        _selected.LastAction = $"Document added: {_actionForm.DocumentTitle}";
-        return $"Document added to {_selected.PolicyNumber}.";
-    }
-
-    string LogPolicyActivity()
-    {
-        _selected.Activities++;
-        _selected.LastAction = $"Activity logged: {_actionForm.Notes}";
-        return $"Activity logged for {_selected.PolicyNumber}.";
     }
 
     void ToggleActionMenu(PolicyRow row)
@@ -1315,79 +1260,6 @@
         public string LastAction { get; set; } = string.Empty;
         public string Notes { get; set; } = string.Empty;
 
-        public static PolicyRow From(PolicyForm form) => new()
-        {
-            Id = Guid.NewGuid(),
-            SubmissionId = Guid.Empty,
-            QuoteId = Guid.Empty,
-            PolicyNumber = form.PolicyNumber,
-            Account = form.Account,
-            AccountType = form.AccountType,
-            AccountId = form.AccountId,
-            Carrier = form.Carrier,
-            Lob = form.Lob,
-            Status = form.Status,
-            EffDate = form.EffDate,
-            ExpDate = form.ExpDate,
-            WrittenPremium = form.WrittenPremium,
-            AnnualPremium = form.AnnualPremium,
-            Producer = form.Producer,
-            Csr = form.Csr,
-            Branch = form.Branch,
-            Documents = 1,
-            Activities = 1,
-            RenewalStage = form.RenewalStage,
-            LastAction = "Policy created from register.",
-            Notes = form.Notes
-        };
-
-        public void Apply(PolicyForm form)
-        {
-            PolicyNumber = form.PolicyNumber;
-            Account = form.Account;
-            AccountType = form.AccountType;
-            AccountId = form.AccountId;
-            Carrier = form.Carrier;
-            Lob = form.Lob;
-            Status = form.Status;
-            EffDate = form.EffDate;
-            ExpDate = form.ExpDate;
-            WrittenPremium = form.WrittenPremium;
-            AnnualPremium = form.AnnualPremium;
-            Producer = form.Producer;
-            Csr = form.Csr;
-            Branch = form.Branch;
-            RenewalStage = form.RenewalStage;
-            Notes = form.Notes;
-            LastAction = "Policy edited from register.";
-        }
-
-        public PolicyRow CloneForRenewal(DateTime effectiveDate, decimal premium) => new()
-        {
-            Id = Guid.NewGuid(),
-            SubmissionId = SubmissionId,
-            QuoteId = QuoteId,
-            PolicyNumber = $"{PolicyNumber}-REN-{DateTime.Today:yyMMdd}",
-            Account = Account,
-            AccountType = AccountType,
-            AccountId = AccountId,
-            Carrier = Carrier,
-            Lob = Lob,
-            Status = "Pending",
-            EffDate = effectiveDate,
-            ExpDate = effectiveDate.AddYears(1),
-            WrittenPremium = premium,
-            AnnualPremium = premium,
-            Producer = Producer,
-            Csr = Csr,
-            Branch = Branch,
-            Documents = 0,
-            Activities = 1,
-            Endorsements = 0,
-            RenewalStage = "Marketing",
-            LastAction = "Renewal created from expiring policy.",
-            Notes = Notes
-        };
     }
 
     sealed class PolicyForm : IValidatableObject

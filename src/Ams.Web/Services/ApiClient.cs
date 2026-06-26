@@ -53,6 +53,7 @@ using Ams.Application.Features.Carriers;
 using Ams.Application.Features.CrmConfig;
 using Ams.Application.Features.AccountConfig;
 using Ams.Application.Features.PolicyConfig;
+using Ams.Application.Features.PolicyCertificates;
 
 using Ams.Application.Features.Lobs;
 using Ams.Application.Features.Appetite;
@@ -2230,6 +2231,16 @@ public sealed partial class ApiClient
     public Task<IReadOnlyList<CommissionLedgerRowDto>?> SearchCommissionLedgerAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<CommissionLedgerRowDto>>($"api/commissions/ledger?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
+    public Task<CommissionLedgerRowDto?> GetCommissionLedgerByIdAsync(Guid tenantId, Guid commissionId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<CommissionLedgerRowDto>($"api/commissions/ledger/{commissionId}?tenantId={tenantId}", cancellationToken);
+
+    public async Task<Guid> CreateCommissionLedgerAsync(CreateCommissionLedgerRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/commissions/ledger", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
     public async Task<Guid> CreateCommissionTransactionAsync(CreateCommissionTransactionRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync("api/commissions/transactions", request, cancellationToken);
@@ -2470,6 +2481,86 @@ public sealed partial class ApiClient
 
     public Task<PagedResult<PolicyRegisterDto>?> SearchPolicyRegisterAsync(Guid tenantId, string? searchTerm = null, string? status = null, string? lineOfBusiness = null, int pageNumber = 1, int pageSize = 250, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<PolicyRegisterDto>>($"api/submissions/policies?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&status={Uri.EscapeDataString(status ?? string.Empty)}&lineOfBusiness={Uri.EscapeDataString(lineOfBusiness ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public Task<PolicyRegisterDto?> GetPolicyRegisterByIdAsync(Guid policyId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PolicyRegisterDto>($"api/submissions/policies/{policyId}", cancellationToken);
+
+    public async Task<Guid> CreatePolicyRegisterAsync(UpsertPolicyRegisterRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/submissions/policies", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdatePolicyRegisterAsync(Guid policyId, UpsertPolicyRegisterRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/submissions/policies/{policyId}", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task<SubmissionActionResult> ExecutePolicyRegisterActionAsync(Guid policyId, PolicyRegisterActionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/policies/{policyId}/actions", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<SubmissionActionResult>(cancellationToken: cancellationToken))!;
+    }
+
+    public Task<PagedResult<PolicyCertificateDto>?> SearchPolicyCertificatesAsync(Guid tenantId, string? searchTerm = null, string? status = null, string? certificateType = null, int pageNumber = 1, int pageSize = 100, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PolicyCertificateDto>>($"api/policy-certificates?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&status={Uri.EscapeDataString(status ?? string.Empty)}&certificateType={Uri.EscapeDataString(certificateType ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public Task<PolicyCertificateDto?> GetPolicyCertificateAsync(Guid certificateId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PolicyCertificateDto>($"api/policy-certificates/{certificateId}", cancellationToken);
+
+    public async Task<PolicyCertificateDto?> GetPolicyCertificateByNumberAsync(Guid tenantId, string certificateNumber, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.GetAsync($"api/policy-certificates/by-number/{Uri.EscapeDataString(certificateNumber)}?tenantId={tenantId}", cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<PolicyCertificateDto>(cancellationToken: cancellationToken);
+    }
+
+    public async Task<Guid> CreatePolicyCertificateAsync(CreatePolicyCertificateRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/policy-certificates", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdatePolicyCertificateAsync(Guid certificateId, UpdatePolicyCertificateRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/policy-certificates/{certificateId}", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task RevokePolicyCertificateAsync(Guid certificateId, RevokePolicyCertificateRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/policy-certificates/{certificateId}/revoke", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task RestorePolicyCertificateAsync(Guid certificateId, RestorePolicyCertificateRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/policy-certificates/{certificateId}/restore", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task MarkPolicyCertificateDeliveredAsync(Guid certificateId, PolicyCertificateActionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/policy-certificates/{certificateId}/deliver", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task DeletePolicyCertificateAsync(Guid certificateId, Guid tenantId, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/policy-certificates/{certificateId}?tenantId={tenantId}&modifiedByUserId={modifiedByUserId}", cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
 
     public Task<List<SubmissionReferenceOptionDto>?> GetSubmissionReferenceOptionsAsync(Guid tenantId, string? optionGroup = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<List<SubmissionReferenceOptionDto>>($"api/submissions/reference-options?tenantId={tenantId}&optionGroup={Uri.EscapeDataString(optionGroup ?? string.Empty)}", cancellationToken);
