@@ -46,6 +46,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICommissionPlanRepository, CommissionPlanRepository>();
         services.AddScoped<IWorkflowRepository, WorkflowRepository>();
         services.AddScoped<IAuditRepository, AuditRepository>();
+        services.AddScoped<IEnterpriseAuditRepository, EnterpriseAuditRepository>();
         services.AddScoped<IAssistantRepository, AssistantRepository>();
         services.AddScoped<IClaimsRepository, ClaimsRepository>();
 
@@ -55,6 +56,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IBranchRepository, BranchRepository>();
         services.AddScoped<IAgencyBusinessHoursRepository, AgencyBusinessHoursRepository>();
         services.AddScoped<IUserRepository, UserRepository>();
+        services.AddScoped<IUserAuditTrailRepository, UserAuditTrailRepository>();
         services.AddScoped<IRoleRepository, RoleRepository>();
         services.AddScoped<IContactRepository, ContactRepository>();
         services.AddScoped<IDuplicateRepository, DuplicateRepository>();
@@ -99,6 +101,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICommissionPlanService, CommissionPlanService>();
         services.AddScoped<IWorkflowService, WorkflowService>();
         services.AddScoped<IAuditService, AuditService>();
+        services.AddScoped<IEnterpriseAuditService, EnterpriseAuditService>();
+        services.AddSingleton<EnterpriseAuditQueue>();
+        services.AddSingleton<IEnterpriseAuditQueue>(sp => sp.GetRequiredService<EnterpriseAuditQueue>());
+        services.AddHostedService(sp => sp.GetRequiredService<EnterpriseAuditQueue>());
         services.AddScoped<IAssistantService, AssistantService>();
         services.AddScoped<IClaimsService, ClaimsService>();
 
@@ -108,6 +114,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IBranchService, BranchService>();
         services.AddScoped<IAgencyBusinessHoursService, AgencyBusinessHoursService>();
         services.AddScoped<IUserService, UserService>();
+        services.AddScoped<IUserAuditTrailService, UserAuditTrailService>();
         services.AddScoped<IRoleService, RoleService>();
         services.AddScoped<IContactService, ContactService>();
         services.AddScoped<IDuplicateService, DuplicateService>();

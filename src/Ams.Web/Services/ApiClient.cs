@@ -3225,6 +3225,81 @@ public sealed partial class ApiClient
         return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
     }
 
+    public Task<PagedResult<UserAuditTrailDto>?> SearchUserAuditTrailAsync(SearchUserAuditTrailRequest request, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/user-audit-trail?tenantId={request.TenantId}&pageNumber={request.PageNumber}&pageSize={request.PageSize}";
+        if (request.UserId.HasValue) url += $"&userId={request.UserId.Value}";
+        if (!string.IsNullOrWhiteSpace(request.SearchTerm)) url += $"&searchTerm={Uri.EscapeDataString(request.SearchTerm)}";
+        if (!string.IsNullOrWhiteSpace(request.ActionCode)) url += $"&actionCode={Uri.EscapeDataString(request.ActionCode)}";
+        if (!string.IsNullOrWhiteSpace(request.CategoryCode)) url += $"&categoryCode={Uri.EscapeDataString(request.CategoryCode)}";
+        if (!string.IsNullOrWhiteSpace(request.SeverityCode)) url += $"&severityCode={Uri.EscapeDataString(request.SeverityCode)}";
+        if (!string.IsNullOrWhiteSpace(request.StatusCode)) url += $"&statusCode={Uri.EscapeDataString(request.StatusCode)}";
+        if (request.FromDateUtc.HasValue) url += $"&fromDateUtc={request.FromDateUtc.Value:O}";
+        if (request.ToDateUtc.HasValue) url += $"&toDateUtc={request.ToDateUtc.Value:O}";
+        return _httpClient.GetFromJsonAsync<PagedResult<UserAuditTrailDto>>(url, cancellationToken);
+    }
+
+    public Task<UserAuditTrailSummaryDto?> GetUserAuditTrailSummaryAsync(Guid tenantId, DateTime? fromDateUtc = null, DateTime? toDateUtc = null, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/user-audit-trail/summary?tenantId={tenantId}";
+        if (fromDateUtc.HasValue) url += $"&fromDateUtc={fromDateUtc.Value:O}";
+        if (toDateUtc.HasValue) url += $"&toDateUtc={toDateUtc.Value:O}";
+        return _httpClient.GetFromJsonAsync<UserAuditTrailSummaryDto>(url, cancellationToken);
+    }
+
+    public Task<IReadOnlyList<UserAuditActionTypeDto>?> GetUserAuditActionTypesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<UserAuditActionTypeDto>>($"api/user-audit-trail/action-types?tenantId={tenantId}", cancellationToken);
+
+    public Task<UserAuditTrailDto?> GetUserAuditTrailByIdAsync(Guid tenantId, Guid auditTrailId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<UserAuditTrailDto>($"api/user-audit-trail/{auditTrailId}?tenantId={tenantId}", cancellationToken);
+
+    public async Task<Guid> LogEnterpriseAuditEventAsync(LogEnterpriseAuditEventRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/enterprise-audit/events", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public Task<PagedResult<EnterpriseAuditEventDto>?> SearchEnterpriseAuditEventsAsync(SearchEnterpriseAuditEventsRequest request, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/enterprise-audit?tenantId={request.TenantId}&pageNumber={request.PageNumber}&pageSize={request.PageSize}";
+        if (!string.IsNullOrWhiteSpace(request.SearchTerm)) url += $"&searchTerm={Uri.EscapeDataString(request.SearchTerm)}";
+        if (request.ActorUserId.HasValue) url += $"&actorUserId={request.ActorUserId.Value}";
+        if (!string.IsNullOrWhiteSpace(request.ActorType)) url += $"&actorType={Uri.EscapeDataString(request.ActorType)}";
+        if (!string.IsNullOrWhiteSpace(request.ActionType)) url += $"&actionType={Uri.EscapeDataString(request.ActionType)}";
+        if (!string.IsNullOrWhiteSpace(request.ActionCategory)) url += $"&actionCategory={Uri.EscapeDataString(request.ActionCategory)}";
+        if (!string.IsNullOrWhiteSpace(request.ModuleName)) url += $"&moduleName={Uri.EscapeDataString(request.ModuleName)}";
+        if (!string.IsNullOrWhiteSpace(request.EntityName)) url += $"&entityName={Uri.EscapeDataString(request.EntityName)}";
+        if (request.EntityId.HasValue) url += $"&entityId={request.EntityId.Value}";
+        if (!string.IsNullOrWhiteSpace(request.Severity)) url += $"&severity={Uri.EscapeDataString(request.Severity)}";
+        if (!string.IsNullOrWhiteSpace(request.SourceSystem)) url += $"&sourceSystem={Uri.EscapeDataString(request.SourceSystem)}";
+        if (request.IsSensitiveData.HasValue) url += $"&isSensitiveData={request.IsSensitiveData.Value}";
+        if (request.IsLegalHold.HasValue) url += $"&isLegalHold={request.IsLegalHold.Value}";
+        if (request.FromUtc.HasValue) url += $"&fromUtc={request.FromUtc.Value:O}";
+        if (request.ToUtc.HasValue) url += $"&toUtc={request.ToUtc.Value:O}";
+        return _httpClient.GetFromJsonAsync<PagedResult<EnterpriseAuditEventDto>>(url, cancellationToken);
+    }
+
+    public Task<EnterpriseAuditSummaryDto?> GetEnterpriseAuditSummaryAsync(Guid tenantId, DateTime? fromUtc = null, DateTime? toUtc = null, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/enterprise-audit/summary?tenantId={tenantId}";
+        if (fromUtc.HasValue) url += $"&fromUtc={fromUtc.Value:O}";
+        if (toUtc.HasValue) url += $"&toUtc={toUtc.Value:O}";
+        return _httpClient.GetFromJsonAsync<EnterpriseAuditSummaryDto>(url, cancellationToken);
+    }
+
+    public Task<IReadOnlyList<EnterpriseAuditAlertDto>?> GetOpenEnterpriseAuditAlertsAsync(Guid tenantId, int top = 10, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<EnterpriseAuditAlertDto>>($"api/enterprise-audit/alerts/open?tenantId={tenantId}&top={top}", cancellationToken);
+
+    public Task<EnterpriseAuditOptionsDto?> GetEnterpriseAuditOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<EnterpriseAuditOptionsDto>($"api/enterprise-audit/options?tenantId={tenantId}", cancellationToken);
+
+    public Task<IReadOnlyList<EnterpriseAuditCapabilityDto>?> GetEnterpriseAuditCapabilitiesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<EnterpriseAuditCapabilityDto>>($"api/enterprise-audit/capabilities?tenantId={tenantId}", cancellationToken);
+
+    public Task<EnterpriseAuditEventDto?> GetEnterpriseAuditEventByIdAsync(Guid tenantId, Guid auditEventId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<EnterpriseAuditEventDto>($"api/enterprise-audit/{auditEventId}?tenantId={tenantId}", cancellationToken);
+
     public async Task<Guid> LogApprovalHistoryAsync(LogApprovalHistoryRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync("api/audit/approval-history/log", request, cancellationToken);

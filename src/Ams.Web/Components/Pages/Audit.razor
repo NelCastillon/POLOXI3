@@ -1,499 +1,907 @@
 @page "/audit2"
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
+@inject IJSRuntime JS
 
-<PageTitle>Audit, Compliance &amp; Record History</PageTitle>
+<PageTitle>Audit Trail Command Center - AMS</PageTitle>
 
-<AppPageHeader Title="Audit, Compliance & Record History" Icon="bi-grid" />
-
-<SfTab>
-    <TabItems>
-        @* -- 1. CRUD History ----------------------------------- *@
-        <TabItem>
-            <ChildContent>
-                <TabHeader Text="CRUD History"></TabHeader>
-            </ChildContent>
-            <ContentTemplate>
-                <div class="toolbar" style="display:flex;gap:8px;align-items:center;margin:12px 0;">
-                    <SfTextBox Placeholder="Search entities / actions..." @bind-Value="_auditSearch" Width="300px"></SfTextBox>
-                    <SfButton CssClass="e-primary" OnClick="LoadAuditAsync">Search</SfButton>
+<div class="uat-page">
+    <section class="uat-hero">
+        <div class="uat-hero__content">
+            <div class="uat-hero-left">
+                <span class="uat-hero-icon"><i class="bi bi-journal-check" aria-hidden="true"></i></span>
+                <div class="uat-hero-title">
+                    <div class="uat-hero__eyebrow">Enterprise compliance command center</div>
+                    <div class="uat-title-row">
+                        <h1>Audit Trail Command Center</h1>
+                        <div class="uat-hero__meta">
+                            <span><i class="bi bi-activity" aria-hidden="true"></i>@_summary.TotalEvents user events</span>
+                            <span><i class="bi bi-diagram-3" aria-hidden="true"></i>@_enterpriseSummary.TotalEvents enterprise events</span>
+                            <span><i class="bi bi-fire" aria-hidden="true"></i>@(_summary.HighSeverityEvents + _enterpriseSummary.HighSeverityEvents) high severity</span>
+                            <span><i class="bi bi-bell-fill" aria-hidden="true"></i>@_enterpriseSummary.OpenAlertEvents open alerts</span>
+                        </div>
+                    </div>
                 </div>
+            </div>
+            <p>Monitor user activity, authentication, role changes, field history, compliance evidence, and cross-module enterprise audit trails.</p>
+        </div>
+        <div class="uat-hero__actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+                <i class="bi bi-arrow-clockwise @(_loading ? "uat-spin" : null)" aria-hidden="true"></i> Refresh
+            </button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="ExportVisibleAsync" disabled="@(!_items.Any())">
+                <i class="bi bi-download" aria-hidden="true"></i> Export visible
+            </button>
+        </div>
+    </section>
 
-                @if (_auditItems is null)
-                {
-                    <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading?</span></div>
-                }
-                else
-                {
-                    <SfGrid DataSource="_auditItems" AllowPaging="true" AllowSorting="true" Height="460px">
-                        <GridPageSettings PageSize="15"></GridPageSettings>
-                        <GridColumns>
-                            <GridColumn Field="@nameof(AuditLogDto.EntityName)" HeaderText="Entity" Width="150"></GridColumn>
-                            <GridColumn Field="@nameof(AuditLogDto.EntityId)" HeaderText="Entity ID" Width="260"></GridColumn>
-                            <GridColumn Field="@nameof(AuditLogDto.EventTypeCode)" HeaderText="Event" Width="120"></GridColumn>
-                            <GridColumn Field="@nameof(AuditLogDto.ActionName)" HeaderText="Action" Width="130"></GridColumn>
-                            <GridColumn Field="@nameof(AuditLogDto.PerformedByUserId)" HeaderText="User" Width="260"></GridColumn>
-                            <GridColumn Field="@nameof(AuditLogDto.PerformedDateUtc)" HeaderText="Date (UTC)" Type="ColumnType.DateTime" Format="yyyy-MM-dd HH:mm:ss" Width="180"></GridColumn>
-                        </GridColumns>
-                    </SfGrid>
-                }
-            </ContentTemplate>
-        </TabItem>
+    <section class="pc-kpi-strip uat-kpi-strip" aria-label="Audit trail summary filters">
+        <button type="button" class="@($"pc-kpi-card {KpiClass("all")}")" title="Show all audit events" @onclick='() => SetKpiFilter("all")'>
+            <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-activity" aria-hidden="true"></i></span>
+            <div><div class="pc-kpi-value">@_summary.TotalEvents</div><div class="pc-kpi-label">Total Events</div></div>
+        </button>
+        <button type="button" class="@($"pc-kpi-card {KpiClass("failed")}")" title="Show failed audit events" @onclick='() => SetKpiFilter("failed")'>
+            <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></span>
+            <div><div class="pc-kpi-value">@_summary.FailedEvents</div><div class="pc-kpi-label">Failed</div></div>
+        </button>
+        <button type="button" class="@($"pc-kpi-card {KpiClass("access")}")" title="Show role and permission changes" @onclick='() => SetKpiFilter("access")'>
+            <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-key" aria-hidden="true"></i></span>
+            <div><div class="pc-kpi-value">@_summary.AccessChanges</div><div class="pc-kpi-label">Access Changes</div></div>
+        </button>
+        <button type="button" class="@($"pc-kpi-card {KpiClass("auth")}")" title="Show authentication events" @onclick='() => SetKpiFilter("auth")'>
+            <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-shield-lock" aria-hidden="true"></i></span>
+            <div><div class="pc-kpi-value">@_summary.AuthenticationEvents</div><div class="pc-kpi-label">Authentication</div></div>
+        </button>
+        <button type="button" class="@($"pc-kpi-card {KpiClass("high")}")" title="Show high severity events" @onclick='() => SetKpiFilter("high")'>
+            <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-fire" aria-hidden="true"></i></span>
+            <div><div class="pc-kpi-value">@_summary.HighSeverityEvents</div><div class="pc-kpi-label">High Severity</div></div>
+        </button>
+        <button type="button" class="pc-kpi-card" title="Enterprise timeline events" @onclick='() => SetEnterpriseCategory(null)'>
+            <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-diagram-3" aria-hidden="true"></i></span>
+            <div><div class="pc-kpi-value">@_enterpriseSummary.TotalEvents</div><div class="pc-kpi-label">Enterprise</div></div>
+        </button>
+        <button type="button" class="pc-kpi-card" title="Data change history" @onclick='() => SetEnterpriseCategory("Data Change")'>
+            <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-list-columns-reverse" aria-hidden="true"></i></span>
+            <div><div class="pc-kpi-value">@_enterpriseSummary.DataChangeEvents</div><div class="pc-kpi-label">Data Changes</div></div>
+        </button>
+        <button type="button" class="pc-kpi-card" title="Document access activity" @onclick='() => SetEnterpriseCategory("Document")'>
+            <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-file-earmark-lock" aria-hidden="true"></i></span>
+            <div><div class="pc-kpi-value">@_enterpriseSummary.DocumentEvents</div><div class="pc-kpi-label">Documents</div></div>
+        </button>
+        <button type="button" class="pc-kpi-card" title="Compliance and legal hold events" @onclick='() => SetEnterpriseCategory("Compliance")'>
+            <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-clipboard-check" aria-hidden="true"></i></span>
+            <div><div class="pc-kpi-value">@_enterpriseSummary.ComplianceEvents</div><div class="pc-kpi-label">Compliance</div></div>
+        </button>
+        <button type="button" class="pc-kpi-card" title="Open audit risk alerts" @onclick='() => SetEnterpriseSeverity("Critical")'>
+            <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-bell-fill" aria-hidden="true"></i></span>
+            <div><div class="pc-kpi-value">@_enterpriseSummary.OpenAlertEvents</div><div class="pc-kpi-label">Open Alerts</div></div>
+        </button>
+    </section>
 
-        @* -- 2. Field-Level Changes ---------------------------- *@
-        <TabItem>
-            <ChildContent>
-                <TabHeader Text="Field Changes"></TabHeader>
-            </ChildContent>
-            <ContentTemplate>
-                <div class="toolbar" style="display:flex;gap:8px;align-items:center;margin:12px 0;">
-                    <SfTextBox Placeholder="Entity name..." @bind-Value="_fieldEntityFilter" Width="200px"></SfTextBox>
-                    <SfTextBox Placeholder="Field name..." @bind-Value="_fieldNameFilter" Width="200px"></SfTextBox>
-                    <SfButton CssClass="e-primary" OnClick="LoadFieldChangesAsync">Search</SfButton>
-                </div>
+    <section class="uat-filter-panel" aria-label="Audit trail filters">
+        <div class="uat-filter-header">
+            <div>
+                <h2>Audit search</h2>
+                <p>Filter by user, actor, action, severity, status, IP address, description, and date range.</p>
+            </div>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters">
+                <i class="bi bi-x-circle" aria-hidden="true"></i> Clear
+            </button>
+        </div>
 
-                @if (_fieldChanges is null)
-                {
-                    <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading?</span></div>
-                }
-                else
-                {
-                    <SfGrid DataSource="_fieldChanges" AllowPaging="true" AllowSorting="true" Height="460px">
-                        <GridPageSettings PageSize="15"></GridPageSettings>
-                        <GridColumns>
-                            <GridColumn Field="@nameof(FieldChangeLogDto.EntityName)" HeaderText="Entity" Width="140"></GridColumn>
-                            <GridColumn Field="@nameof(FieldChangeLogDto.EntityId)" HeaderText="Entity ID" Width="250"></GridColumn>
-                            <GridColumn Field="@nameof(FieldChangeLogDto.FieldName)" HeaderText="Field" Width="140"></GridColumn>
-                            <GridColumn Field="@nameof(FieldChangeLogDto.OldValue)" HeaderText="Old Value" Width="160"></GridColumn>
-                            <GridColumn Field="@nameof(FieldChangeLogDto.NewValue)" HeaderText="New Value" Width="160"></GridColumn>
-                            <GridColumn Field="@nameof(FieldChangeLogDto.ChangedByUserId)" HeaderText="Changed By" Width="250"></GridColumn>
-                            <GridColumn Field="@nameof(FieldChangeLogDto.ChangedDateUtc)" HeaderText="Date (UTC)" Type="ColumnType.DateTime" Format="yyyy-MM-dd HH:mm:ss" Width="180"></GridColumn>
-                            <GridColumn Field="@nameof(FieldChangeLogDto.ChangeSource)" HeaderText="Source" Width="120"></GridColumn>
-                            <GridColumn Field="@nameof(FieldChangeLogDto.IpAddress)" HeaderText="IP" Width="130"></GridColumn>
-                        </GridColumns>
-                    </SfGrid>
-                }
-            </ContentTemplate>
-        </TabItem>
+        <div class="uat-filter-grid">
+            <label class="uat-field">
+                <span>Search</span>
+                <input class="form-control" placeholder="User, actor, action, IP, description..." @bind="_searchTerm" @bind:event="oninput" />
+            </label>
+            <label class="uat-field">
+                <span>Action</span>
+                <select class="form-select" @bind="_actionCode">
+                    <option value="">All actions</option>
+                    @foreach (var action in _actionTypes)
+                    {
+                        <option value="@action.ActionCode">@action.ActionName</option>
+                    }
+                </select>
+            </label>
+            <label class="uat-field">
+                <span>Category</span>
+                <select class="form-select" @bind="_categoryCode">
+                    <option value="">All categories</option>
+                    @foreach (var category in CategoryOptions)
+                    {
+                        <option value="@category">@category</option>
+                    }
+                </select>
+            </label>
+            <label class="uat-field">
+                <span>Severity</span>
+                <select class="form-select" @bind="_severityCode">
+                    <option value="">All severities</option>
+                    @foreach (var severity in SeverityOptions)
+                    {
+                        <option value="@severity">@severity</option>
+                    }
+                </select>
+            </label>
+            <label class="uat-field">
+                <span>Status</span>
+                <select class="form-select" @bind="_statusCode">
+                    <option value="">All statuses</option>
+                    @foreach (var status in StatusOptions)
+                    {
+                        <option value="@status">@status</option>
+                    }
+                </select>
+            </label>
+            <label class="uat-field">
+                <span>From</span>
+                <input class="form-control" type="date" @bind="_fromDate" />
+            </label>
+            <label class="uat-field">
+                <span>To</span>
+                <input class="form-control" type="date" @bind="_toDate" />
+            </label>
+            <div class="uat-filter-actions">
+                <button type="button" class="um-btn um-btn-primary" @onclick="ApplyFiltersAsync">
+                    <i class="bi bi-search" aria-hidden="true"></i> Search
+                </button>
+            </div>
+        </div>
+    </section>
 
-        @* -- 3. Approval History ------------------------------- *@
-        <TabItem>
-            <ChildContent>
-                <TabHeader Text="Approval History"></TabHeader>
-            </ChildContent>
-            <ContentTemplate>
-                <div class="toolbar" style="display:flex;gap:8px;align-items:center;margin:12px 0;">
-                    <SfTextBox Placeholder="Action code filter..." @bind-Value="_approvalActionFilter" Width="220px"></SfTextBox>
-                    <SfButton CssClass="e-primary" OnClick="LoadApprovalHistoryAsync">Search</SfButton>
-                </div>
-
-                @if (_approvalHistory is null)
-                {
-                    <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading?</span></div>
-                }
-                else
-                {
-                    <SfGrid DataSource="_approvalHistory" AllowPaging="true" AllowSorting="true" Height="460px">
-                        <GridPageSettings PageSize="15"></GridPageSettings>
-                        <GridColumns>
-                            <GridColumn Field="@nameof(WorkflowApprovalHistoryDto.WorkflowInstanceId)" HeaderText="Workflow" Width="260"></GridColumn>
-                            <GridColumn Field="@nameof(WorkflowApprovalHistoryDto.ActionCode)" HeaderText="Action" Width="120"></GridColumn>
-                            <GridColumn Field="@nameof(WorkflowApprovalHistoryDto.PreviousStatusCode)" HeaderText="Previous" Width="120"></GridColumn>
-                            <GridColumn Field="@nameof(WorkflowApprovalHistoryDto.NewStatusCode)" HeaderText="New" Width="120"></GridColumn>
-                            <GridColumn Field="@nameof(WorkflowApprovalHistoryDto.ActorUserId)" HeaderText="Actor" Width="260"></GridColumn>
-                            <GridColumn Field="@nameof(WorkflowApprovalHistoryDto.IsDelegated)" HeaderText="Delegated" Width="100" Type="ColumnType.Boolean"></GridColumn>
-                            <GridColumn Field="@nameof(WorkflowApprovalHistoryDto.Notes)" HeaderText="Notes" Width="200"></GridColumn>
-                            <GridColumn Field="@nameof(WorkflowApprovalHistoryDto.ActionDateUtc)" HeaderText="Date (UTC)" Type="ColumnType.DateTime" Format="yyyy-MM-dd HH:mm:ss" Width="180"></GridColumn>
-                        </GridColumns>
-                    </SfGrid>
-                }
-            </ContentTemplate>
-        </TabItem>
-
-        @* -- 4. Security Events -------------------------------- *@
-        <TabItem>
-            <ChildContent>
-                <TabHeader Text="Security Events"></TabHeader>
-            </ChildContent>
-            <ContentTemplate>
-                <div class="toolbar" style="display:flex;gap:8px;align-items:center;margin:12px 0;">
-                    <SfTextBox Placeholder="Search events..." @bind-Value="_securitySearch" Width="260px"></SfTextBox>
-                    <SfDropDownList TItem="SuccessFilter" TValue="string" DataSource="_successFilters" @bind-Value="_securitySuccessFilter" Width="160px" Placeholder="Status">
-                        <DropDownListFieldSettings Text="Label" Value="Value"></DropDownListFieldSettings>
-                    </SfDropDownList>
-                    <SfButton CssClass="e-primary" OnClick="LoadSecurityEventsAsync">Search</SfButton>
-                </div>
-
-                @if (_securityEvents is null)
-                {
-                    <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading?</span></div>
-                }
-                else
-                {
-                    <SfGrid DataSource="_securityEvents" AllowPaging="true" AllowSorting="true" Height="460px">
-                        <GridPageSettings PageSize="15"></GridPageSettings>
-                        <GridColumns>
-                            <GridColumn Field="@nameof(SecurityEventLogDto.EventTypeCode)" HeaderText="Event Type" Width="140"></GridColumn>
-                            <GridColumn Field="@nameof(SecurityEventLogDto.EventDescription)" HeaderText="Description" Width="240"></GridColumn>
-                            <GridColumn Field="@nameof(SecurityEventLogDto.IsSuccess)" HeaderText="Success" Width="90" Type="ColumnType.Boolean"></GridColumn>
-                            <GridColumn Field="@nameof(SecurityEventLogDto.RiskScore)" HeaderText="Risk" Width="80"></GridColumn>
-                            <GridColumn Field="@nameof(SecurityEventLogDto.UserId)" HeaderText="User" Width="250"></GridColumn>
-                            <GridColumn Field="@nameof(SecurityEventLogDto.IpAddress)" HeaderText="IP" Width="140"></GridColumn>
-                            <GridColumn Field="@nameof(SecurityEventLogDto.UserAgent)" HeaderText="User Agent" Width="200"></GridColumn>
-                            <GridColumn Field="@nameof(SecurityEventLogDto.CreatedDateUtc)" HeaderText="Date (UTC)" Type="ColumnType.DateTime" Format="yyyy-MM-dd HH:mm:ss" Width="180"></GridColumn>
-                        </GridColumns>
-                    </SfGrid>
-                }
-            </ContentTemplate>
-        </TabItem>
-
-        @* -- 5. Export/Download History ------------------------- *@
-        <TabItem>
-            <ChildContent>
-                <TabHeader Text="Export History"></TabHeader>
-            </ChildContent>
-            <ContentTemplate>
-                <div class="toolbar" style="display:flex;gap:8px;align-items:center;margin:12px 0;">
-                    <SfTextBox Placeholder="Entity name..." @bind-Value="_exportEntityFilter" Width="200px"></SfTextBox>
-                    <SfTextBox Placeholder="Export type..." @bind-Value="_exportTypeFilter" Width="200px"></SfTextBox>
-                    <SfButton CssClass="e-primary" OnClick="LoadExportLogsAsync">Search</SfButton>
-                </div>
-
-                @if (_exportLogs is null)
-                {
-                    <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading?</span></div>
-                }
-                else
-                {
-                    <SfGrid DataSource="_exportLogs" AllowPaging="true" AllowSorting="true" Height="460px">
-                        <GridPageSettings PageSize="15"></GridPageSettings>
-                        <GridColumns>
-                            <GridColumn Field="@nameof(ExportLogDto.EntityName)" HeaderText="Entity" Width="140"></GridColumn>
-                            <GridColumn Field="@nameof(ExportLogDto.ExportTypeCode)" HeaderText="Type" Width="120"></GridColumn>
-                            <GridColumn Field="@nameof(ExportLogDto.FileName)" HeaderText="File" Width="200"></GridColumn>
-                            <GridColumn Field="@nameof(ExportLogDto.FormatCode)" HeaderText="Format" Width="90"></GridColumn>
-                            <GridColumn Field="@nameof(ExportLogDto.RecordCount)" HeaderText="Records" Width="90"></GridColumn>
-                            <GridColumn Field="@nameof(ExportLogDto.PerformedByUserId)" HeaderText="User" Width="250"></GridColumn>
-                            <GridColumn Field="@nameof(ExportLogDto.IpAddress)" HeaderText="IP" Width="130"></GridColumn>
-                            <GridColumn Field="@nameof(ExportLogDto.CreatedDateUtc)" HeaderText="Date (UTC)" Type="ColumnType.DateTime" Format="yyyy-MM-dd HH:mm:ss" Width="180"></GridColumn>
-                        </GridColumns>
-                    </SfGrid>
-                }
-            </ContentTemplate>
-        </TabItem>
-
-        @* -- 6. Record Timeline -------------------------------- *@
-        <TabItem>
-            <ChildContent>
-                <TabHeader Text="Record Timeline"></TabHeader>
-            </ChildContent>
-            <ContentTemplate>
-                <div class="toolbar" style="display:flex;gap:8px;align-items:center;margin:12px 0;">
-                    <SfTextBox Placeholder="Entity name (e.g. Account)" @bind-Value="_timelineEntityName" Width="200px"></SfTextBox>
-                    <SfTextBox Placeholder="Entity ID (GUID)" @bind-Value="_timelineEntityIdText" Width="300px"></SfTextBox>
-                    <SfButton CssClass="e-primary" OnClick="LoadTimelineAsync">Load Timeline</SfButton>
-                </div>
-
-                @if (_timelineEntries is not null)
-                {
-                    <SfGrid DataSource="_timelineEntries" AllowSorting="true" Height="460px">
-                        <GridColumns>
-                            <GridColumn Field="@nameof(RecordTimelineEntryDto.OccurredDateUtc)" HeaderText="Date (UTC)" Type="ColumnType.DateTime" Format="yyyy-MM-dd HH:mm:ss" Width="180"></GridColumn>
-                            <GridColumn Field="@nameof(RecordTimelineEntryDto.SourceType)" HeaderText="Source" Width="110"></GridColumn>
-                            <GridColumn Field="@nameof(RecordTimelineEntryDto.Summary)" HeaderText="Summary" Width="280"></GridColumn>
-                            <GridColumn Field="@nameof(RecordTimelineEntryDto.Detail)" HeaderText="Detail" Width="300"></GridColumn>
-                            <GridColumn Field="@nameof(RecordTimelineEntryDto.PerformedByUserId)" HeaderText="User" Width="260"></GridColumn>
-                        </GridColumns>
-                    </SfGrid>
-                }
-                else
-                {
-                    <p class="text-muted">Enter an entity name and ID, then click <strong>Load Timeline</strong>.</p>
-                }
-            </ContentTemplate>
-        </TabItem>
-
-        @* -- 7. Retention Policies ----------------------------- *@
-        <TabItem>
-            <ChildContent>
-                <TabHeader Text="Retention Policies"></TabHeader>
-            </ChildContent>
-            <ContentTemplate>
-                <div class="toolbar" style="display:flex;gap:8px;align-items:center;margin:12px 0;">
-                    <SfTextBox Placeholder="Search policies..." @bind-Value="_retentionSearch" Width="260px"></SfTextBox>
-                    <SfButton CssClass="e-primary" OnClick="LoadRetentionPoliciesAsync">Search</SfButton>
-                    <SfButton CssClass="e-success" OnClick="OpenNewRetentionPolicy">+ New Policy</SfButton>
-                </div>
-
-                @if (_retentionPolicies is null)
-                {
-                    <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading?</span></div>
-                }
-                else
-                {
-                    <SfGrid DataSource="_retentionPolicies" AllowPaging="true" AllowSorting="true" Height="400px">
-                        <GridPageSettings PageSize="10"></GridPageSettings>
-                        <GridEvents RowSelected="OnRetentionRowSelected" TValue="RetentionPolicyDto"></GridEvents>
-                        <GridColumns>
-                            <GridColumn Field="@nameof(RetentionPolicyDto.EntityName)" HeaderText="Entity" Width="150"></GridColumn>
-                            <GridColumn Field="@nameof(RetentionPolicyDto.RetentionDays)" HeaderText="Days" Width="80"></GridColumn>
-                            <GridColumn Field="@nameof(RetentionPolicyDto.ActionCode)" HeaderText="Action" Width="100"></GridColumn>
-                            <GridColumn Field="@nameof(RetentionPolicyDto.IsEnabled)" HeaderText="Enabled" Width="90" Type="ColumnType.Boolean"></GridColumn>
-                            <GridColumn Field="@nameof(RetentionPolicyDto.Description)" HeaderText="Description" Width="240"></GridColumn>
-                            <GridColumn Field="@nameof(RetentionPolicyDto.LastAppliedDateUtc)" HeaderText="Last Applied" Type="ColumnType.DateTime" Format="yyyy-MM-dd HH:mm" Width="160"></GridColumn>
-                            <GridColumn Field="@nameof(RetentionPolicyDto.LastAppliedCount)" HeaderText="Affected" Width="90"></GridColumn>
-                            <GridColumn HeaderText="Actions" Width="100">
-                                <Template>
-                                    @{
-                                        var ctx = (context as RetentionPolicyDto)!;
-                                    }
-                                    <SfButton CssClass="e-warning e-small" OnClick="() => ApplyPolicyAsync(ctx.RetentionPolicyId)">Apply</SfButton>
-                                </Template>
-                            </GridColumn>
-                        </GridColumns>
-                    </SfGrid>
-                }
-
-                @* Retention Policy dialog *@
-                <SfDialog @bind-Visible="_showRetentionDialog" Width="520px" Header="@(_isEditingRetention ? "Edit Retention Policy" : "New Retention Policy")" IsModal="true" ShowCloseIcon="true">
-                    <DialogTemplates>
-                        <Content>
-                            <div style="display:flex;flex-direction:column;gap:12px;padding:8px;">
-                                <label>Entity Name</label>
-                                <SfDropDownList TItem="string" TValue="string" DataSource="_retentionEntityOptions" @bind-Value="_retentionEntityName" Placeholder="Select entity..."></SfDropDownList>
-
-                                <label>Retention Days</label>
-                                <SfNumericTextBox TValue="int" @bind-Value="_retentionDays" Min="1" Max="36500" Format="N0"></SfNumericTextBox>
-
-                                <label>Action</label>
-                                <SfDropDownList TItem="string" TValue="string" DataSource="_retentionActionOptions" @bind-Value="_retentionAction" Placeholder="Select action..."></SfDropDownList>
-
-                                <label>Description</label>
-                                <SfTextBox @bind-Value="_retentionDescription" Multiline="true"></SfTextBox>
-
-                                @if (_isEditingRetention)
-                                {
-                                    <div style="display:flex;align-items:center;gap:6px;">
-                                        <SfCheckBox @bind-Checked="_retentionEnabled" Label="Enabled"></SfCheckBox>
-                                    </div>
-                                }
-                            </div>
-                        </Content>
-                    </DialogTemplates>
-                    <DialogButtons>
-                        <DialogButton Content="Save" CssClass="e-primary" OnClick="SaveRetentionPolicyAsync"></DialogButton>
-                        <DialogButton Content="Cancel" OnClick="() => _showRetentionDialog = false"></DialogButton>
-                    </DialogButtons>
-                </SfDialog>
-            </ContentTemplate>
-        </TabItem>
-    </TabItems>
-</SfTab>
-
-<EnterpriseToast @ref="_toast" Timeout="3000" />
-
-@code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
-    private Guid _tenantId;
-    private EnterpriseToast _toast = default!;
-
-    // -- 1. CRUD History -------------------------------------
-    private string? _auditSearch;
-    private List<AuditLogDto>? _auditItems;
-
-    // -- 2. Field Changes ------------------------------------
-    private string? _fieldEntityFilter;
-    private string? _fieldNameFilter;
-    private List<FieldChangeLogDto>? _fieldChanges;
-
-    // -- 3. Approval History ---------------------------------
-    private string? _approvalActionFilter;
-    private List<WorkflowApprovalHistoryDto>? _approvalHistory;
-
-    // -- 4. Security Events ----------------------------------
-    private string? _securitySearch;
-    private string? _securitySuccessFilter;
-    private List<SecurityEventLogDto>? _securityEvents;
-    private readonly List<SuccessFilter> _successFilters = new()
+    @if (!string.IsNullOrWhiteSpace(_loadError))
     {
-        new("All", ""),
-        new("Success", "true"),
-        new("Failed", "false")
-    };
-
-    // -- 5. Export History -----------------------------------
-    private string? _exportEntityFilter;
-    private string? _exportTypeFilter;
-    private List<ExportLogDto>? _exportLogs;
-
-    // -- 6. Record Timeline ----------------------------------
-    private string? _timelineEntityName;
-    private string? _timelineEntityIdText;
-    private List<RecordTimelineEntryDto>? _timelineEntries;
-
-    // -- 7. Retention Policies -------------------------------
-    private string? _retentionSearch;
-    private List<RetentionPolicyDto>? _retentionPolicies;
-    private bool _showRetentionDialog;
-    private bool _isEditingRetention;
-    private Guid? _editingRetentionId;
-    private string _retentionEntityName = string.Empty;
-    private int _retentionDays = 365;
-    private string _retentionAction = "Archive";
-    private string? _retentionDescription;
-    private bool _retentionEnabled = true;
-
-    private readonly List<string> _retentionEntityOptions = new()
-    {
-        "AuditLog", "FieldChangeLog", "SecurityEventLog", "ExportLog"
-    };
-    private readonly List<string> _retentionActionOptions = new() { "Archive", "Delete" };
-
-    protected override async Task OnInitializedAsync()
-    {
-        await ResolveCurrentUserContextAsync();
-        await LoadAuditAsync();
+        <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <strong>Unable to load audit trail.</strong> @_loadError
+        </div>
     }
 
-    // -- Load methods ----------------------------------------
+    <section class="uat-content-card">
+        <div class="uat-results-header">
+            <div>
+                <h2>Audit events</h2>
+                <p>@_result.TotalCount records • page @_page of @TotalPages</p>
+            </div>
+            <span class="uat-last-sync">Last event: @FormatDate(_summary.LastEventDateUtc)</span>
+        </div>
 
-    private async Task LoadAuditAsync()
-    {
-        var result = await Api.SearchAuditAsync(_tenantId, _auditSearch);
-        _auditItems = result?.Items.ToList() ?? [];
-    }
-
-    private async Task LoadFieldChangesAsync()
-    {
-        var entity = string.IsNullOrWhiteSpace(_fieldEntityFilter) ? null : _fieldEntityFilter;
-        var field = string.IsNullOrWhiteSpace(_fieldNameFilter) ? null : _fieldNameFilter;
-        var result = await Api.SearchFieldChangesAsync(_tenantId, entity, fieldName: field);
-        _fieldChanges = result?.Items.ToList() ?? [];
-    }
-
-    private async Task LoadApprovalHistoryAsync()
-    {
-        var action = string.IsNullOrWhiteSpace(_approvalActionFilter) ? null : _approvalActionFilter;
-        var result = await Api.SearchApprovalHistoryAsync(_tenantId, actionCode: action);
-        _approvalHistory = result?.Items.ToList() ?? [];
-    }
-
-    private async Task LoadSecurityEventsAsync()
-    {
-        bool? isSuccess = _securitySuccessFilter switch
+        @if (_loading)
         {
-            "true" => true,
-            "false" => false,
-            _ => null
-        };
-        var result = await Api.SearchSecurityEventsAsync(_tenantId, _securitySearch, isSuccess);
-        _securityEvents = result?.Items.ToList() ?? [];
-    }
-
-    private async Task LoadExportLogsAsync()
-    {
-        var entity = string.IsNullOrWhiteSpace(_exportEntityFilter) ? null : _exportEntityFilter;
-        var type = string.IsNullOrWhiteSpace(_exportTypeFilter) ? null : _exportTypeFilter;
-        var result = await Api.SearchExportLogsAsync(_tenantId, entity, type);
-        _exportLogs = result?.Items.ToList() ?? [];
-    }
-
-    private async Task LoadTimelineAsync()
-    {
-        if (string.IsNullOrWhiteSpace(_timelineEntityName) || !Guid.TryParse(_timelineEntityIdText, out var entityId))
-        {
-            await _toast.ShowAsync(new ToastModel { Title = "Validation", Content = "Enter both entity name and a valid GUID.", CssClass = "e-toast-warning" });
-            return;
+            <div class="uat-loading-state" aria-live="polite">
+                <i class="bi bi-arrow-repeat uat-spin" aria-hidden="true"></i>
+                <strong>Loading audit trail...</strong>
+                <span>Collecting user, access, authentication, and compliance events.</span>
+            </div>
         }
-        var items = await Api.GetRecordTimelineAsync(_tenantId, _timelineEntityName, entityId);
-        _timelineEntries = items?.ToList() ?? [];
-    }
-
-    private async Task LoadRetentionPoliciesAsync()
-    {
-        var result = await Api.SearchRetentionPoliciesAsync(_tenantId, _retentionSearch);
-        _retentionPolicies = result?.Items.ToList() ?? [];
-    }
-
-    // -- Retention policy CRUD -------------------------------
-
-    private void OpenNewRetentionPolicy()
-    {
-        _isEditingRetention = false;
-        _editingRetentionId = null;
-        _retentionEntityName = "AuditLog";
-        _retentionDays = 365;
-        _retentionAction = "Archive";
-        _retentionDescription = null;
-        _retentionEnabled = true;
-        _showRetentionDialog = true;
-    }
-
-    private void OnRetentionRowSelected(RowSelectEventArgs<RetentionPolicyDto> args)
-    {
-        var p = args.Data;
-        _isEditingRetention = true;
-        _editingRetentionId = p.RetentionPolicyId;
-        _retentionEntityName = p.EntityName;
-        _retentionDays = p.RetentionDays;
-        _retentionAction = p.ActionCode;
-        _retentionDescription = p.Description;
-        _retentionEnabled = p.IsEnabled;
-        _showRetentionDialog = true;
-    }
-
-    private async Task SaveRetentionPolicyAsync()
-    {
-        if (_isEditingRetention && _editingRetentionId.HasValue)
+        else if (!_items.Any())
         {
-            await Api.UpdateRetentionPolicyAsync(new UpdateRetentionPolicyRequest
-            {
-                RetentionPolicyId = _editingRetentionId.Value,
-                RetentionDays = _retentionDays,
-                ActionCode = _retentionAction,
-                IsEnabled = _retentionEnabled,
-                Description = _retentionDescription
-            });
-            await _toast.ShowAsync(new ToastModel { Title = "Updated", Content = "Retention policy updated.", CssClass = "e-toast-success" });
+            <div class="uat-empty-state">
+                <i class="bi bi-journal-x" aria-hidden="true"></i>
+                <strong>No audit events found</strong>
+                <span>Adjust the search, KPI, or date filters to broaden the result set.</span>
+            </div>
         }
         else
         {
-            await Api.CreateRetentionPolicyAsync(new CreateRetentionPolicyRequest
-            {
-                TenantId = _tenantId,
-                EntityName = _retentionEntityName,
-                RetentionDays = _retentionDays,
-                ActionCode = _retentionAction,
-                Description = _retentionDescription
-            });
-            await _toast.ShowAsync(new ToastModel { Title = "Created", Content = "Retention policy created.", CssClass = "e-toast-success" });
+            <div class="uat-table-wrap">
+                <table class="uat-table">
+                    <thead>
+                        <tr>
+                            <th>Event</th>
+                            <th>User</th>
+                            <th>Actor</th>
+                            <th>Status</th>
+                            <th>Source</th>
+                            <th>Date / Time</th>
+                            <th>Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var item in _items)
+                        {
+                            <tr class="uat-row" @onclick="() => OpenDetailAsync(item)">
+                                <td>
+                                    <div class="uat-event-cell">
+                                        <span class="uat-event-icon @SeverityClass(item.SeverityCode)"><i class="bi @ActionIcon(item.ActionCode)" aria-hidden="true"></i></span>
+                                        <span><strong>@Display(item.ActionName ?? item.ActionCode)</strong><small>@Display(item.CategoryCode) • @Display(item.SeverityCode)</small></span>
+                                    </div>
+                                </td>
+                                <td><strong>@Display(item.UserFullName ?? item.UserName)</strong><small>@Display(item.UserEmail ?? item.UserName)</small></td>
+                                <td><span>@Display(item.ChangedByFullName ?? item.ChangedByUserName ?? "System")</span></td>
+                                <td><span class="uat-status @StatusClass(item.StatusCode)">@Display(item.StatusCode)</span></td>
+                                <td><span>@Display(item.IpAddress)</span><small>@TrimUserAgent(item.UserAgent)</small></td>
+                                <td><span>@item.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</span><small>@item.CreatedDateUtc.ToLocalTime().ToString("h:mm tt")</small></td>
+                                <td>
+                                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenDetailAsync(item)" @onclick:stopPropagation="true">
+                                        View
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="uat-pager" aria-label="Audit trail pagination">
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPageAsync" disabled="@(_page <= 1)">
+                    <i class="bi bi-chevron-left" aria-hidden="true"></i> Previous
+                </button>
+                <span>Page @_page of @TotalPages</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPageAsync" disabled="@(_page >= TotalPages)">
+                    Next <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                </button>
+            </div>
         }
-        _showRetentionDialog = false;
-        await LoadRetentionPoliciesAsync();
-    }
+    </section>
 
-    private async Task ApplyPolicyAsync(Guid policyId)
-    {
-        var affected = await Api.ApplyRetentionPolicyAsync(policyId);
-        await _toast.ShowAsync(new ToastModel { Title = "Applied", Content = $"Policy applied. {affected} records affected.", CssClass = "e-toast-info" });
-        await LoadRetentionPoliciesAsync();
-    }
+    <section class="uat-content-card">
+        <div class="uat-results-header">
+            <div>
+                <h2>Field changes</h2>
+                <p>Entity-level field history including old value, new value, and changed-by user.</p>
+            </div>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => LoadFieldChangesAsync()" disabled="@_fieldChangesLoading">
+                <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh changes
+            </button>
+        </div>
 
-    // -- Helper types ----------------------------------------
-    private sealed record SuccessFilter(string Label, string Value);
+        <div class="uat-field-change-filter">
+            <label class="uat-field">
+                <span>Entity</span>
+                <input class="form-control" placeholder="Account, User, Policy..." @bind="_fieldEntityFilter" @bind:event="oninput" />
+            </label>
+            <label class="uat-field">
+                <span>Field</span>
+                <input class="form-control" placeholder="StatusCode, Email, Role..." @bind="_fieldNameFilter" @bind:event="oninput" />
+            </label>
+            <div class="uat-filter-actions">
+                <button type="button" class="um-btn um-btn-primary" @onclick="ApplyFieldChangeFiltersAsync">
+                    <i class="bi bi-search" aria-hidden="true"></i> Search changes
+                </button>
+            </div>
+        </div>
 
-    async Task ResolveCurrentUserContextAsync()
+        @if (_fieldChangesLoading)
+        {
+            <div class="uat-loading-state" aria-live="polite">
+                <i class="bi bi-arrow-repeat uat-spin" aria-hidden="true"></i>
+                <strong>Loading field changes...</strong>
+                <span>Collecting audited entity-level modifications.</span>
+            </div>
+        }
+        else if (!_fieldChanges.Any())
+        {
+            <div class="uat-empty-state">
+                <i class="bi bi-list-columns-reverse" aria-hidden="true"></i>
+                <strong>No field changes found</strong>
+                <span>Field-level audit records will appear here when changed values are captured.</span>
+            </div>
+        }
+        else
+        {
+            <div class="uat-table-wrap">
+                <table class="uat-table uat-table--field-changes">
+                    <thead>
+                        <tr>
+                            <th>Entity</th>
+                            <th>Field</th>
+                            <th>Old Value</th>
+                            <th>New Value</th>
+                            <th>Changed By</th>
+                            <th>Changed</th>
+                            <th>Source</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var change in _fieldChanges)
+                        {
+                            <tr>
+                                <td><strong>@Display(change.EntityName)</strong><small>@change.EntityId</small></td>
+                                <td><span class="uat-field-pill">@Display(change.FieldName)</span></td>
+                                <td><code>@Display(change.OldValue)</code></td>
+                                <td><code>@Display(change.NewValue)</code></td>
+                                <td>@Display(change.ChangedByUserId?.ToString())</td>
+                                <td><span>@change.ChangedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</span><small>@change.ChangedDateUtc.ToLocalTime().ToString("h:mm tt")</small></td>
+                                <td><span>@Display(change.ChangeSource)</span><small>@Display(change.IpAddress)</small></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="uat-content-card">
+        <div class="uat-results-header">
+            <div>
+                <span class="uat-section-kicker">Cross-module evidence</span>
+                <h2>Enterprise audit timeline</h2>
+                <p>Cross-module compliance timeline for user activity, data changes, security, tenant, workflow, document, and compliance events.</p>
+            </div>
+            <span class="uat-last-sync">Last enterprise event: @FormatDate(_enterpriseSummary.LastEventUtc)</span>
+        </div>
+
+        <div class="uat-enterprise-filter">
+            <label class="uat-field">
+                <span>Search</span>
+                <input class="form-control" placeholder="Actor, module, entity, action, IP, correlation ID..." @bind="_enterpriseSearch" @bind:event="oninput" />
+            </label>
+            <label class="uat-field">
+                <span>Category</span>
+                <select class="form-select" @bind="_enterpriseCategory">
+                    <option value="">All categories</option>
+                    @foreach (var category in EnterpriseCategories)
+                    {
+                        <option value="@category">@category</option>
+                    }
+                </select>
+            </label>
+            <label class="uat-field">
+                <span>Module</span>
+                <select class="form-select" @bind="_enterpriseModule">
+                    <option value="">All modules</option>
+                    @foreach (var module in EnterpriseModules)
+                    {
+                        <option value="@module">@module</option>
+                    }
+                </select>
+            </label>
+            <label class="uat-field">
+                <span>Severity</span>
+                <select class="form-select" @bind="_enterpriseSeverity">
+                    <option value="">All severities</option>
+                    @foreach (var severity in _enterpriseOptions.Severities)
+                    {
+                        <option value="@severity">@severity</option>
+                    }
+                </select>
+            </label>
+            <div class="uat-filter-actions">
+                <button type="button" class="um-btn um-btn-primary" @onclick="ApplyEnterpriseFiltersAsync">
+                    <i class="bi bi-search" aria-hidden="true"></i> Search timeline
+                </button>
+            </div>
+        </div>
+
+        @if (_enterpriseAlerts.Any())
+        {
+            <div class="uat-alert-strip" aria-label="Open enterprise audit alerts">
+                @foreach (var alert in _enterpriseAlerts)
+                {
+                    <div class="uat-alert-card">
+                        <span class="uat-event-icon @SeverityClass(alert.Severity)"><i class="bi bi-bell-fill" aria-hidden="true"></i></span>
+                        <div><strong>@alert.AlertName</strong><span>@Display(alert.Description)</span></div>
+                        <span class="uat-status @StatusClass(alert.StatusCode)">@alert.Severity</span>
+                    </div>
+                }
+            </div>
+        }
+
+        @if (_enterpriseLoading)
+        {
+            <div class="uat-loading-state" aria-live="polite">
+                <i class="bi bi-arrow-repeat uat-spin" aria-hidden="true"></i>
+                <strong>Loading enterprise audit timeline...</strong>
+                <span>Collecting compliance, security, document, and workflow evidence.</span>
+            </div>
+        }
+        else if (!_enterpriseEvents.Any())
+        {
+            <div class="uat-empty-state">
+                <i class="bi bi-shield-slash" aria-hidden="true"></i>
+                <strong>No enterprise audit events found</strong>
+                <span>Enterprise events will appear here after the migration seed or audit writers create records.</span>
+            </div>
+        }
+        else
+        {
+            <div class="uat-table-wrap">
+                <table class="uat-table uat-table--enterprise">
+                    <thead>
+                        <tr>
+                            <th>Action</th>
+                            <th>Category</th>
+                            <th>Module</th>
+                            <th>Entity</th>
+                            <th>Actor</th>
+                            <th>Severity</th>
+                            <th>Correlation</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var item in _enterpriseEvents)
+                        {
+                            <tr>
+                                <td><strong>@Display(item.ActionType)</strong><small>@Display(item.SourceSystem)</small></td>
+                                <td><span class="uat-field-pill">@Display(item.ActionCategory)</span></td>
+                                <td>@Display(item.ModuleName)</td>
+                                <td><strong>@Display(item.EntityDisplayName ?? item.EntityName)</strong><small>@Display(item.EntityId?.ToString())</small></td>
+                                <td><span>@Display(item.ActorUserName ?? item.ActorType)</span><small>@Display(item.ActorRole)</small></td>
+                                <td><span class="uat-status @StatusClass(item.Severity)">@Display(item.Severity)</span></td>
+                                <td><code>@Display(item.CorrelationId)</code></td>
+                                <td><span>@item.CreatedUtc.ToLocalTime().ToString("MMM d, yyyy")</span><small>@item.CreatedUtc.ToLocalTime().ToString("h:mm tt")</small></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="uat-content-card">
+        <div class="uat-results-header">
+            <div>
+                <span class="uat-section-kicker">Enterprise implementation coverage</span>
+                <h2>Audit capability catalog</h2>
+                <p>DB-backed coverage map for AgencyBinder user activity, data change, security, tenant, workflow, document, compliance, dashboard, alerting, and architecture requirements.</p>
+            </div>
+            <span class="uat-last-sync">@_enterpriseCapabilities.Count capabilities</span>
+        </div>
+
+        @if (!_enterpriseCapabilities.Any())
+        {
+            <div class="uat-empty-state">
+                <i class="bi bi-clipboard2-x" aria-hidden="true"></i>
+                <strong>No capability catalog records found</strong>
+                <span>Run the enterprise audit DB sync to seed the capability coverage catalog.</span>
+            </div>
+        }
+        else
+        {
+            <div class="uat-capability-grid">
+                @foreach (var group in _enterpriseCapabilities.GroupBy(x => x.CapabilityArea).OrderBy(g => g.Min(x => x.DisplayOrder)))
+                {
+                    <article class="uat-capability-card">
+                        <div class="uat-capability-card__header">
+                            <span class="uat-event-icon uat-event-icon--info"><i class="bi @CapabilityIcon(group.Key)" aria-hidden="true"></i></span>
+                            <div>
+                                <h3>@group.Key</h3>
+                                <p>@group.Count() requirements • @group.Count(x => x.RequiresInstrumentation) instrumentation points</p>
+                            </div>
+                        </div>
+                        <div class="uat-capability-list">
+                            @foreach (var capability in group.OrderBy(x => x.DisplayOrder))
+                            {
+                                <div class="uat-capability-item">
+                                    <div>
+                                        <strong>@capability.FeatureName</strong>
+                                        <span>@capability.Purpose</span>
+                                    </div>
+                                    <span class="uat-status @(capability.RequiresInstrumentation ? "uat-status--warning" : "uat-status--success")">
+                                        @(capability.RequiresInstrumentation ? "Instrument" : "Core")
+                                    </span>
+                                </div>
+                            }
+                        </div>
+                    </article>
+                }
+            </div>
+        }
+    </section>
+</div>
+
+@if (_showDetail && _selected is not null)
+{
+    <div class="uat-modal-backdrop" @onclick="CloseDetail">
+        <div class="uat-modal" role="dialog" aria-modal="true" aria-labelledby="auditDetailTitle" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi @ActionIcon(_selected.ActionCode)" aria-hidden="true"></i>
+                <span id="auditDetailTitle">Audit event details</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDetail"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="um-modal-body">
+                <div class="uat-detail-hero">
+                    <span class="uat-event-icon @SeverityClass(_selected.SeverityCode)"><i class="bi @ActionIcon(_selected.ActionCode)" aria-hidden="true"></i></span>
+                    <div>
+                        <h3>@Display(_selected.ActionName ?? _selected.ActionCode)</h3>
+                        <p>@Display(_selected.ActionDescription)</p>
+                    </div>
+                    <span class="uat-status @StatusClass(_selected.StatusCode)">@Display(_selected.StatusCode)</span>
+                </div>
+
+                <div class="uat-detail-grid">
+                    <div><span>User</span><strong>@Display(_selected.UserFullName ?? _selected.UserName)</strong></div>
+                    <div><span>User email</span><strong>@Display(_selected.UserEmail)</strong></div>
+                    <div><span>Actor</span><strong>@Display(_selected.ChangedByFullName ?? _selected.ChangedByUserName ?? "System")</strong></div>
+                    <div><span>Occurred</span><strong>@_selected.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</strong></div>
+                    <div><span>Category</span><strong>@Display(_selected.CategoryCode)</strong></div>
+                    <div><span>Severity</span><strong>@Display(_selected.SeverityCode)</strong></div>
+                    <div><span>IP address</span><strong>@Display(_selected.IpAddress)</strong></div>
+                    <div><span>Session</span><strong>@Display(_selected.SessionId)</strong></div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(_selected.ErrorDetails))
+                {
+                    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+                        <strong>Error details:</strong> @_selected.ErrorDetails
+                    </div>
+                }
+
+                <div class="uat-json-grid">
+                    <div>
+                        <h4>Previous value</h4>
+                        <pre>@DisplayJson(_selected.OldValue)</pre>
+                    </div>
+                    <div>
+                        <h4>New value</h4>
+                        <pre>@DisplayJson(_selected.NewValue)</pre>
+                    </div>
+                </div>
+
+                <div class="uat-user-agent">
+                    <span>User agent</span>
+                    <code>@Display(_selected.UserAgent)</code>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-primary" @onclick="CloseDetail">Done</button>
+            </div>
+        </div>
+    </div>
+}
+
+<EnterpriseToast @ref="_toast" Timeout="3500" NewestOnTop="true" ShowProgressBar="true" />
+
+<style>
+    @("@keyframes um-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }")
+</style>
+
+@code {
+    private const int PageSize = 25;
+
+    private EnterpriseToast _toast = default!;
+    private Guid _tenantId;
+    private bool _loading = true;
+    private string? _loadError;
+    private string _activeKpiFilter = "all";
+    private string? _searchTerm;
+    private string? _actionCode;
+    private string? _categoryCode;
+    private string? _severityCode;
+    private string? _statusCode;
+    private DateTime? _fromDate;
+    private DateTime? _toDate;
+    private int _page = 1;
+    private PagedResult<UserAuditTrailDto> _result = new() { Items = [], PageNumber = 1, PageSize = PageSize };
+    private UserAuditTrailSummaryDto _summary = new();
+    private EnterpriseAuditSummaryDto _enterpriseSummary = new();
+    private EnterpriseAuditOptionsDto _enterpriseOptions = new();
+    private List<UserAuditTrailDto> _items = [];
+    private List<UserAuditActionTypeDto> _actionTypes = [];
+    private List<FieldChangeLogDto> _fieldChanges = [];
+    private List<EnterpriseAuditEventDto> _enterpriseEvents = [];
+    private List<EnterpriseAuditAlertDto> _enterpriseAlerts = [];
+    private List<EnterpriseAuditCapabilityDto> _enterpriseCapabilities = [];
+    private UserAuditTrailDto? _selected;
+    private bool _showDetail;
+    private bool _fieldChangesLoading;
+    private bool _enterpriseLoading;
+    private string? _fieldEntityFilter;
+    private string? _fieldNameFilter;
+    private string? _enterpriseSearch;
+    private string? _enterpriseCategory;
+    private string? _enterpriseModule;
+    private string? _enterpriseSeverity;
+
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling((double)_result.TotalCount / PageSize));
+    private IEnumerable<string> CategoryOptions => _actionTypes.Select(x => x.CategoryCode).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().OrderBy(x => x);
+    private IEnumerable<string> SeverityOptions => _items.Select(x => x.SeverityCode).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().OrderBy(x => x);
+    private IEnumerable<string> StatusOptions => _items.Select(x => x.StatusCode).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().OrderBy(x => x);
+    private IEnumerable<string> EnterpriseCategories => _enterpriseOptions.Categories;
+    private IEnumerable<string> EnterpriseModules => _enterpriseOptions.Modules;
+
+    protected override async Task OnInitializedAsync()
     {
         var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
         _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+
+        try
+        {
+            var request = BuildRequest();
+            var resultTask = Api.SearchUserAuditTrailAsync(request);
+            var summaryTask = Api.GetUserAuditTrailSummaryAsync(_tenantId, request.FromDateUtc, request.ToDateUtc);
+            var actionsTask = Api.GetUserAuditActionTypesAsync(_tenantId);
+
+            await Task.WhenAll(resultTask, summaryTask, actionsTask);
+
+            _result = resultTask.Result ?? new PagedResult<UserAuditTrailDto> { Items = [], PageNumber = _page, PageSize = PageSize };
+            _items = _result.Items.ToList();
+            _summary = summaryTask.Result ?? new UserAuditTrailSummaryDto();
+            _actionTypes = actionsTask.Result?.ToList() ?? [];
+            await LoadEnterpriseAuditAsync(showToastOnError: false);
+            await LoadFieldChangesAsync(showToastOnError: false);
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+            await _toast.ShowAsync(new ToastModel { Title = "Load failed", Content = $"Audit trail load failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private SearchUserAuditTrailRequest BuildRequest()
+    {
+        return new SearchUserAuditTrailRequest
+        {
+            TenantId = _tenantId,
+            SearchTerm = string.IsNullOrWhiteSpace(_searchTerm) ? null : _searchTerm.Trim(),
+            ActionCode = string.IsNullOrWhiteSpace(_actionCode) ? null : _actionCode,
+            CategoryCode = string.IsNullOrWhiteSpace(_categoryCode) ? null : _categoryCode,
+            SeverityCode = string.IsNullOrWhiteSpace(_severityCode) ? null : _severityCode,
+            StatusCode = string.IsNullOrWhiteSpace(_statusCode) ? null : _statusCode,
+            FromDateUtc = _fromDate?.Date.ToUniversalTime(),
+            ToDateUtc = _toDate?.Date.AddDays(1).AddTicks(-1).ToUniversalTime(),
+            PageNumber = _page,
+            PageSize = PageSize
+        };
+    }
+
+    private async Task ApplyFiltersAsync()
+    {
+        _page = 1;
+        _activeKpiFilter = "custom";
+        await LoadAsync();
+    }
+
+    private async Task ApplyFieldChangeFiltersAsync()
+    {
+        await LoadFieldChangesAsync();
+    }
+
+    private async Task ApplyEnterpriseFiltersAsync()
+    {
+        await LoadEnterpriseAuditAsync();
+    }
+
+    private async Task SetEnterpriseCategory(string? category)
+    {
+        _enterpriseCategory = category;
+        _enterpriseSeverity = null;
+        await LoadEnterpriseAuditAsync();
+    }
+
+    private async Task SetEnterpriseSeverity(string? severity)
+    {
+        _enterpriseSeverity = severity;
+        await LoadEnterpriseAuditAsync();
+    }
+
+    private async Task LoadEnterpriseAuditAsync(bool showToastOnError = true)
+    {
+        _enterpriseLoading = true;
+
+        try
+        {
+            var request = new SearchEnterpriseAuditEventsRequest
+            {
+                TenantId = _tenantId,
+                SearchTerm = string.IsNullOrWhiteSpace(_enterpriseSearch) ? null : _enterpriseSearch.Trim(),
+                ActionCategory = string.IsNullOrWhiteSpace(_enterpriseCategory) ? null : _enterpriseCategory,
+                ModuleName = string.IsNullOrWhiteSpace(_enterpriseModule) ? null : _enterpriseModule,
+                Severity = string.IsNullOrWhiteSpace(_enterpriseSeverity) ? null : _enterpriseSeverity,
+                PageNumber = 1,
+                PageSize = 50
+            };
+
+            var eventsTask = Api.SearchEnterpriseAuditEventsAsync(request);
+            var summaryTask = Api.GetEnterpriseAuditSummaryAsync(_tenantId);
+            var alertsTask = Api.GetOpenEnterpriseAuditAlertsAsync(_tenantId, 4);
+            var optionsTask = Api.GetEnterpriseAuditOptionsAsync(_tenantId);
+            var capabilitiesTask = Api.GetEnterpriseAuditCapabilitiesAsync(_tenantId);
+            await Task.WhenAll(eventsTask, summaryTask, alertsTask, optionsTask, capabilitiesTask);
+
+            _enterpriseEvents = eventsTask.Result?.Items.ToList() ?? [];
+            _enterpriseSummary = summaryTask.Result ?? new EnterpriseAuditSummaryDto();
+            _enterpriseAlerts = alertsTask.Result?.ToList() ?? [];
+            _enterpriseOptions = optionsTask.Result ?? new EnterpriseAuditOptionsDto();
+            _enterpriseCapabilities = capabilitiesTask.Result?.ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            if (showToastOnError)
+            {
+                await _toast.ShowAsync(new ToastModel { Title = "Enterprise audit failed", Content = $"Enterprise audit load failed: {ex.Message}", CssClass = "e-toast-danger" });
+            }
+        }
+        finally
+        {
+            _enterpriseLoading = false;
+        }
+    }
+
+    private async Task LoadFieldChangesAsync(bool showToastOnError = true)
+    {
+        _fieldChangesLoading = true;
+
+        try
+        {
+            var entity = string.IsNullOrWhiteSpace(_fieldEntityFilter) ? null : _fieldEntityFilter.Trim();
+            var field = string.IsNullOrWhiteSpace(_fieldNameFilter) ? null : _fieldNameFilter.Trim();
+            var result = await Api.SearchFieldChangesAsync(_tenantId, entityName: entity, fieldName: field, pageNumber: 1, pageSize: 50);
+            _fieldChanges = result?.Items.ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            if (showToastOnError)
+            {
+                await _toast.ShowAsync(new ToastModel { Title = "Field changes failed", Content = $"Field changes load failed: {ex.Message}", CssClass = "e-toast-danger" });
+            }
+        }
+        finally
+        {
+            _fieldChangesLoading = false;
+        }
+    }
+
+    private async Task SetKpiFilter(string filter)
+    {
+        _activeKpiFilter = filter;
+        _page = 1;
+        _statusCode = null;
+        _categoryCode = null;
+        _severityCode = null;
+
+        switch (filter)
+        {
+            case "failed":
+                _statusCode = "Failed";
+                break;
+            case "access":
+                _categoryCode = "Access";
+                break;
+            case "auth":
+                _categoryCode = "Authentication";
+                break;
+            case "high":
+                _severityCode = "High";
+                break;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task ClearFilters()
+    {
+        _searchTerm = null;
+        _actionCode = null;
+        _categoryCode = null;
+        _severityCode = null;
+        _statusCode = null;
+        _fromDate = null;
+        _toDate = null;
+        _activeKpiFilter = "all";
+        _page = 1;
+        await LoadAsync();
+    }
+
+    private async Task PreviousPageAsync()
+    {
+        if (_page <= 1) return;
+        _page--;
+        await LoadAsync();
+    }
+
+    private async Task NextPageAsync()
+    {
+        if (_page >= TotalPages) return;
+        _page++;
+        await LoadAsync();
+    }
+
+    private async Task OpenDetailAsync(UserAuditTrailDto item)
+    {
+        try
+        {
+            _selected = await Api.GetUserAuditTrailByIdAsync(_tenantId, item.AuditTrailId) ?? item;
+            _showDetail = true;
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Title = "Detail failed", Content = $"Audit detail load failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+    }
+
+    private void CloseDetail()
+    {
+        _showDetail = false;
+        _selected = null;
+    }
+
+    private async Task ExportVisibleAsync()
+    {
+        try
+        {
+            var lines = new List<string> { "\"DateUtc\",\"Action\",\"Category\",\"Severity\",\"Status\",\"User\",\"Actor\",\"IpAddress\",\"Description\"" };
+            lines.AddRange(_items.Select(item => string.Join(',',
+                Csv(item.CreatedDateUtc.ToString("O")),
+                Csv(item.ActionName ?? item.ActionCode),
+                Csv(item.CategoryCode),
+                Csv(item.SeverityCode),
+                Csv(item.StatusCode),
+                Csv(item.UserFullName ?? item.UserName),
+                Csv(item.ChangedByFullName ?? item.ChangedByUserName ?? "System"),
+                Csv(item.IpAddress),
+                Csv(item.ActionDescription))));
+
+            var csv = string.Join("\r\n", lines);
+            var fileName = $"user-audit-trail-{DateTime.UtcNow:yyyyMMddHHmmss}.csv";
+            await JS.InvokeVoidAsync("eval", $"(() => {{ const a = document.createElement('a'); a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent({System.Text.Json.JsonSerializer.Serialize(csv)}); a.download = '{fileName}'; document.body.appendChild(a); a.click(); a.remove(); }})() ");
+            await _toast.ShowAsync(new ToastModel { Title = "Export ready", Content = "Visible audit records exported.", CssClass = "e-toast-success" });
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Title = "Export failed", Content = $"Audit export failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+    }
+
+    private string KpiClass(string filter) => _activeKpiFilter == filter ? "pc-kpi-card--active" : string.Empty;
+
+    private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
+    private static string DisplayJson(string? value) => string.IsNullOrWhiteSpace(value) ? "No value captured" : value;
+    private static string FormatDate(DateTime? value) => value.HasValue ? value.Value.ToLocalTime().ToString("MMM d, yyyy h:mm tt") : "No events";
+    private static string Csv(string? value)
+    {
+        var quote = ((char)34).ToString();
+        return quote + (value ?? string.Empty).Replace(quote, quote + quote) + quote;
+    }
+    private static string TrimUserAgent(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value.Length <= 42 ? value : value[..42] + "...";
+
+    private static string StatusClass(string? status) => status switch
+    {
+        "Success" => "uat-status--success",
+        "Failed" => "uat-status--danger",
+        "Attempted" => "uat-status--warning",
+        _ => "uat-status--neutral"
+    };
+
+    private static string SeverityClass(string? severity) => severity switch
+    {
+        "High" => "uat-event-icon--high",
+        "Medium" => "uat-event-icon--medium",
+        _ => "uat-event-icon--info"
+    };
+
+    private static string ActionIcon(string? actionCode) => actionCode switch
+    {
+        "LOGIN" or "LOGOUT" => "bi-box-arrow-in-right",
+        "LOGIN_FAILED" => "bi-shield-exclamation",
+        "ROLE_ASSIGNED" or "ROLE_REMOVED" => "bi-person-badge",
+        "PERMISSION_GRANTED" or "PERMISSION_REVOKED" => "bi-key",
+        "PASSWORD_CHANGED" or "PASSWORD_RESET" => "bi-lock",
+        "MFA_ENABLED" or "MFA_DISABLED" => "bi-phone-vibrate",
+        "ACCOUNT_LOCKED" or "ACCOUNT_UNLOCKED" => "bi-shield-lock",
+        "EXPORT_PERFORMED" => "bi-download",
+        "RETENTION_APPLIED" => "bi-archive",
+        _ => "bi-journal-text"
+    };
+
+    private static string CapabilityIcon(string? area)
+    {
+        return area switch
+        {
+            "User Activity Audit" => "bi-person-lines-fill",
+            "Data Change History" => "bi-list-columns-reverse",
+            "Security Audit" => "bi-shield-lock",
+            "Tenant-Level Audit" => "bi-building-gear",
+            "Business Workflow Audit" => "bi-diagram-3",
+            "Document Audit" => "bi-file-earmark-lock",
+            "Compliance Features" => "bi-clipboard-check",
+            "Admin Audit Dashboard" => "bi-speedometer2",
+            "Alerting and Monitoring" => "bi-bell-fill",
+            "Technical Architecture" => "bi-hdd-network",
+            _ => "bi-check2-square"
+        };
     }
 }

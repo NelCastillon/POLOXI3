@@ -1,4 +1,5 @@
 using Ams.Api.Extensions;
+using Ams.Api.Filters;
 using Ams.Api.Hubs;
 using Ams.Api.Middlewares;
 using Ams.Api.Security;
@@ -8,7 +9,7 @@ using Microsoft.AspNetCore.Authentication;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddControllers();
+builder.Services.AddControllers(options => options.Filters.Add<EntityAuditActionFilter>());
 builder.Services.AddSignalR();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();

@@ -6,7 +6,10 @@ public sealed record CreateCarrierRequest(
     string    NaicCode,
     string    AmBestRating,
     bool      IsAdmitted,
-    DateTime? AppointmentDate);
+    DateTime? AppointmentDate,
+    Guid?     PerformedByUserId = null,
+    string?   PerformedByUserName = null,
+    string?   PerformedByRole = null);
 
 public sealed record UpdateCarrierRequest(
     string    CarrierName,
@@ -14,4 +17,7 @@ public sealed record UpdateCarrierRequest(
     string    AmBestRating,
     bool      IsAdmitted,
     DateTime? AppointmentDate,
-    bool      IsActive);
+    bool      IsActive,
+    Guid?     PerformedByUserId = null,
+    string?   PerformedByUserName = null,
+    string?   PerformedByRole = null);

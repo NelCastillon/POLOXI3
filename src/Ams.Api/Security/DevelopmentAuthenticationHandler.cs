@@ -20,16 +20,41 @@ public sealed class DevelopmentAuthenticationHandler : AuthenticationHandler<Aut
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
-        var claims = new[]
+        // Prefer the acting user forwarded by the AMS Web app (the signed-in
+        // user shown in the top header) so audit trails attribute actions to
+        // the real current user. Fall back to the demo user when absent.
+        var actingUserId = Request.Headers["X-Acting-User-Id"].ToString();
+        var actingUserName = Unescape(Request.Headers["X-Acting-User-Name"].ToString());
+        var actingUserEmail = Unescape(Request.Headers["X-Acting-User-Email"].ToString());
+        var actingTenantId = Request.Headers["X-Acting-Tenant-Id"].ToString();
+
+        var userId = Guid.TryParse(actingUserId, out var forwardedId) && forwardedId != Guid.Empty
+            ? forwardedId
+            : DemoUserId;
+
+        var claims = new List<Claim>
         {
-            new Claim(ClaimTypes.NameIdentifier, DemoUserId.ToString()),
-            new Claim(ClaimTypes.Name, "Development User"),
-            new Claim("sub", DemoUserId.ToString())
+            new(ClaimTypes.NameIdentifier, userId.ToString()),
+            new(ClaimTypes.Name, string.IsNullOrWhiteSpace(actingUserName) ? "Development User" : actingUserName),
+            new("sub", userId.ToString())
         };
+
+        if (!string.IsNullOrWhiteSpace(actingUserEmail))
+        {
+            claims.Add(new Claim(ClaimTypes.Email, actingUserEmail));
+        }
+
+        if (Guid.TryParse(actingTenantId, out var tenantId) && tenantId != Guid.Empty)
+        {
+            claims.Add(new Claim("tenant_id", tenantId.ToString()));
+        }
 
         var identity = new ClaimsIdentity(claims, SchemeName);
         var principal = new ClaimsPrincipal(identity);
         var ticket = new AuthenticationTicket(principal, SchemeName);
         return Task.FromResult(AuthenticateResult.Success(ticket));
     }
+
+    private static string? Unescape(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : Uri.UnescapeDataString(value);
 }

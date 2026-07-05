@@ -114,15 +114,18 @@ builder.Services.AddScoped<LeadDialogService>();
 builder.Services.AddScoped<CurrentUserContext>();
 builder.Services.AddTransient<LeadScoringRealtimeClient>();
 
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddTransient<ActingUserHeaderHandler>();
+
 builder.Services.AddHttpClient<ApiClient>(client =>
 {
     client.BaseAddress = new Uri(builder.Configuration["Api:BaseUrl"] ?? "https://localhost:7051/");
-});
+}).AddHttpMessageHandler<ActingUserHeaderHandler>();
 
 builder.Services.AddHttpClient<ProducerWorkbenchApiClient>(client =>
 {
     client.BaseAddress = new Uri(builder.Configuration["Api:BaseUrl"] ?? "https://localhost:7051/");
-});
+}).AddHttpMessageHandler<ActingUserHeaderHandler>();
 
 var app = builder.Build();
 

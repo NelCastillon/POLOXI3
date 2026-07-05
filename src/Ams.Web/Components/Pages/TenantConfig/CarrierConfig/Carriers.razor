@@ -265,8 +265,8 @@
         _saving = true;
         try
         {
-            if (_editId.HasValue) await Api.UpdateCarrierAsync(_editId.Value, new(_form.CarrierName.Trim(), _form.NaicCode.Trim(), _form.AmBestRating, _form.IsAdmitted, _form.AppointmentDate, _form.IsActive));
-            else await Api.CreateCarrierAsync(new(TenantId, _form.CarrierName.Trim(), _form.NaicCode.Trim(), _form.AmBestRating, _form.IsAdmitted, _form.AppointmentDate));
+            if (_editId.HasValue) await Api.UpdateCarrierAsync(_editId.Value, CreateUpdateRequest(_form.CarrierName.Trim(), _form.NaicCode.Trim(), _form.AmBestRating, _form.IsAdmitted, _form.AppointmentDate, _form.IsActive));
+            else await Api.CreateCarrierAsync(new(TenantId, _form.CarrierName.Trim(), _form.NaicCode.Trim(), _form.AmBestRating, _form.IsAdmitted, _form.AppointmentDate, TenantAdminUserId, null, CurrentRole));
             _showForm = false; ShowToast("success", _editId.HasValue ? "Carrier updated successfully." : "Carrier created successfully."); ResetForm(); await LoadAsync();
         }
         catch (Exception ex) { ShowToast("danger", $"Save failed: {ex.Message}"); }
@@ -278,8 +278,11 @@
     void OpenConfirm(string title, string message, string icon, Func<Task> action) { _confirmTitle = title; _confirmMessage = message; _confirmIcon = icon; _confirmAction = action; _confirmVisible = true; }
     void CloseConfirm() { _confirmVisible = false; _confirmAction = null; }
     async Task ExecuteConfirmedAsync() { if (_confirmAction is null) return; _saving = true; try { await _confirmAction(); _confirmVisible = false; _confirmAction = null; } finally { _saving = false; } }
-    async Task SetCarrierActiveAsync(CarrierDto item, bool active) { try { await Api.UpdateCarrierAsync(item.CarrierId, new(item.CarrierName, item.NaicCode, item.AmBestRating, item.IsAdmitted, item.AppointmentDate, active)); ShowToast("success", active ? "Carrier activated." : "Carrier deactivated."); await LoadAsync(); } catch (Exception ex) { ShowToast("danger", $"Update failed: {ex.Message}"); } }
-    async Task BulkSetActiveAsync(bool active) { var selected = _items.Where(x => _selectedIds.Contains(x.CarrierId)).ToList(); var updated = 0; foreach (var item in selected) { try { await Api.UpdateCarrierAsync(item.CarrierId, new(item.CarrierName, item.NaicCode, item.AmBestRating, item.IsAdmitted, item.AppointmentDate, active)); updated++; } catch (Exception ex) { ShowToast("danger", $"Update failed for {item.CarrierName}: {ex.Message}"); } } ShowToast("success", $"{updated} carrier(s) {(active ? "activated" : "deactivated")}. "); _selectedIds.Clear(); await LoadAsync(); }
+    async Task SetCarrierActiveAsync(CarrierDto item, bool active) { try { await Api.UpdateCarrierAsync(item.CarrierId, CreateUpdateRequest(item.CarrierName, item.NaicCode, item.AmBestRating, item.IsAdmitted, item.AppointmentDate, active)); ShowToast("success", active ? "Carrier activated." : "Carrier deactivated."); await LoadAsync(); } catch (Exception ex) { ShowToast("danger", $"Update failed: {ex.Message}"); } }
+    async Task BulkSetActiveAsync(bool active) { var selected = _items.Where(x => _selectedIds.Contains(x.CarrierId)).ToList(); var updated = 0; foreach (var item in selected) { try { await Api.UpdateCarrierAsync(item.CarrierId, CreateUpdateRequest(item.CarrierName, item.NaicCode, item.AmBestRating, item.IsAdmitted, item.AppointmentDate, active)); updated++; } catch (Exception ex) { ShowToast("danger", $"Update failed for {item.CarrierName}: {ex.Message}"); } } ShowToast("success", $"{updated} carrier(s) {(active ? "activated" : "deactivated")}. "); _selectedIds.Clear(); await LoadAsync(); }
+    string? CurrentRole => CurrentUserRole();
+    UpdateCarrierRequest CreateUpdateRequest(string carrierName, string naicCode, string amBestRating, bool isAdmitted, DateTime? appointmentDate, bool isActive) => new(carrierName, naicCode, amBestRating, isAdmitted, appointmentDate, isActive, TenantAdminUserId, null, CurrentRole);
+    string? CurrentUserRole() => TenantAdminUserId == Guid.Empty ? null : "Tenant Admin";
 
     RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string color) => @<button type="button" class="car-kpi-card car-kpi-card--@color @(_activeTab == key ? "car-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveTab(key)"><span class="car-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span><span class="car-kpi-body"><span class="car-kpi-label">@label</span><strong class="car-kpi-value">@value</strong><span class="car-kpi-sub">@subtitle</span></span></button>;
     int TabCount(string key) => key switch { "active" => _items.Count(x => x.IsActive), "admitted" => _items.Count(x => x.IsAdmitted), "nonadmitted" => _items.Count(x => !x.IsAdmitted), "toprated" => _items.Count(IsTopRated), "review" => _items.Count(NeedsReview), "segments" => SegmentGroups.Count, _ => _items.Count };

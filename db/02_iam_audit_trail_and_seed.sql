@@ -21,14 +21,56 @@ CREATE TABLE IAM.UserAuditTrail (
     SessionId           NVARCHAR(200)    NULL,
     StatusCode          NVARCHAR(50)     NOT NULL DEFAULT 'Success', -- Success, Failed, Attempted
     ErrorDetails        NVARCHAR(MAX)    NULL,          -- Error message if failed
+    ModifiedDateUtc     DATETIME2        NULL,
+    ModifiedByUserId    UNIQUEIDENTIFIER NULL,
+    IsDeleted           BIT              NOT NULL DEFAULT 0,
     CreatedDateUtc      DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
     CONSTRAINT IX_UserAuditTrail_User UNIQUE (AuditTrailId)
 );
 
+IF COL_LENGTH('IAM.UserAuditTrail', 'ModifiedDateUtc') IS NULL
+    ALTER TABLE IAM.UserAuditTrail ADD ModifiedDateUtc DATETIME2 NULL;
+
+IF COL_LENGTH('IAM.UserAuditTrail', 'ModifiedByUserId') IS NULL
+    ALTER TABLE IAM.UserAuditTrail ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+
+IF COL_LENGTH('IAM.UserAuditTrail', 'IsDeleted') IS NULL
+    ALTER TABLE IAM.UserAuditTrail ADD IsDeleted BIT NOT NULL CONSTRAINT DF_UserAuditTrail_IsDeleted DEFAULT 0;
+
 -- Create indexes for faster queries
-CREATE NONCLUSTERED INDEX IX_UserAuditTrail_UserId ON IAM.UserAuditTrail(UserId, CreatedDateUtc DESC);
-CREATE NONCLUSTERED INDEX IX_UserAuditTrail_TenantId ON IAM.UserAuditTrail(TenantId, CreatedDateUtc DESC);
-CREATE NONCLUSTERED INDEX IX_UserAuditTrail_ActionCode ON IAM.UserAuditTrail(ActionCode, CreatedDateUtc DESC);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('IAM.UserAuditTrail') AND name = 'IX_UserAuditTrail_UserId')
+    CREATE NONCLUSTERED INDEX IX_UserAuditTrail_UserId ON IAM.UserAuditTrail(UserId, CreatedDateUtc DESC) INCLUDE (TenantId, ActionCode, StatusCode, ChangedByUserId);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('IAM.UserAuditTrail') AND name = 'IX_UserAuditTrail_TenantId')
+    CREATE NONCLUSTERED INDEX IX_UserAuditTrail_TenantId ON IAM.UserAuditTrail(TenantId, CreatedDateUtc DESC) INCLUDE (UserId, ActionCode, StatusCode, ChangedByUserId);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('IAM.UserAuditTrail') AND name = 'IX_UserAuditTrail_ActionCode')
+    CREATE NONCLUSTERED INDEX IX_UserAuditTrail_ActionCode ON IAM.UserAuditTrail(ActionCode, CreatedDateUtc DESC) INCLUDE (TenantId, UserId, StatusCode);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('IAM.UserAuditTrail') AND name = 'IX_UserAuditTrail_StatusCode')
+    CREATE NONCLUSTERED INDEX IX_UserAuditTrail_StatusCode ON IAM.UserAuditTrail(StatusCode, CreatedDateUtc DESC) INCLUDE (TenantId, UserId, ActionCode);
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('IAM.UserAuditActionType'))
+CREATE TABLE IAM.UserAuditActionType (
+    UserAuditActionTypeId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    TenantId              UNIQUEIDENTIFIER NOT NULL,
+    ActionCode            NVARCHAR(100)    NOT NULL,
+    ActionName            NVARCHAR(200)    NOT NULL,
+    CategoryCode          NVARCHAR(50)     NOT NULL DEFAULT 'User',
+    SeverityCode          NVARCHAR(50)     NOT NULL DEFAULT 'Info',
+    Description           NVARCHAR(500)    NULL,
+    SortOrder             INT              NOT NULL DEFAULT 0,
+    IsActive              BIT              NOT NULL DEFAULT 1,
+    CreatedDateUtc        DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    CreatedByUserId       UNIQUEIDENTIFIER NULL,
+    ModifiedDateUtc       DATETIME2        NULL,
+    ModifiedByUserId      UNIQUEIDENTIFIER NULL,
+    IsDeleted             BIT              NOT NULL DEFAULT 0,
+    CONSTRAINT UQ_UserAuditActionType_Tenant_Action UNIQUE (TenantId, ActionCode)
+);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('IAM.UserAuditActionType') AND name = 'IX_UserAuditActionType_Tenant_Category')
+    CREATE NONCLUSTERED INDEX IX_UserAuditActionType_Tenant_Category ON IAM.UserAuditActionType(TenantId, CategoryCode, SortOrder) INCLUDE (ActionCode, ActionName, SeverityCode, IsActive);
 
 -- ============================================================
 -- LOGIN ATTEMPT TRACKING TABLE
@@ -49,8 +91,11 @@ CREATE TABLE IAM.LoginAttempt (
     CONSTRAINT IX_LoginAttempt_Unique UNIQUE (LoginAttemptId)
 );
 
-CREATE NONCLUSTERED INDEX IX_LoginAttempt_UserId ON IAM.LoginAttempt(UserId, AttemptDateUtc DESC);
-CREATE NONCLUSTERED INDEX IX_LoginAttempt_UserName ON IAM.LoginAttempt(UserName, AttemptDateUtc DESC);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('IAM.LoginAttempt') AND name = 'IX_LoginAttempt_UserId')
+    CREATE NONCLUSTERED INDEX IX_LoginAttempt_UserId ON IAM.LoginAttempt(UserId, AttemptDateUtc DESC);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('IAM.LoginAttempt') AND name = 'IX_LoginAttempt_UserName')
+    CREATE NONCLUSTERED INDEX IX_LoginAttempt_UserName ON IAM.LoginAttempt(UserName, AttemptDateUtc DESC);
 
 -- ============================================================
 -- SEED DATA - PERMISSION ACTIONS
@@ -121,6 +166,33 @@ DECLARE @AdminRoleId UNIQUEIDENTIFIER = '10000000-0000-0000-0000-000000000001';
 DECLARE @ManagerRoleId UNIQUEIDENTIFIER = '10000000-0000-0000-0000-000000000002';
 DECLARE @UserRoleId UNIQUEIDENTIFIER = '10000000-0000-0000-0000-000000000003';
 DECLARE @ViewerRoleId UNIQUEIDENTIFIER = '10000000-0000-0000-0000-000000000004';
+
+-- ============================================================
+-- SEED DATA - USER AUDIT ACTION TYPES
+-- ============================================================
+
+IF NOT EXISTS (SELECT 1 FROM IAM.UserAuditActionType WHERE TenantId = @TenantId AND ActionCode = 'LOGIN')
+BEGIN
+    INSERT INTO IAM.UserAuditActionType (UserAuditActionTypeId, TenantId, ActionCode, ActionName, CategoryCode, SeverityCode, Description, SortOrder, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted) VALUES
+        (NEWID(), @TenantId, 'LOGIN', 'Login', 'Authentication', 'Info', 'User signed in successfully.', 10, 1, SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, 'LOGIN_FAILED', 'Failed Login', 'Authentication', 'High', 'User sign-in attempt failed.', 20, 1, SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, 'LOGOUT', 'Logout', 'Authentication', 'Info', 'User signed out.', 30, 1, SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, 'USER_CREATED', 'User Created', 'User', 'Info', 'A user account was created.', 40, 1, SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, 'USER_UPDATED', 'User Updated', 'User', 'Info', 'A user account was updated.', 50, 1, SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, 'USER_DEACTIVATED', 'User Deactivated', 'User', 'Medium', 'A user account was deactivated.', 60, 1, SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, 'ROLE_ASSIGNED', 'Role Assigned', 'Access', 'Info', 'A role was assigned to a user.', 70, 1, SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, 'ROLE_REMOVED', 'Role Removed', 'Access', 'Medium', 'A role was removed from a user.', 80, 1, SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, 'PERMISSION_GRANTED', 'Permission Granted', 'Access', 'Info', 'A permission was granted to a user.', 90, 1, SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, 'PERMISSION_REVOKED', 'Permission Revoked', 'Access', 'Medium', 'A permission was revoked from a user.', 100, 1, SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, 'PASSWORD_CHANGED', 'Password Changed', 'Credential', 'Info', 'A user password was changed.', 110, 1, SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, 'PASSWORD_RESET', 'Password Reset', 'Credential', 'Medium', 'A password reset was performed.', 120, 1, SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, 'MFA_ENABLED', 'MFA Enabled', 'Credential', 'Info', 'Multi-factor authentication was enabled.', 130, 1, SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, 'MFA_DISABLED', 'MFA Disabled', 'Credential', 'High', 'Multi-factor authentication was disabled.', 140, 1, SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, 'ACCOUNT_LOCKED', 'Account Locked', 'Security', 'High', 'A user account was locked.', 150, 1, SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, 'ACCOUNT_UNLOCKED', 'Account Unlocked', 'Security', 'Medium', 'A user account was unlocked.', 160, 1, SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, 'EXPORT_PERFORMED', 'Export Performed', 'Compliance', 'Medium', 'User data was exported.', 170, 1, SYSUTCDATETIME(), @AdminUserId, 0),
+        (NEWID(), @TenantId, 'RETENTION_APPLIED', 'Retention Applied', 'Compliance', 'High', 'An audit retention policy was applied.', 180, 1, SYSUTCDATETIME(), @AdminUserId, 0);
+END
 
 IF NOT EXISTS (SELECT 1 FROM IAM.Role WHERE RoleCode = 'SYSTEM_ADMIN')
 BEGIN
@@ -248,7 +320,14 @@ BEGIN
         (NEWID(), @TenantId, @UserUserId, 'ROLE_ASSIGNED', 'Assigned USER role by admin', NULL, NULL, @AdminUserId, NULL, NULL, NULL, 'Success', NULL, DATEADD(DAY, -60, SYSUTCDATETIME())),
         (NEWID(), @TenantId, @UserUserId, 'PASSWORD_CHANGED', 'User changed their password', NULL, NULL, @UserUserId, '192.168.1.120', 'Mozilla/5.0 Edge 91.0', NULL, 'Success', NULL, DATEADD(DAY, -15, SYSUTCDATETIME())),
         (NEWID(), @TenantId, @UserUserId, 'LOGIN', 'Standard user logged in', NULL, NULL, NULL, '192.168.1.120', 'Mozilla/5.0 Edge 91.0', NULL, 'Success', NULL, DATEADD(DAY, -3, SYSUTCDATETIME())),
-        (NEWID(), @TenantId, @UserUserId, 'LOGIN', 'Standard user logged in', NULL, NULL, NULL, '192.168.1.120', 'Mozilla/5.0 Edge 91.0', NULL, 'Success', NULL, DATEADD(HOUR, -18, SYSUTCDATETIME()));
+        (NEWID(), @TenantId, @UserUserId, 'LOGIN', 'Standard user logged in', NULL, NULL, NULL, '192.168.1.120', 'Mozilla/5.0 Edge 91.0', NULL, 'Success', NULL, DATEADD(HOUR, -18, SYSUTCDATETIME())),
+        (NEWID(), @TenantId, @UserUserId, 'LOGIN_FAILED', 'Failed login due to invalid password', NULL, NULL, NULL, '192.168.1.121', 'Mozilla/5.0 Edge 91.0', NULL, 'Failed', 'InvalidCredentials', DATEADD(HOUR, -16, SYSUTCDATETIME())),
+        (NEWID(), @TenantId, @UserUserId, 'ACCOUNT_LOCKED', 'Account locked after repeated failed sign-in attempts', NULL, N'{"StatusCode":"Locked"}', @AdminUserId, '192.168.1.121', 'Mozilla/5.0 Edge 91.0', NULL, 'Success', NULL, DATEADD(HOUR, -15, SYSUTCDATETIME())),
+        (NEWID(), @TenantId, @UserUserId, 'ACCOUNT_UNLOCKED', 'Account unlocked by administrator', N'{"StatusCode":"Locked"}', N'{"StatusCode":"Active"}', @AdminUserId, '192.168.1.100', 'Mozilla/5.0 Chrome 91.0', NULL, 'Success', NULL, DATEADD(HOUR, -12, SYSUTCDATETIME())),
+        (NEWID(), @TenantId, @ManagerUserId, 'MFA_DISABLED', 'MFA disabled during device replacement', N'{"MfaEnabled":true}', N'{"MfaEnabled":false}', @AdminUserId, '192.168.1.100', 'Mozilla/5.0 Chrome 91.0', NULL, 'Success', NULL, DATEADD(HOUR, -10, SYSUTCDATETIME())),
+        (NEWID(), @TenantId, @ManagerUserId, 'MFA_ENABLED', 'MFA re-enabled after device replacement', N'{"MfaEnabled":false}', N'{"MfaEnabled":true}', @ManagerUserId, '192.168.1.110', 'Mozilla/5.0 Firefox 88.0', NULL, 'Success', NULL, DATEADD(HOUR, -9, SYSUTCDATETIME())),
+        (NEWID(), @TenantId, @AdminUserId, 'EXPORT_PERFORMED', 'Exported user audit trail report', NULL, N'{"Format":"CSV","Records":25}', @AdminUserId, '192.168.1.100', 'Mozilla/5.0 Chrome 91.0', NULL, 'Success', NULL, DATEADD(HOUR, -6, SYSUTCDATETIME())),
+        (NEWID(), @TenantId, @AdminUserId, 'RETENTION_APPLIED', 'Applied audit retention policy in archive mode', NULL, N'{"Action":"Archive","AffectedRecords":0}', @AdminUserId, '192.168.1.100', 'Mozilla/5.0 Chrome 91.0', NULL, 'Success', NULL, DATEADD(HOUR, -4, SYSUTCDATETIME()));
 END
 
 -- ============================================================
