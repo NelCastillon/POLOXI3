@@ -71,7 +71,16 @@ DECLARE @HasIsDeleted BIT = CASE WHEN COL_LENGTH('IAM.UserProfile', 'IsDeleted')
 IF @TenantId IS NULL
     THROW 51000, 'User profile cannot be saved because the user does not exist.', 1;
 
-IF EXISTS (SELECT 1 FROM IAM.UserProfile WHERE UserId = @UserId AND (@HasIsDeleted = 0 OR IsDeleted = 0))
+DECLARE @ProfileExists BIT = 0;
+DECLARE @ProfileExistsSql NVARCHAR(MAX) = N'SELECT @ProfileExists = CASE WHEN EXISTS (SELECT 1 FROM IAM.UserProfile WHERE UserId = @UserId'
+    + CASE WHEN @HasIsDeleted = 1 THEN N' AND IsDeleted = 0' ELSE N'' END
+    + N') THEN 1 ELSE 0 END;';
+
+EXEC sp_executesql @ProfileExistsSql,
+    N'@UserId UNIQUEIDENTIFIER, @ProfileExists BIT OUTPUT',
+    @UserId, @ProfileExists OUTPUT;
+
+IF @ProfileExists = 1
 BEGIN
     DECLARE @UpdateSql NVARCHAR(MAX) = N'UPDATE IAM.UserProfile SET
         PhoneNumber = @PhoneNumber,
