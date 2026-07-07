@@ -12,6 +12,9 @@ public sealed class UserProfileDto
     public string? StateProvince         { get; set; }
     public string? PostalCode            { get; set; }
     public string? AvatarUrl             { get; set; }
+    public string? AvatarColor           { get; set; }
     public string? EmergencyContactName  { get; set; }
     public string? EmergencyContactPhone { get; set; }
+    public DateTime? CreatedDateUtc      { get; set; }
+    public DateTime? ModifiedDateUtc     { get; set; }
 }

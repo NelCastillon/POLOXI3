@@ -610,9 +610,22 @@ public sealed partial class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    public async Task<AuthenticatedUserDto?> ValidateLoginAsync(Guid tenantId, string userNameOrEmail, string password, CancellationToken cancellationToken = default)
+    public async Task<LoginValidationResultDto?> ValidateLoginAsync(Guid tenantId, string userNameOrEmail, string password, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync("api/auth/validate", new { TenantId = tenantId, UserNameOrEmail = userNameOrEmail, Password = password }, cancellationToken);
+
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            return null;
+        }
+
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<LoginValidationResultDto>(cancellationToken: cancellationToken);
+    }
+
+    public async Task<AuthenticatedUserDto?> VerifyTwoFactorAsync(VerifyTwoFactorRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/auth/2fa/verify", request, cancellationToken);
 
         if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
@@ -3862,8 +3875,8 @@ public sealed partial class ApiClient
     public Task<PagedResult<ConfigurationSettingDto>?> SearchConfigurationSettingsAsync(string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<ConfigurationSettingDto>>($"api/platform/configuration?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
-    public Task<PagedResult<SupportedLocaleDto>?> SearchSupportedLocalesAsync(string? searchTerm = null, CancellationToken cancellationToken = default)
-        => _httpClient.GetFromJsonAsync<PagedResult<SupportedLocaleDto>>($"api/platform/locales?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+    public Task<PagedResult<SupportedLocaleDto>?> SearchSupportedLocalesAsync(string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<SupportedLocaleDto>>($"api/platform/locales?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
     public Task<PagedResult<WorkflowDefinitionDto>?> SearchWorkflowDefinitionsAsync(string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<WorkflowDefinitionDto>>($"api/platform/workflow-definitions?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);

@@ -33,13 +33,32 @@ public sealed class TenantRepository : ITenantRepository
     WHERE IsDeleted = 0
       AND (@SearchTerm IS NULL OR @SearchTerm = ''
            OR TenantName LIKE '%' + @SearchTerm + '%'
-           OR TenantCode LIKE '%' + @SearchTerm + '%'))
+            OR TenantCode LIKE '%' + @SearchTerm + '%'
+            OR PrimaryDomain LIKE '%' + @SearchTerm + '%'
+            OR EXISTS (
+                SELECT 1
+                FROM Core.TenantDomain d
+                WHERE d.TenantId = Core.Tenant.TenantId
+                  AND d.IsDeleted = 0
+                  AND d.IsActive = 1
+                  AND d.DomainName LIKE '%' + @SearchTerm + '%'
+            ))
+)
 SELECT * FROM Cte ORDER BY CreatedDateUtc DESC OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
 SELECT COUNT(1) FROM Core.Tenant
 WHERE IsDeleted = 0
   AND (@SearchTerm IS NULL OR @SearchTerm = ''
        OR TenantName LIKE '%' + @SearchTerm + '%'
-       OR TenantCode LIKE '%' + @SearchTerm + '%');";
+        OR TenantCode LIKE '%' + @SearchTerm + '%'
+        OR PrimaryDomain LIKE '%' + @SearchTerm + '%'
+        OR EXISTS (
+            SELECT 1
+            FROM Core.TenantDomain d
+            WHERE d.TenantId = Core.Tenant.TenantId
+              AND d.IsDeleted = 0
+              AND d.IsActive = 1
+              AND d.DomainName LIKE '%' + @SearchTerm + '%'
+        ));";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql,
             new { SearchTerm = searchTerm, Offset = (Math.Max(pageNumber, 1) - 1) * pageSize, PageSize = pageSize },

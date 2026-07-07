@@ -1,22 +1,23 @@
 @page "/profile"
+@using System.ComponentModel.DataAnnotations
 @inject ApiClient Api
 @inject IJSRuntime JS
 @inject CurrentUserContext CurrentUser
 
-<PageTitle>My Profile ? AMS Enterprise</PageTitle>
+<PageTitle>My Profile | AMS Enterprise</PageTitle>
 
 @if (_loading)
 {
     <div class="pf-loading">
         <div class="pf-spinner" aria-hidden="true"></div>
-        <span>Loading profile?</span>
+        <span>Loading profile...</span>
     </div>
 }
-else if (_user is null)
+else if (_user is null || !string.IsNullOrWhiteSpace(_loadError))
 {
     <div class="pf-error">
         <i class="bi bi-person-x" aria-hidden="true"></i>
-        <p>Profile could not be loaded.</p>
+        <p>@(string.IsNullOrWhiteSpace(_loadError) ? "Profile could not be loaded." : _loadError)</p>
         <button class="ts-btn-ghost" @onclick="LoadAsync">
             <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Retry
         </button>
@@ -32,7 +33,7 @@ else
                 <h1 class="page-title">
                     <i class="bi bi-person-circle" aria-hidden="true"></i> My Profile
                 </h1>
-                <p class="page-subtitle">Manage your personal information, contact details, and preferences</p>
+                <p class="page-subtitle">Manage your DB-backed personal information, contact details, security status, and preferences.</p>
             </div>
             <div class="page-actions">
                 @if (_anyEditing)
@@ -87,17 +88,32 @@ else
 
                     <div class="pf-color-section">
                         <span class="pf-color-label">Avatar color</span>
-                        <div class="pf-color-strip" role="group" aria-label="Choose avatar color">
-                            @foreach (var c in AvatarColors)
-                            {
-                                <button class="pf-color-swatch @(c == _avatarColor ? "is-active" : "")"
-                                        style="background:@c;"
-                                        title="Set avatar color"
-                                        aria-pressed="@(c == _avatarColor ? "true" : "false")"
-                                        @onclick="() => PickColorAsync(c)">
+                        @if (!_editAvatarColor)
+                        {
+                            <div class="pf-avatar-url-row">
+                                <span class="pf-avatar-url-val">@DisplayValue(_profile?.AvatarColor)</span>
+                                <button class="pf-url-edit-btn"
+                                        title="Edit avatar color"
+                                        @onclick="OpenAvatarColor">
+                                    <i class="bi bi-pencil" aria-hidden="true"></i>
                                 </button>
-                            }
-                        </div>
+                            </div>
+                        }
+                        else
+                        {
+                            <EditForm Model="_avatarColorForm" OnValidSubmit="SaveAvatarColorAsync" class="pf-avatar-url-edit pf-validated-form">
+                                <DataAnnotationsValidator />
+                                <input class="um-input" type="color" @bind="_avatarColorForm.AvatarColor" />
+                                <ValidationMessage For="() => _avatarColorForm.AvatarColor" class="text-danger" />
+                                <div class="pf-avatar-url-actions">
+                                    <button type="button" class="ts-btn-ghost" @onclick="() => _editAvatarColor = false">Cancel</button>
+                                    <button type="submit" class="ts-btn-primary" disabled="@_saving">
+                                        @if (_saving) { <span class="ts-spin" aria-hidden="true"></span> }
+                                        Save
+                                    </button>
+                                </div>
+                            </EditForm>
+                        }
                     </div>
 
                     <div class="pf-avatar-url-section">
@@ -110,23 +126,25 @@ else
                                 </span>
                                 <button class="pf-url-edit-btn"
                                         title="Edit avatar URL"
-                                        @onclick="() => { _editAvatarUrl = true; _avatarUrlInput = _profile?.AvatarUrl ?? string.Empty; }">
+                                         @onclick="OpenAvatarUrl">
                                     <i class="bi bi-pencil" aria-hidden="true"></i>
                                 </button>
                             </div>
                         }
                         else
                         {
-                            <div class="pf-avatar-url-edit">
-                                <SfTextBox @bind-Value="_avatarUrlInput" Placeholder="https://?" />
+                            <EditForm Model="_avatarUrlForm" OnValidSubmit="SaveAvatarUrlAsync" class="pf-avatar-url-edit pf-validated-form">
+                                <DataAnnotationsValidator />
+                                <InputText class="ld-input pf-enterprise-input" type="url" @bind-Value="_avatarUrlForm.AvatarUrl" placeholder="https://example.com/avatar.png" />
+                                <ValidationMessage For="() => _avatarUrlForm.AvatarUrl" class="text-danger" />
                                 <div class="pf-avatar-url-actions">
-                                    <button class="ts-btn-ghost" @onclick="() => _editAvatarUrl = false">Cancel</button>
-                                    <button class="ts-btn-primary" @onclick="SaveAvatarUrlAsync" disabled="@_saving">
+                                    <button type="button" class="ts-btn-ghost" @onclick="() => _editAvatarUrl = false">Cancel</button>
+                                    <button type="submit" class="ts-btn-primary" disabled="@_saving">
                                         @if (_saving) { <span class="ts-spin" aria-hidden="true"></span> }
                                         Save
                                     </button>
                                 </div>
-                            </div>
+                            </EditForm>
                         }
                     </div>
                 </div>
@@ -156,12 +174,20 @@ else
                             <dd>@(_user.LastLoginDateUtc?.ToString("MMM d, yyyy") ?? "Never")</dd>
                         </div>
                         <div class="ts-dl-row">
-                            <dt>MFA</dt>
+                            <dt>SMS 2FA</dt>
                             <dd>
                                 <span class="badge @(_user.MfaEnabled ? "badge-green" : "badge-amber")">
-                                    @(_user.MfaEnabled ? "Enabled" : "Not set up")
+                                    @(_user.MfaEnabled ? "Required" : "Optional")
                                 </span>
                             </dd>
+                        </div>
+                        <div class="ts-dl-row">
+                            <dt>Password</dt>
+                            <dd>@(_user.PasswordChangedDateUtc?.ToString("MMM d, yyyy") ?? "Not recorded")</dd>
+                        </div>
+                        <div class="ts-dl-row">
+                            <dt>Lockout</dt>
+                            <dd>@(_user.IsLockedOut ? $"Locked until {_user.LockoutEndDateUtc?.ToString("MMM d, yyyy h:mm tt")}" : "Not locked")</dd>
                         </div>
                         <div class="ts-dl-row">
                             <dt>Roles</dt>
@@ -200,7 +226,7 @@ else
                                 </div>
                                 <div class="pf-field">
                                     <div class="pf-field-label">Display Name</div>
-                                    <div class="pf-field-value">@(_user.DisplayName ?? "?")</div>
+                                    <div class="pf-field-value">@DisplayValue(_user.DisplayName)</div>
                                 </div>
                                 <div class="pf-field">
                                     <div class="pf-field-label">Username</div>
@@ -220,26 +246,29 @@ else
                         }
                         else
                         {
-                            <div class="ts-edit-form">
+                            <EditForm Model="_pForm" OnValidSubmit="SavePersonalAsync" class="ts-edit-form pf-validated-form">
+                                <DataAnnotationsValidator />
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label>Full Name <span class="req" aria-hidden="true">*</span></label>
-                                        <SfTextBox @bind-Value="_pForm.FullName" Placeholder="John Doe" />
+                                        <InputText class="ld-input pf-enterprise-input" @bind-Value="_pForm.FullName" placeholder="John Doe" />
+                                        <ValidationMessage For="() => _pForm.FullName" class="text-danger" />
                                     </div>
                                     <div class="form-group">
                                         <label>Display Name <span class="pf-optional">(optional)</span></label>
-                                        <SfTextBox @bind-Value="_pForm.DisplayName" Placeholder="e.g. Johnny" />
+                                        <InputText class="ld-input pf-enterprise-input" @bind-Value="_pForm.DisplayName" placeholder="e.g. Johnny" />
+                                        <ValidationMessage For="() => _pForm.DisplayName" class="text-danger" />
                                     </div>
                                 </div>
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label>Username</label>
-                                        <SfTextBox Value="@_user.UserName" Enabled="false" />
+                                        <input class="ld-input pf-enterprise-input" value="@_user.UserName" disabled />
                                         <span class="field-hint">Username cannot be changed here.</span>
                                     </div>
                                     <div class="form-group">
                                         <label>Email</label>
-                                        <SfTextBox Value="@_user.Email" Enabled="false" />
+                                        <input class="ld-input pf-enterprise-input" type="email" value="@_user.Email" disabled />
                                         <span class="field-hint">Contact your administrator to update your email.</span>
                                     </div>
                                 </div>
@@ -250,13 +279,13 @@ else
                                     </div>
                                 }
                                 <div class="ts-edit-actions">
-                                    <button class="ts-btn-ghost" @onclick="CancelPersonal">Cancel</button>
-                                    <button class="ts-btn-primary" @onclick="SavePersonalAsync" disabled="@_saving">
+                                    <button type="button" class="ts-btn-ghost" @onclick="CancelPersonal">Cancel</button>
+                                    <button type="submit" class="ts-btn-primary" disabled="@_saving">
                                         @if (_saving) { <span class="ts-spin" aria-hidden="true"></span> }
                                         Save Changes
                                     </button>
                                 </div>
-                            </div>
+                            </EditForm>
                         }
                     </div>
                 </section>
@@ -318,27 +347,31 @@ else
                         }
                         else
                         {
-                            <div class="ts-edit-form">
+                            <EditForm Model="_cForm" OnValidSubmit="SaveContactAsync" class="ts-edit-form pf-validated-form">
+                                <DataAnnotationsValidator />
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label>Phone Number</label>
-                                        <SfTextBox @bind-Value="_cForm.PhoneNumber"
-                                                    Placeholder="(555) 123-4567"
-                                                   Type="InputType.Tel" />
-                                         <small class="text-muted">Use enterprise phone format: (555) 123-4567 or +1 555 123 4567 x123.</small>
+                                        <InputText class="ld-input pf-enterprise-input" type="tel" @bind-Value="_cForm.PhoneNumber" @bind-Value:after="OnProfilePhoneChanged" placeholder="(555) 123-4567" />
+                                        @if (!string.IsNullOrWhiteSpace(_cForm.PhoneNumber))
+                                        {
+                                            <span class="@PhoneHintClass(_cForm.PhoneNumber)">@PhoneStatusText(_cForm.PhoneNumber)</span>
+                                        }
                                     </div>
                                     <div class="form-group">
                                         <label>Mobile Number <span class="pf-optional">(optional)</span></label>
-                                        <SfTextBox @bind-Value="_cForm.MobileNumber"
-                                                    Placeholder="(555) 123-4567"
-                                                   Type="InputType.Tel" />
-                                         <small class="text-muted">Use enterprise phone format: (555) 123-4567 or +1 555 123 4567 x123.</small>
+                                        <InputText class="ld-input pf-enterprise-input" type="tel" @bind-Value="_cForm.MobileNumber" @bind-Value:after="OnProfileMobileChanged" placeholder="(555) 123-4567" />
+                                        @if (!string.IsNullOrWhiteSpace(_cForm.MobileNumber))
+                                        {
+                                            <span class="@PhoneHintClass(_cForm.MobileNumber)">@PhoneStatusText(_cForm.MobileNumber)</span>
+                                        }
                                     </div>
                                 </div>
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label>Email</label>
-                                        <SfTextBox Value="@_user.Email" Enabled="false" />
+                                        <InputText class="ld-input pf-enterprise-input" type="email" @bind-Value="_cForm.Email" disabled />
+                                        <ValidationMessage For="() => _cForm.Email" class="text-danger" />
                                         <span class="field-hint">Contact your administrator to update your email.</span>
                                     </div>
                                     <div class="form-group"></div>
@@ -350,13 +383,13 @@ else
                                     </div>
                                 }
                                 <div class="ts-edit-actions">
-                                    <button class="ts-btn-ghost" @onclick="CancelContact">Cancel</button>
-                                    <button class="ts-btn-primary" @onclick="SaveContactAsync" disabled="@_saving">
+                                    <button type="button" class="ts-btn-ghost" @onclick="CancelContact">Cancel</button>
+                                    <button type="submit" class="ts-btn-primary" disabled="@_saving">
                                         @if (_saving) { <span class="ts-spin" aria-hidden="true"></span> }
                                         Save Changes
                                     </button>
                                 </div>
-                            </div>
+                            </EditForm>
                         }
                     </div>
                 </section>
@@ -397,53 +430,60 @@ else
                                 </div>
                                 <div class="pf-field">
                                     <div class="pf-field-label">City</div>
-                                    <div class="pf-field-value">@(_profile?.City ?? "?")</div>
+                                    <div class="pf-field-value">@DisplayValue(_profile?.City)</div>
                                 </div>
                                 <div class="pf-field">
                                     <div class="pf-field-label">State / Province</div>
-                                    <div class="pf-field-value">@(_profile?.StateProvince ?? "?")</div>
+                                    <div class="pf-field-value">@DisplayValue(_profile?.StateProvince)</div>
                                 </div>
                                 <div class="pf-field">
                                     <div class="pf-field-label">Postal Code</div>
-                                    <div class="pf-field-value">@(_profile?.PostalCode ?? "?")</div>
+                                    <div class="pf-field-value">@DisplayValue(_profile?.PostalCode)</div>
                                 </div>
                                 <div class="pf-field">
                                     <div class="pf-field-label">Country</div>
-                                    <div class="pf-field-value">@(_profile?.CountryCode ?? "?")</div>
+                                    <div class="pf-field-value">@DisplayValue(_profile?.CountryCode)</div>
                                 </div>
                             </div>
                         }
                         else
                         {
-                            <div class="ts-edit-form">
+                            <EditForm Model="_aForm" OnValidSubmit="SaveAddressAsync" class="ts-edit-form pf-validated-form">
+                                <DataAnnotationsValidator />
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label>Address Line 1</label>
-                                        <SfTextBox @bind-Value="_aForm.AddressLine1" Placeholder="Street address" />
+                                        <InputText class="ld-input pf-enterprise-input" @bind-Value="_aForm.AddressLine1" placeholder="Street address" />
+                                        <ValidationMessage For="() => _aForm.AddressLine1" class="text-danger" />
                                     </div>
                                     <div class="form-group">
                                         <label>Address Line 2 <span class="pf-optional">(optional)</span></label>
-                                        <SfTextBox @bind-Value="_aForm.AddressLine2" Placeholder="Suite, unit, etc." />
+                                        <InputText class="ld-input pf-enterprise-input" @bind-Value="_aForm.AddressLine2" placeholder="Suite, unit, etc." />
+                                        <ValidationMessage For="() => _aForm.AddressLine2" class="text-danger" />
                                     </div>
                                 </div>
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label>City</label>
-                                        <SfTextBox @bind-Value="_aForm.City" Placeholder="City" />
+                                        <InputText class="ld-input pf-enterprise-input" @bind-Value="_aForm.City" placeholder="City" />
+                                        <ValidationMessage For="() => _aForm.City" class="text-danger" />
                                     </div>
                                     <div class="form-group">
                                         <label>State / Province</label>
-                                        <SfTextBox @bind-Value="_aForm.StateProvince" Placeholder="State or province" />
+                                        <InputText class="ld-input pf-enterprise-input" @bind-Value="_aForm.StateProvince" placeholder="State or province" />
+                                        <ValidationMessage For="() => _aForm.StateProvince" class="text-danger" />
                                     </div>
                                 </div>
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label>Postal Code</label>
-                                        <SfTextBox @bind-Value="_aForm.PostalCode" Placeholder="00000" />
+                                        <InputText class="ld-input pf-enterprise-input" @bind-Value="_aForm.PostalCode" placeholder="00000" />
+                                        <ValidationMessage For="() => _aForm.PostalCode" class="text-danger" />
                                     </div>
                                     <div class="form-group">
                                         <label>Country Code</label>
-                                        <SfTextBox @bind-Value="_aForm.CountryCode" Placeholder="US" />
+                                        <InputText class="ld-input pf-enterprise-input" @bind-Value="_aForm.CountryCode" placeholder="US" />
+                                        <ValidationMessage For="() => _aForm.CountryCode" class="text-danger" />
                                         <span class="field-hint">2-letter ISO country code (e.g. US, GB, AU)</span>
                                     </div>
                                 </div>
@@ -454,13 +494,13 @@ else
                                     </div>
                                 }
                                 <div class="ts-edit-actions">
-                                    <button class="ts-btn-ghost" @onclick="CancelAddress">Cancel</button>
-                                    <button class="ts-btn-primary" @onclick="SaveAddressAsync" disabled="@_saving">
+                                    <button type="button" class="ts-btn-ghost" @onclick="CancelAddress">Cancel</button>
+                                    <button type="submit" class="ts-btn-primary" disabled="@_saving">
                                         @if (_saving) { <span class="ts-spin" aria-hidden="true"></span> }
                                         Save Changes
                                     </button>
                                 </div>
-                            </div>
+                            </EditForm>
                         }
                     </div>
                 </section>
@@ -484,11 +524,11 @@ else
                             <div class="pf-field-grid">
                                 <div class="pf-field">
                                     <div class="pf-field-label">Job Title</div>
-                                    <div class="pf-field-value">@(_user.JobTitle ?? "?")</div>
+                                    <div class="pf-field-value">@DisplayValue(_user.JobTitle)</div>
                                 </div>
                                 <div class="pf-field">
                                     <div class="pf-field-label">Department</div>
-                                    <div class="pf-field-value">@(_user.Department ?? "?")</div>
+                                    <div class="pf-field-value">@DisplayValue(_user.Department)</div>
                                 </div>
                                 <div class="pf-field pf-field-wide">
                                     <div class="pf-field-label">Branch</div>
@@ -510,7 +550,7 @@ else
                                                         <div class="pf-branch-sub">
                                                             @loc
                                                             @if (!string.IsNullOrEmpty(_branch.CountryCode))
-                                                            { <span class="pf-branch-cc">? @_branch.CountryCode</span> }
+                                                            { <span class="pf-branch-cc">@_branch.CountryCode</span> }
                                                         </div>
                                                     }
                                                 </div>
@@ -542,17 +582,18 @@ else
                         }
                         else
                         {
-                            <div class="ts-edit-form">
+                            <EditForm Model="_oForm" OnValidSubmit="SaveOrgAsync" class="ts-edit-form pf-validated-form">
+                                <DataAnnotationsValidator />
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label>Job Title</label>
-                                        <SfTextBox @bind-Value="_oForm.JobTitle"
-                                                   Placeholder="e.g. Senior Account Manager" />
+                                        <InputText class="ld-input pf-enterprise-input" @bind-Value="_oForm.JobTitle" placeholder="e.g. Senior Account Manager" />
+                                        <ValidationMessage For="() => _oForm.JobTitle" class="text-danger" />
                                     </div>
                                     <div class="form-group">
                                         <label>Department</label>
-                                        <SfTextBox @bind-Value="_oForm.Department"
-                                                   Placeholder="e.g. Sales" />
+                                        <InputText class="ld-input pf-enterprise-input" @bind-Value="_oForm.Department" placeholder="e.g. Sales" />
+                                        <ValidationMessage For="() => _oForm.Department" class="text-danger" />
                                     </div>
                                 </div>
                                 @if (_branch is not null)
@@ -586,13 +627,13 @@ else
                                     </div>
                                 }
                                 <div class="ts-edit-actions">
-                                    <button class="ts-btn-ghost" @onclick="CancelOrg">Cancel</button>
-                                    <button class="ts-btn-primary" @onclick="SaveOrgAsync" disabled="@_saving">
+                                    <button type="button" class="ts-btn-ghost" @onclick="CancelOrg">Cancel</button>
+                                    <button type="submit" class="ts-btn-primary" disabled="@_saving">
                                         @if (_saving) { <span class="ts-spin" aria-hidden="true"></span> }
                                         Save Changes
                                     </button>
                                 </div>
-                            </div>
+                            </EditForm>
                         }
                     </div>
                 </section>
@@ -618,41 +659,44 @@ else
                                     <div class="pf-field-label">Time Zone</div>
                                     <div class="pf-field-value">
                                         <i class="bi bi-clock" aria-hidden="true"></i>
-                                        @(TimeZoneLabel(_user.TimeZoneCode) ?? _user.TimeZoneCode ?? "UTC")
+                                        @DisplayValue(_user.TimeZoneCode)
                                     </div>
                                 </div>
                                 <div class="pf-field">
                                     <div class="pf-field-label">Locale</div>
                                     <div class="pf-field-value">
                                         <i class="bi bi-translate" aria-hidden="true"></i>
-                                        @(LocaleLabel(_user.LocaleCode) ?? _user.LocaleCode ?? "en-US")
+                                        @DisplayValue(LocaleLabel(_user.LocaleCode) ?? _user.LocaleCode)
                                     </div>
                                 </div>
                             </div>
                         }
                         else
                         {
-                            <div class="ts-edit-form">
+                            <EditForm Model="_lForm" OnValidSubmit="SaveLocaleAsync" class="ts-edit-form pf-validated-form">
+                                <DataAnnotationsValidator />
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label>Time Zone</label>
-                                        <SfDropDownList TItem="TzItem" TValue="string"
-                                                        DataSource="@_timeZones"
-                                                        @bind-Value="_lForm.TimeZoneCode"
-                                                        Placeholder="Select time zone?"
-                                                        AllowFiltering="true">
-                                            <DropDownListFieldSettings Text="Label" Value="Code" />
-                                        </SfDropDownList>
+                                        <InputSelect class="ld-input pf-enterprise-input" @bind-Value="_lForm.TimeZoneCode">
+                                            <option value="">Select time zone</option>
+                                            @foreach (var timeZone in _timeZones)
+                                            {
+                                                <option value="@timeZone.Code">@timeZone.Label</option>
+                                            }
+                                        </InputSelect>
+                                        <ValidationMessage For="() => _lForm.TimeZoneCode" class="text-danger" />
                                     </div>
                                     <div class="form-group">
                                         <label>Locale</label>
-                                        <SfDropDownList TItem="LocaleItem" TValue="string"
-                                                        DataSource="@_locales"
-                                                        @bind-Value="_lForm.LocaleCode"
-                                                        Placeholder="Select locale?"
-                                                        AllowFiltering="true">
-                                            <DropDownListFieldSettings Text="Label" Value="Code" />
-                                        </SfDropDownList>
+                                        <InputSelect class="ld-input pf-enterprise-input" @bind-Value="_lForm.LocaleCode">
+                                            <option value="">Select locale</option>
+                                            @foreach (var locale in _localeOptions)
+                                            {
+                                                <option value="@locale.Code">@locale.Label</option>
+                                            }
+                                        </InputSelect>
+                                        <ValidationMessage For="() => _lForm.LocaleCode" class="text-danger" />
                                     </div>
                                 </div>
                                 @if (!string.IsNullOrEmpty(_lError))
@@ -662,13 +706,13 @@ else
                                     </div>
                                 }
                                 <div class="ts-edit-actions">
-                                    <button class="ts-btn-ghost" @onclick="CancelLocale">Cancel</button>
-                                    <button class="ts-btn-primary" @onclick="SaveLocaleAsync" disabled="@_saving">
+                                    <button type="button" class="ts-btn-ghost" @onclick="CancelLocale">Cancel</button>
+                                    <button type="submit" class="ts-btn-primary" disabled="@_saving">
                                         @if (_saving) { <span class="ts-spin" aria-hidden="true"></span> }
                                         Save Preferences
                                     </button>
                                 </div>
-                            </div>
+                            </EditForm>
                         }
                     </div>
                 </section>
@@ -722,18 +766,21 @@ else
                         }
                         else
                         {
-                            <div class="ts-edit-form">
+                            <EditForm Model="_eForm" OnValidSubmit="SaveEmergencyAsync" class="ts-edit-form pf-validated-form">
+                                <DataAnnotationsValidator />
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label>Contact Name</label>
-                                        <SfTextBox @bind-Value="_eForm.Name" Placeholder="Full name" />
+                                        <InputText class="ld-input pf-enterprise-input" @bind-Value="_eForm.Name" placeholder="Full name" />
+                                        <ValidationMessage For="() => _eForm.Name" class="text-danger" />
                                     </div>
                                     <div class="form-group">
                                         <label>Contact Phone</label>
-                                        <SfTextBox @bind-Value="_eForm.Phone"
-                                                    Placeholder="(555) 123-4567"
-                                                   Type="InputType.Tel" />
-                                         <small class="text-muted">Use enterprise phone format: (555) 123-4567 or +1 555 123 4567 x123.</small>
+                                        <InputText class="ld-input pf-enterprise-input" type="tel" @bind-Value="_eForm.Phone" @bind-Value:after="OnEmergencyPhoneChanged" placeholder="(555) 123-4567" />
+                                        @if (!string.IsNullOrWhiteSpace(_eForm.Phone))
+                                        {
+                                            <span class="@PhoneHintClass(_eForm.Phone)">@PhoneStatusText(_eForm.Phone)</span>
+                                        }
                                     </div>
                                 </div>
                                 @if (!string.IsNullOrEmpty(_eError))
@@ -743,13 +790,13 @@ else
                                     </div>
                                 }
                                 <div class="ts-edit-actions">
-                                    <button class="ts-btn-ghost" @onclick="CancelEmergency">Cancel</button>
-                                    <button class="ts-btn-primary" @onclick="SaveEmergencyAsync" disabled="@_saving">
+                                    <button type="button" class="ts-btn-ghost" @onclick="CancelEmergency">Cancel</button>
+                                    <button type="submit" class="ts-btn-primary" disabled="@_saving">
                                         @if (_saving) { <span class="ts-spin" aria-hidden="true"></span> }
                                         Save Changes
                                     </button>
                                 </div>
-                            </div>
+                            </EditForm>
                         }
                     </div>
                 </section>
@@ -767,9 +814,11 @@ else
     private UserDto?        _user;
     private BranchDto?      _branch;
     private UserProfileDto? _profile;
+    private List<LocaleItem> _localeOptions = [];
     private bool            _loading     = true;
     private bool            _saving;
     private string          _avatarColor = "#2563eb";
+    private string?         _loadError;
 
     // -- Edit section toggles --------------------------------------
     private bool   _editPersonal;
@@ -779,7 +828,9 @@ else
     private bool   _editAddress;
     private bool   _editEmergency;
     private bool   _editAvatarUrl;
-    private string _avatarUrlInput = string.Empty;
+    private bool   _editAvatarColor;
+    private AvatarUrlForm _avatarUrlForm = new();
+    private AvatarColorForm _avatarColorForm = new();
     private bool   _anyEditing => _editPersonal || _editContact || _editOrg || _editLocale || _editAddress || _editEmergency;
 
     // -- Per-section error messages --------------------------------
@@ -803,20 +854,10 @@ else
     // -- Lifecycle -------------------------------------------------
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (!firstRender || _user is null) return;
-        try
-        {
-            var saved = await JS.InvokeAsync<string?>("localStorage.getItem", $"ams.avatar.{_currentUserId}");
-            if (!string.IsNullOrEmpty(saved)) { _avatarColor = saved; StateHasChanged(); }
-        }
-        catch { /* JS not yet available or user declined storage */ }
-    }
-
     private async Task LoadAsync()
     {
         _loading = true;
+        _loadError = null;
         try
         {
             var context = await CurrentUser.GetAsync();
@@ -832,21 +873,28 @@ else
             _tenantId = context.TenantId;
             _user    = await Api.GetUserByIdAsync(context.UserId);
             _profile = await Api.GetUserProfileAsync(context.UserId);
+            _avatarColor = NormalizeAvatarColor(_profile?.AvatarColor);
+            _avatarColorForm.AvatarColor = _avatarColor;
             if (_user is not null && _user.BranchId.HasValue)
             {
                 var branches = await Api.SearchBranchesAsync(context.TenantId);
                 _branch = branches?.Items.FirstOrDefault(b => b.BranchId == _user.BranchId);
             }
+
+            var localeResult = await Api.SearchSupportedLocalesAsync(pageSize: 500);
+            _localeOptions = localeResult?.Items
+                .Where(l => l.IsActive)
+                .OrderBy(l => l.LocaleName)
+                .Select(l => new LocaleItem(l.LocaleCode, string.IsNullOrWhiteSpace(l.NativeName) ? l.LocaleName : $"{l.LocaleName} ({l.NativeName})"))
+                .ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Profile load failed: {ex.Message}";
+            _globalMsg = _loadError;
+            _globalErr = true;
         }
         finally { _loading = false; }
-    }
-
-    // -- Avatar color ----------------------------------------------
-    private async Task PickColorAsync(string color)
-    {
-        _avatarColor = color;
-        try { await JS.InvokeVoidAsync("localStorage.setItem", $"ams.avatar.{_currentUserId}", color); }
-        catch { /* storage may be unavailable */ }
     }
 
     // -- Personal section ------------------------------------------
@@ -886,7 +934,7 @@ else
     // -- Contact section -------------------------------------------
     private void OpenContact()
     {
-        _cForm       = new() { PhoneNumber = _user!.PhoneNumber, MobileNumber = _profile?.MobileNumber };
+        _cForm       = new() { PhoneNumber = _user!.PhoneNumber, MobileNumber = _profile?.MobileNumber, Email = _user.Email };
         _cError      = string.Empty;
         _editContact = true;
     }
@@ -903,14 +951,14 @@ else
                 UserId       = _user.UserId,
                 FullName     = _user.FullName,
                 DisplayName  = _user.DisplayName,
-                PhoneNumber  = _cForm.PhoneNumber?.Trim(),
+                PhoneNumber  = NormalizePhone(_cForm.PhoneNumber),
                 JobTitle     = _user.JobTitle,
                 Department   = _user.Department,
                 TimeZoneCode = _user.TimeZoneCode,
                 LocaleCode   = _user.LocaleCode,
             });
             var req = CurrentProfileRequest();
-            req.MobileNumber = _cForm.MobileNumber?.Trim();
+            req.MobileNumber = NormalizePhone(_cForm.MobileNumber);
             await Api.UpdateUserProfileAsync(_user.UserId, req);
             _editContact = false;
             await ReloadAndNotify("Contact information updated.");
@@ -1040,7 +1088,7 @@ else
         {
             var req = CurrentProfileRequest();
             req.EmergencyContactName  = _eForm.Name?.Trim();
-            req.EmergencyContactPhone = _eForm.Phone?.Trim();
+            req.EmergencyContactPhone = NormalizePhone(_eForm.Phone);
             await Api.UpdateUserProfileAsync(_user.UserId, req);
             _editEmergency = false;
             await ReloadAndNotify("Emergency contact updated.");
@@ -1050,6 +1098,20 @@ else
     }
 
     // -- Avatar URL ------------------------------------------------
+    private void OpenAvatarUrl()
+    {
+        _avatarUrlForm = new() { AvatarUrl = _profile?.AvatarUrl ?? string.Empty };
+        _globalMsg = string.Empty;
+        _editAvatarUrl = true;
+    }
+
+    private void OpenAvatarColor()
+    {
+        _avatarColorForm = new() { AvatarColor = NormalizeAvatarColor(_profile?.AvatarColor ?? _avatarColor) };
+        _globalMsg = string.Empty;
+        _editAvatarColor = true;
+    }
+
     private async Task SaveAvatarUrlAsync()
     {
         if (_user is null || _saving) return;
@@ -1057,12 +1119,28 @@ else
         try
         {
             var req = CurrentProfileRequest();
-            req.AvatarUrl = string.IsNullOrWhiteSpace(_avatarUrlInput) ? null : _avatarUrlInput.Trim();
+            req.AvatarUrl = string.IsNullOrWhiteSpace(_avatarUrlForm.AvatarUrl) ? null : _avatarUrlForm.AvatarUrl.Trim();
             await Api.UpdateUserProfileAsync(_user.UserId, req);
             _editAvatarUrl = false;
             await ReloadAndNotify("Avatar image updated.");
         }
-        catch { /* swallow ? cosmetic field */ }
+        catch (Exception ex) { _globalMsg = $"Avatar image update failed: {ex.Message}"; _globalErr = true; }
+        finally { _saving = false; }
+    }
+
+    private async Task SaveAvatarColorAsync()
+    {
+        if (_user is null || _saving) return;
+        _saving = true;
+        try
+        {
+            var req = CurrentProfileRequest();
+            req.AvatarColor = NormalizeAvatarColor(_avatarColorForm.AvatarColor);
+            await Api.UpdateUserProfileAsync(_user.UserId, req);
+            _editAvatarColor = false;
+            await ReloadAndNotify("Avatar color updated.");
+        }
+        catch (Exception ex) { _globalMsg = $"Avatar color update failed: {ex.Message}"; _globalErr = true; }
         finally { _saving = false; }
     }
 
@@ -1086,9 +1164,63 @@ else
         StateProvince         = _profile?.StateProvince,
         PostalCode            = _profile?.PostalCode,
         AvatarUrl             = _profile?.AvatarUrl,
+        AvatarColor           = _profile?.AvatarColor,
         EmergencyContactName  = _profile?.EmergencyContactName,
         EmergencyContactPhone = _profile?.EmergencyContactPhone,
     };
+
+    private static string DisplayValue(string? value) => string.IsNullOrWhiteSpace(value) ? "Not provided" : value;
+
+    private static string NormalizeAvatarColor(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && value.StartsWith('#') && value.Length is 4 or 7 ? value : "#2563eb";
+
+    private void OnProfilePhoneChanged()
+    {
+        if (IsPhoneValid(_cForm.PhoneNumber))
+        {
+            _cForm.PhoneNumber = NormalizePhone(_cForm.PhoneNumber) ?? string.Empty;
+        }
+    }
+
+    private void OnProfileMobileChanged()
+    {
+        if (IsPhoneValid(_cForm.MobileNumber))
+        {
+            _cForm.MobileNumber = NormalizePhone(_cForm.MobileNumber) ?? string.Empty;
+        }
+    }
+
+    private void OnEmergencyPhoneChanged()
+    {
+        if (IsPhoneValid(_eForm.Phone))
+        {
+            _eForm.Phone = NormalizePhone(_eForm.Phone) ?? string.Empty;
+        }
+    }
+
+    private static string PhoneStatusText(string? value) => IsPhoneValid(value)
+        ? $"Phone formatted as {NormalizePhone(value)}"
+        : "Enter a valid 10-digit phone number.";
+
+    private static string PhoneHintClass(string? value) => IsPhoneValid(value)
+        ? "ld-field-hint ld-hint-good"
+        : "ld-field-hint ld-hint-bad";
+
+    private static bool IsPhoneValid(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return true;
+        var digits = new string(value.Where(char.IsDigit).ToArray());
+        if (digits.Length == 11 && digits[0] == '1') digits = digits[1..];
+        return digits.Length == 10;
+    }
+
+    private static string? NormalizePhone(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var digits = new string(value.Where(char.IsDigit).ToArray());
+        if (digits.Length == 11 && digits[0] == '1') digits = digits[1..];
+        return digits.Length == 10 ? $"({digits[..3]}) {digits.Substring(3, 3)}-{digits[6..]}" : value.Trim();
+    }
 
     private static string Initials(string name)
     {
@@ -1116,29 +1248,67 @@ else
     };
 
     private static string? TimeZoneLabel(string? code) => _timeZones.FirstOrDefault(t => t.Code == code)?.Label;
-    private static string? LocaleLabel(string? code)   => _locales.FirstOrDefault(l => l.Code == code)?.Label;
-
-    // -- Avatar colors ---------------------------------------------
-    private static readonly string[] AvatarColors =
-    [
-        "#2563eb", "#7c3aed", "#059669", "#d97706",
-        "#dc2626", "#0891b2", "#db2777", "#4f46e5",
-    ];
+    private string? LocaleLabel(string? code)   => _localeOptions.FirstOrDefault(l => l.Code == code)?.Label;
 
     // -- Form models -----------------------------------------------
-    private sealed class PersonalForm { public string FullName { get; set; } = string.Empty; public string? DisplayName { get; set; } }
-    private sealed class ContactForm  { [AmsPhone] public string? PhoneNumber { get; set; } [AmsPhone] public string? MobileNumber { get; set; } }
-    private sealed class OrgForm      { public string? JobTitle { get; set; } public string? Department { get; set; } }
-    private sealed class LocaleForm   { public string TimeZoneCode { get; set; } = "UTC"; public string LocaleCode { get; set; } = "en-US"; }
-    private sealed class AddressForm  { public string? AddressLine1 { get; set; } public string? AddressLine2 { get; set; } public string? City { get; set; } public string? StateProvince { get; set; } public string? PostalCode { get; set; } public string? CountryCode { get; set; } }
-    private sealed class EmergencyContactForm { public string? Name { get; set; } [AmsPhone] public string? Phone { get; set; } }
+    private sealed class PersonalForm
+    {
+        [Required, StringLength(200)] public string FullName { get; set; } = string.Empty;
+        [StringLength(200)] public string? DisplayName { get; set; }
+    }
+
+    private sealed class ContactForm
+    {
+        [Required, AmsEmailAddress, StringLength(200)] public string Email { get; set; } = string.Empty;
+        [AmsPhone, StringLength(30)] public string? PhoneNumber { get; set; }
+        [AmsPhone, StringLength(30)] public string? MobileNumber { get; set; }
+    }
+
+    private sealed class OrgForm
+    {
+        [StringLength(150)] public string? JobTitle { get; set; }
+        [StringLength(150)] public string? Department { get; set; }
+    }
+
+    private sealed class LocaleForm
+    {
+        [Required, StringLength(100)] public string TimeZoneCode { get; set; } = "UTC";
+        [Required, StringLength(20)] public string LocaleCode { get; set; } = "en-US";
+    }
+
+    private sealed class AddressForm
+    {
+        [StringLength(300)] public string? AddressLine1 { get; set; }
+        [StringLength(300)] public string? AddressLine2 { get; set; }
+        [StringLength(150)] public string? City { get; set; }
+        [StringLength(150)] public string? StateProvince { get; set; }
+        [StringLength(30)] public string? PostalCode { get; set; }
+        [StringLength(10)] public string? CountryCode { get; set; }
+    }
+
+    private sealed class EmergencyContactForm
+    {
+        [StringLength(200)] public string? Name { get; set; }
+        [AmsPhone, StringLength(40)] public string? Phone { get; set; }
+    }
+
+    private sealed class AvatarUrlForm
+    {
+        [Url, StringLength(1000)] public string? AvatarUrl { get; set; }
+    }
+
+    private sealed class AvatarColorForm
+    {
+        [Required, RegularExpression("^#[0-9A-Fa-f]{6}$", ErrorMessage = "Enter a valid 6-digit hex color.")]
+        public string AvatarColor { get; set; } = "#2563eb";
+    }
 
     private sealed record TzItem(string Code, string Label);
     private sealed record LocaleItem(string Code, string Label);
 
     private static readonly List<TzItem> _timeZones =
     [
-        new("UTC",                  "UTC ? Coordinated Universal Time"),
+        new("UTC",                  "UTC - Coordinated Universal Time"),
         new("America/New_York",     "Eastern Time (US & Canada)"),
         new("America/Chicago",      "Central Time (US & Canada)"),
         new("America/Denver",       "Mountain Time (US & Canada)"),
@@ -1146,8 +1316,8 @@ else
         new("America/Anchorage",    "Alaska"),
         new("Pacific/Honolulu",     "Hawaii"),
         new("America/Phoenix",      "Arizona"),
-        new("America/Toronto",      "Eastern Time ? Toronto"),
-        new("America/Vancouver",    "Pacific Time ? Vancouver"),
+        new("America/Toronto",      "Eastern Time - Toronto"),
+        new("America/Vancouver",    "Pacific Time - Vancouver"),
         new("America/Sao_Paulo",    "Brasilia"),
         new("America/Buenos_Aires", "Buenos Aires"),
         new("Europe/London",        "London (GMT/BST)"),
@@ -1171,32 +1341,4 @@ else
         new("Pacific/Auckland",     "Auckland"),
     ];
 
-    private static readonly List<LocaleItem> _locales =
-    [
-        new("en-US", "English (United States)"),
-        new("en-GB", "English (United Kingdom)"),
-        new("en-AU", "English (Australia)"),
-        new("en-CA", "English (Canada)"),
-        new("fr-FR", "French (France)"),
-        new("fr-CA", "French (Canada)"),
-        new("de-DE", "German (Germany)"),
-        new("de-AT", "German (Austria)"),
-        new("es-ES", "Spanish (Spain)"),
-        new("es-MX", "Spanish (Mexico)"),
-        new("pt-BR", "Portuguese (Brazil)"),
-        new("pt-PT", "Portuguese (Portugal)"),
-        new("it-IT", "Italian (Italy)"),
-        new("nl-NL", "Dutch (Netherlands)"),
-        new("pl-PL", "Polish (Poland)"),
-        new("ru-RU", "Russian (Russia)"),
-        new("tr-TR", "Turkish (Turkey)"),
-        new("ar-SA", "Arabic (Saudi Arabia)"),
-        new("zh-CN", "Chinese Simplified (China)"),
-        new("zh-TW", "Chinese Traditional (Taiwan)"),
-        new("ja-JP", "Japanese (Japan)"),
-        new("ko-KR", "Korean (South Korea)"),
-        new("hi-IN", "Hindi (India)"),
-        new("th-TH", "Thai (Thailand)"),
-        new("vi-VN", "Vietnamese (Vietnam)"),
-    ];
 }

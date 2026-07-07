@@ -18,10 +18,22 @@ public sealed class AuthController : ControllerBase
     [HttpPost("validate")]
     public async Task<IActionResult> Validate([FromBody] ValidateLoginRequest request, CancellationToken cancellationToken)
     {
-        var user = await _service.ValidateCredentialsAsync(
+        var result = await _service.ValidateCredentialsAsync(
             request.TenantId,
             request.UserNameOrEmail,
             request.Password,
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            Request.Headers.UserAgent.ToString(),
+            cancellationToken);
+
+        return result is null ? Unauthorized() : Ok(result);
+    }
+
+    [HttpPost("2fa/verify")]
+    public async Task<IActionResult> VerifyTwoFactor([FromBody] VerifyTwoFactorRequest request, CancellationToken cancellationToken)
+    {
+        var user = await _service.VerifyTwoFactorAsync(
+            request,
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             Request.Headers.UserAgent.ToString(),
             cancellationToken);

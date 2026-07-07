@@ -191,6 +191,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWorkflowDefinitionService, WorkflowDefinitionService>();
         services.AddScoped<IUserSessionService, UserSessionService>();
         services.AddScoped<ISecurityAuditService, SecurityAuditService>();
+        services.AddScoped<ITwoFactorSmsSender, LoggingTwoFactorSmsSender>();
 
         // ── IAM extended engines ─────────────────────────────────────
         services.AddScoped<IUserGroupRepository, UserGroupRepository>();

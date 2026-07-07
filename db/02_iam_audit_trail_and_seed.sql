@@ -120,6 +120,63 @@ DECLARE @AdminUserId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000002';
 DECLARE @ManagerUserId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000003';
 DECLARE @UserUserId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000004';
 
+-- Ensure the demo tenant exists and is active for login, even when this IAM seed is run without the core seed file.
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    IF EXISTS (SELECT 1 FROM Core.Tenant WHERE TenantId = @TenantId)
+    BEGIN
+        UPDATE Core.Tenant
+        SET TenantCode = 'DEMO',
+            TenantName = 'Demo Agency',
+            StatusCode = 'Active',
+            PlanCode = 'Enterprise',
+            RegionCode = 'US-EAST',
+            IsolationMode = 'Dedicated',
+            PrimaryDomain = 'demo.agency',
+            ActiveUsers = 7,
+            IsActive = 1,
+            Locale = 'en-US',
+            CurrencyCode = 'USD',
+            TimeZoneId = 'Eastern Standard Time',
+            ModifiedDateUtc = SYSUTCDATETIME(),
+            IsDeleted = 0
+        WHERE TenantId = @TenantId;
+    END
+    ELSE
+    BEGIN
+        INSERT INTO Core.Tenant (TenantId, TenantCode, TenantName, StatusCode, PlanCode, RegionCode, IsolationMode, PrimaryDomain, ActiveUsers, IsActive, Locale, CurrencyCode, TimeZoneId, CreatedDateUtc, GoLiveDateUtc, IsDeleted)
+        VALUES (@TenantId, 'DEMO', 'Demo Agency', 'Active', 'Enterprise', 'US-EAST', 'Dedicated', 'demo.agency', 7, 1, 'en-US', 'USD', 'Eastern Standard Time', SYSUTCDATETIME(), DATEADD(MONTH, -12, SYSUTCDATETIME()), 0);
+    END
+END
+
+IF OBJECT_ID(N'Core.TenantDomain', N'U') IS NOT NULL
+BEGIN
+    UPDATE Core.TenantDomain
+    SET IsPrimary = 0,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    WHERE TenantId = @TenantId
+      AND DomainName <> 'demo.agency';
+
+    IF EXISTS (SELECT 1 FROM Core.TenantDomain WHERE TenantId = @TenantId AND DomainName = 'demo.agency')
+    BEGIN
+        UPDATE Core.TenantDomain
+        SET IsPrimary = 1,
+            SslStatusCode = 'Valid',
+            VerificationStatusCode = 'Verified',
+            VerifiedDateUtc = COALESCE(VerifiedDateUtc, SYSUTCDATETIME()),
+            IsActive = 1,
+            ModifiedDateUtc = SYSUTCDATETIME(),
+            IsDeleted = 0
+        WHERE TenantId = @TenantId
+          AND DomainName = 'demo.agency';
+    END
+    ELSE
+    BEGIN
+        INSERT INTO Core.TenantDomain (TenantDomainId, TenantId, DomainName, IsPrimary, SslStatusCode, VerificationStatusCode, VerifiedDateUtc, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        VALUES (NEWID(), @TenantId, 'demo.agency', 1, 'Valid', 'Verified', SYSUTCDATETIME(), 1, SYSUTCDATETIME(), @AdminUserId, 0);
+    END
+END
+
 -- ============================================================
 -- SEED PermissionAction lookup table FIRST (required by FK)
 -- ============================================================
@@ -261,16 +318,124 @@ END
 -- SEED DATA - USERS
 -- ============================================================
 
-IF NOT EXISTS (SELECT 1 FROM IAM.[User] WHERE UserName = 'admin@enterprise.com')
+DECLARE @SeedPasswordHash NVARCHAR(512) = 'R4KejXsNDfY3F5MWldjuHnk2vvIMhs+e/gSqsmH3IYA=';
+DECLARE @SeedPasswordSalt NVARCHAR(256) = 'AQIDBAUGBwgJCgsMDQ4PEA==';
+
+IF EXISTS (SELECT 1 FROM IAM.[User] WHERE UserId = @AdminUserId)
 BEGIN
-    INSERT INTO IAM.[User] (UserId, TenantId, UserName, Email, FullName, FirstName, LastName, UserTypeCode, StatusCode, MfaEnabled, CreatedDateUtc) VALUES
-        (@AdminUserId, @TenantId, 'admin@enterprise.com', 'admin@enterprise.com', 'System Administrator', 'System', 'Administrator', 'Internal', 'Active', 1, SYSUTCDATETIME()),
-        (@ManagerUserId, @TenantId, 'john.manager@enterprise.com', 'john.manager@enterprise.com', 'John Manager', 'John', 'Manager', 'Internal', 'Active', 1, SYSUTCDATETIME()),
-        (@UserUserId, @TenantId, 'sarah.user@enterprise.com', 'sarah.user@enterprise.com', 'Sarah User', 'Sarah', 'User', 'Internal', 'Active', 0, SYSUTCDATETIME()),
-        (NEWID(), @TenantId, 'viewer@enterprise.com', 'viewer@enterprise.com', 'View Only User', 'View', 'Only User', 'Internal', 'Active', 0, SYSUTCDATETIME()),
-        (NEWID(), @TenantId, 'michael.sales@enterprise.com', 'michael.sales@enterprise.com', 'Michael Sales', 'Michael', 'Sales', 'Internal', 'Active', 0, SYSUTCDATETIME()),
-        (NEWID(), @TenantId, 'emily.finance@enterprise.com', 'emily.finance@enterprise.com', 'Emily Finance', 'Emily', 'Finance', 'Internal', 'Active', 1, SYSUTCDATETIME()),
-        (NEWID(), @TenantId, 'robert.ops@enterprise.com', 'robert.ops@enterprise.com', 'Robert Operations', 'Robert', 'Operations', 'Internal', 'Inactive', 0, SYSUTCDATETIME());
+    UPDATE IAM.[User]
+    SET TenantId = @TenantId,
+        UserName = 'tenant.admin@demo.agency',
+        Email = 'tenant.admin@demo.agency',
+        FullName = 'Tenant Admin',
+        DisplayName = 'Tenant Admin',
+        FirstName = 'Tenant',
+        LastName = 'Admin',
+        UserTypeCode = 'TenantAdmin',
+        StatusCode = 'Active',
+        PhoneNumber = '3108485865',
+        MfaEnabled = 1,
+        PasswordHash = @SeedPasswordHash,
+        PasswordSalt = @SeedPasswordSalt,
+        PasswordChangedDateUtc = COALESCE(PasswordChangedDateUtc, SYSUTCDATETIME()),
+        IsLockedOut = 0,
+        LockoutEndDateUtc = NULL,
+        FailedLoginAttempts = 0,
+        ModifiedDateUtc = SYSUTCDATETIME(),
+        ModifiedByUserId = @AdminUserId,
+        IsDeleted = 0
+    WHERE UserId = @AdminUserId;
+END
+
+IF NOT EXISTS (SELECT 1 FROM IAM.[User] WHERE UserName = 'tenant.admin@demo.agency')
+BEGIN
+    INSERT INTO IAM.[User] (UserId, TenantId, UserName, Email, FullName, DisplayName, FirstName, LastName, UserTypeCode, StatusCode, PhoneNumber, MfaEnabled, PasswordHash, PasswordSalt, PasswordChangedDateUtc, IsLockedOut, FailedLoginAttempts, CreatedDateUtc) VALUES
+        (@AdminUserId, @TenantId, 'tenant.admin@demo.agency', 'tenant.admin@demo.agency', 'Tenant Admin', 'Tenant Admin', 'Tenant', 'Admin', 'TenantAdmin', 'Active', '3108485865', 1, @SeedPasswordHash, @SeedPasswordSalt, SYSUTCDATETIME(), 0, 0, SYSUTCDATETIME()),
+        (@ManagerUserId, @TenantId, 'john.manager@enterprise.com', 'john.manager@enterprise.com', 'John Manager', 'John Manager', 'John', 'Manager', 'Internal', 'Active', '+15550100002', 1, @SeedPasswordHash, @SeedPasswordSalt, SYSUTCDATETIME(), 0, 0, SYSUTCDATETIME()),
+        (@UserUserId, @TenantId, 'sarah.user@enterprise.com', 'sarah.user@enterprise.com', 'Sarah User', 'Sarah User', 'Sarah', 'User', 'Internal', 'Active', '+15550100003', 0, @SeedPasswordHash, @SeedPasswordSalt, SYSUTCDATETIME(), 0, 0, SYSUTCDATETIME()),
+        (NEWID(), @TenantId, 'viewer@enterprise.com', 'viewer@enterprise.com', 'View Only User', 'View Only User', 'View', 'Only User', 'Internal', 'Active', '+15550100004', 0, @SeedPasswordHash, @SeedPasswordSalt, SYSUTCDATETIME(), 0, 0, SYSUTCDATETIME()),
+        (NEWID(), @TenantId, 'michael.sales@enterprise.com', 'michael.sales@enterprise.com', 'Michael Sales', 'Michael Sales', 'Michael', 'Sales', 'Internal', 'Active', '+15550100005', 0, @SeedPasswordHash, @SeedPasswordSalt, SYSUTCDATETIME(), 0, 0, SYSUTCDATETIME()),
+        (NEWID(), @TenantId, 'emily.finance@enterprise.com', 'emily.finance@enterprise.com', 'Emily Finance', 'Emily Finance', 'Emily', 'Finance', 'Internal', 'Active', '+15550100006', 1, @SeedPasswordHash, @SeedPasswordSalt, SYSUTCDATETIME(), 0, 0, SYSUTCDATETIME()),
+        (NEWID(), @TenantId, 'robert.ops@enterprise.com', 'robert.ops@enterprise.com', 'Robert Operations', 'Robert Operations', 'Robert', 'Operations', 'Internal', 'Inactive', '+15550100007', 0, @SeedPasswordHash, @SeedPasswordSalt, SYSUTCDATETIME(), 0, 0, SYSUTCDATETIME());
+END
+
+UPDATE IAM.[User]
+SET TenantId = @TenantId,
+    UserName = 'tenant.admin@demo.agency',
+    Email = 'tenant.admin@demo.agency',
+    FullName = 'Tenant Admin',
+    DisplayName = 'Tenant Admin',
+    FirstName = 'Tenant',
+    LastName = 'Admin',
+    UserTypeCode = 'TenantAdmin',
+    StatusCode = 'Active',
+    PhoneNumber = '3108485865',
+    MfaEnabled = 1,
+    PasswordHash = @SeedPasswordHash,
+    PasswordSalt = @SeedPasswordSalt,
+    PasswordChangedDateUtc = COALESCE(PasswordChangedDateUtc, SYSUTCDATETIME()),
+    IsLockedOut = 0,
+    LockoutEndDateUtc = NULL,
+    FailedLoginAttempts = 0,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @AdminUserId,
+    IsDeleted = 0
+WHERE UserId = @AdminUserId
+   OR (TenantId = @TenantId AND UserName IN ('admin@enterprise.com', 'tenant.admin@demo.agency'));
+
+UPDATE IAM.[User]
+SET PasswordHash = COALESCE(PasswordHash, @SeedPasswordHash),
+    PasswordSalt = COALESCE(PasswordSalt, @SeedPasswordSalt),
+    PasswordChangedDateUtc = COALESCE(PasswordChangedDateUtc, SYSUTCDATETIME()),
+    PhoneNumber = COALESCE(NULLIF(PhoneNumber, ''), CASE UserName
+        WHEN 'tenant.admin@demo.agency' THEN '3108485865'
+        WHEN 'john.manager@enterprise.com' THEN '+15550100002'
+        WHEN 'sarah.user@enterprise.com' THEN '+15550100003'
+        WHEN 'viewer@enterprise.com' THEN '+15550100004'
+        WHEN 'michael.sales@enterprise.com' THEN '+15550100005'
+        WHEN 'emily.finance@enterprise.com' THEN '+15550100006'
+        WHEN 'robert.ops@enterprise.com' THEN '+15550100007'
+        ELSE PhoneNumber
+    END),
+    DisplayName = COALESCE(DisplayName, FullName),
+    IsLockedOut = 0,
+    LockoutEndDateUtc = NULL,
+    FailedLoginAttempts = 0,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE TenantId = @TenantId
+  AND UserName IN ('tenant.admin@demo.agency', 'john.manager@enterprise.com', 'sarah.user@enterprise.com', 'viewer@enterprise.com', 'michael.sales@enterprise.com', 'emily.finance@enterprise.com', 'robert.ops@enterprise.com');
+
+IF OBJECT_ID(N'IAM.MfaDevice', N'U') IS NOT NULL
+BEGIN
+    UPDATE d
+    SET PhoneNumber = u.PhoneNumber,
+        DeviceName = 'Primary SMS Phone',
+        IsVerified = 1,
+        IsActive = 1,
+        ModifiedDateUtc = SYSUTCDATETIME(),
+        ModifiedByUserId = @AdminUserId,
+        IsDeleted = 0
+    FROM IAM.MfaDevice d
+    INNER JOIN IAM.[User] u ON u.UserId = d.UserId AND u.TenantId = d.TenantId
+    WHERE d.TenantId = @TenantId
+      AND d.DeviceTypeCode = 'SMS'
+      AND u.UserName = 'tenant.admin@demo.agency';
+
+    INSERT INTO IAM.MfaDevice (MfaDeviceId, TenantId, UserId, DeviceTypeCode, DeviceName, PhoneNumber, IsVerified, IsActive, LastUsedDateUtc, CreatedByUserId, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), u.TenantId, u.UserId, 'SMS', 'Primary SMS Phone', u.PhoneNumber, 1, 1, DATEADD(DAY, -1, SYSUTCDATETIME()), @AdminUserId, SYSUTCDATETIME(), 0
+    FROM IAM.[User] u
+    WHERE u.TenantId = @TenantId
+      AND u.MfaEnabled = 1
+      AND u.IsDeleted = 0
+      AND u.PhoneNumber IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1
+          FROM IAM.MfaDevice d
+          WHERE d.TenantId = u.TenantId
+            AND d.UserId = u.UserId
+            AND d.DeviceTypeCode = 'SMS'
+            AND d.IsDeleted = 0
+      );
 END
 
 -- ============================================================
@@ -335,10 +500,10 @@ END
 -- ============================================================
 
 -- SEED DATA - LOGIN ATTEMPTS
-IF NOT EXISTS (SELECT 1 FROM IAM.LoginAttempt WHERE UserName = 'admin@enterprise.com')
+IF NOT EXISTS (SELECT 1 FROM IAM.LoginAttempt WHERE UserName = 'tenant.admin@demo.agency')
 BEGIN
     INSERT INTO IAM.LoginAttempt (LoginAttemptId, TenantId, UserId, UserName, LastName, IpAddress, UserAgent, IsSuccessful, FailureReason, AttemptDateUtc) VALUES
-        (NEWID(), @TenantId, @AdminUserId, 'admin@enterprise.com', 'Administrator', '192.168.1.100', 'Mozilla/5.0 Chrome 91.0', 1, NULL, DATEADD(DAY, -5, SYSUTCDATETIME())),
+        (NEWID(), @TenantId, @AdminUserId, 'tenant.admin@demo.agency', 'Admin', '192.168.1.100', 'Mozilla/5.0 Chrome 91.0', 1, NULL, DATEADD(DAY, -5, SYSUTCDATETIME())),
         (NEWID(), @TenantId, @ManagerUserId, 'john.manager@enterprise.com', 'Manager', '192.168.1.110', 'Mozilla/5.0 Firefox 88.0', 0, 'InvalidCredentials', DATEADD(DAY, -3, SYSUTCDATETIME())),
         (NEWID(), @TenantId, @UserUserId, 'sarah.user@enterprise.com', 'User', '192.168.1.120', 'Mozilla/5.0 Edge 90.0', 0, 'AccountLocked', DATEADD(DAY, -2, SYSUTCDATETIME()));
 END

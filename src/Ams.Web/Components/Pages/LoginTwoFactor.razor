@@ -1,0 +1,160 @@
+@page "/login/2fa"
+@layout LoginLayout
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.WebUtilities
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>Two-factor verification | AgencyBinder AMS Enterprise Platform</PageTitle>
+
+<div class="login-shell">
+    <section class="login-brand-panel" aria-label="AMS enterprise platform security">
+        <div class="login-brand-top">
+            <div class="login-logo" aria-hidden="true">
+                <i class="bi bi-phone-vibrate-fill"></i>
+            </div>
+            <div>
+                <div class="login-brand-name">AGENCYBINDER AMS Enterprise</div>
+                <div class="login-brand-kicker">SMS two-factor authentication</div>
+            </div>
+        </div>
+
+        <div class="login-hero-copy">
+            <span class="login-eyebrow"><i class="bi bi-shield-check" aria-hidden="true"></i> Second-step verification</span>
+            <h1>Confirm your identity with the SMS code.</h1>
+            <p>
+                Your password was accepted. Enter the one-time code sent to your registered mobile number to finish signing in.
+            </p>
+        </div>
+
+        <div class="login-proof-grid" aria-label="Two-factor security controls">
+            <div class="login-proof-card">
+                <i class="bi bi-phone" aria-hidden="true"></i>
+                <span>Delivery</span>
+                <strong>SMS code</strong>
+            </div>
+            <div class="login-proof-card">
+                <i class="bi bi-clock-history" aria-hidden="true"></i>
+                <span>Expires</span>
+                <strong>Time limited</strong>
+            </div>
+            <div class="login-proof-card">
+                <i class="bi bi-database-check" aria-hidden="true"></i>
+                <span>Synced</span>
+                <strong>DB tracked</strong>
+            </div>
+            <div class="login-proof-card">
+                <i class="bi bi-shield-lock" aria-hidden="true"></i>
+                <span>Access</span>
+                <strong>Verified session</strong>
+            </div>
+        </div>
+
+        <div class="login-security-strip">
+            <span><i class="bi bi-lock-fill" aria-hidden="true"></i> TLS protected</span>
+            <span><i class="bi bi-phone-fill" aria-hidden="true"></i> SMS challenge</span>
+            <span><i class="bi bi-journal-check" aria-hidden="true"></i> Audited attempts</span>
+        </div>
+    </section>
+
+    <section class="login-form-panel" aria-label="Two-factor verification">
+        <div class="login-form-card">
+            <div class="login-form-header">
+                <div>
+                    <div class="login-form-kicker">Verification required</div>
+                    <h2>Enter your SMS code</h2>
+                    <p>We sent a one-time code to <strong>@_destination</strong>.</p>
+                </div>
+                <span class="login-secure-badge"><i class="bi bi-shield-check" aria-hidden="true"></i> 2FA</span>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(_error))
+            {
+                <div class="login-alert login-alert-danger" role="alert">
+                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                    @_error
+                </div>
+            }
+
+            <form method="post" action="/auth/2fa/verify" class="login-form" autocomplete="one-time-code">
+                <AntiforgeryToken />
+                <input type="hidden" name="TenantId" value="@_tenantId" />
+                <input type="hidden" name="ChallengeId" value="@_challengeId" />
+                <input type="hidden" name="Destination" value="@_destination" />
+                <input type="hidden" name="ReturnUrl" value="@_returnUrl" />
+                <input type="hidden" name="RememberMe" value="@_rememberMe.ToString().ToLowerInvariant()" />
+
+                <div class="login-field">
+                    <label for="code">SMS verification code</label>
+                    <div class="login-input-wrap">
+                        <i class="bi bi-123" aria-hidden="true"></i>
+                        <input id="code" name="Code" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="Enter 6-digit code" autocomplete="one-time-code" required minlength="6" maxlength="10" autofocus />
+                    </div>
+                    <span class="login-field-hint">Codes expire quickly and can only be used once.</span>
+                </div>
+
+                <button type="submit" class="login-submit">
+                    <span>Verify and continue</span>
+                    <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                </button>
+            </form>
+
+            <div class="login-footer-note">
+                If you did not receive a code, return to sign in and start a new verification challenge.
+            </div>
+        </div>
+
+        <div class="login-support-card">
+            <div>
+                <strong>Need a new code?</strong>
+                <span>Restart sign in to send a fresh SMS challenge.</span>
+            </div>
+            <a href="/login"><i class="bi bi-arrow-left" aria-hidden="true"></i> Back to sign in</a>
+        </div>
+    </section>
+</div>
+
+@code {
+    private Guid _tenantId;
+    private Guid _challengeId;
+    private string _destination = "your registered phone";
+    private string _returnUrl = "/";
+    private string _error = string.Empty;
+    private bool _rememberMe;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        if (authState.User.Identity?.IsAuthenticated == true)
+        {
+            Nav.NavigateTo(GetSafeReturnUrl(), replace: true);
+            return;
+        }
+
+        var query = QueryHelpers.ParseQuery(new Uri(Nav.Uri).Query);
+        _tenantId = query.TryGetValue("tenantId", out var tenantId) && Guid.TryParse(tenantId, out var parsedTenantId) ? parsedTenantId : Guid.Empty;
+        _challengeId = query.TryGetValue("challengeId", out var challengeId) && Guid.TryParse(challengeId, out var parsedChallengeId) ? parsedChallengeId : Guid.Empty;
+        _destination = query.TryGetValue("destination", out var destination) && !string.IsNullOrWhiteSpace(destination) ? destination.ToString() : "your registered phone";
+        _error = query.TryGetValue("error", out var error) ? error.ToString() : string.Empty;
+        _rememberMe = query.TryGetValue("rememberMe", out var rememberMe) && string.Equals(rememberMe.ToString(), "true", StringComparison.OrdinalIgnoreCase);
+        _returnUrl = GetSafeReturnUrl();
+
+        if (_tenantId == Guid.Empty || _challengeId == Guid.Empty)
+        {
+            Nav.NavigateTo("/login?error=Two-factor%20verification%20could%20not%20be%20started.", replace: true);
+        }
+    }
+
+    private string GetSafeReturnUrl()
+    {
+        var query = QueryHelpers.ParseQuery(new Uri(Nav.Uri).Query);
+        var returnUrl = query.TryGetValue("returnUrl", out var value) ? value.ToString() : "/";
+
+        if (string.IsNullOrWhiteSpace(returnUrl) || !returnUrl.StartsWith("/", StringComparison.Ordinal) || returnUrl.StartsWith("//", StringComparison.Ordinal))
+        {
+            return "/";
+        }
+
+        return returnUrl;
+    }
+}

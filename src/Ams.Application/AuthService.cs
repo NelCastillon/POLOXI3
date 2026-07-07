@@ -10,17 +10,21 @@ public sealed class AuthService : IAuthService
     private const int PasswordHashBytes = 32;
     private const int PasswordSaltBytes = 16;
     private const int PasswordIterations = 210_000;
+    private const int TwoFactorCodeDigits = 6;
     private const int MaxFailedAttempts = 5;
     private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan TwoFactorChallengeDuration = TimeSpan.FromMinutes(10);
 
     private readonly IAuthRepository _repository;
+    private readonly ITwoFactorSmsSender _smsSender;
 
-    public AuthService(IAuthRepository repository)
+    public AuthService(IAuthRepository repository, ITwoFactorSmsSender smsSender)
     {
         _repository = repository;
+        _smsSender = smsSender;
     }
 
-    public async Task<AuthenticatedUserDto?> ValidateCredentialsAsync(Guid tenantId, string userNameOrEmail, string password, string? ipAddress = null, string? userAgent = null, CancellationToken cancellationToken = default)
+    public async Task<LoginValidationResultDto?> ValidateCredentialsAsync(Guid tenantId, string userNameOrEmail, string password, string? ipAddress = null, string? userAgent = null, CancellationToken cancellationToken = default)
     {
         var userName = userNameOrEmail.Trim();
         var credential = await _repository.GetLoginCredentialAsync(tenantId, userName, cancellationToken);
@@ -44,10 +48,113 @@ public sealed class AuthService : IAuthService
             return null;
         }
 
+        if (credential.MfaEnabled)
+        {
+            var phoneNumber = ResolveTwoFactorPhoneNumber(credential);
+            if (string.IsNullOrWhiteSpace(phoneNumber))
+            {
+                await _repository.RecordLoginAttemptAsync(tenantId, credential.UserId, userName, ipAddress, userAgent, false, "TwoFactorPhoneMissing", cancellationToken);
+                return null;
+            }
+
+            var code = GenerateTwoFactorCode();
+            var salt = RandomNumberGenerator.GetBytes(PasswordSaltBytes);
+            var expiresDateUtc = DateTime.UtcNow.Add(TwoFactorChallengeDuration);
+            var challenge = await _repository.CreateTwoFactorChallengeAsync(
+                tenantId,
+                credential.UserId,
+                MaskPhoneNumber(phoneNumber),
+                Convert.ToBase64String(HashPassword(code, salt)),
+                Convert.ToBase64String(salt),
+                expiresDateUtc,
+                ipAddress,
+                userAgent,
+                cancellationToken);
+
+            await _smsSender.SendCodeAsync(new TwoFactorSmsMessage
+            {
+                TenantId = tenantId,
+                UserId = credential.UserId,
+                ChallengeId = challenge.ChallengeId,
+                PhoneNumber = phoneNumber,
+                Code = code,
+                ExpiresDateUtc = expiresDateUtc
+            }, cancellationToken);
+
+            await _repository.RecordLoginAttemptAsync(tenantId, credential.UserId, userName, ipAddress, userAgent, false, "TwoFactorRequired", cancellationToken);
+
+            return new LoginValidationResultDto
+            {
+                RequiresTwoFactor = true,
+                Challenge = challenge
+            };
+        }
+
         await _repository.RecordLoginSuccessAsync(credential.UserId, cancellationToken);
         await _repository.RecordLoginAttemptAsync(tenantId, credential.UserId, userName, ipAddress, userAgent, true, null, cancellationToken);
 
+        return new LoginValidationResultDto
+        {
+            RequiresTwoFactor = false,
+            User = CreateAuthenticatedUser(credential)
+        };
+    }
+
+    public async Task<AuthenticatedUserDto?> VerifyTwoFactorAsync(VerifyTwoFactorRequest request, string? ipAddress = null, string? userAgent = null, CancellationToken cancellationToken = default)
+    {
+        var challenge = await _repository.GetTwoFactorChallengeAsync(request.TenantId, request.ChallengeId, cancellationToken);
+        if (challenge is null)
+        {
+            await _repository.RecordLoginAttemptAsync(request.TenantId, null, request.ChallengeId.ToString(), ipAddress, userAgent, false, "TwoFactorChallengeNotFound", cancellationToken);
+            return null;
+        }
+
+        if (challenge.ConsumedDateUtc.HasValue)
+        {
+            await _repository.RecordLoginAttemptAsync(challenge.TenantId, challenge.UserId, challenge.UserName, ipAddress, userAgent, false, "TwoFactorChallengeConsumed", cancellationToken);
+            return null;
+        }
+
+        if (challenge.ExpiresDateUtc <= DateTime.UtcNow)
+        {
+            await _repository.RecordTwoFactorFailureAsync(challenge.ChallengeId, "Expired", cancellationToken);
+            await _repository.RecordLoginAttemptAsync(challenge.TenantId, challenge.UserId, challenge.UserName, ipAddress, userAgent, false, "TwoFactorExpired", cancellationToken);
+            return null;
+        }
+
+        if (challenge.AttemptCount >= challenge.MaxAttemptCount)
+        {
+            await _repository.RecordLoginAttemptAsync(challenge.TenantId, challenge.UserId, challenge.UserName, ipAddress, userAgent, false, "TwoFactorAttemptsExceeded", cancellationToken);
+            return null;
+        }
+
+        if (!VerifyPassword(request.Code.Trim(), challenge.CodeHash, challenge.CodeSalt))
+        {
+            await _repository.RecordTwoFactorFailureAsync(challenge.ChallengeId, "InvalidCode", cancellationToken);
+            await _repository.RecordLoginAttemptAsync(challenge.TenantId, challenge.UserId, challenge.UserName, ipAddress, userAgent, false, "TwoFactorInvalidCode", cancellationToken);
+            return null;
+        }
+
+        await _repository.ConsumeTwoFactorChallengeAsync(challenge.ChallengeId, cancellationToken);
+        await _repository.RecordLoginSuccessAsync(challenge.UserId, cancellationToken);
+        await _repository.RecordLoginAttemptAsync(challenge.TenantId, challenge.UserId, challenge.UserName, ipAddress, userAgent, true, null, cancellationToken);
+
         return new AuthenticatedUserDto
+        {
+            UserId = challenge.UserId,
+            TenantId = challenge.TenantId,
+            UserName = challenge.UserName,
+            Email = challenge.Email,
+            FullName = challenge.FullName,
+            DisplayName = challenge.DisplayName,
+            MfaEnabled = challenge.MfaEnabled,
+            RoleCodes = SplitCsv(challenge.AssignedRoleCodes),
+            PermissionCodes = SplitCsv(challenge.EffectivePermissionCodes)
+        };
+    }
+
+    private static AuthenticatedUserDto CreateAuthenticatedUser(LoginCredentialDto credential) =>
+        new()
         {
             UserId = credential.UserId,
             TenantId = credential.TenantId,
@@ -59,7 +166,6 @@ public sealed class AuthService : IAuthService
             RoleCodes = SplitCsv(credential.AssignedRoleCodes),
             PermissionCodes = SplitCsv(credential.EffectivePermissionCodes)
         };
-    }
 
     public Task<Guid> RegisterLoginUserAsync(RegisterLoginUserRequest request, CancellationToken cancellationToken = default)
     {
@@ -112,6 +218,24 @@ public sealed class AuthService : IAuthService
 
     private static byte[] HashPassword(string password, byte[] salt) =>
         Rfc2898DeriveBytes.Pbkdf2(password, salt, PasswordIterations, HashAlgorithmName.SHA256, PasswordHashBytes);
+
+    private static string GenerateTwoFactorCode()
+    {
+        var min = (int)Math.Pow(10, TwoFactorCodeDigits - 1);
+        var max = (int)Math.Pow(10, TwoFactorCodeDigits);
+        return RandomNumberGenerator.GetInt32(min, max).ToString();
+    }
+
+    private static string? ResolveTwoFactorPhoneNumber(LoginCredentialDto credential) =>
+        !string.IsNullOrWhiteSpace(credential.SmsPhoneNumber)
+            ? credential.SmsPhoneNumber.Trim()
+            : string.IsNullOrWhiteSpace(credential.PhoneNumber) ? null : credential.PhoneNumber.Trim();
+
+    private static string MaskPhoneNumber(string phoneNumber)
+    {
+        var digits = new string(phoneNumber.Where(char.IsDigit).ToArray());
+        return digits.Length <= 4 ? "****" : $"***-***-{digits[^4..]}";
+    }
 
     private static bool IsStrongPassword(string password) =>
         password.Length >= 12 &&

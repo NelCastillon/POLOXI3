@@ -27,8 +27,8 @@ BEGIN
         RegionCode, IsolationMode, PrimaryDomain, ActiveUsers, IsActive,
         Locale, CurrencyCode, TimeZoneId, GoLiveDateUtc, CreatedDateUtc
     ) VALUES
-        (@TenantId, 'ENT-001', 'Enterprise Holdings Inc.', 'Active', 'Enterprise',
-         'US-EAST', 'Dedicated', 'enterprise.com', 7, 1,
+        (@TenantId, 'DEMO', 'Demo Agency', 'Active', 'Enterprise',
+         'US-EAST', 'Dedicated', 'demo.agency', 7, 1,
          'en-US', 'USD', 'Eastern Standard Time', DATEADD(MONTH, -12, SYSUTCDATETIME()), DATEADD(MONTH, -13, SYSUTCDATETIME())),
         (NEWID(), 'ENT-002', 'Acme Insurance Group', 'Active', 'Professional',
          'US-WEST', 'Shared', 'acme-insurance.com', 3, 1,
@@ -41,6 +41,23 @@ BEGIN
          'en-US', 'USD', 'Eastern Standard Time', DATEADD(MONTH, -24, SYSUTCDATETIME()), DATEADD(MONTH, -25, SYSUTCDATETIME()));
 END
 
+UPDATE Core.Tenant
+SET TenantCode = 'DEMO',
+    TenantName = 'Demo Agency',
+    StatusCode = 'Active',
+    PlanCode = 'Enterprise',
+    RegionCode = 'US-EAST',
+    IsolationMode = 'Dedicated',
+    PrimaryDomain = 'demo.agency',
+    ActiveUsers = 7,
+    IsActive = 1,
+    Locale = 'en-US',
+    CurrencyCode = 'USD',
+    TimeZoneId = 'Eastern Standard Time',
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    IsDeleted = 0
+WHERE TenantId = @TenantId;
+
 -- ============================================================
 -- CORE.TENANTDOMAIN
 -- ============================================================
@@ -51,10 +68,46 @@ BEGIN
         SslStatusCode, VerificationStatusCode, VerifiedDateUtc,
         IsActive, CreatedDateUtc, CreatedByUserId
     ) VALUES
-        (NEWID(), @TenantId, 'enterprise.com',       1, 'Valid',   'Verified',  DATEADD(MONTH, -12, SYSUTCDATETIME()), 1, DATEADD(MONTH, -13, SYSUTCDATETIME()), @AdminUserId),
-        (NEWID(), @TenantId, 'app.enterprise.com',   0, 'Valid',   'Verified',  DATEADD(MONTH, -12, SYSUTCDATETIME()), 1, DATEADD(MONTH, -13, SYSUTCDATETIME()), @AdminUserId),
-        (NEWID(), @TenantId, 'portal.enterprise.com',0, 'Pending', 'Pending',   NULL,                                  1, DATEADD(DAY,   -5,  SYSUTCDATETIME()), @AdminUserId);
+        (NEWID(), @TenantId, 'demo.agency',       1, 'Valid',   'Verified',  DATEADD(MONTH, -12, SYSUTCDATETIME()), 1, DATEADD(MONTH, -13, SYSUTCDATETIME()), @AdminUserId),
+        (NEWID(), @TenantId, 'app.demo.agency',   0, 'Valid',   'Verified',  DATEADD(MONTH, -12, SYSUTCDATETIME()), 1, DATEADD(MONTH, -13, SYSUTCDATETIME()), @AdminUserId),
+        (NEWID(), @TenantId, 'portal.demo.agency',0, 'Pending', 'Pending',   NULL,                                  1, DATEADD(DAY,   -5,  SYSUTCDATETIME()), @AdminUserId);
 END
+
+IF EXISTS (SELECT 1 FROM Core.TenantDomain WHERE TenantId = @TenantId AND IsPrimary = 1 AND DomainName <> 'demo.agency')
+BEGIN
+    UPDATE Core.TenantDomain
+    SET IsPrimary = 0,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    WHERE TenantId = @TenantId
+      AND DomainName <> 'demo.agency';
+END
+
+IF EXISTS (SELECT 1 FROM Core.TenantDomain WHERE TenantId = @TenantId AND DomainName = 'demo.agency')
+BEGIN
+    UPDATE Core.TenantDomain
+    SET IsPrimary = 1,
+        SslStatusCode = 'Valid',
+        VerificationStatusCode = 'Verified',
+        VerifiedDateUtc = COALESCE(VerifiedDateUtc, SYSUTCDATETIME()),
+        IsActive = 1,
+        ModifiedDateUtc = SYSUTCDATETIME(),
+        IsDeleted = 0
+    WHERE TenantId = @TenantId
+      AND DomainName = 'demo.agency';
+END
+ELSE
+BEGIN
+    INSERT INTO Core.TenantDomain (TenantDomainId, TenantId, DomainName, IsPrimary, SslStatusCode, VerificationStatusCode, VerifiedDateUtc, IsActive, CreatedDateUtc, CreatedByUserId)
+    VALUES (NEWID(), @TenantId, 'demo.agency', 1, 'Valid', 'Verified', SYSUTCDATETIME(), 1, SYSUTCDATETIME(), @AdminUserId);
+END
+
+IF NOT EXISTS (SELECT 1 FROM Core.TenantDomain WHERE TenantId = @TenantId AND DomainName = 'app.demo.agency')
+    INSERT INTO Core.TenantDomain (TenantDomainId, TenantId, DomainName, IsPrimary, SslStatusCode, VerificationStatusCode, VerifiedDateUtc, IsActive, CreatedDateUtc, CreatedByUserId)
+    VALUES (NEWID(), @TenantId, 'app.demo.agency', 0, 'Valid', 'Verified', SYSUTCDATETIME(), 1, SYSUTCDATETIME(), @AdminUserId);
+
+IF NOT EXISTS (SELECT 1 FROM Core.TenantDomain WHERE TenantId = @TenantId AND DomainName = 'portal.demo.agency')
+    INSERT INTO Core.TenantDomain (TenantDomainId, TenantId, DomainName, IsPrimary, SslStatusCode, VerificationStatusCode, IsActive, CreatedDateUtc, CreatedByUserId)
+    VALUES (NEWID(), @TenantId, 'portal.demo.agency', 0, 'Pending', 'Pending', 1, SYSUTCDATETIME(), @AdminUserId);
 
 -- ============================================================
 -- CORE.BRANCH

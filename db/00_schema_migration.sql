@@ -368,6 +368,66 @@ CREATE TABLE IAM.[User] (
     IsDeleted         BIT              NOT NULL DEFAULT 0
 );
 
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('IAM.TwoFactorChallenge'))
+CREATE TABLE IAM.TwoFactorChallenge (
+    TwoFactorChallengeId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    TenantId             UNIQUEIDENTIFIER NOT NULL,
+    UserId               UNIQUEIDENTIFIER NOT NULL,
+    DeliveryMethodCode   NVARCHAR(30)     NOT NULL DEFAULT 'SMS',
+    DestinationMasked    NVARCHAR(100)    NOT NULL,
+    CodeHash             NVARCHAR(512)    NOT NULL,
+    CodeSalt             NVARCHAR(256)    NOT NULL,
+    ExpiresDateUtc       DATETIME2        NOT NULL,
+    ConsumedDateUtc      DATETIME2        NULL,
+    AttemptCount         INT              NOT NULL DEFAULT 0,
+    MaxAttemptCount      INT              NOT NULL DEFAULT 5,
+    IpAddress            NVARCHAR(100)    NULL,
+    UserAgent            NVARCHAR(500)    NULL,
+    FailureReason        NVARCHAR(200)    NULL,
+    CreatedDateUtc       DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc      DATETIME2        NULL,
+    IsDeleted            BIT              NOT NULL DEFAULT 0
+);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_TwoFactorChallenge_User_Active' AND object_id = OBJECT_ID('IAM.TwoFactorChallenge'))
+    CREATE INDEX IX_TwoFactorChallenge_User_Active
+        ON IAM.TwoFactorChallenge (TenantId, UserId, ExpiresDateUtc, ConsumedDateUtc)
+        INCLUDE (AttemptCount, MaxAttemptCount, IsDeleted);
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('IAM.MfaDevice'))
+CREATE TABLE IAM.MfaDevice (
+    MfaDeviceId       UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    TenantId          UNIQUEIDENTIFIER NOT NULL,
+    UserId            UNIQUEIDENTIFIER NOT NULL,
+    DeviceTypeCode    NVARCHAR(50)     NOT NULL DEFAULT 'SMS',
+    DeviceName        NVARCHAR(100)    NOT NULL,
+    PhoneNumber       NVARCHAR(40)     NULL,
+    EmailAddress      NVARCHAR(256)    NULL,
+    SecretKeyHash     NVARCHAR(512)    NULL,
+    IsVerified        BIT              NOT NULL DEFAULT 0,
+    IsActive          BIT              NOT NULL DEFAULT 1,
+    LastUsedDateUtc   DATETIME2        NULL,
+    CreatedDateUtc    DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc   DATETIME2        NULL,
+    CreatedByUserId   UNIQUEIDENTIFIER NULL,
+    ModifiedByUserId  UNIQUEIDENTIFIER NULL,
+    IsDeleted         BIT              NOT NULL DEFAULT 0
+);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_MfaDevice_User_SMS_Active' AND object_id = OBJECT_ID('IAM.MfaDevice'))
+    CREATE INDEX IX_MfaDevice_User_SMS_Active
+        ON IAM.MfaDevice (TenantId, UserId, DeviceTypeCode, IsActive, IsDeleted)
+        INCLUDE (PhoneNumber, IsVerified, LastUsedDateUtc);
+
+IF COL_LENGTH('IAM.MfaDevice', 'ModifiedDateUtc') IS NULL
+    ALTER TABLE IAM.MfaDevice ADD ModifiedDateUtc DATETIME2 NULL;
+
+IF COL_LENGTH('IAM.MfaDevice', 'CreatedByUserId') IS NULL
+    ALTER TABLE IAM.MfaDevice ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+
+IF COL_LENGTH('IAM.MfaDevice', 'ModifiedByUserId') IS NULL
+    ALTER TABLE IAM.MfaDevice ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+
 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('IAM.UserRole'))
 CREATE TABLE IAM.UserRole (
     UserRoleId        UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
@@ -1019,6 +1079,24 @@ IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('IAM.[User]
 ALTER TABLE IAM.[User] ADD FirstName NVARCHAR(150) NULL;
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('IAM.[User]') AND name = 'LastName')
 ALTER TABLE IAM.[User] ADD LastName NVARCHAR(150) NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('IAM.[User]') AND name = 'DisplayName')
+ALTER TABLE IAM.[User] ADD DisplayName NVARCHAR(300) NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('IAM.[User]') AND name = 'PhoneNumber')
+ALTER TABLE IAM.[User] ADD PhoneNumber NVARCHAR(40) NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('IAM.[User]') AND name = 'PasswordHash')
+ALTER TABLE IAM.[User] ADD PasswordHash NVARCHAR(512) NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('IAM.[User]') AND name = 'PasswordSalt')
+ALTER TABLE IAM.[User] ADD PasswordSalt NVARCHAR(256) NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('IAM.[User]') AND name = 'PasswordChangedDateUtc')
+ALTER TABLE IAM.[User] ADD PasswordChangedDateUtc DATETIME2 NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('IAM.[User]') AND name = 'IsLockedOut')
+ALTER TABLE IAM.[User] ADD IsLockedOut BIT NOT NULL CONSTRAINT DF_User_IsLockedOut DEFAULT 0;
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('IAM.[User]') AND name = 'LockoutEndDateUtc')
+ALTER TABLE IAM.[User] ADD LockoutEndDateUtc DATETIME2 NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('IAM.[User]') AND name = 'FailedLoginAttempts')
+ALTER TABLE IAM.[User] ADD FailedLoginAttempts INT NOT NULL CONSTRAINT DF_User_FailedLoginAttempts DEFAULT 0;
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('IAM.[User]') AND name = 'ModifiedByUserId')
+ALTER TABLE IAM.[User] ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
 -- Optionally, update existing rows if needed:
 -- UPDATE IAM.[User] SET FirstName = PARSENAME(REPLACE(FullName, ' ', '.'), 2), LastName = PARSENAME(REPLACE(FullName, ' ', '.'), 1) WHERE FirstName IS NULL OR LastName IS NULL;
 

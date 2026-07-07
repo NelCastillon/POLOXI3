@@ -182,21 +182,111 @@ app.MapPost("/auth/sign-in", async (
         return Results.Redirect(loginRedirect("The organization is not active or could not be found.", form));
     }
 
-    AuthenticatedUserDto? user;
+    LoginValidationResultDto? loginResult;
     try
     {
-        user = await apiClient.ValidateLoginAsync(tenant.TenantId, email, password, cancellationToken);
+        loginResult = await apiClient.ValidateLoginAsync(tenant.TenantId, email, password, cancellationToken);
     }
     catch (HttpRequestException ex)
     {
         return Results.Redirect(loginRedirect($"The AMS API could not validate the credentials: {ex.Message}", form));
     }
 
-    if (user is null)
+    if (loginResult is null)
     {
         return Results.Redirect(loginRedirect("The credentials provided could not be verified.", form));
     }
 
+    if (loginResult.RequiresTwoFactor)
+    {
+        if (loginResult.Challenge is null)
+        {
+            return Results.Redirect(loginRedirect("Two-factor authentication could not be started for this account.", form));
+        }
+
+        var twoFactorUrl = $"/login/2fa?tenantId={loginResult.Challenge.TenantId}&challengeId={loginResult.Challenge.ChallengeId}&destination={Uri.EscapeDataString(loginResult.Challenge.DestinationMasked)}&returnUrl={Uri.EscapeDataString(form.ReturnUrl ?? string.Empty)}&rememberMe={form.RememberMe}";
+        return Results.Redirect(twoFactorUrl);
+    }
+
+    if (loginResult.User is null)
+    {
+        return Results.Redirect(loginRedirect("The credentials provided could not be verified.", form));
+    }
+
+    await SignInAuthenticatedUserAsync(httpContext, loginResult.User, tenant, form.RememberMe);
+
+    var returnUrl = string.IsNullOrWhiteSpace(form.ReturnUrl) ? "/" : form.ReturnUrl;
+    if (!returnUrl.StartsWith("/", StringComparison.Ordinal) || returnUrl.StartsWith("//", StringComparison.Ordinal))
+    {
+        returnUrl = "/";
+    }
+
+    return Results.Redirect(returnUrl);
+});
+
+app.MapPost("/auth/2fa/verify", async (
+    [FromForm] TwoFactorLoginForm form,
+    ApiClient apiClient,
+    HttpContext httpContext,
+    CancellationToken cancellationToken) =>
+{
+    static string verifyRedirect(string message, TwoFactorLoginForm form) =>
+        $"/login/2fa?tenantId={form.TenantId}&challengeId={form.ChallengeId}&destination={Uri.EscapeDataString(form.Destination ?? string.Empty)}&returnUrl={Uri.EscapeDataString(form.ReturnUrl ?? string.Empty)}&rememberMe={form.RememberMe}&error={Uri.EscapeDataString(message)}";
+
+    if (form.TenantId == Guid.Empty || form.ChallengeId == Guid.Empty || string.IsNullOrWhiteSpace(form.Code))
+    {
+        return Results.Redirect(verifyRedirect("Enter the SMS verification code.", form));
+    }
+
+    AuthenticatedUserDto? user;
+    try
+    {
+        user = await apiClient.VerifyTwoFactorAsync(new VerifyTwoFactorRequest
+        {
+            TenantId = form.TenantId,
+            ChallengeId = form.ChallengeId,
+            Code = form.Code.Trim()
+        }, cancellationToken);
+    }
+    catch (HttpRequestException ex)
+    {
+        return Results.Redirect(verifyRedirect($"The AMS API could not verify the SMS code: {ex.Message}", form));
+    }
+
+    if (user is null)
+    {
+        return Results.Redirect(verifyRedirect("The SMS verification code could not be verified.", form));
+    }
+
+    PagedResult<TenantDto>? tenantResult;
+    try
+    {
+        tenantResult = await apiClient.SearchTenantsAsync(user.TenantId.ToString(), 1, 1, cancellationToken);
+    }
+    catch (HttpRequestException ex)
+    {
+        return Results.Redirect(verifyRedirect($"The AMS API could not load the tenant context: {ex.Message}", form));
+    }
+
+    var tenant = tenantResult?.Items.FirstOrDefault(t => t.TenantId == user.TenantId);
+    if (tenant is null)
+    {
+        return Results.Redirect(verifyRedirect("The organization context could not be loaded.", form));
+    }
+
+    await SignInAuthenticatedUserAsync(httpContext, user, tenant, form.RememberMe);
+
+    var returnUrl = string.IsNullOrWhiteSpace(form.ReturnUrl) ? "/" : form.ReturnUrl;
+    if (!returnUrl.StartsWith("/", StringComparison.Ordinal) || returnUrl.StartsWith("//", StringComparison.Ordinal))
+    {
+        returnUrl = "/";
+    }
+
+    return Results.Redirect(returnUrl);
+});
+
+static async Task SignInAuthenticatedUserAsync(HttpContext httpContext, AuthenticatedUserDto user, TenantDto tenant, bool rememberMe)
+{
     var claims = new List<Claim>
     {
         new(ClaimTypes.NameIdentifier, user.UserId.ToString()),
@@ -225,21 +315,13 @@ app.MapPost("/auth/sign-in", async (
     var principal = new ClaimsPrincipal(identity);
     var properties = new AuthenticationProperties
     {
-        IsPersistent = form.RememberMe,
-        ExpiresUtc = DateTimeOffset.UtcNow.Add(form.RememberMe ? TimeSpan.FromDays(14) : TimeSpan.FromHours(8)),
+        IsPersistent = rememberMe,
+        ExpiresUtc = DateTimeOffset.UtcNow.Add(rememberMe ? TimeSpan.FromDays(14) : TimeSpan.FromHours(8)),
         AllowRefresh = true
     };
 
     await httpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, properties);
-
-    var returnUrl = string.IsNullOrWhiteSpace(form.ReturnUrl) ? "/" : form.ReturnUrl;
-    if (!returnUrl.StartsWith("/", StringComparison.Ordinal) || returnUrl.StartsWith("//", StringComparison.Ordinal))
-    {
-        returnUrl = "/";
-    }
-
-    return Results.Redirect(returnUrl);
-});
+}
 
 app.MapGet("/auth/sign-out", async (HttpContext httpContext) =>
 {
@@ -259,6 +341,16 @@ public sealed class LoginForm
     public string? Tenant { get; set; }
     public string? Email { get; set; }
     public string? Password { get; set; }
+    public bool RememberMe { get; set; }
+    public string? ReturnUrl { get; set; }
+}
+
+public sealed class TwoFactorLoginForm
+{
+    public Guid TenantId { get; set; }
+    public Guid ChallengeId { get; set; }
+    public string? Code { get; set; }
+    public string? Destination { get; set; }
     public bool RememberMe { get; set; }
     public string? ReturnUrl { get; set; }
 }
