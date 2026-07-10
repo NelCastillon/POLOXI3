@@ -8,7 +8,7 @@
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
 
-<PageTitle>Enterprise Claims Summary ? AMS</PageTitle>
+<PageTitle>Enterprise Claims Summary - AMS</PageTitle>
 
 @if (_toastVisible)
 {
@@ -156,7 +156,7 @@
                                         <td class="cs-num">@row.Count.ToString("N0", CultureInfo.CurrentCulture)</td>
                                         <td class="cs-num"><strong>@row.Reserved.ToString("C0", CultureInfo.CurrentCulture)</strong></td>
                                         <td class="cs-num">@ShareLabel(row.Reserved, TotalReserveBasis)</td>
-                                        <td><div class="cs-row-actions"><button type="button" title="Open claims" @onclick="@(() => OpenAggregate(row))" @onclick:stopPropagation="true">?</button><button type="button" title="Inspect" @onclick="@(() => SelectAggregate(row))" @onclick:stopPropagation="true">?</button></div></td>
+                                        <td><div class="cs-row-actions"><button type="button" title="Open claims" @onclick="@(() => OpenAggregate(row))" @onclick:stopPropagation="true"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></button><button type="button" title="Inspect" @onclick="@(() => SelectAggregate(row))" @onclick:stopPropagation="true"><i class="bi bi-search" aria-hidden="true"></i></button></div></td>
                                     </tr>
                                 }
                             </tbody>
@@ -256,7 +256,6 @@
             if (_tenantId == Guid.Empty) await ResolveCurrentUserContextAsync();
             _data = await Api.GetClaimsSummaryAsync(_tenantId);
             _selected = _selected is null ? AggregateRows.FirstOrDefault() : AggregateRows.FirstOrDefault(r => r.Key == _selected.Key) ?? AggregateRows.FirstOrDefault();
-            ShowToast("Claims summary synced successfully.", "success");
         }
         catch (Exception ex)
         {
@@ -302,13 +301,14 @@
     private void SetFilter(string filter)
     {
         _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter;
-        _view = filter switch { "paid" or "lob" => "lob", "cycle" => "status", _ when filter != "all" => "table", _ => _view };
+        _view = _activeFilter switch { "all" => "overview", "paid" or "lob" => "lob", "cycle" => "status", "reserved" or "litigated" => "analytics", _ => "table" };
         _selected = FilteredAggregateRows.FirstOrDefault() ?? AggregateRows.FirstOrDefault();
     }
 
     private void SetView(string view) => _view = view;
-    private void ResetFilters() { _activeFilter = "all"; _searchTerm = string.Empty; _sort = "reserved"; _selected = AggregateRows.FirstOrDefault(); }
+    private void ResetFilters() { _activeFilter = "all"; _searchTerm = string.Empty; _sort = "reserved"; _view = "overview"; _selected = AggregateRows.FirstOrDefault(); }
     private void SelectAggregate(AggregateRow row) => _selected = row;
+    private void SelectAndFocusAggregate(AggregateRow row) { _selected = row; _activeFilter = row.Kind == "Line" ? "lob" : "all"; _view = row.Kind == "Line" ? "lob" : "status"; }
     private void SelectTopExposure() { if (TopExposure is not null) { _selected = TopExposure; _view = "table"; } }
     private void OpenAggregate(AggregateRow row) { if (!string.IsNullOrWhiteSpace(row.Status)) OpenClaimsByStatus(row.Status); else if (!string.IsNullOrWhiteSpace(row.Lob)) OpenClaimsByLob(row.Lob); else OpenClaimsRegister(); }
     private void OpenClaimsRegister() => Nav.NavigateTo("/claims");
@@ -322,7 +322,7 @@
 
     private RenderFragment ExposureRankPanel => @<section class="cs-panel"><h3><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Reserve exposure ranking</h3><div class="cs-rank-stack">@foreach (var row in FilteredAggregateRows.Take(8)) { <button type="button" class="@(SelectedKey == row.Key ? "cs-rank-row cs-rank-active" : "cs-rank-row")" @onclick="@(() => SelectAggregate(row))"><span>@row.Label</span><div><i style="width:@WidthPct(row.Reserved, MaxReserve)"></i></div><strong>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><small>@row.Reserved.ToString("C0", CultureInfo.CurrentCulture)</small></button> }</div></section>;
     private RenderFragment AggregateCard(AggregateRow row) => @<article class="@(SelectedKey == row.Key ? "cs-aggregate-card cs-aggregate-card-selected" : "cs-aggregate-card")" @onclick="@(() => SelectAggregate(row))"><div class="cs-aggregate-top"><span class="cs-aggregate-icon"><i class="bi @row.Icon" aria-hidden="true"></i></span><span class="cs-badge @row.BadgeClass">@row.Kind</span></div><h3>@row.Label</h3><p>@row.Caption</p><div class="cs-aggregate-stats"><div><span>Claims</span><strong>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</strong></div><div><span>Reserved</span><strong>@row.Reserved.ToString("C0", CultureInfo.CurrentCulture)</strong></div><div><span>Share</span><strong>@ShareLabel(row.Reserved, TotalReserveBasis)</strong></div></div><div class="cs-aggregate-actions" @onclick:stopPropagation="true"><button type="button" @onclick="@(() => OpenAggregate(row))">Open</button><button type="button" @onclick="@(() => SelectAggregate(row))">Inspect</button></div></article>;
-    private RenderFragment AnalyticsPanel(string title, IReadOnlyList<AggregateRow> rows, string icon, string tone) => @<section class="cs-analytics-panel @tone"><h3><i class="bi @icon" aria-hidden="true"></i> @title</h3><div class="cs-analytics-list">@foreach (var row in rows.OrderByDescending(r => r.Reserved).Take(8)) { <button type="button" @onclick="@(() => SelectAggregate(row))"><span>@row.Label</span><div><i style="width:@WidthPct(row.Reserved, MaxReserve)"></i></div><strong>@row.Reserved.ToString("C0", CultureInfo.CurrentCulture)</strong><small>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</small></button> }</div></section>;
+    private RenderFragment AnalyticsPanel(string title, IReadOnlyList<AggregateRow> rows, string icon, string tone) => @<section class="cs-analytics-panel @tone"><h3><i class="bi @icon" aria-hidden="true"></i> @title</h3><div class="cs-analytics-list">@foreach (var row in rows.OrderByDescending(r => r.Reserved).Take(8)) { <button type="button" @onclick="@(() => SelectAndFocusAggregate(row))"><span>@row.Label</span><div><i style="width:@WidthPct(row.Reserved, MaxReserve)"></i></div><strong>@row.Reserved.ToString("C0", CultureInfo.CurrentCulture)</strong><small>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</small></button> }</div></section>;
     private RenderFragment InsightPanel => @<section class="cs-analytics-panel cs-tone-amber"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Executive insight</h3><div class="cs-insight-grid"><div><span>Severity index</span><strong>@SeverityIndex</strong><small>reserve / open claim</small></div><div><span>MTD velocity</span><strong>@MtdVelocity</strong><small>new vs closed claims</small></div><div><span>Cycle time</span><strong>@AvgCloseDays.ToString("F0", CultureInfo.CurrentCulture)d</strong><small>average close</small></div><div><span>Litigation ratio</span><strong>@LitigationRatio</strong><small>severe claims / open</small></div></div><p>@GuidanceText</p></section>;
 
     private decimal MaxReserve => Math.Max(1m, AggregateRows.Max(r => r.Reserved));

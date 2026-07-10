@@ -1,6 +1,7 @@
 @inherits LayoutComponentBase
 @inject ShellStateService Shell
 @inject IJSRuntime JS
+@inject IHttpContextAccessor HttpContextAccessor
 @implements IDisposable
 
 @* WCAG 2.4.1 - skip navigation *@
@@ -30,16 +31,37 @@
 
 @code {
     private bool _prevDark;
+    private IJSObjectReference? _module;
 
-    protected override void OnInitialized()  => Shell.OnChange += OnShellChange;
+    protected override void OnInitialized()
+    {
+        Shell.OnChange += OnShellChange;
+
+        // Restore the persisted theme from the cookie so the very first render
+        // (including prerender) is already in the right theme - no flash/twitch.
+        var cookieTheme = HttpContextAccessor.HttpContext?.Request.Cookies["ams-theme"];
+        if (cookieTheme == "dark" && !Shell.ThemeDark)
+        {
+            Shell.SetTheme(true);
+        }
+
+        _prevDark = Shell.ThemeDark;
+    }
+
     private void OnShellChange()             => InvokeAsync(StateHasChanged);
     public  void Dispose()                   => Shell.OnChange -= OnShellChange;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender || Shell.ThemeDark != _prevDark)
+        if (firstRender)
         {
-            await JS.InvokeVoidAsync("amsShell.setTheme", Shell.ThemeDark);
+            _module = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Layout/MainLayout.razor.js");
+            await _module.InvokeVoidAsync("init");
+        }
+
+        if (_module is not null && (firstRender || Shell.ThemeDark != _prevDark))
+        {
+            await _module.InvokeVoidAsync("applyTheme", Shell.ThemeDark);
             _prevDark = Shell.ThemeDark;
         }
     }

@@ -8,7 +8,7 @@
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
 
-<PageTitle>Enterprise Billing Summary ? AMS</PageTitle>
+<PageTitle>Enterprise Billing Summary - AMS</PageTitle>
 
 @if (_toastVisible)
 {
@@ -70,7 +70,7 @@
             <button type="button" class="bs-workflow-card bs-workflow-danger" @onclick='() => SetFilter("overdue")'><i class="bi bi-hourglass" aria-hidden="true"></i><span><strong>Collect overdue</strong><span>Prioritize late AR exposure.</span></span></button>
             <button type="button" class="bs-workflow-card" @onclick='() => SetView("aging")'><i class="bi bi-calendar-range" aria-hidden="true"></i><span><strong>Review aging</strong><span>Analyze invoice bucket mix.</span></span></button>
             <button type="button" class="bs-workflow-card" @onclick='() => SetFilter("commissions")'><i class="bi bi-percent" aria-hidden="true"></i><span><strong>Manage commissions</strong><span>Track pending and paid payout flow.</span></span></button>
-            <button type="button" class="bs-workflow-card" @onclick='() => SetFilter("collected")'><i class="bi bi-cash-stack" aria-hidden="true"></i><span><strong>Inspect collections</strong><span>Validate MTD cash movement.</span></span></button>
+            <button type="button" class="bs-workflow-card" @onclick='() => OpenCollections()'><i class="bi bi-cash-stack" aria-hidden="true"></i><span><strong>Inspect collections</strong><span>Validate MTD cash movement.</span></span></button>
         </section>
 
         <section class="bs-filter-panel">
@@ -156,7 +156,7 @@
                                         <td class="bs-num">@row.Count.ToString("N0", CultureInfo.CurrentCulture)</td>
                                         <td class="bs-num"><strong>@row.Amount.ToString("C0", CultureInfo.CurrentCulture)</strong></td>
                                         <td class="bs-num">@ShareLabel(row.Amount, TotalAmountBasis)</td>
-                                        <td><div class="bs-row-actions"><button type="button" title="Open" @onclick="@(() => OpenAggregate(row))" @onclick:stopPropagation="true">?</button><button type="button" title="Inspect" @onclick="@(() => SelectAggregate(row))" @onclick:stopPropagation="true">?</button></div></td>
+                                        <td><div class="bs-row-actions"><button type="button" title="Open" @onclick="@(() => OpenAggregate(row))" @onclick:stopPropagation="true"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></button><button type="button" title="Inspect" @onclick="@(() => SelectAggregate(row))" @onclick:stopPropagation="true"><i class="bi bi-search" aria-hidden="true"></i></button></div></td>
                                     </tr>
                                 }
                             </tbody>
@@ -185,6 +185,7 @@
                     <div class="bs-detail-actions">
                         <button type="button" class="um-btn um-btn-ghost" @onclick='() => OpenAggregate(_selected)'><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open</button>
                         <button type="button" class="um-btn um-btn-ghost" @onclick='() => SetView(_selected.Kind == "Aging" ? "aging" : "commissions")'><i class="bi bi-columns-gap" aria-hidden="true"></i> Compare</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick='() => GoTo("/billing/invoices")'><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Invoices</button>
                         <button type="button" class="um-btn um-btn-ghost" @onclick='() => GoTo("/tenant/dashboard/claims-summary")'><i class="bi bi-exclamation-circle" aria-hidden="true"></i> Claims</button>
                         <button type="button" class="um-btn um-btn-primary" @onclick='() => SetView("analytics")'><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Analytics</button>
                     </div>
@@ -238,9 +239,9 @@
     private IReadOnlyList<AggregateRow> AgingRows => (_data?.ArAging ?? []).Select(b => new AggregateRow($"aging:{b.BucketLabel}", "Aging", b.BucketLabel, $"{b.InvoiceCount.ToString("N0", CultureInfo.CurrentCulture)} open invoice(s)", b.InvoiceCount, b.Amount, AgingBadgeClass(b.BucketLabel), AgingIcon(b.BucketLabel), b.BucketLabel, "/billing/ar-aging")).ToList();
     private IReadOnlyList<AggregateRow> SummaryRows => _data is null ? [] :
     [
-        new("summary:outstanding", "Summary", "Outstanding AR", $"{TotalOpenInvoices.ToString("N0", CultureInfo.CurrentCulture)} open invoice(s)", TotalOpenInvoices, OutstandingAr, "bs-badge-info", "bi-receipt", "ar", "/billing/ar-aging"),
-        new("summary:collected", "Summary", "Collected MTD", "Month-to-date collections", 1, CollectedMtd, "bs-badge-success", "bi-cash-coin", "collected", "/billing/ar-aging"),
-        new("summary:overdue", "Summary", "Overdue Balance", $"{OverdueInvoiceCount.ToString("N0", CultureInfo.CurrentCulture)} overdue invoice(s)", OverdueInvoiceCount, OverdueBalance, "bs-badge-danger", "bi-hourglass", "overdue", "/billing/ar-aging"),
+        new("summary:outstanding", "Summary", "Outstanding AR", $"{TotalOpenInvoices.ToString("N0", CultureInfo.CurrentCulture)} open invoice(s)", TotalOpenInvoices, OutstandingAr, "bs-badge-info", "bi-receipt", "ar", "/billing/invoices"),
+        new("summary:collected", "Summary", "Collected MTD", "Month-to-date collections", 1, CollectedMtd, "bs-badge-success", "bi-cash-coin", "collected", "/billing/collections"),
+        new("summary:overdue", "Summary", "Overdue Balance", $"{OverdueInvoiceCount.ToString("N0", CultureInfo.CurrentCulture)} overdue invoice(s)", OverdueInvoiceCount, OverdueBalance, "bs-badge-danger", "bi-hourglass", "overdue", "/billing/delinquency"),
         new("summary:pendingcommissions", "Summary", "Pending Commissions", "Commission liability pending payout", 1, PendingCommissions, "bs-badge-warning", "bi-percent", "commissions", "/commissions"),
         new("summary:paidcommissions", "Summary", "Paid Commissions MTD", "Commission payouts completed this month", 1, PaidCommissionsMtd, "bs-badge-success", "bi-check2-circle", "commissions", "/commissions")
     ];
@@ -265,7 +266,6 @@
             if (_tenantId == Guid.Empty) await ResolveCurrentUserContextAsync();
             _data = await Api.GetBillingSummaryAsync(_tenantId);
             _selected = _selected is null ? AggregateRows.FirstOrDefault() : AggregateRows.FirstOrDefault(r => r.Key == _selected.Key) ?? AggregateRows.FirstOrDefault();
-            ShowToast("Billing summary synced successfully.", "success");
         }
         catch (Exception ex)
         {
@@ -311,16 +311,18 @@
     private void SetFilter(string filter)
     {
         _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter;
-        _view = filter switch { "commissions" or "collected" => "commissions", "aging" or "ar" or "overdue" or "invoices" => "aging", _ when filter != "all" => "table", _ => _view };
+        _view = _activeFilter switch { "all" => "overview", "commissions" or "collected" => "commissions", "aging" or "ar" or "overdue" or "invoices" => "aging", _ => "table" };
         _selected = FilteredAggregateRows.FirstOrDefault() ?? AggregateRows.FirstOrDefault();
     }
 
     private void SetView(string view) => _view = view;
-    private void ResetFilters() { _activeFilter = "all"; _searchTerm = string.Empty; _sort = "amount"; _selected = AggregateRows.FirstOrDefault(); }
+    private void ResetFilters() { _activeFilter = "all"; _searchTerm = string.Empty; _sort = "amount"; _view = "overview"; _selected = AggregateRows.FirstOrDefault(); }
     private void SelectAggregate(AggregateRow row) => _selected = row;
+    private void SelectAndFocusAggregate(AggregateRow row) { _selected = row; _activeFilter = row.Kind == "Aging" ? "aging" : row.FilterToken ?? "all"; _view = row.Kind == "Aging" ? "aging" : "commissions"; }
     private void SelectTopExposure() { if (TopExposure is not null) { _selected = TopExposure; _view = "table"; } }
     private void OpenAggregate(AggregateRow row) => Nav.NavigateTo(row.Route ?? "/billing/ar-aging");
     private void OpenArAging() => Nav.NavigateTo("/billing/ar-aging");
+    private void OpenCollections() { _activeFilter = "collected"; _view = "commissions"; _selected = FilteredAggregateRows.FirstOrDefault() ?? AggregateRows.FirstOrDefault(); Nav.NavigateTo("/billing/collections"); }
     private void GoTo(string url) => Nav.NavigateTo(url);
     private void OnSearchChanged(BlazorChangeEventArgs e) { _searchTerm = e.Value?.ToString() ?? string.Empty; _selected = FilteredAggregateRows.FirstOrDefault() ?? AggregateRows.FirstOrDefault(); }
     private void OnSortChanged(BlazorChangeEventArgs e) { _sort = e.Value?.ToString() ?? "amount"; _selected = FilteredAggregateRows.FirstOrDefault() ?? AggregateRows.FirstOrDefault(); }
@@ -329,7 +331,7 @@
 
     private RenderFragment ExposureRankPanel => @<section class="bs-panel"><h3><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Billing exposure ranking</h3><div class="bs-rank-stack">@foreach (var row in FilteredAggregateRows.Take(8)) { <button type="button" class="@(SelectedKey == row.Key ? "bs-rank-row bs-rank-active" : "bs-rank-row")" @onclick="@(() => SelectAggregate(row))"><span>@row.Label</span><div><i style="width:@WidthPct(row.Amount, MaxAmount)"></i></div><strong>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><small>@row.Amount.ToString("C0", CultureInfo.CurrentCulture)</small></button> }</div></section>;
     private RenderFragment AggregateCard(AggregateRow row) => @<article class="@(SelectedKey == row.Key ? "bs-aggregate-card bs-aggregate-card-selected" : "bs-aggregate-card")" @onclick="@(() => SelectAggregate(row))"><div class="bs-aggregate-top"><span class="bs-aggregate-icon"><i class="bi @row.Icon" aria-hidden="true"></i></span><span class="bs-badge @row.BadgeClass">@row.Kind</span></div><h3>@row.Label</h3><p>@row.Caption</p><div class="bs-aggregate-stats"><div><span>Count</span><strong>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</strong></div><div><span>Amount</span><strong>@row.Amount.ToString("C0", CultureInfo.CurrentCulture)</strong></div><div><span>Share</span><strong>@ShareLabel(row.Amount, TotalAmountBasis)</strong></div></div><div class="bs-aggregate-actions" @onclick:stopPropagation="true"><button type="button" @onclick="@(() => OpenAggregate(row))">Open</button><button type="button" @onclick="@(() => SelectAggregate(row))">Inspect</button></div></article>;
-    private RenderFragment AnalyticsPanel(string title, IReadOnlyList<AggregateRow> rows, string icon, string tone) => @<section class="bs-analytics-panel @tone"><h3><i class="bi @icon" aria-hidden="true"></i> @title</h3><div class="bs-analytics-list">@foreach (var row in rows.OrderByDescending(r => r.Amount).Take(8)) { <button type="button" @onclick="@(() => SelectAggregate(row))"><span>@row.Label</span><div><i style="width:@WidthPct(row.Amount, MaxAmount)"></i></div><strong>@row.Amount.ToString("C0", CultureInfo.CurrentCulture)</strong><small>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</small></button> }</div></section>;
+    private RenderFragment AnalyticsPanel(string title, IReadOnlyList<AggregateRow> rows, string icon, string tone) => @<section class="bs-analytics-panel @tone"><h3><i class="bi @icon" aria-hidden="true"></i> @title</h3><div class="bs-analytics-list">@foreach (var row in rows.OrderByDescending(r => r.Amount).Take(8)) { <button type="button" @onclick="@(() => SelectAndFocusAggregate(row))"><span>@row.Label</span><div><i style="width:@WidthPct(row.Amount, MaxAmount)"></i></div><strong>@row.Amount.ToString("C0", CultureInfo.CurrentCulture)</strong><small>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</small></button> }</div></section>;
     private RenderFragment InsightPanel => @<section class="bs-analytics-panel bs-tone-amber"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Executive insight</h3><div class="bs-insight-grid"><div><span>Overdue ratio</span><strong>@OverdueRatio</strong><small>overdue / open invoices</small></div><div><span>AR average</span><strong>@AverageOpenInvoice</strong><small>open invoice average</small></div><div><span>Commission load</span><strong>@PendingCommissions.ToString("C0", CultureInfo.CurrentCulture)</strong><small>pending payout</small></div><div><span>Cash velocity</span><strong>@CollectedMtd.ToString("C0", CultureInfo.CurrentCulture)</strong><small>collected MTD</small></div></div><p>@GuidanceText</p></section>;
 
     private decimal MaxAmount => Math.Max(1m, AggregateRows.Max(r => r.Amount));

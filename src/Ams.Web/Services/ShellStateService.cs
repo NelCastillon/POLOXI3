@@ -49,5 +49,12 @@ public sealed class ShellStateService
         Notify();
     }
 
+    public void SetTheme(bool dark)
+    {
+        if (ThemeDark == dark) return;
+        ThemeDark = dark;
+        Notify();
+    }
+
     private void Notify() => OnChange?.Invoke();
 }

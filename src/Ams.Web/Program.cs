@@ -105,6 +105,7 @@ builder.Services.AddScoped<IContactIntakeNotificationService, SmtpContactIntakeN
 builder.Services.AddSyncfusionBlazor();
 
 // Scoped: each Blazor Server circuit gets its own shell state
+builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ShellStateService>();
 builder.Services.AddScoped<BreadcrumbService>();
 builder.Services.AddScoped<NotificationService>();

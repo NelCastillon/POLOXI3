@@ -202,7 +202,7 @@
                                             <td><span class="al-badge @StatusBadgeClass(alert.StatusCode)">@alert.StatusCode</span></td>
                                             <td>@RelativeAge(alert.TriggeredDateUtc)<small>@FormatDateTime(alert.TriggeredDateUtc)</small></td>
                                             <td>@OwnerLabel(alert)<small>@(alert.EscalatedDateUtc.HasValue ? "Escalated" : "Standard")</small></td>
-                                            <td><div class="al-row-actions"><button type="button" title="Inspect" @onclick="@(() => SelectAlert(alert))" @onclick:stopPropagation="true">Yes</button><button type="button" title="Acknowledge" disabled="@IsResolved(alert)" @onclick="@(() => ConfirmAcknowledge(alert))" @onclick:stopPropagation="true">A</button><button type="button" title="Resolve" disabled="@IsResolved(alert)" @onclick="@(() => ConfirmResolve(alert))" @onclick:stopPropagation="true">R</button></div></td>
+                                            <td><div class="al-row-actions"><button type="button" title="Inspect" @onclick="@(() => SelectAlert(alert))" @onclick:stopPropagation="true"><i class="bi bi-search" aria-hidden="true"></i></button><button type="button" title="Acknowledge" disabled="@IsResolved(alert)" @onclick="@(() => ConfirmAcknowledge(alert))" @onclick:stopPropagation="true"><i class="bi bi-check2-circle" aria-hidden="true"></i></button><button type="button" title="Resolve" disabled="@IsResolved(alert)" @onclick="@(() => ConfirmResolve(alert))" @onclick:stopPropagation="true"><i class="bi bi-check-circle" aria-hidden="true"></i></button></div></td>
                                         </tr>
                                     }
                                 </tbody>
@@ -299,7 +299,7 @@
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Client Portal Setup", "/tenant/portal/features"), new("Portal Alerts", "/tenant/portal/alerts"));
+        Breadcrumbs.SetCrumbs(new("Tenant Dashboard", "/tenant/dashboard"), new("Portal Setup", "/tenant/portal/features"), new("Portal Alerts", "/tenant/portal/alerts"));
         await LoadAsync();
     }
 
@@ -313,7 +313,6 @@
             var result = await Api.SearchAlertsAsync(tenantId: _tenantId, pageSize: 250);
             _alerts = result?.Items?.ToList() ?? [];
             _selected = _selected is null ? FilteredAlerts.FirstOrDefault() : _alerts.FirstOrDefault(a => a.AlertId == _selected.AlertId) ?? FilteredAlerts.FirstOrDefault();
-            ShowToast("Alerts synced successfully.", "success");
         }
         catch (Exception ex)
         {
@@ -362,12 +361,12 @@
     private void SetFilter(string filter)
     {
         _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter;
-        _view = filter switch { "critical" => "critical", "unassigned" => "assigned", "stale" or "escalated" or "open" => "table", _ => _view };
+        _view = _activeFilter switch { "all" => "overview", "critical" => "critical", "unassigned" => "assigned", "stale" or "escalated" or "open" => "table", _ => _view };
         _selected = FilteredAlerts.FirstOrDefault() ?? _alerts.FirstOrDefault();
     }
 
     private void SetView(string view) => _view = view;
-    private void ResetFilters() { _activeFilter = "all"; _searchTerm = string.Empty; _severityFilter = string.Empty; _statusFilter = string.Empty; _sort = "importance"; _selected = FilteredAlerts.FirstOrDefault() ?? _alerts.FirstOrDefault(); }
+    private void ResetFilters() { _activeFilter = "all"; _searchTerm = string.Empty; _severityFilter = string.Empty; _statusFilter = string.Empty; _sort = "importance"; _view = "overview"; _selected = FilteredAlerts.FirstOrDefault() ?? _alerts.FirstOrDefault(); }
     private void SelectAlert(AlertDto alert) => _selected = alert;
     private void SelectTopAlert() { if (TopAlert is not null) { _selected = TopAlert; _view = "table"; } }
     private void GoTo(string url) => Nav.NavigateTo(url);
@@ -409,41 +408,63 @@
     private async Task AcknowledgeAsync(AlertDto alert)
     {
         await Api.AcknowledgeAlertAsync(alert.AlertId, new AcknowledgeAlertRequest { AcknowledgedByUserId = _tenantAdminUserId, Notes = $"Acknowledged from tenant alerts command center on {DateTime.UtcNow:O}." });
-        await LoadAsync();
+        await LoadAndSelectAsync(alert.AlertId);
         ShowToast($"{alert.AlertName} acknowledged.", "success");
     }
 
     private async Task ResolveAsync(AlertDto alert)
     {
         await Api.ResolveAlertAsync(alert.AlertId, new ResolveAlertRequest { ResolvedByUserId = _tenantAdminUserId, Notes = $"Resolved from tenant alerts command center on {DateTime.UtcNow:O}." });
-        await LoadAsync();
+        await LoadAndSelectAsync(alert.AlertId);
         ShowToast($"{alert.AlertName} resolved.", "success");
     }
 
     private async Task AssignToMeAsync(AlertDto alert)
     {
         await Api.AssignAlertAsync(alert.AlertId, new AssignAlertRequest { OwnerUserId = _tenantAdminUserId, Notes = $"Assigned from tenant alerts command center on {DateTime.UtcNow:O}." });
-        await LoadAsync();
+        await LoadAndSelectAsync(alert.AlertId);
         ShowToast($"{alert.AlertName} assigned to you.", "success");
     }
 
     private async Task EscalateAsync(AlertDto alert)
     {
         await Api.EscalateAlertAsync(alert.AlertId, new EscalateAlertRequest { SeverityCode = "Critical", Notes = $"Escalated from tenant alerts command center on {DateTime.UtcNow:O}." });
-        await LoadAsync();
+        await LoadAndSelectAsync(alert.AlertId);
         ShowToast($"{alert.AlertName} escalated to Critical.", "warning");
     }
 
+    private async Task LoadAndSelectAsync(Guid alertId)
+    {
+        await LoadAsync();
+        _selected = _alerts.FirstOrDefault(a => a.AlertId == alertId) ?? FilteredAlerts.FirstOrDefault() ?? _alerts.FirstOrDefault();
+    }
+
     private RenderFragment ImportanceRankPanel => @<section class="al-panel"><h3><i class="bi bi-bar-chart-line" aria-hidden="true"></i> Alert importance ranking</h3><div class="al-rank-stack">@foreach (var alert in FilteredAlerts.Take(8)) { <button type="button" class="@(IsSelected(alert) ? "al-rank-row al-rank-active" : "al-rank-row")" @onclick="@(() => SelectAlert(alert))"><span>@alert.AlertName</span><div><i style="width:@WidthPct(ImportanceScore(alert), MaxImportance)"></i></div><strong>@alert.SeverityCode</strong><small>@RelativeAge(alert.TriggeredDateUtc)</small></button> }</div></section>;
-    private RenderFragment AlertCard(AlertDto alert) => @<article class="@(IsSelected(alert) ? "al-alert-card al-alert-card-selected" : "al-alert-card")" @onclick="@(() => SelectAlert(alert))"><div class="al-alert-top"><span class="al-alert-icon"><i class="bi @AlertIcon(alert)" aria-hidden="true"></i></span><span class="al-badge @SeverityBadgeClass(alert.SeverityCode)">@alert.SeverityCode</span></div><h3>@alert.AlertName</h3><p>@(alert.Message ?? alert.ServiceName)</p><div class="al-alert-stats"><div><span>Status</span><strong>@alert.StatusCode</strong></div><div><span>Age</span><strong>@RelativeAge(alert.TriggeredDateUtc)</strong></div><div><span>Owner</span><strong>@OwnerLabel(alert)</strong></div></div><div class="al-alert-actions" @onclick:stopPropagation="true"><button type="button" @onclick="@(() => ConfirmAcknowledge(alert))" disabled="@IsResolved(alert)">Ack</button><button type="button" @onclick="@(() => ConfirmAssignToMe(alert))" disabled="@IsResolved(alert)">Assign</button><button type="button" @onclick="@(() => ConfirmResolve(alert))" disabled="@IsResolved(alert)">Resolve</button></div></article>;
+    private RenderFragment AlertCard(AlertDto alert) => @<article class="@(IsSelected(alert) ? "al-alert-card al-alert-card-selected" : "al-alert-card")" @onclick="@(() => SelectAlert(alert))"><div class="al-alert-top"><span class="al-alert-icon"><i class="bi @AlertIcon(alert)" aria-hidden="true"></i></span><span class="al-badge @SeverityBadgeClass(alert.SeverityCode)">@alert.SeverityCode</span></div><h3>@alert.AlertName</h3><p>@(alert.Message ?? alert.ServiceName)</p><div class="al-alert-stats"><div><span>Status</span><strong>@alert.StatusCode</strong></div><div><span>Age</span><strong>@RelativeAge(alert.TriggeredDateUtc)</strong></div><div><span>Owner</span><strong>@OwnerLabel(alert)</strong></div></div><div class="al-alert-actions" @onclick:stopPropagation="true"><button type="button" @onclick="@(() => ConfirmAcknowledge(alert))" disabled="@IsResolved(alert)"><i class="bi bi-check2-circle" aria-hidden="true"></i> Ack</button><button type="button" @onclick="@(() => ConfirmAssignToMe(alert))" disabled="@IsResolved(alert)"><i class="bi bi-person-check" aria-hidden="true"></i> Assign</button><button type="button" @onclick="@(() => ConfirmResolve(alert))" disabled="@IsResolved(alert)"><i class="bi bi-check-circle" aria-hidden="true"></i> Resolve</button></div></article>;
     private RenderFragment AnalyticsPanel(string title, IReadOnlyList<DistributionRow> rows, string icon, string tone) => @<section class="al-analytics-panel @tone"><h3><i class="bi @icon" aria-hidden="true"></i> @title</h3><div class="al-analytics-list">@foreach (var row in rows) { <button type="button" @onclick="@(() => ApplyDistribution(row.Label, title))"><span>@row.Label</span><div><i style="width:@row.Width"></i></div><strong>@row.Count.ToString("N0", CultureInfo.CurrentCulture)</strong><small>@row.Percent.ToString("P0", CultureInfo.CurrentCulture)</small></button> }</div></section>;
     private RenderFragment InsightPanel => @<section class="al-analytics-panel al-tone-amber"><h3><i class="bi bi-lightbulb" aria-hidden="true"></i> Executive insight</h3><div class="al-insight-grid"><div><span>Open ratio</span><strong>@Ratio(OpenCount, _alerts.Count)</strong><small>open / all alerts</small></div><div><span>Critical ratio</span><strong>@Ratio(CriticalCount, Math.Max(1, OpenCount))</strong><small>critical / open alerts</small></div><div><span>Owner gap</span><strong>@UnassignedCount.ToString("N0", CultureInfo.CurrentCulture)</strong><small>unassigned alerts</small></div><div><span>Average age</span><strong>@AverageAgeLabel</strong><small>active alert age</small></div></div><p>@GuidanceText</p></section>;
 
     private void ApplyDistribution(string label, string title)
     {
-        if (title.Contains("Severity", StringComparison.OrdinalIgnoreCase)) _severityFilter = _severityFilter == label ? string.Empty : label;
-        else if (title.Contains("Status", StringComparison.OrdinalIgnoreCase)) _statusFilter = _statusFilter == label ? string.Empty : label;
-        else _searchTerm = _searchTerm == label ? string.Empty : label;
+        _activeFilter = "all";
+        if (title.Contains("Severity", StringComparison.OrdinalIgnoreCase))
+        {
+            _severityFilter = _severityFilter == label ? string.Empty : label;
+            _statusFilter = string.Empty;
+            _searchTerm = string.Empty;
+        }
+        else if (title.Contains("Status", StringComparison.OrdinalIgnoreCase))
+        {
+            _statusFilter = _statusFilter == label ? string.Empty : label;
+            _severityFilter = string.Empty;
+            _searchTerm = string.Empty;
+        }
+        else
+        {
+            _searchTerm = _searchTerm == label ? string.Empty : label;
+            _severityFilter = string.Empty;
+            _statusFilter = string.Empty;
+        }
 
         _view = "table";
         _selected = FilteredAlerts.FirstOrDefault() ?? _alerts.FirstOrDefault();

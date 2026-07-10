@@ -5,6 +5,8 @@
 @using Ams.Application.Features.AutomationJobs
 @using Ams.Web.Services
 @inject ApiClient ApiClient
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
 
 <PageTitle>Enterprise Job Scheduler</PageTitle>
 
@@ -89,8 +91,8 @@
                             <div class="text-muted small">Reusable pipelines composed from worker StepExecutor types.</div>
                         </div>
                         <div class="d-flex flex-wrap gap-2">
-                            <input class="form-control form-control-sm scheduler-filter" placeholder="Search jobs" @bind="_searchTerm" @bind:event="oninput" />
-                            <select class="form-select form-select-sm scheduler-select" @bind="_statusFilter">
+                            <input class="form-control form-control-sm scheduler-filter" placeholder="Search jobs" @bind="_searchTerm" @bind:event="oninput" @onkeyup="OnSearchKeyUp" />
+                            <select class="form-select form-select-sm scheduler-select" @bind="_statusFilter" @bind:after="SearchJobsAsync">
                                 <option value="">All statuses</option>
                                 <option>Draft</option>
                                 <option>Active</option>
@@ -133,7 +135,7 @@
                                 <tbody>
                                     @foreach (var job in _jobs.Items)
                                     {
-                                        <tr class="@(job.JobDefinitionId == _selectedJob?.JobDefinitionId ? "table-primary-subtle" : null)">
+                                        <tr class="@(job.JobDefinitionId == _selectedJob?.JobDefinitionId ? "row-selected" : null)">
                                             <td>
                                                 <button class="btn btn-link p-0 fw-semibold text-start" @onclick="() => SelectJobAsync(job)">@job.JobName</button>
                                                 <div class="small text-muted"><code>@job.JobCode</code> - @job.JobTypeCode</div>
@@ -165,6 +167,16 @@
                         </div>
                         <button class="btn btn-sm btn-outline-secondary" @onclick="LoadRunsAsync">Reload runs</button>
                     </div>
+                    @if (_runs.Items.Count == 0)
+                    {
+                        <div class="empty-state">
+                            <div class="bi bi-activity empty-icon"></div>
+                            <h3 class="h6">No runs recorded yet</h3>
+                            <p>Trigger a job manually or wait for the next cron occurrence to see run telemetry here.</p>
+                        </div>
+                    }
+                    else
+                    {
                     <div class="table-responsive enterprise-table-wrap">
                         <table class="table table-hover align-middle mb-0 enterprise-table">
                             <thead>
@@ -181,7 +193,7 @@
                             <tbody>
                                 @foreach (var run in _runs.Items)
                                 {
-                                    <tr class="@(run.JobRunId == _selectedRun?.JobRunId ? "table-primary-subtle" : null)">
+                                    <tr class="@(run.JobRunId == _selectedRun?.JobRunId ? "row-selected" : null)">
                                         <td><code>@run.CorrelationId</code></td>
                                         <td>@run.JobName</td>
                                         <td><span class="status-pill @StatusCss(run.StatusCode)">@run.StatusCode</span></td>
@@ -194,6 +206,7 @@
                             </tbody>
                         </table>
                     </div>
+                    }
                 </div>
             </div>
         </div>
@@ -411,7 +424,9 @@
 </div>
 
 <style>
-    .automation-scheduler .metric-card { border: 1px solid #e5e7eb; border-radius: 1rem; padding: 1rem; background: #fff; display: flex; gap: .85rem; align-items: center; box-shadow: 0 0.5rem 1.25rem rgba(15, 23, 42, .04); }
+    .automation-scheduler .metric-card { border: 1px solid #e5e7eb; border-radius: 1rem; padding: 1rem; background: #fff; display: flex; gap: .85rem; align-items: center; box-shadow: 0 0.5rem 1.25rem rgba(15, 23, 42, .04); transition: transform .15s ease, box-shadow .15s ease; }
+    .automation-scheduler .metric-card:hover { transform: translateY(-2px); box-shadow: 0 0.75rem 1.5rem rgba(15, 23, 42, .08); }
+    .automation-scheduler .row-selected td { background: rgba(37, 99, 235, .08); }
     .automation-scheduler .metric-icon { width: 2.65rem; height: 2.65rem; border-radius: .9rem; display: inline-flex; align-items: center; justify-content: center; font-size: 1.25rem; }
     .automation-scheduler .metric-value { font-size: 1.35rem; font-weight: 700; color: #111827; }
     .automation-scheduler .metric-label { font-size: .8rem; color: #6b7280; }
@@ -442,7 +457,8 @@
 </style>
 
 @code {
-    private static readonly Guid DefaultTenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private static readonly Guid FallbackTenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private Guid _tenantId = FallbackTenantId;
     private AutomationSchedulerDashboardDto? _dashboard;
     private PagedResult<JobDefinitionDto> _jobs = new();
     private PagedResult<JobRunDto> _runs = new();
@@ -463,11 +479,18 @@
     private string? _loadError;
     private bool _isError;
     private bool _isLoading;
-    private JobFormModel _jobForm = JobFormModel.New(DefaultTenantId);
-    private StepFormModel _stepForm = StepFormModel.New(DefaultTenantId, Guid.Empty, 1);
-    private ScheduleFormModel _scheduleForm = ScheduleFormModel.New(DefaultTenantId, Guid.Empty);
+    private JobFormModel _jobForm = JobFormModel.New(FallbackTenantId);
+    private StepFormModel _stepForm = StepFormModel.New(FallbackTenantId, Guid.Empty, 1);
+    private ScheduleFormModel _scheduleForm = ScheduleFormModel.New(FallbackTenantId, Guid.Empty);
 
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Automation", "/automation/job-scheduler"), new("Job Scheduler", ""));
+        var user = await CurrentUser.RequireAsync();
+        _tenantId = user.TenantId == Guid.Empty ? FallbackTenantId : user.TenantId;
+        _jobForm = JobFormModel.New(_tenantId);
+        await LoadAsync();
+    }
 
     private async Task LoadAsync()
     {
@@ -475,7 +498,7 @@
         try
         {
             _loadError = null;
-            _dashboard = await ApiClient.GetAutomationSchedulerDashboardAsync(DefaultTenantId);
+            _dashboard = await ApiClient.GetAutomationSchedulerDashboardAsync(_tenantId);
             await SearchJobsAsync();
             await LoadRunsAsync();
             if (_selectedJob is null && _jobs.Items.Count > 0)
@@ -495,12 +518,20 @@
 
     private async Task SearchJobsAsync()
     {
-        _jobs = await ApiClient.SearchAutomationJobsAsync(DefaultTenantId, _searchTerm, _statusFilter, null, 1, 25) ?? new PagedResult<JobDefinitionDto>();
+        _jobs = await ApiClient.SearchAutomationJobsAsync(_tenantId, _searchTerm, _statusFilter, null, 1, 25) ?? new PagedResult<JobDefinitionDto>();
+    }
+
+    private async Task OnSearchKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await SearchJobsAsync();
+        }
     }
 
     private async Task LoadRunsAsync()
     {
-        _runs = await ApiClient.SearchAutomationJobRunsAsync(DefaultTenantId, _selectedJob?.JobDefinitionId, null, 1, 15) ?? new PagedResult<JobRunDto>();
+        _runs = await ApiClient.SearchAutomationJobRunsAsync(_tenantId, _selectedJob?.JobDefinitionId, null, 1, 15) ?? new PagedResult<JobRunDto>();
     }
 
     private async Task SelectJobAsync(JobDefinitionDto job)
@@ -508,8 +539,8 @@
         _selectedJob = job;
         _steps = await ApiClient.GetAutomationJobStepsAsync(job.JobDefinitionId);
         _schedules = await ApiClient.GetAutomationJobSchedulesAsync(job.JobDefinitionId);
-        _stepForm = StepFormModel.New(DefaultTenantId, job.JobDefinitionId, _steps.Count + 1);
-        _scheduleForm = ScheduleFormModel.New(DefaultTenantId, job.JobDefinitionId);
+        _stepForm = StepFormModel.New(_tenantId, job.JobDefinitionId, _steps.Count + 1);
+        _scheduleForm = ScheduleFormModel.New(_tenantId, job.JobDefinitionId);
         await LoadRunsAsync();
     }
 
@@ -525,7 +556,7 @@
     private void StartNewJob()
     {
         _editingJobId = null;
-        _jobForm = JobFormModel.New(DefaultTenantId);
+        _jobForm = JobFormModel.New(_tenantId);
     }
 
     private void EditJob(JobDefinitionDto job)
@@ -580,7 +611,7 @@
     {
         if (_selectedJob is null) return;
         _editingStepId = null;
-        _stepForm = StepFormModel.New(DefaultTenantId, _selectedJob.JobDefinitionId, _steps.Count + 1);
+        _stepForm = StepFormModel.New(_tenantId, _selectedJob.JobDefinitionId, _steps.Count + 1);
     }
 
     private void EditStep(JobStepDto step)

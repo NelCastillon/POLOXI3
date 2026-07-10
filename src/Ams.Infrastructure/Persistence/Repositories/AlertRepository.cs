@@ -30,7 +30,12 @@ public sealed class AlertRepository : IAlertRepository
       AND (@SearchTerm   IS NULL OR @SearchTerm   = ''
            OR AlertName   LIKE '%' + @SearchTerm + '%'
            OR ServiceName LIKE '%' + @SearchTerm + '%'
-           OR Message     LIKE '%' + @SearchTerm + '%')
+            OR Message     LIKE '%' + @SearchTerm + '%'
+            OR AlertTypeCode LIKE '%' + @SearchTerm + '%'
+            OR StatusCode LIKE '%' + @SearchTerm + '%'
+            OR SeverityCode LIKE '%' + @SearchTerm + '%'
+            OR RegionCode LIKE '%' + @SearchTerm + '%'
+            OR Notes LIKE '%' + @SearchTerm + '%')
 )
 SELECT COUNT(*) FROM Cte;
 
@@ -49,10 +54,18 @@ SELECT COUNT(*) FROM Cte;
       AND (@SearchTerm   IS NULL OR @SearchTerm   = ''
            OR AlertName   LIKE '%' + @SearchTerm + '%'
            OR ServiceName LIKE '%' + @SearchTerm + '%'
-           OR Message     LIKE '%' + @SearchTerm + '%')
+            OR Message     LIKE '%' + @SearchTerm + '%'
+            OR AlertTypeCode LIKE '%' + @SearchTerm + '%'
+            OR StatusCode LIKE '%' + @SearchTerm + '%'
+            OR SeverityCode LIKE '%' + @SearchTerm + '%'
+            OR RegionCode LIKE '%' + @SearchTerm + '%'
+            OR Notes LIKE '%' + @SearchTerm + '%')
 )
 SELECT * FROM Cte
-ORDER BY TriggeredDateUtc DESC
+ORDER BY
+    CASE LOWER(SeverityCode) WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
+    CASE LOWER(StatusCode) WHEN 'open' THEN 0 WHEN 'acknowledged' THEN 1 WHEN 'resolved' THEN 3 WHEN 'closed' THEN 4 ELSE 2 END,
+    TriggeredDateUtc DESC
 OFFSET (@PageNumber - 1) * @PageSize ROWS FETCH NEXT @PageSize ROWS ONLY;";
 
         using var conn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -147,7 +160,7 @@ WHERE AlertId = @AlertId AND IsDeleted = 0;";
 
     public async Task<int> GetOpenCountAsync(CancellationToken cancellationToken = default)
     {
-        const string sql = "SELECT COUNT(*) FROM Core.Alert WHERE StatusCode = 'Open' AND IsDeleted = 0;";
+        const string sql = "SELECT COUNT(*) FROM Core.Alert WHERE StatusCode NOT IN ('Resolved','Closed') AND IsDeleted = 0;";
         using var conn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         return await conn.ExecuteScalarAsync<int>(sql);
     }
