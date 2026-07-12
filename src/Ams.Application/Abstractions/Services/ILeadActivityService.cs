@@ -11,5 +11,6 @@ public interface ILeadActivityService
     Task DeleteAsync(Guid id, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default);
     Task<LeadActivityDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<LeadActivityDto>> GetByLeadIdAsync(Guid leadId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<LeadActivityOutcomeDto>> GetOutcomesAsync(Guid tenantId, string? activityTypeCode = null, CancellationToken cancellationToken = default);
     Task<PagedResult<LeadActivityDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default);
 }

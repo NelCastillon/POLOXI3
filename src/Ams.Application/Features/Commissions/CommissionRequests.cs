@@ -154,7 +154,7 @@ public class CreateCommissionTransactionRequest
     [RequiredGuid(ErrorMessage = "Payee is required.")] public Guid PayeeId { get; set; }
     [RequiredGuid(ErrorMessage = "Commission Plan is required.")] public Guid CommissionPlanId { get; set; }
     [Required, StringLength(100)] public string SourceEntityName { get; set; } = "Policy";
-    [Required] public Guid SourceEntityId { get; set; } = Guid.NewGuid();
+    [Required] public Guid SourceEntityId { get; set; }
     [Required] public DateOnly TransactionDate { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow);
     [Range(0.01, 100000000)] public decimal GrossAmount { get; set; }
     [Range(0, 100)] public decimal CommissionRate { get; set; }

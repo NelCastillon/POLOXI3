@@ -1,5 +1,7 @@
 @page "/billing/modes"
 @namespace Ams.Web.Components.Pages
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
@@ -17,6 +19,14 @@
         </button>
     </Actions>
 </AppPageHeader>
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+        @_loadError
+    </div>
+}
 
 <!-- Mode selector -->
 <div class="bm-mode-selector">
@@ -46,7 +56,7 @@
         </div>
         <div class="bm-card-body">
             <div class="bm-card-stat"><span class="bm-stat-v">@_accounts.Count(x=>x.Mode=="Direct Bill")</span><span class="bm-stat-l">Accounts</span></div>
-            <div class="bm-card-stat"><span class="bm-stat-v">@Fmt(_accounts.Where(x=>x.Mode=="Direct Bill").Sum(x=>x.Premium))</span><span class="bm-stat-l">Premium Written</span></div>
+            <div class="bm-card-stat"><span class="bm-stat-v">@Fmt(_accounts.Where(x=>x.Mode=="Direct Bill").Sum(x=>x.BilledAmount))</span><span class="bm-stat-l">Billed Premium</span></div>
             <div class="bm-card-stat"><span class="bm-stat-v">@Fmt(_accounts.Where(x=>x.Mode=="Direct Bill").Sum(x=>x.Outstanding))</span><span class="bm-stat-l">Outstanding</span></div>
             <div class="bm-card-stat"><span class="bm-stat-v">@_accounts.Count(x=>x.Mode=="Direct Bill" && x.Delinquent)</span><span class="bm-stat-l">Delinquent</span></div>
         </div>
@@ -62,9 +72,9 @@
         </div>
         <div class="bm-card-body">
             <div class="bm-card-stat"><span class="bm-stat-v">@_accounts.Count(x=>x.Mode=="Agency Bill")</span><span class="bm-stat-l">Accounts</span></div>
-            <div class="bm-card-stat"><span class="bm-stat-v">@Fmt(_accounts.Where(x=>x.Mode=="Agency Bill").Sum(x=>x.Premium))</span><span class="bm-stat-l">Premium Collected</span></div>
+            <div class="bm-card-stat"><span class="bm-stat-v">@Fmt(_accounts.Where(x=>x.Mode=="Agency Bill").Sum(x=>x.BilledAmount))</span><span class="bm-stat-l">Billed Premium</span></div>
             <div class="bm-card-stat"><span class="bm-stat-v">@Fmt(_accounts.Where(x=>x.Mode=="Agency Bill").Sum(x=>x.Outstanding))</span><span class="bm-stat-l">Remittance Due</span></div>
-            <div class="bm-card-stat"><span class="bm-stat-v">@_nextRemittance.ToString("MMM d")</span><span class="bm-stat-l">Next Remittance</span></div>
+            <div class="bm-card-stat"><span class="bm-stat-v">@(_nextRemittance?.ToString("MMM d") ?? "Not scheduled")</span><span class="bm-stat-l">Next Remittance</span></div>
         </div>
         <div class="bm-card-footer">
             <span class="bm-pill bm-pill-purple">Agency invoices and remits to carrier</span>
@@ -78,7 +88,7 @@
         </div>
         <div class="bm-card-body">
             <div class="bm-card-stat"><span class="bm-stat-v">@_accounts.Count(x=>x.Mode=="EFT")</span><span class="bm-stat-l">Accounts</span></div>
-            <div class="bm-card-stat"><span class="bm-stat-v">@Fmt(_accounts.Where(x=>x.Mode=="EFT").Sum(x=>x.Premium))</span><span class="bm-stat-l">Premium Written</span></div>
+            <div class="bm-card-stat"><span class="bm-stat-v">@Fmt(_accounts.Where(x=>x.Mode=="EFT").Sum(x=>x.BilledAmount))</span><span class="bm-stat-l">Billed Premium</span></div>
             <div class="bm-card-stat"><span class="bm-stat-v">@_accounts.Count(x=>x.Mode=="EFT" && x.AutopayEnrolled)</span><span class="bm-stat-l">Autopay Active</span></div>
             <div class="bm-card-stat"><span class="bm-stat-v">@_accounts.Count(x=>x.Mode=="EFT" && x.Delinquent)</span><span class="bm-stat-l">NSF / Failed</span></div>
         </div>
@@ -90,25 +100,31 @@
 
 <!-- Distribution chart (visual bar) -->
 <div class="bm-dist-section">
-    <div class="bm-dist-title">Premium Distribution by Billing Mode</div>
+    <div class="bm-dist-title">Billed Premium Distribution by Billing Mode</div>
     <div class="bm-dist-bar-wrap">
-        @{ var total = _accounts.Sum(x=>(double)x.Premium); }
-        <div class="bm-dist-seg bm-seg-direct"  style="flex:@_accounts.Where(x=>x.Mode=="Direct Bill").Sum(x=>(double)x.Premium)" title="Direct Bill">Direct Bill</div>
-        <div class="bm-dist-seg bm-seg-agency"  style="flex:@_accounts.Where(x=>x.Mode=="Agency Bill").Sum(x=>(double)x.Premium)" title="Agency Bill">Agency Bill</div>
-        <div class="bm-dist-seg bm-seg-eft"     style="flex:@_accounts.Where(x=>x.Mode=="EFT").Sum(x=>(double)x.Premium)"        title="EFT">EFT</div>
+        @{ var total = _accounts.Sum(x=>(double)x.BilledAmount); }
+        <div class="bm-dist-seg bm-seg-direct"  style="flex:@_accounts.Where(x=>x.Mode=="Direct Bill").Sum(x=>(double)x.BilledAmount)" title="Direct Bill">Direct Bill</div>
+        <div class="bm-dist-seg bm-seg-agency"  style="flex:@_accounts.Where(x=>x.Mode=="Agency Bill").Sum(x=>(double)x.BilledAmount)" title="Agency Bill">Agency Bill</div>
+        <div class="bm-dist-seg bm-seg-eft"     style="flex:@_accounts.Where(x=>x.Mode=="EFT").Sum(x=>(double)x.BilledAmount)"        title="EFT">EFT</div>
     </div>
     <div class="bm-dist-legend">
-        <span class="bm-leg-dot bm-ld-direct" aria-hidden="true"></span> Direct Bill (@((int)(_accounts.Where(x=>x.Mode=="Direct Bill").Sum(x=>(double)x.Premium)/total*100))%)
+        <span class="bm-leg-dot bm-ld-direct" aria-hidden="true"></span> Direct Bill (@ModePercent("Direct Bill", total)%)
         &nbsp;&nbsp;
-        <span class="bm-leg-dot bm-ld-agency" aria-hidden="true"></span> Agency Bill (@((int)(_accounts.Where(x=>x.Mode=="Agency Bill").Sum(x=>(double)x.Premium)/total*100))%)
+        <span class="bm-leg-dot bm-ld-agency" aria-hidden="true"></span> Agency Bill (@ModePercent("Agency Bill", total)%)
         &nbsp;&nbsp;
-        <span class="bm-leg-dot bm-ld-eft"    aria-hidden="true"></span> EFT (@((int)(_accounts.Where(x=>x.Mode=="EFT").Sum(x=>(double)x.Premium)/total*100))%)
+        <span class="bm-leg-dot bm-ld-eft"    aria-hidden="true"></span> EFT (@ModePercent("EFT", total)%)
     </div>
 </div>
 
 <!-- Remittance schedule -->
 <div class="bm-rem-section">
     <div class="bm-rem-title"><i class="bi bi-calendar-range" aria-hidden="true"></i> Agency Bill Remittance Schedule</div>
+    @if (_loading)
+    {
+        <div class="alert alert-info" role="status"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Loading billing mode data...</div>
+    }
+    else
+    {
     <SfGrid DataSource="FilteredAccounts" AllowSorting="true" AllowPaging="true" Height="380px">
         <GridPageSettings PageSize="10"></GridPageSettings>
         <GridColumns>
@@ -119,7 +135,7 @@
                     <span class="bm-mode-chip bm-mc-@r.Mode.ToLower().Replace(" ","-")">@r.Mode</span>
                 </Template>
             </GridColumn>
-            <GridColumn Field="@nameof(BillingModeRow.Premium)" HeaderText="Premium" Format="C2" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+            <GridColumn Field="@nameof(BillingModeRow.BilledAmount)" HeaderText="Billed Premium" Format="C2" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
             <GridColumn Field="@nameof(BillingModeRow.Outstanding)" HeaderText="Outstanding" Format="C2" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
             <GridColumn Field="@nameof(BillingModeRow.RemittanceDue)" HeaderText="Remittance Due" Type="ColumnType.Date" Format="d" Width="140"></GridColumn>
             <GridColumn HeaderText="Autopay" Width="90" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
@@ -147,25 +163,21 @@
             </GridColumn>
         </GridColumns>
     </SfGrid>
+    }
 </div>
 
 @code {
     private string _activeMode = "all";
-    private readonly DateTime _nextRemittance = DateTime.Today.AddDays(5);
+    private Guid _tenantId;
+    private bool _loading = true;
+    private string? _loadError;
 
-    private List<BillingModeRow> _accounts =
-    [
-        new(Guid.NewGuid(), "Acme Corp",             "Direct Bill", 48200m,  4500m, null,                              true,  false),
-        new(Guid.NewGuid(), "Green Valley LLC",      "Agency Bill", 21400m,  7800m, DateTime.Today.AddDays(5),         false, false),
-        new(Guid.NewGuid(), "Harbor Logistics Inc.", "Direct Bill", 95000m,     0m, null,                              true,  false),
-        new(Guid.NewGuid(), "Westside Properties",   "Direct Bill", 31200m,  9000m, null,                              false, true),
-        new(Guid.NewGuid(), "Summit Tech Solutions", "Agency Bill", 18900m,  2100m, DateTime.Today.AddDays(5),         true,  false),
-        new(Guid.NewGuid(), "Coastal Restaurants",   "EFT",         11600m,  9300m, null,                              true,  true),
-        new(Guid.NewGuid(), "Pioneer Manufacturing", "Direct Bill",104000m,     0m, null,                              false, false),
-        new(Guid.NewGuid(), "Riverdale Medical",     "Agency Bill", 43700m,  6400m, DateTime.Today.AddDays(5),         false, false),
-        new(Guid.NewGuid(), "Apex Distribution",     "EFT",         29800m,     0m, null,                              true,  false),
-        new(Guid.NewGuid(), "Bluewater Marine",      "Direct Bill", 17500m,  3750m, null,                              true,  false),
-    ];
+    private List<BillingModeRow> _accounts = [];
+
+    private DateTime? _nextRemittance => _accounts.Where(x => x.Mode == "Agency Bill" && x.RemittanceDue.HasValue)
+        .Select(x => x.RemittanceDue!.Value)
+        .Cast<DateTime?>()
+        .Min();
 
     private IEnumerable<BillingModeRow> FilteredAccounts => _accounts.Where(a =>
         _activeMode == "all" ||
@@ -173,11 +185,57 @@
         (_activeMode == "agency" && a.Mode == "Agency Bill") ||
         (_activeMode == "eft"    && a.Mode == "EFT"));
 
-    protected override void OnInitialized() =>
+    protected override async Task OnInitializedAsync()
+    {
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Billing","/billing/accounts"), new("Billing Modes",""));
+        await LoadAsync();
+    }
 
-    static string Fmt(decimal v) => v.ToString("C0");
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
 
-    record BillingModeRow(Guid Id, string AccountName, string Mode, decimal Premium, decimal Outstanding,
-                          DateTime? RemittanceDue, bool AutopayEnrolled, bool Delinquent);
+        try
+        {
+            var context = await CurrentUser.RequireAsync();
+            _tenantId = context.TenantId;
+
+            await Api.EnsureBillingAccountsSeedAsync(_tenantId);
+            var result = await Api.GetBillingModeDashboardAsync(_tenantId);
+            _accounts = result?.Select(ToRow).ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load billing modes: {ex.Message}";
+            _accounts = [];
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static string Fmt(decimal v) => v.ToString("C0");
+
+    private int ModePercent(string mode, double total)
+        => total <= 0 ? 0 : (int)(_accounts.Where(x => x.Mode == mode).Sum(x => (double)x.BilledAmount) / total * 100);
+
+    private static BillingModeRow ToRow(BillingModeDashboardRowDto account)
+    {
+        var mode = string.IsNullOrWhiteSpace(account.BillingModeCode) ? "Unassigned" : account.BillingModeCode;
+        return new(
+            account.AccountId,
+            account.AccountName,
+            mode,
+            account.BilledAmount,
+            account.OutstandingAmount,
+            account.NextRemittanceDueDate,
+            account.AutopayEnrolled,
+            string.Equals(account.StatusCode, "Delinquent", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(account.StatusCode, "Suspended", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private sealed record BillingModeRow(Guid Id, string AccountName, string Mode, decimal BilledAmount, decimal Outstanding,
+        DateTime? RemittanceDue, bool AutopayEnrolled, bool Delinquent);
 }

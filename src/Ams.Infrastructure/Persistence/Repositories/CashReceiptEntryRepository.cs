@@ -185,6 +185,7 @@ INSERT INTO Finance.CashReceiptEntry (CashReceiptEntryId, TenantId, AccountId, I
 VALUES (@Id, @TenantId, @AccountId, @InvoiceId, @ReceiptDate, @Amount, @PaymentMethodCode, @ReferenceNumber, @GLAccountId, @BankAccountCode, @Notes, @StatusCode, SYSUTCDATETIME(), @CreatedByUserId, NULL, NULL, 0);";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.TenantId, request.AccountId, request.InvoiceId, request.ReceiptDate, request.Amount, request.PaymentMethodCode, request.ReferenceNumber, request.GLAccountId, request.BankAccountCode, request.Notes, request.StatusCode, request.CreatedByUserId }, cancellationToken: cancellationToken));
+        await SyncPostedReceiptToBillingAsync(cn, id, request.TenantId, request.AccountId, request.InvoiceId, request.ReceiptDate, request.Amount, request.PaymentMethodCode, request.ReferenceNumber, request.StatusCode, request.Notes, request.CreatedByUserId, cancellationToken);
         return id;
     }
 
@@ -209,5 +210,101 @@ SET AccountId = @AccountId,
 WHERE CashReceiptEntryId = @Id AND COALESCE(IsDeleted, 0) = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.AccountId, request.InvoiceId, request.ReceiptDate, request.Amount, request.PaymentMethodCode, request.ReferenceNumber, request.GLAccountId, request.BankAccountCode, request.Notes, request.StatusCode, request.ModifiedByUserId }, cancellationToken: cancellationToken));
+        await SyncPostedReceiptToBillingAsync(cn, id, request.TenantId, request.AccountId, request.InvoiceId, request.ReceiptDate, request.Amount, request.PaymentMethodCode, request.ReferenceNumber, request.StatusCode, request.Notes, request.ModifiedByUserId, cancellationToken);
+    }
+
+    private static async Task SyncPostedReceiptToBillingAsync(System.Data.IDbConnection connection, Guid cashReceiptEntryId, Guid tenantId, Guid accountId, Guid? invoiceId, DateOnly receiptDate, decimal amount, string paymentMethodCode, string? referenceNumber, string statusCode, string? notes, Guid? userId, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(statusCode, "Posted", StringComparison.OrdinalIgnoreCase) || amount <= 0)
+        {
+            return;
+        }
+
+        const string sql = @"
+IF OBJECT_ID(N'Billing.Payment', N'U') IS NOT NULL
+BEGIN
+    DECLARE @HasPaymentNumber bit = CASE WHEN COL_LENGTH(N'Billing.Payment', N'PaymentNumber') IS NULL THEN 0 ELSE 1 END;
+    DECLARE @HasInvoiceId bit = CASE WHEN COL_LENGTH(N'Billing.Payment', N'InvoiceId') IS NULL THEN 0 ELSE 1 END;
+    DECLARE @HasCurrencyCode bit = CASE WHEN COL_LENGTH(N'Billing.Payment', N'CurrencyCode') IS NULL THEN 0 ELSE 1 END;
+    DECLARE @HasTotalAmount bit = CASE WHEN COL_LENGTH(N'Billing.Payment', N'TotalAmount') IS NULL THEN 0 ELSE 1 END;
+    DECLARE @HasPaymentStatusCodeId bit = CASE WHEN COL_LENGTH(N'Billing.Payment', N'PaymentStatusCodeId') IS NULL THEN 0 ELSE 1 END;
+    DECLARE @HasStatusCode bit = CASE WHEN COL_LENGTH(N'Billing.Payment', N'StatusCode') IS NULL THEN 0 ELSE 1 END;
+    DECLARE @HasNotes bit = CASE WHEN COL_LENGTH(N'Billing.Payment', N'Notes') IS NULL THEN 0 ELSE 1 END;
+    DECLARE @PaymentId uniqueidentifier = NULL;
+    DECLARE @PaymentNumber nvarchar(50) = CONCAT(N'CR-', LEFT(CONVERT(nvarchar(36), @CashReceiptEntryId), 8));
+
+    IF @HasNotes = 1
+    BEGIN
+        SELECT TOP (1) @PaymentId = PaymentId
+        FROM Billing.Payment
+        WHERE TenantId = @TenantId
+          AND COALESCE(IsDeleted, 0) = 0
+          AND Notes LIKE CONCAT(N'%CashReceiptEntryId:', CONVERT(nvarchar(36), @CashReceiptEntryId), N'%');
+    END;
+
+    IF @PaymentId IS NULL AND NULLIF(@ReferenceNumber, N'') IS NOT NULL
+    BEGIN
+        SELECT TOP (1) @PaymentId = PaymentId
+        FROM Billing.Payment
+        WHERE TenantId = @TenantId
+          AND COALESCE(IsDeleted, 0) = 0
+          AND ReferenceNumber = @ReferenceNumber;
+    END;
+
+    IF @PaymentId IS NULL
+    BEGIN
+        SET @PaymentId = NEWID();
+        DECLARE @Columns nvarchar(max) = N'PaymentId, TenantId, AccountId, PaymentDate, Amount, PaymentMethodCode, ReferenceNumber, CreatedDateUtc, CreatedByUserId, IsDeleted';
+        DECLARE @Values nvarchar(max) = N'@PaymentId, @TenantId, @AccountId, @PaymentDate, @Amount, @PaymentMethodCode, @ReferenceNumber, SYSUTCDATETIME(), @UserId, 0';
+
+        IF @HasPaymentNumber = 1 BEGIN SET @Columns = REPLACE(@Columns, N'PaymentId,', N'PaymentId, PaymentNumber,'); SET @Values = REPLACE(@Values, N'@PaymentId,', N'@PaymentId, @PaymentNumber,'); END;
+        IF @HasInvoiceId = 1 BEGIN SET @Columns = REPLACE(@Columns, N'AccountId,', N'AccountId, InvoiceId,'); SET @Values = REPLACE(@Values, N'@AccountId,', N'@AccountId, @InvoiceId,'); END;
+        IF @HasCurrencyCode = 1 BEGIN SET @Columns = REPLACE(@Columns, N'Amount,', N'CurrencyCode, Amount,'); SET @Values = REPLACE(@Values, N'@Amount,', N'N''USD'', @Amount,'); END;
+        IF @HasTotalAmount = 1 BEGIN SET @Columns = REPLACE(@Columns, N'Amount,', N'TotalAmount, Amount,'); SET @Values = REPLACE(@Values, N'@Amount,', N'@Amount, @Amount,'); END;
+        IF @HasPaymentStatusCodeId = 1 BEGIN SET @Columns = REPLACE(@Columns, N'ReferenceNumber,', N'ReferenceNumber, PaymentStatusCodeId,'); SET @Values = REPLACE(@Values, N'@ReferenceNumber,', N'@ReferenceNumber, 2,'); END;
+        IF @HasStatusCode = 1 BEGIN SET @Columns = REPLACE(@Columns, N'ReferenceNumber,', N'ReferenceNumber, StatusCode,'); SET @Values = REPLACE(@Values, N'@ReferenceNumber,', N'@ReferenceNumber, N''Applied'','); END;
+        IF @HasNotes = 1 BEGIN SET @Columns = REPLACE(@Columns, N'CreatedDateUtc,', N'Notes, CreatedDateUtc,'); SET @Values = REPLACE(@Values, N'SYSUTCDATETIME(),', N'@BillingNotes, SYSUTCDATETIME(),'); END;
+
+        DECLARE @InsertSql nvarchar(max) = CONCAT(N'INSERT INTO Billing.Payment (', @Columns, N') VALUES (', @Values, N');');
+        EXEC sp_executesql @InsertSql, N'@PaymentId uniqueidentifier, @PaymentNumber nvarchar(50), @TenantId uniqueidentifier, @AccountId uniqueidentifier, @InvoiceId uniqueidentifier, @PaymentDate date, @Amount decimal(18,2), @PaymentMethodCode nvarchar(50), @ReferenceNumber nvarchar(100), @BillingNotes nvarchar(500), @UserId uniqueidentifier', @PaymentId, @PaymentNumber, @TenantId, @AccountId, @InvoiceId, @ReceiptDate, @Amount, @PaymentMethodCode, @ReferenceNumber, @BillingNotes, @UserId;
+    END
+    ELSE
+    BEGIN
+        UPDATE Billing.Payment
+        SET AccountId = @AccountId,
+            PaymentDate = @ReceiptDate,
+            Amount = @Amount,
+            PaymentMethodCode = @PaymentMethodCode,
+            ReferenceNumber = @ReferenceNumber
+        WHERE PaymentId = @PaymentId;
+
+        IF @HasInvoiceId = 1 UPDATE Billing.Payment SET InvoiceId = @InvoiceId WHERE PaymentId = @PaymentId;
+        IF @HasTotalAmount = 1 UPDATE Billing.Payment SET TotalAmount = @Amount WHERE PaymentId = @PaymentId;
+        IF @HasPaymentStatusCodeId = 1 UPDATE Billing.Payment SET PaymentStatusCodeId = 2 WHERE PaymentId = @PaymentId;
+        IF @HasStatusCode = 1 UPDATE Billing.Payment SET StatusCode = N'Applied' WHERE PaymentId = @PaymentId;
+        IF @HasNotes = 1 UPDATE Billing.Payment SET Notes = @BillingNotes WHERE PaymentId = @PaymentId;
+    END;
+END;
+
+IF @InvoiceId IS NOT NULL AND OBJECT_ID(N'Billing.Invoice', N'U') IS NOT NULL AND COL_LENGTH(N'Billing.Invoice', N'BalanceAmount') IS NOT NULL
+BEGIN
+    UPDATE Billing.Invoice
+    SET BalanceAmount = CASE WHEN BalanceAmount - @Amount < 0 THEN 0 ELSE BalanceAmount - @Amount END
+    WHERE InvoiceId = @InvoiceId
+      AND TenantId = @TenantId
+      AND COALESCE(IsDeleted, 0) = 0;
+
+    IF COL_LENGTH(N'Billing.Invoice', N'InvoiceStatusCodeId') IS NOT NULL
+    BEGIN
+        UPDATE Billing.Invoice
+        SET InvoiceStatusCodeId = CASE WHEN BalanceAmount <= 0 THEN 3 ELSE InvoiceStatusCodeId END
+        WHERE InvoiceId = @InvoiceId
+          AND TenantId = @TenantId
+          AND COALESCE(IsDeleted, 0) = 0;
+    END;
+END;";
+
+        var billingNotes = string.Join(' ', new[] { notes, $"CashReceiptEntryId:{cashReceiptEntryId}" }.Where(x => !string.IsNullOrWhiteSpace(x)));
+        await connection.ExecuteAsync(new CommandDefinition(sql, new { CashReceiptEntryId = cashReceiptEntryId, TenantId = tenantId, AccountId = accountId, InvoiceId = invoiceId, ReceiptDate = receiptDate, Amount = amount, PaymentMethodCode = paymentMethodCode, ReferenceNumber = referenceNumber, BillingNotes = billingNotes, UserId = userId }, cancellationToken: cancellationToken));
     }
 }

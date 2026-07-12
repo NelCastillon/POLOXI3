@@ -36,14 +36,20 @@ public sealed class LeadCommunicationDto
     public Guid CommunicationId { get; set; }
     public Guid TenantId { get; set; }
     public Guid LeadId { get; set; }
+    public Guid? MessageThreadId { get; set; }
+    public Guid? ThreadMessageId { get; set; }
     public string Channel { get; set; } = string.Empty;
     public string Subject { get; set; } = string.Empty;
     public string Preview { get; set; } = string.Empty;
+    public string Direction { get; set; } = "Outbound";
+    public string DeliveryStatus { get; set; } = "Delivered";
+    public string EngagementStatus { get; set; } = "Open";
     public Guid? SentByUserId { get; set; }
     public string? SentByName { get; set; }
     public DateTime SentAt { get; set; }
     public bool Opened { get; set; }
     public bool Clicked { get; set; }
+    public bool IsAutomated { get; set; }
     public DateTime CreatedDateUtc { get; set; }
     public DateTime? ModifiedDateUtc { get; set; }
 }
@@ -53,15 +59,48 @@ public sealed class LeadCampaignEnrollmentDto
     public Guid EnrollmentId { get; set; }
     public Guid TenantId { get; set; }
     public Guid LeadId { get; set; }
+    public Guid? CampaignId { get; set; }
     public string CampaignName { get; set; } = string.Empty;
+    public string? CampaignType { get; set; }
+    public string? Segment { get; set; }
     public string Status { get; set; } = "Active";
     public DateTime EnrolledAt { get; set; }
     public int EmailsSent { get; set; }
     public int EmailsOpen { get; set; }
     public int Clicks { get; set; }
+    public decimal OpenRate { get; set; }
+    public int Conversions { get; set; }
+    public decimal Revenue { get; set; }
     public DateTime? LastTouch { get; set; }
     public DateTime CreatedDateUtc { get; set; }
     public DateTime? ModifiedDateUtc { get; set; }
+}
+
+public sealed class LeadEngagementOptionDto
+{
+    public Guid OptionId { get; set; }
+    public Guid TenantId { get; set; }
+    public string OptionType { get; set; } = string.Empty;
+    public string Code { get; set; } = string.Empty;
+    public string Label { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public int SortOrder { get; set; }
+    public bool IsActive { get; set; }
+}
+
+public sealed class LeadCampaignOptionDto
+{
+    public Guid CampaignId { get; set; }
+    public Guid TenantId { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Type { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public string Segment { get; set; } = string.Empty;
+    public DateTime StartDate { get; set; }
+    public int Reached { get; set; }
+    public decimal OpenRate { get; set; }
+    public int Conversions { get; set; }
+    public decimal Revenue { get; set; }
 }
 
 public sealed class LeadDocumentDto

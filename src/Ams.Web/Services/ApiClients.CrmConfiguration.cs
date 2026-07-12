@@ -131,6 +131,52 @@ public sealed partial class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
+    public Task<PagedResult<LeadActivityOutcomeDto>?> SearchLeadActivityOutcomesAsync(Guid tenantId, string? searchTerm = null, string? activityTypeCode = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<LeadActivityOutcomeDto>>($"api/crm/activity-outcomes?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&activityTypeCode={Uri.EscapeDataString(activityTypeCode ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public async Task<Guid> CreateLeadActivityOutcomeAsync(CreateLeadActivityOutcomeRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/crm/activity-outcomes", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdateLeadActivityOutcomeAsync(Guid id, UpdateLeadActivityOutcomeRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/crm/activity-outcomes/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteLeadActivityOutcomeAsync(Guid id, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/crm/activity-outcomes/{id}?modifiedByUserId={modifiedByUserId}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public Task<PagedResult<LeadActivityTypeDto>?> SearchLeadActivityTypesAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<LeadActivityTypeDto>>($"api/crm/activity-types?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public async Task<Guid> CreateLeadActivityTypeAsync(CreateLeadActivityTypeRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/crm/activity-types", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdateLeadActivityTypeAsync(Guid id, UpdateLeadActivityTypeRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/crm/activity-types/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteLeadActivityTypeAsync(Guid id, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/crm/activity-types/{id}?modifiedByUserId={modifiedByUserId}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
     public Task<PagedResult<CrmCustomFieldDto>?> SearchCrmCustomFieldsAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<CrmCustomFieldDto>>($"api/crm/custom-fields?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 

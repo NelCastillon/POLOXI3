@@ -131,7 +131,7 @@
                         </div>
                         <div class="ld-field">
                             <label>Owner</label>
-                            <InputSelect class="ld-input" @bind-Value="_leadForm.Owner">
+                            <InputSelect class="ld-input" @bind-Value="_leadForm.Owner" disabled="@(_editingId == Guid.Empty)">
                                 <option value="">Assign Owner</option>
                                 @foreach (var owner in _ownerOptions)
                                 {
@@ -567,6 +567,7 @@
             var users = usersTask.Result?.Items?.ToList() ?? [];
             var ownerLookup = users.ToDictionary(u => u.UserId, u => string.IsNullOrWhiteSpace(u.DisplayName) ? u.FullName : u.DisplayName);
             _ownerOptions = users.Where(u => string.Equals(u.StatusCode, "Active", StringComparison.OrdinalIgnoreCase)).Select(u => new LabelValue(u.UserId.ToString(), string.IsNullOrWhiteSpace(u.DisplayName) ? u.FullName : u.DisplayName)).Where(x => !string.IsNullOrWhiteSpace(x.Label)).OrderBy(x => x.Label).ToList();
+            EnsureCurrentUserOwnerOption(ownerLookup);
             _leads = leadsTask.Result?.Items?.Select(l => MapToLeadRow(l, ownerLookup)).ToList() ?? [];
             RebuildDerived();
             _detail = LeadId.HasValue
@@ -664,7 +665,7 @@
     private void OnOwnerFilterChanged(BlazorChangeEventArgs e) { _filterOwner = e.Value?.ToString() ?? string.Empty; ApplyFilters(); }
     private void OnRatingFilterChanged(BlazorChangeEventArgs e) { _filterRating = e.Value?.ToString() ?? string.Empty; ApplyFilters(); }
 
-    private void OnNewLeadClick() { _editingId = Guid.Empty; _leadForm = new LeadFormModel { Source = "Referral", Stage = "New", Priority = "Warm", Score = 50, Owner = string.Empty }; _showLeadModal = true; }
+    private void OnNewLeadClick() { _editingId = Guid.Empty; EnsureCurrentUserOwnerOption(); _leadForm = new LeadFormModel { Source = "Referral", Stage = "New", Priority = "Warm", Score = 50, Owner = CurrentUserOwnerValue }; _showLeadModal = true; }
     private void OpenEdit(LeadRow lead) { _editingId = lead.LeadId; _leadForm = new LeadFormModel { FirstName = lead.FirstName, LastName = lead.LastName, Company = lead.CompanyName, Email = lead.Email, Phone = lead.Phone, Source = lead.Source, Stage = lead.Stage, Priority = lead.Rating, Owner = lead.AssignedToUserId?.ToString() ?? string.Empty, EstPremium = lead.EstPremium, Score = lead.Score, Notes = lead.Notes ?? string.Empty }; _showLeadModal = true; }
     private Task CloseLeadModal() => CloseLeadModalAsync();
     private Task CloseLeadModalAsync(bool force = false) { if (!_savingLead || force) { _showLeadModal = false; StateHasChanged(); } return Task.CompletedTask; }
@@ -693,7 +694,9 @@
         _savingLead = true;
         try
         {
-            var assignedToUserId = Guid.TryParse(_leadForm.Owner, out var ownerId) ? ownerId : (Guid?)null;
+            var assignedToUserId = _editingId == Guid.Empty && TenantAdminUserId != Guid.Empty
+                ? TenantAdminUserId
+                : Guid.TryParse(_leadForm.Owner, out var ownerId) ? ownerId : (Guid?)null;
             if (_editingId == Guid.Empty)
             {
                 await Api.CreateLeadAsync(new CreateLeadRequest { TenantId = _tenantId, LeadNumber = $"LD-{DateTime.UtcNow:yyyyMMddHHmmss}", AccountName = _leadForm.Company.Trim(), FirstName = _leadForm.FirstName.Trim(), LastName = _leadForm.LastName.Trim(), Email = _leadForm.Email.Trim(), Phone = NormalizePhone(_leadForm.Phone), InterestedService = _leadForm.Notes, AnnualRevenue = _leadForm.EstPremium, Score = _leadForm.Score, PriorityCode = _leadForm.Priority, SourceCode = _leadForm.Source, NurturingStageCode = _leadForm.Stage, AssignedToUserId = assignedToUserId, CreatedByUserId = TenantAdminUserId });
@@ -711,6 +714,22 @@
         }
         catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", "danger"); }
         finally { _savingLead = false; }
+    }
+
+    private string CurrentUserOwnerValue => TenantAdminUserId == Guid.Empty ? string.Empty : TenantAdminUserId.ToString();
+
+    private void EnsureCurrentUserOwnerOption(IReadOnlyDictionary<Guid, string>? ownerLookup = null)
+    {
+        if (TenantAdminUserId == Guid.Empty) return;
+
+        var value = CurrentUserOwnerValue;
+        if (_ownerOptions.Any(x => string.Equals(x.Value, value, StringComparison.OrdinalIgnoreCase))) return;
+
+        var label = ownerLookup is not null && ownerLookup.TryGetValue(TenantAdminUserId, out var ownerName) && !string.IsNullOrWhiteSpace(ownerName)
+            ? ownerName
+            : "Current user";
+        _ownerOptions.Add(new LabelValue(value, label));
+        _ownerOptions = _ownerOptions.OrderBy(x => x.Label).ToList();
     }
 
     private string ResolveSelectedAssignmentDefault()

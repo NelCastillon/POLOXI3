@@ -27,6 +27,12 @@ public sealed class LeadService : ILeadService
     public Task<LeadEngagementSummaryDto?> GetEngagementSummaryAsync(Guid leadId, CancellationToken cancellationToken = default)
         => _repository.GetEngagementSummaryAsync(leadId, cancellationToken);
 
+    public Task<IReadOnlyList<LeadEngagementOptionDto>> GetEngagementOptionsAsync(Guid tenantId, string? optionType = null, CancellationToken cancellationToken = default)
+        => _repository.GetEngagementOptionsAsync(tenantId, optionType, cancellationToken);
+
+    public Task<IReadOnlyList<LeadCampaignOptionDto>> GetCampaignOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetCampaignOptionsAsync(tenantId, cancellationToken);
+
     public Task<PagedResult<LeadDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _repository.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
 

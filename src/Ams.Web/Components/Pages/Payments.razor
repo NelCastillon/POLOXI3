@@ -103,6 +103,32 @@
     </div>
 }
 
+@if (_showProcessorConfirm && _selected is not null)
+{
+    <div class="pay-modal-backdrop" role="presentation" @onclick="CancelProcessorConfirm">
+        <div class="pay-modal pay-action-modal" role="dialog" aria-modal="true" aria-labelledby="pay-processor-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-exclamation-triangle-fill text-danger" aria-hidden="true"></i>
+                <span id="pay-processor-confirm-title">Confirm @_processorAction</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CancelProcessorConfirm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="um-modal-body">
+                <div class="pay-modal-intro">
+                    <span><i class="bi bi-shield-exclamation" aria-hidden="true"></i> Processor action</span>
+                    <p>This will submit a @_processorAction.ToLowerInvariant() request for <strong>@DisplayPaymentNumber(_selected)</strong> in the amount of <strong>@_selected.Amount.ToString("C2")</strong>.</p>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelProcessorConfirm" disabled="@_busy">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteProcessorConfirmAsync" disabled="@_busy">
+                    @if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                    Confirm @_processorAction
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
 <div class="pay-enterprise-page">
     <section class="pay-header">
         <div class="pay-header-left">
@@ -114,9 +140,10 @@
                     <span class="pay-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
                 </div>
                 <div class="pay-sub-row">
-                    <span>Record, track, and reconcile premium payments across billing accounts.</span>
+                    <span>Record, process, refund, void, track, and reconcile premium payments across billing accounts.</span>
                     <span class="pay-sub-chip"><i class="bi bi-cash-coin" aria-hidden="true"></i> @_filtered.Count matching payments</span>
                     <span class="pay-sub-chip"><i class="bi bi-currency-dollar" aria-hidden="true"></i> @Fmt(_filtered.Sum(x => x.Amount)) visible total</span>
+                    <span class="pay-sub-chip"><i class="bi bi-router" aria-hidden="true"></i> @_operations.Count processor ops</span>
                 </div>
             </div>
         </div>
@@ -155,21 +182,25 @@
             <span class="pay-workflow-icon"><i class="bi bi-receipt" aria-hidden="true"></i></span>
             <span class="pay-workflow-content"><strong>1</strong><span>Invoice</span><small>Review receivables.</small></span>
         </button>
-        <button type="button" class="pay-workflow-card pay-wf-pay" @onclick="OpenRecord">
+                        <button type="button" class="pay-workflow-card pay-wf-pay" @onclick="OpenRecord">
             <span class="pay-workflow-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
             <span class="pay-workflow-content"><strong>2</strong><span>Collect</span><small>Record payments.</small></span>
         </button>
+        <button type="button" class="pay-workflow-card pay-wf-pay" @onclick="CreateCheckoutForSelectedAsync" disabled="@(_selected is null || !_credentials.Any(x => x.IsActive) || _busy)">
+            <span class="pay-workflow-icon"><i class="bi bi-credit-card-2-front" aria-hidden="true"></i></span>
+            <span class="pay-workflow-content"><strong>3</strong><span>Checkout</span><small>Create processor session.</small></span>
+        </button>
         <button type="button" class="pay-workflow-card pay-wf-account" @onclick='() => Nav.NavigateTo("/billing/accounts")'>
             <span class="pay-workflow-icon"><i class="bi bi-building" aria-hidden="true"></i></span>
-            <span class="pay-workflow-content"><strong>3</strong><span>Account</span><small>Billing setup.</small></span>
+            <span class="pay-workflow-content"><strong>4</strong><span>Account</span><small>Billing setup.</small></span>
         </button>
         <button type="button" class="pay-workflow-card pay-wf-recon" @onclick='() => Nav.NavigateTo("/billing/reconciliation")'>
             <span class="pay-workflow-icon"><i class="bi bi-ui-checks-grid" aria-hidden="true"></i></span>
-            <span class="pay-workflow-content"><strong>4</strong><span>Reconcile</span><small>Match deposits.</small></span>
+            <span class="pay-workflow-content"><strong>5</strong><span>Reconcile</span><small>Match deposits.</small></span>
         </button>
         <button type="button" class="pay-workflow-card pay-wf-exp" @onclick='() => Nav.NavigateTo("/billing/payment-experience")'>
             <span class="pay-workflow-icon"><i class="bi bi-graph-up" aria-hidden="true"></i></span>
-            <span class="pay-workflow-content"><strong>5</strong><span>Experience</span><small>Monitor trends.</small></span>
+            <span class="pay-workflow-content"><strong>6</strong><span>Experience</span><small>Monitor trends.</small></span>
         </button>
     </section>
 
@@ -302,13 +333,18 @@
                         <div class="pay-meta-row"><span class="pay-meta-lbl">Reference</span><span class="pay-meta-val">@(_selected.ReferenceNumber ?? "-")</span></div>
                         <div class="pay-meta-row"><span class="pay-meta-lbl">Created</span><span class="pay-meta-val">@_selected.CreatedDateUtc.ToString("MMM d, yyyy")</span></div>
                         <div class="pay-meta-row"><span class="pay-meta-lbl">Account</span><span class="pay-meta-val">@AccountName(_selected.AccountId)</span></div>
+                        <div class="pay-meta-row"><span class="pay-meta-lbl">Processor</span><span class="pay-meta-val">@ProcessorStatus(_selected.PaymentId)</span></div>
                     </div>
                     <div class="pay-contact-card">
                         <strong>Payment notes</strong>
                         <span><i class="bi bi-journal-text" aria-hidden="true"></i> @(_selected.Notes ?? "No notes were recorded for this payment.")</span>
                         <span><i class="bi bi-receipt" aria-hidden="true"></i> Invoice: @(_selected.InvoiceId?.ToString() ?? "Unapplied / account-level")</span>
+                        <span><i class="bi bi-router" aria-hidden="true"></i> @ProcessorSummary(_selected.PaymentId)</span>
                     </div>
                     <div class="pay-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="CreateCheckoutForSelectedAsync" disabled="@(!_credentials.Any(x => x.IsActive) || _busy)"><i class="bi bi-credit-card-2-front" aria-hidden="true"></i> Checkout</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick='() => OpenProcessorConfirm("Refund")' disabled="@(_busy || !_credentials.Any(x => x.IsActive))"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Refund</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick='() => OpenProcessorConfirm("Void")' disabled="@(_busy || !_credentials.Any(x => x.IsActive))"><i class="bi bi-slash-circle" aria-hidden="true"></i> Void</button>
                         <button type="button" class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo($"/billing/accounts/{_selected.AccountId}")'><i class="bi bi-building" aria-hidden="true"></i> Account</button>
                         <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/reconciliation")'><i class="bi bi-ui-checks-grid" aria-hidden="true"></i> Reconcile</button>
                         <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
@@ -337,18 +373,22 @@
     private bool _loading;
     private bool _busy;
     private bool _showRecord;
+    private bool _showProcessorConfirm;
+    private string _processorAction = string.Empty;
     private bool _saveAttempted;
     private int _page = 1;
     private const int PageSize = 15;
     private PaymentDto? _selected;
     private PaymentForm _form = new();
 
-    private readonly List<string> _methods = ["ACH", "Credit Card", "Check", "Wire Transfer", "Cash"];
-    private readonly List<string> _statuses = ["Pending", "Cleared", "Applied", "Failed", "Returned", "Void"];
+    private IReadOnlyList<string> _methods => DistinctOptions(_items.Select(p => p.PaymentMethodCode), _form.PaymentMethodCode, _filterMethod);
+    private IReadOnlyList<string> _statuses => DistinctOptions(_items.Select(p => p.StatusCode), _filterStatus);
     private List<PaymentDto> _items = [];
     private List<PaymentDto> _filtered = [];
     private List<PaymentDto> _paged = [];
     private List<AccountOption> _accountOptions = [];
+    private List<PaymentGatewayCredentialDto> _credentials = [];
+    private List<PaymentProcessorOperationDto> _operations = [];
 
     private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
     private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
@@ -396,12 +436,16 @@
         {
             var accounts = await Api.SearchBillingAccountsAsync(_tenantId, null, 1, 500);
             _accountOptions = accounts?.Items?
-                .Select(a => new AccountOption(a.AccountId, a.AccountName, a.AccountNumber))
+                .Select(a => new AccountOption(a.AccountId, a.AccountName, a.AccountNumber, a.DefaultPaymentMethodCode))
                 .OrderBy(a => a.Name)
                 .ToList() ?? [];
 
             var result = await Api.SearchPaymentsAsync(_tenantId, null);
             _items = result?.Items?.ToList() ?? [];
+            var credentials = await Api.SearchPaymentGatewayCredentialsAsync(_tenantId, pageSize: 100);
+            _credentials = credentials?.Items.Where(x => x.IsActive).ToList() ?? [];
+            var operations = await Api.SearchPaymentProcessorOperationsAsync(_tenantId, pageSize: 250);
+            _operations = operations?.Items.ToList() ?? [];
             ApplyFilters(resetPage: true);
             EnsureSelectedStillVisible();
         }
@@ -409,6 +453,8 @@
         {
             _loadError = $"Payments failed to load: {ex.Message}";
             _items = [];
+            _credentials = [];
+            _operations = [];
             ApplyFilters(resetPage: true);
             ShowToast($"Load failed: {ex.Message}", "danger");
         }
@@ -484,10 +530,32 @@
     private void ClearSelection() => _selected = null;
     private bool IsSelected(PaymentDto item) => _selected?.PaymentId == item.PaymentId;
 
+    private void OpenProcessorConfirm(string action)
+    {
+        if (_selected is null) return;
+        _processorAction = action;
+        _showProcessorConfirm = true;
+    }
+
+    private void CancelProcessorConfirm()
+    {
+        if (_busy) return;
+        _showProcessorConfirm = false;
+        _processorAction = string.Empty;
+    }
+
+    private async Task ExecuteProcessorConfirmAsync()
+    {
+        if (string.Equals(_processorAction, "Refund", StringComparison.OrdinalIgnoreCase)) await RefundSelectedAsync();
+        else if (string.Equals(_processorAction, "Void", StringComparison.OrdinalIgnoreCase)) await VoidSelectedAsync();
+        _showProcessorConfirm = false;
+        _processorAction = string.Empty;
+    }
+
     private void OpenRecord()
     {
         _saveAttempted = false;
-        _form = new();
+        _form = DefaultPaymentForm();
         if (_selected is not null)
         {
             _form.AccountId = _selected.AccountId;
@@ -550,6 +618,98 @@
         return Task.CompletedTask;
     }
 
+    private async Task CreateCheckoutForSelectedAsync()
+    {
+        if (_selected is null) return;
+        var credential = ActiveCredential(_selected);
+        if (credential is null)
+        {
+            ShowToast("Configure an active encrypted payment gateway credential before checkout.", "warning");
+            return;
+        }
+        _busy = true;
+        try
+        {
+            var baseUri = Nav.BaseUri.TrimEnd('/');
+            var operation = await Api.CreatePaymentCheckoutSessionAsync(new CreateCheckoutSessionRequest
+            {
+                TenantId = _tenantId,
+                AccountId = _selected.AccountId,
+                InvoiceId = _selected.InvoiceId,
+                PaymentGatewayCredentialId = credential.PaymentGatewayCredentialId,
+                Amount = _selected.Amount,
+                CurrencyCode = "USD",
+                SuccessUrl = $"{baseUri}/billing/payments",
+                CancelUrl = $"{baseUri}/billing/payments",
+                Description = $"Payment {DisplayPaymentNumber(_selected)}",
+                CreatedByUserId = _tenantAdminUserId
+            });
+            if (operation is not null) _operations.Insert(0, operation);
+            ShowToast(operation?.CheckoutUrl is null ? "Checkout session created." : "Checkout session created with provider URL.", "success");
+            if (!string.IsNullOrWhiteSpace(operation?.CheckoutUrl)) Nav.NavigateTo(operation.CheckoutUrl, forceLoad: true);
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Checkout failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RefundSelectedAsync()
+    {
+        if (_selected is null) return;
+        var credential = ActiveCredential(_selected);
+        if (credential is null)
+        {
+            ShowToast("Configure an active encrypted payment gateway credential before refund.", "warning");
+            return;
+        }
+        _busy = true;
+        try
+        {
+            var operation = await Api.RefundPaymentAsync(new RefundPaymentRequest { TenantId = _tenantId, PaymentId = _selected.PaymentId, PaymentGatewayCredentialId = credential.PaymentGatewayCredentialId, Amount = _selected.Amount, Reason = "Refund initiated from billing payments", CreatedByUserId = _tenantAdminUserId });
+            if (operation is not null) _operations.Insert(0, operation);
+            ShowToast("Refund submitted to processor.", "success");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Refund failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task VoidSelectedAsync()
+    {
+        if (_selected is null) return;
+        var credential = ActiveCredential(_selected);
+        if (credential is null)
+        {
+            ShowToast("Configure an active encrypted payment gateway credential before void.", "warning");
+            return;
+        }
+        _busy = true;
+        try
+        {
+            var operation = await Api.VoidPaymentAsync(new VoidPaymentRequest { TenantId = _tenantId, PaymentId = _selected.PaymentId, PaymentGatewayCredentialId = credential.PaymentGatewayCredentialId, Reason = "Void initiated from billing payments", CreatedByUserId = _tenantAdminUserId });
+            if (operation is not null) _operations.Insert(0, operation);
+            ShowToast("Void submitted to processor.", "success");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Void failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
     private async Task ExportAsync()
     {
         if (!_filtered.Any())
@@ -594,8 +754,47 @@
     }
 
     private string AccountName(Guid accountId) => _accountOptions.FirstOrDefault(a => a.Id == accountId)?.Display ?? accountId.ToString()[..8];
+    private PaymentForm DefaultPaymentForm()
+    {
+        var method = _selected is not null ? _selected.PaymentMethodCode : _accountOptions.Select(x => x.DefaultPaymentMethodCode).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
+        var status = _items.Select(x => x.StatusCode).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
+        return new() { PaymentMethodCode = method ?? string.Empty, StatusCode = status ?? string.Empty };
+    }
+    private PaymentGatewayCredentialDto? ActiveCredential(PaymentDto payment)
+    {
+        if (payment.PaymentMethodCode.Equals("ACH", StringComparison.OrdinalIgnoreCase))
+        {
+            return _credentials.FirstOrDefault(x => x.IsActive && x.ProviderCode == PaymentProcessorCodes.Ach) ?? _credentials.FirstOrDefault(x => x.IsActive);
+        }
+
+        if (IsCard(payment.PaymentMethodCode))
+        {
+            return _credentials.FirstOrDefault(x => x.IsActive && x.ProviderCode != PaymentProcessorCodes.Ach) ?? _credentials.FirstOrDefault(x => x.IsActive);
+        }
+
+        return _credentials.FirstOrDefault(x => x.IsActive);
+    }
+    private string ProcessorStatus(Guid paymentId)
+    {
+        var operation = LatestOperation(paymentId);
+        return operation is null ? "Not processed" : $"{operation.ProviderCode} {operation.OperationType} {operation.StatusCode}";
+    }
+    private string ProcessorSummary(Guid paymentId)
+    {
+        var operation = LatestOperation(paymentId);
+        if (operation is null) return _credentials.Count == 0 ? "No active processor credential configured." : "Ready for processor action.";
+        return string.IsNullOrWhiteSpace(operation.FailureMessage) ? $"Latest operation: {operation.OperationType} / {operation.StatusCode} / {operation.ProviderStatus ?? "provider pending"}." : $"Latest operation failed: {operation.FailureMessage}";
+    }
+    private PaymentProcessorOperationDto? LatestOperation(Guid paymentId) => _operations.Where(x => x.PaymentId == paymentId).OrderByDescending(x => x.CreatedDateUtc).FirstOrDefault();
     private static string DisplayPaymentNumber(PaymentDto payment) => !string.IsNullOrWhiteSpace(payment.PaymentNumber) ? payment.PaymentNumber : payment.ReferenceNumber ?? payment.PaymentId.ToString()[..8];
     private static string Fmt(decimal v) => v.ToString("C0");
+    private static IReadOnlyList<string> DistinctOptions(IEnumerable<string?> values, params string?[] additionalValues)
+        => values.Concat(additionalValues)
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(v => v)
+            .ToList();
     private static bool IsCleared(string status) => status is "Cleared" or "Applied" or "Paid";
     private static bool IsProblemStatus(string status) => status is "Failed" or "Returned" or "Void" or "Voided";
     private static bool IsCard(string method) => method is "Card" or "Credit Card" or "Credit/Debit Card";
@@ -614,7 +813,7 @@
         public string Title => $"Filter by {Label}";
     }
 
-    private sealed record AccountOption(Guid Id, string Name, string Number)
+    private sealed record AccountOption(Guid Id, string Name, string Number, string DefaultPaymentMethodCode)
     {
         public string Display => $"{Name} - {Number}";
     }
@@ -628,9 +827,9 @@
         [Required]
         public DateTime PaymentDate { get; set; } = DateTime.Today;
         [Required, StringLength(50)]
-        public string PaymentMethodCode { get; set; } = "ACH";
+        public string PaymentMethodCode { get; set; } = string.Empty;
         [Required, StringLength(50)]
-        public string StatusCode { get; set; } = "Pending";
+        public string StatusCode { get; set; } = string.Empty;
         [StringLength(100)]
         public string? ReferenceNumber { get; set; }
         [StringLength(500)]

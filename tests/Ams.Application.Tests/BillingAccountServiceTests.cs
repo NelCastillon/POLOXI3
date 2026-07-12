@@ -70,6 +70,9 @@ public sealed class BillingAccountServiceTests
         public Task<PagedResult<BillingAccountDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 250, CancellationToken cancellationToken = default)
             => Task.FromResult(new PagedResult<BillingAccountDto>());
 
+        public Task<IReadOnlyList<BillingModeDashboardRowDto>> GetBillingModeDashboardAsync(Guid tenantId, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<BillingModeDashboardRowDto>>([]);
+
         public Task<Guid> CreateAsync(CreateBillingAccountRequest request, CancellationToken cancellationToken = default)
         {
             LastCreatedRequest = request;

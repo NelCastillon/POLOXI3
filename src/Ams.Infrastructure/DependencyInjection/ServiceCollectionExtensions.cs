@@ -6,6 +6,7 @@ using Ams.Infrastructure.Persistence;
 using Ams.Infrastructure.Persistence.ConnectionFactory;
 using Ams.Infrastructure.Persistence.Repositories;
 using Ams.Infrastructure.Persistence.TypeHandlers;
+using Ams.Infrastructure.Payments;
 using Ams.Infrastructure.Services;
 using Dapper;
 using Microsoft.Extensions.Configuration;
@@ -33,6 +34,7 @@ public static class ServiceCollectionExtensions
             options.ContainerName = section[nameof(DocumentStorageOptions.ContainerName)] ?? "documents";
         });
 
+        services.AddDataProtection();
         services.AddScoped<ISqlConnectionFactory, SqlConnectionFactory>();
         services.AddTransient<DatabaseMigrator>();
         services.AddScoped<IDocumentStorageService, AzureBlobDocumentStorageService>();
@@ -67,6 +69,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IExpenseRepository, ExpenseRepository>();
         services.AddScoped<IBillingAccountRepository, BillingAccountRepository>();
         services.AddScoped<IPaymentRepository, PaymentRepository>();
+        services.AddScoped<IPaymentPlatformRepository, PaymentPlatformRepository>();
         services.AddScoped<IGLAccountRepository, GLAccountRepository>();
         services.AddScoped<IJournalEntryRepository, JournalEntryRepository>();
         services.AddScoped<ICommissionPayeeRepository, CommissionPayeeRepository>();
@@ -91,6 +94,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDataQualityRepository, DataQualityRepository>();
         services.AddScoped<IDataCenterRepository, DataCenterRepository>();
         services.AddScoped<ISlaPolicyRepository, SlaPolicyRepository>();
+        services.AddScoped<IAmsCapabilityRepository, AmsCapabilityRepository>();
 
         // ── Existing services ────────────────────────────────────────
         services.AddScoped<ILeadService, LeadService>();
@@ -125,6 +129,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IExpenseService, ExpenseService>();
         services.AddScoped<IBillingAccountService, BillingAccountService>();
         services.AddScoped<IPaymentService, PaymentService>();
+        services.AddScoped<IPaymentPlatformService, PaymentPlatformService>();
+        services.AddScoped<IPaymentProcessorGateway, StripePaymentProcessorGateway>();
+        services.AddScoped<IPaymentProcessorGateway, AuthorizeNetPaymentProcessorGateway>();
+        services.AddScoped<IPaymentProcessorGateway, AchPaymentProcessorGateway>();
         services.AddScoped<IFinanceService, FinanceService>();
         services.AddScoped<ICommissionService, CommissionService>();
         services.AddScoped<IDocumentService, DocumentService>();
@@ -135,6 +143,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDashboardService, DashboardService>();
         services.AddScoped<IAgencyDashboardService, AgencyDashboardService>();
         services.AddScoped<AdminPagesService>();
+        services.AddScoped<IAmsCapabilityService, AmsCapabilityService>();
 
         // ── Platform Core engines ────────────────────────────────────
         services.AddScoped<ITenantDomainRepository, TenantDomainRepository>();
@@ -476,6 +485,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDuplicateRuleService, DuplicateRuleService>();
         services.AddScoped<IAssignmentRuleRepository, AssignmentRuleRepository>();
         services.AddScoped<IAssignmentRuleService, AssignmentRuleService>();
+        services.AddScoped<ILeadActivityOutcomeRepository, LeadActivityOutcomeRepository>();
+        services.AddScoped<ILeadActivityOutcomeService, LeadActivityOutcomeService>();
+        services.AddScoped<ILeadActivityTypeRepository, LeadActivityTypeRepository>();
+        services.AddScoped<ILeadActivityTypeService, LeadActivityTypeService>();
         services.AddScoped<ICrmCustomFieldRepository, CrmCustomFieldRepository>();
         services.AddScoped<ICrmCustomFieldService, CrmCustomFieldService>();
         services.AddScoped<IPricingMarketRulesRepository, PricingMarketRulesRepository>();

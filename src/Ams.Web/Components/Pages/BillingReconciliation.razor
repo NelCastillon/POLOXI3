@@ -345,8 +345,8 @@
     private RecRun? _selected;
     private RecForm _form = new();
 
-    private readonly List<string> _types = ["Carrier Statement", "Agency Bill", "Direct Bill", "Bank Deposit", "Cash Receipt"];
-    private readonly List<string> _statuses = ["In Progress", "Pending Review", "Reconciled", "Disputed"];
+    private IReadOnlyList<string> _types => DistinctOptions(_runs.Select(r => r.Type), _form.Type, _filterType);
+    private IReadOnlyList<string> _statuses => DistinctOptions(_runs.Select(r => r.Status), _form.Status, _filterStatus);
     private List<RecRun> _runs = [];
     private List<RecRun> _filtered = [];
     private List<RecRun> _paged = [];
@@ -406,19 +406,18 @@
         try
         {
             var result = await Api.SearchBankReconciliationsAsync(_tenantId, null);
-            var bankRuns = result?.Items?.Select(FromBankReconciliation).ToList() ?? [];
-            _runs = bankRuns.Count > 0 ? bankRuns : SeedRuns();
+            _runs = result?.Items?.Select(FromBankReconciliation).ToList() ?? [];
             _exceptions = BuildExceptions(_runs);
             ApplyFilters(resetPage: true);
             EnsureSelectedStillVisible();
         }
         catch (Exception ex)
         {
-            _loadError = $"Reconciliation data source unavailable: {ex.Message}. Showing workflow seed data.";
-            _runs = SeedRuns();
+            _loadError = $"Reconciliation data source unavailable: {ex.Message}";
+            _runs = [];
             _exceptions = BuildExceptions(_runs);
             ApplyFilters(resetPage: true);
-            ShowToast($"Loaded fallback reconciliation workflow: {ex.Message}", "warning");
+            ShowToast($"Load failed: {ex.Message}", "danger");
         }
         finally
         {
@@ -524,35 +523,15 @@
             if (_editingId == Guid.Empty)
             {
                 var request = ToCreateRequest(_form);
-                Guid id;
-                try
-                {
-                    id = await Api.CreateBankReconciliationAsync(request);
-                    ShowToast("Reconciliation started.", "success");
-                    await LoadAsync();
-                }
-                catch (Exception ex)
-                {
-                    id = Guid.NewGuid();
-                    _runs.Insert(0, FromForm(id, _form, "Local"));
-                    ApplyFilters(resetPage: true);
-                    ShowToast($"Reconciliation added locally because persistence is unavailable: {ex.Message}", "warning");
-                }
+                await Api.CreateBankReconciliationAsync(request);
+                ShowToast("Reconciliation started.", "success");
+                await LoadAsync();
             }
             else
             {
-                var existing = _runs.First(r => r.Id == _editingId);
-                if (existing.Source == "Finance")
-                {
-                    await Api.UpdateBankReconciliationAsync(_editingId, ToUpdateRequest(_editingId, _form));
-                    ShowToast("Reconciliation updated.", "success");
-                    await LoadAsync();
-                }
-                else
-                {
-                    ReplaceRun(_editingId, FromForm(_editingId, _form, existing.Source));
-                    ShowToast("Reconciliation updated locally.", "success");
-                }
+                await Api.UpdateBankReconciliationAsync(_editingId, ToUpdateRequest(_editingId, _form));
+                ShowToast("Reconciliation updated.", "success");
+                await LoadAsync();
             }
             _showForm = false;
         }
@@ -646,20 +625,9 @@
     }
 
     private static RecRun FromBankReconciliation(BankReconciliationDto dto) => new(dto.BankReconciliationId, dto.BankStatementDate.ToDateTime(TimeOnly.MinValue), dto.BankName, "Bank Deposit", dto.BankBalance, dto.BookBalance, dto.Discrepancy, Math.Abs(dto.Discrepancy) >= 1m ? 1 : 0, NormalizeStatus(dto.StatusCode), "Finance", dto.CreatedDateUtc);
-    private RecRun FromForm(Guid id, RecForm form, string source) => new(id, form.RunDate, form.Carrier, form.Type, form.StatementAmount, form.BookAmount, form.StatementAmount - form.BookAmount, Math.Abs(form.StatementAmount - form.BookAmount) >= 1m ? 1 : 0, form.Status, source, DateTime.UtcNow);
     private CreateBankReconciliationRequest ToCreateRequest(RecForm form) => new() { TenantId = _tenantId, BankAccountNumber = form.Type, BankName = form.Carrier, BankStatementDate = DateOnly.FromDateTime(form.RunDate), BankBalance = form.StatementAmount, BookBalance = form.BookAmount, StatusCode = form.Status, CreatedByUserId = _tenantAdminUserId };
     private UpdateBankReconciliationRequest ToUpdateRequest(Guid id, RecForm form) => new() { BankReconciliationId = id, TenantId = _tenantId, BankAccountNumber = form.Type, BankName = form.Carrier, BankStatementDate = DateOnly.FromDateTime(form.RunDate), BankBalance = form.StatementAmount, BookBalance = form.BookAmount, StatusCode = form.Status, ModifiedByUserId = _tenantAdminUserId };
     private UpdateBankReconciliationRequest ToUpdateRequest(Guid id, RecRun run) => new() { BankReconciliationId = id, TenantId = _tenantId, BankAccountNumber = run.Type, BankName = run.Carrier, BankStatementDate = DateOnly.FromDateTime(run.RunDate), BankBalance = run.StatementAmount, BookBalance = run.BookAmount, StatusCode = run.Status, ModifiedByUserId = _tenantAdminUserId };
-
-    private static List<RecRun> SeedRuns() =>
-    [
-        new(Guid.NewGuid(), new DateTime(2025,1,31), "Travelers", "Carrier Statement", 154200m, 154198m, 2m, 0, "Reconciled", "Seed", DateTime.UtcNow.AddDays(-20)),
-        new(Guid.NewGuid(), new DateTime(2025,1,31), "Hartford", "Carrier Statement", 89500m, 89745m, -245m, 2, "Pending Review", "Seed", DateTime.UtcNow.AddDays(-18)),
-        new(Guid.NewGuid(), new DateTime(2025,1,31), "Agency-Bill Pool", "Agency Bill", 32100m, 31975m, 125m, 1, "Pending Review", "Seed", DateTime.UtcNow.AddDays(-16)),
-        new(Guid.NewGuid(), new DateTime(2025,2,28), "Travelers", "Carrier Statement", 161000m, 160800m, 200m, 1, "In Progress", "Seed", DateTime.UtcNow.AddDays(-10)),
-        new(Guid.NewGuid(), new DateTime(2025,2,28), "Nationwide", "Direct Bill", 47800m, 47800m, 0m, 0, "Reconciled", "Seed", DateTime.UtcNow.AddDays(-8)),
-        new(Guid.NewGuid(), new DateTime(2025,2,28), "Agency-Bill Pool", "Agency Bill", 28900m, 29100m, -200m, 3, "Disputed", "Seed", DateTime.UtcNow.AddDays(-5))
-    ];
 
     private static List<RecException> BuildExceptions(List<RecRun> runs)
     {
@@ -677,6 +645,13 @@
 
     private static string NormalizeStatus(string status) => status switch { "Pending" => "In Progress", "Closed" => "Reconciled", _ => status };
     private static string Fmt(decimal v) => v.ToString("C0");
+    private static IReadOnlyList<string> DistinctOptions(IEnumerable<string?> values, params string?[] additionalValues)
+        => values.Concat(additionalValues)
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(v => v)
+            .ToList();
     private static string StatusCss(string status) => $"rec-st-{CssKey(status)}";
     private static string TypeCss(string type) => $"rec-typ-{CssKey(type)}";
     private static string ExceptionCss(string type) => $"rec-et-{CssKey(type)}";

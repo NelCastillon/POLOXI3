@@ -225,6 +225,86 @@ public sealed class AssignmentRulesController : ControllerBase
 }
 
 [ApiController]
+[Route("api/crm/activity-outcomes")]
+public sealed class LeadActivityOutcomesController : ControllerBase
+{
+    private readonly ILeadActivityOutcomeService _service;
+    public LeadActivityOutcomesController(ILeadActivityOutcomeService service) => _service = service;
+
+    [HttpGet("{id:guid}")]
+    public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
+    {
+        var item = await _service.GetByIdAsync(id, ct);
+        return item is null ? NotFound() : Ok(item);
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> Search([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, [FromQuery] string? activityTypeCode, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 50, CancellationToken ct = default)
+        => Ok(await _service.SearchAsync(tenantId, searchTerm, activityTypeCode, pageNumber, pageSize, ct));
+
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreateLeadActivityOutcomeRequest request, CancellationToken ct)
+    {
+        var id = await _service.CreateAsync(request, ct);
+        return CreatedAtAction(nameof(GetById), new { id }, new { id });
+    }
+
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateLeadActivityOutcomeRequest request, CancellationToken ct)
+    {
+        await _service.UpdateAsync(id, request, ct);
+        return NoContent();
+    }
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, [FromQuery] Guid? modifiedByUserId, CancellationToken ct)
+    {
+        await _service.DeleteAsync(id, modifiedByUserId, ct);
+        return NoContent();
+    }
+}
+
+[ApiController]
+[Route("api/crm/activity-types")]
+public sealed class LeadActivityTypesController : ControllerBase
+{
+    private readonly ILeadActivityTypeService _service;
+    public LeadActivityTypesController(ILeadActivityTypeService service) => _service = service;
+
+    [HttpGet("{id:guid}")]
+    public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
+    {
+        var item = await _service.GetByIdAsync(id, ct);
+        return item is null ? NotFound() : Ok(item);
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> Search([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 50, CancellationToken ct = default)
+        => Ok(await _service.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, ct));
+
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreateLeadActivityTypeRequest request, CancellationToken ct)
+    {
+        var id = await _service.CreateAsync(request, ct);
+        return CreatedAtAction(nameof(GetById), new { id }, new { id });
+    }
+
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateLeadActivityTypeRequest request, CancellationToken ct)
+    {
+        await _service.UpdateAsync(id, request, ct);
+        return NoContent();
+    }
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, [FromQuery] Guid? modifiedByUserId, CancellationToken ct)
+    {
+        await _service.DeleteAsync(id, modifiedByUserId, ct);
+        return NoContent();
+    }
+}
+
+[ApiController]
 [Route("api/crm/custom-fields")]
 public sealed class CrmCustomFieldsController : ControllerBase
 {

@@ -51,6 +51,13 @@ public sealed class LeadActivitiesController : ControllerBase
         return Ok(items);
     }
 
+    [HttpGet("outcomes")]
+    public async Task<IActionResult> GetOutcomes([FromQuery] Guid tenantId, [FromQuery] string? activityTypeCode, CancellationToken cancellationToken)
+    {
+        var items = await _service.GetOutcomesAsync(tenantId, activityTypeCode, cancellationToken);
+        return Ok(items);
+    }
+
     [HttpGet]
     public async Task<IActionResult> Search([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 25, CancellationToken cancellationToken = default)
     {

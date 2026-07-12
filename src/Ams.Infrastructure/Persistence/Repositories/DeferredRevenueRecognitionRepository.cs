@@ -18,6 +18,40 @@ public sealed class DeferredRevenueRecognitionRepository : IDeferredRevenueRecog
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'Finance')
     EXEC('CREATE SCHEMA Finance');
 
+IF OBJECT_ID(N'Finance.JournalEntry', N'U') IS NULL
+BEGIN
+    CREATE TABLE Finance.JournalEntry
+    (
+        JournalEntryId  UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+        TenantId        UNIQUEIDENTIFIER NOT NULL,
+        EntryNumber     NVARCHAR(50)     NOT NULL,
+        EntryDate       DATE             NOT NULL,
+        Description     NVARCHAR(1000)   NOT NULL,
+        TotalDebit      DECIMAL(18, 2)   NOT NULL DEFAULT 0,
+        TotalCredit     DECIMAL(18, 2)   NOT NULL DEFAULT 0,
+        StatusCode      NVARCHAR(50)     NOT NULL DEFAULT N'Draft',
+        CreatedDateUtc  DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2        NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted       BIT              NOT NULL DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Finance.JournalEntryLine', N'U') IS NULL
+BEGIN
+    CREATE TABLE Finance.JournalEntryLine
+    (
+        LineId uniqueidentifier NOT NULL CONSTRAINT PK_JournalEntryLine PRIMARY KEY,
+        JournalEntryId uniqueidentifier NOT NULL,
+        GLAccountId uniqueidentifier NOT NULL,
+        DebitAmount decimal(18,2) NOT NULL CONSTRAINT DF_JournalEntryLine_Debit DEFAULT (0),
+        CreditAmount decimal(18,2) NOT NULL CONSTRAINT DF_JournalEntryLine_Credit DEFAULT (0),
+        Description nvarchar(1000) NULL,
+        LineOrder int NOT NULL CONSTRAINT DF_JournalEntryLine_LineOrder DEFAULT (0)
+    );
+END;
+
 IF OBJECT_ID('Finance.DeferredRevenueRecognition', 'U') IS NULL
 BEGIN
     CREATE TABLE Finance.DeferredRevenueRecognition
@@ -130,6 +164,10 @@ INSERT INTO Finance.DeferredRevenueRecognition (RecognitionId, TenantId, Deferre
 VALUES (@Id, @TenantId, @DeferredRevenueScheduleId, @RecognitionDate, @Amount, @JournalEntryId, @StatusCode, SYSUTCDATETIME(), @CreatedByUserId, NULL, NULL, 0);";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.TenantId, request.DeferredRevenueScheduleId, request.RecognitionDate, request.Amount, request.JournalEntryId, request.StatusCode, request.CreatedByUserId }, cancellationToken: cancellationToken));
+        if (string.Equals(request.StatusCode, "Posted", StringComparison.OrdinalIgnoreCase))
+        {
+            await PostRecognitionAsync(cn, id, request.TenantId, request.CreatedByUserId, cancellationToken);
+        }
         return id;
     }
 
@@ -149,5 +187,91 @@ SET DeferredRevenueScheduleId = @DeferredRevenueScheduleId,
 WHERE RecognitionId = @Id AND COALESCE(IsDeleted, 0) = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.DeferredRevenueScheduleId, request.RecognitionDate, request.Amount, request.JournalEntryId, request.StatusCode, request.ModifiedByUserId }, cancellationToken: cancellationToken));
+        if (string.Equals(request.StatusCode, "Posted", StringComparison.OrdinalIgnoreCase))
+        {
+            await PostRecognitionAsync(cn, id, request.TenantId, request.ModifiedByUserId, cancellationToken);
+        }
+    }
+
+    private static async Task PostRecognitionAsync(System.Data.IDbConnection connection, Guid recognitionId, Guid tenantId, Guid? userId, CancellationToken cancellationToken)
+    {
+        const string sql = @"
+DECLARE @ExistingJournalEntryId uniqueidentifier;
+DECLARE @DeferredRevenueScheduleId uniqueidentifier;
+DECLARE @RecognitionDate date;
+DECLARE @Amount decimal(18,2);
+DECLARE @RevenueGLAccountId uniqueidentifier;
+DECLARE @DeferredGLAccountId uniqueidentifier;
+DECLARE @EntryNumber nvarchar(50);
+DECLARE @Description nvarchar(1000);
+DECLARE @JournalEntryId uniqueidentifier;
+
+SELECT @ExistingJournalEntryId = r.JournalEntryId,
+       @DeferredRevenueScheduleId = r.DeferredRevenueScheduleId,
+       @RecognitionDate = r.RecognitionDate,
+       @Amount = r.Amount,
+       @RevenueGLAccountId = s.GLAccountId,
+       @DeferredGLAccountId = s.DeferredGLAccountId
+FROM Finance.DeferredRevenueRecognition r
+JOIN Finance.DeferredRevenueSchedule s ON s.DeferredRevenueScheduleId = r.DeferredRevenueScheduleId
+WHERE r.RecognitionId = @RecognitionId
+  AND r.TenantId = @TenantId
+  AND COALESCE(r.IsDeleted, 0) = 0
+  AND COALESCE(s.IsDeleted, 0) = 0;
+
+IF @DeferredRevenueScheduleId IS NULL
+    THROW 51001, 'Deferred revenue recognition or schedule was not found.', 1;
+
+IF @ExistingJournalEntryId IS NOT NULL
+    RETURN;
+
+IF @Amount <= 0
+    THROW 51002, 'Deferred revenue recognition amount must be greater than zero before posting.', 1;
+
+IF @RevenueGLAccountId IS NULL OR @DeferredGLAccountId IS NULL
+    THROW 51003, 'Deferred revenue schedule requires both revenue and deferred GL accounts before posting.', 1;
+
+IF NOT EXISTS (SELECT 1 FROM Finance.GLAccount WHERE GLAccountId = @RevenueGLAccountId AND TenantId = @TenantId AND COALESCE(IsDeleted, 0) = 0)
+    THROW 51004, 'Revenue GL account was not found for the deferred revenue schedule.', 1;
+
+IF NOT EXISTS (SELECT 1 FROM Finance.GLAccount WHERE GLAccountId = @DeferredGLAccountId AND TenantId = @TenantId AND COALESCE(IsDeleted, 0) = 0)
+    THROW 51005, 'Deferred revenue GL account was not found for the deferred revenue schedule.', 1;
+
+SET @JournalEntryId = NEWID();
+SET @EntryNumber = CONCAT(N'DRR-', FORMAT(@RecognitionDate, 'yyyyMMdd'), N'-', LEFT(CONVERT(nvarchar(36), @RecognitionId), 8));
+SET @Description = CONCAT(N'Deferred revenue recognition ', LEFT(CONVERT(nvarchar(36), @RecognitionId), 8));
+
+BEGIN TRANSACTION;
+
+INSERT INTO Finance.JournalEntry (JournalEntryId, TenantId, EntryNumber, EntryDate, Description, TotalDebit, TotalCredit, StatusCode, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+VALUES (@JournalEntryId, @TenantId, @EntryNumber, @RecognitionDate, @Description, @Amount, @Amount, N'Posted', SYSUTCDATETIME(), @UserId, NULL, NULL, 0);
+
+INSERT INTO Finance.JournalEntryLine (LineId, JournalEntryId, GLAccountId, DebitAmount, CreditAmount, Description, LineOrder)
+VALUES (NEWID(), @JournalEntryId, @DeferredGLAccountId, @Amount, 0, N'Debit deferred revenue liability', 1),
+       (NEWID(), @JournalEntryId, @RevenueGLAccountId, 0, @Amount, N'Credit recognized revenue', 2);
+
+UPDATE Finance.DeferredRevenueRecognition
+SET JournalEntryId = @JournalEntryId,
+    StatusCode = N'Posted',
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @UserId
+WHERE RecognitionId = @RecognitionId
+  AND TenantId = @TenantId
+  AND COALESCE(IsDeleted, 0) = 0;
+
+UPDATE s
+SET RecognizedAmount = CASE WHEN s.RecognizedAmount + @Amount > s.TotalAmount THEN s.TotalAmount ELSE s.RecognizedAmount + @Amount END,
+    RemainingAmount = CASE WHEN s.TotalAmount - (s.RecognizedAmount + @Amount) < 0 THEN 0 ELSE s.TotalAmount - (s.RecognizedAmount + @Amount) END,
+    StatusCode = CASE WHEN s.TotalAmount - (s.RecognizedAmount + @Amount) <= 0 THEN N'Completed' ELSE s.StatusCode END,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @UserId
+FROM Finance.DeferredRevenueSchedule s
+WHERE s.DeferredRevenueScheduleId = @DeferredRevenueScheduleId
+  AND s.TenantId = @TenantId
+  AND COALESCE(s.IsDeleted, 0) = 0;
+
+COMMIT TRANSACTION;";
+
+        await connection.ExecuteAsync(new CommandDefinition(sql, new { RecognitionId = recognitionId, TenantId = tenantId, UserId = userId }, cancellationToken: cancellationToken));
     }
 }

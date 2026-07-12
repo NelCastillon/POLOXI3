@@ -26,6 +26,10 @@ public sealed class BillingAccountsController : ControllerBase
     public async Task<IActionResult> Search([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 250, CancellationToken cancellationToken = default)
         => Ok(await _service.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken));
 
+    [HttpGet("billing-mode-dashboard")]
+    public async Task<IActionResult> GetBillingModeDashboard([FromQuery] Guid tenantId, CancellationToken cancellationToken = default)
+        => Ok(await _service.GetBillingModeDashboardAsync(tenantId, cancellationToken));
+
     [HttpGet("{accountId:guid}")]
     public async Task<IActionResult> GetById(Guid accountId, CancellationToken cancellationToken)
     {

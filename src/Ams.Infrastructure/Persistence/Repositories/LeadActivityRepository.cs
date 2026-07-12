@@ -171,6 +171,26 @@ WHERE a.ActivityId = @Id AND a.IsDeleted = 0;";
             new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
     }
 
+    public async Task<IReadOnlyList<LeadActivityOutcomeDto>> GetOutcomesAsync(Guid tenantId, string? activityTypeCode = null, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT ActivityOutcomeId, TenantId, ActivityTypeCode, OutcomeCode, OutcomeName, Description, SortOrder, IsActive
+FROM CRM.LeadActivityOutcome
+WHERE TenantId = @TenantId
+  AND IsActive = 1
+  AND IsDeleted = 0
+  AND (@ActivityTypeCode IS NULL OR @ActivityTypeCode = '' OR ActivityTypeCode = @ActivityTypeCode)
+ORDER BY ActivityTypeCode, SortOrder, OutcomeName;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var items = await cn.QueryAsync<LeadActivityOutcomeDto>(new CommandDefinition(sql, new
+        {
+            TenantId = tenantId,
+            ActivityTypeCode = string.IsNullOrWhiteSpace(activityTypeCode) ? null : activityTypeCode.Trim()
+        }, cancellationToken: cancellationToken));
+        return items.AsList();
+    }
+
     public async Task<PagedResult<LeadActivityDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         const string sql = @"

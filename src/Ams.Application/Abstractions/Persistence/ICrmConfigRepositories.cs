@@ -55,6 +55,24 @@ public interface IAssignmentRuleRepository
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 }
 
+public interface ILeadActivityOutcomeRepository
+{
+    Task<LeadActivityOutcomeDto?> GetByIdAsync(Guid id, CancellationToken ct = default);
+    Task<PagedResult<LeadActivityOutcomeDto>> SearchAsync(Guid tenantId, string? searchTerm, string? activityTypeCode = null, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default);
+    Task<Guid> CreateAsync(CreateLeadActivityOutcomeRequest request, CancellationToken ct = default);
+    Task UpdateAsync(Guid id, UpdateLeadActivityOutcomeRequest request, CancellationToken ct = default);
+    Task DeleteAsync(Guid id, Guid? modifiedByUserId = null, CancellationToken ct = default);
+}
+
+public interface ILeadActivityTypeRepository
+{
+    Task<LeadActivityTypeDto?> GetByIdAsync(Guid id, CancellationToken ct = default);
+    Task<PagedResult<LeadActivityTypeDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default);
+    Task<Guid> CreateAsync(CreateLeadActivityTypeRequest request, CancellationToken ct = default);
+    Task UpdateAsync(Guid id, UpdateLeadActivityTypeRequest request, CancellationToken ct = default);
+    Task DeleteAsync(Guid id, Guid? modifiedByUserId = null, CancellationToken ct = default);
+}
+
 public interface ICrmCustomFieldRepository
 {
     Task<CrmCustomFieldDto?> GetByIdAsync(Guid id, CancellationToken ct = default);

@@ -1,6 +1,8 @@
 @page "/workbench/accounting2"
 @namespace Ams.Web.Components.Pages
 @inject NavigationManager Nav
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 
 <PageTitle>Accounting Workbench</PageTitle>
 
@@ -16,6 +18,11 @@
         </button>
     </Actions>
 </AppPageHeader>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+}
 
 <div class="workbench-container">
     <!-- Financial Metrics Row -->
@@ -65,8 +72,8 @@
                         @foreach (var payment in _pendingPayments.Take(5))
                         {
                             <li class="transaction-item">
-                                <span class="transaction-ref">@payment</span>
-                                <span class="transaction-amount">$5,000.00</span>
+                                <span class="transaction-ref">@payment.Label</span>
+                                <span class="transaction-amount">@payment.Amount.ToString("C0")</span>
                             </li>
                         }
                     </ul>
@@ -128,8 +135,8 @@
                         @foreach (var entry in _journalEntries.Take(5))
                         {
                             <li class="entry-item">
-                                <span class="entry-id">@entry</span>
-                                <span class="entry-status">Pending</span>
+                                <span class="entry-id">@entry.Label</span>
+                                <span class="entry-status">@entry.Status</span>
                             </li>
                         }
                     </ul>
@@ -158,8 +165,8 @@
                         @foreach (var balance in _glBalances.Take(5))
                         {
                             <li class="balance-item">
-                                <span class="balance-account">@balance</span>
-                                <span class="balance-amount">$45,000.00</span>
+                                <span class="balance-account">@balance.Label</span>
+                                <span class="balance-amount">@balance.Amount.ToString("C0")</span>
                             </li>
                         }
                     </ul>
@@ -344,10 +351,12 @@
     private decimal _accountsReceivable = 0m;
     private int _pendingTransactions = 0;
     private int _reconciliationDays = 0;
-    private List<string>? _pendingPayments;
+    private Guid _tenantId;
+    private string? _loadError;
+    private List<WorkbenchAmountItem>? _pendingPayments;
     private List<string>? _reconciliationStatus;
-    private List<string>? _journalEntries;
-    private List<string>? _glBalances;
+    private List<WorkbenchStatusItem>? _journalEntries;
+    private List<WorkbenchAmountItem>? _glBalances;
 
     protected override async Task OnInitializedAsync()
     {
@@ -356,16 +365,69 @@
 
     private async Task LoadMetricsAsync()
     {
-        // TODO: Load from API
-        _accountsPayable = 125000m;
-        _accountsReceivable = 245000m;
-        _pendingTransactions = 34;
-        _reconciliationDays = 3;
-        _pendingPayments = new List<string> { "INV-2024-001", "INV-2024-002", "INV-2024-003" };
-        _reconciliationStatus = new List<string> { "Bank Account 001", "Bank Account 002" };
-        _journalEntries = new List<string> { "JE-2024-001", "JE-2024-002", "JE-2024-003" };
-        _glBalances = new List<string> { "1000 - Cash", "1100 - AR", "2000 - AP", "3000 - Equity" };
-        await Task.CompletedTask;
+        _loadError = null;
+        _pendingPayments = null;
+        _reconciliationStatus = null;
+        _journalEntries = null;
+        _glBalances = null;
+
+        try
+        {
+            var context = await CurrentUser.RequireAsync();
+            _tenantId = context.TenantId;
+
+            var apInvoices = await Api.SearchApInvoicesAsync(_tenantId, string.Empty);
+            var apPayments = await Api.SearchApPaymentsAsync(_tenantId, string.Empty);
+            var billingAccounts = await Api.SearchBillingAccountsAsync(_tenantId, pageSize: 500);
+            var bankReconciliations = await Api.SearchBankReconciliationsAsync(_tenantId, string.Empty);
+            var journalEntries = await Api.SearchJournalEntriesAsync(_tenantId, string.Empty);
+            var glAccounts = await Api.SearchGLAccountsAsync(_tenantId, pageSize: 500);
+            var accountingPeriods = await Api.SearchAccountingPeriodsAsync(_tenantId, string.Empty);
+
+            var apInvoiceItems = apInvoices?.Items.ToList() ?? [];
+            var apPaymentItems = apPayments?.Items.ToList() ?? [];
+            var billingAccountItems = billingAccounts?.Items.ToList() ?? [];
+            var reconciliationItems = bankReconciliations?.Items.ToList() ?? [];
+            var journalEntryItems = journalEntries?.Items.ToList() ?? [];
+            var glAccountItems = glAccounts?.Items.ToList() ?? [];
+            var periodItems = accountingPeriods?.Items.ToList() ?? [];
+
+            _accountsPayable = apInvoiceItems.Where(x => x.StatusCode != "Paid" && x.StatusCode != "Void").Sum(x => Math.Max(0, x.Amount - x.AmountPaid));
+            _accountsReceivable = billingAccountItems.Sum(x => x.BalanceAmount);
+            _pendingTransactions = apPaymentItems.Count(x => x.StatusCode == "Pending") + journalEntryItems.Count(x => x.StatusCode == "Draft") + reconciliationItems.Count(x => x.StatusCode is "Pending" or "Exception");
+            _reconciliationDays = periodItems.Where(x => x.StatusCode != "Closed").Select(x => Math.Max(0, (DateTime.Today - x.EndDate.ToDateTime(TimeOnly.MinValue)).Days)).DefaultIfEmpty(0).Max();
+
+            _pendingPayments = apPaymentItems
+                .Where(x => x.StatusCode == "Pending")
+                .OrderByDescending(x => x.PaymentDate)
+                .Select(x => new WorkbenchAmountItem(string.IsNullOrWhiteSpace(x.ReferenceNumber) ? x.ApPaymentId.ToString("N")[..8] : x.ReferenceNumber, x.Amount))
+                .ToList();
+            _reconciliationStatus = reconciliationItems
+                .Where(x => x.StatusCode is "Pending" or "Exception")
+                .OrderByDescending(x => x.BankStatementDate)
+                .Select(x => $"{x.BankName} - {x.StatusCode}")
+                .ToList();
+            _journalEntries = journalEntryItems
+                .OrderByDescending(x => x.EntryDate)
+                .Select(x => new WorkbenchStatusItem(x.EntryNumber, x.StatusCode))
+                .ToList();
+            _glBalances = glAccountItems
+                .OrderBy(x => x.AccountCode)
+                .Select(x => new WorkbenchAmountItem($"{x.AccountCode} - {x.AccountName}", 0m))
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Accounting workbench failed to load: {ex.Message}";
+            _accountsPayable = 0m;
+            _accountsReceivable = 0m;
+            _pendingTransactions = 0;
+            _reconciliationDays = 0;
+            _pendingPayments = [];
+            _reconciliationStatus = [];
+            _journalEntries = [];
+            _glBalances = [];
+        }
     }
 
     private async Task RefreshAsync()
@@ -392,4 +454,7 @@
     {
         Nav.NavigateTo("/finance/trial-balance");
     }
+
+    private sealed record WorkbenchAmountItem(string Label, decimal Amount);
+    private sealed record WorkbenchStatusItem(string Label, string Status);
 }

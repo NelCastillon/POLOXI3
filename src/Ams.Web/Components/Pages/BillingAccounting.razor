@@ -1,5 +1,7 @@
 @page "/billing"
 @namespace Ams.Web.Components.Pages
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
@@ -17,6 +19,14 @@
         </button>
     </Actions>
 </AppPageHeader>
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+        @_loadError
+    </div>
+}
 
 <section class="bill-hero" aria-label="Billing and accounting overview">
     <div>
@@ -36,10 +46,10 @@
 </section>
 
 <section class="bill-kpi-grid" aria-label="Billing and accounting metrics">
-    @Kpi("AR Balance", "$1.84M", "Open receivables", "bi-currency-dollar", "bill-tone-blue")
-    @Kpi("Past Due", "$286K", "30+ day exposure", "bi-exclamation-triangle", "bill-tone-red")
-    @Kpi("Cash Today", "$142K", "Receipts posted", "bi-cash-coin", "bill-tone-green")
-    @Kpi("Close Tasks", _workflow.Count(x => x.Stage == "Close").ToString(), "Period close controls", "bi-lock", "bill-tone-violet")
+    @Kpi("AR Balance", Fmt(_arBalance), "Open receivables", "bi-currency-dollar", "bill-tone-blue")
+    @Kpi("Past Due", Fmt(_pastDueBalance), "30+ day exposure", "bi-exclamation-triangle", "bill-tone-red")
+    @Kpi("Cash Today", Fmt(_cashToday), "Receipts posted", "bi-cash-coin", "bill-tone-green")
+    @Kpi("Close Tasks", _closeTaskCount.ToString("N0"), "Period close controls", "bi-lock", "bill-tone-violet")
 </section>
 
 <section class="bill-command-bar" aria-label="Billing workflow filters">
@@ -63,6 +73,10 @@
 </section>
 
 <section class="bill-layout">
+    @if (_loading)
+    {
+        <div class="alert alert-info" role="status"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Loading billing and accounting data...</div>
+    }
     <div class="bill-flow" aria-label="Billing and accounting workflow lanes">
         @foreach (var lane in _lanes)
         {
@@ -169,8 +183,25 @@
 @code {
     private string _search = string.Empty;
     private string _filter = string.Empty;
+    private Guid _tenantId;
+    private bool _loading = true;
+    private string? _loadError;
+    private decimal _arBalance;
+    private decimal _pastDueBalance;
+    private decimal _cashToday;
+    private int _closeTaskCount;
     private FinanceWorkflowItem? _selected;
     private readonly List<FinanceWorkflowItem> _workflow = [];
+    private List<BillingAccountDto> _billingAccounts = [];
+    private List<InvoiceDto> _invoices = [];
+    private List<PaymentDto> _payments = [];
+    private List<BillingAdjustmentDto> _adjustments = [];
+    private List<ArAgingSnapshotDto> _arAging = [];
+    private List<CollectionsNoteDto> _collections = [];
+    private List<BankReconciliationDto> _reconciliations = [];
+    private List<JournalEntryDto> _journalEntries = [];
+    private List<ApInvoiceDto> _apInvoices = [];
+    private List<AccountingPeriodDto> _accountingPeriods = [];
 
     private readonly Lane[] _lanes =
     [
@@ -242,28 +273,131 @@
         .ThenBy(x => x.Stage)
         .ThenBy(x => x.Title);
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Billing & Accounting", "/billing"));
-        BuildWorkflow();
-        _selected = _workflow.FirstOrDefault(x => x.Risk == "High") ?? _workflow.FirstOrDefault();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+
+        try
+        {
+            var context = await CurrentUser.RequireAsync();
+            _tenantId = context.TenantId;
+
+            await Api.EnsureBillingAccountsSeedAsync(_tenantId);
+
+            var accountsTask = Api.SearchBillingAccountsAsync(_tenantId, null, 1, 500);
+            var invoicesTask = Api.SearchInvoicesAsync(_tenantId, null);
+            var paymentsTask = Api.SearchPaymentsAsync(_tenantId, null);
+            var adjustmentsTask = Api.SearchBillingAdjustmentsAsync(_tenantId, null);
+            var agingTask = Api.SearchArAgingSnapshotsAsync(_tenantId, null);
+            var collectionsTask = Api.SearchCollectionsNotesAsync(_tenantId, null);
+            var reconciliationsTask = Api.SearchBankReconciliationsAsync(_tenantId, null);
+            var journalEntriesTask = Api.SearchJournalEntriesAsync(_tenantId, null);
+            var apInvoicesTask = Api.SearchApInvoicesAsync(_tenantId, null);
+            var periodsTask = Api.SearchAccountingPeriodsAsync(_tenantId, null);
+
+            await Task.WhenAll(accountsTask, invoicesTask, paymentsTask, adjustmentsTask, agingTask, collectionsTask, reconciliationsTask, journalEntriesTask, apInvoicesTask, periodsTask);
+
+            _billingAccounts = accountsTask.Result?.Items.ToList() ?? [];
+            _invoices = invoicesTask.Result?.Items.ToList() ?? [];
+            _payments = paymentsTask.Result?.Items.ToList() ?? [];
+            _adjustments = adjustmentsTask.Result?.Items.ToList() ?? [];
+            _arAging = agingTask.Result?.Items.ToList() ?? [];
+            _collections = collectionsTask.Result?.Items.ToList() ?? [];
+            _reconciliations = reconciliationsTask.Result?.Items.ToList() ?? [];
+            _journalEntries = journalEntriesTask.Result?.Items.ToList() ?? [];
+            _apInvoices = apInvoicesTask.Result?.Items.ToList() ?? [];
+            _accountingPeriods = periodsTask.Result?.Items.ToList() ?? [];
+
+            BuildMetrics();
+            BuildWorkflow();
+            _selected = _workflow.FirstOrDefault(x => x.Risk == "High") ?? _workflow.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load billing and accounting data: {ex.Message}";
+            _workflow.Clear();
+            _selected = null;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void BuildMetrics()
+    {
+        _arBalance = _billingAccounts.Sum(a => a.BalanceAmount);
+        _pastDueBalance = _invoices.Where(IsPastDue).Sum(i => i.BalanceAmount);
+        _cashToday = _payments.Where(p => p.PaymentDate.Date == DateTime.Today && IsSuccessfulPayment(p)).Sum(p => p.Amount);
+        _closeTaskCount = _accountingPeriods.Count(p => !string.Equals(p.StatusCode, "Closed", StringComparison.OrdinalIgnoreCase)) +
+            _journalEntries.Count(j => !string.Equals(j.StatusCode, "Posted", StringComparison.OrdinalIgnoreCase));
     }
 
     private void BuildWorkflow()
     {
         _workflow.Clear();
-        _workflow.AddRange(
-        [
-            new("Agency bill invoice run", "Monthly commercial lines invoice batch requires tenant admin review before release.", "AR", "Medium", "Bill", "Maria Santos", "Today", "Invoice approval", "/billing/invoices"),
-            new("Delinquent account escalation", "90+ day AR exposure exceeds threshold and requires collection action.", "Collections", "High", "Collect", "Kevin Obi", "Same day", "Collections policy", "/billing/collections"),
-            new("Payment allocation exception", "Client payment could not auto-match invoice and requires manual allocation.", "Cash", "High", "Collect", "Sarah Kim", "4h", "Cash application", "/billing/payments"),
-            new("Carrier statement reconciliation", "Carrier download totals do not match subledger activity.", "Reconciliation", "High", "Reconcile", "James Park", "Today", "Reconciliation variance", "/billing/reconciliation"),
-            new("Bank deposit reconciliation", "Cash receipts batch is pending bank statement match.", "Reconciliation", "Medium", "Reconcile", "Lisa Chen", "24h", "Bank reconciliation", "/finance/bank-reconciliation"),
-            new("AP invoice approval", "Vendor invoice is awaiting coding and approval before payment run.", "AP", "Medium", "Post", "Diana Perez", "2 days", "AP approval", "/finance/ap-invoices"),
-            new("Deferred revenue recognition", "Revenue schedule requires validation before GL posting.", "GL", "Medium", "Post", "Robert Yamamoto", "Close cycle", "Revenue recognition", "/finance/deferred-revenue"),
-            new("Trial balance review", "Debits and credits require final review before period lock.", "GL", "Medium", "Close", "Diana Perez", "Month end", "Trial balance control", "/finance/trial-balance"),
-            new("Period close checklist", "Open close tasks must be completed before locking accounting period.", "Close", "High", "Close", "Robert Yamamoto", "Month end", "Close certification", "/finance/period-close")
-        ]);
+
+        var openInvoices = _invoices.Count(i => i.BalanceAmount > 0);
+        if (openInvoices > 0)
+        {
+            _workflow.Add(new("Open invoice review", $"{openInvoices:N0} invoice(s) have open balances totaling {Fmt(_arBalance)}.", "AR", RiskByAmount(_arBalance), "Bill", "Billing Team", "Today", "Invoice approval", "/billing/invoices"));
+        }
+
+        var overdueInvoices = _invoices.Where(IsPastDue).ToList();
+        var delinquentAccounts = _billingAccounts.Count(a => string.Equals(a.StatusCode, "Delinquent", StringComparison.OrdinalIgnoreCase) || string.Equals(a.StatusCode, "Suspended", StringComparison.OrdinalIgnoreCase));
+        if (overdueInvoices.Count > 0 || delinquentAccounts > 0)
+        {
+            _workflow.Add(new("Delinquent account escalation", $"{delinquentAccounts:N0} account(s) and {overdueInvoices.Count:N0} invoice(s) need collections review.", "Collections", overdueInvoices.Any(i => i.BalanceAmount >= 10000m) ? "High" : "Medium", "Collect", "Collections Team", "Same day", "Collections policy", "/billing/collections"));
+        }
+
+        var paymentExceptions = _payments.Count(IsPaymentException);
+        if (paymentExceptions > 0)
+        {
+            _workflow.Add(new("Payment exception review", $"{paymentExceptions:N0} payment(s) are pending, failed, returned, or not yet applied.", "Cash", paymentExceptions >= 5 ? "High" : "Medium", "Collect", "Cash Application", "4h", "Cash application", "/billing/payments"));
+        }
+
+        var pendingAdjustments = _adjustments.Count(a => string.Equals(a.StatusCode, "Pending", StringComparison.OrdinalIgnoreCase));
+        if (pendingAdjustments > 0)
+        {
+            _workflow.Add(new("Credit and adjustment approval", $"{pendingAdjustments:N0} billing adjustment(s) are pending approval or posting.", "AR", pendingAdjustments >= 5 ? "High" : "Medium", "Bill", "Billing Team", "Today", "Adjustment approval", "/billing/credits"));
+        }
+
+        var dueCollections = _collections.Count(c => c.NextFollowUpDate.HasValue && c.NextFollowUpDate.Value <= DateOnly.FromDateTime(DateTime.Today));
+        if (dueCollections > 0)
+        {
+            _workflow.Add(new("Collections follow-up queue", $"{dueCollections:N0} collections follow-up(s) are due now.", "Collections", "High", "Collect", "Collections Team", "Same day", "Dunning workflow", "/billing/collections"));
+        }
+
+        var reconciliationExceptions = _reconciliations.Count(r => r.Discrepancy != 0 || !string.Equals(r.StatusCode, "Reconciled", StringComparison.OrdinalIgnoreCase));
+        if (reconciliationExceptions > 0)
+        {
+            _workflow.Add(new("Reconciliation exception review", $"{reconciliationExceptions:N0} reconciliation run(s) have discrepancies or open status.", "Reconciliation", reconciliationExceptions >= 3 ? "High" : "Medium", "Reconcile", "Accounting Team", "24h", "Reconciliation variance", "/billing/reconciliation"));
+        }
+
+        var openApInvoices = _apInvoices.Count(i => !string.Equals(i.StatusCode, "Paid", StringComparison.OrdinalIgnoreCase) && i.Amount > i.AmountPaid);
+        if (openApInvoices > 0)
+        {
+            _workflow.Add(new("AP invoice approval", $"{openApInvoices:N0} vendor invoice(s) are open or awaiting payment.", "AP", openApInvoices >= 5 ? "High" : "Medium", "Post", "Accounting Team", "2 days", "AP approval", "/finance/ap-invoices"));
+        }
+
+        var unpostedEntries = _journalEntries.Count(j => !string.Equals(j.StatusCode, "Posted", StringComparison.OrdinalIgnoreCase) || j.TotalDebit != j.TotalCredit);
+        if (unpostedEntries > 0)
+        {
+            _workflow.Add(new("Journal entry posting review", $"{unpostedEntries:N0} journal entrie(s) are unposted or out of balance.", "GL", unpostedEntries >= 3 ? "High" : "Medium", "Post", "Accounting Team", "Close cycle", "GL posting", "/finance/journalentries"));
+        }
+
+        var openPeriods = _accountingPeriods.Count(p => !string.Equals(p.StatusCode, "Closed", StringComparison.OrdinalIgnoreCase));
+        if (openPeriods > 0)
+        {
+            _workflow.Add(new("Period close checklist", $"{openPeriods:N0} accounting period(s) remain open or pending close.", "Close", "High", "Close", "Accounting Team", "Month end", "Close certification", "/finance/period-close"));
+        }
     }
 
     private void ResetFilters()
@@ -274,14 +408,7 @@
 
     private void Advance(FinanceWorkflowItem item)
     {
-        item.Stage = item.Stage switch
-        {
-            "Bill" => "Collect",
-            "Collect" => "Reconcile",
-            "Reconcile" => "Post",
-            "Post" => "Close",
-            _ => "Close"
-        };
+        Nav.NavigateTo(item.Url);
     }
 
     private int FilterCount(string key) => key switch
@@ -321,6 +448,22 @@
             <small>@meta</small>
         </div>
     </article>;
+
+    private static string Fmt(decimal value) => value.ToString("C0");
+
+    private static bool IsPastDue(InvoiceDto invoice)
+        => invoice.BalanceAmount > 0 && (invoice.StatusCode == 3 || invoice.CreatedDateUtc.Date <= DateTime.UtcNow.Date.AddDays(-30));
+
+    private static bool IsSuccessfulPayment(PaymentDto payment)
+        => payment.StatusCode.Equals("Applied", StringComparison.OrdinalIgnoreCase) || payment.StatusCode.Equals("Cleared", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsPaymentException(PaymentDto payment)
+        => payment.StatusCode.Equals("Pending", StringComparison.OrdinalIgnoreCase) ||
+           payment.StatusCode.Equals("Failed", StringComparison.OrdinalIgnoreCase) ||
+           payment.StatusCode.Equals("Returned", StringComparison.OrdinalIgnoreCase) ||
+           payment.StatusCode.Equals("Void", StringComparison.OrdinalIgnoreCase);
+
+    private static string RiskByAmount(decimal amount) => amount >= 100000m ? "High" : amount > 0 ? "Medium" : "Low";
 
     private sealed record Lane(string Key, string Label, string Description);
     private sealed record Filter(string Key, string Label);

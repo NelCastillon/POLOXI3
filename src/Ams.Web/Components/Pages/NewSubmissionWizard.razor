@@ -309,13 +309,14 @@
                                 <button type="button" class="nsw-btn nsw-btn--ghost" @onclick="SelectRequiredForms">Select required</button>
                             </div>
                             <div class="nsw-forms-list">
-                                @foreach (var form in _acordForms)
+                                @foreach (var form in AcordFormOptions)
                                 {
-                                    var selected = _selectedFormIds.Contains(form.Id);
-                                    <button type="button" class="nsw-form-row @(selected ? "nsw-form-row--active" : string.Empty)" @onclick="() => ToggleForm(form.Id)">
-                                        <span class="nsw-form-num">@form.Number</span>
-                                        <span class="nsw-form-info"><strong>@form.Title</strong><small>@form.Lobs</small></span>
-                                        @if (form.Required)
+                                    var formId = FormSelectionId(form);
+                                    var selected = _selectedFormIds.Contains(formId);
+                                    <button type="button" class="nsw-form-row @(selected ? "nsw-form-row--active" : string.Empty)" @onclick="() => ToggleForm(formId)">
+                                        <span class="nsw-form-num">@FormNumberLabel(form)</span>
+                                        <span class="nsw-form-info"><strong>@form.FormName</strong><small>@form.LineOfBusiness</small></span>
+                                        @if (IsRequiredForm(form))
                                         {
                                             <span class="nsw-required-pill">Required</span>
                                         }
@@ -512,16 +513,7 @@
         new("c-10", "Chubb Insurance", "A++", ["General Liability", "Commercial Property", "Umbrella / Excess", "Professional Liab."], true, ["TX", "CA", "NY", "IL"])
     ];
 
-    readonly AcordForm[] _acordForms =
-    [
-        new("af-125", "ACORD 125", "Commercial Insurance Application", "All commercial lines", true),
-        new("af-126", "ACORD 126", "Commercial General Liability Section", "General Liability", false),
-        new("af-140", "ACORD 140", "Property Section", "Commercial Property", false),
-        new("af-163", "ACORD 163", "Workers Compensation Application", "Workers Comp", false),
-        new("af-137", "ACORD 137", "Commercial Auto Section", "Commercial Auto", false),
-        new("af-131", "ACORD 131", "Excess / Umbrella Application", "Umbrella / Excess", false),
-        new("af-828", "ACORD 828", "Cyber & Data Breach Application", "Professional Liab.", false)
-    ];
+    readonly List<AcordFormDto> _acordForms = [];
 
     readonly string[] _priorities = ["Low", "Standard", "High", "Urgent"];
     readonly string[] _states = ["AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"];
@@ -552,6 +544,7 @@
     IEnumerable<CarrierRow> SortedCarriers => _carriers.OrderByDescending(c => c.AppetiteLobs.Contains(_form.LineOfBusiness)).ThenByDescending(c => c.Preferred).ThenBy(c => c.Name);
     IEnumerable<string> SelectedCarrierNames => _selectedCarrierIds.Select(id => _carriers.FirstOrDefault(c => c.Id == id)?.Name).Where(name => !string.IsNullOrWhiteSpace(name))!;
     IEnumerable<string> ImportanceReasons => BuildImportanceReasons();
+    IEnumerable<AcordFormDto> AcordFormOptions => _acordForms.OrderByDescending(IsRequiredForm).ThenBy(f => f.FormNumber);
     string ConfirmIconClass => _confirmKind == "danger" ? "nsw-confirm-icon nsw-confirm-icon--danger" : "nsw-confirm-icon";
     string ConfirmButtonClass => _confirmKind == "danger" ? "nsw-btn nsw-btn--danger" : "nsw-btn nsw-btn--primary";
 
@@ -563,7 +556,20 @@
         _form.Priority = "Standard";
         _form.RiskState = "TX";
         await ResolveCurrentUserContextAsync();
-        await LoadOpportunitiesAsync();
+        await Task.WhenAll(LoadOpportunitiesAsync(), LoadAcordFormsAsync());
+    }
+
+    async Task LoadAcordFormsAsync()
+    {
+        try
+        {
+            _acordForms.Clear();
+            _acordForms.AddRange(await Api.GetAcordFormsAsync(_tenantId) ?? []);
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Unable to load ACORD forms: {ex.Message}", true);
+        }
     }
 
     protected override void OnParametersSet()
@@ -666,10 +672,9 @@
 
     void SelectRequiredForms()
     {
-        _selectedFormIds.Add("af-125");
-        foreach (var form in _acordForms.Where(f => f.Lobs.Contains(_form.LineOfBusiness, StringComparison.OrdinalIgnoreCase)))
+        foreach (var form in _acordForms.Where(IsRequiredForm).Concat(_acordForms.Where(f => IsLobMatch(f.LineOfBusiness, _form.LineOfBusiness))).DistinctBy(f => f.AcordFormId))
         {
-            _selectedFormIds.Add(form.Id);
+            _selectedFormIds.Add(FormSelectionId(form));
         }
         ShowToast("Required forms selected.");
     }
@@ -852,6 +857,10 @@
     RenderFragment ReviewCard(string title, string icon, int editStep, string value, string subValue) => @<div class="nsw-review-card"><div class="nsw-review-card__head"><span><i class="bi @icon" aria-hidden="true"></i>@title</span><button type="button" class="nsw-link-button" @onclick="() => _step = editStep">Edit</button></div><strong>@Safe(value, "-")</strong><small>@Safe(subValue, "-")</small></div>;
 
     string CarrierAppetiteText(CarrierRow carrier) => carrier.AppetiteLobs.Contains(_form.LineOfBusiness) ? "Appetite match" : "Available market";
+    static string FormSelectionId(AcordFormDto form) => form.AcordFormId.ToString("N");
+    static string FormNumberLabel(AcordFormDto form) => form.FormNumber.StartsWith("ACORD", StringComparison.OrdinalIgnoreCase) ? form.FormNumber : $"ACORD {form.FormNumber}";
+    static bool IsRequiredForm(AcordFormDto form) => string.Equals(form.FormNumber, "125", StringComparison.OrdinalIgnoreCase) || form.FormName.Contains("Commercial Insurance Application", StringComparison.OrdinalIgnoreCase);
+    static bool IsLobMatch(string formLob, string selectedLob) => !string.IsNullOrWhiteSpace(selectedLob) && (formLob.Contains(selectedLob, StringComparison.OrdinalIgnoreCase) || selectedLob.Contains(formLob, StringComparison.OrdinalIgnoreCase));
     static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
     static string ToastIconClass(ToastMessage toast) => toast.CssClass.Contains("danger", StringComparison.OrdinalIgnoreCase) ? "bi-exclamation-triangle" : "bi-check-circle";
 
@@ -920,7 +929,6 @@
     sealed record StepDef(int Index, string Label, string Kicker, string Title, string Description, string Icon);
     sealed record LobCard(string Key, string Label, string Icon, string Color, string Description, string[] SubLines);
     sealed record CarrierRow(string Id, string Name, string AMBest, string[] AppetiteLobs, bool Preferred, string[] States);
-    sealed record AcordForm(string Id, string Number, string Title, string Lobs, bool Required);
     sealed record OpportunityOption(Guid OpportunityId, Guid AccountId, string AccountName, string OpportunityName, decimal EstimatedAmount, string? StageName, decimal WinProbability, DateTime? CloseDate, string? OwnerName);
     sealed record ToastMessage(Guid Id, string Message, string CssClass);
 }

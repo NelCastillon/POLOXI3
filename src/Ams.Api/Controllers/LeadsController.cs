@@ -48,6 +48,20 @@ public sealed class LeadsController : ControllerBase
         return item is null ? NotFound() : Ok(item);
     }
 
+    [HttpGet("engagement-options")]
+    public async Task<IActionResult> GetEngagementOptions([FromQuery] Guid tenantId, [FromQuery] string? optionType, CancellationToken cancellationToken)
+    {
+        var items = await _service.GetEngagementOptionsAsync(tenantId, optionType, cancellationToken);
+        return Ok(items);
+    }
+
+    [HttpGet("campaign-options")]
+    public async Task<IActionResult> GetCampaignOptions([FromQuery] Guid tenantId, CancellationToken cancellationToken)
+    {
+        var items = await _service.GetCampaignOptionsAsync(tenantId, cancellationToken);
+        return Ok(items);
+    }
+
     [HttpGet]
     public async Task<IActionResult> Search([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 25, CancellationToken cancellationToken = default)
     {

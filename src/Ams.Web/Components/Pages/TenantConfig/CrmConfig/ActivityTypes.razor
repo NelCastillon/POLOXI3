@@ -1,0 +1,311 @@
+@page "/tenent/crm/activity-types"
+@page "/tenant/crm/activity-types"
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.CrmConfig
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Activity Types Command Center - AMS</PageTitle>
+
+<div class="atc-page">
+    <section class="atc-hero">
+        <div class="atc-hero__content">
+            <div class="atc-hero-left">
+                <span class="atc-hero-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span>
+                <div class="atc-hero-title">
+                    <div class="atc-hero__eyebrow">Enterprise CRM activity settings</div>
+                    <div class="atc-title-row">
+                        <h1>Activity Types Command Center</h1>
+                        <div class="atc-hero__meta">
+                            <span><i class="bi bi-diagram-3" aria-hidden="true"></i>@_items.Count types</span>
+                            <span><i class="bi bi-shield-check" aria-hidden="true"></i>@ActiveCount active</span>
+                            <span><i class="bi bi-slash-circle" aria-hidden="true"></i>@InactiveCount inactive</span>
+                            <span><i class="bi bi-exclamation-octagon" aria-hidden="true"></i>@ReviewCount review</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <p>Manage the database-backed activity type settings that feed Add Activity and Activity Outcome dropdowns. Keep codes stable so outcomes, lead activity history, reporting, and automations remain consistent.</p>
+        </div>
+        <div class="atc-hero__actions">
+            <button type="button" class="atc-btn atc-btn--light" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "atc-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="atc-btn atc-btn--primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Type</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger atc-alert" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="atc-kpi-strip" aria-label="Activity type KPI filters">
+        @KpiCard("all", "Total Types", _items.Count.ToString("N0", CultureInfo.CurrentCulture), "All DB-configured activity types", "bi-diagram-3", "blue")
+        @KpiCard("active", "Active", ActiveCount.ToString("N0", CultureInfo.CurrentCulture), "Available to activity workflows", "bi-shield-check", "green")
+        @KpiCard("inactive", "Inactive", InactiveCount.ToString("N0", CultureInfo.CurrentCulture), "Disabled types retained for configuration history", "bi-slash-circle", "amber")
+        @KpiCard("review", "Needs Review", ReviewCount.ToString("N0", CultureInfo.CurrentCulture), "Missing icons, descriptions, or inactive", "bi-exclamation-octagon", "red")
+    </section>
+
+    <section class="atc-filter-panel" aria-label="Activity type filters">
+        <div class="atc-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input type="search" placeholder="Search activity type code, name, icon, or description..." aria-label="Search activity types" value="@_search" @oninput="OnSearchInput" />
+        </div>
+        <div class="atc-filter-grid">
+            <label><span>Status</span><select class="form-select" @bind="_statusFilter" @bind:after="ApplyFilters"><option value="">All statuses</option><option value="Active">Active</option><option value="Inactive">Inactive</option></select></label>
+            <label><span>Sort</span><select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters"><option value="sort">Sort order</option><option value="name">Type name</option><option value="code">Type code</option><option value="status">Status</option><option value="risk">Review risk</option></select></label>
+        </div>
+        <button type="button" class="atc-btn atc-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+    </section>
+
+    <main class="atc-dashboard">
+        <section class="atc-main-card">
+            <div class="atc-card-header">
+                <div>
+                    <span class="atc-section-kicker">Activity Type Settings</span>
+                    <h2>@FilteredTypes.Count() types</h2>
+                    <p>These rows are the authoritative UI settings for CRM activity type dropdowns.</p>
+                </div>
+                <div class="atc-card-actions">
+                    <button type="button" class="atc-btn atc-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Prev</button>
+                    <span class="atc-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="atc-btn atc-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="atc-loading"><span class="atc-spinner"></span> Loading activity types...</div>
+            }
+            else if (!FilteredTypes.Any())
+            {
+                <div class="atc-empty"><i class="bi bi-diagram-3" aria-hidden="true"></i><strong>No activity types found</strong><span>Adjust filters or add a new database-backed activity type.</span></div>
+            }
+            else
+            {
+                <div class="atc-table-wrap">
+                    <table class="atc-table">
+                        <thead><tr><th>Review</th><th>Type</th><th>Code</th><th>Icon</th><th>Sort</th><th>Status</th><th class="atc-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var item in PagedTypes)
+                            {
+                                <tr class="@(_selected?.ActivityTypeId == item.ActivityTypeId ? "atc-row atc-row--selected" : "atc-row")" @onclick="() => SelectRow(item)">
+                                    <td>@ReviewBadge(item)</td>
+                                    <td><button type="button" class="atc-link-button" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)">@item.ActivityTypeName</button><small>@Safe(item.Description, "No description")</small></td>
+                                    <td><span class="atc-code">@item.ActivityTypeCode</span></td>
+                                    <td><span class="atc-pill atc-pill--blue"><i class="bi @IconName(item.IconCssClass)" aria-hidden="true"></i>@Safe(item.IconCssClass, "No icon")</span></td>
+                                    <td><strong>@item.SortOrder</strong></td>
+                                    <td>@StatusBadge(item)</td>
+                                    <td class="atc-actions-col"><button type="button" class="atc-icon-btn" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="atc-icon-btn" title="Toggle active" @onclick:stopPropagation="true" @onclick="() => ConfirmToggleActive(item)"><i class="bi @(item.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i></button><button type="button" class="atc-icon-btn atc-danger-icon" title="Delete" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(item)"><i class="bi bi-trash3" aria-hidden="true"></i></button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="atc-side-panel">
+            <section class="atc-panel-card">
+                <span class="atc-section-kicker">Selected type</span>
+                @if (_selected is null)
+                {
+                    <div class="atc-empty atc-empty--compact"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a row</strong><span>Choose an activity type to inspect UI readiness.</span></div>
+                }
+                else
+                {
+                    <div class="atc-selected">
+                        <div class="atc-selected__title"><div class="atc-rule-icon"><i class="bi @IconName(_selected.IconCssClass)" aria-hidden="true"></i></div><div><h3>@_selected.ActivityTypeName</h3><span>@_selected.ActivityTypeCode</span></div></div>
+                        <div class="atc-score-card atc-score-card--@ReviewTone(_selected)"><span>Configuration score</span><strong>@QualityScore(_selected)</strong><small>@ReviewLevel(_selected)</small></div>
+                        <dl class="atc-detail-list"><div><dt>Code</dt><dd>@_selected.ActivityTypeCode</dd></div><div><dt>Name</dt><dd>@_selected.ActivityTypeName</dd></div><div><dt>Icon</dt><dd>@Safe(_selected.IconCssClass, "Missing")</dd></div><div><dt>Sort</dt><dd>@_selected.SortOrder</dd></div><div><dt>Status</dt><dd>@(_selected.IsActive ? "Active" : "Inactive")</dd></div></dl>
+                        <div class="atc-note-card"><strong>Recommended action</strong><p>@RecommendedAction(_selected)</p></div>
+                    </div>
+                }
+            </section>
+        </aside>
+    </main>
+</div>
+
+@if (_showForm)
+{
+    <div class="atc-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="atc-modal" role="dialog" aria-modal="true" aria-labelledby="atc-form-title" @onclick:stopPropagation="true">
+            <div class="atc-modal__header"><i class="bi @(_editId.HasValue ? "bi-pencil-square" : "bi-plus-circle")" aria-hidden="true"></i><span id="atc-form-title">@(_editId.HasValue ? "Edit Activity Type" : "Add Activity Type")</span><button type="button" class="atc-icon-btn atc-icon-btn--light ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="atc-modal__body">
+                    
+                    <div class="atc-form-grid">
+                        <label class="atc-field"><span>Type Code <em>*</em></span><InputText @bind-Value="_form.ActivityTypeCode" class="form-control" placeholder="Call" /></label>
+                        <label class="atc-field"><span>Type Name <em>*</em></span><InputText @bind-Value="_form.ActivityTypeName" class="form-control" placeholder="Call" /></label>
+                        <label class="atc-field"><span>Icon CSS</span><InputText @bind-Value="_form.IconCssClass" class="form-control" placeholder="bi bi-telephone" /></label>
+                        <label class="atc-field"><span>Sort Order</span><InputNumber @bind-Value="_form.SortOrder" class="form-control" min="0" /></label>
+                        <label class="atc-field"><span>Status</span><span class="atc-switch"><InputCheckbox @bind-Value="_form.IsActive" /> Active type</span></label>
+                        <label class="atc-field atc-field--wide"><span>Description</span><InputTextArea @bind-Value="_form.Description" class="form-control" rows="4" placeholder="Explain when this activity type should be selected." /></label>
+                    </div>
+                    @if (!string.IsNullOrEmpty(_formError))
+                    {
+                        <div class="alert alert-danger atc-form-alert" role="alert"><i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_formError</div>
+                    }
+                </div>
+                <div class="atc-modal__footer"><button type="button" class="atc-btn atc-btn--ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="atc-btn atc-btn--primary" disabled="@_saving">@if (_saving) { <span class="atc-spin-sm" aria-hidden="true"></span> } @(_editId.HasValue ? "Save Changes" : "Create Type")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showConfirm)
+{
+    <div class="atc-modal-backdrop" role="presentation" @onclick="CloseConfirm"><div class="atc-confirm" role="dialog" aria-modal="true" aria-labelledby="atc-confirm-title" @onclick:stopPropagation="true"><div class="atc-modal__header"><i class="bi @_confirmIcon" aria-hidden="true"></i><span>Confirm action</span><button type="button" class="atc-icon-btn atc-icon-btn--light ms-auto" @onclick="CloseConfirm" disabled="@_saving"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div><div class="atc-confirm__body"><div class="@(_confirmDanger ? "atc-confirm-icon atc-confirm-icon--danger" : "atc-confirm-icon")"><i class="bi @_confirmIcon" aria-hidden="true"></i></div><div><h3 id="atc-confirm-title">@_confirmTitle</h3><p>@_confirmMessage</p></div></div><div class="atc-modal__footer"><button type="button" class="atc-btn atc-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button><button type="button" class="@(_confirmDanger ? "atc-btn atc-btn--danger" : "atc-btn atc-btn--primary")" @onclick="ExecuteConfirmedActionAsync" disabled="@_saving">Confirm</button></div></div></div>
+}
+
+<div class="atc-toast-stack" aria-live="polite" aria-atomic="true">@foreach (var toast in _toasts) { <div class="atc-toast @toast.CssClass"><i class="bi @(toast.CssClass.Contains("danger") ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i><span>@toast.Message</span><button type="button" @onclick="() => DismissToast(toast.Id)"><i class="bi bi-x" aria-hidden="true"></i></button></div> }</div>
+
+@code {
+    private Guid _tenantId;
+    private Guid _currentUserId;
+    private List<LeadActivityTypeDto> _items = [];
+    private LeadActivityTypeDto? _selected;
+    private bool _loading = true;
+    private bool _saving;
+    private string? _loadError;
+    private string _activeKpi = "all";
+    private string _search = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _sortMode = "sort";
+    private int _page = 1;
+    private const int PageSize = 12;
+    private bool _showForm;
+    private string _formError = string.Empty;
+    private Guid? _editId;
+    private ActivityTypeFormModel _form = new();
+    private bool _showConfirm;
+    private bool _confirmDanger;
+    private string _confirmTitle = string.Empty;
+    private string _confirmMessage = string.Empty;
+    private string _confirmIcon = "bi-question-circle";
+    private Func<Task>? _confirmedAction;
+    private readonly List<ToastMessage> _toasts = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _currentUserId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM Configuration", null), new("Activity Types", null));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchLeadActivityTypesAsync(_tenantId, _search.Trim(), pageSize: 1000);
+            _items = result?.Items.ToList() ?? [];
+            _selected = _selected is null ? OrderedTypes(_items).FirstOrDefault() : _items.FirstOrDefault(x => x.ActivityTypeId == _selected.ActivityTypeId) ?? OrderedTypes(_items).FirstOrDefault();
+            _page = 1;
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load activity types: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "atc-toast--danger");
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task OnSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; await LoadAsync(); }
+    private void SetActiveKpi(string key) { _activeKpi = _activeKpi == key ? "all" : key; _page = 1; }
+    private void ApplyFilters() => _page = 1;
+    private void ClearFilters() { _statusFilter = string.Empty; _sortMode = "sort"; _activeKpi = "all"; _page = 1; }
+    private bool HasFilters => !string.IsNullOrEmpty(_statusFilter) || _sortMode != "sort" || _activeKpi != "all";
+    private int ActiveCount => _items.Count(x => x.IsActive);
+    private int InactiveCount => _items.Count(x => !x.IsActive);
+    private int ReviewCount => _items.Count(NeedsReview);
+
+    private IEnumerable<LeadActivityTypeDto> FilteredTypes
+    {
+        get
+        {
+            var query = _activeKpi switch { "active" => _items.Where(x => x.IsActive), "inactive" => _items.Where(x => !x.IsActive), "review" => _items.Where(NeedsReview), _ => _items };
+            if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => _statusFilter == "Active" ? x.IsActive : !x.IsActive);
+            return OrderedTypes(query);
+        }
+    }
+
+    private IEnumerable<LeadActivityTypeDto> OrderedTypes(IEnumerable<LeadActivityTypeDto> query) => _sortMode switch { "name" => query.OrderBy(x => x.ActivityTypeName), "code" => query.OrderBy(x => x.ActivityTypeCode), "status" => query.OrderByDescending(x => x.IsActive).ThenBy(x => x.SortOrder), "risk" => query.OrderByDescending(RiskScore).ThenBy(x => x.SortOrder), _ => query.OrderBy(x => x.SortOrder).ThenBy(x => x.ActivityTypeName) };
+    private IEnumerable<LeadActivityTypeDto> PagedTypes => FilteredTypes.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredTypes.Count() / (double)PageSize));
+    private void PreviousPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void SelectRow(LeadActivityTypeDto item) => _selected = item;
+
+    private void OpenCreate() { _editId = null; _form = new ActivityTypeFormModel { SortOrder = _items.Select(x => x.SortOrder).DefaultIfEmpty(0).Max() + 10, IsActive = true, IconCssClass = "bi bi-ui-checks-grid" }; _formError = string.Empty; _showForm = true; }
+    private void OpenEdit(LeadActivityTypeDto item) { _editId = item.ActivityTypeId; _form = new ActivityTypeFormModel { ActivityTypeCode = item.ActivityTypeCode, ActivityTypeName = item.ActivityTypeName, IconCssClass = item.IconCssClass, Description = item.Description, SortOrder = item.SortOrder, IsActive = item.IsActive }; _formError = string.Empty; _showForm = true; }
+    private void CloseForm() { if (_saving) return; _showForm = false; _form = new(); _editId = null; _formError = string.Empty; }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        _formError = string.Empty;
+        try
+        {
+            var code = _form.ActivityTypeCode.Trim();
+            var name = _form.ActivityTypeName.Trim();
+            if (_editId.HasValue)
+            {
+                await Api.UpdateLeadActivityTypeAsync(_editId.Value, new(code, name, TrimOrNull(_form.IconCssClass), TrimOrNull(_form.Description), _form.SortOrder, _form.IsActive, _currentUserId == Guid.Empty ? null : _currentUserId));
+                ShowToast("Activity type updated.", "atc-toast--success");
+            }
+            else
+            {
+                await Api.CreateLeadActivityTypeAsync(new(_tenantId, code, name, TrimOrNull(_form.IconCssClass), TrimOrNull(_form.Description), _form.SortOrder, _currentUserId == Guid.Empty ? null : _currentUserId));
+                ShowToast("Activity type created.", "atc-toast--success");
+            }
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; ShowToast($"Save failed: {ex.Message}", "atc-toast--danger"); }
+        finally { _saving = false; }
+    }
+
+    private void ConfirmToggleActive(LeadActivityTypeDto item) => ShowConfirm(item.IsActive ? "Deactivate activity type?" : "Activate activity type?", $"This will {(item.IsActive ? "hide" : "show")} '{item.ActivityTypeName}' in activity type dropdowns.", item.IsActive ? "bi-slash-circle" : "bi-check-circle", false, async () => await SetTypeActiveAsync(item, !item.IsActive));
+    private async Task SetTypeActiveAsync(LeadActivityTypeDto item, bool active) { await Api.UpdateLeadActivityTypeAsync(item.ActivityTypeId, new(item.ActivityTypeCode, item.ActivityTypeName, item.IconCssClass, item.Description, item.SortOrder, active, _currentUserId == Guid.Empty ? null : _currentUserId)); ShowToast(active ? "Activity type activated." : "Activity type deactivated.", "atc-toast--success"); await LoadAsync(); }
+    private void ConfirmDelete(LeadActivityTypeDto item) => ShowConfirm("Remove activity type?", $"Remove '{item.ActivityTypeName}'? Existing outcomes and activities keep their stored type code.", "bi-trash3", true, async () => await DeleteTypeAsync(item));
+    private async Task DeleteTypeAsync(LeadActivityTypeDto item) { await Api.DeleteLeadActivityTypeAsync(item.ActivityTypeId, _currentUserId == Guid.Empty ? null : _currentUserId); if (_selected?.ActivityTypeId == item.ActivityTypeId) _selected = null; ShowToast("Activity type removed.", "atc-toast--success"); await LoadAsync(); }
+    private void ShowConfirm(string title, string message, string icon, bool danger, Func<Task> action) { _confirmTitle = title; _confirmMessage = message; _confirmIcon = icon; _confirmDanger = danger; _confirmedAction = action; _showConfirm = true; }
+    private void CloseConfirm() { if (!_saving) _showConfirm = false; }
+    private async Task ExecuteConfirmedActionAsync() { if (_confirmedAction is null) return; _saving = true; try { await _confirmedAction(); _showConfirm = false; } catch (Exception ex) { ShowToast($"Action failed: {ex.Message}", "atc-toast--danger"); } finally { _saving = false; } }
+
+    private RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string tone) => @<button type="button" class="atc-kpi-card atc-kpi-card--@tone @(_activeKpi == key ? "atc-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveKpi(key)"><span class="atc-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span><span class="atc-kpi-body"><span class="atc-kpi-label">@label</span><span class="atc-kpi-value">@value</span><span class="atc-kpi-sub">@subtitle</span></span></button>;
+    private IReadOnlyList<InsightDef> Insights => [];
+    private static bool NeedsReview(LeadActivityTypeDto item) => !item.IsActive || string.IsNullOrWhiteSpace(item.Description) || string.IsNullOrWhiteSpace(item.IconCssClass);
+    private static int RiskScore(LeadActivityTypeDto item) => (!item.IsActive ? 50 : 0) + (string.IsNullOrWhiteSpace(item.Description) ? 25 : 0) + (string.IsNullOrWhiteSpace(item.IconCssClass) ? 25 : 0);
+    private static int QualityScore(LeadActivityTypeDto item) => Math.Clamp(100 - RiskScore(item), 0, 100);
+    private static string ReviewLevel(LeadActivityTypeDto item) => RiskScore(item) >= 60 ? "Critical" : RiskScore(item) >= 25 ? "Review" : "Healthy";
+    private static string ReviewTone(LeadActivityTypeDto item) => ReviewLevel(item) switch { "Critical" => "red", "Review" => "amber", _ => "green" };
+    private static string RecommendedAction(LeadActivityTypeDto item) => !item.IsActive ? "Activate this type if it should appear in Add Activity dropdowns." : string.IsNullOrWhiteSpace(item.Description) ? "Add a description so admins understand when to use this type." : string.IsNullOrWhiteSpace(item.IconCssClass) ? "Add an icon CSS class for polished UI presentation." : "Monitor usage and keep type codes stable for activity history and automation.";
+    private static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private static string? TrimOrNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string IconName(string? css) => string.IsNullOrWhiteSpace(css) ? "bi-ui-checks-grid" : css.Split(' ', StringSplitOptions.RemoveEmptyEntries).LastOrDefault(x => x.StartsWith("bi-", StringComparison.OrdinalIgnoreCase)) ?? "bi-ui-checks-grid";
+    private static RenderFragment StatusBadge(LeadActivityTypeDto item) => @<span class="atc-pill @(item.IsActive ? "atc-pill--green" : "atc-pill--neutral")">@(item.IsActive ? "Active" : "Inactive")</span>;
+    private static RenderFragment ReviewBadge(LeadActivityTypeDto item) => @<span class="atc-risk-badge atc-risk-badge--@ReviewTone(item)"><i class="bi @(ReviewTone(item) == "red" ? "bi-exclamation-octagon" : "bi-shield-check")" aria-hidden="true"></i>@ReviewLevel(item)</span>;
+    private void ShowToast(string message, string cssClass) { _toasts.Add(new(Guid.NewGuid(), message.Length <= 160 ? message : $"{message[..157]}...", cssClass)); if (_toasts.Count > 4) _toasts.RemoveAt(0); }
+    private void DismissToast(Guid id) => _toasts.RemoveAll(t => t.Id == id);
+
+    private sealed class ActivityTypeFormModel
+    {
+        [Required, StringLength(50)] public string ActivityTypeCode { get; set; } = string.Empty;
+        [Required, StringLength(100)] public string ActivityTypeName { get; set; } = string.Empty;
+        [StringLength(100)] public string? IconCssClass { get; set; }
+        [StringLength(500)] public string? Description { get; set; }
+        [Range(0, int.MaxValue)] public int SortOrder { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+
+    private sealed record InsightDef(string Title, string Description, string Icon);
+    private sealed record ToastMessage(Guid Id, string Message, string CssClass);
+}

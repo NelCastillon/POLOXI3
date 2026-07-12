@@ -199,6 +199,20 @@ VALUES
         };
     }
 
+    public Task<IReadOnlyList<LeadEngagementOptionDto>> GetEngagementOptionsAsync(Guid tenantId, string? optionType = null, CancellationToken cancellationToken = default)
+        => QueryListAsync<LeadEngagementOptionDto>(@"
+SELECT OptionId, TenantId, OptionType, Code, Label, Description, SortOrder, IsActive
+FROM CRM.LeadEngagementOption
+WHERE TenantId = @TenantId AND IsDeleted = 0 AND IsActive = 1 AND (@OptionType IS NULL OR OptionType = @OptionType)
+ORDER BY OptionType, SortOrder, Label;", new { TenantId = tenantId, OptionType = EmptyToNull(optionType) }, cancellationToken);
+
+    public Task<IReadOnlyList<LeadCampaignOptionDto>> GetCampaignOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => QueryListAsync<LeadCampaignOptionDto>(@"
+SELECT CampaignId, TenantId, Name, Type, Status, Segment, StartDate, Reached, OpenRate, Conversions, Revenue
+FROM Comms.Campaign
+WHERE TenantId = @TenantId AND IsDeleted = 0
+ORDER BY CASE WHEN Status = N'Active' THEN 0 WHEN Status = N'Scheduled' THEN 1 ELSE 2 END, StartDate DESC, Name;", new { TenantId = tenantId }, cancellationToken);
+
     public async Task UpdateAsync(UpdateLeadRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"
@@ -317,46 +331,133 @@ AND COL_LENGTH('CRM.Lead', 'AccountId') IS NULL
     public Task DeleteInterestLineAsync(Guid interestLineId, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => SoftDeleteAsync("CRM.LeadInterestLine", "InterestLineId", interestLineId, modifiedByUserId, cancellationToken);
 
     public Task<IReadOnlyList<LeadCommunicationDto>> GetCommunicationsAsync(Guid leadId, CancellationToken cancellationToken = default)
-        => QueryListAsync<LeadCommunicationDto>("SELECT c.CommunicationId, c.TenantId, c.LeadId, c.Channel, c.Subject, c.Preview, c.SentByUserId, COALESCE(u.DisplayName, u.FullName) AS SentByName, c.SentAt, c.Opened, c.Clicked, c.CreatedDateUtc, c.ModifiedDateUtc FROM CRM.LeadCommunication c LEFT JOIN IAM.[User] u ON u.UserId = c.SentByUserId WHERE c.LeadId = @LeadId AND c.IsDeleted = 0 ORDER BY c.SentAt DESC;", new { LeadId = leadId }, cancellationToken);
+        => QueryListAsync<LeadCommunicationDto>("SELECT c.CommunicationId, c.TenantId, c.LeadId, c.MessageThreadId, c.ThreadMessageId, c.Channel, c.Subject, c.Preview, c.Direction, c.DeliveryStatus, c.EngagementStatus, c.SentByUserId, COALESCE(u.DisplayName, u.FullName) AS SentByName, c.SentAt, c.Opened, c.Clicked, c.IsAutomated, c.CreatedDateUtc, c.ModifiedDateUtc FROM CRM.LeadCommunication c LEFT JOIN IAM.[User] u ON u.UserId = c.SentByUserId WHERE c.LeadId = @LeadId AND c.IsDeleted = 0 ORDER BY c.SentAt DESC;", new { LeadId = leadId }, cancellationToken);
 
     public async Task<Guid> CreateCommunicationAsync(CreateLeadCommunicationRequest request, CancellationToken cancellationToken = default)
     {
         var id = Guid.NewGuid();
-        const string sql = @"INSERT INTO CRM.LeadCommunication (CommunicationId,TenantId,LeadId,Channel,Subject,Preview,SentByUserId,SentAt,Opened,Clicked,CreatedDateUtc,IsDeleted) VALUES (@CommunicationId,@TenantId,@LeadId,@Channel,@Subject,@Preview,@SentByUserId,@SentAt,@Opened,@Clicked,SYSUTCDATETIME(),0);";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await cn.ExecuteAsync(new CommandDefinition(sql, new { CommunicationId = id, request.TenantId, request.LeadId, request.Channel, request.Subject, request.Preview, request.SentByUserId, request.SentAt, request.Opened, request.Clicked }, cancellationToken: cancellationToken));
+        using var tx = cn.BeginTransaction();
+        const string sql = @"INSERT INTO CRM.LeadCommunication (CommunicationId,TenantId,LeadId,MessageThreadId,ThreadMessageId,Channel,Subject,Preview,Direction,DeliveryStatus,EngagementStatus,SentByUserId,SentAt,Opened,Clicked,IsAutomated,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES (@CommunicationId,@TenantId,@LeadId,@MessageThreadId,@ThreadMessageId,@Channel,@Subject,@Preview,@Direction,@DeliveryStatus,@EngagementStatus,@SentByUserId,@SentAt,@Opened,@Clicked,@IsAutomated,SYSUTCDATETIME(),@SentByUserId,0);";
+        try
+        {
+            var sync = await UpsertCommunicationSyncAsync(cn, tx, request, id, null, null, cancellationToken);
+            var affected = await cn.ExecuteAsync(new CommandDefinition(sql, new { CommunicationId = id, request.TenantId, request.LeadId, MessageThreadId = sync.ThreadId, ThreadMessageId = sync.MessageId, request.Channel, request.Subject, request.Preview, request.Direction, request.DeliveryStatus, request.EngagementStatus, request.SentByUserId, request.SentAt, request.Opened, request.Clicked, request.IsAutomated }, transaction: tx, cancellationToken: cancellationToken));
+            if (affected == 0) throw new InvalidOperationException("Lead communication was not created.");
+            tx.Commit();
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
         return id;
     }
 
     public async Task UpdateCommunicationAsync(UpdateLeadCommunicationRequest request, CancellationToken cancellationToken = default)
     {
-        const string sql = @"UPDATE CRM.LeadCommunication SET Channel=@Channel,Subject=@Subject,Preview=@Preview,SentByUserId=@SentByUserId,SentAt=@SentAt,Opened=@Opened,Clicked=@Clicked,ModifiedByUserId=@ModifiedByUserId,ModifiedDateUtc=SYSUTCDATETIME() WHERE CommunicationId=@CommunicationId AND IsDeleted=0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await cn.ExecuteAsync(new CommandDefinition(sql, request, cancellationToken: cancellationToken));
+        using var tx = cn.BeginTransaction();
+        var current = await cn.QuerySingleOrDefaultAsync<LeadCommunicationDto>(new CommandDefinition("SELECT CommunicationId, MessageThreadId, ThreadMessageId FROM CRM.LeadCommunication WHERE CommunicationId = @CommunicationId AND IsDeleted = 0;", new { request.CommunicationId }, transaction: tx, cancellationToken: cancellationToken));
+        const string sql = @"UPDATE CRM.LeadCommunication SET MessageThreadId=@MessageThreadId,ThreadMessageId=@ThreadMessageId,Channel=@Channel,Subject=@Subject,Preview=@Preview,Direction=@Direction,DeliveryStatus=@DeliveryStatus,EngagementStatus=@EngagementStatus,SentByUserId=@SentByUserId,SentAt=@SentAt,Opened=@Opened,Clicked=@Clicked,IsAutomated=@IsAutomated,ModifiedByUserId=@ModifiedByUserId,ModifiedDateUtc=SYSUTCDATETIME() WHERE CommunicationId=@CommunicationId AND IsDeleted=0;";
+        try
+        {
+            var sync = await UpsertCommunicationSyncAsync(cn, tx, request, request.CommunicationId, current?.MessageThreadId, current?.ThreadMessageId, cancellationToken);
+            var affected = await cn.ExecuteAsync(new CommandDefinition(sql, new { request.CommunicationId, MessageThreadId = sync.ThreadId, ThreadMessageId = sync.MessageId, request.Channel, request.Subject, request.Preview, request.Direction, request.DeliveryStatus, request.EngagementStatus, request.SentByUserId, request.SentAt, request.Opened, request.Clicked, request.IsAutomated, request.ModifiedByUserId }, transaction: tx, cancellationToken: cancellationToken));
+            if (affected == 0) throw new InvalidOperationException("Lead communication was not updated.");
+            tx.Commit();
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
     }
 
-    public Task DeleteCommunicationAsync(Guid communicationId, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => SoftDeleteAsync("CRM.LeadCommunication", "CommunicationId", communicationId, modifiedByUserId, cancellationToken);
+    public async Task DeleteCommunicationAsync(Guid communicationId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var tx = cn.BeginTransaction();
+        try
+        {
+            var current = await cn.QuerySingleOrDefaultAsync<LeadCommunicationDto>(new CommandDefinition("SELECT CommunicationId, MessageThreadId, ThreadMessageId FROM CRM.LeadCommunication WHERE CommunicationId = @CommunicationId AND IsDeleted = 0;", new { CommunicationId = communicationId }, transaction: tx, cancellationToken: cancellationToken));
+            await cn.ExecuteAsync(new CommandDefinition("UPDATE CRM.LeadCommunication SET IsDeleted = 1, ModifiedByUserId = @ModifiedByUserId, ModifiedDateUtc = SYSUTCDATETIME() WHERE CommunicationId = @CommunicationId AND IsDeleted = 0;", new { CommunicationId = communicationId, ModifiedByUserId = modifiedByUserId }, transaction: tx, cancellationToken: cancellationToken));
+            if (current?.MessageThreadId is { } threadId)
+            {
+                await cn.ExecuteAsync(new CommandDefinition("UPDATE Comms.MessageThread SET Status = N'Resolved', ModifiedDateUtc = SYSUTCDATETIME() WHERE ThreadId = @ThreadId AND IsDeleted = 0;", new { ThreadId = threadId }, transaction: tx, cancellationToken: cancellationToken));
+            }
+            tx.Commit();
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
+    }
 
     public Task<IReadOnlyList<LeadCampaignEnrollmentDto>> GetCampaignEnrollmentsAsync(Guid leadId, CancellationToken cancellationToken = default)
-        => QueryListAsync<LeadCampaignEnrollmentDto>("SELECT EnrollmentId, TenantId, LeadId, CampaignName, Status, EnrolledAt, EmailsSent, EmailsOpen, Clicks, LastTouch, CreatedDateUtc, ModifiedDateUtc FROM CRM.LeadCampaignEnrollment WHERE LeadId = @LeadId AND IsDeleted = 0 ORDER BY EnrolledAt DESC;", new { LeadId = leadId }, cancellationToken);
+        => QueryListAsync<LeadCampaignEnrollmentDto>("SELECT EnrollmentId, TenantId, LeadId, CampaignId, CampaignName, CampaignType, Segment, Status, EnrolledAt, EmailsSent, EmailsOpen, Clicks, OpenRate, Conversions, Revenue, LastTouch, CreatedDateUtc, ModifiedDateUtc FROM CRM.LeadCampaignEnrollment WHERE LeadId = @LeadId AND IsDeleted = 0 ORDER BY EnrolledAt DESC;", new { LeadId = leadId }, cancellationToken);
 
     public async Task<Guid> CreateCampaignEnrollmentAsync(CreateLeadCampaignEnrollmentRequest request, CancellationToken cancellationToken = default)
     {
         var id = Guid.NewGuid();
-        const string sql = @"INSERT INTO CRM.LeadCampaignEnrollment (EnrollmentId,TenantId,LeadId,CampaignName,Status,EnrolledAt,EmailsSent,EmailsOpen,Clicks,LastTouch,CreatedByUserId,CreatedDateUtc,IsDeleted) VALUES (@EnrollmentId,@TenantId,@LeadId,@CampaignName,@Status,@EnrolledAt,@EmailsSent,@EmailsOpen,@Clicks,@LastTouch,@CreatedByUserId,SYSUTCDATETIME(),0);";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await cn.ExecuteAsync(new CommandDefinition(sql, new { EnrollmentId = id, request.TenantId, request.LeadId, request.CampaignName, request.Status, request.EnrolledAt, request.EmailsSent, request.EmailsOpen, request.Clicks, request.LastTouch, request.CreatedByUserId }, cancellationToken: cancellationToken));
+        using var tx = cn.BeginTransaction();
+        const string sql = @"INSERT INTO CRM.LeadCampaignEnrollment (EnrollmentId,TenantId,LeadId,CampaignId,CampaignName,CampaignType,Segment,Status,EnrolledAt,EmailsSent,EmailsOpen,Clicks,OpenRate,Conversions,Revenue,LastTouch,CreatedByUserId,CreatedDateUtc,IsDeleted) VALUES (@EnrollmentId,@TenantId,@LeadId,@CampaignId,@CampaignName,@CampaignType,@Segment,@Status,@EnrolledAt,@EmailsSent,@EmailsOpen,@Clicks,@OpenRate,@Conversions,@Revenue,@LastTouch,@CreatedByUserId,SYSUTCDATETIME(),0);";
+        try
+        {
+            var campaign = await UpsertCampaignSyncAsync(cn, tx, request, cancellationToken);
+            var affected = await cn.ExecuteAsync(new CommandDefinition(sql, new { EnrollmentId = id, request.TenantId, request.LeadId, CampaignId = campaign.CampaignId, CampaignName = campaign.Name, CampaignType = campaign.Type, Segment = campaign.Segment, request.Status, request.EnrolledAt, request.EmailsSent, request.EmailsOpen, request.Clicks, OpenRate = campaign.OpenRate, Conversions = campaign.Conversions, Revenue = campaign.Revenue, request.LastTouch, request.CreatedByUserId }, transaction: tx, cancellationToken: cancellationToken));
+            if (affected == 0) throw new InvalidOperationException("Lead campaign enrollment was not created.");
+            tx.Commit();
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
         return id;
     }
 
     public async Task UpdateCampaignEnrollmentAsync(UpdateLeadCampaignEnrollmentRequest request, CancellationToken cancellationToken = default)
     {
-        const string sql = @"UPDATE CRM.LeadCampaignEnrollment SET CampaignName=@CampaignName,Status=@Status,EnrolledAt=@EnrolledAt,EmailsSent=@EmailsSent,EmailsOpen=@EmailsOpen,Clicks=@Clicks,LastTouch=@LastTouch,ModifiedByUserId=@ModifiedByUserId,ModifiedDateUtc=SYSUTCDATETIME() WHERE EnrollmentId=@EnrollmentId AND IsDeleted=0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await cn.ExecuteAsync(new CommandDefinition(sql, request, cancellationToken: cancellationToken));
+        using var tx = cn.BeginTransaction();
+        const string sql = @"UPDATE CRM.LeadCampaignEnrollment SET CampaignId=@CampaignId,CampaignName=@CampaignName,CampaignType=@CampaignType,Segment=@Segment,Status=@Status,EnrolledAt=@EnrolledAt,EmailsSent=@EmailsSent,EmailsOpen=@EmailsOpen,Clicks=@Clicks,OpenRate=@OpenRate,Conversions=@Conversions,Revenue=@Revenue,LastTouch=@LastTouch,ModifiedByUserId=@ModifiedByUserId,ModifiedDateUtc=SYSUTCDATETIME() WHERE EnrollmentId=@EnrollmentId AND IsDeleted=0;";
+        try
+        {
+            var campaign = await UpsertCampaignSyncAsync(cn, tx, request, cancellationToken);
+            var affected = await cn.ExecuteAsync(new CommandDefinition(sql, new { request.EnrollmentId, CampaignId = campaign.CampaignId, CampaignName = campaign.Name, CampaignType = campaign.Type, Segment = campaign.Segment, request.Status, request.EnrolledAt, request.EmailsSent, request.EmailsOpen, request.Clicks, OpenRate = campaign.OpenRate, Conversions = campaign.Conversions, Revenue = campaign.Revenue, request.LastTouch, request.ModifiedByUserId }, transaction: tx, cancellationToken: cancellationToken));
+            if (affected == 0) throw new InvalidOperationException("Lead campaign enrollment was not updated.");
+            tx.Commit();
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
     }
 
-    public Task DeleteCampaignEnrollmentAsync(Guid enrollmentId, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => SoftDeleteAsync("CRM.LeadCampaignEnrollment", "EnrollmentId", enrollmentId, modifiedByUserId, cancellationToken);
+    public async Task DeleteCampaignEnrollmentAsync(Guid enrollmentId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var tx = cn.BeginTransaction();
+        try
+        {
+            var campaignId = await cn.ExecuteScalarAsync<Guid?>(new CommandDefinition("SELECT CampaignId FROM CRM.LeadCampaignEnrollment WHERE EnrollmentId = @EnrollmentId AND IsDeleted = 0;", new { EnrollmentId = enrollmentId }, transaction: tx, cancellationToken: cancellationToken));
+            await cn.ExecuteAsync(new CommandDefinition("UPDATE CRM.LeadCampaignEnrollment SET IsDeleted = 1, ModifiedByUserId = @ModifiedByUserId, ModifiedDateUtc = SYSUTCDATETIME() WHERE EnrollmentId = @EnrollmentId AND IsDeleted = 0;", new { EnrollmentId = enrollmentId, ModifiedByUserId = modifiedByUserId }, transaction: tx, cancellationToken: cancellationToken));
+            if (campaignId is { } id)
+            {
+                await cn.ExecuteAsync(new CommandDefinition("UPDATE Comms.Campaign SET ModifiedDateUtc = SYSUTCDATETIME() WHERE CampaignId = @CampaignId AND IsDeleted = 0;", new { CampaignId = id }, transaction: tx, cancellationToken: cancellationToken));
+            }
+            tx.Commit();
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
+    }
 
     public Task<IReadOnlyList<LeadDocumentDto>> GetDocumentsAsync(Guid leadId, CancellationToken cancellationToken = default)
         => QueryListAsync<LeadDocumentDto>("SELECT d.DocumentId, d.TenantId, d.LeadId, d.FileName, d.Extension, d.Category, d.SizeKb, d.UploadedByUserId, COALESCE(u.DisplayName, u.FullName) AS UploadedByName, d.UploadedAt, d.CreatedDateUtc, d.ModifiedDateUtc FROM CRM.LeadDocument d LEFT JOIN IAM.[User] u ON u.UserId = d.UploadedByUserId WHERE d.LeadId = @LeadId AND d.IsDeleted = 0 ORDER BY d.UploadedAt DESC;", new { LeadId = leadId }, cancellationToken);
@@ -392,6 +493,100 @@ AND COL_LENGTH('CRM.Lead', 'AccountId') IS NULL
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
     }
+
+    private static async Task<CommunicationSync> UpsertCommunicationSyncAsync(IDbConnection connection, IDbTransaction transaction, CreateLeadCommunicationRequest request, Guid communicationId, Guid? existingThreadId, Guid? existingMessageId, CancellationToken cancellationToken)
+    {
+        var threadId = existingThreadId ?? request.MessageThreadId ?? Guid.NewGuid();
+        var messageId = existingMessageId ?? Guid.NewGuid();
+        var preview = request.Preview.Length > 500 ? request.Preview[..500] : request.Preview;
+        var senderName = await connection.ExecuteScalarAsync<string?>(new CommandDefinition("SELECT TOP 1 COALESCE(DisplayName, FullName, Email) FROM IAM.[User] WHERE UserId = @UserId AND IsDeleted = 0;", new { UserId = request.SentByUserId }, transaction: transaction, cancellationToken: cancellationToken)) ?? "System";
+
+        if (existingThreadId is null)
+        {
+            const string insertThreadSql = @"
+INSERT INTO Comms.MessageThread (ThreadId,TenantId,AccountName,AccountId,ContactName,ContactEmail,ContactPhone,Channel,Subject,BodyPreview,Status,Priority,AssignedTo,Producer,Branch,IsRead,IsEscalated,OptedOut,MessageCount,LastActivityAt,Sentiment,CsrOwner,AiSummary,CreatedDateUtc,IsDeleted)
+SELECT @ThreadId, l.TenantId, COALESCE(l.AccountName, N'Lead engagement'), CONVERT(NVARCHAR(50), l.AccountId), LTRIM(RTRIM(COALESCE(l.FirstName, N'') + N' ' + COALESCE(l.LastName, N''))), l.Email, l.Phone, @Channel, @Subject, @Preview, @EngagementStatus, COALESCE(l.PriorityCode, N'Normal'), @SenderName, @SenderName, NULL, @Opened, 0, 0, 1, @SentAt, CASE WHEN @Clicked = 1 THEN N'Positive' ELSE N'Neutral' END, @SenderName, CONCAT(N'Lead communication synced from CRM engagement item ', CONVERT(NVARCHAR(36), @CommunicationId)), SYSUTCDATETIME(), 0
+FROM CRM.Lead l
+WHERE l.LeadId = @LeadId AND l.IsDeleted = 0;";
+            var affected = await connection.ExecuteAsync(new CommandDefinition(insertThreadSql, new { ThreadId = threadId, request.LeadId, request.Channel, request.Subject, Preview = preview, request.EngagementStatus, SenderName = senderName, request.Opened, request.Clicked, request.SentAt, CommunicationId = communicationId }, transaction: transaction, cancellationToken: cancellationToken));
+            if (affected == 0) throw new InvalidOperationException("Communication sync thread was not created.");
+        }
+        else
+        {
+            const string updateThreadSql = @"
+UPDATE Comms.MessageThread
+SET Channel = @Channel,
+    Subject = @Subject,
+    BodyPreview = @Preview,
+    Status = @EngagementStatus,
+    IsRead = @Opened,
+    MessageCount = CASE WHEN MessageCount <= 0 THEN 1 ELSE MessageCount END,
+    LastActivityAt = @SentAt,
+    Sentiment = CASE WHEN @Clicked = 1 THEN N'Positive' ELSE Sentiment END,
+    CsrOwner = COALESCE(CsrOwner, @SenderName),
+    AiSummary = CONCAT(N'Lead communication synced from CRM engagement item ', CONVERT(NVARCHAR(36), @CommunicationId)),
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE ThreadId = @ThreadId AND IsDeleted = 0;";
+            var affected = await connection.ExecuteAsync(new CommandDefinition(updateThreadSql, new { ThreadId = threadId, request.Channel, request.Subject, Preview = preview, request.EngagementStatus, SenderName = senderName, request.Opened, request.Clicked, request.SentAt, CommunicationId = communicationId }, transaction: transaction, cancellationToken: cancellationToken));
+            if (affected == 0) throw new InvalidOperationException("Communication sync thread was not updated.");
+        }
+
+        if (existingMessageId is null)
+        {
+            const string insertMessageSql = @"INSERT INTO Comms.ThreadMessage (MessageId,ThreadId,SenderName,Channel,Direction,Body,SentAt,DeliveryStatus,IsAutomated) VALUES (@MessageId,@ThreadId,@SenderName,@Channel,@Direction,@Body,@SentAt,@DeliveryStatus,@IsAutomated);";
+            var affected = await connection.ExecuteAsync(new CommandDefinition(insertMessageSql, new { MessageId = messageId, ThreadId = threadId, SenderName = senderName, request.Channel, request.Direction, Body = request.Preview, request.SentAt, request.DeliveryStatus, request.IsAutomated }, transaction: transaction, cancellationToken: cancellationToken));
+            if (affected == 0) throw new InvalidOperationException("Communication sync message was not created.");
+        }
+        else
+        {
+            const string updateMessageSql = @"UPDATE Comms.ThreadMessage SET SenderName=@SenderName, Channel=@Channel, Direction=@Direction, Body=@Body, SentAt=@SentAt, DeliveryStatus=@DeliveryStatus, IsAutomated=@IsAutomated WHERE MessageId=@MessageId;";
+            var affected = await connection.ExecuteAsync(new CommandDefinition(updateMessageSql, new { MessageId = messageId, SenderName = senderName, request.Channel, request.Direction, Body = request.Preview, request.SentAt, request.DeliveryStatus, request.IsAutomated }, transaction: transaction, cancellationToken: cancellationToken));
+            if (affected == 0) throw new InvalidOperationException("Communication sync message was not updated.");
+        }
+
+        return new(threadId, messageId);
+    }
+
+    private static async Task<CampaignSync> UpsertCampaignSyncAsync(IDbConnection connection, IDbTransaction transaction, CreateLeadCampaignEnrollmentRequest request, CancellationToken cancellationToken)
+    {
+        var existing = request.CampaignId is { } campaignId
+            ? await connection.QuerySingleOrDefaultAsync<CampaignSync>(new CommandDefinition("SELECT CampaignId, Name, Type, Status, Segment, OpenRate, Conversions, Revenue FROM Comms.Campaign WHERE CampaignId = @CampaignId AND IsDeleted = 0;", new { CampaignId = campaignId }, transaction: transaction, cancellationToken: cancellationToken))
+            : await connection.QuerySingleOrDefaultAsync<CampaignSync>(new CommandDefinition("SELECT TOP 1 CampaignId, Name, Type, Status, Segment, OpenRate, Conversions, Revenue FROM Comms.Campaign WHERE TenantId = @TenantId AND Name = @Name AND IsDeleted = 0 ORDER BY CreatedDateUtc DESC;", new { request.TenantId, Name = request.CampaignName }, transaction: transaction, cancellationToken: cancellationToken));
+
+        if (existing is not null)
+        {
+            const string updateSql = @"
+UPDATE Comms.Campaign
+SET Status = @Status,
+    Reached = CASE WHEN @EmailsSent > Reached THEN @EmailsSent ELSE Reached END,
+    OpenRate = @OpenRate,
+    Conversions = @Conversions,
+    Revenue = @Revenue,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE CampaignId = @CampaignId AND IsDeleted = 0;";
+            var affected = await connection.ExecuteAsync(new CommandDefinition(updateSql, new { existing.CampaignId, request.Status, request.EmailsSent, OpenRate = request.OpenRate > 0 ? request.OpenRate : existing.OpenRate, Conversions = Math.Max(request.Conversions, existing.Conversions), Revenue = Math.Max(request.Revenue, existing.Revenue) }, transaction: transaction, cancellationToken: cancellationToken));
+            if (affected == 0) throw new InvalidOperationException("Campaign sync record was not updated.");
+            return existing with
+            {
+                Status = request.Status,
+                OpenRate = request.OpenRate > 0 ? request.OpenRate : existing.OpenRate,
+                Conversions = Math.Max(request.Conversions, existing.Conversions),
+                Revenue = Math.Max(request.Revenue, existing.Revenue)
+            };
+        }
+
+        var newCampaignId = Guid.NewGuid();
+        var type = request.CampaignType!.Trim();
+        var segment = request.Segment!.Trim();
+        const string insertSql = @"
+INSERT INTO Comms.Campaign (CampaignId,TenantId,Name,Type,Status,Segment,StartDate,Reached,OpenRate,Conversions,Revenue,CreatedDateUtc,IsDeleted)
+VALUES (@CampaignId,@TenantId,@Name,@Type,@Status,@Segment,@StartDate,@Reached,@OpenRate,@Conversions,@Revenue,SYSUTCDATETIME(),0);";
+        var inserted = await connection.ExecuteAsync(new CommandDefinition(insertSql, new { CampaignId = newCampaignId, request.TenantId, Name = request.CampaignName, Type = type, request.Status, Segment = segment, StartDate = request.EnrolledAt, Reached = request.EmailsSent, request.OpenRate, request.Conversions, request.Revenue }, transaction: transaction, cancellationToken: cancellationToken));
+        if (inserted == 0) throw new InvalidOperationException("Campaign sync record was not created.");
+        return new(newCampaignId, request.CampaignName, type, request.Status, segment, request.OpenRate, request.Conversions, request.Revenue);
+    }
+
+    private static string? EmptyToNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     public async Task<IReadOnlyList<LeadScoringRuleDto>> GetScoringRulesAsync(Guid tenantId, CancellationToken cancellationToken = default)
     {
@@ -824,6 +1019,10 @@ ORDER BY PointValue DESC, RuleName;";
         decimal? AnnualRevenue,
         string? SourceCode,
         DateTime CreatedDateUtc);
+
+    private sealed record CommunicationSync(Guid ThreadId, Guid MessageId);
+
+    private sealed record CampaignSync(Guid CampaignId, string Name, string Type, string Status, string Segment, decimal OpenRate, int Conversions, decimal Revenue);
 
     private sealed class LeadEngagementMetrics
     {

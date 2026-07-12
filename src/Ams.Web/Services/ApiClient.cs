@@ -1045,6 +1045,12 @@ public sealed partial class ApiClient
     public Task<IReadOnlyList<LeadCommunicationDto>?> GetLeadCommunicationsAsync(Guid leadId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<LeadCommunicationDto>>($"api/leads/{leadId}/communications", cancellationToken);
 
+    public Task<IReadOnlyList<LeadEngagementOptionDto>?> GetLeadEngagementOptionsAsync(Guid tenantId, string? optionType = null, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<LeadEngagementOptionDto>>($"api/leads/engagement-options?tenantId={tenantId}&optionType={Uri.EscapeDataString(optionType ?? string.Empty)}", cancellationToken);
+
+    public Task<IReadOnlyList<LeadCampaignOptionDto>?> GetLeadCampaignOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<LeadCampaignOptionDto>>($"api/leads/campaign-options?tenantId={tenantId}", cancellationToken);
+
     public async Task<Guid> CreateLeadCommunicationAsync(Guid leadId, CreateLeadCommunicationRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync($"api/leads/{leadId}/communications", request, cancellationToken);
@@ -1499,6 +1505,9 @@ public sealed partial class ApiClient
     public Task<PagedResult<BillingAccountDto>?> SearchBillingAccountsAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 250, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<BillingAccountDto>>($"api/billing/accounts?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
+    public Task<IReadOnlyList<BillingModeDashboardRowDto>?> GetBillingModeDashboardAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<BillingModeDashboardRowDto>>($"api/billing/accounts/billing-mode-dashboard?tenantId={tenantId}", cancellationToken);
+
     public async Task<Guid> CreateBillingAccountAsync(CreateBillingAccountRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync("api/billing/accounts", request, cancellationToken);
@@ -1896,6 +1905,85 @@ public sealed partial class ApiClient
         return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
     }
 
+    public Task<PagedResult<PaymentGatewayCredentialDto>?> SearchPaymentGatewayCredentialsAsync(Guid tenantId, string? providerCode = null, string? environment = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PaymentGatewayCredentialDto>>($"api/payment-platform/credentials?tenantId={tenantId}&providerCode={Uri.EscapeDataString(providerCode ?? string.Empty)}&environment={Uri.EscapeDataString(environment ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public async Task<Guid> UpsertPaymentGatewayCredentialAsync(UpsertPaymentGatewayCredentialRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/payment-platform/credentials", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<PaymentGatewayCredentialIdResult>(cancellationToken: cancellationToken))!.PaymentGatewayCredentialId;
+    }
+
+    public Task<PagedResult<PaymentMethodTokenDto>?> SearchPaymentMethodTokensAsync(Guid tenantId, Guid? accountId = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PaymentMethodTokenDto>>($"api/payment-platform/tokens?tenantId={tenantId}&accountId={accountId}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public async Task<Guid> TokenizePaymentMethodAsync(TokenizePaymentMethodRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/payment-platform/tokens", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<PaymentMethodTokenIdResult>(cancellationToken: cancellationToken))!.PaymentMethodTokenId;
+    }
+
+    public async Task<PaymentProcessorOperationDto?> CreatePaymentCheckoutSessionAsync(CreateCheckoutSessionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/payment-platform/checkout-sessions", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<PaymentProcessorOperationDto>(cancellationToken: cancellationToken);
+    }
+
+    public async Task<PaymentProcessorOperationDto?> ChargePaymentAsync(ChargePaymentRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/payment-platform/charges", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<PaymentProcessorOperationDto>(cancellationToken: cancellationToken);
+    }
+
+    public async Task<PaymentProcessorOperationDto?> RefundPaymentAsync(RefundPaymentRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/payment-platform/refunds", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<PaymentProcessorOperationDto>(cancellationToken: cancellationToken);
+    }
+
+    public async Task<PaymentProcessorOperationDto?> VoidPaymentAsync(VoidPaymentRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/payment-platform/voids", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<PaymentProcessorOperationDto>(cancellationToken: cancellationToken);
+    }
+
+    public Task<PagedResult<PaymentProcessorOperationDto>?> SearchPaymentProcessorOperationsAsync(Guid tenantId, string? providerCode = null, string? statusCode = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PaymentProcessorOperationDto>>($"api/payment-platform/operations?tenantId={tenantId}&providerCode={Uri.EscapeDataString(providerCode ?? string.Empty)}&statusCode={Uri.EscapeDataString(statusCode ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public Task<PagedResult<PaymentWebhookEventDto>?> SearchPaymentWebhookEventsAsync(Guid tenantId, string? providerCode = null, bool? isProcessed = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PaymentWebhookEventDto>>($"api/payment-platform/webhook-events?tenantId={tenantId}&providerCode={Uri.EscapeDataString(providerCode ?? string.Empty)}&isProcessed={isProcessed}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public async Task<Guid> IngestPaymentWebhookAsync(PaymentWebhookIngestRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/payment-platform/webhooks", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<PaymentWebhookEventIdResult>(cancellationToken: cancellationToken))!.PaymentWebhookEventId;
+    }
+
+    public Task<PagedResult<PaymentSettlementBatchDto>?> SearchPaymentSettlementBatchesAsync(Guid tenantId, string? providerCode = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PaymentSettlementBatchDto>>($"api/payment-platform/settlements?tenantId={tenantId}&providerCode={Uri.EscapeDataString(providerCode ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    private sealed class PaymentGatewayCredentialIdResult
+    {
+        public Guid PaymentGatewayCredentialId { get; set; }
+    }
+
+    private sealed class PaymentMethodTokenIdResult
+    {
+        public Guid PaymentMethodTokenId { get; set; }
+    }
+
+    private sealed class PaymentWebhookEventIdResult
+    {
+        public Guid PaymentWebhookEventId { get; set; }
+    }
+
     // -- Billing extended engine -------------------------------
     public Task<PagedResult<RateCardDto>?> SearchRateCardsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<RateCardDto>>($"api/billing/rate-cards?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
@@ -2285,6 +2373,9 @@ public sealed partial class ApiClient
 
     public Task<PagedResult<CommissionPayoutStatementDto>?> SearchCommissionPayoutStatementsAsync(Guid tenantId, string? searchTerm = null, string? statusCode = null, Guid? payeeId = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<CommissionPayoutStatementDto>>($"api/commissions/payout-statements?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&statusCode={Uri.EscapeDataString(statusCode ?? string.Empty)}&payeeId={payeeId}", cancellationToken);
+
+    public Task<CommissionPayoutStatementDto?> GetCommissionPayoutStatementAsync(Guid statementId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<CommissionPayoutStatementDto>($"api/commissions/payout-statements/{statementId}", cancellationToken);
 
     public async Task EnsureCommissionPayoutStatementsSeedAsync(Guid tenantId, Guid? createdByUserId = null, CancellationToken cancellationToken = default)
     {
@@ -3962,6 +4053,9 @@ public sealed partial class ApiClient
 
     public Task<IReadOnlyList<LeadActivityDto>?> GetLeadActivitiesByLeadIdAsync(Guid leadId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<LeadActivityDto>>($"api/crm/lead-activities/by-lead/{leadId}", cancellationToken);
+
+    public Task<IReadOnlyList<LeadActivityOutcomeDto>?> GetLeadActivityOutcomesAsync(Guid tenantId, string? activityTypeCode = null, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<LeadActivityOutcomeDto>>($"api/crm/lead-activities/outcomes?tenantId={tenantId}&activityTypeCode={Uri.EscapeDataString(activityTypeCode ?? string.Empty)}", cancellationToken);
 
     public async Task<Guid> CreateLeadActivityAsync(CreateLeadActivityRequest request, CancellationToken cancellationToken = default)
     {

@@ -225,6 +225,7 @@ INSERT INTO Finance.ApPayment (ApPaymentId, TenantId, VendorId, ApInvoiceId, Pay
 VALUES (@Id, @TenantId, @VendorId, @ApInvoiceId, @PaymentDate, @Amount, @PaymentMethodCode, @ReferenceNumber, @Notes, @StatusCode, SYSUTCDATETIME(), @CreatedByUserId, NULL, NULL, 0);";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.TenantId, request.VendorId, request.ApInvoiceId, request.PaymentDate, request.Amount, request.PaymentMethodCode, request.ReferenceNumber, request.Notes, request.StatusCode, request.CreatedByUserId }, cancellationToken: cancellationToken));
+        await SyncProcessedPaymentToInvoiceAsync(cn, request.TenantId, request.ApInvoiceId, request.Amount, request.StatusCode, cancellationToken);
         return id;
     }
 
@@ -247,5 +248,28 @@ SET VendorId = @VendorId,
 WHERE ApPaymentId = @Id AND COALESCE(IsDeleted, 0) = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.VendorId, request.ApInvoiceId, request.PaymentDate, request.Amount, request.PaymentMethodCode, request.ReferenceNumber, request.Notes, request.StatusCode, request.ModifiedByUserId }, cancellationToken: cancellationToken));
+        await SyncProcessedPaymentToInvoiceAsync(cn, request.TenantId, request.ApInvoiceId, request.Amount, request.StatusCode, cancellationToken);
+    }
+
+    private static async Task SyncProcessedPaymentToInvoiceAsync(System.Data.IDbConnection connection, Guid tenantId, Guid? apInvoiceId, decimal amount, string statusCode, CancellationToken cancellationToken)
+    {
+        if (apInvoiceId is null || apInvoiceId == Guid.Empty || amount <= 0 || !string.Equals(statusCode, "Processed", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        const string sql = @"
+IF OBJECT_ID(N'Finance.ApInvoice', N'U') IS NOT NULL
+BEGIN
+    UPDATE Finance.ApInvoice
+    SET AmountPaid = CASE WHEN AmountPaid + @Amount > Amount THEN Amount ELSE AmountPaid + @Amount END,
+        StatusCode = CASE WHEN AmountPaid + @Amount >= Amount THEN N'Paid' ELSE StatusCode END,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    WHERE ApInvoiceId = @ApInvoiceId
+      AND TenantId = @TenantId
+      AND COALESCE(IsDeleted, 0) = 0;
+END;";
+
+        await connection.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId, ApInvoiceId = apInvoiceId, Amount = amount }, cancellationToken: cancellationToken));
     }
 }

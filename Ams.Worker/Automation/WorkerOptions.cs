@@ -6,4 +6,7 @@ public sealed class WorkerOptions
     public int MaxDueSchedulesPerPoll { get; set; } = 10;
     public int MaxQueuedRunsPerPoll { get; set; } = 5;
     public int RunStaleAfterMinutes { get; set; } = 120;
+    public int PaymentPollIntervalSeconds { get; set; } = 60;
+    public int MaxPaymentRetriesPerPoll { get; set; } = 50;
+    public int MaxPaymentSettlementCredentialsPerPoll { get; set; } = 25;
 }

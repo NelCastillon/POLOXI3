@@ -1,0 +1,668 @@
+@page "/tenant/crm/activity-outcomes"
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.CrmConfig
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Activity Outcomes Command Center - AMS</PageTitle>
+
+<div class="aoc-page">
+    <section class="aoc-hero">
+        <div class="aoc-hero__content">
+            <div class="aoc-hero-left">
+                <span class="aoc-hero-icon"><i class="bi bi-ui-checks-grid" aria-hidden="true"></i></span>
+                <div class="aoc-hero-title">
+                    <div class="aoc-hero__eyebrow">Enterprise CRM activity configuration</div>
+                    <div class="aoc-title-row">
+                        <h1>Activity Outcomes Command Center</h1>
+                        <div class="aoc-hero__meta">
+                            <span><i class="bi bi-list-check" aria-hidden="true"></i>@_items.Count outcomes</span>
+                            <span><i class="bi bi-shield-check" aria-hidden="true"></i>@ActiveCount active</span>
+                            <span><i class="bi bi-diagram-3" aria-hidden="true"></i>@ActivityTypeGroups.Count types</span>
+                            <span><i class="bi bi-exclamation-octagon" aria-hidden="true"></i>@ReviewCount review</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <p>Manage the database-backed outcomes that appear in Lead Detail Add Activity workflows. Outcomes are tenant-scoped, sorted by activity type, and drive consistent reporting, automation, and follow-up quality.</p>
+        </div>
+        <div class="aoc-hero__actions">
+            <button type="button" class="aoc-btn aoc-btn--light" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "aoc-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="aoc-btn aoc-btn--primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Outcome</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger aoc-alert" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="aoc-kpi-strip" aria-label="Activity outcome KPI filters">
+        @KpiCard("all", "Total Outcomes", _items.Count.ToString("N0", CultureInfo.CurrentCulture), "All DB-configured activity outcomes", "bi-list-check", "blue")
+        @KpiCard("active", "Active", ActiveCount.ToString("N0", CultureInfo.CurrentCulture), "Available in activity outcome dropdowns", "bi-shield-check", "green")
+        @KpiCard("inactive", "Inactive", InactiveCount.ToString("N0", CultureInfo.CurrentCulture), "Disabled outcomes retained for history", "bi-slash-circle", "amber")
+        @KpiCard("types", "Activity Types", ActivityTypeGroups.Count.ToString("N0", CultureInfo.CurrentCulture), "Distinct DB-driven activity types", "bi-diagram-3", "purple")
+        @KpiCard("review", "Needs Review", ReviewCount.ToString("N0", CultureInfo.CurrentCulture), "Missing descriptions or inactive outcomes", "bi-exclamation-octagon", "red")
+    </section>
+
+    <section class="aoc-workflows" aria-label="Activity outcome workflows">
+        <button type="button" class="aoc-workflow" @onclick='() => SetDashboardFocus("review", "risk")'><span class="aoc-workflow-icon"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></span><span class="aoc-workflow-meta"><strong>Quality review</strong><span>Find inactive or undocumented outcomes</span></span></button>
+        <button type="button" class="aoc-workflow" @onclick='() => SetDashboardFocus("types", "type")'><span class="aoc-workflow-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span><span class="aoc-workflow-meta"><strong>Type coverage</strong><span>Review activity types and outcome counts</span></span></button>
+        <button type="button" class="aoc-workflow" @onclick='() => SetDashboardFocus("active", "sort")'><span class="aoc-workflow-icon"><i class="bi bi-sort-numeric-down" aria-hidden="true"></i></span><span class="aoc-workflow-meta"><strong>Sort order</strong><span>Validate dropdown sequence by type</span></span></button>
+        <button type="button" class="aoc-workflow" @onclick='() => SetDashboardFocus("inactive", "status")'><span class="aoc-workflow-icon"><i class="bi bi-slash-circle" aria-hidden="true"></i></span><span class="aoc-workflow-meta"><strong>Inactive cleanup</strong><span>Review disabled outcomes</span></span></button>
+    </section>
+
+    <section class="aoc-filter-panel" aria-label="Activity outcome filters">
+        <div class="aoc-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input type="search" placeholder="Search activity type, outcome code, name, or description..." aria-label="Search activity outcomes" value="@_search" @oninput="OnSearchInput" />
+        </div>
+        <div class="aoc-filter-grid">
+            <label><span>Activity Type</span><select class="form-select" @bind="_typeFilter" @bind:after="ApplyFilters"><option value="">All types</option>@foreach (var type in ActivityTypeOptions) { <option value="@type">@type</option> }</select></label>
+            <label><span>Status</span><select class="form-select" @bind="_statusFilter" @bind:after="ApplyFilters"><option value="">All statuses</option><option value="Active">Active</option><option value="Inactive">Inactive</option></select></label>
+            <label><span>Sort</span><select class="form-select" @bind="_sortMode" @bind:after="ApplyFilters"><option value="type">Activity type</option><option value="sort">Sort order</option><option value="name">Outcome name</option><option value="code">Outcome code</option><option value="status">Status</option><option value="risk">Review risk</option></select></label>
+        </div>
+        <button type="button" class="aoc-btn aoc-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+    </section>
+
+    <nav class="aoc-tabs" aria-label="Activity outcome views">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="aoc-tab @(_activeTab == tab.Key ? "aoc-tab--active" : null)" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <strong>@TabCount(tab.Key)</strong>
+            </button>
+        }
+    </nav>
+
+    <main class="aoc-dashboard">
+        <section class="aoc-main-card">
+            <div class="aoc-card-header">
+                <div>
+                    <span class="aoc-section-kicker">@ActiveViewTitle</span>
+                    <h2>@FilteredOutcomes.Count() outcomes</h2>
+                    <p>Database-backed values used by activity outcome dropdowns. Keep codes stable for reporting and use names/descriptions for user-facing clarity.</p>
+                </div>
+                <div class="aoc-card-actions">
+                    @if (_selectedOutcomes.Count > 0)
+                    {
+                        <span class="aoc-sel-count">@_selectedOutcomes.Count selected</span>
+                        <button type="button" class="aoc-btn aoc-btn--ghost" @onclick="() => ConfirmBulkSetActive(true)"><i class="bi bi-check-circle" aria-hidden="true"></i> Activate</button>
+                        <button type="button" class="aoc-btn aoc-btn--ghost" @onclick="() => ConfirmBulkSetActive(false)"><i class="bi bi-slash-circle" aria-hidden="true"></i> Deactivate</button>
+                        <button type="button" class="aoc-btn aoc-btn--danger-ghost" @onclick="ConfirmBulkDelete"><i class="bi bi-trash3" aria-hidden="true"></i> Remove</button>
+                    }
+                    <button type="button" class="aoc-btn aoc-btn--ghost" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Prev</button>
+                    <span class="aoc-page-indicator">Page @_page of @TotalPages</span>
+                    <button type="button" class="aoc-btn aoc-btn--ghost" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="aoc-loading"><span class="aoc-spinner"></span> Loading activity outcomes...</div>
+            }
+            else if (!FilteredOutcomes.Any())
+            {
+                <div class="aoc-empty"><i class="bi bi-ui-checks-grid" aria-hidden="true"></i><strong>No activity outcomes found</strong><span>Adjust the active tab, search, or filters, or create a new database-backed outcome.</span></div>
+            }
+            else if (_activeTab == "types")
+            {
+                <div class="aoc-type-grid">
+                    @foreach (var group in ActivityTypeGroups)
+                    {
+                        <article class="aoc-type-card">
+                            <div class="aoc-type-icon"><i class="bi @ActivityTypeIcon(group.Name)" aria-hidden="true"></i></div>
+                            <div class="aoc-type-meta">
+                                <h3>@group.Name</h3>
+                                <p>@group.Count outcomes - @group.Active active - @group.Review needs review</p>
+                                <div class="aoc-mini-bar"><span style="width:@group.Percent%"></span></div>
+                            </div>
+                            <button type="button" class="aoc-btn aoc-btn--ghost" @onclick="() => FilterByType(group.Name)">Open</button>
+                        </article>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="aoc-table-wrap">
+                    <table class="aoc-table">
+                        <thead>
+                            <tr>
+                                <th class="aoc-check-col"><input type="checkbox" checked="@AllPageSelected" @onchange="ToggleSelectAllPage" aria-label="Select all activity outcomes on page" /></th>
+                                <th>Review</th>
+                                <th>Activity Type</th>
+                                <th>Outcome</th>
+                                <th>Code</th>
+                                <th>Sort</th>
+                                <th>Status</th>
+                                <th class="aoc-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in PagedOutcomes)
+                            {
+                                <tr class="@(_selected?.ActivityOutcomeId == item.ActivityOutcomeId ? "aoc-row aoc-row--selected" : "aoc-row")" @onclick="() => SelectRow(item)">
+                                    <td class="aoc-check-col" @onclick:stopPropagation="true"><input type="checkbox" checked="@IsSelected(item)" @onchange="() => ToggleSelect(item)" aria-label="Select activity outcome" /></td>
+                                    <td>@ReviewBadge(item)</td>
+                                    <td><span class="aoc-pill aoc-pill--blue"><i class="bi @ActivityTypeIcon(item.ActivityTypeCode)" aria-hidden="true"></i>@item.ActivityTypeCode</span></td>
+                                    <td><button type="button" class="aoc-link-button" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)">@item.OutcomeName</button><small>@Safe(item.Description, "No description")</small></td>
+                                    <td><span class="aoc-code">@item.OutcomeCode</span></td>
+                                    <td><strong>@item.SortOrder</strong></td>
+                                    <td>@StatusBadge(item)</td>
+                                    <td class="aoc-actions-col">
+                                        <button type="button" class="aoc-icon-btn" title="Open action menu" @onclick:stopPropagation="true" @onclick="() => ToggleActionMenu(item)"><i class="bi bi-three-dots-vertical" aria-hidden="true"></i></button>
+                                        @if (_openActionMenuFor == item.ActivityOutcomeId)
+                                        {
+                                            <div class="aoc-menu" role="menu" @onclick:stopPropagation="true">
+                                                <div class="aoc-menu__summary"><strong>@item.OutcomeName</strong><span>@item.ActivityTypeCode outcome</span></div>
+                                                <button type="button" class="aoc-menu-item" role="menuitem" @onclick="() => SelectRow(item)"><i class="bi bi-eye" aria-hidden="true"></i><span>Inspect outcome</span></button>
+                                                <button type="button" class="aoc-menu-item" role="menuitem" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i><span>Edit outcome</span></button>
+                                                <button type="button" class="aoc-menu-item" role="menuitem" @onclick="() => ConfirmToggleActive(item)"><i class="bi @(item.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i><span>@(item.IsActive ? "Deactivate" : "Activate")</span></button>
+                                                <button type="button" class="aoc-menu-item aoc-menu-item--danger" role="menuitem" @onclick="() => ConfirmDelete(item)"><i class="bi bi-trash3" aria-hidden="true"></i><span>Remove outcome</span></button>
+                                            </div>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <aside class="aoc-side-panel">
+            <section class="aoc-panel-card">
+                <span class="aoc-section-kicker">Selected outcome</span>
+                @if (_selected is null)
+                {
+                    <div class="aoc-empty aoc-empty--compact"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a row</strong><span>Choose an outcome to inspect dropdown behavior and configuration quality.</span></div>
+                }
+                else
+                {
+                    <div class="aoc-selected">
+                        <div class="aoc-selected__title"><div class="aoc-rule-icon"><i class="bi @ActivityTypeIcon(_selected.ActivityTypeCode)" aria-hidden="true"></i></div><div><h3>@_selected.OutcomeName</h3><span>@_selected.ActivityTypeCode activity outcome</span></div></div>
+                        <div class="aoc-score-card aoc-score-card--@ReviewTone(_selected)"><span>Configuration score</span><strong>@QualityScore(_selected)</strong><small>@ReviewLevel(_selected)</small></div>
+                        <dl class="aoc-detail-list">
+                            <div><dt>Activity Type</dt><dd>@_selected.ActivityTypeCode</dd></div>
+                            <div><dt>Outcome Code</dt><dd>@_selected.OutcomeCode</dd></div>
+                            <div><dt>Sort Order</dt><dd>@_selected.SortOrder</dd></div>
+                            <div><dt>Status</dt><dd>@(_selected.IsActive ? "Active" : "Inactive")</dd></div>
+                            <div><dt>Description</dt><dd>@Safe(_selected.Description, "Missing")</dd></div>
+                        </dl>
+                        <div class="aoc-note-card"><strong>Recommended action</strong><p>@RecommendedAction(_selected)</p></div>
+                        <div class="aoc-selected-actions"><button type="button" class="aoc-btn aoc-btn--primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="aoc-btn aoc-btn--ghost" @onclick="() => ConfirmToggleActive(_selected)"><i class="bi @(_selected.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i> @(_selected.IsActive ? "Deactivate" : "Activate")</button><button type="button" class="aoc-btn aoc-btn--danger-ghost" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash3" aria-hidden="true"></i> Remove</button></div>
+                    </div>
+                }
+            </section>
+
+            <section class="aoc-panel-card">
+                <span class="aoc-section-kicker">Configuration intelligence</span>
+                <div class="aoc-insight-list">
+                    @foreach (var insight in Insights)
+                    {
+                        <div class="aoc-insight"><i class="bi @insight.Icon" aria-hidden="true"></i><div><strong>@insight.Title</strong><span>@insight.Description</span></div></div>
+                    }
+                </div>
+            </section>
+        </aside>
+    </main>
+</div>
+
+@if (_showForm)
+{
+    <div class="aoc-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="aoc-modal" role="dialog" aria-modal="true" aria-labelledby="aoc-form-title" @onclick:stopPropagation="true">
+            <div class="aoc-modal__header"><i class="bi @(_editId.HasValue ? "bi-pencil-square" : "bi-plus-circle")" aria-hidden="true"></i><span id="aoc-form-title">@(_editId.HasValue ? "Edit Activity Outcome" : "Add Activity Outcome")</span><button type="button" class="aoc-icon-btn aoc-icon-btn--light ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="aoc-modal__body">
+                    
+                    <div class="aoc-form-grid">
+                        <label class="aoc-field"><span>Activity Type <em>*</em></span><InputSelect @bind-Value="_form.ActivityTypeCode" class="form-select"><option value="">Select activity type...</option>@foreach (var type in ActivityTypeOptions) { <option value="@type">@type</option> }</InputSelect></label>
+                        <label class="aoc-field"><span>Outcome Code <em>*</em></span><InputText @bind-Value="_form.OutcomeCode" class="form-control" placeholder="CONNECTED" /></label>
+                        <label class="aoc-field aoc-field--wide"><span>Outcome Name <em>*</em></span><InputText @bind-Value="_form.OutcomeName" class="form-control" placeholder="Connected" /></label>
+                        <label class="aoc-field"><span>Sort Order</span><InputNumber @bind-Value="_form.SortOrder" class="form-control" min="0" /></label>
+                        <label class="aoc-field"><span>Status</span><span class="aoc-switch"><InputCheckbox @bind-Value="_form.IsActive" /> Active outcome</span></label>
+                        <label class="aoc-field aoc-field--wide"><span>Description</span><InputTextArea @bind-Value="_form.Description" class="form-control" rows="4" placeholder="Explain when this outcome should be selected by CRM users." /></label>
+                    </div>
+                    @if (!string.IsNullOrEmpty(_formError))
+                    {
+                        <div class="alert alert-danger aoc-form-alert" role="alert"><i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_formError</div>
+                    }
+                </div>
+                <div class="aoc-modal__footer"><button type="button" class="aoc-btn aoc-btn--ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="aoc-btn aoc-btn--primary" disabled="@_saving">@if (_saving) { <span class="aoc-spin-sm" aria-hidden="true"></span> } @(_editId.HasValue ? "Save Changes" : "Create Outcome")</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showConfirm)
+{
+    <div class="aoc-modal-backdrop" role="presentation" @onclick="CloseConfirm">
+        <div class="aoc-confirm" role="dialog" aria-modal="true" aria-labelledby="aoc-confirm-title" @onclick:stopPropagation="true">
+            <div class="aoc-modal__header"><i class="bi @_confirmIcon" aria-hidden="true"></i><span>Confirm action</span><button type="button" class="aoc-icon-btn aoc-icon-btn--light ms-auto" @onclick="CloseConfirm" disabled="@_saving"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <div class="aoc-confirm__body"><div class="@(_confirmDanger ? "aoc-confirm-icon aoc-confirm-icon--danger" : "aoc-confirm-icon")"><i class="bi @_confirmIcon" aria-hidden="true"></i></div><div><h3 id="aoc-confirm-title">@_confirmTitle</h3><p>@_confirmMessage</p></div></div>
+            <div class="aoc-modal__footer"><button type="button" class="aoc-btn aoc-btn--ghost" @onclick="CloseConfirm" disabled="@_saving">Cancel</button><button type="button" class="@(_confirmDanger ? "aoc-btn aoc-btn--danger" : "aoc-btn aoc-btn--primary")" @onclick="ExecuteConfirmedActionAsync" disabled="@_saving">@if (_saving) { <span class="aoc-spin-sm" aria-hidden="true"></span> } Confirm</button></div>
+        </div>
+    </div>
+}
+
+<div class="aoc-toast-stack" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in _toasts)
+    {
+        <div class="aoc-toast @toast.CssClass"><i class="bi @(toast.CssClass.Contains("danger") ? "bi-exclamation-triangle" : "bi-check-circle")" aria-hidden="true"></i><span>@toast.Message</span><button type="button" @onclick="() => DismissToast(toast.Id)"><i class="bi bi-x" aria-hidden="true"></i></button></div>
+    }
+</div>
+
+@code {
+    private Guid _tenantId;
+    private Guid _currentUserId;
+    private readonly TabDef[] _tabs = [new("all", "All", "bi-list-check"), new("review", "Needs Review", "bi-exclamation-octagon"), new("active", "Active", "bi-shield-check"), new("inactive", "Inactive", "bi-slash-circle"), new("types", "By Type", "bi-diagram-3")];
+    private readonly InsightDef[] _baselineInsights = [new("Keep codes stable", "Outcome codes are stored on lead activities and should remain stable for reports and automations.", "bi-code-square"), new("Use descriptions", "Descriptions help admins understand when a value should appear in activity workflows.", "bi-card-text"), new("Sort by workflow", "Sort order controls the dropdown sequence within each activity type.", "bi-sort-numeric-down")];
+
+    private List<LeadActivityOutcomeDto> _items = [];
+    private List<LeadActivityTypeDto> _activityTypes = [];
+    private readonly List<LeadActivityOutcomeDto> _selectedOutcomes = [];
+    private LeadActivityOutcomeDto? _selected;
+    private bool _loading = true;
+    private bool _saving;
+    private string? _loadError;
+    private string _activeTab = "all";
+    private string _activeKpi = "all";
+    private string _search = string.Empty;
+    private string _typeFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _sortMode = "type";
+    private int _page = 1;
+    private const int PageSize = 12;
+    private Guid? _openActionMenuFor;
+
+    private bool _showForm;
+    private string _formError = string.Empty;
+    private Guid? _editId;
+    private ActivityOutcomeFormModel _form = new();
+
+    private bool _showConfirm;
+    private bool _confirmDanger;
+    private string _confirmTitle = string.Empty;
+    private string _confirmMessage = string.Empty;
+    private string _confirmIcon = "bi-question-circle";
+    private Func<Task>? _confirmedAction;
+    private readonly List<ToastMessage> _toasts = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _currentUserId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM Configuration", null), new("Activirty Outcome", null));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        StateHasChanged();
+        try
+        {
+            var outcomesTask = Api.SearchLeadActivityOutcomesAsync(_tenantId, _search.Trim(), null, pageSize: 1000);
+            var typesTask = Api.SearchLeadActivityTypesAsync(_tenantId, pageSize: 1000);
+            await Task.WhenAll(outcomesTask, typesTask);
+            var result = outcomesTask.Result;
+            _items = result?.Items.ToList() ?? [];
+            _activityTypes = typesTask.Result?.Items.OrderBy(t => t.SortOrder).ThenBy(t => t.ActivityTypeName).ToList() ?? [];
+            _selected = _selected is null ? OrderedOutcomes(_items).FirstOrDefault() : _items.FirstOrDefault(o => o.ActivityOutcomeId == _selected.ActivityOutcomeId) ?? OrderedOutcomes(_items).FirstOrDefault();
+            _selectedOutcomes.RemoveAll(selected => _items.All(o => o.ActivityOutcomeId != selected.ActivityOutcomeId));
+            _page = 1;
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load activity outcomes: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "aoc-toast--danger");
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task OnSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _search = e.Value?.ToString() ?? string.Empty;
+        await LoadAsync();
+    }
+
+    private void SetActiveKpi(string key)
+    {
+        _activeKpi = _activeKpi == key ? "all" : key;
+        _activeTab = _activeKpi switch { "review" => "review", "active" => "active", "inactive" => "inactive", "types" => "types", _ => "all" };
+        _page = 1;
+    }
+
+    private void SetActiveTab(string key)
+    {
+        _activeTab = key;
+        _activeKpi = key is "review" or "active" or "inactive" or "types" ? key : "all";
+        _page = 1;
+    }
+
+    private void SetDashboardFocus(string tab, string sortMode)
+    {
+        _activeTab = tab;
+        _activeKpi = tab is "review" or "active" or "inactive" or "types" ? tab : "all";
+        _sortMode = sortMode;
+        _page = 1;
+    }
+
+    private void ApplyFilters() => _page = 1;
+
+    private void ClearFilters()
+    {
+        _typeFilter = string.Empty;
+        _statusFilter = string.Empty;
+        _sortMode = "type";
+        _activeTab = "all";
+        _activeKpi = "all";
+        _page = 1;
+    }
+
+    private bool HasFilters => !string.IsNullOrEmpty(_typeFilter) || !string.IsNullOrEmpty(_statusFilter) || _sortMode != "type" || _activeTab != "all";
+    private int ActiveCount => _items.Count(o => o.IsActive);
+    private int InactiveCount => _items.Count(o => !o.IsActive);
+    private int ReviewCount => _items.Count(NeedsReview);
+    private IEnumerable<string> ActivityTypeOptions => _activityTypes.Where(t => t.IsActive).Select(t => t.ActivityTypeCode).Where(s => !string.IsNullOrWhiteSpace(s));
+
+    private IEnumerable<LeadActivityOutcomeDto> TabFiltered => _activeTab switch
+    {
+        "review" => _items.Where(NeedsReview),
+        "active" => _items.Where(o => o.IsActive),
+        "inactive" => _items.Where(o => !o.IsActive),
+        _ => _items,
+    };
+
+    private IEnumerable<LeadActivityOutcomeDto> FilteredOutcomes
+    {
+        get
+        {
+            var query = TabFiltered;
+            if (!string.IsNullOrWhiteSpace(_typeFilter)) query = query.Where(o => string.Equals(o.ActivityTypeCode, _typeFilter, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(o => _statusFilter == "Active" ? o.IsActive : !o.IsActive);
+            return OrderedOutcomes(query);
+        }
+    }
+
+    private IEnumerable<LeadActivityOutcomeDto> OrderedOutcomes(IEnumerable<LeadActivityOutcomeDto> query) => _sortMode switch
+    {
+        "sort" => query.OrderBy(o => o.SortOrder).ThenBy(o => o.ActivityTypeCode).ThenBy(o => o.OutcomeName),
+        "name" => query.OrderBy(o => o.OutcomeName).ThenBy(o => o.ActivityTypeCode),
+        "code" => query.OrderBy(o => o.OutcomeCode).ThenBy(o => o.ActivityTypeCode),
+        "status" => query.OrderByDescending(o => o.IsActive).ThenBy(o => o.ActivityTypeCode).ThenBy(o => o.SortOrder),
+        "risk" => query.OrderByDescending(RiskScore).ThenBy(o => o.ActivityTypeCode).ThenBy(o => o.SortOrder),
+        _ => query.OrderBy(o => o.ActivityTypeCode).ThenBy(o => o.SortOrder).ThenBy(o => o.OutcomeName),
+    };
+
+    private IEnumerable<LeadActivityOutcomeDto> PagedOutcomes => FilteredOutcomes.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredOutcomes.Count() / (double)PageSize));
+    private void PreviousPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private string ActiveViewTitle => _tabs.FirstOrDefault(t => t.Key == _activeTab)?.Label ?? "Activity Outcomes";
+    private int TabCount(string key) => key switch { "review" => ReviewCount, "active" => ActiveCount, "inactive" => InactiveCount, "types" => ActivityTypeGroups.Count, _ => _items.Count };
+
+    private List<ActivityTypeGroup> ActivityTypeGroups
+    {
+        get
+        {
+            var outcomeGroups = _items.GroupBy(o => o.ActivityTypeCode).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+            var source = _activityTypes.Count > 0
+                ? _activityTypes.Select(t => t.ActivityTypeCode).Distinct(StringComparer.OrdinalIgnoreCase)
+                : _items.Select(o => o.ActivityTypeCode).Distinct(StringComparer.OrdinalIgnoreCase);
+            var rows = source.Select(type =>
+            {
+                var outcomes = outcomeGroups.TryGetValue(type, out var list) ? list : [];
+                return new ActivityTypeGroup(type, outcomes.Count, outcomes.Count(o => o.IsActive), outcomes.Count(NeedsReview), 0);
+            }).ToList();
+            var max = Math.Max(1, rows.Count == 0 ? 1 : rows.Max(g => g.Count));
+            return rows.Select(g => g with { Percent = (int)Math.Round(g.Count * 100.0 / max) }).OrderByDescending(g => g.Review).ThenBy(g => g.Name).ToList();
+        }
+    }
+
+    private void FilterByType(string type)
+    {
+        _typeFilter = type;
+        _activeTab = "all";
+        _activeKpi = "all";
+        _page = 1;
+    }
+
+    private void SelectRow(LeadActivityOutcomeDto item) { _selected = item; _openActionMenuFor = null; }
+    private bool IsSelected(LeadActivityOutcomeDto item) => _selectedOutcomes.Any(x => x.ActivityOutcomeId == item.ActivityOutcomeId);
+    private void ToggleSelect(LeadActivityOutcomeDto item) { if (IsSelected(item)) _selectedOutcomes.RemoveAll(x => x.ActivityOutcomeId == item.ActivityOutcomeId); else _selectedOutcomes.Add(item); }
+    private bool AllPageSelected => PagedOutcomes.Any() && PagedOutcomes.All(IsSelected);
+    private void ToggleSelectAllPage()
+    {
+        var page = PagedOutcomes.ToList();
+        if (page.All(IsSelected)) foreach (var item in page) _selectedOutcomes.RemoveAll(x => x.ActivityOutcomeId == item.ActivityOutcomeId);
+        else foreach (var item in page.Where(item => !IsSelected(item))) _selectedOutcomes.Add(item);
+    }
+
+    private void ToggleActionMenu(LeadActivityOutcomeDto item) => _openActionMenuFor = _openActionMenuFor == item.ActivityOutcomeId ? null : item.ActivityOutcomeId;
+
+    private void OpenCreate()
+    {
+        _editId = null;
+        var activityType = !string.IsNullOrWhiteSpace(_typeFilter) ? _typeFilter : ActivityTypeOptions.FirstOrDefault() ?? string.Empty;
+        _form = new ActivityOutcomeFormModel { SortOrder = NextSortOrderFor(activityType), IsActive = true, ActivityTypeCode = activityType };
+        _formError = string.Empty;
+        _showForm = true;
+        _openActionMenuFor = null;
+    }
+
+    private void OpenEdit(LeadActivityOutcomeDto item)
+    {
+        _editId = item.ActivityOutcomeId;
+        _form = new ActivityOutcomeFormModel { ActivityTypeCode = item.ActivityTypeCode, OutcomeCode = item.OutcomeCode, OutcomeName = item.OutcomeName, Description = item.Description, SortOrder = item.SortOrder, IsActive = item.IsActive };
+        _formError = string.Empty;
+        _showForm = true;
+        _openActionMenuFor = null;
+    }
+
+    private void CloseForm()
+    {
+        if (_saving) return;
+        _showForm = false;
+        _form = new();
+        _editId = null;
+        _formError = string.Empty;
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        _formError = string.Empty;
+        try
+        {
+            var activityType = _form.ActivityTypeCode.Trim();
+            var outcomeCode = NormalizeCode(_form.OutcomeCode);
+            var outcomeName = _form.OutcomeName.Trim();
+            if (_editId.HasValue)
+            {
+                await Api.UpdateLeadActivityOutcomeAsync(_editId.Value, new(activityType, outcomeCode, outcomeName, TrimOrNull(_form.Description), _form.SortOrder, _form.IsActive, _currentUserId == Guid.Empty ? null : _currentUserId));
+                ShowToast("Activity outcome updated.", "aoc-toast--success");
+            }
+            else
+            {
+                var id = await Api.CreateLeadActivityOutcomeAsync(new(_tenantId, activityType, outcomeCode, outcomeName, TrimOrNull(_form.Description), _form.SortOrder, _currentUserId == Guid.Empty ? null : _currentUserId));
+                _editId = id;
+                ShowToast("Activity outcome created.", "aoc-toast--success");
+            }
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast($"Save failed: {ex.Message}", "aoc-toast--danger");
+        }
+        finally { _saving = false; }
+    }
+
+    private void ConfirmToggleActive(LeadActivityOutcomeDto item)
+    {
+        ShowConfirm(item.IsActive ? "Deactivate activity outcome?" : "Activate activity outcome?", $"This will {(item.IsActive ? "hide" : "show")} '{item.OutcomeName}' for {item.ActivityTypeCode} activities.", item.IsActive ? "bi-slash-circle" : "bi-check-circle", false, async () => await SetOutcomeActiveAsync(item, !item.IsActive));
+    }
+
+    private async Task SetOutcomeActiveAsync(LeadActivityOutcomeDto item, bool isActive)
+    {
+        await Api.UpdateLeadActivityOutcomeAsync(item.ActivityOutcomeId, new(item.ActivityTypeCode, item.OutcomeCode, item.OutcomeName, item.Description, item.SortOrder, isActive, _currentUserId == Guid.Empty ? null : _currentUserId));
+        ShowToast(isActive ? "Activity outcome activated." : "Activity outcome deactivated.", "aoc-toast--success");
+        await LoadAsync();
+    }
+
+    private void ConfirmDelete(LeadActivityOutcomeDto item)
+    {
+        ShowConfirm("Remove activity outcome?", $"You are about to remove '{item.OutcomeName}'. Existing activity history keeps stored codes, but the value will no longer be configurable.", "bi-trash3", true, async () => await DeleteOutcomeAsync(item));
+    }
+
+    private async Task DeleteOutcomeAsync(LeadActivityOutcomeDto item)
+    {
+        await Api.DeleteLeadActivityOutcomeAsync(item.ActivityOutcomeId, _currentUserId == Guid.Empty ? null : _currentUserId);
+        _selectedOutcomes.RemoveAll(o => o.ActivityOutcomeId == item.ActivityOutcomeId);
+        if (_selected?.ActivityOutcomeId == item.ActivityOutcomeId) _selected = null;
+        ShowToast("Activity outcome removed.", "aoc-toast--success");
+        await LoadAsync();
+    }
+
+    private void ConfirmBulkSetActive(bool isActive)
+    {
+        var count = _selectedOutcomes.Count;
+        ShowConfirm(isActive ? "Activate selected outcomes?" : "Deactivate selected outcomes?", $"This will {(isActive ? "activate" : "deactivate")} {count} selected outcome(s).", isActive ? "bi-check-circle" : "bi-slash-circle", false, async () => await BulkSetActiveAsync(isActive));
+    }
+
+    private async Task BulkSetActiveAsync(bool isActive)
+    {
+        foreach (var item in _selectedOutcomes.ToList()) await SetOutcomeActiveAsync(item, isActive);
+        _selectedOutcomes.Clear();
+    }
+
+    private void ConfirmBulkDelete()
+    {
+        var count = _selectedOutcomes.Count;
+        ShowConfirm("Remove selected outcomes?", $"You are about to remove {count} selected activity outcome(s).", "bi-trash3", true, BulkDeleteAsync);
+    }
+
+    private async Task BulkDeleteAsync()
+    {
+        foreach (var item in _selectedOutcomes.ToList()) await Api.DeleteLeadActivityOutcomeAsync(item.ActivityOutcomeId, _currentUserId == Guid.Empty ? null : _currentUserId);
+        _selectedOutcomes.Clear();
+        _selected = null;
+        ShowToast("Selected activity outcomes removed.", "aoc-toast--success");
+        await LoadAsync();
+    }
+
+    private void ShowConfirm(string title, string message, string icon, bool danger, Func<Task> action)
+    {
+        _confirmTitle = title;
+        _confirmMessage = message;
+        _confirmIcon = icon;
+        _confirmDanger = danger;
+        _confirmedAction = action;
+        _showConfirm = true;
+        _openActionMenuFor = null;
+    }
+
+    private void CloseConfirm() { if (!_saving) _showConfirm = false; }
+
+    private async Task ExecuteConfirmedActionAsync()
+    {
+        if (_confirmedAction is null) return;
+        _saving = true;
+        try
+        {
+            await _confirmedAction();
+            _showConfirm = false;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Action failed: {ex.Message}", "aoc-toast--danger");
+        }
+        finally { _saving = false; }
+    }
+
+    private IReadOnlyList<InsightDef> Insights
+    {
+        get
+        {
+            var insights = _baselineInsights.ToList();
+            if (_items.Any(o => !o.IsActive)) insights.Insert(0, new("Inactive outcomes", $"{InactiveCount} outcome(s) are disabled and hidden from active dropdowns.", "bi-slash-circle"));
+            if (_items.Any(o => string.IsNullOrWhiteSpace(o.Description))) insights.Insert(0, new("Descriptions missing", $"{_items.Count(o => string.IsNullOrWhiteSpace(o.Description))} outcome(s) should include guidance descriptions.", "bi-card-text"));
+            if (ActivityTypeGroups.Any(g => g.Active == 0)) insights.Insert(0, new("Type coverage gap", "At least one activity type has no active outcomes available for users.", "bi-diagram-3"));
+            return insights.Take(5).ToList();
+        }
+    }
+
+    private RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string tone) => @<button type="button" class="aoc-kpi-card aoc-kpi-card--@tone @(_activeKpi == key ? "aoc-kpi-card--active" : null)" title="@subtitle" @onclick="() => SetActiveKpi(key)"><span class="aoc-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span><span class="aoc-kpi-body"><span class="aoc-kpi-label">@label</span><span class="aoc-kpi-value">@value</span><span class="aoc-kpi-sub">@subtitle</span></span></button>;
+
+    private static bool NeedsReview(LeadActivityOutcomeDto item) => !item.IsActive || string.IsNullOrWhiteSpace(item.Description) || string.IsNullOrWhiteSpace(item.OutcomeCode) || string.IsNullOrWhiteSpace(item.OutcomeName);
+    private static int RiskScore(LeadActivityOutcomeDto item) => (!item.IsActive ? 50 : 0) + (string.IsNullOrWhiteSpace(item.Description) ? 25 : 0) + (string.IsNullOrWhiteSpace(item.OutcomeCode) ? 40 : 0) + (string.IsNullOrWhiteSpace(item.OutcomeName) ? 40 : 0);
+    private static int QualityScore(LeadActivityOutcomeDto item) => Math.Clamp(100 - RiskScore(item), 0, 100);
+    private static string ReviewLevel(LeadActivityOutcomeDto item) => RiskScore(item) >= 60 ? "Critical" : RiskScore(item) >= 25 ? "Review" : "Healthy";
+    private static string ReviewTone(LeadActivityOutcomeDto item) => ReviewLevel(item) switch { "Critical" => "red", "Review" => "amber", _ => "green" };
+    private static string RecommendedAction(LeadActivityOutcomeDto item) => !item.IsActive ? "Activate this outcome if it should appear in the Add Activity dropdown." : string.IsNullOrWhiteSpace(item.Description) ? "Add a description so admins know when users should select this outcome." : item.SortOrder < 0 ? "Use a non-negative sort order for predictable dropdown sequencing." : "Monitor usage and keep codes stable for workflow automation and analytics.";
+    private static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private int NextSortOrderFor(string activityType) => string.IsNullOrWhiteSpace(activityType) ? 10 : (_items.Where(o => string.Equals(o.ActivityTypeCode, activityType, StringComparison.OrdinalIgnoreCase)).Select(o => o.SortOrder).DefaultIfEmpty(0).Max() + 10);
+    private static string? TrimOrNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string NormalizeCode(string value) => new(value.Trim().ToUpperInvariant().Select(ch => char.IsLetterOrDigit(ch) ? ch : '_').ToArray());
+    private string ActivityTypeIcon(string? type)
+    {
+        var configured = _activityTypes.FirstOrDefault(t => string.Equals(t.ActivityTypeCode, type, StringComparison.OrdinalIgnoreCase))?.IconCssClass;
+        if (!string.IsNullOrWhiteSpace(configured)) return IconName(configured);
+        return type?.ToLowerInvariant() switch { "call" => "bi-telephone", "email" => "bi-envelope", "meeting" => "bi-calendar-event", "task" => "bi-check2-square", "note" => "bi-sticky", "follow-up" => "bi-arrow-repeat", "sms" => "bi-chat-dots", "workflow" => "bi-diagram-3", "portal" => "bi-window", _ => "bi-ui-checks-grid" };
+    }
+
+    private static string IconName(string css) => css.Split(' ', StringSplitOptions.RemoveEmptyEntries).LastOrDefault(x => x.StartsWith("bi-", StringComparison.OrdinalIgnoreCase)) ?? "bi-ui-checks-grid";
+
+    private static RenderFragment StatusBadge(LeadActivityOutcomeDto item) => @<span class="aoc-pill @(item.IsActive ? "aoc-pill--green" : "aoc-pill--neutral")">@(item.IsActive ? "Active" : "Inactive")</span>;
+    private static RenderFragment ReviewBadge(LeadActivityOutcomeDto item) => @<span class="aoc-risk-badge aoc-risk-badge--@ReviewTone(item)"><i class="bi @(ReviewTone(item) == "red" ? "bi-exclamation-octagon" : "bi-shield-check")" aria-hidden="true"></i>@ReviewLevel(item)</span>;
+
+    private void ShowToast(string message, string cssClass)
+    {
+        _toasts.Add(new(Guid.NewGuid(), message.Length <= 160 ? message : $"{message[..157]}...", cssClass));
+        if (_toasts.Count > 4) _toasts.RemoveAt(0);
+    }
+
+    private void DismissToast(Guid id) => _toasts.RemoveAll(t => t.Id == id);
+
+    private sealed class ActivityOutcomeFormModel
+    {
+        [Required(ErrorMessage = "Activity Type is required.")]
+        [StringLength(50, ErrorMessage = "Activity Type cannot exceed 50 characters.")]
+        public string ActivityTypeCode { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Outcome Code is required.")]
+        [StringLength(50, ErrorMessage = "Outcome Code cannot exceed 50 characters.")]
+        public string OutcomeCode { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Outcome Name is required.")]
+        [StringLength(100, ErrorMessage = "Outcome Name cannot exceed 100 characters.")]
+        public string OutcomeName { get; set; } = string.Empty;
+
+        [StringLength(500, ErrorMessage = "Description cannot exceed 500 characters.")]
+        public string? Description { get; set; }
+
+        [Range(0, int.MaxValue, ErrorMessage = "Sort Order must be 0 or greater.")]
+        public int SortOrder { get; set; }
+
+        public bool IsActive { get; set; } = true;
+    }
+
+    private sealed record TabDef(string Key, string Label, string Icon);
+    private sealed record InsightDef(string Title, string Description, string Icon);
+    private sealed record ActivityTypeGroup(string Name, int Count, int Active, int Review, int Percent);
+    private sealed record ToastMessage(Guid Id, string Message, string CssClass);
+}

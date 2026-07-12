@@ -27,6 +27,9 @@ public sealed class BillingAccountService : IBillingAccountService
     public Task<PagedResult<BillingAccountDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 250, CancellationToken cancellationToken = default)
         => _repository.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
 
+    public Task<IReadOnlyList<BillingModeDashboardRowDto>> GetBillingModeDashboardAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetBillingModeDashboardAsync(tenantId, cancellationToken);
+
     public async Task<Guid> CreateAsync(CreateBillingAccountRequest request, CancellationToken cancellationToken = default)
     {
         // Enterprise rule: a Billing Account must never be orphaned. It requires a parent

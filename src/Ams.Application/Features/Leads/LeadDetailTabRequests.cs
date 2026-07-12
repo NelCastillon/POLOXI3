@@ -71,6 +71,7 @@ public class CreateLeadCommunicationRequest
 {
     public Guid TenantId { get; set; }
     public Guid LeadId { get; set; }
+    public Guid? MessageThreadId { get; set; }
 
     [Required, StringLength(50)]
     public string Channel { get; set; } = string.Empty;
@@ -81,10 +82,20 @@ public class CreateLeadCommunicationRequest
     [Required, StringLength(2000)]
     public string Preview { get; set; } = string.Empty;
 
+    [Required, StringLength(50)]
+    public string Direction { get; set; } = "Outbound";
+
+    [Required, StringLength(50)]
+    public string DeliveryStatus { get; set; } = "Delivered";
+
+    [Required, StringLength(50)]
+    public string EngagementStatus { get; set; } = "Open";
+
     public Guid? SentByUserId { get; set; }
     public DateTime SentAt { get; set; } = DateTime.UtcNow;
     public bool Opened { get; set; }
     public bool Clicked { get; set; }
+    public bool IsAutomated { get; set; }
 }
 
 public sealed class UpdateLeadCommunicationRequest : CreateLeadCommunicationRequest
@@ -97,9 +108,16 @@ public class CreateLeadCampaignEnrollmentRequest
 {
     public Guid TenantId { get; set; }
     public Guid LeadId { get; set; }
+    public Guid? CampaignId { get; set; }
 
     [Required, StringLength(200)]
     public string CampaignName { get; set; } = string.Empty;
+
+    [Required, StringLength(50)]
+    public string? CampaignType { get; set; }
+
+    [Required, StringLength(150)]
+    public string? Segment { get; set; }
 
     [Required, StringLength(50)]
     public string Status { get; set; } = "Active";
@@ -114,6 +132,15 @@ public class CreateLeadCampaignEnrollmentRequest
 
     [Range(0, int.MaxValue)]
     public int Clicks { get; set; }
+
+    [Range(0, 100)]
+    public decimal OpenRate { get; set; }
+
+    [Range(0, int.MaxValue)]
+    public int Conversions { get; set; }
+
+    [Range(0, 999999999)]
+    public decimal Revenue { get; set; }
 
     public DateTime? LastTouch { get; set; }
     public Guid? CreatedByUserId { get; set; }

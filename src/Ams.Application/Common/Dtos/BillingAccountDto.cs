@@ -18,3 +18,18 @@ public sealed class BillingAccountDto
     public string? MainEmail { get; set; }
     public string? MainPhone { get; set; }
 }
+
+public sealed class BillingModeDashboardRowDto
+{
+    public Guid AccountId { get; set; }
+    public Guid TenantId { get; set; }
+    public string AccountNumber { get; set; } = string.Empty;
+    public string AccountName { get; set; } = string.Empty;
+    public string BillingModeCode { get; set; } = string.Empty;
+    public decimal BilledAmount { get; set; }
+    public decimal OutstandingAmount { get; set; }
+    public decimal CreditLimit { get; set; }
+    public bool AutopayEnrolled { get; set; }
+    public string StatusCode { get; set; } = string.Empty;
+    public DateTime? NextRemittanceDueDate { get; set; }
+}

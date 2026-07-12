@@ -75,7 +75,7 @@
                         <div class="um-field">
                             <label>Status <span class="text-danger">*</span></label>
                             <InputSelect class="form-select" @bind-Value="_form.StatusCode">
-                                @foreach (var status in _statuses)
+                    @foreach (var status in StatusOptions)
                                 {
                                     <option value="@status">@status</option>
                                 }
@@ -145,7 +145,7 @@
     <section class="drr-enterprise-search" aria-label="Recognition filters">
         <div class="drr-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
         <div class="drr-search-body"><label for="drr-search">Search recognition entries</label><input id="drr-search" class="drr-search-input" type="search" placeholder="Search status, schedule, amount, journal, or date..." @bind="SearchFilter" @bind:event="oninput" /><span class="drr-search-hint">Filters apply instantly across synchronized recognition data.</span></div>
-        <select class="drr-filter-select" @bind="StatusFilter" aria-label="Status filter"><option value="">All statuses</option>@foreach (var status in _statuses) { <option value="@status">@status</option> }</select>
+        <select class="drr-filter-select" @bind="StatusFilter" aria-label="Status filter"><option value="">All statuses</option>@foreach (var status in StatusOptions) { <option value="@status">@status</option> }</select>
         <select class="drr-filter-select" @bind="ScheduleFilter" aria-label="Schedule filter"><option value="">All schedules</option>@foreach (var schedule in _schedules) { <option value="@schedule.DeferredRevenueScheduleId.ToString()">@ShortId(schedule.DeferredRevenueScheduleId)</option> }</select>
         <div class="drr-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
     </section>
@@ -233,7 +233,7 @@
     private string _toastKind = "success";
     private string? _loadError;
     private string? _formError;
-    private readonly List<string> _statuses = ["Pending", "Approved", "Posted", "Voided"];
+    private IEnumerable<string> StatusOptions => DistinctOptions(_items.Select(x => x.StatusCode), _form.StatusCode, _statusFilter, _pendingStatus);
 
     private IEnumerable<DeferredRevenueRecognitionDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
     private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
@@ -372,7 +372,7 @@
         _busy = true;
         try
         {
-            await Api.UpdateDeferredRevenueRecognitionAsync(_statusTarget.RecognitionId, new UpdateDeferredRevenueRecognitionRequest { TenantId = _tenantId, RecognitionId = _statusTarget.RecognitionId, DeferredRevenueScheduleId = _statusTarget.DeferredRevenueScheduleId, RecognitionDate = _statusTarget.RecognitionDate, Amount = _statusTarget.Amount, JournalEntryId = _pendingStatus == "Posted" ? (_statusTarget.JournalEntryId ?? Guid.NewGuid()) : _statusTarget.JournalEntryId, StatusCode = _pendingStatus, ModifiedByUserId = _tenantAdminUserId });
+            await Api.UpdateDeferredRevenueRecognitionAsync(_statusTarget.RecognitionId, new UpdateDeferredRevenueRecognitionRequest { TenantId = _tenantId, RecognitionId = _statusTarget.RecognitionId, DeferredRevenueScheduleId = _statusTarget.DeferredRevenueScheduleId, RecognitionDate = _statusTarget.RecognitionDate, Amount = _statusTarget.Amount, JournalEntryId = _statusTarget.JournalEntryId, StatusCode = _pendingStatus, ModifiedByUserId = _tenantAdminUserId });
             ShowToast($"Recognition entry marked {_pendingStatus.ToLowerInvariant()}.", "success");
             _showStatusConfirm = false;
             _statusTarget = null;
@@ -413,6 +413,7 @@
     private string ScheduleProgress(Guid scheduleId) => $"{ScheduleProgressPercent(scheduleId)}%";
     private int ScheduleProgressPercent(Guid scheduleId) { var schedule = _schedules.FirstOrDefault(x => x.DeferredRevenueScheduleId == scheduleId); return schedule is null || schedule.TotalAmount <= 0 ? 0 : Math.Clamp((int)Math.Round(schedule.RecognizedAmount * 100m / schedule.TotalAmount), 0, 100); }
     private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static IReadOnlyList<string> DistinctOptions(IEnumerable<string?> values, params string?[] additionalValues) => values.Concat(additionalValues).Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
     private static int StatusSort(string status) => status switch { "Pending" => 0, "Approved" => 1, "Posted" => 2, "Voided" => 3, _ => 4 };
     private static bool CanApprove(DeferredRevenueRecognitionDto item) => item.StatusCode == "Pending";
     private static bool CanPost(DeferredRevenueRecognitionDto item) => item.StatusCode is "Approved" or "Pending";

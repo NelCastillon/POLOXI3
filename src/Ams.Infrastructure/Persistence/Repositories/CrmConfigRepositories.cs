@@ -257,6 +257,180 @@ public sealed class AssignmentRuleRepository : IAssignmentRuleRepository
     }
 }
 
+public sealed class LeadActivityOutcomeRepository : ILeadActivityOutcomeRepository
+{
+    private readonly ISqlConnectionFactory _cf;
+    public LeadActivityOutcomeRepository(ISqlConnectionFactory cf) => _cf = cf;
+    private const string Cols = "ActivityOutcomeId, TenantId, ActivityTypeCode, OutcomeCode, OutcomeName, Description, SortOrder, IsActive";
+
+    public async Task<LeadActivityOutcomeDto?> GetByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        return await cn.QuerySingleOrDefaultAsync<LeadActivityOutcomeDto>(new CommandDefinition($"SELECT {Cols} FROM CRM.LeadActivityOutcome WHERE ActivityOutcomeId=@Id AND IsDeleted=0;", new { Id = id }, cancellationToken: ct));
+    }
+
+    public async Task<PagedResult<LeadActivityOutcomeDto>> SearchAsync(Guid tenantId, string? searchTerm, string? activityTypeCode = null, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default)
+    {
+        const string sql = @"
+SELECT ActivityOutcomeId, TenantId, ActivityTypeCode, OutcomeCode, OutcomeName, Description, SortOrder, IsActive
+FROM CRM.LeadActivityOutcome
+WHERE TenantId = @TenantId
+  AND IsDeleted = 0
+  AND (@ActivityTypeCode IS NULL OR @ActivityTypeCode = '' OR ActivityTypeCode = @ActivityTypeCode)
+  AND (@SearchTerm IS NULL OR @SearchTerm = '' OR OutcomeName LIKE '%' + @SearchTerm + '%' OR OutcomeCode LIKE '%' + @SearchTerm + '%' OR ActivityTypeCode LIKE '%' + @SearchTerm + '%' OR Description LIKE '%' + @SearchTerm + '%')
+ORDER BY ActivityTypeCode ASC, SortOrder ASC, OutcomeName ASC OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+
+SELECT COUNT(1)
+FROM CRM.LeadActivityOutcome
+WHERE TenantId = @TenantId
+  AND IsDeleted = 0
+  AND (@ActivityTypeCode IS NULL OR @ActivityTypeCode = '' OR ActivityTypeCode = @ActivityTypeCode)
+  AND (@SearchTerm IS NULL OR @SearchTerm = '' OR OutcomeName LIKE '%' + @SearchTerm + '%' OR OutcomeCode LIKE '%' + @SearchTerm + '%' OR ActivityTypeCode LIKE '%' + @SearchTerm + '%' OR Description LIKE '%' + @SearchTerm + '%');";
+
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new
+        {
+            TenantId = tenantId,
+            SearchTerm = searchTerm ?? string.Empty,
+            ActivityTypeCode = activityTypeCode ?? string.Empty,
+            Offset = (Math.Max(pageNumber, 1) - 1) * Math.Max(pageSize, 1),
+            PageSize = Math.Max(pageSize, 1)
+        }, cancellationToken: ct));
+        var items = (await multi.ReadAsync<LeadActivityOutcomeDto>()).AsList();
+        var total = await multi.ReadSingleAsync<int>();
+        return new PagedResult<LeadActivityOutcomeDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
+    }
+
+    public async Task<Guid> CreateAsync(CreateLeadActivityOutcomeRequest r, CancellationToken ct = default)
+    {
+        const string sql = @"
+INSERT INTO CRM.LeadActivityOutcome (ActivityOutcomeId,TenantId,ActivityTypeCode,OutcomeCode,OutcomeName,Description,SortOrder,IsActive,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES (@Id,@TenantId,@ActivityTypeCode,@OutcomeCode,@OutcomeName,@Description,@SortOrder,1,SYSUTCDATETIME(),@CreatedByUserId,0);";
+        var id = Guid.NewGuid();
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, r.TenantId, ActivityTypeCode = r.ActivityTypeCode.Trim(), OutcomeCode = r.OutcomeCode.Trim(), OutcomeName = r.OutcomeName.Trim(), Description = TrimOrNull(r.Description), r.SortOrder, r.CreatedByUserId }, cancellationToken: ct));
+        return id;
+    }
+
+    public async Task UpdateAsync(Guid id, UpdateLeadActivityOutcomeRequest r, CancellationToken ct = default)
+    {
+        const string sql = @"
+UPDATE CRM.LeadActivityOutcome
+SET ActivityTypeCode=@ActivityTypeCode,
+    OutcomeCode=@OutcomeCode,
+    OutcomeName=@OutcomeName,
+    Description=@Description,
+    SortOrder=@SortOrder,
+    IsActive=@IsActive,
+    IsDeleted=0,
+    ModifiedDateUtc=SYSUTCDATETIME(),
+    ModifiedByUserId=@ModifiedByUserId
+WHERE ActivityOutcomeId=@Id AND IsDeleted=0;";
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, ActivityTypeCode = r.ActivityTypeCode.Trim(), OutcomeCode = r.OutcomeCode.Trim(), OutcomeName = r.OutcomeName.Trim(), Description = TrimOrNull(r.Description), r.SortOrder, r.IsActive, r.ModifiedByUserId }, cancellationToken: ct));
+    }
+
+    public async Task DeleteAsync(Guid id, Guid? modifiedByUserId = null, CancellationToken ct = default)
+    {
+        const string sql = @"
+UPDATE CRM.LeadActivityOutcome
+SET IsDeleted=1,
+    IsActive=0,
+    ModifiedDateUtc=SYSUTCDATETIME(),
+    ModifiedByUserId=@ModifiedByUserId
+WHERE ActivityOutcomeId=@Id AND IsDeleted=0;";
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, ModifiedByUserId = modifiedByUserId }, cancellationToken: ct));
+    }
+
+    private static string? TrimOrNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+}
+
+public sealed class LeadActivityTypeRepository : ILeadActivityTypeRepository
+{
+    private readonly ISqlConnectionFactory _cf;
+    public LeadActivityTypeRepository(ISqlConnectionFactory cf) => _cf = cf;
+    private const string Cols = "ActivityTypeId, TenantId, ActivityTypeCode, ActivityTypeName, IconCssClass, Description, SortOrder, IsActive, CreatedDateUtc";
+
+    public async Task<LeadActivityTypeDto?> GetByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        return await cn.QuerySingleOrDefaultAsync<LeadActivityTypeDto>(new CommandDefinition($"SELECT {Cols} FROM CRM.LeadActivityType WHERE ActivityTypeId=@Id AND IsDeleted=0;", new { Id = id }, cancellationToken: ct));
+    }
+
+    public async Task<PagedResult<LeadActivityTypeDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default)
+    {
+        const string sql = @"
+SELECT ActivityTypeId, TenantId, ActivityTypeCode, ActivityTypeName, IconCssClass, Description, SortOrder, IsActive, CreatedDateUtc
+FROM CRM.LeadActivityType
+WHERE TenantId = @TenantId
+  AND IsDeleted = 0
+  AND (@SearchTerm IS NULL OR @SearchTerm = '' OR ActivityTypeName LIKE '%' + @SearchTerm + '%' OR ActivityTypeCode LIKE '%' + @SearchTerm + '%' OR Description LIKE '%' + @SearchTerm + '%')
+ORDER BY SortOrder ASC, ActivityTypeName ASC OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+
+SELECT COUNT(1)
+FROM CRM.LeadActivityType
+WHERE TenantId = @TenantId
+  AND IsDeleted = 0
+  AND (@SearchTerm IS NULL OR @SearchTerm = '' OR ActivityTypeName LIKE '%' + @SearchTerm + '%' OR ActivityTypeCode LIKE '%' + @SearchTerm + '%' OR Description LIKE '%' + @SearchTerm + '%');";
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new
+        {
+            TenantId = tenantId,
+            SearchTerm = searchTerm ?? string.Empty,
+            Offset = (Math.Max(pageNumber, 1) - 1) * Math.Max(pageSize, 1),
+            PageSize = Math.Max(pageSize, 1)
+        }, cancellationToken: ct));
+        var items = (await multi.ReadAsync<LeadActivityTypeDto>()).AsList();
+        var total = await multi.ReadSingleAsync<int>();
+        return new PagedResult<LeadActivityTypeDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
+    }
+
+    public async Task<Guid> CreateAsync(CreateLeadActivityTypeRequest r, CancellationToken ct = default)
+    {
+        const string sql = @"
+INSERT INTO CRM.LeadActivityType (ActivityTypeId,TenantId,ActivityTypeCode,ActivityTypeName,IconCssClass,Description,SortOrder,IsActive,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES (@Id,@TenantId,@ActivityTypeCode,@ActivityTypeName,@IconCssClass,@Description,@SortOrder,1,SYSUTCDATETIME(),@CreatedByUserId,0);";
+        var id = Guid.NewGuid();
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, r.TenantId, ActivityTypeCode = r.ActivityTypeCode.Trim(), ActivityTypeName = r.ActivityTypeName.Trim(), IconCssClass = TrimOrNull(r.IconCssClass), Description = TrimOrNull(r.Description), r.SortOrder, r.CreatedByUserId }, cancellationToken: ct));
+        return id;
+    }
+
+    public async Task UpdateAsync(Guid id, UpdateLeadActivityTypeRequest r, CancellationToken ct = default)
+    {
+        const string sql = @"
+UPDATE CRM.LeadActivityType
+SET ActivityTypeCode=@ActivityTypeCode,
+    ActivityTypeName=@ActivityTypeName,
+    IconCssClass=@IconCssClass,
+    Description=@Description,
+    SortOrder=@SortOrder,
+    IsActive=@IsActive,
+    IsDeleted=0,
+    ModifiedDateUtc=SYSUTCDATETIME(),
+    ModifiedByUserId=@ModifiedByUserId
+WHERE ActivityTypeId=@Id AND IsDeleted=0;";
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, ActivityTypeCode = r.ActivityTypeCode.Trim(), ActivityTypeName = r.ActivityTypeName.Trim(), IconCssClass = TrimOrNull(r.IconCssClass), Description = TrimOrNull(r.Description), r.SortOrder, r.IsActive, r.ModifiedByUserId }, cancellationToken: ct));
+    }
+
+    public async Task DeleteAsync(Guid id, Guid? modifiedByUserId = null, CancellationToken ct = default)
+    {
+        const string sql = @"
+UPDATE CRM.LeadActivityType
+SET IsDeleted=1,
+    IsActive=0,
+    ModifiedDateUtc=SYSUTCDATETIME(),
+    ModifiedByUserId=@ModifiedByUserId
+WHERE ActivityTypeId=@Id AND IsDeleted=0;";
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, ModifiedByUserId = modifiedByUserId }, cancellationToken: ct));
+    }
+
+    private static string? TrimOrNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+}
+
 public sealed class CrmCustomFieldRepository : ICrmCustomFieldRepository
 {
     private readonly ISqlConnectionFactory _cf;

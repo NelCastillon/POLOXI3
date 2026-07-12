@@ -148,6 +148,46 @@ WHERE a.TenantId = @TenantId AND a.IsDeleted = 0
         return new PagedResult<BillingAccountDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
     }
 
+    public async Task<IReadOnlyList<BillingModeDashboardRowDto>> GetBillingModeDashboardAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        await EnsureSchemaAndSeedAsync(tenantId, cancellationToken);
+
+        const string sql = @"
+SELECT a.AccountId,
+       a.TenantId,
+       a.AccountNumber,
+       a.AccountName,
+       COALESCE(s.BillingModeCode, N'Direct Bill') AS BillingModeCode,
+       COALESCE(inv.BilledAmount, 0) AS BilledAmount,
+       COALESCE(inv.OutstandingAmount, 0) AS OutstandingAmount,
+       COALESCE(s.CreditLimit, 0) AS CreditLimit,
+       COALESCE(s.AutopayEnrolled, 0) AS AutopayEnrolled,
+       a.StatusCode,
+       CASE
+           WHEN COALESCE(s.BillingModeCode, N'Direct Bill') = N'Agency Bill' THEN inv.NextOpenDueDate
+           ELSE NULL
+       END AS NextRemittanceDueDate
+FROM Client.Account a
+LEFT JOIN Billing.AccountSettings s ON s.AccountId = a.AccountId AND s.IsDeleted = 0
+OUTER APPLY
+(
+    SELECT SUM(i.TotalAmount) AS BilledAmount,
+           SUM(i.BalanceAmount) AS OutstandingAmount,
+           MIN(CASE WHEN i.BalanceAmount > 0 THEN CAST(i.DueDate AS DATETIME2) END) AS NextOpenDueDate
+    FROM Billing.Invoice i
+    WHERE i.AccountId = a.AccountId
+      AND i.TenantId = a.TenantId
+      AND i.IsDeleted = 0
+) inv
+WHERE a.TenantId = @TenantId
+  AND a.IsDeleted = 0
+ORDER BY a.AccountName;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows = await cn.QueryAsync<BillingModeDashboardRowDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken));
+        return rows.AsList();
+    }
+
     public async Task<Guid> CreateAsync(CreateBillingAccountRequest request, CancellationToken cancellationToken = default)
     {
         if (request.AccountId == Guid.Empty) throw new InvalidOperationException("Account is required.");

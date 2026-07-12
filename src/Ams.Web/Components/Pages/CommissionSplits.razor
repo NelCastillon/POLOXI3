@@ -1,7 +1,11 @@
 @page "/commissions/splits-legacy"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Commissions
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 @inject ConfirmationDialogService Confirmations
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 
 <PageTitle>Split Commission Setup - AMS</PageTitle>
 
@@ -20,12 +24,12 @@
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
                         <div><label class="sp-lbl">Applies To</label>
                             <SfDropDownList TValue="string" TItem="string"
-                                DataSource='new[]{"New Business","Renewal","Both","Override Only"}'
+                                DataSource="AppliesOptions"
                                 @bind-Value="_editAppliesTo" Width="100%"></SfDropDownList>
                         </div>
                         <div><label class="sp-lbl">Split Type</label>
                             <SfDropDownList TValue="string" TItem="string"
-                                DataSource='new[]{"Fixed %","Tiered","Equal Share","Primary/Secondary","Custom"}'
+                                DataSource="SplitTypeOptions"
                                 @bind-Value="_editSplitType" Width="100%"></SfDropDownList>
                         </div>
                     </div>
@@ -41,7 +45,7 @@
                         <div class="sp-alloc-row">
                             <SfTextBox Value="@alloc.Name" ValueChanged="v => _editProducers[idx] = alloc with { Name = v }" Placeholder="Producer name..." Width="180px"></SfTextBox>
                             <SfDropDownList TValue="string" TItem="string" Value="@alloc.Role" ValueChanged="v => _editProducers[idx] = alloc with { Role = v }"
-                                DataSource='new[]{"Primary","Secondary","Branch Manager","House Account","Referral"}'
+                                DataSource="RoleOptions"
                                 Width="155px"></SfDropDownList>
                             <SfNumericTextBox TValue="decimal" Value="@alloc.Pct" ValueChanged="v => _editProducers[idx] = alloc with { Pct = v }" Format="N1" Min="0" Max="100" Width="80px"></SfNumericTextBox>
                             <span class="sp-pct-lbl">%</span>
@@ -119,23 +123,34 @@
 <!-- Toolbar -->
 <div class="sp-toolbar">
     <SfTextBox Placeholder="Search rule name..." @bind-Value="_searchTerm" Width="260px"></SfTextBox>
+    <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
     <select class="e-input sp-sel" @bind="_filterApplies">
         <option value="">All Types</option>
-        <option value="New Business">New Business</option>
-        <option value="Renewal">Renewal</option>
-        <option value="Both">Both</option>
-        <option value="Override Only">Override Only</option>
+        @foreach (var applies in AppliesOptions)
+        {
+            <option value="@applies">@applies</option>
+        }
     </select>
     <select class="e-input sp-sel" @bind="_filterStatus">
         <option value="">All Statuses</option>
-        <option value="Active">Active</option>
-        <option value="Draft">Draft</option>
-        <option value="Archived">Archived</option>
+        @foreach (var status in StatusOptions)
+        {
+            <option value="@status">@status</option>
+        }
     </select>
 </div>
 
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+}
+
 <!-- Rules grid -->
-@if (_rules.Count == 0)
+@if (_loading)
+{
+    <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading split rules...</span></div>
+}
+else if (_rules.Count == 0)
 {
     <div class="sp-empty-state">
         <i class="bi bi-scissors sp-es-icon" aria-hidden="true"></i>
@@ -221,6 +236,10 @@ else
 @code {
     private string? _searchTerm;
     private string _filterApplies = "", _filterStatus = "";
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private bool _loading;
+    private string? _loadError;
     private bool _showCreate;
     private SplitRule? _editRule;
     private string? _editName, _editAppliesTo = "Both", _editSplitType = "Fixed %";
@@ -228,32 +247,66 @@ else
     private DateTime _editEffective = DateTime.Today;
     private List<AllocRow> _editProducers = [];
     private EnterpriseToast _toast = default!;
+    private List<CommissionPlanDto> _plans = [];
+    private List<CommissionPayeeDto> _payees = [];
+    private List<CommissionSplitRuleDto> _ruleDtos = [];
 
-    private readonly List<SplitRule> _rules =
-    [
-        new(Guid.NewGuid(), "60/40 New Biz Sharing",     "New Business", "Fixed %",  [new("Sarah Chen","Primary",60m), new("Marcus Webb","Secondary",40m)], false, false, true,  "Active",  DateTime.Today.AddYears(-1)),
-        new(Guid.NewGuid(), "50/50 Renewal Split",        "Renewal",      "Fixed %",  [new("Sarah Chen","Primary",50m), new("Marcus Webb","Secondary",50m)], false, false, true,  "Active",  DateTime.Today.AddYears(-1)),
-        new(Guid.NewGuid(), "Branch Override - South",    "Both",         "Fixed %",  [new("Sarah Chen","Primary",60m), new("Marcus Webb","Secondary",30m), new("Branch Office","Branch Manager",10m)], true, false, true, "Active", DateTime.Today.AddYears(-1)),
-        new(Guid.NewGuid(), "House Account - Corp",       "Both",         "Fixed %",  [new("House Account","House Account",100m)], false, true, false, "Active",  DateTime.Today.AddYears(-1)),
-        new(Guid.NewGuid(), "Referral 3-Way",             "New Business", "Custom",   [new("Linda Torres","Primary",50m), new("Priya Patel","Secondary",30m), new("Tom Harris","Referral",20m)], false, false, false, "Active", DateTime.Today.AddMonths(-6)),
-        new(Guid.NewGuid(), "Equal Share 4-Producer",     "Both",         "Equal Share",[new("Producer A","Primary",25m),new("Producer B","Secondary",25m),new("Producer C","Secondary",25m),new("Producer D","Secondary",25m)], false, false, true, "Draft", DateTime.Today),
-    ];
+    private List<SplitRule> _rules = [];
+
+    private IReadOnlyList<string> AppliesOptions => DistinctOptions(_rules.Select(r => r.AppliesTo), _editAppliesTo, _filterApplies);
+    private IReadOnlyList<string> SplitTypeOptions => DistinctOptions(_rules.Select(r => r.SplitType), _editSplitType);
+    private IReadOnlyList<string> StatusOptions => DistinctOptions(_rules.Select(r => r.Status), _filterStatus);
+    private IReadOnlyList<string> RoleOptions => DistinctOptions(_rules.SelectMany(r => r.Allocations.Select(a => a.Role)), _editProducers.Select(p => p.Role).ToArray());
 
     private IEnumerable<SplitRule> FilteredRules => _rules.Where(r =>
         (string.IsNullOrEmpty(_searchTerm)    || r.Name.Contains(_searchTerm, StringComparison.OrdinalIgnoreCase)) &&
         (string.IsNullOrEmpty(_filterApplies) || r.AppliesTo == _filterApplies) &&
         (string.IsNullOrEmpty(_filterStatus)  || r.Status == _filterStatus));
 
-    protected override void OnInitialized() =>
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Commissions","/commissions"), new("Split Rules",""));
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Commissions","/commissions"), new("Split Rules", ""));
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            await Api.EnsureCommissionSplitRulesSeedAsync(_tenantId, _tenantAdminUserId);
+            var rulesTask = Api.SearchCommissionSplitRulesAsync(_tenantId, _searchTerm);
+            var plansTask = Api.SearchCommissionPlansAsync(_tenantId, null);
+            var payeesTask = Api.SearchCommissionPayeesAsync(_tenantId, null);
+            await Task.WhenAll(rulesTask, plansTask, payeesTask);
+            _ruleDtos = rulesTask.Result?.Items.ToList() ?? [];
+            _plans = plansTask.Result?.Items.ToList() ?? [];
+            _payees = payeesTask.Result?.Items.ToList() ?? [];
+            _rules = _ruleDtos.Select(ToSplitRule).ToList();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Commission split rules failed to load: {ex.Message}";
+            _rules = [];
+            await _toast.ShowAsync(new ToastModel { Content = $"Load failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
 
     void NewRule()
     {
         _editRule = null; _editName = null;
-        _editAppliesTo = "Both"; _editSplitType = "Fixed %";
+        _editAppliesTo = _plans.FirstOrDefault()?.PlanTypeCode ?? AppliesOptions.FirstOrDefault() ?? "Standard"; _editSplitType = SplitTypeOptions.FirstOrDefault() ?? "Producer";
         _editBranchOverride = _editHouseAccount = _editSharedClawback = false;
         _editEffective = DateTime.Today;
-        _editProducers = [new("", "Primary", 60m), new("", "Secondary", 40m)];
+        _editProducers = [new(PayeeLabel(null), RoleOptions.FirstOrDefault() ?? "Producer", 100m)];
         _showCreate = true;
     }
 
@@ -270,15 +323,53 @@ else
     async Task SaveRuleAsync()
     {
         if (string.IsNullOrWhiteSpace(_editName) || _editProducers.Sum(p => p.Pct) != 100) return;
-        var allocs = _editProducers.Select(p => new AllocRow(p.Name, p.Role, p.Pct)).ToList();
+        var primaryAlloc = _editProducers.OrderByDescending(p => p.Pct).FirstOrDefault();
+        var plan = _plans.FirstOrDefault(p => string.Equals(p.PlanTypeCode, _editAppliesTo, StringComparison.OrdinalIgnoreCase)) ?? _plans.FirstOrDefault();
+        if (plan is null)
+        {
+            await _toast.ShowAsync(new ToastModel { Content = "Save failed: no commission plan is available for this tenant.", CssClass = "e-toast-danger" });
+            return;
+        }
+
+        var payeeId = PayeeIdFromLabel(primaryAlloc?.Name);
         if (_editRule is null)
-            _rules.Insert(0, new(Guid.NewGuid(), _editName, _editAppliesTo!, _editSplitType!, allocs, _editBranchOverride, _editHouseAccount, _editSharedClawback, "Draft", _editEffective));
+        {
+            await Api.CreateCommissionSplitRuleAsync(new CreateCommissionSplitRuleRequest
+            {
+                TenantId = _tenantId,
+                CommissionPlanId = plan.CommissionPlanId,
+                RuleName = _editName,
+                SplitTypeCode = _editSplitType!,
+                PayeeId = payeeId,
+                SplitPct = primaryAlloc?.Pct ?? 100m,
+                OverrideRatePct = _editBranchOverride ? primaryAlloc?.Pct : null,
+                EffectiveStartDate = DateOnly.FromDateTime(_editEffective),
+                StatusCode = "Draft",
+                CreatedByUserId = _tenantAdminUserId
+            });
+        }
         else
         {
-            var i = _rules.IndexOf(_editRule);
-            if (i >= 0) _rules[i] = _editRule with { Name = _editName, AppliesTo = _editAppliesTo!, SplitType = _editSplitType!, Allocations = allocs, BranchOverride = _editBranchOverride, HouseAccount = _editHouseAccount, SharedClawback = _editSharedClawback, Effective = _editEffective };
+            var source = _ruleDtos.First(r => r.SplitRuleId == _editRule.Id);
+            await Api.UpdateCommissionSplitRuleAsync(_editRule.Id, new UpdateCommissionSplitRuleRequest
+            {
+                SplitRuleId = _editRule.Id,
+                TenantId = _tenantId,
+                CommissionPlanId = plan.CommissionPlanId,
+                RuleName = _editName,
+                SplitTypeCode = _editSplitType!,
+                PayeeId = payeeId,
+                SplitPct = primaryAlloc?.Pct ?? source.SplitPct,
+                OverrideRatePct = _editBranchOverride ? primaryAlloc?.Pct : source.OverrideRatePct,
+                Priority = source.Priority,
+                EffectiveStartDate = DateOnly.FromDateTime(_editEffective),
+                EffectiveEndDate = source.EffectiveEndDate,
+                StatusCode = source.StatusCode,
+                ModifiedByUserId = _tenantAdminUserId
+            });
         }
         _showCreate = false;
+        await LoadAsync();
         await _toast.ShowAsync(new ToastModel { Content = "Split rule saved.", CssClass = "e-toast-success" });
     }
 
@@ -304,4 +395,29 @@ else
         public int ProducerCount => Allocations.Count;
         public string Status { get; set; } = Status;
     }
+
+    private SplitRule ToSplitRule(CommissionSplitRuleDto rule)
+    {
+        var plan = _plans.FirstOrDefault(p => p.CommissionPlanId == rule.CommissionPlanId);
+        var allocation = new AllocRow(PayeeLabel(rule.PayeeId), rule.SplitTypeCode, rule.SplitPct);
+        return new(rule.SplitRuleId, rule.RuleName, plan?.PlanTypeCode ?? rule.SplitTypeCode, rule.SplitTypeCode, [allocation], rule.OverrideRatePct.HasValue, plan?.HouseAccountRules ?? false, false, rule.StatusCode, rule.EffectiveStartDate.ToDateTime(TimeOnly.MinValue));
+    }
+
+    private string PayeeLabel(Guid? payeeId)
+    {
+        if (payeeId is null) return "Unassigned payee";
+        var payee = _payees.FirstOrDefault(p => p.PayeeId == payeeId.Value);
+        return payee is null ? payeeId.Value.ToString()[..8] : $"{payee.PayeeTypeCode} {payee.UserId.ToString()[..8]}";
+    }
+
+    private Guid? PayeeIdFromLabel(string? label)
+        => _payees.FirstOrDefault(p => string.Equals(PayeeLabel(p.PayeeId), label, StringComparison.OrdinalIgnoreCase))?.PayeeId;
+
+    private static IReadOnlyList<string> DistinctOptions(IEnumerable<string?> values, params string?[] additionalValues)
+        => values.Concat(additionalValues)
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(v => v)
+            .ToList();
 }

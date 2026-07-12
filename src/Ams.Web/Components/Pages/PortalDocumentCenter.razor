@@ -41,12 +41,10 @@
                         <div class="pd-field pd-field--full">
                             <label>Document Name <span class="text-danger">*</span></label>
                             <InputText class="form-control" @bind-Value="_shareForm.Name" placeholder="Riverside BOP policy" />
-                            <ValidationMessage For="() => _shareForm.Name" class="text-danger" />
                         </div>
                         <div class="pd-field">
                             <label>Account Name <span class="text-danger">*</span></label>
                             <InputText class="form-control" @bind-Value="_shareForm.AccountName" placeholder="Riverside Construction LLC" />
-                            <ValidationMessage For="() => _shareForm.AccountName" class="text-danger" />
                         </div>
                         <div class="pd-field">
                             <label>Category <span class="text-danger">*</span></label>
@@ -56,7 +54,6 @@
                                     <option value="@option">@option</option>
                                 }
                             </InputSelect>
-                            <ValidationMessage For="() => _shareForm.Category" class="text-danger" />
                         </div>
                         <div class="pd-field">
                             <label>File Type <span class="text-danger">*</span></label>
@@ -66,12 +63,10 @@
                                     <option value="@option">@option</option>
                                 }
                             </InputSelect>
-                            <ValidationMessage For="() => _shareForm.FileType" class="text-danger" />
                         </div>
                         <div class="pd-field">
                             <label>File Size (KB) <span class="text-danger">*</span></label>
                             <InputNumber class="form-control" @bind-Value="_shareForm.FileSizeKb" />
-                            <ValidationMessage For="() => _shareForm.FileSizeKb" class="text-danger" />
                         </div>
                         <div class="pd-field">
                             <label>Visibility <span class="text-danger">*</span></label>
@@ -81,7 +76,6 @@
                                     <option value="@option">@option</option>
                                 }
                             </InputSelect>
-                            <ValidationMessage For="() => _shareForm.Visibility" class="text-danger" />
                         </div>
                         <div class="pd-field">
                             <label>Shared Date</label>
@@ -132,12 +126,10 @@
                         <div class="pd-field pd-field--full">
                             <label>Document Name <span class="text-danger">*</span></label>
                             <InputText class="form-control" @bind-Value="_editForm.Name" />
-                            <ValidationMessage For="() => _editForm.Name" class="text-danger" />
                         </div>
                         <div class="pd-field">
                             <label>Account Name <span class="text-danger">*</span></label>
                             <InputText class="form-control" @bind-Value="_editForm.AccountName" />
-                            <ValidationMessage For="() => _editForm.AccountName" class="text-danger" />
                         </div>
                         <div class="pd-field">
                             <label>Category <span class="text-danger">*</span></label>
@@ -147,7 +139,6 @@
                                     <option value="@option">@option</option>
                                 }
                             </InputSelect>
-                            <ValidationMessage For="() => _editForm.Category" class="text-danger" />
                         </div>
                         <div class="pd-field">
                             <label>File Type <span class="text-danger">*</span></label>
@@ -157,12 +148,10 @@
                                     <option value="@option">@option</option>
                                 }
                             </InputSelect>
-                            <ValidationMessage For="() => _editForm.FileType" class="text-danger" />
                         </div>
                         <div class="pd-field">
                             <label>File Size (KB) <span class="text-danger">*</span></label>
                             <InputNumber class="form-control" @bind-Value="_editForm.FileSizeKb" />
-                            <ValidationMessage For="() => _editForm.FileSizeKb" class="text-danger" />
                         </div>
                         <div class="pd-field">
                             <label>Visibility <span class="text-danger">*</span></label>
@@ -172,7 +161,6 @@
                                     <option value="@option">@option</option>
                                 }
                             </InputSelect>
-                            <ValidationMessage For="() => _editForm.Visibility" class="text-danger" />
                         </div>
                         <div class="pd-field">
                             <label>Shared Date</label>
@@ -181,12 +169,10 @@
                         <div class="pd-field">
                             <label>Views <span class="text-danger">*</span></label>
                             <InputNumber class="form-control" @bind-Value="_editForm.ViewCount" />
-                            <ValidationMessage For="() => _editForm.ViewCount" class="text-danger" />
                         </div>
                         <div class="pd-field">
                             <label>Downloads <span class="text-danger">*</span></label>
                             <InputNumber class="form-control" @bind-Value="_editForm.DownloadCount" />
-                            <ValidationMessage For="() => _editForm.DownloadCount" class="text-danger" />
                         </div>
                     </div>
                 </div>
@@ -468,12 +454,12 @@
 
 @code {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private static readonly string[] CategoryOptions = ["Policy", "Certificate", "ID Card", "Invoice", "Form", "Claims"];
     private static readonly string[] VisibilityOptions = ["Shared", "Agency Only"];
     private static readonly string[] FileTypeOptions = ["PDF", "DOCX", "XLSX", "PNG", "JPG"];
 
     private Guid _tenantId;
     private Guid _tenantAdminUserId;
+    private List<DocumentConfigItemDto> _documentCategories = [];
     private List<PortalAdminDocumentDto> _docs = [];
     private PortalAdminDocumentDto? _selected;
     private string _search = string.Empty;
@@ -527,6 +513,7 @@
         _ => "Portal document register"
     };
     private TabDef[] Tabs => [new("all", "All", "bi-folder2-open"), new("shared", "Shared", "bi-cloud-check"), new("agency", "Agency Only", "bi-lock"), new("certificates", "Certificates", "bi-file-earmark-text"), new("engaged", "Engaged", "bi-eye")];
+    private IEnumerable<string> CategoryOptions => _documentCategories.Select(CategoryLabel).Where(c => !string.IsNullOrWhiteSpace(c));
     private IEnumerable<Signal> ImportanceSignals => BuildImportanceSignals();
     private KpiCard[] Kpis =>
     [
@@ -559,8 +546,12 @@
         {
             _loading = true;
             _loadError = null;
-            var result = await Api.SearchPortalAdminDocumentsAsync(_tenantId, _search);
+            var documentsTask = Api.SearchPortalAdminDocumentsAsync(_tenantId, _search);
+            var categoriesTask = Api.SearchDocumentConfigItemsAsync(_tenantId, "DocumentCategory", pageSize: 1000);
+            await Task.WhenAll(documentsTask, categoriesTask);
+            var result = documentsTask.Result;
             _docs = result?.Items.ToList() ?? [];
+            _documentCategories = categoriesTask.Result?.Items.Where(c => c.IsActive).OrderBy(c => c.SortOrder).ThenBy(c => c.Name).ToList() ?? [];
             if (_selected is not null)
             {
                 _selected = _docs.FirstOrDefault(d => d.Id == _selected.Id);
@@ -579,7 +570,7 @@
 
     private void OpenShare()
     {
-        _shareForm = new DocumentFormModel { SharedAt = DateTime.Today };
+        _shareForm = new DocumentFormModel { Category = CategoryOptions.FirstOrDefault() ?? string.Empty, SharedAt = DateTime.Today };
         _selectedFileName = null;
         _showShare = true;
     }
@@ -589,7 +580,7 @@
         if (_saving) return;
         _showShare = false;
         _selectedFileName = null;
-        _shareForm = new DocumentFormModel { SharedAt = DateTime.Today };
+        _shareForm = new DocumentFormModel { Category = CategoryOptions.FirstOrDefault() ?? string.Empty, SharedAt = DateTime.Today };
     }
 
     private void OpenEdit(PortalAdminDocumentDto doc)
@@ -862,6 +853,8 @@
         var ext = Path.GetExtension(fileName).TrimStart('.').ToUpperInvariant();
         return string.IsNullOrWhiteSpace(ext) ? "PDF" : ext;
     }
+
+    private static string CategoryLabel(DocumentConfigItemDto category) => string.IsNullOrWhiteSpace(category.Name) ? category.Code : category.Name;
 
     private void ShowValidationToast(EditContext _) => ShowToast("Please fix validation errors before saving.", "danger");
 

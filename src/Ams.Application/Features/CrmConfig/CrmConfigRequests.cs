@@ -93,6 +93,42 @@ public sealed record UpdateAssignmentRuleRequest(
     [StringLength(500)] string? Description,
     bool IsActive);
 
+public sealed record CreateLeadActivityOutcomeRequest(
+    Guid TenantId,
+    [Required, StringLength(50)] string ActivityTypeCode,
+    [Required, StringLength(50)] string OutcomeCode,
+    [Required, StringLength(100)] string OutcomeName,
+    [StringLength(500)] string? Description,
+    [Range(0, int.MaxValue)] int SortOrder,
+    Guid? CreatedByUserId = null);
+
+public sealed record UpdateLeadActivityOutcomeRequest(
+    [Required, StringLength(50)] string ActivityTypeCode,
+    [Required, StringLength(50)] string OutcomeCode,
+    [Required, StringLength(100)] string OutcomeName,
+    [StringLength(500)] string? Description,
+    [Range(0, int.MaxValue)] int SortOrder,
+    bool IsActive,
+    Guid? ModifiedByUserId = null);
+
+public sealed record CreateLeadActivityTypeRequest(
+    Guid TenantId,
+    [Required, StringLength(50)] string ActivityTypeCode,
+    [Required, StringLength(100)] string ActivityTypeName,
+    [StringLength(100)] string? IconCssClass,
+    [StringLength(500)] string? Description,
+    [Range(0, int.MaxValue)] int SortOrder,
+    Guid? CreatedByUserId = null);
+
+public sealed record UpdateLeadActivityTypeRequest(
+    [Required, StringLength(50)] string ActivityTypeCode,
+    [Required, StringLength(100)] string ActivityTypeName,
+    [StringLength(100)] string? IconCssClass,
+    [StringLength(500)] string? Description,
+    [Range(0, int.MaxValue)] int SortOrder,
+    bool IsActive,
+    Guid? ModifiedByUserId = null);
+
 public sealed record CreateCrmCustomFieldRequest(
     Guid TenantId,
     [Required, StringLength(80)] string FieldCode,

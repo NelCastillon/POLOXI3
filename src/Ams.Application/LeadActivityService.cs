@@ -30,6 +30,9 @@ public sealed class LeadActivityService : ILeadActivityService
     public Task<IReadOnlyList<LeadActivityDto>> GetByLeadIdAsync(Guid leadId, CancellationToken cancellationToken = default)
         => _repository.GetByLeadIdAsync(leadId, cancellationToken);
 
+    public Task<IReadOnlyList<LeadActivityOutcomeDto>> GetOutcomesAsync(Guid tenantId, string? activityTypeCode = null, CancellationToken cancellationToken = default)
+        => _repository.GetOutcomesAsync(tenantId, activityTypeCode, cancellationToken);
+
     public Task<PagedResult<LeadActivityDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _repository.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
 }

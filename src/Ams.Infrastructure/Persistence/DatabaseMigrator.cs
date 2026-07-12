@@ -221,6 +221,20 @@ public sealed partial class DatabaseMigrator
         new("0183_CommonEntity_UserAuditActionTypes_Sync", Migration0183_CommonEntityUserAuditActionTypesSync),
         new("0184_Audit_SensitiveFieldCatalog_CreateSeed", Migration0184_AuditSensitiveFieldCatalogCreateSeed),
         new("0185_Audit_ActorAttribution_DataSync", Migration0185_AuditActorAttributionDataSync),
+        new("0186_CRM_LeadActivityOutcome_CreateSeed", Migration0186_CrmLeadActivityOutcomeCreateSeed),
+        new("0187_CRM_LeadActivityType_CreateSeed", Migration0187_CrmLeadActivityTypeCreateSeed),
+        new("0188_DocumentCategory_CompleteSeed", Migration0188_DocumentCategoryCompleteSeed),
+        new("0189_DocumentCategory_NormalizedTables", Migration0189_DocumentCategoryNormalizedTables),
+        new("0190_DocumentCategory_DmsSchemaCleanup", Migration0190_DocumentCategoryDmsSchemaCleanupSafe),
+        new("0191_DocumentCategory_DmsFinalConversion", Migration0191_DocumentCategoryDmsFinalConversion),
+        new("0192_DocumentCategory_DropLegacyTables", Migration0192_DocumentCategoryDropLegacyTables),
+        new("0193_DocumentCategory_VerifyDropLegacyTables", Migration0193_DocumentCategoryVerifyDropLegacyTables),
+        new("0194_DocumentCategory_CorrectCategoryGroupMapping", Migration0194_DocumentCategoryCorrectCategoryGroupMapping),
+        new("0195_DMS_EnterpriseConfigurationSeed", Migration0195_DmsEnterpriseConfigurationSeed),
+        new("0196_DMS_EnterpriseConfigurationCleanup", Migration0196_DmsEnterpriseConfigurationCleanup),
+        new("0197_Enterprise_AmsCapabilityMatrix", Migration0197_EnterpriseAmsCapabilityMatrix),
+        new("0198_Enterprise_AmsCapabilityGapExtensions", Migration0198_EnterpriseAmsCapabilityGapExtensions),
+        new("0199_CRM_LeadEngagement_CommunicationCampaignEnterprise", Migration0199_CrmLeadEngagementCommunicationCampaignEnterprise),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -13502,4 +13516,2222 @@ JOIN Audit.AuditEvent e ON e.AuditEventId = c.AuditEventId
 WHERE c.ChangedByUserId IS NULL
    OR NOT EXISTS (SELECT 1 FROM IAM.[User] u WHERE u.UserId = c.ChangedByUserId AND u.IsDeleted = 0);
 ";
+
+    private const string Migration0186_CrmLeadActivityOutcomeCreateSeed = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM') EXEC(N'CREATE SCHEMA CRM');
+
+IF OBJECT_ID(N'CRM.LeadActivityOutcome', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.LeadActivityOutcome
+    (
+        ActivityOutcomeId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_LeadActivityOutcome PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ActivityTypeCode NVARCHAR(50) NOT NULL,
+        OutcomeCode NVARCHAR(50) NOT NULL,
+        OutcomeName NVARCHAR(100) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_LeadActivityOutcome_SortOrder DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_LeadActivityOutcome_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadActivityOutcome_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_LeadActivityOutcome_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadActivityOutcome') AND name = N'UX_LeadActivityOutcome_Tenant_Type_Code')
+    CREATE UNIQUE INDEX UX_LeadActivityOutcome_Tenant_Type_Code ON CRM.LeadActivityOutcome(TenantId, ActivityTypeCode, OutcomeCode) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadActivityOutcome') AND name = N'IX_LeadActivityOutcome_Tenant_Type_Active')
+    CREATE INDEX IX_LeadActivityOutcome_Tenant_Type_Active ON CRM.LeadActivityOutcome(TenantId, ActivityTypeCode, IsActive, IsDeleted) INCLUDE (OutcomeName, SortOrder);
+
+DECLARE @LeadActivityOutcomes TABLE
+(
+    ActivityTypeCode NVARCHAR(50) NOT NULL,
+    OutcomeCode NVARCHAR(50) NOT NULL,
+    OutcomeName NVARCHAR(100) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO @LeadActivityOutcomes (ActivityTypeCode, OutcomeCode, OutcomeName, Description, SortOrder) VALUES
+(N'Call', N'CONNECTED', N'Connected', N'Call connected with the lead or stakeholder.', 10),
+(N'Call', N'LEFT_VOICEMAIL', N'Left Voicemail', N'Voicemail was left for the lead or stakeholder.', 20),
+(N'Call', N'NO_ANSWER', N'No Answer', N'No one answered the call.', 30),
+(N'Call', N'BAD_NUMBER', N'Bad Number', N'Phone number is invalid or disconnected.', 40),
+(N'Call', N'CALLBACK_REQUESTED', N'Callback Requested', N'Lead requested a callback.', 50),
+(N'Call', N'MEETING_SCHEDULED', N'Meeting Scheduled', N'Call resulted in a scheduled meeting.', 60),
+(N'Call', N'QUOTE_REQUESTED', N'Quote Requested', N'Lead requested a quote or proposal.', 70),
+(N'Call', N'INTERESTED', N'Interested', N'Lead indicated interest in coverage or next steps.', 80),
+(N'Call', N'NOT_INTERESTED', N'Not Interested', N'Lead declined or is not currently interested.', 90),
+(N'Call', N'NEEDS_FOLLOW_UP', N'Needs Follow-up', N'Additional follow-up is required.', 100),
+(N'Email', N'SENT', N'Sent', N'Email was sent successfully.', 10),
+(N'Email', N'OPENED', N'Opened', N'Email was opened.', 20),
+(N'Email', N'CLICKED', N'Clicked', N'Recipient clicked a link.', 30),
+(N'Email', N'REPLIED', N'Replied', N'Recipient replied to the email.', 40),
+(N'Email', N'BOUNCED', N'Bounced', N'Email bounced or could not be delivered.', 50),
+(N'Email', N'UNSUBSCRIBED', N'Unsubscribed', N'Recipient unsubscribed.', 60),
+(N'Email', N'MEETING_SCHEDULED', N'Meeting Scheduled', N'Email resulted in a scheduled meeting.', 70),
+(N'Email', N'QUOTE_REQUESTED', N'Quote Requested', N'Recipient requested a quote or proposal.', 80),
+(N'Email', N'NEEDS_FOLLOW_UP', N'Needs Follow-up', N'Additional follow-up is required.', 90),
+(N'Meeting', N'COMPLETED', N'Completed', N'Meeting was completed.', 10),
+(N'Meeting', N'NO_SHOW', N'No Show', N'Lead or stakeholder did not attend.', 20),
+(N'Meeting', N'RESCHEDULED', N'Rescheduled', N'Meeting was rescheduled.', 30),
+(N'Meeting', N'DISCOVERY_COMPLETED', N'Discovery Completed', N'Discovery questions and needs assessment were completed.', 40),
+(N'Meeting', N'APPLICATION_STARTED', N'Application Started', N'Application or intake was started.', 50),
+(N'Meeting', N'DOCUMENTS_REQUESTED', N'Documents Requested', N'Supporting documents were requested.', 60),
+(N'Meeting', N'QUOTE_REQUESTED', N'Quote Requested', N'Meeting resulted in a quote request.', 70),
+(N'Meeting', N'NEEDS_FOLLOW_UP', N'Needs Follow-up', N'Additional follow-up is required.', 80),
+(N'Task', N'OPEN', N'Open', N'Task remains open.', 10),
+(N'Task', N'IN_PROGRESS', N'In Progress', N'Task is in progress.', 20),
+(N'Task', N'COMPLETED', N'Completed', N'Task was completed.', 30),
+(N'Task', N'BLOCKED', N'Blocked', N'Task is blocked.', 40),
+(N'Task', N'DEFERRED', N'Deferred', N'Task was deferred.', 50),
+(N'Task', N'CANCELLED', N'Cancelled', N'Task was cancelled.', 60),
+(N'Note', N'DOCUMENTED', N'Documented', N'Note was documented for the lead.', 10),
+(N'Note', N'REVIEWED', N'Reviewed', N'Note was reviewed.', 20),
+(N'Note', N'NEEDS_FOLLOW_UP', N'Needs Follow-up', N'Note requires follow-up.', 30),
+(N'Note', N'INFO_RECEIVED', N'Information Received', N'New information was received.', 40),
+(N'Note', N'INFO_REQUESTED', N'Information Requested', N'Additional information was requested.', 50),
+(N'Follow-up', N'SCHEDULED', N'Scheduled', N'Follow-up was scheduled.', 10),
+(N'Follow-up', N'COMPLETED', N'Completed', N'Follow-up was completed.', 20),
+(N'Follow-up', N'RESCHEDULED', N'Rescheduled', N'Follow-up was rescheduled.', 30),
+(N'Follow-up', N'WAITING_ON_CLIENT', N'Waiting on Client', N'Waiting for client response or documents.', 40),
+(N'Follow-up', N'WAITING_ON_CARRIER', N'Waiting on Carrier', N'Waiting for carrier response.', 50),
+(N'Follow-up', N'NEEDS_FOLLOW_UP', N'Needs Follow-up', N'Another follow-up is required.', 60),
+(N'SMS', N'SENT', N'Sent', N'SMS was sent successfully.', 10),
+(N'SMS', N'DELIVERED', N'Delivered', N'SMS was delivered.', 20),
+(N'SMS', N'REPLIED', N'Replied', N'Recipient replied to the SMS.', 30),
+(N'SMS', N'FAILED', N'Failed', N'SMS failed to send or deliver.', 40),
+(N'SMS', N'OPTED_OUT', N'Opted Out', N'Recipient opted out of SMS.', 50),
+(N'Workflow', N'TRIGGERED', N'Triggered', N'Workflow was triggered.', 10),
+(N'Workflow', N'COMPLETED', N'Completed', N'Workflow completed successfully.', 20),
+(N'Workflow', N'FAILED', N'Failed', N'Workflow failed.', 30),
+(N'Workflow', N'RETRY_SCHEDULED', N'Retry Scheduled', N'Workflow retry was scheduled.', 40),
+(N'Portal', N'INVITED', N'Invited', N'Portal invitation was sent.', 10),
+(N'Portal', N'ACCESSED', N'Accessed', N'Lead or stakeholder accessed the portal.', 20),
+(N'Portal', N'DOCUMENT_UPLOADED', N'Document Uploaded', N'Document was uploaded through the portal.', 30),
+(N'Portal', N'FORM_COMPLETED', N'Form Completed', N'Portal form was completed.', 40),
+(N'Portal', N'NEEDS_FOLLOW_UP', N'Needs Follow-up', N'Portal activity requires follow-up.', 50);
+
+MERGE CRM.LeadActivityOutcome AS target
+USING (
+    SELECT t.TenantId,
+           o.ActivityTypeCode,
+           o.OutcomeCode,
+           o.OutcomeName,
+           o.Description,
+           o.SortOrder,
+           COALESCE(admin.UserId, '00000000-0000-0000-0000-000000000002') AS AdminUserId
+    FROM Core.Tenant t
+    CROSS JOIN @LeadActivityOutcomes o
+    OUTER APPLY (
+        SELECT TOP 1 u.UserId
+        FROM IAM.[User] u
+        WHERE u.TenantId = t.TenantId AND u.IsDeleted = 0
+        ORDER BY u.IsActive DESC, u.CreatedDateUtc
+    ) admin
+    WHERE ISNULL(t.IsDeleted, 0) = 0
+) AS source
+ON target.TenantId = source.TenantId
+   AND target.ActivityTypeCode = source.ActivityTypeCode
+   AND target.OutcomeCode = source.OutcomeCode
+WHEN MATCHED THEN
+    UPDATE SET OutcomeName = source.OutcomeName,
+               Description = source.Description,
+               SortOrder = source.SortOrder,
+               IsActive = 1,
+               IsDeleted = 0,
+               ModifiedDateUtc = SYSUTCDATETIME(),
+               ModifiedByUserId = source.AdminUserId
+WHEN NOT MATCHED THEN
+    INSERT (ActivityOutcomeId, TenantId, ActivityTypeCode, OutcomeCode, OutcomeName, Description, SortOrder, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (NEWID(), source.TenantId, source.ActivityTypeCode, source.OutcomeCode, source.OutcomeName, source.Description, source.SortOrder, 1, SYSUTCDATETIME(), source.AdminUserId, 0);
+";
+
+    private const string Migration0187_CrmLeadActivityTypeCreateSeed = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM') EXEC(N'CREATE SCHEMA CRM');
+
+IF OBJECT_ID(N'CRM.LeadActivityType', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.LeadActivityType
+    (
+        ActivityTypeId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_LeadActivityType PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ActivityTypeCode NVARCHAR(50) NOT NULL,
+        ActivityTypeName NVARCHAR(100) NOT NULL,
+        IconCssClass NVARCHAR(100) NULL,
+        Description NVARCHAR(500) NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_LeadActivityType_SortOrder DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_LeadActivityType_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadActivityType_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_LeadActivityType_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadActivityType') AND name = N'UX_LeadActivityType_Tenant_Code')
+    CREATE UNIQUE INDEX UX_LeadActivityType_Tenant_Code ON CRM.LeadActivityType(TenantId, ActivityTypeCode) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadActivityType') AND name = N'IX_LeadActivityType_Tenant_Active')
+    CREATE INDEX IX_LeadActivityType_Tenant_Active ON CRM.LeadActivityType(TenantId, IsActive, IsDeleted) INCLUDE (ActivityTypeCode, ActivityTypeName, SortOrder);
+
+DECLARE @LeadActivityTypes TABLE
+(
+    ActivityTypeCode NVARCHAR(50) NOT NULL,
+    ActivityTypeName NVARCHAR(100) NOT NULL,
+    IconCssClass NVARCHAR(100) NULL,
+    Description NVARCHAR(500) NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO @LeadActivityTypes (ActivityTypeCode, ActivityTypeName, IconCssClass, Description, SortOrder) VALUES
+(N'Call', N'Call', N'bi bi-telephone', N'Phone call activity with a lead or stakeholder.', 10),
+(N'Email', N'Email', N'bi bi-envelope', N'Email activity sent to or received from a lead.', 20),
+(N'Meeting', N'Meeting', N'bi bi-calendar-event', N'Scheduled meeting or appointment activity.', 30),
+(N'Task', N'Task', N'bi bi-check2-square', N'Internal task or to-do related to a lead.', 40),
+(N'Note', N'Note', N'bi bi-sticky', N'General note documented on the lead timeline.', 50),
+(N'Follow-up', N'Follow-up', N'bi bi-arrow-repeat', N'Follow-up activity requiring future action.', 60),
+(N'SMS', N'SMS', N'bi bi-chat-dots', N'Text message activity with a lead or stakeholder.', 70),
+(N'Workflow', N'Workflow', N'bi bi-diagram-3', N'Automated or manual workflow activity.', 80),
+(N'Portal', N'Portal', N'bi bi-window', N'Client portal activity or interaction.', 90);
+
+INSERT INTO @LeadActivityTypes (ActivityTypeCode, ActivityTypeName, IconCssClass, Description, SortOrder)
+SELECT DISTINCT o.ActivityTypeCode, o.ActivityTypeCode, N'bi bi-ui-checks-grid', N'Activity type inferred from existing activity outcome configuration.', 1000
+FROM CRM.LeadActivityOutcome o
+WHERE o.IsDeleted = 0
+  AND NOT EXISTS (SELECT 1 FROM @LeadActivityTypes t WHERE t.ActivityTypeCode = o.ActivityTypeCode);
+
+MERGE CRM.LeadActivityType AS target
+USING (
+    SELECT t.TenantId,
+           a.ActivityTypeCode,
+           a.ActivityTypeName,
+           a.IconCssClass,
+           a.Description,
+           a.SortOrder,
+           COALESCE(admin.UserId, '00000000-0000-0000-0000-000000000002') AS AdminUserId
+    FROM Core.Tenant t
+    CROSS JOIN @LeadActivityTypes a
+    OUTER APPLY (
+        SELECT TOP 1 u.UserId
+        FROM IAM.[User] u
+        WHERE u.TenantId = t.TenantId AND u.IsDeleted = 0
+        ORDER BY u.IsActive DESC, u.CreatedDateUtc
+    ) admin
+    WHERE ISNULL(t.IsDeleted, 0) = 0
+) AS source
+ON target.TenantId = source.TenantId AND target.ActivityTypeCode = source.ActivityTypeCode
+WHEN MATCHED THEN
+    UPDATE SET ActivityTypeName = source.ActivityTypeName,
+               IconCssClass = source.IconCssClass,
+               Description = source.Description,
+               SortOrder = source.SortOrder,
+               IsActive = 1,
+               IsDeleted = 0,
+               ModifiedDateUtc = SYSUTCDATETIME(),
+               ModifiedByUserId = source.AdminUserId
+WHEN NOT MATCHED THEN
+    INSERT (ActivityTypeId, TenantId, ActivityTypeCode, ActivityTypeName, IconCssClass, Description, SortOrder, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (NEWID(), source.TenantId, source.ActivityTypeCode, source.ActivityTypeName, source.IconCssClass, source.Description, source.SortOrder, 1, SYSUTCDATETIME(), source.AdminUserId, 0);
+";
+
+    private const string Migration0188_DocumentCategoryCompleteSeed = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Documents') EXEC(N'CREATE SCHEMA Documents');
+
+IF OBJECT_ID(N'Documents.DocumentConfigItem', N'U') IS NULL
+BEGIN
+    CREATE TABLE Documents.DocumentConfigItem
+    (
+        DocumentConfigItemId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DocumentConfigItem PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        Kind NVARCHAR(80) NOT NULL,
+        Code NVARCHAR(80) NOT NULL,
+        Name NVARCHAR(200) NOT NULL,
+        Category NVARCHAR(120) NULL,
+        Description NVARCHAR(500) NULL,
+        ConfigurationJson NVARCHAR(4000) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_DocumentConfigItem_IsActive DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_DocumentConfigItem_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentConfigItem_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        ModifiedDateUtc DATETIME2 NULL,
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DocumentConfigItem_IsDeleted DEFAULT 0
+    );
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Documents.DocumentConfigItem') AND name = N'IX_DocumentConfigItem_TenantKind')
+    CREATE INDEX IX_DocumentConfigItem_TenantKind ON Documents.DocumentConfigItem(TenantId, Kind, IsDeleted, SortOrder, Name);
+
+DECLARE @DocumentCategories TABLE
+(
+    Code NVARCHAR(80) NOT NULL,
+    Name NVARCHAR(200) NOT NULL,
+    Category NVARCHAR(120) NULL,
+    Description NVARCHAR(500) NULL,
+    ConfigurationJson NVARCHAR(4000) NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO @DocumentCategories (Code, Name, Category, Description, ConfigurationJson, SortOrder) VALUES
+(N'APPLICATION', N'Application', N'Intake', N'Client, prospect, policy, and carrier application documents.', N'{""portalVisible"":false,""requiresIndexing"":true,""source"":""SystemSeed""}', 10),
+(N'STATEMENT', N'Statement', N'Accounting', N'Billing, premium, account, and carrier statement documents.', N'{""portalVisible"":true,""requiresIndexing"":true,""source"":""SystemSeed""}', 20),
+(N'LOSS_RUN', N'Loss Run', N'Claims', N'Carrier loss run reports and loss history documents.', N'{""portalVisible"":false,""legalHoldEligible"":true,""source"":""SystemSeed""}', 30),
+(N'CERTIFICATE', N'Certificate', N'Servicing', N'Certificates of insurance and certificate delivery documents.', N'{""portalVisible"":true,""requiresIndexing"":true,""source"":""SystemSeed""}', 40),
+(N'FINANCIAL', N'Financial', N'Accounting', N'Financial statements, schedules, worksheets, and finance documents.', N'{""portalVisible"":false,""requiresIndexing"":true,""source"":""SystemSeed""}', 50),
+(N'FINANCIALS', N'Financials', N'Accounting', N'Opportunity and submission financial documents retained under legacy naming.', N'{""portalVisible"":false,""requiresIndexing"":true,""aliasOf"":""FINANCIAL"",""source"":""SystemSeed""}', 55),
+(N'CORRESPONDENCE', N'Correspondence', N'Communications', N'Email, letter, note, and other document correspondence.', N'{""portalVisible"":true,""requiresIndexing"":true,""source"":""SystemSeed""}', 60),
+(N'PROPOSAL', N'Proposal', N'Sales', N'Proposal, quote presentation, renewal proposal, and option comparison documents.', N'{""portalVisible"":true,""requiresIndexing"":true,""source"":""SystemSeed""}', 70),
+(N'CARRIER_SUB', N'Carrier Submission', N'Submissions', N'Carrier submission packets, applications, supplements, and market submissions.', N'{""portalVisible"":false,""requiresIndexing"":true,""legacyValue"":""Carrier Sub"",""source"":""SystemSeed""}', 80),
+(N'POLICY', N'Policy', N'Policy', N'Policy declarations, forms, endorsements, binders, and policy documents.', N'{""portalVisible"":true,""requiresIndexing"":true,""source"":""SystemSeed""}', 90),
+(N'ID_CARD', N'ID Card', N'Policy', N'Auto ID cards and proof-of-coverage identification documents.', N'{""portalVisible"":true,""requiresIndexing"":true,""source"":""SystemSeed""}', 100),
+(N'INVOICE', N'Invoice', N'Billing', N'Premium, agency bill, direct bill, commission, and service invoices.', N'{""portalVisible"":true,""requiresIndexing"":true,""source"":""SystemSeed""}', 110),
+(N'FORM', N'Form', N'Forms', N'General forms, supplemental forms, signed forms, and intake forms.', N'{""portalVisible"":true,""requiresIndexing"":true,""source"":""SystemSeed""}', 120),
+(N'CLAIMS', N'Claims', N'Claims', N'Claim notices, adjuster correspondence, photos, estimates, and claim documents.', N'{""portalVisible"":true,""legalHoldEligible"":true,""source"":""SystemSeed""}', 130),
+(N'OTHER', N'Other', N'General', N'General document category for records that do not fit a standard category.', N'{""portalVisible"":true,""requiresIndexing"":false,""source"":""SystemSeed""}', 990);
+
+MERGE Documents.DocumentConfigItem AS target
+USING
+(
+    SELECT t.TenantId,
+           c.Code,
+           c.Name,
+           c.Category,
+           c.Description,
+           c.ConfigurationJson,
+           c.SortOrder,
+           COALESCE(admin.UserId, '00000000-0000-0000-0000-000000000002') AS AdminUserId
+    FROM Core.Tenant t
+    CROSS JOIN @DocumentCategories c
+    OUTER APPLY (
+        SELECT TOP 1 u.UserId
+        FROM IAM.[User] u
+        WHERE u.TenantId = t.TenantId AND u.IsDeleted = 0
+        ORDER BY u.IsActive DESC, u.CreatedDateUtc
+    ) admin
+    WHERE ISNULL(t.IsDeleted, 0) = 0
+) AS source
+ON target.TenantId = source.TenantId AND target.Kind = N'DocumentCategory' AND target.Code = source.Code
+WHEN MATCHED THEN
+    UPDATE SET Name = source.Name,
+               Category = source.Category,
+               Description = source.Description,
+               ConfigurationJson = source.ConfigurationJson,
+               SortOrder = source.SortOrder,
+               IsActive = 1,
+               IsDeleted = 0,
+               ModifiedDateUtc = SYSUTCDATETIME(),
+               ModifiedByUserId = source.AdminUserId
+WHEN NOT MATCHED THEN
+    INSERT (DocumentConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (NEWID(), source.TenantId, N'DocumentCategory', source.Code, source.Name, source.Category, source.Description, source.ConfigurationJson, 1, source.SortOrder, SYSUTCDATETIME(), source.AdminUserId, 0);
+";
+
+    private const string Migration0189_DocumentCategoryNormalizedTables = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'DMS') EXEC(N'CREATE SCHEMA DMS');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Master') EXEC(N'CREATE SCHEMA Master');
+
+IF OBJECT_ID(N'DMS.DocumentKind', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentKind
+    (
+        DocumentKindId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_DocumentKind PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        KindCode NVARCHAR(80) NOT NULL,
+        KindName NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_DMS_DocumentKind_IsActive DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_DMS_DocumentKind_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DMS_DocumentKind_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DMS_DocumentKind_IsDeleted DEFAULT 0
+    );
+END
+
+IF OBJECT_ID(N'DMS.DocumentGroup', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentGroup
+    (
+        DocumentGroupId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_DocumentGroup PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentKindId UNIQUEIDENTIFIER NOT NULL,
+        CategoryId UNIQUEIDENTIFIER NULL,
+        GroupCode NVARCHAR(120) NOT NULL,
+        GroupName NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_DMS_DocumentGroup_IsActive DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_DMS_DocumentGroup_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DMS_DocumentGroup_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DMS_DocumentGroup_IsDeleted DEFAULT 0
+    );
+END
+
+IF COL_LENGTH(N'DMS.DocumentGroup', N'ConfigurationJson') IS NULL
+    ALTER TABLE DMS.DocumentGroup ADD ConfigurationJson NVARCHAR(4000) NULL;
+
+IF COL_LENGTH(N'DMS.DocumentGroup', N'CategoryId') IS NULL
+    ALTER TABLE DMS.DocumentGroup ADD CategoryId UNIQUEIDENTIFIER NULL;
+
+IF OBJECT_ID(N'Master.Category', N'U') IS NULL
+BEGIN
+    CREATE TABLE Master.Category
+    (
+        CategoryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Master_Category PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentKindId UNIQUEIDENTIFIER NOT NULL,
+        CategoryCode NVARCHAR(80) NOT NULL,
+        CategoryName NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        ConfigurationJson NVARCHAR(4000) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_Master_Category_IsActive DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_Master_Category_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Master_Category_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Master_Category_IsDeleted DEFAULT 0
+    );
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.DocumentKind') AND name = N'UX_DMS_DocumentKind_TenantCode')
+    CREATE UNIQUE INDEX UX_DMS_DocumentKind_TenantCode ON DMS.DocumentKind(TenantId, KindCode) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.DocumentGroup') AND name = N'UX_DMS_DocumentGroup_TenantKindCode')
+    CREATE UNIQUE INDEX UX_DMS_DocumentGroup_TenantKindCode ON DMS.DocumentGroup(TenantId, DocumentKindId, GroupCode) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Master.Category') AND name = N'UX_Master_Category_TenantKindCode')
+    CREATE UNIQUE INDEX UX_Master_Category_TenantKindCode ON Master.Category(TenantId, DocumentKindId, CategoryCode) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Master.Category') AND name = N'IX_Master_Category_TenantKindSort')
+    CREATE INDEX IX_Master_Category_TenantKindSort ON Master.Category(TenantId, DocumentKindId, IsDeleted, SortOrder, CategoryName);
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_DMS_DocumentGroup_DocumentKind')
+    ALTER TABLE DMS.DocumentGroup ADD CONSTRAINT FK_DMS_DocumentGroup_DocumentKind FOREIGN KEY (DocumentKindId) REFERENCES DMS.DocumentKind(DocumentKindId);
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_DMS_DocumentGroup_MasterCategory')
+    ALTER TABLE DMS.DocumentGroup ADD CONSTRAINT FK_DMS_DocumentGroup_MasterCategory FOREIGN KEY (CategoryId) REFERENCES Master.Category(CategoryId);
+
+IF OBJECT_ID(N'Documents.DocumentConfigItem', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Documents.DocumentConfigItem', N'Group') IS NULL
+        ALTER TABLE Documents.DocumentConfigItem ADD [Group] NVARCHAR(200) NULL;
+
+    IF OBJECT_ID(N'DOCS.DocumentGroup', N'U') IS NOT NULL
+    BEGIN
+        DECLARE @DocsDocumentGroupKindApplySql NVARCHAR(MAX) = N'OUTER APPLY (SELECT CAST(NULL AS NVARCHAR(80)) AS KindCode) kind';
+
+        IF OBJECT_ID(N'DOCS.DccumentKind', N'U') IS NOT NULL AND COL_LENGTH(N'DOCS.DocumentGroup', N'DccumentKindId') IS NOT NULL
+            SET @DocsDocumentGroupKindApplySql = N'OUTER APPLY (SELECT TOP 1 dk.KindCode FROM DOCS.DccumentKind dk WHERE dk.DccumentKindId = legacy.DccumentKindId) kind';
+        ELSE IF OBJECT_ID(N'DOCS.DocumentKind', N'U') IS NOT NULL AND COL_LENGTH(N'DOCS.DocumentGroup', N'DocumentKindId') IS NOT NULL
+            SET @DocsDocumentGroupKindApplySql = N'OUTER APPLY (SELECT TOP 1 dk.KindCode FROM DOCS.DocumentKind dk WHERE dk.DocumentKindId = legacy.DocumentKindId) kind';
+
+        DECLARE @MergeDocsDocumentGroupToConfigSql NVARCHAR(MAX) = N'
+MERGE Documents.DocumentConfigItem AS target
+USING
+(
+    SELECT legacy.TenantId,
+           COALESCE(kind.KindCode, N''DocumentCategory'') AS Kind,
+           legacy.GroupCode AS Code,
+           legacy.GroupName AS Name,
+           COALESCE(category.CategoryName, legacy.GroupName, N''Unassigned'') AS [Group],
+           COALESCE(category.CategoryName, legacy.GroupName, N''Unassigned'') AS Category,
+           legacy.Description,
+           NULL AS ConfigurationJson,
+           legacy.IsActive,
+           legacy.SortOrder,
+           legacy.CreatedDateUtc,
+           legacy.CreatedByUserId,
+           legacy.ModifiedDateUtc,
+           legacy.ModifiedByUserId,
+           legacy.IsDeleted
+    FROM DOCS.DocumentGroup legacy
+    ' + @DocsDocumentGroupKindApplySql + N'
+    OUTER APPLY
+    (
+        SELECT TOP 1 mc.CategoryName
+        FROM Master.Category mc
+        WHERE mc.DocumentGroupId = legacy.DocumentGroupId
+          AND mc.TenantId = legacy.TenantId
+          AND mc.IsDeleted = 0
+    ) category
+    WHERE NULLIF(LTRIM(RTRIM(legacy.GroupCode)), N'''') IS NOT NULL
+      AND NULLIF(LTRIM(RTRIM(legacy.GroupName)), N'''') IS NOT NULL
+) AS source
+ON target.TenantId = source.TenantId AND target.Kind = source.Kind AND target.Code = source.Code
+WHEN MATCHED THEN
+    UPDATE SET Name = source.Name,
+               [Group] = source.[Group],
+               Category = source.Category,
+               Description = source.Description,
+               IsActive = source.IsActive,
+               SortOrder = source.SortOrder,
+               IsDeleted = source.IsDeleted,
+               ModifiedDateUtc = COALESCE(source.ModifiedDateUtc, SYSUTCDATETIME()),
+               ModifiedByUserId = source.ModifiedByUserId
+WHEN NOT MATCHED THEN
+    INSERT (DocumentConfigItemId, TenantId, Kind, Code, Name, [Group], Category, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+    VALUES (NEWID(), source.TenantId, source.Kind, source.Code, source.Name, source.[Group], source.Category, source.Description, source.ConfigurationJson, source.IsActive, source.SortOrder, source.CreatedDateUtc, source.CreatedByUserId, source.ModifiedDateUtc, source.ModifiedByUserId, source.IsDeleted);';
+
+        EXEC sp_executesql @MergeDocsDocumentGroupToConfigSql;
+    END
+
+    MERGE DMS.DocumentKind AS target
+    USING
+    (
+        SELECT TenantId,
+               Kind AS KindCode,
+               Kind AS KindName,
+               MIN(CreatedDateUtc) AS CreatedDateUtc,
+               MIN(CreatedByUserId) AS CreatedByUserId,
+               MIN(SortOrder) AS SortOrder,
+               CONVERT(bit, MAX(CONVERT(int, IsActive))) AS IsActive
+        FROM Documents.DocumentConfigItem
+        WHERE IsDeleted = 0 AND NULLIF(LTRIM(RTRIM(Kind)), N'') IS NOT NULL
+        GROUP BY TenantId, Kind
+    ) AS source
+    ON target.TenantId = source.TenantId AND target.KindCode = source.KindCode
+    WHEN MATCHED THEN
+        UPDATE SET KindName = source.KindName,
+                   IsActive = source.IsActive,
+                   SortOrder = source.SortOrder,
+                   IsDeleted = 0,
+                   ModifiedDateUtc = SYSUTCDATETIME()
+    WHEN NOT MATCHED THEN
+        INSERT (DocumentKindId, TenantId, KindCode, KindName, Description, IsActive, SortOrder, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        VALUES (NEWID(), source.TenantId, source.KindCode, source.KindName, NULL, source.IsActive, source.SortOrder, source.CreatedDateUtc, source.CreatedByUserId, 0);
+
+    MERGE Master.Category AS target
+    USING
+    (
+        SELECT MIN(dci.DocumentConfigItemId) AS CategoryId,
+               dci.TenantId,
+               dk.DocumentKindId,
+               COALESCE(NULLIF(LTRIM(RTRIM(dci.Category)), N''), N'Unassigned') AS CategoryName,
+               UPPER(REPLACE(REPLACE(COALESCE(NULLIF(LTRIM(RTRIM(dci.Category)), N''), N'Unassigned'), N' ', N'_'), N'-', N'_')) AS CategoryCode,
+               MIN(dci.Description) AS Description,
+               MIN(dci.ConfigurationJson) AS ConfigurationJson,
+               CONVERT(bit, MAX(CONVERT(int, dci.IsActive))) AS IsActive,
+               MIN(dci.SortOrder) AS SortOrder,
+               MIN(dci.CreatedDateUtc) AS CreatedDateUtc,
+               MIN(dci.CreatedByUserId) AS CreatedByUserId,
+               MAX(dci.ModifiedDateUtc) AS ModifiedDateUtc,
+               MAX(dci.ModifiedByUserId) AS ModifiedByUserId
+        FROM Documents.DocumentConfigItem dci
+        INNER JOIN DMS.DocumentKind dk ON dk.TenantId = dci.TenantId AND dk.KindCode = dci.Kind AND dk.IsDeleted = 0
+        WHERE dci.IsDeleted = 0
+        GROUP BY dci.TenantId, dk.DocumentKindId, COALESCE(NULLIF(LTRIM(RTRIM(dci.Category)), N''), N'Unassigned')
+    ) AS source
+    ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.CategoryCode = source.CategoryCode
+    WHEN MATCHED THEN
+        UPDATE SET CategoryName = source.CategoryName,
+                   Description = source.Description,
+                   ConfigurationJson = source.ConfigurationJson,
+                   IsActive = source.IsActive,
+                   SortOrder = source.SortOrder,
+                   IsDeleted = 0,
+                   ModifiedDateUtc = COALESCE(source.ModifiedDateUtc, SYSUTCDATETIME()),
+                   ModifiedByUserId = source.ModifiedByUserId
+    WHEN NOT MATCHED THEN
+        INSERT (CategoryId, TenantId, DocumentKindId, CategoryCode, CategoryName, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+        VALUES (source.CategoryId, source.TenantId, source.DocumentKindId, source.CategoryCode, source.CategoryName, source.Description, source.ConfigurationJson, source.IsActive, source.SortOrder, source.CreatedDateUtc, source.CreatedByUserId, source.ModifiedDateUtc, source.ModifiedByUserId, 0);
+
+    IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_Master_Category_DocumentKind')
+       AND NOT EXISTS (SELECT 1 FROM Master.Category WHERE DocumentKindId IS NULL AND IsDeleted = 0)
+        ALTER TABLE Master.Category ADD CONSTRAINT FK_Master_Category_DocumentKind FOREIGN KEY (DocumentKindId) REFERENCES DMS.DocumentKind(DocumentKindId);
+
+    MERGE DMS.DocumentGroup AS target
+    USING
+    (
+        SELECT dci.TenantId,
+               dk.DocumentKindId,
+               mc.CategoryId,
+               dci.Code AS GroupCode,
+               dci.Name AS GroupName,
+               MAX(dci.Description) AS Description,
+               MIN(dci.CreatedDateUtc) AS CreatedDateUtc,
+               MIN(dci.CreatedByUserId) AS CreatedByUserId,
+               MIN(dci.SortOrder) AS SortOrder,
+               CONVERT(bit, MAX(CONVERT(int, dci.IsActive))) AS IsActive
+        FROM Documents.DocumentConfigItem dci
+        INNER JOIN DMS.DocumentKind dk ON dk.TenantId = dci.TenantId AND dk.KindCode = dci.Kind AND dk.IsDeleted = 0
+        INNER JOIN Master.Category mc ON mc.TenantId = dci.TenantId
+                                     AND mc.DocumentKindId = dk.DocumentKindId
+                                     AND mc.CategoryCode = UPPER(REPLACE(REPLACE(COALESCE(NULLIF(LTRIM(RTRIM(dci.Category)), N''), N'Unassigned'), N' ', N'_'), N'-', N'_'))
+                                     AND mc.IsDeleted = 0
+        WHERE dci.IsDeleted = 0 AND NULLIF(LTRIM(RTRIM(dci.Name)), N'') IS NOT NULL
+        GROUP BY dci.TenantId, dk.DocumentKindId, mc.CategoryId, dci.Code, dci.Name
+    ) AS source
+    ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.GroupCode = source.GroupCode
+    WHEN MATCHED THEN
+        UPDATE SET CategoryId = source.CategoryId,
+                   GroupName = source.GroupName,
+                   Description = source.Description,
+                   IsActive = source.IsActive,
+                   SortOrder = source.SortOrder,
+                   IsDeleted = 0,
+                   ModifiedDateUtc = SYSUTCDATETIME()
+    WHEN NOT MATCHED THEN
+        INSERT (DocumentGroupId, TenantId, DocumentKindId, CategoryId, GroupCode, GroupName, Description, IsActive, SortOrder, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        VALUES (NEWID(), source.TenantId, source.DocumentKindId, source.CategoryId, source.GroupCode, source.GroupName, source.Description, source.IsActive, source.SortOrder, source.CreatedDateUtc, source.CreatedByUserId, 0);
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Master.Category') AND name = N'UX_Master_Category_TenantKindCode')
+   AND NOT EXISTS
+   (
+       SELECT 1
+       FROM Master.Category
+       WHERE IsDeleted = 0
+       GROUP BY TenantId, DocumentKindId, CategoryCode
+       HAVING COUNT(1) > 1
+   )
+    CREATE UNIQUE INDEX UX_Master_Category_TenantKindCode ON Master.Category(TenantId, DocumentKindId, CategoryCode) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Master.Category') AND name = N'IX_Master_Category_TenantKindSort')
+    CREATE INDEX IX_Master_Category_TenantKindSort ON Master.Category(TenantId, DocumentKindId, IsDeleted, SortOrder, CategoryName);
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_Master_Category_DocumentKind')
+   AND NOT EXISTS (SELECT 1 FROM Master.Category WHERE DocumentKindId IS NULL AND IsDeleted = 0)
+    ALTER TABLE Master.Category ADD CONSTRAINT FK_Master_Category_DocumentKind FOREIGN KEY (DocumentKindId) REFERENCES DMS.DocumentKind(DocumentKindId);
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_DMS_DocumentGroup_MasterCategory')
+    ALTER TABLE DMS.DocumentGroup ADD CONSTRAINT FK_DMS_DocumentGroup_MasterCategory FOREIGN KEY (CategoryId) REFERENCES Master.Category(CategoryId);
+
+IF OBJECT_ID(N'DOCS.DocumentGroup', N'U') IS NOT NULL
+BEGIN
+    DECLARE @DropDocsDocumentGroupFksSql NVARCHAR(MAX) = N'';
+
+    SELECT @DropDocsDocumentGroupFksSql = @DropDocsDocumentGroupFksSql + N'ALTER TABLE DOCS.DocumentGroup DROP CONSTRAINT ' + QUOTENAME(fk.name) + N';'
+    FROM sys.foreign_keys fk
+    WHERE fk.parent_object_id = OBJECT_ID(N'DOCS.DocumentGroup');
+
+    IF @DropDocsDocumentGroupFksSql <> N''
+        EXEC sp_executesql @DropDocsDocumentGroupFksSql;
+
+    DROP TABLE DOCS.DocumentGroup;
+END
+
+IF OBJECT_ID(N'DOCS.DocumentKind', N'U') IS NOT NULL
+    DROP TABLE DOCS.DocumentKind;
+
+IF OBJECT_ID(N'DOCS.DccumentKind', N'U') IS NOT NULL
+    DROP TABLE DOCS.DccumentKind;
+
+IF OBJECT_ID(N'Docs.DocumentGroup', N'U') IS NOT NULL
+BEGIN
+    DECLARE @DropDocsMixedDocumentGroupFksSql NVARCHAR(MAX) = N'';
+
+    SELECT @DropDocsMixedDocumentGroupFksSql = @DropDocsMixedDocumentGroupFksSql + N'ALTER TABLE Docs.DocumentGroup DROP CONSTRAINT ' + QUOTENAME(fk.name) + N';'
+    FROM sys.foreign_keys fk
+    WHERE fk.parent_object_id = OBJECT_ID(N'Docs.DocumentGroup');
+
+    IF @DropDocsMixedDocumentGroupFksSql <> N''
+        EXEC sp_executesql @DropDocsMixedDocumentGroupFksSql;
+
+    DROP TABLE Docs.DocumentGroup;
+END
+
+IF OBJECT_ID(N'Docs.DocumentKind', N'U') IS NOT NULL
+    DROP TABLE Docs.DocumentKind;
+
+IF OBJECT_ID(N'Docs.DccumentKind', N'U') IS NOT NULL
+    DROP TABLE Docs.DccumentKind;
+
+IF OBJECT_ID(N'Documents.DocumentConfigItem', N'U') IS NOT NULL
+BEGIN
+    DECLARE @DropDocumentConfigItemFksSql NVARCHAR(MAX) = N'';
+
+    SELECT @DropDocumentConfigItemFksSql = @DropDocumentConfigItemFksSql + N'ALTER TABLE ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + N'.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + N' DROP CONSTRAINT ' + QUOTENAME(fk.name) + N';'
+    FROM sys.foreign_keys fk
+    WHERE fk.referenced_object_id = OBJECT_ID(N'Documents.DocumentConfigItem');
+
+    IF @DropDocumentConfigItemFksSql <> N''
+        EXEC sp_executesql @DropDocumentConfigItemFksSql;
+
+    DROP TABLE Documents.DocumentConfigItem;
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_Master_Category_DocumentKind')
+   AND NOT EXISTS (SELECT 1 FROM Master.Category WHERE DocumentKindId IS NULL AND IsDeleted = 0)
+    ALTER TABLE Master.Category ADD CONSTRAINT FK_Master_Category_DocumentKind FOREIGN KEY (DocumentKindId) REFERENCES DMS.DocumentKind(DocumentKindId);
+";
+
+    private const string Migration0190_DocumentCategoryDmsSchemaCleanup = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'DMS') EXEC(N'CREATE SCHEMA DMS');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Master') EXEC(N'CREATE SCHEMA Master');
+
+IF OBJECT_ID(N'DMS.DocumentKind', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentKind
+    (
+        DocumentKindId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_DocumentKind PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        KindCode NVARCHAR(80) NOT NULL,
+        KindName NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_DMS_DocumentKind_IsActive DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_DMS_DocumentKind_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DMS_DocumentKind_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DMS_DocumentKind_IsDeleted DEFAULT 0
+    );
+END
+
+IF OBJECT_ID(N'DMS.DocumentGroup', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentGroup
+    (
+        DocumentGroupId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_DocumentGroup PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentKindId UNIQUEIDENTIFIER NOT NULL,
+        CategoryId UNIQUEIDENTIFIER NULL,
+        GroupCode NVARCHAR(120) NOT NULL,
+        GroupName NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_DMS_DocumentGroup_IsActive DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_DMS_DocumentGroup_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DMS_DocumentGroup_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DMS_DocumentGroup_IsDeleted DEFAULT 0
+    );
+END
+
+IF OBJECT_ID(N'Master.Category', N'U') IS NULL
+BEGIN
+    CREATE TABLE Master.Category
+    (
+        CategoryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Master_Category PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentKindId UNIQUEIDENTIFIER NOT NULL,
+        CategoryCode NVARCHAR(80) NOT NULL,
+        CategoryName NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        ConfigurationJson NVARCHAR(4000) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_Master_Category_IsActive DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_Master_Category_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Master_Category_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Master_Category_IsDeleted DEFAULT 0
+    );
+END
+
+IF COL_LENGTH(N'DMS.DocumentGroup', N'CategoryId') IS NULL
+    ALTER TABLE DMS.DocumentGroup ADD CategoryId UNIQUEIDENTIFIER NULL;
+
+IF EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_Master_Category_DccumentKind')
+    ALTER TABLE Master.Category DROP CONSTRAINT FK_Master_Category_DccumentKind;
+
+IF EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_Master_Category_DocumentGroup')
+    ALTER TABLE Master.Category DROP CONSTRAINT FK_Master_Category_DocumentGroup;
+
+IF COL_LENGTH(N'Master.Category', N'TenantId') IS NULL
+    ALTER TABLE Master.Category ADD TenantId UNIQUEIDENTIFIER NULL;
+
+IF COL_LENGTH(N'Master.Category', N'DocumentKindId') IS NULL
+    ALTER TABLE Master.Category ADD DocumentKindId UNIQUEIDENTIFIER NULL;
+
+IF COL_LENGTH(N'Master.Category', N'CategoryCode') IS NULL
+    ALTER TABLE Master.Category ADD CategoryCode NVARCHAR(80) NULL;
+
+IF COL_LENGTH(N'Master.Category', N'CategoryName') IS NULL
+    ALTER TABLE Master.Category ADD CategoryName NVARCHAR(200) NULL;
+
+IF COL_LENGTH(N'Master.Category', N'Description') IS NULL
+    ALTER TABLE Master.Category ADD Description NVARCHAR(500) NULL;
+
+IF COL_LENGTH(N'Master.Category', N'ConfigurationJson') IS NULL
+    ALTER TABLE Master.Category ADD ConfigurationJson NVARCHAR(4000) NULL;
+
+IF COL_LENGTH(N'Master.Category', N'IsActive') IS NULL
+    ALTER TABLE Master.Category ADD IsActive BIT NOT NULL CONSTRAINT DF_Master_Category_IsActive_0190 DEFAULT 1;
+
+IF COL_LENGTH(N'Master.Category', N'SortOrder') IS NULL
+    ALTER TABLE Master.Category ADD SortOrder INT NOT NULL CONSTRAINT DF_Master_Category_SortOrder_0190 DEFAULT 0;
+
+IF COL_LENGTH(N'Master.Category', N'CreatedDateUtc') IS NULL
+    ALTER TABLE Master.Category ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Master_Category_CreatedDateUtc_0190 DEFAULT SYSUTCDATETIME();
+
+IF COL_LENGTH(N'Master.Category', N'CreatedByUserId') IS NULL
+    ALTER TABLE Master.Category ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+
+IF COL_LENGTH(N'Master.Category', N'ModifiedDateUtc') IS NULL
+    ALTER TABLE Master.Category ADD ModifiedDateUtc DATETIME2 NULL;
+
+IF COL_LENGTH(N'Master.Category', N'ModifiedByUserId') IS NULL
+    ALTER TABLE Master.Category ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+
+IF COL_LENGTH(N'Master.Category', N'IsDeleted') IS NULL
+    ALTER TABLE Master.Category ADD IsDeleted BIT NOT NULL CONSTRAINT DF_Master_Category_IsDeleted_0190 DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.DocumentKind') AND name = N'UX_DMS_DocumentKind_TenantCode')
+    CREATE UNIQUE INDEX UX_DMS_DocumentKind_TenantCode ON DMS.DocumentKind(TenantId, KindCode) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.DocumentGroup') AND name = N'UX_DMS_DocumentGroup_TenantKindCode')
+    CREATE UNIQUE INDEX UX_DMS_DocumentGroup_TenantKindCode ON DMS.DocumentGroup(TenantId, DocumentKindId, GroupCode) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_DMS_DocumentGroup_DocumentKind')
+    ALTER TABLE DMS.DocumentGroup ADD CONSTRAINT FK_DMS_DocumentGroup_DocumentKind FOREIGN KEY (DocumentKindId) REFERENCES DMS.DocumentKind(DocumentKindId);
+
+IF OBJECT_ID(N'Documents.DocumentConfigItem', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Documents.DocumentConfigItem', N'Group') IS NULL
+        ALTER TABLE Documents.DocumentConfigItem ADD [Group] NVARCHAR(200) NULL;
+
+    IF OBJECT_ID(N'DOCS.DocumentGroup', N'U') IS NOT NULL
+    BEGIN
+        DECLARE @DocsDocumentGroupKindApplySql NVARCHAR(MAX) = N'OUTER APPLY (SELECT CAST(NULL AS NVARCHAR(80)) AS KindCode) kind';
+
+        IF OBJECT_ID(N'DOCS.DccumentKind', N'U') IS NOT NULL AND COL_LENGTH(N'DOCS.DocumentGroup', N'DccumentKindId') IS NOT NULL
+            SET @DocsDocumentGroupKindApplySql = N'OUTER APPLY (SELECT TOP 1 dk.KindCode FROM DOCS.DccumentKind dk WHERE dk.DccumentKindId = legacy.DccumentKindId) kind';
+        ELSE IF OBJECT_ID(N'DOCS.DocumentKind', N'U') IS NOT NULL AND COL_LENGTH(N'DOCS.DocumentGroup', N'DocumentKindId') IS NOT NULL
+            SET @DocsDocumentGroupKindApplySql = N'OUTER APPLY (SELECT TOP 1 dk.KindCode FROM DOCS.DocumentKind dk WHERE dk.DocumentKindId = legacy.DocumentKindId) kind';
+
+        DECLARE @MergeDocsDocumentGroupToConfigSql NVARCHAR(MAX) = N'
+MERGE Documents.DocumentConfigItem AS target
+USING
+(
+    SELECT legacy.TenantId,
+           COALESCE(kind.KindCode, N''DocumentCategory'') AS Kind,
+           legacy.GroupCode AS Code,
+           legacy.GroupName AS Name,
+           COALESCE(category.CategoryName, legacy.GroupName, N''Unassigned'') AS [Group],
+           COALESCE(category.CategoryName, legacy.GroupName, N''Unassigned'') AS Category,
+           legacy.Description,
+           NULL AS ConfigurationJson,
+           legacy.IsActive,
+           legacy.SortOrder,
+           legacy.CreatedDateUtc,
+           legacy.CreatedByUserId,
+           legacy.ModifiedDateUtc,
+           legacy.ModifiedByUserId,
+           legacy.IsDeleted
+    FROM DOCS.DocumentGroup legacy
+    ' + @DocsDocumentGroupKindApplySql + N'
+    OUTER APPLY
+    (
+        SELECT TOP 1 mc.CategoryName
+        FROM Master.Category mc
+        WHERE mc.DocumentGroupId = legacy.DocumentGroupId
+          AND mc.TenantId = legacy.TenantId
+          AND mc.IsDeleted = 0
+    ) category
+    WHERE NULLIF(LTRIM(RTRIM(legacy.GroupCode)), N'''') IS NOT NULL
+      AND NULLIF(LTRIM(RTRIM(legacy.GroupName)), N'''') IS NOT NULL
+) AS source
+ON target.TenantId = source.TenantId AND target.Kind = source.Kind AND target.Code = source.Code
+WHEN MATCHED THEN
+    UPDATE SET Name = source.Name,
+               [Group] = source.[Group],
+               Category = source.Category,
+               Description = source.Description,
+               IsActive = source.IsActive,
+               SortOrder = source.SortOrder,
+               IsDeleted = source.IsDeleted,
+               ModifiedDateUtc = COALESCE(source.ModifiedDateUtc, SYSUTCDATETIME()),
+               ModifiedByUserId = source.ModifiedByUserId
+WHEN NOT MATCHED THEN
+    INSERT (DocumentConfigItemId, TenantId, Kind, Code, Name, [Group], Category, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+    VALUES (NEWID(), source.TenantId, source.Kind, source.Code, source.Name, source.[Group], source.Category, source.Description, source.ConfigurationJson, source.IsActive, source.SortOrder, source.CreatedDateUtc, source.CreatedByUserId, source.ModifiedDateUtc, source.ModifiedByUserId, source.IsDeleted);';
+
+        EXEC sp_executesql @MergeDocsDocumentGroupToConfigSql;
+    END
+
+    MERGE DMS.DocumentKind AS target
+    USING
+    (
+        SELECT TenantId,
+               Kind AS KindCode,
+               Kind AS KindName,
+               MIN(CreatedDateUtc) AS CreatedDateUtc,
+               MIN(CreatedByUserId) AS CreatedByUserId,
+               MIN(SortOrder) AS SortOrder,
+               CONVERT(bit, MAX(CONVERT(int, IsActive))) AS IsActive
+        FROM Documents.DocumentConfigItem
+        WHERE IsDeleted = 0 AND NULLIF(LTRIM(RTRIM(Kind)), N'') IS NOT NULL
+        GROUP BY TenantId, Kind
+    ) AS source
+    ON target.TenantId = source.TenantId AND target.KindCode = source.KindCode
+    WHEN MATCHED THEN
+        UPDATE SET KindName = source.KindName,
+                   IsActive = source.IsActive,
+                   SortOrder = source.SortOrder,
+                   IsDeleted = 0,
+                   ModifiedDateUtc = SYSUTCDATETIME()
+    WHEN NOT MATCHED THEN
+        INSERT (DocumentKindId, TenantId, KindCode, KindName, Description, IsActive, SortOrder, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        VALUES (NEWID(), source.TenantId, source.KindCode, source.KindName, NULL, source.IsActive, source.SortOrder, source.CreatedDateUtc, source.CreatedByUserId, 0);
+
+    MERGE Master.Category AS target
+    USING
+    (
+        SELECT MIN(dci.DocumentConfigItemId) AS CategoryId,
+               dci.TenantId,
+               dk.DocumentKindId,
+               COALESCE(NULLIF(LTRIM(RTRIM(dci.Category)), N''), N'Unassigned') AS CategoryName,
+               UPPER(REPLACE(REPLACE(COALESCE(NULLIF(LTRIM(RTRIM(dci.Category)), N''), N'Unassigned'), N' ', N'_'), N'-', N'_')) AS CategoryCode,
+               MIN(dci.Description) AS Description,
+               MIN(dci.ConfigurationJson) AS ConfigurationJson,
+               CONVERT(bit, MAX(CONVERT(int, dci.IsActive))) AS IsActive,
+               MIN(dci.SortOrder) AS SortOrder,
+               MIN(dci.CreatedDateUtc) AS CreatedDateUtc,
+               MIN(dci.CreatedByUserId) AS CreatedByUserId,
+               MAX(dci.ModifiedDateUtc) AS ModifiedDateUtc,
+               MAX(dci.ModifiedByUserId) AS ModifiedByUserId
+        FROM Documents.DocumentConfigItem dci
+        INNER JOIN DMS.DocumentKind dk ON dk.TenantId = dci.TenantId AND dk.KindCode = dci.Kind AND dk.IsDeleted = 0
+        WHERE dci.IsDeleted = 0
+        GROUP BY dci.TenantId, dk.DocumentKindId, COALESCE(NULLIF(LTRIM(RTRIM(dci.Category)), N''), N'Unassigned')
+    ) AS source
+    ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.CategoryCode = source.CategoryCode
+    WHEN MATCHED THEN
+        UPDATE SET CategoryName = source.CategoryName,
+                   Description = source.Description,
+                   ConfigurationJson = source.ConfigurationJson,
+                   IsActive = source.IsActive,
+                   SortOrder = source.SortOrder,
+                   IsDeleted = 0,
+                   ModifiedDateUtc = COALESCE(source.ModifiedDateUtc, SYSUTCDATETIME()),
+                   ModifiedByUserId = source.ModifiedByUserId
+    WHEN NOT MATCHED THEN
+        INSERT (CategoryId, TenantId, DocumentKindId, CategoryCode, CategoryName, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+        VALUES (source.CategoryId, source.TenantId, source.DocumentKindId, source.CategoryCode, source.CategoryName, source.Description, source.ConfigurationJson, source.IsActive, source.SortOrder, source.CreatedDateUtc, source.CreatedByUserId, source.ModifiedDateUtc, source.ModifiedByUserId, 0);
+
+    MERGE DMS.DocumentGroup AS target
+    USING
+    (
+        SELECT dci.TenantId,
+               dk.DocumentKindId,
+               mc.CategoryId,
+               dci.Code AS GroupCode,
+               dci.Name AS GroupName,
+               MAX(dci.Description) AS Description,
+               MIN(dci.CreatedDateUtc) AS CreatedDateUtc,
+               MIN(dci.CreatedByUserId) AS CreatedByUserId,
+               MIN(dci.SortOrder) AS SortOrder,
+               CONVERT(bit, MAX(CONVERT(int, dci.IsActive))) AS IsActive
+        FROM Documents.DocumentConfigItem dci
+        INNER JOIN DMS.DocumentKind dk ON dk.TenantId = dci.TenantId AND dk.KindCode = dci.Kind AND dk.IsDeleted = 0
+        INNER JOIN Master.Category mc ON mc.TenantId = dci.TenantId
+                                     AND mc.DocumentKindId = dk.DocumentKindId
+                                     AND mc.CategoryCode = UPPER(REPLACE(REPLACE(COALESCE(NULLIF(LTRIM(RTRIM(dci.Category)), N''), N'Unassigned'), N' ', N'_'), N'-', N'_'))
+                                     AND mc.IsDeleted = 0
+        WHERE dci.IsDeleted = 0 AND NULLIF(LTRIM(RTRIM(dci.Name)), N'') IS NOT NULL
+        GROUP BY dci.TenantId, dk.DocumentKindId, mc.CategoryId, dci.Code, dci.Name
+    ) AS source
+    ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.GroupCode = source.GroupCode
+    WHEN MATCHED THEN
+        UPDATE SET CategoryId = source.CategoryId,
+                   GroupName = source.GroupName,
+                   Description = source.Description,
+                   IsActive = source.IsActive,
+                   SortOrder = source.SortOrder,
+                   IsDeleted = 0,
+                   ModifiedDateUtc = SYSUTCDATETIME()
+    WHEN NOT MATCHED THEN
+        INSERT (DocumentGroupId, TenantId, DocumentKindId, CategoryId, GroupCode, GroupName, Description, IsActive, SortOrder, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        VALUES (NEWID(), source.TenantId, source.DocumentKindId, source.CategoryId, source.GroupCode, source.GroupName, source.Description, source.IsActive, source.SortOrder, source.CreatedDateUtc, source.CreatedByUserId, 0);
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Master.Category') AND name = N'UX_Master_Category_TenantKindCode')
+   AND NOT EXISTS
+   (
+       SELECT 1
+       FROM Master.Category
+       WHERE IsDeleted = 0
+       GROUP BY TenantId, DocumentKindId, CategoryCode
+       HAVING COUNT(1) > 1
+   )
+    CREATE UNIQUE INDEX UX_Master_Category_TenantKindCode ON Master.Category(TenantId, DocumentKindId, CategoryCode) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Master.Category') AND name = N'IX_Master_Category_TenantKindSort')
+    CREATE INDEX IX_Master_Category_TenantKindSort ON Master.Category(TenantId, DocumentKindId, IsDeleted, SortOrder, CategoryName);
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_Master_Category_DocumentKind')
+   AND NOT EXISTS (SELECT 1 FROM Master.Category WHERE DocumentKindId IS NULL AND IsDeleted = 0)
+    ALTER TABLE Master.Category ADD CONSTRAINT FK_Master_Category_DocumentKind FOREIGN KEY (DocumentKindId) REFERENCES DMS.DocumentKind(DocumentKindId);
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_DMS_DocumentGroup_MasterCategory')
+    ALTER TABLE DMS.DocumentGroup ADD CONSTRAINT FK_DMS_DocumentGroup_MasterCategory FOREIGN KEY (CategoryId) REFERENCES Master.Category(CategoryId);
+
+IF OBJECT_ID(N'DOCS.DocumentGroup', N'U') IS NOT NULL
+BEGIN
+    DECLARE @DropDocsDocumentGroupFksSql NVARCHAR(MAX) = N'';
+
+    SELECT @DropDocsDocumentGroupFksSql = @DropDocsDocumentGroupFksSql + N'ALTER TABLE DOCS.DocumentGroup DROP CONSTRAINT ' + QUOTENAME(fk.name) + N';'
+    FROM sys.foreign_keys fk
+    WHERE fk.parent_object_id = OBJECT_ID(N'DOCS.DocumentGroup')
+       OR fk.referenced_object_id = OBJECT_ID(N'DOCS.DocumentGroup');
+
+    IF @DropDocsDocumentGroupFksSql <> N''
+        EXEC sp_executesql @DropDocsDocumentGroupFksSql;
+
+    DROP TABLE DOCS.DocumentGroup;
+END
+
+IF OBJECT_ID(N'DOCS.DocumentKind', N'U') IS NOT NULL
+    DROP TABLE DOCS.DocumentKind;
+
+IF OBJECT_ID(N'DOCS.DccumentKind', N'U') IS NOT NULL
+    DROP TABLE DOCS.DccumentKind;
+
+IF OBJECT_ID(N'Docs.DocumentGroup', N'U') IS NOT NULL
+BEGIN
+    DECLARE @DropDocsMixedDocumentGroupFksSql NVARCHAR(MAX) = N'';
+
+    SELECT @DropDocsMixedDocumentGroupFksSql = @DropDocsMixedDocumentGroupFksSql + N'ALTER TABLE Docs.DocumentGroup DROP CONSTRAINT ' + QUOTENAME(fk.name) + N';'
+    FROM sys.foreign_keys fk
+    WHERE fk.parent_object_id = OBJECT_ID(N'Docs.DocumentGroup')
+       OR fk.referenced_object_id = OBJECT_ID(N'Docs.DocumentGroup');
+
+    IF @DropDocsMixedDocumentGroupFksSql <> N''
+        EXEC sp_executesql @DropDocsMixedDocumentGroupFksSql;
+
+    DROP TABLE Docs.DocumentGroup;
+END
+
+IF OBJECT_ID(N'Docs.DocumentKind', N'U') IS NOT NULL
+    DROP TABLE Docs.DocumentKind;
+
+IF OBJECT_ID(N'Docs.DccumentKind', N'U') IS NOT NULL
+    DROP TABLE Docs.DccumentKind;
+
+IF OBJECT_ID(N'Documents.DocumentConfigItem', N'U') IS NOT NULL
+BEGIN
+    DECLARE @DropDocumentConfigItemFksSql NVARCHAR(MAX) = N'';
+
+    SELECT @DropDocumentConfigItemFksSql = @DropDocumentConfigItemFksSql + N'ALTER TABLE ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + N'.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + N' DROP CONSTRAINT ' + QUOTENAME(fk.name) + N';'
+    FROM sys.foreign_keys fk
+    WHERE fk.parent_object_id = OBJECT_ID(N'Documents.DocumentConfigItem')
+       OR fk.referenced_object_id = OBJECT_ID(N'Documents.DocumentConfigItem');
+
+    IF @DropDocumentConfigItemFksSql <> N''
+        EXEC sp_executesql @DropDocumentConfigItemFksSql;
+
+    DROP TABLE Documents.DocumentConfigItem;
+END
+";
+
+    private const string Migration0191_DocumentCategoryDmsFinalConversion = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'DMS') EXEC(N'CREATE SCHEMA DMS');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Master') EXEC(N'CREATE SCHEMA Master');
+
+IF OBJECT_ID(N'DMS.DocumentKind', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentKind
+    (
+        DocumentKindId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_DocumentKind PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        KindCode NVARCHAR(80) NOT NULL,
+        KindName NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_DMS_DocumentKind_IsActive DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_DMS_DocumentKind_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DMS_DocumentKind_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DMS_DocumentKind_IsDeleted DEFAULT 0
+    );
+END
+
+IF OBJECT_ID(N'DMS.DocumentGroup', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentGroup
+    (
+        DocumentGroupId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_DocumentGroup PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentKindId UNIQUEIDENTIFIER NOT NULL,
+        CategoryId UNIQUEIDENTIFIER NULL,
+        GroupCode NVARCHAR(120) NOT NULL,
+        GroupName NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_DMS_DocumentGroup_IsActive DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_DMS_DocumentGroup_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DMS_DocumentGroup_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DMS_DocumentGroup_IsDeleted DEFAULT 0
+    );
+END
+
+IF OBJECT_ID(N'Master.Category', N'U') IS NULL
+BEGIN
+    CREATE TABLE Master.Category
+    (
+        CategoryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Master_Category PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NULL,
+        DocumentKindId UNIQUEIDENTIFIER NULL,
+        CategoryCode NVARCHAR(80) NULL,
+        CategoryName NVARCHAR(200) NULL,
+        Description NVARCHAR(500) NULL,
+        ConfigurationJson NVARCHAR(4000) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_Master_Category_IsActive_0191 DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_Master_Category_SortOrder_0191 DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Master_Category_CreatedDateUtc_0191 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Master_Category_IsDeleted_0191 DEFAULT 0
+    );
+END
+
+IF COL_LENGTH(N'DMS.DocumentGroup', N'CategoryId') IS NULL ALTER TABLE DMS.DocumentGroup ADD CategoryId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Master.Category', N'TenantId') IS NULL ALTER TABLE Master.Category ADD TenantId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Master.Category', N'DocumentKindId') IS NULL ALTER TABLE Master.Category ADD DocumentKindId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Master.Category', N'CategoryCode') IS NULL ALTER TABLE Master.Category ADD CategoryCode NVARCHAR(80) NULL;
+IF COL_LENGTH(N'Master.Category', N'CategoryName') IS NULL ALTER TABLE Master.Category ADD CategoryName NVARCHAR(200) NULL;
+IF COL_LENGTH(N'Master.Category', N'Description') IS NULL ALTER TABLE Master.Category ADD Description NVARCHAR(500) NULL;
+IF COL_LENGTH(N'Master.Category', N'ConfigurationJson') IS NULL ALTER TABLE Master.Category ADD ConfigurationJson NVARCHAR(4000) NULL;
+IF COL_LENGTH(N'Master.Category', N'IsActive') IS NULL ALTER TABLE Master.Category ADD IsActive BIT NOT NULL CONSTRAINT DF_Master_Category_IsActive_0191_Upgrade DEFAULT 1;
+IF COL_LENGTH(N'Master.Category', N'SortOrder') IS NULL ALTER TABLE Master.Category ADD SortOrder INT NOT NULL CONSTRAINT DF_Master_Category_SortOrder_0191_Upgrade DEFAULT 0;
+IF COL_LENGTH(N'Master.Category', N'CreatedDateUtc') IS NULL ALTER TABLE Master.Category ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Master_Category_CreatedDateUtc_0191_Upgrade DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Master.Category', N'CreatedByUserId') IS NULL ALTER TABLE Master.Category ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Master.Category', N'ModifiedDateUtc') IS NULL ALTER TABLE Master.Category ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Master.Category', N'ModifiedByUserId') IS NULL ALTER TABLE Master.Category ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Master.Category', N'IsDeleted') IS NULL ALTER TABLE Master.Category ADD IsDeleted BIT NOT NULL CONSTRAINT DF_Master_Category_IsDeleted_0191_Upgrade DEFAULT 0;
+
+IF OBJECT_ID(N'Documents.DocumentConfigItem', N'U') IS NOT NULL
+BEGIN
+    MERGE DMS.DocumentKind AS target
+    USING
+    (
+        SELECT TenantId,
+               Kind AS KindCode,
+               Kind AS KindName,
+               MIN(CreatedDateUtc) AS CreatedDateUtc,
+               MIN(CreatedByUserId) AS CreatedByUserId,
+               MIN(SortOrder) AS SortOrder,
+               CONVERT(bit, MAX(CONVERT(int, IsActive))) AS IsActive
+        FROM Documents.DocumentConfigItem
+        WHERE IsDeleted = 0 AND NULLIF(LTRIM(RTRIM(Kind)), N'') IS NOT NULL
+        GROUP BY TenantId, Kind
+    ) AS source
+    ON target.TenantId = source.TenantId AND target.KindCode = source.KindCode
+    WHEN MATCHED THEN
+        UPDATE SET KindName = source.KindName, IsActive = source.IsActive, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+    WHEN NOT MATCHED THEN
+        INSERT (DocumentKindId, TenantId, KindCode, KindName, IsActive, SortOrder, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        VALUES (NEWID(), source.TenantId, source.KindCode, source.KindName, source.IsActive, source.SortOrder, source.CreatedDateUtc, source.CreatedByUserId, 0);
+
+    MERGE Master.Category AS target
+    USING
+    (
+        SELECT MIN(dci.DocumentConfigItemId) AS CategoryId,
+               dci.TenantId,
+               dk.DocumentKindId,
+               UPPER(REPLACE(REPLACE(COALESCE(NULLIF(LTRIM(RTRIM(dci.Category)), N''), N'Unassigned'), N' ', N'_'), N'-', N'_')) AS CategoryCode,
+               COALESCE(NULLIF(LTRIM(RTRIM(dci.Category)), N''), N'Unassigned') AS CategoryName,
+               MIN(dci.Description) AS Description,
+               MIN(dci.ConfigurationJson) AS ConfigurationJson,
+               CONVERT(bit, MAX(CONVERT(int, dci.IsActive))) AS IsActive,
+               MIN(dci.SortOrder) AS SortOrder,
+               MIN(dci.CreatedDateUtc) AS CreatedDateUtc,
+               MIN(dci.CreatedByUserId) AS CreatedByUserId
+        FROM Documents.DocumentConfigItem dci
+        INNER JOIN DMS.DocumentKind dk ON dk.TenantId = dci.TenantId AND dk.KindCode = dci.Kind AND dk.IsDeleted = 0
+        WHERE dci.IsDeleted = 0
+        GROUP BY dci.TenantId, dk.DocumentKindId, COALESCE(NULLIF(LTRIM(RTRIM(dci.Category)), N''), N'Unassigned')
+    ) AS source
+    ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.CategoryCode = source.CategoryCode
+    WHEN MATCHED THEN
+        UPDATE SET CategoryName = source.CategoryName, Description = source.Description, ConfigurationJson = source.ConfigurationJson, IsActive = source.IsActive, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+    WHEN NOT MATCHED THEN
+        INSERT (CategoryId, TenantId, DocumentKindId, CategoryCode, CategoryName, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        VALUES (source.CategoryId, source.TenantId, source.DocumentKindId, source.CategoryCode, source.CategoryName, source.Description, source.ConfigurationJson, source.IsActive, source.SortOrder, source.CreatedDateUtc, source.CreatedByUserId, 0);
+
+    MERGE DMS.DocumentGroup AS target
+    USING
+    (
+        SELECT dci.TenantId,
+               dk.DocumentKindId,
+               mc.CategoryId,
+               dci.Code AS GroupCode,
+               dci.Name AS GroupName,
+               MAX(dci.Description) AS Description,
+               MIN(dci.CreatedDateUtc) AS CreatedDateUtc,
+               MIN(dci.CreatedByUserId) AS CreatedByUserId,
+               MIN(dci.SortOrder) AS SortOrder,
+               CONVERT(bit, MAX(CONVERT(int, dci.IsActive))) AS IsActive
+        FROM Documents.DocumentConfigItem dci
+        INNER JOIN DMS.DocumentKind dk ON dk.TenantId = dci.TenantId AND dk.KindCode = dci.Kind AND dk.IsDeleted = 0
+        INNER JOIN Master.Category mc ON mc.TenantId = dci.TenantId
+                                     AND mc.DocumentKindId = dk.DocumentKindId
+                                     AND mc.CategoryCode = UPPER(REPLACE(REPLACE(COALESCE(NULLIF(LTRIM(RTRIM(dci.Category)), N''), N'Unassigned'), N' ', N'_'), N'-', N'_'))
+                                     AND mc.IsDeleted = 0
+        WHERE dci.IsDeleted = 0 AND NULLIF(LTRIM(RTRIM(dci.Name)), N'') IS NOT NULL
+        GROUP BY dci.TenantId, dk.DocumentKindId, mc.CategoryId, dci.Code, dci.Name
+    ) AS source
+    ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.GroupCode = source.GroupCode
+    WHEN MATCHED THEN
+        UPDATE SET CategoryId = source.CategoryId, GroupName = source.GroupName, Description = source.Description, IsActive = source.IsActive, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+    WHEN NOT MATCHED THEN
+        INSERT (DocumentGroupId, TenantId, DocumentKindId, CategoryId, GroupCode, GroupName, Description, IsActive, SortOrder, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        VALUES (NEWID(), source.TenantId, source.DocumentKindId, source.CategoryId, source.GroupCode, source.GroupName, source.Description, source.IsActive, source.SortOrder, source.CreatedDateUtc, source.CreatedByUserId, 0);
+END
+
+IF OBJECT_ID(N'DOCS.DocumentGroup', N'U') IS NOT NULL
+BEGIN
+    DECLARE @DropDocsDocumentGroupFksSql0191 NVARCHAR(MAX) = N'';
+    SELECT @DropDocsDocumentGroupFksSql0191 = @DropDocsDocumentGroupFksSql0191 + N'ALTER TABLE DOCS.DocumentGroup DROP CONSTRAINT ' + QUOTENAME(fk.name) + N';'
+    FROM sys.foreign_keys fk
+    WHERE fk.parent_object_id = OBJECT_ID(N'DOCS.DocumentGroup');
+
+    IF @DropDocsDocumentGroupFksSql0191 <> N'' EXEC sp_executesql @DropDocsDocumentGroupFksSql0191;
+    DROP TABLE DOCS.DocumentGroup;
+END
+
+IF OBJECT_ID(N'DOCS.DocumentKind', N'U') IS NOT NULL DROP TABLE DOCS.DocumentKind;
+IF OBJECT_ID(N'DOCS.DccumentKind', N'U') IS NOT NULL DROP TABLE DOCS.DccumentKind;
+IF OBJECT_ID(N'Documents.DocumentConfigItem', N'U') IS NOT NULL DROP TABLE Documents.DocumentConfigItem;
+";
+
+    private const string Migration0192_DocumentCategoryDropLegacyTables = @"
+DECLARE @DropLegacyDocumentTablesSql NVARCHAR(MAX) = N'';
+
+SELECT @DropLegacyDocumentTablesSql = @DropLegacyDocumentTablesSql + N'ALTER TABLE ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + N'.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + N' DROP CONSTRAINT ' + QUOTENAME(fk.name) + N';' + CHAR(13) + CHAR(10)
+FROM sys.foreign_keys fk
+WHERE fk.parent_object_id IN
+(
+    OBJECT_ID(N'DOCS.DocumentGroup'),
+    OBJECT_ID(N'Docs.DocumentGroup'),
+    OBJECT_ID(N'DOCS.DocumentKind'),
+    OBJECT_ID(N'Docs.DocumentKind'),
+    OBJECT_ID(N'DOCS.DccumentKind'),
+    OBJECT_ID(N'Docs.DccumentKind'),
+    OBJECT_ID(N'Documents.DocumentConfigItem')
+)
+OR fk.referenced_object_id IN
+(
+    OBJECT_ID(N'DOCS.DocumentGroup'),
+    OBJECT_ID(N'Docs.DocumentGroup'),
+    OBJECT_ID(N'DOCS.DocumentKind'),
+    OBJECT_ID(N'Docs.DocumentKind'),
+    OBJECT_ID(N'DOCS.DccumentKind'),
+    OBJECT_ID(N'Docs.DccumentKind'),
+    OBJECT_ID(N'Documents.DocumentConfigItem')
+);
+
+SELECT @DropLegacyDocumentTablesSql = @DropLegacyDocumentTablesSql + N'DROP TABLE ' + QUOTENAME(s.name) + N'.' + QUOTENAME(t.name) + N';' + CHAR(13) + CHAR(10)
+FROM sys.tables t
+INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+WHERE (s.name IN (N'DOCS', N'Docs') AND t.name IN (N'DocumentGroup', N'DocumentKind', N'DccumentKind'))
+   OR (s.name = N'Documents' AND t.name = N'DocumentConfigItem')
+ORDER BY CASE WHEN t.name = N'DocumentGroup' THEN 1 WHEN t.name = N'DocumentKind' THEN 2 WHEN t.name = N'DccumentKind' THEN 3 ELSE 4 END;
+
+IF @DropLegacyDocumentTablesSql <> N''
+    EXEC sp_executesql @DropLegacyDocumentTablesSql;
+";
+
+    private const string Migration0193_DocumentCategoryVerifyDropLegacyTables = @"
+DECLARE @LegacyObjects TABLE
+(
+    ObjectId INT NOT NULL PRIMARY KEY,
+    SchemaName SYSNAME NOT NULL,
+    TableName SYSNAME NOT NULL,
+    DropOrder INT NOT NULL
+);
+
+INSERT INTO @LegacyObjects (ObjectId, SchemaName, TableName, DropOrder)
+SELECT t.object_id,
+       s.name,
+       t.name,
+       CASE
+           WHEN s.name COLLATE Latin1_General_100_CI_AS = N'Docs' AND t.name = N'DocumentGroup' THEN 10
+           WHEN s.name COLLATE Latin1_General_100_CI_AS = N'Docs' AND t.name IN (N'DocumentKind', N'DccumentKind') THEN 20
+           WHEN s.name = N'Documents' AND t.name = N'DocumentConfigItem' THEN 30
+           ELSE 100
+       END
+FROM sys.tables t
+INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+WHERE (s.name COLLATE Latin1_General_100_CI_AS = N'Docs' AND t.name IN (N'DocumentGroup', N'DocumentKind', N'DccumentKind'))
+   OR (s.name = N'Documents' AND t.name = N'DocumentConfigItem');
+
+DECLARE @DropConstraintsSql NVARCHAR(MAX) = N'';
+
+SELECT @DropConstraintsSql = @DropConstraintsSql
+    + N'ALTER TABLE ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + N'.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id))
+    + N' DROP CONSTRAINT ' + QUOTENAME(fk.name) + N';' + CHAR(13) + CHAR(10)
+FROM sys.foreign_keys fk
+WHERE fk.parent_object_id IN (SELECT ObjectId FROM @LegacyObjects)
+   OR fk.referenced_object_id IN (SELECT ObjectId FROM @LegacyObjects);
+
+IF @DropConstraintsSql <> N''
+    EXEC sp_executesql @DropConstraintsSql;
+
+DECLARE @DropTablesSql NVARCHAR(MAX) = N'';
+
+SELECT @DropTablesSql = @DropTablesSql
+    + N'DROP TABLE ' + QUOTENAME(SchemaName) + N'.' + QUOTENAME(TableName) + N';' + CHAR(13) + CHAR(10)
+FROM @LegacyObjects
+ORDER BY DropOrder, SchemaName, TableName;
+
+IF @DropTablesSql <> N''
+    EXEC sp_executesql @DropTablesSql;
+
+DECLARE @RemainingLegacyObjects NVARCHAR(MAX);
+
+SELECT @RemainingLegacyObjects = STRING_AGG(QUOTENAME(s.name) + N'.' + QUOTENAME(t.name), N', ')
+FROM sys.tables t
+INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+WHERE (s.name COLLATE Latin1_General_100_CI_AS = N'Docs' AND t.name IN (N'DocumentGroup', N'DocumentKind', N'DccumentKind'))
+   OR (s.name = N'Documents' AND t.name = N'DocumentConfigItem');
+
+IF @RemainingLegacyObjects IS NOT NULL
+    THROW 51092, @RemainingLegacyObjects, 1;
+";
+
+    private const string Migration0190_DocumentCategoryDmsSchemaCleanupSafe = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'DMS') EXEC(N'CREATE SCHEMA DMS');
+
+IF OBJECT_ID(N'DMS.DocumentKind', N'U') IS NULL
+    CREATE TABLE DMS.DocumentKind (DocumentKindId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_DocumentKind PRIMARY KEY DEFAULT NEWID(), TenantId UNIQUEIDENTIFIER NOT NULL, KindCode NVARCHAR(80) NOT NULL, KindName NVARCHAR(200) NOT NULL, Description NVARCHAR(500) NULL, IsActive BIT NOT NULL CONSTRAINT DF_DMS_DocumentKind_IsActive DEFAULT 1, SortOrder INT NOT NULL CONSTRAINT DF_DMS_DocumentKind_SortOrder DEFAULT 0, CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DMS_DocumentKind_CreatedDateUtc DEFAULT SYSUTCDATETIME(), CreatedByUserId UNIQUEIDENTIFIER NULL, ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL, IsDeleted BIT NOT NULL CONSTRAINT DF_DMS_DocumentKind_IsDeleted DEFAULT 0);
+
+IF OBJECT_ID(N'DMS.DocumentGroup', N'U') IS NULL
+    CREATE TABLE DMS.DocumentGroup (DocumentGroupId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_DocumentGroup PRIMARY KEY DEFAULT NEWID(), TenantId UNIQUEIDENTIFIER NOT NULL, DocumentKindId UNIQUEIDENTIFIER NOT NULL, CategoryId UNIQUEIDENTIFIER NULL, GroupCode NVARCHAR(120) NOT NULL, GroupName NVARCHAR(200) NOT NULL, Description NVARCHAR(500) NULL, IsActive BIT NOT NULL CONSTRAINT DF_DMS_DocumentGroup_IsActive DEFAULT 1, SortOrder INT NOT NULL CONSTRAINT DF_DMS_DocumentGroup_SortOrder DEFAULT 0, CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DMS_DocumentGroup_CreatedDateUtc DEFAULT SYSUTCDATETIME(), CreatedByUserId UNIQUEIDENTIFIER NULL, ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL, IsDeleted BIT NOT NULL CONSTRAINT DF_DMS_DocumentGroup_IsDeleted DEFAULT 0);
+
+DECLARE @DropFkSql NVARCHAR(MAX) = N'';
+SELECT @DropFkSql = @DropFkSql + N'ALTER TABLE ' + QUOTENAME(OBJECT_SCHEMA_NAME(parent_object_id)) + N'.' + QUOTENAME(OBJECT_NAME(parent_object_id)) + N' DROP CONSTRAINT ' + QUOTENAME(name) + N';' + CHAR(13) + CHAR(10)
+FROM sys.foreign_keys
+WHERE parent_object_id IN (OBJECT_ID(N'Docs.DocumentGroup'), OBJECT_ID(N'Docs.DccumentKind'), OBJECT_ID(N'Documents.DocumentConfigItem'), OBJECT_ID(N'Master.Category'))
+   OR referenced_object_id IN (OBJECT_ID(N'Docs.DocumentGroup'), OBJECT_ID(N'Docs.DccumentKind'), OBJECT_ID(N'Documents.DocumentConfigItem'));
+IF @DropFkSql <> N'' EXEC sp_executesql @DropFkSql;
+
+IF OBJECT_ID(N'Docs.DccumentKind', N'U') IS NOT NULL
+BEGIN
+    EXEC sp_executesql N'
+MERGE DMS.DocumentKind AS target
+USING (SELECT * FROM Docs.DccumentKind) AS source
+ON target.TenantId = source.TenantId AND target.KindCode = source.KindCode
+WHEN MATCHED THEN UPDATE SET KindName = source.KindName, Description = source.Description, IsActive = source.IsActive, SortOrder = source.SortOrder, ModifiedDateUtc = COALESCE(source.ModifiedDateUtc, SYSUTCDATETIME()), ModifiedByUserId = source.ModifiedByUserId, IsDeleted = source.IsDeleted
+WHEN NOT MATCHED THEN INSERT (DocumentKindId, TenantId, KindCode, KindName, Description, IsActive, SortOrder, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted) VALUES (source.DccumentKindId, source.TenantId, source.KindCode, source.KindName, source.Description, source.IsActive, source.SortOrder, source.CreatedDateUtc, source.CreatedByUserId, source.ModifiedDateUtc, source.ModifiedByUserId, source.IsDeleted);';
+END
+
+IF OBJECT_ID(N'Docs.DocumentGroup', N'U') IS NOT NULL
+BEGIN
+    EXEC sp_executesql N'
+MERGE DMS.DocumentGroup AS target
+USING (
+    SELECT legacy.DocumentGroupId, legacy.TenantId, dk.DocumentKindId, legacy.GroupCode, legacy.GroupName, legacy.Description, legacy.IsActive, legacy.SortOrder, legacy.CreatedDateUtc, legacy.CreatedByUserId, legacy.ModifiedDateUtc, legacy.ModifiedByUserId, legacy.IsDeleted
+    FROM Docs.DocumentGroup legacy
+    INNER JOIN Docs.DccumentKind oldKind ON oldKind.DccumentKindId = legacy.DccumentKindId
+    INNER JOIN DMS.DocumentKind dk ON dk.TenantId = legacy.TenantId AND dk.KindCode = oldKind.KindCode AND dk.IsDeleted = 0
+) AS source
+ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.GroupCode = source.GroupCode
+WHEN MATCHED THEN UPDATE SET GroupName = source.GroupName, Description = source.Description, IsActive = source.IsActive, SortOrder = source.SortOrder, ModifiedDateUtc = COALESCE(source.ModifiedDateUtc, SYSUTCDATETIME()), ModifiedByUserId = source.ModifiedByUserId, IsDeleted = source.IsDeleted
+WHEN NOT MATCHED THEN INSERT (DocumentGroupId, TenantId, DocumentKindId, GroupCode, GroupName, Description, IsActive, SortOrder, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted) VALUES (source.DocumentGroupId, source.TenantId, source.DocumentKindId, source.GroupCode, source.GroupName, source.Description, source.IsActive, source.SortOrder, source.CreatedDateUtc, source.CreatedByUserId, source.ModifiedDateUtc, source.ModifiedByUserId, source.IsDeleted);';
+END
+
+DECLARE @DropTablesSql NVARCHAR(MAX) = N'';
+SELECT @DropTablesSql = @DropTablesSql + N'DROP TABLE ' + QUOTENAME(s.name) + N'.' + QUOTENAME(t.name) + N';' + CHAR(13) + CHAR(10)
+FROM sys.tables t
+INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+WHERE (s.name COLLATE Latin1_General_100_CI_AS = N'Docs' AND t.name IN (N'DocumentGroup', N'DocumentKind', N'DccumentKind'))
+   OR (s.name = N'Documents' AND t.name = N'DocumentConfigItem')
+ORDER BY CASE WHEN t.name = N'DocumentGroup' THEN 1 ELSE 2 END;
+IF @DropTablesSql <> N'' EXEC sp_executesql @DropTablesSql;
+
+DECLARE @Remaining NVARCHAR(MAX);
+SELECT @Remaining = STRING_AGG(QUOTENAME(s.name) + N'.' + QUOTENAME(t.name), N', ')
+FROM sys.tables t INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+WHERE (s.name COLLATE Latin1_General_100_CI_AS = N'Docs' AND t.name IN (N'DocumentGroup', N'DocumentKind', N'DccumentKind'))
+   OR (s.name = N'Documents' AND t.name = N'DocumentConfigItem');
+IF @Remaining IS NOT NULL THROW 51090, @Remaining, 1;
+";
+
+    private const string Migration0194_DocumentCategoryCorrectCategoryGroupMapping = @"
+IF COL_LENGTH(N'Master.Category', N'DccumentKindId') IS NOT NULL
+BEGIN
+    DECLARE @DropLegacyMasterCategoryDefaultsSql NVARCHAR(MAX) = N'';
+
+    SELECT @DropLegacyMasterCategoryDefaultsSql = @DropLegacyMasterCategoryDefaultsSql + N'ALTER TABLE Master.Category DROP CONSTRAINT ' + QUOTENAME(dc.name) + N';'
+    FROM sys.default_constraints dc
+    INNER JOIN sys.columns c ON c.object_id = dc.parent_object_id AND c.column_id = dc.parent_column_id
+    WHERE dc.parent_object_id = OBJECT_ID(N'Master.Category') AND c.name = N'DccumentKindId';
+
+    IF @DropLegacyMasterCategoryDefaultsSql <> N''
+        EXEC sp_executesql @DropLegacyMasterCategoryDefaultsSql;
+
+    ALTER TABLE Master.Category ALTER COLUMN DccumentKindId UNIQUEIDENTIFIER NULL;
+END
+
+DECLARE @DocumentCategoryKind TABLE
+(
+    TenantId UNIQUEIDENTIFIER NOT NULL,
+    DocumentKindId UNIQUEIDENTIFIER NOT NULL,
+    PRIMARY KEY (TenantId, DocumentKindId)
+);
+
+INSERT INTO @DocumentCategoryKind (TenantId, DocumentKindId)
+SELECT TenantId, DocumentKindId
+FROM DMS.DocumentKind
+WHERE KindCode = N'DocumentCategory' AND IsDeleted = 0;
+
+DECLARE @DocumentCategoryGroups TABLE
+(
+    Code NVARCHAR(80) NOT NULL,
+    Name NVARCHAR(200) NOT NULL,
+    Category NVARCHAR(200) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    ConfigurationJson NVARCHAR(4000) NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO @DocumentCategoryGroups (Code, Name, Category, Description, ConfigurationJson, SortOrder) VALUES
+(N'APPLICATION', N'Application', N'Intake', N'Client, prospect, policy, and carrier application documents.', N'{""portalVisible"":false,""requiresIndexing"":true,""source"":""SystemSeed""}', 10),
+(N'STATEMENT', N'Statement', N'Accounting', N'Billing, premium, account, and carrier statement documents.', N'{""portalVisible"":true,""requiresIndexing"":true,""source"":""SystemSeed""}', 20),
+(N'LOSS_RUN', N'Loss Run', N'Claims', N'Carrier loss run reports and loss history documents.', N'{""portalVisible"":false,""legalHoldEligible"":true,""source"":""SystemSeed""}', 30),
+(N'CERTIFICATE', N'Certificate', N'Servicing', N'Certificates of insurance and certificate delivery documents.', N'{""portalVisible"":true,""requiresIndexing"":true,""source"":""SystemSeed""}', 40),
+(N'FINANCIAL', N'Financial', N'Accounting', N'Financial statements, schedules, worksheets, and finance documents.', N'{""portalVisible"":false,""requiresIndexing"":true,""source"":""SystemSeed""}', 50),
+(N'FINANCIALS', N'Financials', N'Accounting', N'Opportunity and submission financial documents retained under legacy naming.', N'{""portalVisible"":false,""requiresIndexing"":true,""aliasOf"":""FINANCIAL"",""source"":""SystemSeed""}', 55),
+(N'CORRESPONDENCE', N'Correspondence', N'Communications', N'Email, letter, note, and other document correspondence.', N'{""portalVisible"":true,""requiresIndexing"":true,""source"":""SystemSeed""}', 60),
+(N'PROPOSAL', N'Proposal', N'Sales', N'Proposal, quote presentation, renewal proposal, and option comparison documents.', N'{""portalVisible"":true,""requiresIndexing"":true,""source"":""SystemSeed""}', 70),
+(N'CARRIER_SUB', N'Carrier Submission', N'Submissions', N'Carrier submission packets, applications, supplements, and market submissions.', N'{""portalVisible"":false,""requiresIndexing"":true,""legacyValue"":""Carrier Sub"",""source"":""SystemSeed""}', 80),
+(N'POLICY', N'Policy', N'Policy', N'Policy declarations, forms, endorsements, binders, and policy documents.', N'{""portalVisible"":true,""requiresIndexing"":true,""source"":""SystemSeed""}', 90),
+(N'ID_CARD', N'ID Card', N'Policy', N'Auto ID cards and proof-of-coverage identification documents.', N'{""portalVisible"":true,""requiresIndexing"":true,""source"":""SystemSeed""}', 100),
+(N'INVOICE', N'Invoice', N'Billing', N'Premium, agency bill, direct bill, commission, and service invoices.', N'{""portalVisible"":true,""requiresIndexing"":true,""source"":""SystemSeed""}', 110),
+(N'FORM', N'Form', N'Forms', N'General forms, supplemental forms, signed forms, and intake forms.', N'{""portalVisible"":true,""requiresIndexing"":true,""source"":""SystemSeed""}', 120),
+(N'CLAIMS', N'Claims', N'Claims', N'Claim notices, adjuster correspondence, photos, estimates, and claim documents.', N'{""portalVisible"":true,""legalHoldEligible"":true,""source"":""SystemSeed""}', 130),
+(N'OTHER', N'Other', N'General', N'General document category for records that do not fit a standard category.', N'{""portalVisible"":true,""requiresIndexing"":false,""source"":""SystemSeed""}', 990);
+
+DECLARE @DocumentCategories TABLE
+(
+    CategoryName NVARCHAR(200) NOT NULL,
+    CategoryCode NVARCHAR(80) NOT NULL,
+    SortOrder INT NOT NULL,
+    PRIMARY KEY (CategoryCode)
+);
+
+INSERT INTO @DocumentCategories (CategoryName, CategoryCode, SortOrder)
+SELECT Category,
+       UPPER(REPLACE(REPLACE(Category, N' ', N'_'), N'-', N'_')),
+       MIN(SortOrder)
+FROM @DocumentCategoryGroups
+GROUP BY Category;
+
+UPDATE dg
+SET IsDeleted = 1,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM DMS.DocumentGroup dg
+INNER JOIN @DocumentCategoryKind dk ON dk.DocumentKindId = dg.DocumentKindId AND dk.TenantId = dg.TenantId
+WHERE NOT EXISTS (SELECT 1 FROM @DocumentCategoryGroups g WHERE g.Code = dg.GroupCode);
+
+UPDATE mc
+SET IsDeleted = 1,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Master.Category mc
+INNER JOIN @DocumentCategoryKind dk ON dk.DocumentKindId = mc.DocumentKindId AND dk.TenantId = mc.TenantId
+WHERE NOT EXISTS (SELECT 1 FROM @DocumentCategories c WHERE c.CategoryCode = mc.CategoryCode);
+
+MERGE Master.Category AS target
+USING
+(
+    SELECT dk.TenantId,
+           dk.DocumentKindId,
+           c.CategoryCode,
+           c.CategoryName,
+           c.SortOrder
+    FROM @DocumentCategoryKind dk
+    CROSS JOIN @DocumentCategories c
+) AS source
+ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.CategoryCode = source.CategoryCode
+WHEN MATCHED THEN
+    UPDATE SET CategoryName = source.CategoryName,
+               Description = NULL,
+               ConfigurationJson = NULL,
+               IsActive = 1,
+               SortOrder = source.SortOrder,
+               IsDeleted = 0,
+               ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN
+    INSERT (CategoryId, TenantId, DocumentKindId, CategoryCode, CategoryName, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    VALUES (NEWID(), source.TenantId, source.DocumentKindId, source.CategoryCode, source.CategoryName, NULL, NULL, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+
+MERGE DMS.DocumentGroup AS target
+USING
+(
+    SELECT dk.TenantId,
+           dk.DocumentKindId,
+           mc.CategoryId,
+           g.Code AS GroupCode,
+           g.Name AS GroupName,
+           g.Description,
+           g.SortOrder
+    FROM @DocumentCategoryKind dk
+    CROSS JOIN @DocumentCategoryGroups g
+    INNER JOIN Master.Category mc ON mc.TenantId = dk.TenantId
+                                 AND mc.DocumentKindId = dk.DocumentKindId
+                                 AND mc.CategoryCode = UPPER(REPLACE(REPLACE(g.Category, N' ', N'_'), N'-', N'_'))
+                                 AND mc.IsDeleted = 0
+) AS source
+ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.GroupCode = source.GroupCode
+WHEN MATCHED THEN
+    UPDATE SET CategoryId = source.CategoryId,
+               GroupName = source.GroupName,
+               Description = source.Description,
+               IsActive = 1,
+               SortOrder = source.SortOrder,
+               IsDeleted = 0,
+               ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN
+    INSERT (DocumentGroupId, TenantId, DocumentKindId, CategoryId, GroupCode, GroupName, Description, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    VALUES (NEWID(), source.TenantId, source.DocumentKindId, source.CategoryId, source.GroupCode, source.GroupName, source.Description, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+";
+
+    private const string Migration0195_DmsEnterpriseConfigurationSeed = """
+IF COL_LENGTH(N'DMS.DocumentGroup', N'ConfigurationJson') IS NULL
+    ALTER TABLE DMS.DocumentGroup ADD ConfigurationJson NVARCHAR(4000) NULL;
+
+DECLARE @Tenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+INSERT INTO @Tenants (TenantId)
+SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0 AND IsActive = 1
+UNION SELECT DISTINCT TenantId FROM DMS.DocumentKind WHERE IsDeleted = 0;
+
+DECLARE @Kinds TABLE (KindCode NVARCHAR(80) NOT NULL PRIMARY KEY, KindName NVARCHAR(200) NOT NULL, Description NVARCHAR(500) NULL, SortOrder INT NOT NULL);
+INSERT INTO @Kinds (KindCode, KindName, Description, SortOrder) VALUES
+(N'DocumentCategory', N'Document Categories', N'Enterprise document category and type taxonomy used across upload, portal, CRM, policy, and servicing screens.', 10),
+(N'DocumentTemplate', N'Document Templates', N'Reusable templates with merge, e-sign, packet, and delivery metadata.', 20),
+(N'AcordForm', N'ACORD Forms', N'ACORD form library defaults, line-of-business mappings, and AI prefill settings.', 30),
+(N'ESignTemplate', N'E-Sign Templates', N'E-signature templates, signer roles, routing defaults, and evidence settings.', 40),
+(N'PacketTemplate', N'Packet Templates', N'Document bundle templates for onboarding, renewal, claims, and service delivery.', 50),
+(N'RetentionRule', N'Retention Rules', N'Document retention, archive, deletion approval, and legal hold policies.', 60),
+(N'OcrIndexingRule', N'OCR / Indexing Rules', N'OCR extraction, indexing, confidence, and exception routing rules.', 70),
+(N'StorageSetting', N'Storage Settings', N'Storage providers, encryption, region, lifecycle, and quota defaults.', 80);
+
+MERGE DMS.DocumentKind AS target
+USING (SELECT t.TenantId, k.KindCode, k.KindName, k.Description, k.SortOrder FROM @Tenants t CROSS JOIN @Kinds k) AS source
+ON target.TenantId = source.TenantId AND target.KindCode = source.KindCode
+WHEN MATCHED THEN UPDATE SET KindName = source.KindName, Description = source.Description, IsActive = 1, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (DocumentKindId, TenantId, KindCode, KindName, Description, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.KindCode, source.KindName, source.Description, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+
+IF EXISTS
+(
+    SELECT 1
+    FROM sys.indexes i
+    INNER JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+    INNER JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+    WHERE i.object_id = OBJECT_ID(N'Master.Category')
+      AND i.name = N'UX_Master_Category_TenantKindCode'
+      AND c.name = N'DccumentKindId'
+)
+    DROP INDEX UX_Master_Category_TenantKindCode ON Master.Category;
+
+DECLARE @Groups TABLE
+(
+    KindCode NVARCHAR(80) NOT NULL,
+    GroupCode NVARCHAR(80) NOT NULL,
+    GroupName NVARCHAR(200) NOT NULL,
+    CategoryCode NVARCHAR(80) NOT NULL,
+    CategoryName NVARCHAR(200) NOT NULL,
+    CategoryDescription NVARCHAR(500) NULL,
+    Description NVARCHAR(500) NULL,
+    ConfigurationJson NVARCHAR(4000) NULL,
+    SortOrder INT NOT NULL,
+    PRIMARY KEY (KindCode, GroupCode)
+);
+
+INSERT INTO @Groups (KindCode, GroupCode, GroupName, CategoryCode, CategoryName, CategoryDescription, Description, ConfigurationJson, SortOrder) VALUES
+(N'DocumentCategory', N'APPLICATION', N'Application', N'INTAKE', N'Intake', N'Inbound client and prospect document intake.', N'Client, prospect, policy, and carrier application documents.', N'{"portalVisible":false,"requiresIndexing":true,"source":"EnterpriseSeed"}', 10),
+(N'DocumentCategory', N'QUOTE', N'Quote', N'SALES', N'Sales', N'Sales and producer-facing documentation.', N'Carrier quotes, indications, premium options, and coverage comparisons.', N'{"portalVisible":true,"requiresIndexing":true,"workflow":"QuoteReview","source":"EnterpriseSeed"}', 20),
+(N'DocumentCategory', N'PROPOSAL', N'Proposal', N'SALES', N'Sales', N'Sales and producer-facing documentation.', N'Proposal, quote presentation, renewal proposal, and option comparison documents.', N'{"portalVisible":true,"requiresIndexing":true,"packetEligible":true,"source":"EnterpriseSeed"}', 30),
+(N'DocumentCategory', N'CARRIER_SUB', N'Carrier Submission', N'SUBMISSIONS', N'Submissions', N'Carrier submission and market placement records.', N'Carrier submission packets, applications, supplements, and market submissions.', N'{"portalVisible":false,"requiresIndexing":true,"legacyValue":"Carrier Sub","source":"EnterpriseSeed"}', 40),
+(N'DocumentCategory', N'BINDER', N'Binder', N'POLICY', N'Policy', N'Coverage evidence and policy lifecycle documents.', N'Binders, subjectivities, bind orders, and pre-policy coverage evidence.', N'{"portalVisible":true,"requiresIndexing":true,"retentionBasis":"CoverageRecord","source":"EnterpriseSeed"}', 50),
+(N'DocumentCategory', N'POLICY', N'Policy', N'POLICY', N'Policy', N'Coverage evidence and policy lifecycle documents.', N'Policy declarations, forms, endorsements, binders, and policy documents.', N'{"portalVisible":true,"requiresIndexing":true,"retentionBasis":"CoverageRecord","source":"EnterpriseSeed"}', 60),
+(N'DocumentCategory', N'ENDORSEMENT', N'Endorsement', N'POLICY', N'Policy', N'Coverage evidence and policy lifecycle documents.', N'Policy endorsements, change requests, and carrier confirmations.', N'{"portalVisible":true,"requiresIndexing":true,"workflow":"EndorsementReview","source":"EnterpriseSeed"}', 70),
+(N'DocumentCategory', N'CERTIFICATE', N'Certificate', N'SERVICING', N'Servicing', N'Client service documents and evidence of insurance.', N'Certificates of insurance, evidence forms, holder schedules, and delivery documents.', N'{"portalVisible":true,"requiresIndexing":true,"externalShareAllowed":true,"source":"EnterpriseSeed"}', 80),
+(N'DocumentCategory', N'ID_CARD', N'ID Card', N'POLICY', N'Policy', N'Coverage evidence and policy lifecycle documents.', N'Auto ID cards and proof-of-coverage identification documents.', N'{"portalVisible":true,"requiresIndexing":true,"externalShareAllowed":true,"source":"EnterpriseSeed"}', 90),
+(N'DocumentCategory', N'SCHEDULE', N'Schedule', N'SERVICING', N'Servicing', N'Client service documents and evidence of insurance.', N'Vehicle, property, location, equipment, driver, and exposure schedules.', N'{"portalVisible":true,"requiresIndexing":true,"source":"EnterpriseSeed"}', 100),
+(N'DocumentCategory', N'INVOICE', N'Invoice', N'BILLING', N'Billing', N'Billing, commission, premium, and receivable documents.', N'Premium, agency bill, direct bill, commission, and service invoices.', N'{"portalVisible":true,"requiresIndexing":true,"retentionBasis":"FinancialRecord","source":"EnterpriseSeed"}', 110),
+(N'DocumentCategory', N'STATEMENT', N'Statement', N'ACCOUNTING', N'Accounting', N'Accounting, finance, commission, and reconciliation records.', N'Billing, premium, account, and carrier statement documents.', N'{"portalVisible":true,"requiresIndexing":true,"retentionBasis":"FinancialRecord","source":"EnterpriseSeed"}', 120),
+(N'DocumentCategory', N'FINANCIAL', N'Financial', N'ACCOUNTING', N'Accounting', N'Accounting, finance, commission, and reconciliation records.', N'Financial statements, schedules, worksheets, and finance documents.', N'{"portalVisible":false,"requiresIndexing":true,"retentionBasis":"FinancialRecord","source":"EnterpriseSeed"}', 130),
+(N'DocumentCategory', N'LOSS_RUN', N'Loss Run', N'CLAIMS', N'Claims', N'Claims, loss history, incidents, and legal hold records.', N'Carrier loss run reports and loss history documents.', N'{"portalVisible":false,"legalHoldEligible":true,"requiresIndexing":true,"source":"EnterpriseSeed"}', 140),
+(N'DocumentCategory', N'CLAIMS', N'Claims', N'CLAIMS', N'Claims', N'Claims, loss history, incidents, and legal hold records.', N'Claim notices, adjuster correspondence, photos, estimates, and claim documents.', N'{"portalVisible":true,"legalHoldEligible":true,"requiresIndexing":true,"source":"EnterpriseSeed"}', 150),
+(N'DocumentCategory', N'INSPECTION', N'Inspection', N'CLAIMS', N'Claims', N'Claims, loss history, incidents, and legal hold records.', N'Inspection reports, risk engineering documents, photos, and recommendations.', N'{"portalVisible":false,"requiresIndexing":true,"workflow":"RiskReview","source":"EnterpriseSeed"}', 160),
+(N'DocumentCategory', N'CORRESPONDENCE', N'Correspondence', N'COMMUNICATIONS', N'Communications', N'Email, letter, note, and communication records.', N'Email, letter, note, and other document correspondence.', N'{"portalVisible":true,"requiresIndexing":true,"source":"EnterpriseSeed"}', 170),
+(N'DocumentCategory', N'NOTICE', N'Notice', N'COMMUNICATIONS', N'Communications', N'Email, letter, note, and communication records.', N'Carrier, insured, regulator, cancellation, nonrenewal, and compliance notices.', N'{"portalVisible":true,"requiresIndexing":true,"notifyOnUpload":true,"source":"EnterpriseSeed"}', 180),
+(N'DocumentCategory', N'FORM', N'Form', N'FORMS', N'Forms', N'Forms, supplements, checklists, and signed acknowledgements.', N'General forms, supplemental forms, signed forms, and intake forms.', N'{"portalVisible":true,"requiresIndexing":true,"source":"EnterpriseSeed"}', 190),
+(N'DocumentCategory', N'ACORD', N'ACORD Form', N'FORMS', N'Forms', N'Forms, supplements, checklists, and signed acknowledgements.', N'ACORD forms and standardized insurance application forms.', N'{"portalVisible":false,"requiresIndexing":true,"ocrProfile":"AcordDefault","source":"EnterpriseSeed"}', 200),
+(N'DocumentCategory', N'SIGNATURE', N'Signature / E-Sign', N'FORMS', N'Forms', N'Forms, supplements, checklists, and signed acknowledgements.', N'Signed forms, e-signature evidence, signer certificates, and consent records.', N'{"portalVisible":true,"requiresIndexing":true,"esignEvidence":true,"source":"EnterpriseSeed"}', 210),
+(N'DocumentCategory', N'CONTRACT', N'Contract', N'COMPLIANCE', N'Compliance', N'Compliance, licensing, contracts, and regulatory records.', N'Agency, vendor, producer, carrier, and client contracts.', N'{"portalVisible":false,"requiresApproval":true,"retentionBasis":"ContractRecord","source":"EnterpriseSeed"}', 220),
+(N'DocumentCategory', N'LICENSE', N'License', N'COMPLIANCE', N'Compliance', N'Compliance, licensing, contracts, and regulatory records.', N'Producer, agency, carrier appointment, and regulatory licensing records.', N'{"portalVisible":false,"requiresIndexing":true,"retentionBasis":"ComplianceRecord","source":"EnterpriseSeed"}', 230),
+(N'DocumentCategory', N'AUDIT', N'Audit', N'COMPLIANCE', N'Compliance', N'Compliance, licensing, contracts, and regulatory records.', N'Audit requests, responses, evidence, findings, and remediation records.', N'{"portalVisible":false,"legalHoldEligible":true,"requiresIndexing":true,"source":"EnterpriseSeed"}', 240),
+(N'DocumentCategory', N'RENEWAL', N'Renewal', N'SERVICING', N'Servicing', N'Client service documents and evidence of insurance.', N'Renewal strategy, exposure updates, renewal applications, and remarketing documentation.', N'{"portalVisible":true,"requiresIndexing":true,"workflow":"RenewalReview","source":"EnterpriseSeed"}', 250),
+(N'DocumentCategory', N'CANCELLATION', N'Cancellation / Nonrenewal', N'POLICY', N'Policy', N'Coverage evidence and policy lifecycle documents.', N'Cancellation, reinstatement, nonrenewal, intent-to-cancel, and lapse notices.', N'{"portalVisible":true,"requiresIndexing":true,"notifyOnUpload":true,"source":"EnterpriseSeed"}', 260),
+(N'DocumentCategory', N'PACKET', N'Packet', N'GENERAL', N'General', N'General document management and miscellaneous records.', N'Generated packets, assembled delivery bundles, and packet manifests.', N'{"portalVisible":true,"packetEligible":true,"requiresIndexing":false,"source":"EnterpriseSeed"}', 270),
+(N'DocumentCategory', N'ATTACHMENT', N'Attachment', N'GENERAL', N'General', N'General document management and miscellaneous records.', N'Supporting attachments and related supplemental files.', N'{"portalVisible":true,"requiresIndexing":false,"source":"EnterpriseSeed"}', 280),
+(N'DocumentCategory', N'OTHER', N'Other', N'GENERAL', N'General', N'General document management and miscellaneous records.', N'General document category for records that do not fit a standard category.', N'{"portalVisible":true,"requiresIndexing":false,"source":"EnterpriseSeed"}', 990),
+(N'DocumentTemplate', N'CLIENT_WELCOME_LETTER', N'Client Welcome Letter', N'CLIENT_DELIVERY', N'Client Delivery', N'Templates delivered to clients and insureds.', N'Welcome letter with client, producer, and servicing-team merge fields.', N'{"mergeReady":true,"tokens":["ClientName","ProducerName","ServiceTeam"],"packetEligible":true,"delivery":"PortalEmail"}', 10),
+(N'DocumentTemplate', N'POLICY_DELIVERY_COVER', N'Policy Delivery Cover Letter', N'CLIENT_DELIVERY', N'Client Delivery', N'Templates delivered to clients and insureds.', N'Policy delivery cover letter with policy, carrier, and effective-date merge fields.', N'{"mergeReady":true,"tokens":["PolicyNumber","CarrierName","EffectiveDate"],"packetEligible":true,"delivery":"PortalEmail"}', 20),
+(N'DocumentTemplate', N'CERTIFICATE_COVER', N'Certificate Cover Letter', N'CERTIFICATES', N'Certificates', N'Certificate and evidence delivery templates.', N'Certificate transmittal template with holder and policy merge tokens.', N'{"mergeReady":true,"tokens":["HolderName","NamedInsured","PolicyNumber"],"packetEligible":true,"delivery":"Email"}', 30),
+(N'DocumentTemplate', N'RENEWAL_PROPOSAL', N'Renewal Proposal', N'RENEWALS', N'Renewals', N'Renewal strategy and presentation templates.', N'Renewal proposal with expiring coverage, quotes, options, and recommendations.', N'{"mergeReady":true,"tokens":["ExpiringPremium","RenewalPremium","CoverageOptions"],"esignReady":false,"packetEligible":true}', 40),
+(N'DocumentTemplate', N'BOR_LETTER', N'Broker of Record Letter', N'ESIGN', N'E-Sign Ready', N'Templates prepared for e-signature.', N'Broker of record letter prepared for signer routing and evidence storage.', N'{"mergeReady":true,"esignReady":true,"signers":["InsuredPrincipal"],"packetEligible":true}', 50),
+(N'DocumentTemplate', N'CLAIM_ACKNOWLEDGEMENT', N'Claim Acknowledgement', N'CLAIMS', N'Claims', N'Claims communication templates.', N'Claim acknowledgement and next-step notification template.', N'{"mergeReady":true,"tokens":["ClaimNumber","AdjusterName","LossDate"],"delivery":"PortalEmail"}', 60),
+(N'AcordForm', N'ACORD_25', N'ACORD 25 Certificate of Liability', N'CERTIFICATES', N'Certificates', N'Certificate ACORD forms.', N'Certificate of Liability Insurance form used for evidence of coverage.', N'{"formNumber":"25","edition":"2016/03","lineOfBusiness":"Commercial Lines","aiPrefill":true,"fieldCount":36}', 10),
+(N'AcordForm', N'ACORD_125', N'ACORD 125 Commercial Insurance Application', N'APPLICATIONS', N'Applications', N'Application ACORD forms.', N'Commercial insurance application for account and exposure intake.', N'{"formNumber":"125","edition":"2016/03","lineOfBusiness":"Commercial Lines","aiPrefill":true,"fieldCount":72}', 20),
+(N'AcordForm', N'ACORD_126', N'ACORD 126 Commercial General Liability', N'APPLICATIONS', N'Applications', N'Application ACORD forms.', N'Commercial general liability section for application packets.', N'{"formNumber":"126","edition":"2016/09","lineOfBusiness":"General Liability","aiPrefill":true,"fieldCount":54}', 30),
+(N'AcordForm', N'ACORD_127', N'ACORD 127 Business Auto', N'APPLICATIONS', N'Applications', N'Application ACORD forms.', N'Business auto application section for commercial auto submissions.', N'{"formNumber":"127","edition":"2014/12","lineOfBusiness":"Commercial Auto","aiPrefill":true,"fieldCount":58}', 40),
+(N'AcordForm', N'ACORD_130', N'ACORD 130 Workers Compensation', N'APPLICATIONS', N'Applications', N'Application ACORD forms.', N'Workers compensation application and state-specific exposure fields.', N'{"formNumber":"130","edition":"2017/05","lineOfBusiness":"Workers Compensation","aiPrefill":true,"fieldCount":64}', 50),
+(N'ESignTemplate', N'BOR_ESIGN', N'Broker of Record E-Sign', N'CLIENT_SIGNATURE', N'Client Signature', N'Client signature and authorization templates.', N'E-sign template for broker-of-record authorization and evidence package.', N'{"esignReady":true,"signers":["AuthorizedRepresentative"],"routing":"Sequential","evidenceRequired":true}', 10),
+(N'ESignTemplate', N'APPLICATION_SIGNATURE', N'Application Signature Packet', N'CLIENT_SIGNATURE', N'Client Signature', N'Client signature and authorization templates.', N'Client application signature packet for new business and renewal submissions.', N'{"esignReady":true,"signers":["Applicant","Producer"],"routing":"Sequential","evidenceRequired":true}', 20),
+(N'ESignTemplate', N'FINANCE_AGREEMENT', N'Premium Finance Agreement', N'BILLING_SIGNATURE', N'Billing Signature', N'Billing and finance signature templates.', N'Premium finance agreement signer routing template.', N'{"esignReady":true,"signers":["InsuredPrincipal"],"routing":"Parallel","evidenceRequired":true}', 30),
+(N'PacketTemplate', N'WELCOME_PACKET', N'New Client Welcome Packet', N'ONBOARDING', N'Onboarding', N'Client onboarding packet templates.', N'Welcome packet containing welcome letter, service contacts, portal guidance, and key documents.', N'{"packetReady":true,"bundle":["CLIENT_WELCOME_LETTER","PORTAL_GUIDE"],"delivery":"PortalEmail"}', 10),
+(N'PacketTemplate', N'RENEWAL_PACKET', N'Renewal Review Packet', N'RENEWAL', N'Renewal', N'Renewal packet templates.', N'Renewal packet containing renewal proposal, coverage summaries, and signature documents.', N'{"packetReady":true,"bundle":["RENEWAL_PROPOSAL","APPLICATION_SIGNATURE"],"delivery":"PortalEmail"}', 20),
+(N'PacketTemplate', N'POLICY_DELIVERY_PACKET', N'Policy Delivery Packet', N'POLICY_DELIVERY', N'Policy Delivery', N'Policy delivery packet templates.', N'Policy delivery bundle with policy cover letter, policy documents, certificates, and ID cards.', N'{"packetReady":true,"bundle":["POLICY_DELIVERY_COVER","POLICY","CERTIFICATE"],"delivery":"PortalEmail"}', 30),
+(N'PacketTemplate', N'CLAIM_INTAKE_PACKET', N'Claim Intake Packet', N'CLAIMS', N'Claims', N'Claims packet templates.', N'Claim intake bundle for first notice of loss and supporting evidence.', N'{"packetReady":true,"bundle":["CLAIM_ACKNOWLEDGEMENT","LOSS_RUN"],"delivery":"PortalEmail"}', 40),
+(N'RetentionRule', N'POLICY_7_YEARS', N'Policy Documents - 7 Years', N'POLICY_RETENTION', N'Policy Retention', N'Policy and coverage retention standards.', N'Retain policy records for seven years after policy expiration.', N'{"retentionYears":7,"startTrigger":"PolicyExpiration","action":"ArchiveThenReview","approvalRequired":true}', 10),
+(N'RetentionRule', N'CLAIM_10_YEARS', N'Claim Documents - 10 Years', N'CLAIM_RETENTION', N'Claim Retention', N'Claims and legal hold retention standards.', N'Retain claim and loss documents for ten years after claim closure.', N'{"retentionYears":10,"startTrigger":"ClaimClosed","action":"LegalReviewBeforeDelete","approvalRequired":true}', 20),
+(N'RetentionRule', N'FINANCE_7_YEARS', N'Financial Documents - 7 Years', N'FINANCE_RETENTION', N'Finance Retention', N'Financial and accounting retention standards.', N'Retain financial, invoice, commission, and statement records for seven years.', N'{"retentionYears":7,"startTrigger":"FiscalYearEnd","action":"ArchiveThenDelete","approvalRequired":true}', 30),
+(N'RetentionRule', N'COMPLIANCE_PERMANENT', N'Compliance Records - Permanent', N'COMPLIANCE_RETENTION', N'Compliance Retention', N'Compliance and regulatory retention standards.', N'Retain audit, license, appointment, and regulatory compliance evidence permanently.', N'{"retentionYears":99,"startTrigger":"CreatedDate","action":"PermanentArchive","approvalRequired":true}', 40),
+(N'OcrIndexingRule', N'POLICY_NUMBER_OCR', N'Policy Number Extraction', N'POLICY_INDEXING', N'Policy Indexing', N'Policy and coverage extraction rules.', N'Extract policy number, carrier, effective date, expiration date, and named insured.', N'{"ocrReady":true,"fields":["PolicyNumber","CarrierName","EffectiveDate","ExpirationDate","NamedInsured"],"minConfidence":85}', 10),
+(N'OcrIndexingRule', N'INVOICE_OCR', N'Invoice Extraction', N'BILLING_INDEXING', N'Billing Indexing', N'Billing and finance extraction rules.', N'Extract invoice number, amount due, due date, policy number, and billing carrier.', N'{"ocrReady":true,"fields":["InvoiceNumber","AmountDue","DueDate","PolicyNumber","CarrierName"],"minConfidence":82}', 20),
+(N'OcrIndexingRule', N'ACORD_OCR', N'ACORD Form Extraction', N'ACORD_INDEXING', N'ACORD Indexing', N'ACORD extraction rules.', N'Extract ACORD form number, edition, applicant, producer, and line-of-business fields.', N'{"ocrReady":true,"fields":["FormNumber","Edition","ApplicantName","ProducerName","LineOfBusiness"],"minConfidence":80}', 30),
+(N'OcrIndexingRule', N'CLAIM_OCR', N'Claim Document Extraction', N'CLAIM_INDEXING', N'Claim Indexing', N'Claims extraction rules.', N'Extract claim number, loss date, claimant, adjuster, and claim status.', N'{"ocrReady":true,"fields":["ClaimNumber","LossDate","ClaimantName","AdjusterName","ClaimStatus"],"minConfidence":80}', 40),
+(N'StorageSetting', N'DEFAULT_STORAGE', N'Default Document Storage', N'PRIMARY_STORAGE', N'Primary Storage', N'Primary storage configuration.', N'Encrypted primary document storage with tenant isolation, checksum validation, and lifecycle tags.', N'{"provider":"AzureBlob","encryption":"AES256","tenantIsolation":true,"checksum":"SHA256","lifecycle":"HotToCoolAfter90Days"}', 10),
+(N'StorageSetting', N'ARCHIVE_STORAGE', N'Archive Document Storage', N'ARCHIVE_STORAGE', N'Archive Storage', N'Long-term archive configuration.', N'Immutable archive storage for retention-controlled document records.', N'{"provider":"AzureBlobArchive","immutability":true,"legalHold":true,"lifecycle":"ArchiveAfter365Days"}', 20),
+(N'StorageSetting', N'PORTAL_SHARE_STORAGE', N'Portal Share Storage', N'SHARE_STORAGE', N'Share Storage', N'External document sharing storage.', N'Secure external sharing storage with expiring links and access audit logging.', N'{"provider":"AzureBlob","signedUrls":true,"defaultExpiryDays":14,"auditAccess":true}', 30);
+
+MERGE Master.Category AS target
+USING
+(
+    SELECT dk.TenantId, dk.DocumentKindId, g.CategoryCode, g.CategoryName, MAX(g.CategoryDescription) AS Description, MIN(g.SortOrder) AS SortOrder
+    FROM @Groups g
+    INNER JOIN DMS.DocumentKind dk ON dk.KindCode = g.KindCode AND dk.IsDeleted = 0
+    GROUP BY dk.TenantId, dk.DocumentKindId, g.CategoryCode, g.CategoryName
+) AS source
+ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.CategoryCode = source.CategoryCode
+WHEN MATCHED THEN UPDATE SET CategoryName = source.CategoryName, Description = source.Description, IsActive = 1, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (CategoryId, TenantId, DocumentKindId, CategoryCode, CategoryName, Description, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.DocumentKindId, source.CategoryCode, source.CategoryName, source.Description, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+
+CREATE TABLE #DmsEnterpriseGroups
+(
+    TenantId UNIQUEIDENTIFIER NOT NULL,
+    DocumentKindId UNIQUEIDENTIFIER NOT NULL,
+    CategoryId UNIQUEIDENTIFIER NOT NULL,
+    GroupCode NVARCHAR(80) NOT NULL,
+    GroupName NVARCHAR(200) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    ConfigurationJson NVARCHAR(4000) NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO #DmsEnterpriseGroups (TenantId, DocumentKindId, CategoryId, GroupCode, GroupName, Description, ConfigurationJson, SortOrder)
+SELECT dk.TenantId, dk.DocumentKindId, mc.CategoryId, g.GroupCode, g.GroupName, g.Description, g.ConfigurationJson, g.SortOrder
+FROM @Groups g
+INNER JOIN DMS.DocumentKind dk ON dk.KindCode = g.KindCode AND dk.IsDeleted = 0
+INNER JOIN Master.Category mc ON mc.TenantId = dk.TenantId AND mc.DocumentKindId = dk.DocumentKindId AND mc.CategoryCode = g.CategoryCode AND mc.IsDeleted = 0;
+
+EXEC sp_executesql N'
+MERGE DMS.DocumentGroup AS target
+USING #DmsEnterpriseGroups AS source
+ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.GroupCode = source.GroupCode
+WHEN MATCHED THEN UPDATE SET CategoryId = source.CategoryId, GroupName = source.GroupName, Description = source.Description, ConfigurationJson = source.ConfigurationJson, IsActive = 1, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (DocumentGroupId, TenantId, DocumentKindId, CategoryId, GroupCode, GroupName, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.DocumentKindId, source.CategoryId, source.GroupCode, source.GroupName, source.Description, source.ConfigurationJson, 1, source.SortOrder, SYSUTCDATETIME(), 0);';
+
+DROP TABLE #DmsEnterpriseGroups;
+
+UPDATE mc
+SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME()
+FROM Master.Category mc
+WHERE mc.DocumentKindId IS NULL
+  AND mc.IsDeleted = 0
+  AND EXISTS (SELECT 1 FROM DMS.DocumentKind dk WHERE dk.TenantId = mc.TenantId AND dk.IsDeleted = 0);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Master.Category') AND name = N'UX_Master_Category_TenantKindCode')
+   AND NOT EXISTS
+   (
+       SELECT 1
+       FROM Master.Category
+       WHERE IsDeleted = 0
+       GROUP BY TenantId, DocumentKindId, CategoryCode
+       HAVING COUNT(1) > 1
+   )
+    CREATE UNIQUE INDEX UX_Master_Category_TenantKindCode ON Master.Category(TenantId, DocumentKindId, CategoryCode) WHERE IsDeleted = 0;
+
+DECLARE @AcordForms TABLE (FormNumber NVARCHAR(40) NOT NULL, FormName NVARCHAR(200) NOT NULL, LineOfBusiness NVARCHAR(120) NOT NULL, Edition NVARCHAR(40) NOT NULL, Description NVARCHAR(500) NULL, FieldCount INT NOT NULL, SortOrder INT NOT NULL);
+INSERT INTO @AcordForms (FormNumber, FormName, LineOfBusiness, Edition, Description, FieldCount, SortOrder) VALUES
+(N'25', N'Certificate of Liability Insurance', N'Commercial Lines', N'2016/03', N'Evidence of liability coverage for certificate holders.', 36, 10),
+(N'27', N'Evidence of Property Insurance', N'Property', N'2016/03', N'Evidence of commercial property coverage.', 28, 20),
+(N'80', N'Homeowner Application', N'Personal Lines', N'2013/01', N'Homeowner application and property details.', 46, 30),
+(N'125', N'Commercial Insurance Application', N'Commercial Lines', N'2016/03', N'Commercial account application and named insured intake.', 72, 40),
+(N'126', N'Commercial General Liability Section', N'General Liability', N'2016/09', N'Commercial general liability application section.', 54, 50),
+(N'127', N'Business Auto Section', N'Commercial Auto', N'2014/12', N'Business auto application section.', 58, 60),
+(N'130', N'Workers Compensation Application', N'Workers Compensation', N'2017/05', N'Workers compensation application and rating details.', 64, 70),
+(N'140', N'Property Section', N'Property', N'2016/03', N'Commercial property application section.', 60, 80),
+(N'141', N'Crime Section', N'Crime', N'2016/03', N'Crime coverage application section.', 34, 90),
+(N'160', N'Business Owners Section', N'Business Owners', N'2016/03', N'Business owners policy application section.', 50, 100);
+
+MERGE DMS.AcordForm AS target
+USING (SELECT t.TenantId, f.* FROM @Tenants t CROSS JOIN @AcordForms f) AS source
+ON target.TenantId = source.TenantId AND target.FormNumber = source.FormNumber AND target.Edition = source.Edition AND target.IsDeleted = 0
+WHEN MATCHED THEN UPDATE SET FormName = source.FormName, LineOfBusiness = source.LineOfBusiness, Status = N'Active', AiPrefilled = 1, PrefillFieldCount = source.FieldCount, PrefillConfidence = 92, Description = source.Description, LastModifiedDateUtc = SYSUTCDATETIME(), ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (AcordFormId, TenantId, FormNumber, FormName, LineOfBusiness, Edition, Status, AiPrefilled, PrefillFieldCount, PrefillConfidence, OwnerName, Description, LastModifiedDateUtc, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.FormNumber, source.FormName, source.LineOfBusiness, source.Edition, N'Active', 1, source.FieldCount, 92, N'Document Operations', source.Description, SYSUTCDATETIME(), SYSUTCDATETIME(), 0);
+
+DECLARE @Policies TABLE (PolicyCode NVARCHAR(80) NOT NULL PRIMARY KEY, PolicyName NVARCHAR(200) NOT NULL, Description NVARCHAR(500) NULL, ApplicableCategory NVARCHAR(120) NULL, ApplicableDocType NVARCHAR(120) NULL, ApplicableEntityType NVARCHAR(120) NULL, Years INT NOT NULL, StartTrigger NVARCHAR(80) NOT NULL, ExpiryAction NVARCHAR(80) NOT NULL, NotifyDays INT NOT NULL, NotifyRole NVARCHAR(80) NOT NULL, Basis NVARCHAR(500) NULL, SortOrder INT NOT NULL);
+INSERT INTO @Policies (PolicyCode, PolicyName, Description, ApplicableCategory, ApplicableDocType, ApplicableEntityType, Years, StartTrigger, ExpiryAction, NotifyDays, NotifyRole, Basis, SortOrder) VALUES
+(N'POLICY-7YR', N'Policy Documents - 7 Years', N'Retain policy records for seven years after expiration.', N'Policy', N'Policy', N'Policy', 7, N'PolicyExpiration', N'ArchiveThenReview', 180, N'COMPLIANCE_MANAGER', N'Insurance policy recordkeeping standard.', 10),
+(N'CLAIM-10YR', N'Claim Documents - 10 Years', N'Retain claim and loss records for ten years after closure.', N'Claims', N'Claim', N'Claim', 10, N'ClaimClosed', N'LegalReviewBeforeDelete', 365, N'CLAIMS_MANAGER', N'Claims and litigation hold standard.', 20),
+(N'FINANCE-7YR', N'Financial Documents - 7 Years', N'Retain invoice, statement, commission, and financial records for seven years.', N'Accounting', N'Financial', N'Account', 7, N'FiscalYearEnd', N'ArchiveThenDelete', 180, N'FINANCE_MANAGER', N'Financial and tax recordkeeping standard.', 30),
+(N'COMPLIANCE-PERM', N'Compliance Records - Permanent', N'Retain audit, licensing, appointment, and regulatory evidence permanently.', N'Compliance', N'Compliance', N'Tenant', 99, N'CreatedDate', N'PermanentArchive', 365, N'COMPLIANCE_MANAGER', N'Regulatory evidence retention standard.', 40),
+(N'CONTRACT-10YR', N'Contracts - 10 Years', N'Retain contracts for ten years after termination or expiration.', N'Compliance', N'Contract', N'Contract', 10, N'ContractEndDate', N'LegalReviewBeforeDelete', 365, N'LEGAL_REVIEWER', N'Contract limitation and dispute support standard.', 50);
+
+MERGE DMS.DocumentRetentionPolicy AS target
+USING (SELECT t.TenantId, p.* FROM @Tenants t CROSS JOIN @Policies p) AS source
+ON target.TenantId = source.TenantId AND target.PolicyCode = source.PolicyCode AND target.IsDeleted = 0
+WHEN MATCHED THEN UPDATE SET PolicyName = source.PolicyName, Description = source.Description, ApplicableCategory = source.ApplicableCategory, ApplicableDocType = source.ApplicableDocType, ApplicableEntityType = source.ApplicableEntityType, RetentionPeriodYears = source.Years, RetentionStartTrigger = source.StartTrigger, ActionOnExpiry = source.ExpiryAction, RequireApprovalToDelete = 1, NotifyBeforeDays = source.NotifyDays, NotifyRoleCode = source.NotifyRole, RegulatoryBasis = source.Basis, IsActive = 1, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (RetentionPolicyId, TenantId, PolicyName, PolicyCode, Description, ApplicableCategory, ApplicableDocType, ApplicableEntityType, RetentionPeriodYears, RetentionStartTrigger, ActionOnExpiry, RequireApprovalToDelete, NotifyBeforeDays, NotifyRoleCode, RegulatoryBasis, ComplianceNotes, IsActive, EffectiveDate, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.PolicyName, source.PolicyCode, source.Description, source.ApplicableCategory, source.ApplicableDocType, source.ApplicableEntityType, source.Years, source.StartTrigger, source.ExpiryAction, 1, source.NotifyDays, source.NotifyRole, source.Basis, N'Enterprise seed policy; review with carrier, legal, and jurisdiction-specific requirements.', 1, CONVERT(date, SYSUTCDATETIME()), SYSUTCDATETIME(), 0);
+
+DECLARE @Workflows TABLE (TemplateCode NVARCHAR(80) NOT NULL PRIMARY KEY, TemplateName NVARCHAR(200) NOT NULL, Description NVARCHAR(500) NULL, WorkflowType NVARCHAR(80) NOT NULL, TriggerCategory NVARCHAR(120) NULL, TriggerDocType NVARCHAR(120) NULL, SortOrder INT NOT NULL);
+INSERT INTO @Workflows (TemplateCode, TemplateName, Description, WorkflowType, TriggerCategory, TriggerDocType, SortOrder) VALUES
+(N'POLICY-REVIEW', N'Policy Document Review', N'Review, approve, and archive uploaded policy documents.', N'Approval', N'Policy', N'Policy', 10),
+(N'CLAIM-REVIEW', N'Claim Document Review', N'Review claim documents for completeness, legal hold, and service follow-up.', N'Approval', N'Claims', N'Claim', 20),
+(N'CERTIFICATE-ISSUANCE', N'Certificate Issuance Review', N'Validate certificate requests, evidence, and delivery requirements.', N'Fulfillment', N'Servicing', N'Certificate', 30),
+(N'RENEWAL-PACKET', N'Renewal Packet Assembly', N'Assemble, approve, and deliver renewal packets.', N'Packet', N'Servicing', N'Renewal', 40),
+(N'COMPLIANCE-APPROVAL', N'Compliance Approval', N'Review compliance, contract, license, and audit documents.', N'Compliance', N'Compliance', N'Compliance', 50);
+
+MERGE DMS.DocumentWorkflowTemplate AS target
+USING (SELECT t.TenantId, w.* FROM @Tenants t CROSS JOIN @Workflows w) AS source
+ON target.TenantId = source.TenantId AND target.TemplateCode = source.TemplateCode AND target.IsDeleted = 0
+WHEN MATCHED THEN UPDATE SET TemplateName = source.TemplateName, Description = source.Description, WorkflowType = source.WorkflowType, IsSequential = 1, RequiresAllApprovals = 1, AutoArchiveOnComplete = 1, NotifyOnStart = 1, NotifyOnComplete = 1, TriggerOnUpload = 1, TriggerOnCategory = source.TriggerCategory, TriggerOnDocType = source.TriggerDocType, IsActive = 1, SortOrder = source.SortOrder, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (WorkflowTemplateId, TenantId, TemplateName, TemplateCode, Description, WorkflowType, IsSequential, RequiresAllApprovals, AutoArchiveOnComplete, NotifyOnStart, NotifyOnComplete, TriggerOnUpload, TriggerOnCategory, TriggerOnDocType, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.TemplateName, source.TemplateCode, source.Description, source.WorkflowType, 1, 1, 1, 1, 1, 1, source.TriggerCategory, source.TriggerDocType, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+
+DECLARE @WorkflowSteps TABLE (StepCode NVARCHAR(80) NOT NULL, StepName NVARCHAR(200) NOT NULL, StepType NVARCHAR(80) NOT NULL, StepOrder INT NOT NULL, Description NVARCHAR(500) NULL, RoleCode NVARCHAR(80) NULL, DueDays INT NULL, EscalateDays INT NULL, EscalateRole NVARCHAR(80) NULL, PRIMARY KEY (StepCode, StepOrder));
+INSERT INTO @WorkflowSteps (StepCode, StepName, StepType, StepOrder, Description, RoleCode, DueDays, EscalateDays, EscalateRole) VALUES
+(N'DEFAULT', N'Intake Completeness Review', N'Review', 10, N'Validate required metadata, category, entity links, and document quality.', N'DOCUMENT_SPECIALIST', 2, 3, N'SERVICE_MANAGER'),
+(N'DEFAULT', N'Business Approval', N'Approval', 20, N'Approve document for business use, packet delivery, or portal visibility.', N'SERVICE_MANAGER', 3, 5, N'OPERATIONS_MANAGER'),
+(N'DEFAULT', N'Compliance / Retention Check', N'Compliance', 30, N'Confirm retention, security, privacy, and legal hold requirements.', N'COMPLIANCE_MANAGER', 5, 7, N'LEGAL_REVIEWER');
+
+MERGE DMS.DocumentWorkflowStepTemplate AS target
+USING
+(
+    SELECT wt.TenantId, wt.WorkflowTemplateId, s.StepName, s.StepType, s.StepOrder, s.Description, s.RoleCode, s.DueDays, s.EscalateDays, s.EscalateRole
+    FROM DMS.DocumentWorkflowTemplate wt
+    INNER JOIN @Workflows w ON w.TemplateCode = wt.TemplateCode
+    CROSS JOIN @WorkflowSteps s
+    WHERE wt.IsDeleted = 0
+) AS source
+ON target.WorkflowTemplateId = source.WorkflowTemplateId AND target.StepOrder = source.StepOrder AND target.IsDeleted = 0
+WHEN MATCHED THEN UPDATE SET StepName = source.StepName, StepType = source.StepType, Description = source.Description, AssignedToRoleCode = source.RoleCode, IsRequired = 1, DueDays = source.DueDays, EscalateDays = source.EscalateDays, EscalateToRoleCode = source.EscalateRole, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (StepTemplateId, TenantId, WorkflowTemplateId, StepName, StepType, StepOrder, Description, AssignedToRoleCode, AssignToBranchAdmin, AssignToDocOwner, IsRequired, DueDays, EscalateDays, EscalateToRoleCode, RequiresPreviousApproval, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.WorkflowTemplateId, source.StepName, source.StepType, source.StepOrder, source.Description, source.RoleCode, 0, 0, 1, source.DueDays, source.EscalateDays, source.EscalateRole, CASE WHEN source.StepOrder > 10 THEN 1 ELSE 0 END, SYSUTCDATETIME(), 0);
+""";
+
+    private const string Migration0196_DmsEnterpriseConfigurationCleanup = """
+DECLARE @LegacyPlaceholders TABLE
+(
+    KindCode NVARCHAR(80) NOT NULL,
+    GroupCode NVARCHAR(80) NOT NULL,
+    PRIMARY KEY (KindCode, GroupCode)
+);
+
+INSERT INTO @LegacyPlaceholders (KindCode, GroupCode) VALUES
+(N'AcordForm', N'CERTIFICATE'),
+(N'DocumentCategory', N'FINANCIALS'),
+(N'DocumentTemplate', N'CLIENT'),
+(N'ESignTemplate', N'BROKER_OF_RECORD'),
+(N'OcrIndexingRule', N'OCR'),
+(N'PacketTemplate', N'RENEWALS'),
+(N'RetentionRule', N'POLICY'),
+(N'StorageSetting', N'STORAGE');
+
+UPDATE dg
+SET IsDeleted = 1,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM DMS.DocumentGroup dg
+INNER JOIN DMS.DocumentKind dk ON dk.DocumentKindId = dg.DocumentKindId AND dk.IsDeleted = 0
+INNER JOIN @LegacyPlaceholders lp ON lp.KindCode = dk.KindCode AND lp.GroupCode = dg.GroupCode
+WHERE dg.IsDeleted = 0
+  AND (dg.ConfigurationJson IS NULL OR dg.CategoryId IS NULL);
+
+UPDATE mc
+SET IsDeleted = 1,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Master.Category mc
+WHERE mc.IsDeleted = 0
+  AND mc.DocumentKindId IS NULL;
+""";
+
+    private const string Migration0197_EnterpriseAmsCapabilityMatrix = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Enterprise') EXEC(N'CREATE SCHEMA Enterprise');
+
+IF OBJECT_ID(N'Enterprise.AmsCapability', N'U') IS NULL
+BEGIN
+    CREATE TABLE Enterprise.AmsCapability
+    (
+        CapabilityId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Enterprise_AmsCapability PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DomainCode NVARCHAR(80) NOT NULL,
+        DomainName NVARCHAR(200) NOT NULL,
+        CapabilityCode NVARCHAR(120) NOT NULL,
+        CapabilityName NVARCHAR(200) NOT NULL,
+        MarketBenchmark NVARCHAR(1000) NOT NULL,
+        CurrentState NVARCHAR(1000) NOT NULL,
+        StatusCode NVARCHAR(40) NOT NULL,
+        PriorityCode NVARCHAR(40) NOT NULL,
+        MaturityScore INT NOT NULL CONSTRAINT DF_Enterprise_AmsCapability_MaturityScore DEFAULT 0,
+        ExistingModuleRoute NVARCHAR(300) NOT NULL CONSTRAINT DF_Enterprise_AmsCapability_ExistingModuleRoute DEFAULT N'',
+        RecommendedAction NVARCHAR(1000) NOT NULL,
+        DataSource NVARCHAR(300) NOT NULL CONSTRAINT DF_Enterprise_AmsCapability_DataSource DEFAULT N'Database',
+        ConfigurationJson NVARCHAR(4000) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_Enterprise_AmsCapability_IsActive DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_Enterprise_AmsCapability_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Enterprise_AmsCapability_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Enterprise_AmsCapability_IsDeleted DEFAULT 0
+    );
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Enterprise.AmsCapability') AND name = N'UX_Enterprise_AmsCapability_TenantCode')
+    CREATE UNIQUE INDEX UX_Enterprise_AmsCapability_TenantCode ON Enterprise.AmsCapability(TenantId, CapabilityCode) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Enterprise.AmsCapability') AND name = N'IX_Enterprise_AmsCapability_TenantDomain')
+    CREATE INDEX IX_Enterprise_AmsCapability_TenantDomain ON Enterprise.AmsCapability(TenantId, DomainCode, StatusCode, PriorityCode, IsDeleted, SortOrder);
+
+DECLARE @Tenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+INSERT INTO @Tenants (TenantId)
+SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0 AND IsActive = 1;
+
+DECLARE @Capabilities TABLE
+(
+    DomainCode NVARCHAR(80) NOT NULL,
+    DomainName NVARCHAR(200) NOT NULL,
+    CapabilityCode NVARCHAR(120) NOT NULL PRIMARY KEY,
+    CapabilityName NVARCHAR(200) NOT NULL,
+    MarketBenchmark NVARCHAR(1000) NOT NULL,
+    CurrentState NVARCHAR(1000) NOT NULL,
+    StatusCode NVARCHAR(40) NOT NULL,
+    PriorityCode NVARCHAR(40) NOT NULL,
+    MaturityScore INT NOT NULL,
+    ExistingModuleRoute NVARCHAR(300) NOT NULL,
+    RecommendedAction NVARCHAR(1000) NOT NULL,
+    DataSource NVARCHAR(300) NOT NULL,
+    ConfigurationJson NVARCHAR(4000) NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO @Capabilities (DomainCode, DomainName, CapabilityCode, CapabilityName, MarketBenchmark, CurrentState, StatusCode, PriorityCode, MaturityScore, ExistingModuleRoute, RecommendedAction, DataSource, ConfigurationJson, SortOrder) VALUES
+(N'POLICY', N'Policy Lifecycle', N'POLICY_LIFECYCLE', N'Policy lifecycle and servicing', N'Top AMS platforms maintain full policy term history, endorsements, cancellations, reinstatements, renewals, servicing assignments, and policy document requirements.', N'Policy, endorsement, cancellation, coverage, and policy operations pages exist; use this capability to govern remaining lifecycle depth and integrations.', N'Partial', N'Critical', 72, N'/policy/operations', N'Continue consolidating policy term history, renewal workflows, endorsement/cancellation execution, and document requirements into the existing policy ops modules.', N'Policy modules, DMS, renewal retention', N'{"existingModules":["PolicyOpsWorkbench","PolicyEndorsements","PolicyCancellations","PolicyCoverages","DMS"]}', 10),
+(N'CARRIER', N'Carrier Connectivity', N'CARRIER_DOWNLOAD_RECONCILIATION', N'Carrier download reconciliation', N'Enterprise AMS platforms support carrier download inboxes, AL3/ACORD-style matching, suspense queues, preview-before-commit, and exception handling.', N'Carrier download dashboard, items, exceptions, worker executors, and mapping screens already exist.', N'Partial', N'Critical', 78, N'/carrier-connectivity', N'Use existing download services to add import preview, reconciliation audit, and unmatched-download resolution SLAs instead of creating another download module.', N'Integration.CarrierDownloadItem and carrier download services', N'{"existingModules":["CarrierConnectivityDashboard","CarrierDownloadMappings","Ams.Worker carrier executors"]}', 20),
+(N'CARRIER', N'Carrier Connectivity', N'CARRIER_DOWNLOAD_MAPPING', N'Carrier download field mapping', N'Top AMS platforms provide carrier-specific transaction, field mapping, transform, and validation rules.', N'Carrier download mapping configuration exists under carrier config.', N'Implemented', N'High', 86, N'/tenant/carriers/download-mappings', N'Extend current mapping rules with carrier-specific validation packs and versioning where needed.', N'Agency.CarrierDownloadMapping', N'{"existingModules":["CarrierDownloadMappings"]}', 30),
+(N'COMMISSION', N'Commission Accounting', N'COMMISSION_ACCOUNTING', N'Commission accounting and reconciliation', N'Enterprise AMS platforms support direct/agency bill commissions, producer splits, statement reconciliation, exceptions, chargebacks, accruals, and payables.', N'Commission transactions, accruals, calculations, disputes, exceptions, payout batches, payout statements, forecasts, and configuration modules exist.', N'Partial', N'Critical', 82, N'/commissions', N'Unify existing commission modules into a guided reconciliation cockpit and add carrier statement import validation against transactions.', N'Commission schema and commission modules', N'{"existingModules":["CommissionManagement","CommissionAccruals","CommissionCalculations","CommissionExceptions","CommissionPayoutBatches"]}', 40),
+(N'COMMISSION', N'Commission Accounting', N'COMMISSION_PAYOUTS', N'Producer payout and statement workflow', N'Top AMS platforms generate producer payable batches, statements, approvals, and chargeback tracking.', N'Payout, payout batch, payout statement, payee, clawback, and dispute modules exist.', N'Implemented', N'High', 88, N'/commissions/payout-batches', N'Add approval routing and scheduled statement delivery to the existing payout workflow where missing.', N'Commission payout tables and pages', N'{"existingModules":["CommissionPayoutBatches","CommissionPayoutStatements","CommissionClawbacks"]}', 50),
+(N'CERTIFICATES', N'Certificate Management', N'CERTIFICATE_MANAGEMENT', N'Certificate management', N'Enterprise AMS platforms support holders, templates, bulk issuance, renewal regeneration, delivery tracking, wording requirements, and COI history.', N'Operations workbench includes certificate queues and DMS has certificate document types; a dedicated holder/template lifecycle should be tracked here.', N'Partial', N'Critical', 62, N'/workbench/operations', N'Extend existing operations workbench certificate queue with holder records, bulk issuance, renewal regeneration, delivery audit, and wording rules.', N'OPS.TaskItem and operations workbench', N'{"existingModules":["OperationsWorkbench","DMS DocumentCategory Certificate"]}', 60),
+(N'WORK', N'Work Management', N'GLOBAL_WORK_QUEUE', N'Global activity, task, suspense, and SLA center', N'Top AMS platforms provide team queues, suspense dates, recurring tasks, SLAs, escalation, bulk reassignment, and cross-entity timelines.', N'My workbench, operations workbench, queue routing, SLA policies, activity, and task pages exist.', N'Partial', N'Critical', 76, N'/workbench/operations', N'Use current workbench and queue routing modules as the system of record; add recurring task templates and bulk reassignment if not already present.', N'OPS.TaskItem, Portal.AdminRecord, SLA and routing tables', N'{"existingModules":["OperationsWorkbench","MyWorkbench","QueueRouting","SlaPolicy"]}', 70),
+(N'DOCUMENTS', N'Document and Forms', N'DOCUMENT_MANAGEMENT', N'Document management system', N'Enterprise AMS platforms support classifications, templates, e-sign packets, OCR/indexing, retention, secure sharing, audit, portal visibility, and legal hold.', N'DMS categories, templates, ACORD, e-sign, packets, retention, OCR, storage settings, workflows, and cleanup seeds are DB-backed.', N'Implemented', N'Critical', 90, N'/tenant/documents/setup', N'Continue using DMS as the canonical source; avoid hardcoded document options in UI.', N'DMS.DocumentKind, DMS.DocumentGroup, Master.Category', N'{"existingModules":["DocumentSetupDashboard","DocumentCategories","DocumentTemplates","RetentionRules","OcrIndexingRules"]}', 80),
+(N'DOCUMENTS', N'Document and Forms', N'ACORD_GENERATION', N'ACORD form generation and mapping', N'Top AMS platforms generate ACORD PDFs from account, policy, exposure, vehicle, property, and contact data with version-aware validation.', N'ACORD form library is DB-backed and submission wizard now loads forms from DMS; full PDF generation and field mapping should be tracked as the next layer.', N'Partial', N'Critical', 68, N'/tenant/documents/acord', N'Add form field mapping definitions, PDF fill/generation, validation rules, and state-specific supplement handling to the existing ACORD module.', N'DMS.AcordForm and document config', N'{"existingModules":["AcordForms","NewSubmissionWizard"]}', 90),
+(N'DOCUMENTS', N'Document and Forms', N'DOCUMENT_WORKFLOW_RETENTION', N'Document workflow and retention governance', N'Enterprise AMS platforms enforce review workflows, retention policies, legal hold, audit trails, and deletion approvals.', N'DMS workflow templates, workflow steps, retention policies, document exception queues, and audit-related modules exist.', N'Implemented', N'High', 86, N'/tenant/documents/workflows', N'Wire retention execution jobs and legal hold enforcement to the existing retention/workflow tables.', N'DMS.DocumentWorkflowTemplate and DMS.DocumentRetentionPolicy', N'{"existingModules":["DocumentWorkflowPage","RetentionRules","DocumentExceptions"]}', 100),
+(N'PORTAL', N'Client Portal', N'CLIENT_PORTAL_SELF_SERVICE', N'Client portal self-service workflows', N'Top AMS portals support secure documents, certificate requests, claims, renewal questionnaires, e-sign launch, invoices/payments, service requests, and audit.', N'Portal document center and portal configuration exist; service workflows should be expanded through DB-backed portal configuration.', N'Partial', N'High', 64, N'/portal/documents', N'Add portal self-service request types and entitlement-driven document, certificate, claim, renewal, and payment workflows using existing portal config.', N'Portal configuration and document center', N'{"existingModules":["PortalDocumentCenter","PortalConfiguration"]}', 110),
+(N'ANALYTICS', N'Reporting and Analytics', N'REPORT_BUILDER', N'Report builder and scheduled reporting', N'Enterprise AMS platforms provide report builders, saved definitions, scheduled delivery, exports, book-of-business, production, expiration, retention, and commission reports.', N'Report definitions, report preview/run/download, dashboard builder, KPI definitions, and analytics pages exist.', N'Partial', N'High', 78, N'/analytics/reports', N'Add scheduled report delivery and export governance to the existing report definition/run infrastructure.', N'Reporting.ReportDefinition and analytics dashboard records', N'{"existingModules":["Reports","DashboardBuilder","KpiDefinitions"]}', 120),
+(N'DATA', N'Data and Migration', N'DATA_IMPORT_MIGRATION', N'Data import, migration, and quality tooling', N'Enterprise AMS migrations need import templates, staging, validation, duplicate detection, preview, rollback, legacy mapping, and remediation workflows.', N'Admin data center, onboarding migration, data quality, duplicate, enrichment, and carrier/commission import pages exist.', N'Partial', N'High', 74, N'/admin/system/data', N'Convert remaining onboarding/import screens to shared DB-backed import templates, staging batches, validation results, and rollback records.', N'Data center, data quality, onboarding migration', N'{"existingModules":["AdminDataCenter","AdminDataQuality","AdminOnboardingMigration"]}', 130),
+(N'INTEGRATION', N'Integration Marketplace', N'INTEGRATION_MARKETPLACE', N'Integration marketplace and event governance', N'Top AMS platforms expose OAuth clients, API keys, webhooks, accounting/e-sign/storage/rating integrations, event logs, and operational replay.', N'Carrier integrations and integration status exist; general marketplace governance should be centralized.', N'Gap', N'High', 42, N'/tenant/integrations/carriers', N'Add DB-backed integration catalog, OAuth/API client registry, webhook subscriptions, event log, and replay controls linked to existing carrier integrations.', N'Integration configuration', N'{"existingModules":["CarrierIntegrations","CarrierIntegrationStatus"]}', 140),
+(N'SECURITY', N'Security and Compliance', N'SECURITY_GOVERNANCE', N'Security, compliance, and data governance', N'Enterprise AMS buyers expect field security, role/branch/department boundaries, legal hold, retention execution, PII classification, audit export, impersonation audit, and SOC2 evidence.', N'IAM, access reviews, SOD, privileged access, enterprise audit, security audit, retention, and document audit foundations exist.', N'Partial', N'Critical', 80, N'/security/audit', N'Link IAM governance, document retention/legal hold, PII classification, and audit export into a compliance evidence workspace.', N'IAM, EnterpriseAudit, SecurityAudit, DMS retention', N'{"existingModules":["TenantSecurityAudit","AccessReview","PrivilegedAccess","EnterpriseAudit"]}', 150),
+(N'MARKETING', N'Sales and Marketing', N'SALES_MARKETING_AUTOMATION', N'Sales, marketing, and producer automation', N'Top AMS/CRM platforms support lead source attribution, campaigns, cross-sell, win/loss, renewal remarketing, pipeline automation, and producer analytics.', N'CRM, lead activity, forecast, producer workbench, marketing workbench, campaigns, and AI renewal-risk settings exist.', N'Partial', N'Medium', 76, N'/marketing/workbench', N'Use current CRM/marketing workbench modules to add cross-sell/campaign automation and renewal remarketing templates where not already present.', N'CRM, Marketing, ProducerWorkbench, AI config', N'{"existingModules":["ProducerWorkbench","MarketingWorkbench","LeadActivity","Forecast"]}', 160),
+(N'CLAIMS', N'Claims', N'CLAIMS_MANAGEMENT', N'Claims lifecycle and loss management', N'Enterprise AMS claims modules include FNOL, parties, adjusters, reserves, payments, legal hold, diary, loss runs, and document checklists.', N'Claims service/pages and DMS claims document types exist; full lifecycle depth should be governed here.', N'Partial', N'High', 66, N'/claims', N'Extend existing claims module with FNOL parties, adjuster contacts, reserves/payments, legal hold, claim diary, loss runs, and document checklist integration.', N'Claims module and DMS claims documents', N'{"existingModules":["Claims","DMS Claims Category"]}', 170);
+
+MERGE Enterprise.AmsCapability AS target
+USING
+(
+    SELECT t.TenantId, c.*
+    FROM @Tenants t
+    CROSS JOIN @Capabilities c
+) AS source
+ON target.TenantId = source.TenantId AND target.CapabilityCode = source.CapabilityCode
+WHEN MATCHED THEN UPDATE SET
+    DomainCode = source.DomainCode,
+    DomainName = source.DomainName,
+    CapabilityName = source.CapabilityName,
+    MarketBenchmark = source.MarketBenchmark,
+    CurrentState = source.CurrentState,
+    StatusCode = source.StatusCode,
+    PriorityCode = source.PriorityCode,
+    MaturityScore = source.MaturityScore,
+    ExistingModuleRoute = source.ExistingModuleRoute,
+    RecommendedAction = source.RecommendedAction,
+    DataSource = source.DataSource,
+    ConfigurationJson = source.ConfigurationJson,
+    SortOrder = source.SortOrder,
+    IsActive = 1,
+    IsDeleted = 0,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (CapabilityId, TenantId, DomainCode, DomainName, CapabilityCode, CapabilityName, MarketBenchmark, CurrentState, StatusCode, PriorityCode, MaturityScore, ExistingModuleRoute, RecommendedAction, DataSource, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.DomainCode, source.DomainName, source.CapabilityCode, source.CapabilityName, source.MarketBenchmark, source.CurrentState, source.StatusCode, source.PriorityCode, source.MaturityScore, source.ExistingModuleRoute, source.RecommendedAction, source.DataSource, source.ConfigurationJson, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+""";
+
+    private const string Migration0198_EnterpriseAmsCapabilityGapExtensions = """
+DECLARE @Tenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+INSERT INTO @Tenants (TenantId)
+SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0 AND IsActive = 1;
+
+DECLARE @Capabilities TABLE
+(
+    DomainCode NVARCHAR(80) NOT NULL,
+    DomainName NVARCHAR(200) NOT NULL,
+    CapabilityCode NVARCHAR(120) NOT NULL PRIMARY KEY,
+    CapabilityName NVARCHAR(200) NOT NULL,
+    MarketBenchmark NVARCHAR(1000) NOT NULL,
+    CurrentState NVARCHAR(1000) NOT NULL,
+    StatusCode NVARCHAR(40) NOT NULL,
+    PriorityCode NVARCHAR(40) NOT NULL,
+    MaturityScore INT NOT NULL,
+    ExistingModuleRoute NVARCHAR(300) NOT NULL,
+    RecommendedAction NVARCHAR(1000) NOT NULL,
+    DataSource NVARCHAR(300) NOT NULL,
+    ConfigurationJson NVARCHAR(4000) NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO @Capabilities (DomainCode, DomainName, CapabilityCode, CapabilityName, MarketBenchmark, CurrentState, StatusCode, PriorityCode, MaturityScore, ExistingModuleRoute, RecommendedAction, DataSource, ConfigurationJson, SortOrder) VALUES
+(N'BILLING', N'Billing and Accounting', N'BILLING_ACCOUNTING', N'Billing, receivables, payments, and accounting integration', N'Top AMS platforms support agency bill/direct bill workflows, invoices, payments, receivables aging, collections, GL posting, bank reconciliation, payment plans, taxes/fees, and accounting exports.', N'Billing accounts, invoices, payments, AR aging, collections, reconciliation, GL accounts, journal entries, payment providers, and billing configuration pages exist.', N'Partial', N'Critical', 78, N'/billing', N'Unify billing, payment, collections, reconciliation, and GL posting into an auditable accounting workflow with export/reconciliation controls.', N'Billing.Invoice, Billing.Payment, Finance.GLAccount, Finance.JournalEntry', N'{"existingModules":["BillingAccounting","BillingAccounts","ArAging","BillingReconciliation","PaymentProviders","GLAccounts"]}', 35),
+(N'COMMUNICATIONS', N'Communications and Email', N'COMMUNICATION_CAPTURE', N'Email, SMS, appointment, and communication capture', N'Enterprise AMS platforms capture Outlook/email conversations, SMS, calls, appointments, templates, consent preferences, delivery/read tracking, and file-to-account/policy/document workflows.', N'Communications, inbox, templates, campaigns, and appointment scheduler pages exist; full email add-in/file-to-record capture should be tracked explicitly.', N'Partial', N'High', 63, N'/communications', N'Add Microsoft 365/Outlook filing, communication threading, consent preferences, delivery/read tracking, and document filing from messages using DB-backed communication configuration.', N'Communications pages and Portal.AdminRecord communication records', N'{"existingModules":["Communications","CommunicationsInbox","CommunicationsTemplates","AppointmentScheduler","CampaignMessagingCenter"]}', 115),
+(N'RATING', N'Quote, Rating, and Binding', N'QUOTE_RATING_BIND', N'Comparative rating, quote-to-bind, and market submission', N'Top AMS platforms support carrier appetite, comparative rating, quote comparisons, bind issuance, underwriting packets, quote proposals, and market response tracking.', N'Carrier appetite, comparative rating results, bind issuance, submissions, quote DTO/services, and new submission wizard exist.', N'Partial', N'Critical', 70, N'/quotes/rating-results', N'Connect rating results, quote register, bind issuance, carrier submissions, DMS packets, and policy creation into a single quote-to-bind workflow.', N'CRM.Quote, submissions, carrier appetite, DMS packet templates', N'{"existingModules":["CarrierAppetiteFinder","ComparativeRatingResults","BindIssuanceCenter","NewSubmissionWizard","Submissions"]}', 125),
+(N'AGENCY', N'Agency Operations', N'AGENCY_PRODUCER_APPOINTMENTS', N'Producer licensing, carrier appointments, branches, and team structure', N'Enterprise AMS platforms track producer licensing, appointments, branch/department/team security, carrier access, compensation attribution, and book assignment.', N'Agency profile, branches, producers/staff, departments, teams, business hours, and carrier appointments exist.', N'Partial', N'High', 72, N'/tenant/agency/producers', N'Add explicit license expiration monitoring, appointment renewal workflow, producer book reassignment, and branch/department security evidence.', N'Agency.CarrierAppointment, agency configuration pages', N'{"existingModules":["ProducersStaff","CarrierAppointments","Branches","DepartmentsTeams","BusinessHours"]}', 135),
+(N'CLIENT', N'Client and Account 360', N'ACCOUNT_CONTACT_360', N'Account, contact, relationship, and household/business 360', N'Top AMS platforms provide account/contact 360, relationship maps, account hierarchy, decision makers, contact roles, notes, events, health, and complete timelines.', N'Account 360, accounts, contacts, relationship maps, hierarchy, decision makers, contact roles, notes, events, health, and timelines exist.', N'Implemented', N'High', 84, N'/accounts', N'Keep Account/Contact 360 as the canonical client source and ensure all servicing, policy, claim, billing, document, and communication records link back to it.', N'Client.Account, Client.Contact and account/contact pages', N'{"existingModules":["Account360","Accounts","Contacts","RelationshipMap","AccountHierarchy","Contact360","AccountTimeline"]}', 145),
+(N'PORTAL', N'Client Portal', N'MOBILE_CLIENT_EXPERIENCE', N'Mobile-ready client and insured experience', N'Top AMS platforms provide responsive/mobile client access for documents, certificates, claims, billing, service requests, e-sign, notifications, and secure messaging.', N'Portal document center and several portal/admin configurations exist; a mobile-specific client experience is not separately governed.', N'Gap', N'Medium', 38, N'/portal/documents', N'Add mobile-first portal capability tracking, responsive service request flows, push/SMS notification preferences, and client-facing task/status visibility.', N'Portal configuration and document center', N'{"existingModules":["PortalDocumentCenter","PortalConfiguration","Communications"]}', 155);
+
+MERGE Enterprise.AmsCapability AS target
+USING
+(
+    SELECT t.TenantId, c.*
+    FROM @Tenants t
+    CROSS JOIN @Capabilities c
+) AS source
+ON target.TenantId = source.TenantId AND target.CapabilityCode = source.CapabilityCode
+WHEN MATCHED THEN UPDATE SET
+    DomainCode = source.DomainCode,
+    DomainName = source.DomainName,
+    CapabilityName = source.CapabilityName,
+    MarketBenchmark = source.MarketBenchmark,
+    CurrentState = source.CurrentState,
+    StatusCode = source.StatusCode,
+    PriorityCode = source.PriorityCode,
+    MaturityScore = source.MaturityScore,
+    ExistingModuleRoute = source.ExistingModuleRoute,
+    RecommendedAction = source.RecommendedAction,
+    DataSource = source.DataSource,
+    ConfigurationJson = source.ConfigurationJson,
+    SortOrder = source.SortOrder,
+    IsActive = 1,
+    IsDeleted = 0,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (CapabilityId, TenantId, DomainCode, DomainName, CapabilityCode, CapabilityName, MarketBenchmark, CurrentState, StatusCode, PriorityCode, MaturityScore, ExistingModuleRoute, RecommendedAction, DataSource, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.DomainCode, source.DomainName, source.CapabilityCode, source.CapabilityName, source.MarketBenchmark, source.CurrentState, source.StatusCode, source.PriorityCode, source.MaturityScore, source.ExistingModuleRoute, source.RecommendedAction, source.DataSource, source.ConfigurationJson, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+""";
+
+    private const string Migration0199_CrmLeadEngagementCommunicationCampaignEnterprise = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM') EXEC(N'CREATE SCHEMA CRM');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Comms') EXEC(N'CREATE SCHEMA Comms');
+
+IF OBJECT_ID(N'CRM.Lead', N'U') IS NOT NULL AND COL_LENGTH(N'CRM.Lead', N'AccountId') IS NULL ALTER TABLE CRM.Lead ADD AccountId UNIQUEIDENTIFIER NULL;
+
+IF OBJECT_ID(N'CRM.LeadEngagementOption', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.LeadEngagementOption
+    (
+        OptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_LeadEngagementOption PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        OptionType NVARCHAR(50) NOT NULL,
+        Code NVARCHAR(100) NOT NULL,
+        Label NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_LeadEngagementOption_SortOrder DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_LeadEngagementOption_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadEngagementOption_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_LeadEngagementOption_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadEngagementOption') AND name = N'UX_LeadEngagementOption_TypeCode')
+    CREATE UNIQUE INDEX UX_LeadEngagementOption_TypeCode ON CRM.LeadEngagementOption(TenantId, OptionType, Code) WHERE IsDeleted = 0;
+
+IF OBJECT_ID(N'CRM.LeadCommunication', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.LeadCommunication
+    (
+        CommunicationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_LeadCommunication PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LeadId UNIQUEIDENTIFIER NOT NULL,
+        MessageThreadId UNIQUEIDENTIFIER NULL,
+        ThreadMessageId UNIQUEIDENTIFIER NULL,
+        Channel NVARCHAR(50) NOT NULL,
+        Subject NVARCHAR(200) NOT NULL,
+        Preview NVARCHAR(2000) NOT NULL,
+        Direction NVARCHAR(50) NOT NULL CONSTRAINT DF_LeadCommunication_Direction DEFAULT N'Outbound',
+        DeliveryStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_LeadCommunication_DeliveryStatus DEFAULT N'Delivered',
+        EngagementStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_LeadCommunication_EngagementStatus DEFAULT N'Open',
+        SentByUserId UNIQUEIDENTIFIER NULL,
+        SentAt DATETIME2 NOT NULL CONSTRAINT DF_LeadCommunication_SentAt_0199 DEFAULT SYSUTCDATETIME(),
+        Opened BIT NOT NULL CONSTRAINT DF_LeadCommunication_Opened_0199 DEFAULT 0,
+        Clicked BIT NOT NULL CONSTRAINT DF_LeadCommunication_Clicked_0199 DEFAULT 0,
+        IsAutomated BIT NOT NULL CONSTRAINT DF_LeadCommunication_IsAutomated DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadCommunication_CreatedDateUtc_0199 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_LeadCommunication_IsDeleted_0199 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'CRM.LeadCommunication', N'MessageThreadId') IS NULL ALTER TABLE CRM.LeadCommunication ADD MessageThreadId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.LeadCommunication', N'ThreadMessageId') IS NULL ALTER TABLE CRM.LeadCommunication ADD ThreadMessageId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.LeadCommunication', N'Direction') IS NULL ALTER TABLE CRM.LeadCommunication ADD Direction NVARCHAR(50) NOT NULL CONSTRAINT DF_LeadCommunication_Direction_0199 DEFAULT N'Outbound';
+IF COL_LENGTH(N'CRM.LeadCommunication', N'DeliveryStatus') IS NULL ALTER TABLE CRM.LeadCommunication ADD DeliveryStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_LeadCommunication_DeliveryStatus_0199 DEFAULT N'Delivered';
+IF COL_LENGTH(N'CRM.LeadCommunication', N'EngagementStatus') IS NULL ALTER TABLE CRM.LeadCommunication ADD EngagementStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_LeadCommunication_EngagementStatus_0199 DEFAULT N'Open';
+IF COL_LENGTH(N'CRM.LeadCommunication', N'IsAutomated') IS NULL ALTER TABLE CRM.LeadCommunication ADD IsAutomated BIT NOT NULL CONSTRAINT DF_LeadCommunication_IsAutomated_0199 DEFAULT 0;
+
+IF OBJECT_ID(N'CRM.LeadCampaignEnrollment', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.LeadCampaignEnrollment
+    (
+        EnrollmentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_LeadCampaignEnrollment PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LeadId UNIQUEIDENTIFIER NOT NULL,
+        CampaignId UNIQUEIDENTIFIER NULL,
+        CampaignName NVARCHAR(200) NOT NULL,
+        CampaignType NVARCHAR(50) NULL,
+        Segment NVARCHAR(150) NULL,
+        Status NVARCHAR(50) NOT NULL CONSTRAINT DF_LeadCampaignEnrollment_Status_0199 DEFAULT N'Active',
+        EnrolledAt DATETIME2 NOT NULL CONSTRAINT DF_LeadCampaignEnrollment_EnrolledAt_0199 DEFAULT SYSUTCDATETIME(),
+        EmailsSent INT NOT NULL CONSTRAINT DF_LeadCampaignEnrollment_EmailsSent_0199 DEFAULT 0,
+        EmailsOpen INT NOT NULL CONSTRAINT DF_LeadCampaignEnrollment_EmailsOpen_0199 DEFAULT 0,
+        Clicks INT NOT NULL CONSTRAINT DF_LeadCampaignEnrollment_Clicks_0199 DEFAULT 0,
+        OpenRate DECIMAL(9,2) NOT NULL CONSTRAINT DF_LeadCampaignEnrollment_OpenRate DEFAULT 0,
+        Conversions INT NOT NULL CONSTRAINT DF_LeadCampaignEnrollment_Conversions DEFAULT 0,
+        Revenue DECIMAL(18,2) NOT NULL CONSTRAINT DF_LeadCampaignEnrollment_Revenue DEFAULT 0,
+        LastTouch DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadCampaignEnrollment_CreatedDateUtc_0199 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_LeadCampaignEnrollment_IsDeleted_0199 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'CRM.LeadCampaignEnrollment', N'CampaignId') IS NULL ALTER TABLE CRM.LeadCampaignEnrollment ADD CampaignId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.LeadCampaignEnrollment', N'CampaignType') IS NULL ALTER TABLE CRM.LeadCampaignEnrollment ADD CampaignType NVARCHAR(50) NULL;
+IF COL_LENGTH(N'CRM.LeadCampaignEnrollment', N'Segment') IS NULL ALTER TABLE CRM.LeadCampaignEnrollment ADD Segment NVARCHAR(150) NULL;
+IF COL_LENGTH(N'CRM.LeadCampaignEnrollment', N'OpenRate') IS NULL ALTER TABLE CRM.LeadCampaignEnrollment ADD OpenRate DECIMAL(9,2) NOT NULL CONSTRAINT DF_LeadCampaignEnrollment_OpenRate_0199 DEFAULT 0;
+IF COL_LENGTH(N'CRM.LeadCampaignEnrollment', N'Conversions') IS NULL ALTER TABLE CRM.LeadCampaignEnrollment ADD Conversions INT NOT NULL CONSTRAINT DF_LeadCampaignEnrollment_Conversions_0199 DEFAULT 0;
+IF COL_LENGTH(N'CRM.LeadCampaignEnrollment', N'Revenue') IS NULL ALTER TABLE CRM.LeadCampaignEnrollment ADD Revenue DECIMAL(18,2) NOT NULL CONSTRAINT DF_LeadCampaignEnrollment_Revenue_0199 DEFAULT 0;
+
+IF OBJECT_ID(N'Comms.MessageThread', N'U') IS NULL
+BEGIN
+    CREATE TABLE Comms.MessageThread
+    (
+        ThreadId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommsMessageThread_0199 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountName NVARCHAR(200) NOT NULL,
+        AccountId NVARCHAR(50) NULL,
+        ContactName NVARCHAR(200) NULL,
+        ContactEmail NVARCHAR(300) NULL,
+        ContactPhone NVARCHAR(50) NULL,
+        Channel NVARCHAR(50) NOT NULL,
+        Subject NVARCHAR(300) NOT NULL,
+        BodyPreview NVARCHAR(500) NOT NULL,
+        Status NVARCHAR(50) NOT NULL CONSTRAINT DF_CommsMessageThread_Status_0199 DEFAULT N'Open',
+        Priority NVARCHAR(50) NOT NULL CONSTRAINT DF_CommsMessageThread_Priority_0199 DEFAULT N'Normal',
+        AssignedTo NVARCHAR(200) NULL,
+        Producer NVARCHAR(200) NULL,
+        Branch NVARCHAR(100) NULL,
+        IsRead BIT NOT NULL CONSTRAINT DF_CommsMessageThread_IsRead_0199 DEFAULT 0,
+        IsEscalated BIT NOT NULL CONSTRAINT DF_CommsMessageThread_IsEscalated_0199 DEFAULT 0,
+        OptedOut BIT NOT NULL CONSTRAINT DF_CommsMessageThread_OptedOut_0199 DEFAULT 0,
+        MessageCount INT NOT NULL CONSTRAINT DF_CommsMessageThread_MessageCount_0199 DEFAULT 0,
+        LastActivityAt DATETIME2 NOT NULL CONSTRAINT DF_CommsMessageThread_LastActivityAt_0199 DEFAULT SYSUTCDATETIME(),
+        Sentiment NVARCHAR(50) NOT NULL CONSTRAINT DF_CommsMessageThread_Sentiment_0199 DEFAULT N'Neutral',
+        CsrOwner NVARCHAR(200) NULL,
+        AiSummary NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommsMessageThread_CreatedDateUtc_0199 DEFAULT SYSUTCDATETIME(),
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CommsMessageThread_IsDeleted_0199 DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Comms.ThreadMessage', N'U') IS NULL
+BEGIN
+    CREATE TABLE Comms.ThreadMessage
+    (
+        MessageId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommsThreadMessage_0199 PRIMARY KEY DEFAULT NEWID(),
+        ThreadId UNIQUEIDENTIFIER NOT NULL,
+        SenderName NVARCHAR(200) NOT NULL,
+        Channel NVARCHAR(50) NOT NULL,
+        Direction NVARCHAR(50) NOT NULL,
+        Body NVARCHAR(MAX) NOT NULL,
+        SentAt DATETIME2 NOT NULL CONSTRAINT DF_CommsThreadMessage_SentAt_0199 DEFAULT SYSUTCDATETIME(),
+        DeliveryStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_CommsThreadMessage_DeliveryStatus_0199 DEFAULT N'Delivered',
+        IsAutomated BIT NOT NULL CONSTRAINT DF_CommsThreadMessage_IsAutomated_0199 DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Comms.Campaign', N'U') IS NULL
+BEGIN
+    CREATE TABLE Comms.Campaign
+    (
+        CampaignId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommsCampaign_0199 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        Name NVARCHAR(200) NOT NULL,
+        Type NVARCHAR(50) NOT NULL,
+        Status NVARCHAR(50) NOT NULL,
+        Segment NVARCHAR(150) NOT NULL,
+        StartDate DATETIME2 NOT NULL,
+        Reached INT NOT NULL CONSTRAINT DF_CommsCampaign_Reached_0199 DEFAULT 0,
+        OpenRate DECIMAL(9,2) NOT NULL CONSTRAINT DF_CommsCampaign_OpenRate_0199 DEFAULT 0,
+        Conversions INT NOT NULL CONSTRAINT DF_CommsCampaign_Conversions_0199 DEFAULT 0,
+        Revenue DECIMAL(18,2) NOT NULL CONSTRAINT DF_CommsCampaign_Revenue_0199 DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommsCampaign_CreatedDateUtc_0199 DEFAULT SYSUTCDATETIME(),
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CommsCampaign_IsDeleted_0199 DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadCommunication') AND name = N'IX_LeadCommunication_Sync') EXEC(N'CREATE INDEX IX_LeadCommunication_Sync ON CRM.LeadCommunication(MessageThreadId, ThreadMessageId) WHERE IsDeleted = 0');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadCampaignEnrollment') AND name = N'IX_LeadCampaignEnrollment_Campaign') EXEC(N'CREATE INDEX IX_LeadCampaignEnrollment_Campaign ON CRM.LeadCampaignEnrollment(CampaignId, LeadId, IsDeleted)');
+
+DECLARE @Tenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+INSERT INTO @Tenants (TenantId)
+SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM @Tenants)
+    INSERT INTO @Tenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+MERGE CRM.LeadEngagementOption AS target
+USING
+(
+    SELECT t.TenantId, v.OptionType, v.Code, v.Label, v.Description, v.SortOrder
+    FROM @Tenants t
+    CROSS JOIN (VALUES
+        (N'CommunicationChannel', N'Email', N'Email', N'Email communication synced to Comms.MessageThread and Comms.ThreadMessage.', 10),
+        (N'CommunicationChannel', N'Phone', N'Phone', N'Phone call or voicemail communication.', 20),
+        (N'CommunicationChannel', N'SMS', N'SMS', N'Text message communication.', 30),
+        (N'CommunicationChannel', N'Portal Message', N'Portal Message', N'Client portal message.', 40),
+        (N'CommunicationChannel', N'Workflow', N'Workflow', N'Automated workflow communication.', 50),
+        (N'CommunicationDirection', N'Outbound', N'Outbound', N'Communication sent by agency or workflow.', 10),
+        (N'CommunicationDirection', N'Inbound', N'Inbound', N'Communication received from the prospect.', 20),
+        (N'CommunicationDirection', N'Internal Note', N'Internal Note', N'Internal agency note tied to engagement.', 30),
+        (N'CommunicationDeliveryStatus', N'Delivered', N'Delivered', N'Communication delivered or logged successfully.', 10),
+        (N'CommunicationDeliveryStatus', N'Pending', N'Pending', N'Communication is pending delivery or review.', 20),
+        (N'CommunicationDeliveryStatus', N'Failed', N'Failed', N'Communication failed delivery.', 30),
+        (N'CommunicationStatus', N'Open', N'Open', N'Engagement item is open.', 10),
+        (N'CommunicationStatus', N'Pending', N'Pending', N'Engagement item is pending response.', 20),
+        (N'CommunicationStatus', N'Resolved', N'Resolved', N'Engagement item is resolved.', 30),
+        (N'CommunicationStatus', N'Escalated', N'Escalated', N'Engagement item needs escalation.', 40),
+        (N'CampaignStatus', N'Active', N'Active', N'Campaign is currently active.', 10),
+        (N'CampaignStatus', N'Paused', N'Paused', N'Campaign is temporarily paused.', 20),
+        (N'CampaignStatus', N'Scheduled', N'Scheduled', N'Campaign is scheduled.', 30),
+        (N'CampaignStatus', N'Completed', N'Completed', N'Campaign is completed.', 40),
+        (N'CampaignStatus', N'Cancelled', N'Cancelled', N'Campaign is cancelled.', 50),
+        (N'LeadSource', N'Referral', N'Referral', N'Referred by client, partner, carrier, or producer network.', 10),
+        (N'LeadSource', N'Website', N'Website', N'Inbound website or landing page lead source.', 20),
+        (N'LeadSource', N'Cold Call', N'Cold Call', N'Outbound prospecting or call campaign source.', 30),
+        (N'LeadSource', N'Social', N'Social', N'Social media or professional network source.', 40),
+        (N'LeadSource', N'Email', N'Email', N'Email marketing or direct email source.', 50),
+        (N'LeadSource', N'Event', N'Event', N'Conference, webinar, or agency event source.', 60),
+        (N'LeadSource', N'Partner', N'Partner', N'Partner or center-of-influence source.', 70),
+        (N'LeadSource', N'Inbound', N'Inbound', N'General inbound lead source.', 80),
+        (N'LeadStage', N'New', N'New', N'Newly created lead awaiting initial qualification.', 10),
+        (N'LeadStage', N'Contacted', N'Contacted', N'Lead has received an initial producer or workflow touch.', 20),
+        (N'LeadStage', N'Qualified', N'Qualified', N'Lead has enough readiness signals for opportunity conversion.', 30),
+        (N'LeadStage', N'Proposal', N'Proposal', N'Lead is in proposal or quote presentation stage.', 40),
+        (N'LeadStage', N'Negotiation', N'Negotiation', N'Lead is negotiating terms, coverage, or premium.', 50),
+        (N'LeadStage', N'Converted', N'Converted', N'Lead has converted to an opportunity or account.', 60),
+        (N'LeadStage', N'Lost', N'Lost', N'Lead is no longer active.', 70),
+        (N'LeadPriority', N'Hot', N'Hot', N'Highest priority lead requiring immediate action.', 10),
+        (N'LeadPriority', N'High', N'High', N'High priority lead or interest line.', 20),
+        (N'LeadPriority', N'Warm', N'Warm', N'Engaged lead with active nurture signals.', 30),
+        (N'LeadPriority', N'Medium', N'Medium', N'Medium priority lead or interest line.', 40),
+        (N'LeadPriority', N'Normal', N'Normal', N'Standard priority lead or interest line.', 50),
+        (N'LeadPriority', N'Cold', N'Cold', N'Low urgency lead with limited engagement.', 60),
+        (N'LeadPriority', N'Low', N'Low', N'Low priority lead or interest line.', 70),
+        (N'DocumentExtension', N'.pdf', N'PDF', N'Portable document format.', 10),
+        (N'DocumentExtension', N'.doc', N'DOC', N'Word document format.', 20),
+        (N'DocumentExtension', N'.docx', N'DOCX', N'Word Open XML document format.', 30),
+        (N'DocumentExtension', N'.xls', N'XLS', N'Excel workbook format.', 40),
+        (N'DocumentExtension', N'.xlsx', N'XLSX', N'Excel Open XML workbook format.', 50),
+        (N'DocumentExtension', N'.csv', N'CSV', N'Comma-separated values file.', 60),
+        (N'DocumentExtension', N'.png', N'PNG', N'Portable network graphics image.', 70),
+        (N'DocumentExtension', N'.jpg', N'JPG', N'JPEG image.', 80),
+        (N'DocumentExtension', N'.jpeg', N'JPEG', N'JPEG image.', 90),
+        (N'DocumentExtension', N'.txt', N'TXT', N'Plain text document.', 100)
+    ) AS v(OptionType, Code, Label, Description, SortOrder)
+) AS source
+ON target.TenantId = source.TenantId AND target.OptionType = source.OptionType AND target.Code = source.Code
+WHEN MATCHED THEN UPDATE SET Label = source.Label, Description = source.Description, SortOrder = source.SortOrder, IsActive = 1, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (OptionId, TenantId, OptionType, Code, Label, Description, SortOrder, IsActive, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.OptionType, source.Code, source.Label, source.Description, source.SortOrder, 1, SYSUTCDATETIME(), 0);
+
+DECLARE @DefaultTenant UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM @Tenants ORDER BY TenantId), '00000000-0000-0000-0000-000000000001');
+DECLARE @TargetLeadId UNIQUEIDENTIFIER = '73ce70fc-548c-41c7-af16-36c35dacf185';
+DECLARE @AdminUserId UNIQUEIDENTIFIER = (SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @DefaultTenant AND IsDeleted = 0 ORDER BY CreatedDateUtc);
+
+IF OBJECT_ID(N'CRM.Lead', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM CRM.Lead WHERE LeadId = @TargetLeadId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO CRM.Lead (LeadId, TenantId, LeadNumber, AccountName, FirstName, LastName, Email, Phone, InterestedService, AnnualRevenue, Score, PriorityCode, SourceCode, NurturingStageCode, AssignedToUserId, StatusCodeId, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (@TargetLeadId, @DefaultTenant, N'LD-ENG-735', N'Enterprise Engagement Prospect', N'Jordan', N'Rivera', N'jordan.rivera@example.com', N'(555) 010-7350', N'Commercial engagement program', 78500, 74, N'High', N'Referral', N'Contacted', @AdminUserId, 1, SYSUTCDATETIME(), @AdminUserId, 0);
+END;
+
+IF OBJECT_ID(N'Comms.Campaign', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM Comms.Campaign WHERE TenantId = @DefaultTenant AND Name = N'Enterprise Lead Nurture Series' AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Comms.Campaign (CampaignId, TenantId, Name, Type, Status, Segment, StartDate, Reached, OpenRate, Conversions, Revenue, CreatedDateUtc, IsDeleted)
+    VALUES (NEWID(), @DefaultTenant, N'Enterprise Lead Nurture Series', N'Multi-Channel', N'Active', N'Commercial prospects', DATEADD(day, -14, SYSUTCDATETIME()), 128, 42.50, 8, 0, SYSUTCDATETIME(), 0);
+END;
+
+DECLARE @CampaignId UNIQUEIDENTIFIER = (SELECT TOP 1 CampaignId FROM Comms.Campaign WHERE TenantId = @DefaultTenant AND IsDeleted = 0 AND Name = N'Enterprise Lead Nurture Series' ORDER BY CreatedDateUtc DESC);
+
+IF OBJECT_ID(N'CRM.LeadCommunication', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM CRM.LeadCommunication WHERE LeadId = @TargetLeadId AND IsDeleted = 0)
+BEGIN
+    DECLARE @ThreadId UNIQUEIDENTIFIER = NEWID();
+    DECLARE @MessageId UNIQUEIDENTIFIER = NEWID();
+    EXEC sp_executesql N'
+    INSERT INTO Comms.MessageThread (ThreadId, TenantId, AccountName, AccountId, ContactName, ContactEmail, ContactPhone, Channel, Subject, BodyPreview, Status, Priority, AssignedTo, Producer, Branch, IsRead, IsEscalated, OptedOut, MessageCount, LastActivityAt, Sentiment, CsrOwner, AiSummary, CreatedDateUtc, IsDeleted)
+    SELECT @ThreadId, l.TenantId, COALESCE(l.AccountName, N''Lead engagement''), CONVERT(NVARCHAR(50), l.AccountId), LTRIM(RTRIM(COALESCE(l.FirstName, N'''') + N'' '' + COALESCE(l.LastName, N''''))), l.Email, l.Phone, N''Email'', N''Enterprise engagement kickoff'', N''Introduced the engagement plan and campaign path for the lead.'', N''Open'', COALESCE(l.PriorityCode, N''Normal''), COALESCE(u.DisplayName, u.FullName), COALESCE(u.DisplayName, u.FullName), NULL, 1, 0, 0, 1, DATEADD(day, -1, SYSUTCDATETIME()), N''Positive'', COALESCE(u.DisplayName, u.FullName), N''Lead entered the enterprise engagement communication and campaign workflow.'', SYSUTCDATETIME(), 0
+    FROM CRM.Lead l
+    LEFT JOIN IAM.[User] u ON u.UserId = @AdminUserId
+    WHERE l.LeadId = @TargetLeadId;
+
+    INSERT INTO Comms.ThreadMessage (MessageId, ThreadId, SenderName, Channel, Direction, Body, SentAt, DeliveryStatus, IsAutomated)
+    SELECT @MessageId, @ThreadId, COALESCE(u.DisplayName, u.FullName, N''System''), N''Email'', N''Outbound'', N''Introduced the engagement plan and campaign path for the lead.'', DATEADD(day, -1, SYSUTCDATETIME()), N''Delivered'', 0
+    FROM IAM.[User] u WHERE u.UserId = @AdminUserId;
+
+    IF @@ROWCOUNT = 0
+        INSERT INTO Comms.ThreadMessage (MessageId, ThreadId, SenderName, Channel, Direction, Body, SentAt, DeliveryStatus, IsAutomated)
+        VALUES (@MessageId, @ThreadId, N''System'', N''Email'', N''Outbound'', N''Introduced the engagement plan and campaign path for the lead.'', DATEADD(day, -1, SYSUTCDATETIME()), N''Delivered'', 0);
+
+    INSERT INTO CRM.LeadCommunication (CommunicationId, TenantId, LeadId, MessageThreadId, ThreadMessageId, Channel, Subject, Preview, Direction, DeliveryStatus, EngagementStatus, SentByUserId, SentAt, Opened, Clicked, IsAutomated, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (NEWID(), @DefaultTenant, @TargetLeadId, @ThreadId, @MessageId, N''Email'', N''Enterprise engagement kickoff'', N''Introduced the engagement plan and campaign path for the lead.'', N''Outbound'', N''Delivered'', N''Open'', @AdminUserId, DATEADD(day, -1, SYSUTCDATETIME()), 1, 0, 0, SYSUTCDATETIME(), @AdminUserId, 0);',
+    N'@ThreadId UNIQUEIDENTIFIER, @MessageId UNIQUEIDENTIFIER, @DefaultTenant UNIQUEIDENTIFIER, @TargetLeadId UNIQUEIDENTIFIER, @AdminUserId UNIQUEIDENTIFIER',
+    @ThreadId = @ThreadId, @MessageId = @MessageId, @DefaultTenant = @DefaultTenant, @TargetLeadId = @TargetLeadId, @AdminUserId = @AdminUserId;
+END;
+
+IF OBJECT_ID(N'CRM.LeadCampaignEnrollment', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM CRM.LeadCampaignEnrollment WHERE LeadId = @TargetLeadId AND IsDeleted = 0)
+BEGIN
+    EXEC sp_executesql N'
+    INSERT INTO CRM.LeadCampaignEnrollment (EnrollmentId, TenantId, LeadId, CampaignId, CampaignName, CampaignType, Segment, Status, EnrolledAt, EmailsSent, EmailsOpen, Clicks, OpenRate, Conversions, Revenue, LastTouch, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), @DefaultTenant, @TargetLeadId, @CampaignId, c.Name, c.Type, c.Segment, c.Status, DATEADD(day, -7, SYSUTCDATETIME()), 3, 2, 1, c.OpenRate, c.Conversions, c.Revenue, DATEADD(day, -1, SYSUTCDATETIME()), SYSUTCDATETIME(), @AdminUserId, 0
+    FROM Comms.Campaign c
+    WHERE c.CampaignId = @CampaignId;',
+    N'@DefaultTenant UNIQUEIDENTIFIER, @TargetLeadId UNIQUEIDENTIFIER, @CampaignId UNIQUEIDENTIFIER, @AdminUserId UNIQUEIDENTIFIER',
+    @DefaultTenant = @DefaultTenant, @TargetLeadId = @TargetLeadId, @CampaignId = @CampaignId, @AdminUserId = @AdminUserId;
+END;
+""";
 }
