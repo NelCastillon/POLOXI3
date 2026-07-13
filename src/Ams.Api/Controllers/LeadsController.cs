@@ -77,6 +77,14 @@ public sealed class LeadsController : ControllerBase
         return NoContent();
     }
 
+    [HttpPost("{id:guid}/convert")]
+    public async Task<IActionResult> Convert(Guid id, [FromBody] ConvertLeadRequest request, CancellationToken cancellationToken)
+    {
+        request.LeadId = id;
+        var result = await _service.ConvertAsync(request, cancellationToken);
+        return Ok(result);
+    }
+
     [HttpGet("{leadId:guid}/contacts")]
     public async Task<IActionResult> GetContacts(Guid leadId, CancellationToken cancellationToken) => Ok(await _service.GetContactsAsync(leadId, cancellationToken));
 

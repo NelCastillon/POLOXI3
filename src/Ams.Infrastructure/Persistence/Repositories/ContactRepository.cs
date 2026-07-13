@@ -311,9 +311,10 @@ WHERE ContactId = @Id AND IsDeleted = 0;";
         return statusCode?.Trim().ToLowerInvariant() switch
         {
             "inactive" => 2,
-            "converted" => 3,
-            "lost" => 4,
+            "qualified" => 3,
+            "converted" => 4,
             "disqualified" => 5,
+            "lost" => 5,
             _ => 1
         };
     }

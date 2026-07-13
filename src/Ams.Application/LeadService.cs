@@ -21,6 +21,9 @@ public sealed class LeadService : ILeadService
     public Task<LeadDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
         => _repository.GetByIdAsync(id, cancellationToken);
 
+    public Task<LeadConversionResultDto> ConvertAsync(ConvertLeadRequest request, CancellationToken cancellationToken = default)
+        => _repository.ConvertAsync(request, cancellationToken);
+
     public Task<IReadOnlyList<LeadScoreFactorDto>> GetScoreFactorsAsync(Guid leadId, CancellationToken cancellationToken = default)
         => _repository.GetScoreFactorsAsync(leadId, cancellationToken);
 

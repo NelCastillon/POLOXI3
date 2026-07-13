@@ -115,12 +115,26 @@ LEFT JOIN IAM.[User] u ON u.UserId = a.CreatedByUserId
 WHERE a.OpportunityId = @Id AND a.IsDeleted = 0
 ORDER BY a.ActivityDate DESC;
 
-SELECT s.SubmissionId, s.TenantId, s.OpportunityId, s.SubmissionNumber, s.LineOfBusiness, s.Status, s.TargetPremium,
-       (SELECT COUNT(1) FROM CRM.Quote q WHERE q.OpportunityId = s.OpportunityId AND q.IsDeleted = 0) AS QuoteCount,
-       s.CreatedDateUtc, s.ModifiedDateUtc
-FROM CRM.OpportunitySubmission s
-WHERE s.OpportunityId = @Id AND s.IsDeleted = 0
-ORDER BY s.CreatedDateUtc DESC;
+SELECT SubmissionId, TenantId, OpportunityId, SubmissionNumber, LineOfBusiness, Status, TargetPremium, QuoteCount, CreatedDateUtc, ModifiedDateUtc
+FROM
+(
+    SELECT s.SubmissionId, s.TenantId, s.OpportunityId, s.SubmissionNumber, s.LineOfBusiness, s.Status, s.TargetPremium,
+           (SELECT COUNT(1) FROM Submissions.Quote q WHERE q.SubmissionId = s.SubmissionId AND q.IsDeleted = 0) AS QuoteCount,
+           s.CreatedDateUtc, s.ModifiedDateUtc
+    FROM Submissions.Submission s
+    WHERE s.OpportunityId = @Id AND s.IsDeleted = 0
+
+    UNION ALL
+
+    SELECT s.SubmissionId, s.TenantId, s.OpportunityId, s.SubmissionNumber, s.LineOfBusiness, s.Status, s.TargetPremium,
+           (SELECT COUNT(1) FROM CRM.Quote q WHERE q.OpportunityId = s.OpportunityId AND q.IsDeleted = 0) AS QuoteCount,
+           s.CreatedDateUtc, s.ModifiedDateUtc
+    FROM CRM.OpportunitySubmission s
+    WHERE s.OpportunityId = @Id
+      AND s.IsDeleted = 0
+      AND NOT EXISTS (SELECT 1 FROM Submissions.Submission ss WHERE ss.SubmissionId = s.SubmissionId AND ss.IsDeleted = 0)
+) s
+ORDER BY CreatedDateUtc DESC;
 
 SELECT QuoteId, TenantId, QuoteNumber, OpportunityId, AccountId, TotalAmount, ValidUntilDate, StatusCode, CreatedDateUtc, ModifiedDateUtc
 FROM CRM.Quote
@@ -209,6 +223,68 @@ WHERE o.TenantId = @TenantId AND o.IsDeleted = 0
             PageNumber = pageNumber,
             PageSize = pageSize
         };
+    }
+
+    public async Task<OpportunityConversionLaunchDto?> GetConversionLaunchAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT TOP 1
+       o.OpportunityId,
+       o.TenantId,
+       lc.LeadConversionId,
+       COALESCE(lc.LeadId, o.LeadId) AS LeadId,
+       COALESCE(lc.AccountId, o.AccountId) AS AccountId,
+       lc.SubmissionId,
+       COALESCE(lc.SourceLeadNumber, l.LeadNumber) AS SourceLeadNumber,
+       COALESCE(a.AccountName, lc.AccountNameSnapshot) AS AccountName,
+       COALESCE(o.OpportunityName, lc.OpportunityNameSnapshot) AS OpportunityName,
+       o.OpportunityNumber,
+       lc.SubmissionNumber,
+       lc.LineOfBusiness,
+       COALESCE(lc.EstimatedAmount, o.EstimatedAmount) AS EstimatedAmount,
+       lc.ConvertedDateUtc
+FROM CRM.Opportunity o
+LEFT JOIN CRM.LeadConversion lc ON lc.OpportunityId = o.OpportunityId AND lc.IsDeleted = 0
+LEFT JOIN CRM.Lead l ON l.LeadId = COALESCE(lc.LeadId, o.LeadId)
+LEFT JOIN Client.Account a ON a.AccountId = COALESCE(lc.AccountId, o.AccountId)
+WHERE o.OpportunityId = @OpportunityId AND o.IsDeleted = 0
+ORDER BY lc.ConvertedDateUtc DESC;
+
+SELECT OpportunityConversionLaunchActionId, ActionCode, ActionTitle, ActionDescription, IconCssClass, ButtonCssClass,
+       RouteTemplate, SortOrder, IsPrimary, OpensNewContext
+FROM CRM.OpportunityConversionLaunchAction
+WHERE TenantId = (SELECT TenantId FROM CRM.Opportunity WHERE OpportunityId = @OpportunityId)
+  AND IsActive = 1
+  AND IsDeleted = 0
+ORDER BY SortOrder, ActionTitle;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { OpportunityId = id }, cancellationToken: cancellationToken));
+        var launch = await multi.ReadSingleOrDefaultAsync<OpportunityConversionLaunchDto>();
+        if (launch is null)
+        {
+            return null;
+        }
+
+        var actions = (await multi.ReadAsync<OpportunityConversionLaunchActionRow>()).AsList();
+        launch.Actions = actions
+            .Select(action => new OpportunityConversionLaunchActionDto
+            {
+                OpportunityConversionLaunchActionId = action.OpportunityConversionLaunchActionId,
+                ActionCode = action.ActionCode,
+                ActionTitle = action.ActionTitle,
+                ActionDescription = action.ActionDescription,
+                IconCssClass = action.IconCssClass,
+                ButtonCssClass = action.ButtonCssClass,
+                Route = ResolveLaunchRoute(action.RouteTemplate, launch),
+                SortOrder = action.SortOrder,
+                IsPrimary = action.IsPrimary,
+                OpensNewContext = action.OpensNewContext,
+                IsAvailable = IsLaunchActionAvailable(action.ActionCode, launch)
+            })
+            .ToList();
+
+        return launch;
     }
 
     public async Task UpdateAsync(Guid id, UpdateOpportunityRequest request, CancellationToken cancellationToken = default)
@@ -399,5 +475,38 @@ END;";
         }, cancellationToken: cancellationToken));
     }
 
+    private static bool IsLaunchActionAvailable(string actionCode, OpportunityConversionLaunchDto launch)
+        => actionCode switch
+        {
+            "REVIEW_ACCOUNT" => launch.AccountId.HasValue,
+            "REVIEW_SUBMISSION" => launch.SubmissionId.HasValue,
+            "REVIEW_SOURCE_LEAD" => launch.LeadId.HasValue,
+            _ => true
+        };
+
+    private static string ResolveLaunchRoute(string routeTemplate, OpportunityConversionLaunchDto launch)
+    {
+        return routeTemplate
+            .Replace("{OpportunityId}", launch.OpportunityId.ToString(), StringComparison.OrdinalIgnoreCase)
+            .Replace("{LeadConversionId}", launch.LeadConversionId?.ToString() ?? string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace("{LeadId}", launch.LeadId?.ToString() ?? string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace("{AccountId}", launch.AccountId?.ToString() ?? string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace("{SubmissionId}", launch.SubmissionId?.ToString() ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
     private sealed record WorkflowTarget(Guid TenantId, Guid OpportunityId);
+
+    private sealed class OpportunityConversionLaunchActionRow
+    {
+        public Guid OpportunityConversionLaunchActionId { get; set; }
+        public string ActionCode { get; set; } = string.Empty;
+        public string ActionTitle { get; set; } = string.Empty;
+        public string? ActionDescription { get; set; }
+        public string? IconCssClass { get; set; }
+        public string? ButtonCssClass { get; set; }
+        public string RouteTemplate { get; set; } = string.Empty;
+        public int SortOrder { get; set; }
+        public bool IsPrimary { get; set; }
+        public bool OpensNewContext { get; set; }
+    }
 }

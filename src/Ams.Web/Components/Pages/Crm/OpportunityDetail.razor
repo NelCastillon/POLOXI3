@@ -56,6 +56,46 @@ else
         </div>
     </section>
 
+    @if (_conversionLaunch?.HasConversionContext == true)
+    {
+        <section class="od-conversion-launch" aria-label="Lead conversion launch center">
+            <div class="od-conversion-head">
+                <div>
+                    <span class="od-conversion-eyebrow"><i class="bi bi-arrow-up-right-circle" aria-hidden="true"></i> Lead conversion command center</span>
+                    <h2>Next best actions for @_conversionLaunch.OpportunityName</h2>
+                    <p>DB-backed launch actions synchronize the new opportunity with the converted lead, account, submission draft, and pipeline modules.</p>
+                </div>
+                <span class="od-conversion-badge"><i class="bi bi-check2-circle" aria-hidden="true"></i> Converted @ConversionDateLabel</span>
+            </div>
+            <div class="od-conversion-grid">
+                <div class="od-conversion-summary">
+                    <span>Source lead</span>
+                    <strong>@Safe(_conversionLaunch.SourceLeadNumber, "Converted lead")</strong>
+                    <small>@(_conversionLaunch.LineOfBusiness ?? "Line pending")</small>
+                </div>
+                <div class="od-conversion-summary">
+                    <span>Account</span>
+                    <strong>@Safe(_conversionLaunch.AccountName, _opp.AccountName)</strong>
+                    <small>@_conversionLaunch.EstimatedAmount.GetValueOrDefault().ToString("C0") estimated premium</small>
+                </div>
+                <div class="od-conversion-summary">
+                    <span>Submission</span>
+                    <strong>@(_conversionLaunch.SubmissionNumber ?? "No draft created")</strong>
+                    <small>@(_conversionLaunch.HasSubmissionDraft ? "Persisted draft is ready" : "Create from the opportunity workspace")</small>
+                </div>
+            </div>
+            <div class="od-conversion-actions" aria-label="Post-conversion actions">
+                @foreach (var action in _conversionLaunch.Actions.OrderBy(a => a.SortOrder))
+                {
+                    <button type="button" class="@LaunchActionClass(action)" title="@action.ActionDescription" disabled="@(!action.IsAvailable)" @onclick="() => NavigateLaunchAction(action)">
+                        <i class="bi @Safe(action.IconCssClass, "bi-arrow-right-circle")" aria-hidden="true"></i>
+                        <span><strong>@action.ActionTitle</strong><small>@action.ActionDescription</small></span>
+                    </button>
+                }
+            </div>
+        </section>
+    }
+
     <section class="od-kpi-strip" aria-label="Opportunity KPI filters">
         <button type="button" class='@KpiClass("overview")' title="Show overview" @onclick='() => ActivateKpi("overview", 0)'><span class="od-kpi-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></span><span><strong class="od-kpi-val">@_opp.Amount.ToString("C0")</strong><span class="od-kpi-lbl">Amount</span><small>@WeightedAmount.ToString("C0") weighted</small></span></button>
         <button type="button" class='@KpiClass("stage")' title="Show workflow" @onclick='() => ActivateKpi("stage", 6)'><span class="od-kpi-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span><span><strong class="od-kpi-val">@_opp.WinPct%</strong><span class="od-kpi-lbl">Win probability</span><small>@_opp.ForecastCategory forecast</small></span></button>
@@ -512,6 +552,15 @@ else
 @code {
     [Parameter] public Guid OpportunityId { get; set; }
 
+    [SupplyParameterFromQuery(Name = "from")]
+    public string? LaunchSource { get; set; }
+
+    [SupplyParameterFromQuery(Name = "conversionId")]
+    public Guid? LaunchConversionId { get; set; }
+
+    [SupplyParameterFromQuery(Name = "submissionId")]
+    public Guid? LaunchSubmissionId { get; set; }
+
     private bool     _loading = true;
     private int      _tab     = 0;
     private OppDetailModel? _opp;
@@ -529,6 +578,7 @@ else
     private List<DocRow>     _documents   = [];
     private List<CompetitorRow> _competitors = [];
     private List<WorkflowEventRow> _workflowEvents = [];
+    private OpportunityConversionLaunchDto? _conversionLaunch;
 
     private bool   _showEdit        = false;
     private bool   _showStage       = false;
@@ -597,6 +647,7 @@ else
             _workflowEvents = detail.WorkflowEvents.Select(MapWorkflowEvent).ToList();
             await LoadDocumentCategoriesAsync();
             await LoadOpportunityDocumentsAsync();
+            await LoadConversionLaunchAsync();
 
             Breadcrumbs.SetCrumbs(
                 new("Home","/"), new("CRM","/crm/opportunities"),
@@ -621,6 +672,40 @@ else
     }
 
     private static string CategoryLabel(DocumentConfigItemDto category) => Normalize(category.Name) ?? Normalize(category.Code) ?? string.Empty;
+
+    private async Task LoadConversionLaunchAsync()
+    {
+        _conversionLaunch = await Api.GetOpportunityConversionLaunchAsync(OpportunityId);
+        if (_conversionLaunch is not null && LaunchSubmissionId.HasValue && !_conversionLaunch.SubmissionId.HasValue)
+        {
+            _conversionLaunch.SubmissionId = LaunchSubmissionId;
+        }
+    }
+
+    private string ConversionDateLabel => _conversionLaunch?.ConvertedDateUtc?.ToString("MMM d, yyyy") ?? "recently";
+
+    private static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+
+    private static string LaunchActionClass(OpportunityConversionLaunchActionDto action)
+    {
+        var css = string.IsNullOrWhiteSpace(action.ButtonCssClass) ? "um-btn um-btn-ghost" : action.ButtonCssClass.Trim();
+        if (action.IsPrimary && !css.Contains("um-btn-primary", StringComparison.OrdinalIgnoreCase))
+        {
+            css += " od-launch-primary";
+        }
+
+        return action.IsAvailable ? $"od-launch-action {css}" : $"od-launch-action {css} od-launch-action-disabled";
+    }
+
+    private void NavigateLaunchAction(OpportunityConversionLaunchActionDto action)
+    {
+        if (!action.IsAvailable || string.IsNullOrWhiteSpace(action.Route))
+        {
+            return;
+        }
+
+        Nav.NavigateTo(action.Route);
+    }
 
     private async Task CommitActivityAsync()
     {

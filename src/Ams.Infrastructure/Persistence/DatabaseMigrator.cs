@@ -239,6 +239,9 @@ public sealed partial class DatabaseMigrator
         new("0201_DMS_RemoveCrmDocumentGroupsSeedLead", Migration0201_DmsRemoveCrmDocumentGroupsSeedLead),
         new("0202_DMS_DocumentCategoryEnterpriseSeed", Migration0202_DmsDocumentCategoryEnterpriseSeed),
         new("0203_DMS_DocumentCategoryGroupSchemaCleanup", Migration0203_DmsDocumentCategoryGroupSchemaCleanup),
+        new("0204_CRM_LeadConversion_EnterpriseWorkflow", Migration0204_CrmLeadConversionEnterpriseWorkflow),
+        new("0205_CRM_LeadConversion_SubmissionDraftLink", Migration0205_CrmLeadConversionSubmissionDraftLink),
+        new("0206_CRM_OpportunityConversionLaunchActions", Migration0206_CrmOpportunityConversionLaunchActions),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -16089,6 +16092,200 @@ WHERE g.CategoryId IS NOT NULL
 
 IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_DMS_DocumentGroup_DocumentCategory')
     ALTER TABLE DMS.DocumentGroup ADD CONSTRAINT FK_DMS_DocumentGroup_DocumentCategory FOREIGN KEY (CategoryId) REFERENCES DMS.DocumentCategory(DocumentCategoryId);
+""";
+
+    private const string Migration0204_CrmLeadConversionEnterpriseWorkflow = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM') EXEC(N'CREATE SCHEMA CRM');
+
+IF OBJECT_ID(N'CRM.LeadConversion', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.LeadConversion
+    (
+        LeadConversionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CRM_LeadConversion PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LeadId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        OpportunityId UNIQUEIDENTIFIER NOT NULL,
+        ContactId UNIQUEIDENTIFIER NULL,
+        ConversionTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_LeadConversion_Type DEFAULT N'AccountOpportunity',
+        AccountActionCode NVARCHAR(50) NOT NULL CONSTRAINT DF_LeadConversion_AccountAction DEFAULT N'Created',
+        SubmissionNextStepCode NVARCHAR(50) NULL,
+        SourceLeadNumber NVARCHAR(50) NULL,
+        AccountNameSnapshot NVARCHAR(200) NOT NULL,
+        OpportunityNameSnapshot NVARCHAR(200) NOT NULL,
+        EstimatedAmount DECIMAL(18,2) NULL,
+        LineOfBusiness NVARCHAR(100) NULL,
+        Notes NVARCHAR(1000) NULL,
+        ConvertedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadConversion_ConvertedDate DEFAULT SYSUTCDATETIME(),
+        ConvertedByUserId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadConversion_CreatedDate DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_LeadConversion_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'CRM.LeadConversion', N'U') IS NOT NULL AND COL_LENGTH(N'CRM.LeadConversion', N'LeadConversionId') IS NULL
+    ALTER TABLE CRM.LeadConversion ADD LeadConversionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_LeadConversion_Id_0204 DEFAULT NEWID();
+
+IF OBJECT_ID(N'CRM.LeadConversion', N'U') IS NOT NULL AND COL_LENGTH(N'CRM.LeadConversion', N'TenantId') IS NULL
+    ALTER TABLE CRM.LeadConversion ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_LeadConversion_TenantId_0204 DEFAULT '00000000-0000-0000-0000-000000000001';
+
+IF OBJECT_ID(N'CRM.LeadConversion', N'U') IS NOT NULL AND COL_LENGTH(N'CRM.LeadConversion', N'LeadId') IS NULL
+    ALTER TABLE CRM.LeadConversion ADD LeadId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_LeadConversion_LeadId_0204 DEFAULT '00000000-0000-0000-0000-000000000000';
+
+IF OBJECT_ID(N'CRM.LeadConversion', N'U') IS NOT NULL AND COL_LENGTH(N'CRM.LeadConversion', N'AccountId') IS NULL
+    ALTER TABLE CRM.LeadConversion ADD AccountId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_LeadConversion_AccountId_0204 DEFAULT '00000000-0000-0000-0000-000000000000';
+
+IF OBJECT_ID(N'CRM.LeadConversion', N'U') IS NOT NULL AND COL_LENGTH(N'CRM.LeadConversion', N'OpportunityId') IS NULL
+    ALTER TABLE CRM.LeadConversion ADD OpportunityId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_LeadConversion_OpportunityId_0204 DEFAULT '00000000-0000-0000-0000-000000000000';
+
+IF COL_LENGTH(N'CRM.LeadConversion', N'ContactId') IS NULL ALTER TABLE CRM.LeadConversion ADD ContactId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.LeadConversion', N'ConversionTypeCode') IS NULL ALTER TABLE CRM.LeadConversion ADD ConversionTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_LeadConversion_Type_0204 DEFAULT N'AccountOpportunity';
+IF COL_LENGTH(N'CRM.LeadConversion', N'AccountActionCode') IS NULL ALTER TABLE CRM.LeadConversion ADD AccountActionCode NVARCHAR(50) NOT NULL CONSTRAINT DF_LeadConversion_AccountAction_0204 DEFAULT N'Created';
+IF COL_LENGTH(N'CRM.LeadConversion', N'SubmissionNextStepCode') IS NULL ALTER TABLE CRM.LeadConversion ADD SubmissionNextStepCode NVARCHAR(50) NULL;
+IF COL_LENGTH(N'CRM.LeadConversion', N'SourceLeadNumber') IS NULL ALTER TABLE CRM.LeadConversion ADD SourceLeadNumber NVARCHAR(50) NULL;
+IF COL_LENGTH(N'CRM.LeadConversion', N'AccountNameSnapshot') IS NULL ALTER TABLE CRM.LeadConversion ADD AccountNameSnapshot NVARCHAR(200) NOT NULL CONSTRAINT DF_LeadConversion_AccountName_0204 DEFAULT N'Converted Account';
+IF COL_LENGTH(N'CRM.LeadConversion', N'OpportunityNameSnapshot') IS NULL ALTER TABLE CRM.LeadConversion ADD OpportunityNameSnapshot NVARCHAR(200) NOT NULL CONSTRAINT DF_LeadConversion_OpportunityName_0204 DEFAULT N'Converted Opportunity';
+IF COL_LENGTH(N'CRM.LeadConversion', N'EstimatedAmount') IS NULL ALTER TABLE CRM.LeadConversion ADD EstimatedAmount DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'CRM.LeadConversion', N'LineOfBusiness') IS NULL ALTER TABLE CRM.LeadConversion ADD LineOfBusiness NVARCHAR(100) NULL;
+IF COL_LENGTH(N'CRM.LeadConversion', N'Notes') IS NULL ALTER TABLE CRM.LeadConversion ADD Notes NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'CRM.LeadConversion', N'ConvertedDateUtc') IS NULL ALTER TABLE CRM.LeadConversion ADD ConvertedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadConversion_ConvertedDate_0204 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'CRM.LeadConversion', N'ConvertedByUserId') IS NULL ALTER TABLE CRM.LeadConversion ADD ConvertedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.LeadConversion', N'CreatedDateUtc') IS NULL ALTER TABLE CRM.LeadConversion ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadConversion_CreatedDate_0204 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'CRM.LeadConversion', N'CreatedByUserId') IS NULL ALTER TABLE CRM.LeadConversion ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.LeadConversion', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.LeadConversion ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'CRM.LeadConversion', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.LeadConversion ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.LeadConversion', N'IsDeleted') IS NULL ALTER TABLE CRM.LeadConversion ADD IsDeleted BIT NOT NULL CONSTRAINT DF_LeadConversion_IsDeleted_0204 DEFAULT 0;
+
+IF OBJECT_ID(N'CRM.Lead', N'U') IS NOT NULL AND COL_LENGTH(N'CRM.Lead', N'AccountId') IS NULL
+    ALTER TABLE CRM.Lead ADD AccountId UNIQUEIDENTIFIER NULL;
+
+IF OBJECT_ID(N'CRM.Opportunity', N'U') IS NOT NULL AND COL_LENGTH(N'CRM.Opportunity', N'LeadId') IS NULL
+    ALTER TABLE CRM.Opportunity ADD LeadId UNIQUEIDENTIFIER NULL;
+
+IF OBJECT_ID(N'CRM.LeadConversion', N'U') IS NOT NULL
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadConversion') AND name = N'UX_LeadConversion_Lead_Active')
+        EXEC(N'CREATE UNIQUE INDEX UX_LeadConversion_Lead_Active ON CRM.LeadConversion(LeadId) WHERE IsDeleted = 0 AND LeadId <> ''00000000-0000-0000-0000-000000000000'';');
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadConversion') AND name = N'IX_LeadConversion_Tenant_Date')
+        EXEC(N'CREATE INDEX IX_LeadConversion_Tenant_Date ON CRM.LeadConversion(TenantId, ConvertedDateUtc DESC, IsDeleted);');
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadConversion') AND name = N'IX_LeadConversion_Account_Opportunity')
+        EXEC(N'CREATE INDEX IX_LeadConversion_Account_Opportunity ON CRM.LeadConversion(AccountId, OpportunityId, IsDeleted);');
+END;
+""";
+
+    private const string Migration0205_CrmLeadConversionSubmissionDraftLink = """
+IF OBJECT_ID(N'CRM.LeadConversion', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'CRM.LeadConversion', N'SubmissionId') IS NULL
+        ALTER TABLE CRM.LeadConversion ADD SubmissionId UNIQUEIDENTIFIER NULL;
+
+    IF COL_LENGTH(N'CRM.LeadConversion', N'SubmissionNumber') IS NULL
+        ALTER TABLE CRM.LeadConversion ADD SubmissionNumber NVARCHAR(50) NULL;
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadConversion') AND name = N'IX_LeadConversion_Submission')
+        EXEC(N'CREATE INDEX IX_LeadConversion_Submission ON CRM.LeadConversion(SubmissionId, IsDeleted) WHERE SubmissionId IS NOT NULL;');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+IF OBJECT_ID(N'Submissions.SubmissionSeq', N'SO') IS NULL EXEC(N'CREATE SEQUENCE Submissions.SubmissionSeq AS INT START WITH 1000 INCREMENT BY 1');
+""";
+
+    private const string Migration0206_CrmOpportunityConversionLaunchActions = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM') EXEC(N'CREATE SCHEMA CRM');
+
+IF OBJECT_ID(N'CRM.OpportunityConversionLaunchAction', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.OpportunityConversionLaunchAction
+    (
+        OpportunityConversionLaunchActionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CRM_OpportunityConversionLaunchAction PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ActionCode NVARCHAR(80) NOT NULL,
+        ActionTitle NVARCHAR(160) NOT NULL,
+        ActionDescription NVARCHAR(500) NULL,
+        IconCssClass NVARCHAR(100) NULL,
+        ButtonCssClass NVARCHAR(100) NULL,
+        RouteTemplate NVARCHAR(300) NOT NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_SortOrder DEFAULT 0,
+        IsPrimary BIT NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_IsPrimary DEFAULT 0,
+        OpensNewContext BIT NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_OpensNewContext DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_CreatedDate DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'TenantId') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_TenantId_0206 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'ActionCode') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD ActionCode NVARCHAR(80) NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_Code_0206 DEFAULT N'OPEN_OPPORTUNITY';
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'ActionTitle') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD ActionTitle NVARCHAR(160) NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_Title_0206 DEFAULT N'Open opportunity';
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'ActionDescription') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD ActionDescription NVARCHAR(500) NULL;
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'IconCssClass') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD IconCssClass NVARCHAR(100) NULL;
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'ButtonCssClass') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD ButtonCssClass NVARCHAR(100) NULL;
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'RouteTemplate') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD RouteTemplate NVARCHAR(300) NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_Route_0206 DEFAULT N'/crm/opportunities/{OpportunityId}';
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'SortOrder') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD SortOrder INT NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_SortOrder_0206 DEFAULT 0;
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'IsPrimary') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD IsPrimary BIT NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_IsPrimary_0206 DEFAULT 0;
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'OpensNewContext') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD OpensNewContext BIT NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_OpensNewContext_0206 DEFAULT 0;
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'IsActive') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD IsActive BIT NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_IsActive_0206 DEFAULT 1;
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'CreatedDateUtc') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_CreatedDate_0206 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'CreatedByUserId') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'IsDeleted') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD IsDeleted BIT NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_IsDeleted_0206 DEFAULT 0;
+
+DECLARE @LaunchTenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO @LaunchTenants (TenantId)
+    SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0;
+END;
+
+IF NOT EXISTS (SELECT 1 FROM @LaunchTenants)
+    INSERT INTO @LaunchTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+;WITH Seed AS
+(
+    SELECT TenantId, ActionCode, ActionTitle, ActionDescription, IconCssClass, ButtonCssClass, RouteTemplate, SortOrder, IsPrimary, OpensNewContext
+    FROM @LaunchTenants
+    CROSS APPLY (VALUES
+        (N'OPEN_OPPORTUNITY', N'Open new opportunity workspace', N'Review the converted opportunity, confirm stage, owner, estimated premium, close date, and workflow timeline.', N'bi-trophy-fill', N'um-btn um-btn-primary', N'/crm/opportunities/{OpportunityId}?from=lead-conversion&conversionId={LeadConversionId}', 10, CONVERT(bit, 1), CONVERT(bit, 0)),
+        (N'REVIEW_ACCOUNT', N'Review account 360', N'Validate the account profile, contacts, lifecycle stage, servicing ownership, and relationship context created or linked during conversion.', N'bi-building-check', N'um-btn um-btn-ghost', N'/accounts/{AccountId}?from=lead-conversion&opportunityId={OpportunityId}', 20, CONVERT(bit, 0), CONVERT(bit, 0)),
+        (N'REVIEW_SUBMISSION', N'Continue submission draft', N'Open the persisted draft submission created during conversion and complete market-ready intake details.', N'bi-send-check', N'um-btn um-btn-ghost', N'/submissions/{SubmissionId}', 30, CONVERT(bit, 0), CONVERT(bit, 0)),
+        (N'REVIEW_SOURCE_LEAD', N'Review source lead', N'Open the original lead for conversion audit, prior activities, communications, interest lines, and source history.', N'bi-person-lines-fill', N'um-btn um-btn-ghost', N'/crm/leads/{LeadId}', 40, CONVERT(bit, 0), CONVERT(bit, 0)),
+        (N'OPEN_PIPELINE', N'Back to opportunity pipeline', N'Return to the CRM opportunity pipeline with the converted opportunity context preserved.', N'bi-kanban', N'um-btn um-btn-ghost', N'/crm/opportunities?highlight={OpportunityId}', 50, CONVERT(bit, 0), CONVERT(bit, 0))
+    ) v(ActionCode, ActionTitle, ActionDescription, IconCssClass, ButtonCssClass, RouteTemplate, SortOrder, IsPrimary, OpensNewContext)
+)
+MERGE CRM.OpportunityConversionLaunchAction AS target
+USING Seed AS source
+    ON target.TenantId = source.TenantId AND target.ActionCode = source.ActionCode
+WHEN MATCHED THEN UPDATE SET
+    ActionTitle = source.ActionTitle,
+    ActionDescription = source.ActionDescription,
+    IconCssClass = source.IconCssClass,
+    ButtonCssClass = source.ButtonCssClass,
+    RouteTemplate = source.RouteTemplate,
+    SortOrder = source.SortOrder,
+    IsPrimary = source.IsPrimary,
+    OpensNewContext = source.OpensNewContext,
+    IsActive = 1,
+    IsDeleted = 0,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT
+    (OpportunityConversionLaunchActionId, TenantId, ActionCode, ActionTitle, ActionDescription, IconCssClass, ButtonCssClass, RouteTemplate, SortOrder, IsPrimary, OpensNewContext, IsActive, CreatedDateUtc, IsDeleted)
+VALUES
+    (NEWID(), source.TenantId, source.ActionCode, source.ActionTitle, source.ActionDescription, source.IconCssClass, source.ButtonCssClass, source.RouteTemplate, source.SortOrder, source.IsPrimary, source.OpensNewContext, 1, SYSUTCDATETIME(), 0);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunityConversionLaunchAction') AND name = N'UX_OpportunityConversionLaunchAction_Tenant_Code')
+    EXEC(N'CREATE UNIQUE INDEX UX_OpportunityConversionLaunchAction_Tenant_Code ON CRM.OpportunityConversionLaunchAction(TenantId, ActionCode) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunityConversionLaunchAction') AND name = N'IX_OpportunityConversionLaunchAction_Tenant_Active')
+    EXEC(N'CREATE INDEX IX_OpportunityConversionLaunchAction_Tenant_Active ON CRM.OpportunityConversionLaunchAction(TenantId, IsActive, IsDeleted, SortOrder);');
 """;
 
     private const string Migration0203_DmsDocumentCategoryGroupSchemaCleanup = """

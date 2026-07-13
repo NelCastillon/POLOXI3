@@ -33,6 +33,9 @@ public sealed class OpportunityService : IOpportunityService
     public Task<OpportunityDetailDto?> GetDetailAsync(Guid id, CancellationToken cancellationToken = default)
         => _repository.GetDetailAsync(id, cancellationToken);
 
+    public Task<OpportunityConversionLaunchDto?> GetConversionLaunchAsync(Guid id, CancellationToken cancellationToken = default)
+        => _repository.GetConversionLaunchAsync(id, cancellationToken);
+
     public Task<PagedResult<OpportunityDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _repository.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
 

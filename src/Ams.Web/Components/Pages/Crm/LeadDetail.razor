@@ -89,6 +89,77 @@
     </div>
 }
 
+@if (_showConvert)
+{
+    <div class="ldd-modal-backdrop" role="presentation" @onclick="CloseConvert">
+        <div class="ldd-enterprise-modal ldd-enterprise-modal--wide" role="dialog" aria-modal="true" aria-labelledby="leadConvertTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_convertForm" OnValidSubmit="ConvertAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-header">
+                    <i class="bi bi-arrow-up-right-circle" aria-hidden="true"></i>
+                    <span id="leadConvertTitle">Convert lead to Account + Opportunity</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseConvert" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="ldd-convert-flow" aria-label="Enterprise conversion path">
+                        <span><i class="bi bi-person-lines-fill" aria-hidden="true"></i> Lead</span>
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                        <span><i class="bi bi-building" aria-hidden="true"></i> Account</span>
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                        <span><i class="bi bi-trophy" aria-hidden="true"></i> Opportunity</span>
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                        <span><i class="bi bi-send" aria-hidden="true"></i> Submission</span>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field-wide">
+                            <label>Account handling</label>
+                            <InputSelect class="um-input" @bind-Value="_convertForm.AccountMode" @bind-Value:after="OnConvertAccountModeChanged">
+                                <option value="Create">Create new account from lead</option>
+                                <option value="Link">Link existing account</option>
+                            </InputSelect>
+                        </div>
+                        @if (_convertForm.AccountMode == "Link")
+                        {
+                            <div class="um-field um-field-wide">
+                                <label>Find existing account</label>
+                                <div class="d-flex gap-2">
+                                    <InputText class="um-input" @bind-Value="_convertAccountSearch" placeholder="Search DB accounts by name or email" />
+                                    <button type="button" class="um-btn um-btn-ghost" @onclick="LoadConvertAccountCandidatesAsync" disabled="@_busy"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
+                                </div>
+                            </div>
+                            <div class="um-field um-field-wide">
+                                <label>Existing account</label>
+                                <InputSelect class="um-input" @bind-Value="_convertForm.ExistingAccountId">
+                                    <option value="">Select account</option>
+                                    @foreach (var account in _accountCandidates)
+                                    {
+                                        <option value="@account.AccountId">@account.AccountName (@account.AccountNumber)</option>
+                                    }
+                                </InputSelect>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="um-field um-field-wide"><label>New account name</label><InputText class="um-input" @bind-Value="_convertForm.AccountName" /></div>
+                        }
+                        <div class="um-field um-field-wide"><label>Opportunity name</label><InputText class="um-input" @bind-Value="_convertForm.OpportunityName" /></div>
+                        <div class="um-field"><label>Line of business</label><InputSelect class="um-input" @bind-Value="_convertForm.LineOfBusiness"><option value="">Select line</option>@foreach (var line in _lineOfBusinessOptions) { <option value="@line.LobName">@line.LobName</option> }</InputSelect></div>
+                        <div class="um-field"><label>Estimated premium</label><InputNumber class="um-input" @bind-Value="_convertForm.EstimatedAmount" /></div>
+                        <div class="um-field"><label>Target close date</label><InputDate class="um-input" @bind-Value="_convertForm.CloseDate" /></div>
+                        <div class="um-field"><label>Owner</label><InputSelect class="um-input" @bind-Value="_convertForm.OwnerUserId"><option value="">Use current owner</option>@foreach (var owner in _ownerOptions) { <option value="@owner.Value">@owner.Label</option> }</InputSelect></div>
+                        <div class="um-field um-field-wide"><label><InputCheckbox @bind-Value="_convertForm.CreateSubmissionDraft" /> Create draft submission during conversion</label><span class="ldd-text-muted">AMS creates the account, opportunity, and draft submission in one backend transaction, then opens the persisted submission.</span></div>
+                        <div class="um-field um-field-wide"><label>Conversion notes</label><InputTextArea class="um-input" rows="3" @bind-Value="_convertForm.Notes" /></div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseConvert" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy"><i class="bi bi-check2-circle" aria-hidden="true"></i> Convert to Account + Opportunity</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
 @if (_showTabForm)
 {
     <div class="ldd-modal-backdrop" role="presentation">
@@ -565,6 +636,7 @@ else
     private bool _busy;
     private bool _showEdit;
     private bool _showAssign;
+    private bool _showConvert;
     private bool _showTabForm;
     private string? _loadError;
     private int _activeTab;
@@ -575,10 +647,13 @@ else
     private EnterpriseDocumentPreview? _documentPreview;
     private LeadEditForm _editForm = new();
     private LeadAssignForm _assignForm = new();
+    private LeadConvertForm _convertForm = new();
     private LeadTabItemForm _tabForm = new();
     private IBrowserFile? _selectedDocumentFile;
     private Guid? _editingTabItemId;
     private List<OwnerOption> _ownerOptions = [];
+    private List<AccountDto> _accountCandidates = [];
+    private string _convertAccountSearch = string.Empty;
 
     private readonly TabDefinition[] _tabs =
     [
@@ -1539,72 +1614,102 @@ else
 
     private void OpenConvertWorkflow()
     {
-        _confirmAction = new("Convert lead", $"Convert {LeadDisplayName} to a Prospect account and opportunity?", "Convert", "um-btn-primary", "bi-trophy", ConvertAsync);
+        if (_lead is null) return;
+        var accountName = Safe(_lead.AccountName, LeadDisplayName);
+        var lob = _interestLines.OrderByDescending(l => l.EstPremium).FirstOrDefault()?.LineOfBusiness
+            ?? _lineOfBusinessOptions.FirstOrDefault(l => string.Equals(l.LobName, _lead.InterestedService, StringComparison.OrdinalIgnoreCase))?.LobName
+            ?? _lineOfBusinessOptions.FirstOrDefault()?.LobName
+            ?? string.Empty;
+        var estimatedAmount = _interestLines.Count > 0 ? _interestLines.Sum(l => l.EstPremium) : _lead.AnnualRevenue;
+        _convertForm = new LeadConvertForm
+        {
+            AccountMode = _lead.AccountId.HasValue ? "Link" : "Create",
+            ExistingAccountId = _lead.AccountId?.ToString() ?? string.Empty,
+            AccountName = accountName,
+            OpportunityName = $"{accountName} - {Safe(lob, "Opportunity")}",
+            LineOfBusiness = lob,
+            EstimatedAmount = estimatedAmount,
+            CloseDate = DateTime.Today.AddDays(45),
+            OwnerUserId = _lead.AssignedToUserId?.ToString() ?? string.Empty,
+            Notes = $"Converted from lead {Safe(_lead.LeadNumber, LeadId.ToString())}."
+        };
+        _convertAccountSearch = accountName;
+        _showConvert = true;
+        _ = LoadConvertAccountCandidatesAsync();
     }
 
     private async Task ConvertAsync()
     {
         if (_lead is null) return;
-        var tenantId = _lead.TenantId;
-        var stamp = DateTime.UtcNow.ToString("yyyyMMddHHmmssfff", CultureInfo.InvariantCulture);
-        var accountName = Safe(_lead.AccountName, LeadDisplayName);
-        var accountId = _lead.AccountId;
-
-        if (!accountId.HasValue)
+        _busy = true;
+        try
         {
-            accountId = await Api.CreateAccountAsync(new CreateAccountRequest
+            var result = await Api.ConvertLeadAsync(LeadId, new ConvertLeadRequest
             {
-                TenantId = tenantId,
-                AccountNumber = $"ACC-{stamp}",
-                AccountName = accountName,
-                AccountTypeCode = "Prospect",
-                MainEmail = string.IsNullOrWhiteSpace(_lead.Email) ? null : _lead.Email,
-                MainPhone = string.IsNullOrWhiteSpace(_lead.Phone) ? null : _lead.Phone,
-                StatusCode = "Active",
-                LifecycleStageCode = "Prospect",
-                AnnualRevenue = _lead.AnnualRevenue,
-                OwnerUserId = _lead.AssignedToUserId,
-                CreatedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId
+                TenantId = _lead.TenantId,
+                LeadId = LeadId,
+                ExistingAccountId = _convertForm.ExistingAccountGuid,
+                AccountName = _convertForm.AccountMode == "Create" ? TrimOrNull(_convertForm.AccountName) : null,
+                OpportunityName = _convertForm.OpportunityName,
+                LineOfBusiness = TrimOrNull(_convertForm.LineOfBusiness),
+                EstimatedAmount = _convertForm.EstimatedAmount,
+                CloseDate = _convertForm.CloseDate,
+                OwnerUserId = _convertForm.OwnerGuid ?? _lead.AssignedToUserId,
+                ConvertedByUserId = _currentUserId,
+                CreateSubmissionDraft = _convertForm.CreateSubmissionDraft,
+                Notes = TrimOrNull(_convertForm.Notes)
             });
+
+            _showConvert = false;
+            var draftText = result.SubmissionDraftCreated && result.SubmissionNumber is not null ? $" Draft submission {result.SubmissionNumber} was created." : string.Empty;
+            ShowToast("success", $"Lead converted to {result.AccountName} and {result.OpportunityName}.{draftText}");
+            Nav.NavigateTo($"/crm/opportunities/{result.OpportunityId}?from=lead-conversion&conversionId={result.LeadConversionId}&submissionId={result.SubmissionId}");
         }
-
-        var opportunityId = await Api.CreateOpportunityAsync(new CreateOpportunityRequest
+        catch (Exception ex)
         {
-            TenantId = tenantId,
-            OpportunityNumber = $"OPP-{stamp}",
-            AccountId = accountId.Value,
-            OpportunityName = $"{accountName} Opportunity",
-            EstimatedAmount = _lead.AnnualRevenue ?? _interestLines.Sum(l => l.EstPremium),
-            OwnerUserId = _lead.AssignedToUserId,
-            CloseDate = DateTime.UtcNow.Date.AddDays(30),
-            LeadId = LeadId,
-            WinProbability = 50,
-            ForecastCategoryCode = "Pipeline",
-            CreatedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId
-        });
-
-        foreach (var contact in _contacts)
-        {
-            await SyncLeadContactToAccountAsync(contact, accountId.Value);
+            ShowToast("danger", $"Convert failed: {ex.Message}");
         }
-
-        await Api.UpdateLeadAsync(LeadId, BuildUpdateRequest(_lead.AssignedToUserId, "Converted", 4, "Hot", Math.Max(_lead.Score ?? 0, 85), DateTime.UtcNow, accountId));
-        await Api.CreateLeadCommunicationAsync(LeadId, new CreateLeadCommunicationRequest
+        finally
         {
-            TenantId = tenantId,
-            LeadId = LeadId,
-            Channel = "Workflow",
-            Subject = "Lead converted",
-            Preview = "Lead converted to Prospect account and opportunity from Lead Detail.",
-            SentByUserId = _currentUserId == Guid.Empty ? null : _currentUserId,
-            SentAt = DateTime.UtcNow,
-            Opened = true,
-            Clicked = false
-        });
+            _busy = false;
+        }
+    }
 
-        _confirmAction = null;
-        ShowToast("success", "Lead converted.");
-        Nav.NavigateTo($"/crm/opportunities/{opportunityId}");
+    private void CloseConvert() => _showConvert = false;
+
+    private async Task OnConvertAccountModeChanged()
+    {
+        if (_convertForm.AccountMode == "Link")
+        {
+            await LoadConvertAccountCandidatesAsync();
+        }
+        else
+        {
+            _convertForm.ExistingAccountId = string.Empty;
+        }
+    }
+
+    private async Task LoadConvertAccountCandidatesAsync()
+    {
+        if (_lead is null) return;
+        try
+        {
+            var search = TrimOrNull(_convertAccountSearch) ?? TrimOrNull(_lead.AccountName) ?? TrimOrNull(_lead.Email) ?? LeadDisplayName;
+            var result = await Api.SearchAccountsAsync(_lead.TenantId, search, pageSize: 25);
+            _accountCandidates = result?.Items?.ToList() ?? [];
+            if (_lead.AccountId.HasValue && !_accountCandidates.Any(a => a.AccountId == _lead.AccountId.Value))
+            {
+                var account = await Api.GetAccountByIdAsync(_lead.AccountId.Value);
+                if (account is not null)
+                {
+                    _accountCandidates.Insert(0, account);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Account search failed: {ex.Message}");
+        }
     }
 
     private async Task ExecuteConfirmedAsync()
@@ -1665,7 +1770,7 @@ else
 
     private string KpiClass(int index) => _activeTab == index ? "ldd-kpi-card ldd-kpi-card--active" : "ldd-kpi-card";
     private string TabClass(int index) => _activeTab == index ? "ldd-native-tab ldd-native-tab--active" : "ldd-native-tab";
-    private string StatusLabel(int statusCode) => statusCode switch { 1 => "Open", 2 => "Qualified", 3 => "Converted", 4 => "Lost", 5 => "Disqualified", _ => "Open" };
+    private string StatusLabel(int statusCode) => statusCode switch { 1 => "Open", 2 => "Contacted", 3 => "Qualified", 4 => "Converted", 5 => "Disqualified", _ => "Open" };
     private static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
     private static string Money(decimal? value) => value.HasValue ? value.Value.ToString("C0", CultureInfo.CurrentCulture) : "-";
     private static string DateOrDash(DateTime? value) => value.HasValue ? value.Value.ToLocalTime().ToString("MMM d, yyyy") : "-";
@@ -1754,6 +1859,49 @@ else
         public string? InterestedService { get; set; }
 
         public Guid? AssignedGuid => Guid.TryParse(AssignedToUserId, out var id) ? id : null;
+    }
+
+    private sealed class LeadConvertForm : IValidatableObject
+    {
+        [Required, StringLength(20)]
+        public string AccountMode { get; set; } = "Create";
+
+        public string ExistingAccountId { get; set; } = string.Empty;
+
+        [StringLength(200)]
+        public string AccountName { get; set; } = string.Empty;
+
+        [Required, StringLength(200)]
+        public string OpportunityName { get; set; } = string.Empty;
+
+        [StringLength(100)]
+        public string LineOfBusiness { get; set; } = string.Empty;
+
+        [Range(0, 999999999999)]
+        public decimal? EstimatedAmount { get; set; }
+
+        public DateTime? CloseDate { get; set; }
+        public string OwnerUserId { get; set; } = string.Empty;
+        public bool CreateSubmissionDraft { get; set; }
+
+        [StringLength(1000)]
+        public string? Notes { get; set; }
+
+        public Guid? ExistingAccountGuid => Guid.TryParse(ExistingAccountId, out var id) ? id : null;
+        public Guid? OwnerGuid => Guid.TryParse(OwnerUserId, out var id) ? id : null;
+
+        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+        {
+            if (AccountMode == "Link" && ExistingAccountGuid is null)
+            {
+                yield return new ValidationResult("Select an existing account to link.", [nameof(ExistingAccountId)]);
+            }
+
+            if (AccountMode == "Create" && string.IsNullOrWhiteSpace(AccountName))
+            {
+                yield return new ValidationResult("Account name is required when creating a new account.", [nameof(AccountName)]);
+            }
+        }
     }
 
     private sealed class LeadTabItemForm : IValidatableObject

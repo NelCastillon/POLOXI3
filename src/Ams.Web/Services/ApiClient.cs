@@ -982,6 +982,13 @@ public sealed partial class ApiClient
         await EnsureSuccessWithDetailsAsync(response, cancellationToken);
     }
 
+    public async Task<LeadConversionResultDto> ConvertLeadAsync(Guid leadId, ConvertLeadRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/leads/{leadId}/convert", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<LeadConversionResultDto>(cancellationToken: cancellationToken))!;
+    }
+
     public Task<IReadOnlyList<LeadContactDto>?> GetLeadContactsAsync(Guid leadId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<LeadContactDto>>($"api/leads/{leadId}/contacts", cancellationToken);
 
@@ -1183,6 +1190,9 @@ public sealed partial class ApiClient
 
     public Task<OpportunityDetailDto?> GetOpportunityDetailAsync(Guid opportunityId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<OpportunityDetailDto>($"api/opportunities/{opportunityId}/detail", cancellationToken);
+
+    public Task<OpportunityConversionLaunchDto?> GetOpportunityConversionLaunchAsync(Guid opportunityId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<OpportunityConversionLaunchDto>($"api/opportunities/{opportunityId}/conversion-launch", cancellationToken);
 
     public async Task UpdateOpportunityAsync(Guid opportunityId, UpdateOpportunityRequest request, CancellationToken cancellationToken = default)
     {

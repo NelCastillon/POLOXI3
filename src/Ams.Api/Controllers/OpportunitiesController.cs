@@ -37,6 +37,13 @@ public sealed class OpportunitiesController : ControllerBase
         return item is null ? NotFound() : Ok(item);
     }
 
+    [HttpGet("{id:guid}/conversion-launch")]
+    public async Task<IActionResult> GetConversionLaunch(Guid id, CancellationToken cancellationToken)
+    {
+        var item = await _service.GetConversionLaunchAsync(id, cancellationToken);
+        return item is null ? NotFound() : Ok(item);
+    }
+
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateOpportunityRequest request, CancellationToken cancellationToken)
     {

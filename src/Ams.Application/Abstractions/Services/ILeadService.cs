@@ -8,6 +8,7 @@ public interface ILeadService
 {
     Task<Guid> CreateAsync(Ams.Application.Features.Leads.CreateLeadRequest request, CancellationToken cancellationToken = default);
     Task<LeadDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
+    Task<LeadConversionResultDto> ConvertAsync(ConvertLeadRequest request, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<LeadScoreFactorDto>> GetScoreFactorsAsync(Guid leadId, CancellationToken cancellationToken = default);
     Task<LeadEngagementSummaryDto?> GetEngagementSummaryAsync(Guid leadId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<LeadEngagementOptionDto>> GetEngagementOptionsAsync(Guid tenantId, string? optionType = null, CancellationToken cancellationToken = default);

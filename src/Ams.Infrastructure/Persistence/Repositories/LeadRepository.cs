@@ -281,12 +281,345 @@ WHERE LeadId = @LeadId AND IsDeleted = 0;";
         }, cancellationToken: cancellationToken));
     }
 
+    public async Task<LeadConversionResultDto> ConvertAsync(ConvertLeadRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request.TenantId == Guid.Empty)
+        {
+            throw new InvalidOperationException("Tenant is required to convert a lead.");
+        }
+
+        if (request.LeadId == Guid.Empty)
+        {
+            throw new InvalidOperationException("Lead is required for conversion.");
+        }
+
+        if (request.ConvertedByUserId == Guid.Empty)
+        {
+            throw new InvalidOperationException("Converted by user is required.");
+        }
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureLeadAccountIdColumnAsync(cn, cancellationToken);
+        using var tx = cn.BeginTransaction();
+
+        try
+        {
+            var lead = await cn.QuerySingleOrDefaultAsync<LeadDto>(new CommandDefinition(@"
+SELECT LeadId, TenantId, LeadNumber, AccountName, FirstName, LastName, Email, Phone, InterestedService, AnnualRevenue, Score, PriorityCode, SourceCode, NurturingStageCode, QualifiedDate, StatusCodeId AS StatusCode, AccountId, AssignedToUserId, CreatedDateUtc, ModifiedDateUtc
+FROM CRM.Lead WITH (UPDLOCK, HOLDLOCK)
+WHERE LeadId = @LeadId AND TenantId = @TenantId AND IsDeleted = 0;", new { request.LeadId, request.TenantId }, transaction: tx, cancellationToken: cancellationToken));
+
+            if (lead is null)
+            {
+                throw new InvalidOperationException("Lead was not found for this tenant.");
+            }
+
+            var existingConversion = await cn.QuerySingleOrDefaultAsync<LeadConversionResultDto>(new CommandDefinition(@"
+SELECT TOP 1 lc.LeadConversionId, lc.LeadId, lc.AccountId, lc.OpportunityId, lc.ContactId, lc.AccountActionCode,
+       a.AccountName, o.OpportunityName, o.OpportunityNumber, lc.LineOfBusiness, lc.EstimatedAmount,
+       CAST(CASE WHEN lc.SubmissionNextStepCode IN (N'StartSubmission', N'DraftCreated') OR lc.SubmissionId IS NOT NULL THEN 1 ELSE 0 END AS bit) AS SubmissionDraftRequested,
+       lc.SubmissionId, lc.SubmissionNumber,
+       CAST(CASE WHEN lc.SubmissionId IS NOT NULL THEN 1 ELSE 0 END AS bit) AS SubmissionDraftCreated
+FROM CRM.LeadConversion lc
+LEFT JOIN Client.Account a ON a.AccountId = lc.AccountId
+LEFT JOIN CRM.Opportunity o ON o.OpportunityId = lc.OpportunityId
+WHERE lc.LeadId = @LeadId AND lc.IsDeleted = 0
+ORDER BY lc.ConvertedDateUtc DESC;", new { request.LeadId }, transaction: tx, cancellationToken: cancellationToken));
+
+            if (existingConversion is not null)
+            {
+                if (request.CreateSubmissionDraft && !existingConversion.SubmissionId.HasValue)
+                {
+                    var draft = await CreateSubmissionDraftAsync(cn, tx, request.TenantId, existingConversion.AccountId, existingConversion.OpportunityId, existingConversion.LineOfBusiness, existingConversion.EstimatedAmount, lead.PriorityCode, lead.AssignedToUserId ?? request.ConvertedByUserId, request.ConvertedByUserId, request.CloseDate, cancellationToken);
+                    await cn.ExecuteAsync(new CommandDefinition(@"
+UPDATE CRM.LeadConversion
+SET SubmissionId = @SubmissionId,
+    SubmissionNumber = @SubmissionNumber,
+    SubmissionNextStepCode = N'DraftCreated',
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE LeadConversionId = @LeadConversionId AND IsDeleted = 0;", new
+                    {
+                        existingConversion.LeadConversionId,
+                        draft.SubmissionId,
+                        draft.SubmissionNumber,
+                        ModifiedByUserId = request.ConvertedByUserId
+                    }, transaction: tx, cancellationToken: cancellationToken));
+
+                    existingConversion.SubmissionId = draft.SubmissionId;
+                    existingConversion.SubmissionNumber = draft.SubmissionNumber;
+                    existingConversion.SubmissionDraftRequested = true;
+                    existingConversion.SubmissionDraftCreated = true;
+                }
+
+                tx.Commit();
+                return existingConversion;
+            }
+
+            var ownerUserId = request.OwnerUserId ?? lead.AssignedToUserId ?? request.ConvertedByUserId;
+            var accountName = Clean(request.AccountName) ?? Clean(lead.AccountName) ?? Clean($"{lead.FirstName} {lead.LastName}") ?? $"Converted Lead {lead.LeadNumber}";
+            var lineOfBusiness = Clean(request.LineOfBusiness) ?? await GetPrimaryLeadLineOfBusinessAsync(cn, tx, lead.LeadId, cancellationToken) ?? Clean(lead.InterestedService);
+            var estimatedAmount = request.EstimatedAmount ?? await GetPrimaryLeadEstimatedPremiumAsync(cn, tx, lead.LeadId, cancellationToken) ?? lead.AnnualRevenue ?? 0m;
+            var opportunityName = Clean(request.OpportunityName) ?? $"{accountName} - {Clean(lineOfBusiness) ?? "Opportunity"}";
+            var accountActionCode = request.ExistingAccountId.HasValue ? "Linked" : "Created";
+            var accountId = request.ExistingAccountId ?? lead.AccountId;
+
+            if (accountId.HasValue)
+            {
+                var linkedAccountName = await cn.QuerySingleOrDefaultAsync<string?>(new CommandDefinition(@"
+SELECT AccountName
+FROM Client.Account
+WHERE AccountId = @AccountId AND TenantId = @TenantId AND IsDeleted = 0;", new { AccountId = accountId.Value, request.TenantId }, transaction: tx, cancellationToken: cancellationToken));
+
+                if (linkedAccountName is null)
+                {
+                    throw new InvalidOperationException("Selected account was not found for this tenant.");
+                }
+
+                accountName = linkedAccountName;
+                accountActionCode = "Linked";
+            }
+            else
+            {
+                accountId = await cn.QuerySingleOrDefaultAsync<Guid?>(new CommandDefinition(@"
+SELECT TOP 1 AccountId
+FROM Client.Account
+WHERE TenantId = @TenantId
+  AND IsDeleted = 0
+  AND (
+       AccountName = @AccountName
+       OR (@Email IS NOT NULL AND MainEmail = @Email)
+       OR (@Phone IS NOT NULL AND MainPhone = @Phone)
+  )
+ORDER BY CASE WHEN AccountName = @AccountName THEN 0 ELSE 1 END, CreatedDateUtc DESC;", new { request.TenantId, AccountName = accountName, Email = Clean(lead.Email), Phone = Clean(lead.Phone) }, transaction: tx, cancellationToken: cancellationToken));
+
+                if (accountId.HasValue)
+                {
+                    accountActionCode = "Linked";
+                }
+                else
+                {
+                    accountId = Guid.NewGuid();
+                    var accountNumber = await GenerateAccountNumberAsync(cn, tx, lead.LeadNumber, cancellationToken);
+                    await cn.ExecuteAsync(new CommandDefinition(@"
+INSERT INTO Client.Account
+(AccountId, TenantId, AccountNumber, AccountName, AccountTypeCode, MainEmail, MainPhone, StatusCode, SegmentCode, OwnerUserId, LifecycleStageCode, Industry, AnnualRevenue, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+(@AccountId, @TenantId, @AccountNumber, @AccountName, N'Commercial', @MainEmail, @MainPhone, N'Active', @SegmentCode, @OwnerUserId, N'Prospect', @Industry, @AnnualRevenue, SYSUTCDATETIME(), @CreatedByUserId, 0);", new
+                    {
+                        AccountId = accountId.Value,
+                        request.TenantId,
+                        AccountNumber = accountNumber,
+                        AccountName = accountName,
+                        MainEmail = Clean(lead.Email),
+                        MainPhone = Clean(lead.Phone),
+                        SegmentCode = estimatedAmount >= 150000m ? "Enterprise" : estimatedAmount >= 75000m ? "Mid-Market" : "Standard",
+                        OwnerUserId = ownerUserId,
+                        Industry = lineOfBusiness,
+                        AnnualRevenue = estimatedAmount > 0 ? estimatedAmount : lead.AnnualRevenue,
+                        CreatedByUserId = request.ConvertedByUserId
+                    }, transaction: tx, cancellationToken: cancellationToken));
+                }
+            }
+
+            var contactId = await UpsertConvertedContactAsync(cn, tx, request.TenantId, accountId.Value, lead, request.ConvertedByUserId, cancellationToken);
+            contactId = await CopyLeadContactsToAccountAsync(cn, tx, request.TenantId, lead.LeadId, accountId.Value, request.ConvertedByUserId, contactId, cancellationToken) ?? contactId;
+            var opportunityId = Guid.NewGuid();
+            var opportunityNumber = await GenerateOpportunityNumberAsync(cn, tx, lead.LeadNumber, cancellationToken);
+            var stageId = await GetQualificationStageIdAsync(cn, tx, request.TenantId, cancellationToken);
+
+            await cn.ExecuteAsync(new CommandDefinition(@"
+INSERT INTO CRM.Opportunity
+(OpportunityId, TenantId, OpportunityNumber, AccountId, OpportunityName, EstimatedAmount, OwnerUserId, CloseDate, LeadId, WinProbability, ForecastCategoryCode, StageName, OpportunityStageId, StatusCodeId, Description, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+(@OpportunityId, @TenantId, @OpportunityNumber, @AccountId, @OpportunityName, @EstimatedAmount, @OwnerUserId, @CloseDate, @LeadId, @WinProbability, N'Pipeline', N'Qualification', @OpportunityStageId, 1, @Description, SYSUTCDATETIME(), @CreatedByUserId, 0);", new
+            {
+                OpportunityId = opportunityId,
+                request.TenantId,
+                OpportunityNumber = opportunityNumber,
+                AccountId = accountId.Value,
+                OpportunityName = opportunityName,
+                EstimatedAmount = estimatedAmount,
+                OwnerUserId = ownerUserId,
+                CloseDate = request.CloseDate,
+                LeadId = lead.LeadId,
+                WinProbability = lead.Score.HasValue ? Math.Clamp(lead.Score.Value, 25, 85) : 40,
+                OpportunityStageId = stageId,
+                Description = Clean(request.Notes) ?? $"Converted from lead {lead.LeadNumber}.",
+                CreatedByUserId = request.ConvertedByUserId
+            }, transaction: tx, cancellationToken: cancellationToken));
+
+            await CreateOpportunityLinesFromLeadAsync(cn, tx, request.TenantId, lead.LeadId, opportunityId, request.ConvertedByUserId, lineOfBusiness, estimatedAmount, cancellationToken);
+            await CopyLeadActivitiesToOpportunityAsync(cn, tx, request.TenantId, lead.LeadId, opportunityId, request.ConvertedByUserId, cancellationToken);
+            var submissionDraft = request.CreateSubmissionDraft
+                ? await CreateSubmissionDraftAsync(cn, tx, request.TenantId, accountId.Value, opportunityId, lineOfBusiness, estimatedAmount, lead.PriorityCode, ownerUserId, request.ConvertedByUserId, request.CloseDate, cancellationToken)
+                : null;
+
+            await cn.ExecuteAsync(new CommandDefinition(@"
+UPDATE CRM.Lead
+SET AccountId = @AccountId,
+    NurturingStageCode = N'Converted',
+    QualifiedDate = COALESCE(QualifiedDate, SYSUTCDATETIME()),
+    StatusCodeId = 4,
+    ModifiedByUserId = @ModifiedByUserId,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE LeadId = @LeadId AND TenantId = @TenantId AND IsDeleted = 0;", new { AccountId = accountId.Value, lead.LeadId, request.TenantId, ModifiedByUserId = request.ConvertedByUserId }, transaction: tx, cancellationToken: cancellationToken));
+
+            var conversionId = Guid.NewGuid();
+            var submissionNextStep = submissionDraft is not null ? "DraftCreated" : request.CreateSubmissionDraft ? "StartSubmission" : null;
+            await cn.ExecuteAsync(new CommandDefinition(@"
+INSERT INTO CRM.LeadConversion
+(LeadConversionId, TenantId, LeadId, AccountId, OpportunityId, ContactId, ConversionTypeCode, AccountActionCode, SubmissionNextStepCode, SubmissionId, SubmissionNumber, SourceLeadNumber, AccountNameSnapshot, OpportunityNameSnapshot, EstimatedAmount, LineOfBusiness, Notes, ConvertedDateUtc, ConvertedByUserId, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+(@LeadConversionId, @TenantId, @LeadId, @AccountId, @OpportunityId, @ContactId, N'AccountOpportunity', @AccountActionCode, @SubmissionNextStepCode, @SubmissionId, @SubmissionNumber, @SourceLeadNumber, @AccountNameSnapshot, @OpportunityNameSnapshot, @EstimatedAmount, @LineOfBusiness, @Notes, SYSUTCDATETIME(), @ConvertedByUserId, SYSUTCDATETIME(), @ConvertedByUserId, 0);", new
+            {
+                LeadConversionId = conversionId,
+                request.TenantId,
+                lead.LeadId,
+                AccountId = accountId.Value,
+                OpportunityId = opportunityId,
+                ContactId = contactId,
+                AccountActionCode = accountActionCode,
+                SubmissionNextStepCode = submissionNextStep,
+                SubmissionId = submissionDraft?.SubmissionId,
+                SubmissionNumber = submissionDraft?.SubmissionNumber,
+                SourceLeadNumber = lead.LeadNumber,
+                AccountNameSnapshot = accountName,
+                OpportunityNameSnapshot = opportunityName,
+                EstimatedAmount = estimatedAmount,
+                LineOfBusiness = lineOfBusiness,
+                Notes = Clean(request.Notes),
+                ConvertedByUserId = request.ConvertedByUserId
+            }, transaction: tx, cancellationToken: cancellationToken));
+
+            await cn.ExecuteAsync(new CommandDefinition(@"
+INSERT INTO CRM.OpportunityWorkflowEvent
+(WorkflowEventId, TenantId, OpportunityId, EventType, EventTitle, EventDetail, RelatedEntityName, RelatedEntityId, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+(NEWID(), @TenantId, @OpportunityId, N'Conversion', N'Lead converted', @Detail, N'Lead', @LeadId, SYSUTCDATETIME(), SYSUTCDATETIME(), @CreatedByUserId, 0);", new
+            {
+                request.TenantId,
+                OpportunityId = opportunityId,
+                LeadId = lead.LeadId,
+                Detail = $"Lead {lead.LeadNumber} converted to account {accountName} and opportunity {opportunityName}.",
+                CreatedByUserId = request.ConvertedByUserId
+            }, transaction: tx, cancellationToken: cancellationToken));
+
+            tx.Commit();
+
+            return new LeadConversionResultDto
+            {
+                LeadConversionId = conversionId,
+                LeadId = lead.LeadId,
+                AccountId = accountId.Value,
+                OpportunityId = opportunityId,
+                ContactId = contactId,
+                AccountActionCode = accountActionCode,
+                AccountName = accountName,
+                OpportunityName = opportunityName,
+                OpportunityNumber = opportunityNumber,
+                LineOfBusiness = lineOfBusiness,
+                EstimatedAmount = estimatedAmount,
+                SubmissionDraftRequested = request.CreateSubmissionDraft,
+                SubmissionId = submissionDraft?.SubmissionId,
+                SubmissionNumber = submissionDraft?.SubmissionNumber,
+                SubmissionDraftCreated = submissionDraft is not null
+            };
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
+    }
+
     private static Task EnsureLeadAccountIdColumnAsync(IDbConnection connection, CancellationToken cancellationToken)
         => connection.ExecuteAsync(new CommandDefinition(@"
 IF EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('CRM.Lead'))
 AND COL_LENGTH('CRM.Lead', 'AccountId') IS NULL
     ALTER TABLE CRM.Lead ADD AccountId UNIQUEIDENTIFIER NULL;",
             cancellationToken: cancellationToken));
+
+    private static async Task<SubmissionDraftLink> CreateSubmissionDraftAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, Guid accountId, Guid opportunityId, string? lineOfBusiness, decimal? targetPremium, string? leadPriority, Guid assignedToUserId, Guid createdByUserId, DateTime? requestedEffectiveDate, CancellationToken cancellationToken)
+    {
+        var existing = await connection.QuerySingleOrDefaultAsync<SubmissionDraftLink>(new CommandDefinition(@"
+SELECT TOP 1 SubmissionId, SubmissionNumber
+FROM Submissions.Submission
+WHERE TenantId = @TenantId
+  AND OpportunityId = @OpportunityId
+  AND IsDeleted = 0
+  AND Status = N'Draft'
+ORDER BY CreatedDateUtc DESC;", new { TenantId = tenantId, OpportunityId = opportunityId }, transaction: transaction, cancellationToken: cancellationToken));
+
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        var submissionId = Guid.NewGuid();
+        var effectiveDate = requestedEffectiveDate?.Date ?? DateTime.UtcNow.Date.AddDays(30);
+        var expirationDate = effectiveDate.AddYears(1);
+        var premium = targetPremium.GetValueOrDefault() > 0 ? targetPremium : null;
+        var draft = await connection.QuerySingleAsync<SubmissionDraftLink>(new CommandDefinition(@"
+DECLARE @SubmissionNumber NVARCHAR(50) = N'SUB-' + CONVERT(NVARCHAR(8), SYSUTCDATETIME(), 112) + N'-' + RIGHT(N'0000' + CAST(NEXT VALUE FOR Submissions.SubmissionSeq AS NVARCHAR(20)), 4);
+
+INSERT INTO Submissions.Submission
+    (SubmissionId, TenantId, AccountId, OpportunityId, SubmissionNumber, LineOfBusiness, Status, Priority,
+     AssignedToUserId, EffectiveDate, ExpirationDate, TargetPremium, MarketCount, QuoteCount,
+     CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+    (@SubmissionId, @TenantId, @AccountId, @OpportunityId, @SubmissionNumber, @LineOfBusiness, N'Draft', @Priority,
+     @AssignedToUserId, @EffectiveDate, @ExpirationDate, @TargetPremium, 0, 0,
+     SYSUTCDATETIME(), @CreatedByUserId, 0);
+
+SELECT @SubmissionId AS SubmissionId, @SubmissionNumber AS SubmissionNumber;", new
+        {
+            SubmissionId = submissionId,
+            TenantId = tenantId,
+            AccountId = accountId,
+            OpportunityId = opportunityId,
+            LineOfBusiness = Clean(lineOfBusiness) ?? "General Liability",
+            Priority = SubmissionPriority(leadPriority, premium),
+            AssignedToUserId = assignedToUserId,
+            EffectiveDate = effectiveDate,
+            ExpirationDate = expirationDate,
+            TargetPremium = premium,
+            CreatedByUserId = createdByUserId
+        }, transaction: transaction, cancellationToken: cancellationToken));
+
+        await connection.ExecuteAsync(new CommandDefinition(@"
+IF OBJECT_ID(N'Submissions.SubmissionActionLog', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, IsDeleted)
+    VALUES (NEWID(), @SubmissionId, @TenantId, N'LeadConversionDraftCreated', N'Draft submission created atomically from lead conversion.', SYSUTCDATETIME(), 0);
+END;
+
+IF OBJECT_ID(N'CRM.OpportunityWorkflowEvent', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO CRM.OpportunityWorkflowEvent
+    (WorkflowEventId, TenantId, OpportunityId, EventType, EventTitle, EventDetail, RelatedEntityName, RelatedEntityId, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES
+    (NEWID(), @TenantId, @OpportunityId, N'Submission', N'Submission draft created', @Detail, N'Submission', @SubmissionId, SYSUTCDATETIME(), SYSUTCDATETIME(), @CreatedByUserId, 0);
+END;", new
+        {
+            draft.SubmissionId,
+            TenantId = tenantId,
+            OpportunityId = opportunityId,
+            Detail = $"Draft submission {draft.SubmissionNumber} created from lead conversion.",
+            CreatedByUserId = createdByUserId
+        }, transaction: transaction, cancellationToken: cancellationToken));
+
+        return draft;
+    }
+
+    private static string SubmissionPriority(string? leadPriority, decimal? premium)
+    {
+        var priority = Clean(leadPriority);
+        if (priority is not null && priority.Equals("Urgent", StringComparison.OrdinalIgnoreCase)) return "Urgent";
+        if (priority is not null && priority.Equals("High", StringComparison.OrdinalIgnoreCase)) return "High";
+        if (priority is not null && priority.Equals("Low", StringComparison.OrdinalIgnoreCase)) return "Low";
+        return premium.GetValueOrDefault() >= 100000m ? "High" : "Standard";
+    }
 
     public Task<IReadOnlyList<LeadContactDto>> GetContactsAsync(Guid leadId, CancellationToken cancellationToken = default)
         => QueryListAsync<LeadContactDto>("SELECT ContactId, TenantId, LeadId, FirstName, LastName, Title, Email, Phone, IsPrimary, CreatedDateUtc, ModifiedDateUtc FROM CRM.LeadContact WHERE LeadId = @LeadId AND IsDeleted = 0 ORDER BY IsPrimary DESC, CreatedDateUtc DESC;", new { LeadId = leadId }, cancellationToken);
@@ -898,6 +1231,222 @@ WHERE LeadId = @LeadId AND IsDeleted = 0;", new { LeadId = leadId }, cancellatio
         };
     }
 
+    private static async Task<string?> GetPrimaryLeadLineOfBusinessAsync(IDbConnection connection, IDbTransaction transaction, Guid leadId, CancellationToken cancellationToken)
+    {
+        return await connection.QuerySingleOrDefaultAsync<string?>(new CommandDefinition(@"
+SELECT TOP 1 LineOfBusiness
+FROM CRM.LeadInterestLine
+WHERE LeadId = @LeadId AND IsDeleted = 0
+ORDER BY EstPremium DESC, CreatedDateUtc DESC;", new { LeadId = leadId }, transaction: transaction, cancellationToken: cancellationToken));
+    }
+
+    private static async Task<decimal?> GetPrimaryLeadEstimatedPremiumAsync(IDbConnection connection, IDbTransaction transaction, Guid leadId, CancellationToken cancellationToken)
+    {
+        return await connection.QuerySingleOrDefaultAsync<decimal?>(new CommandDefinition(@"
+SELECT NULLIF(SUM(EstPremium), 0)
+FROM CRM.LeadInterestLine
+WHERE LeadId = @LeadId AND IsDeleted = 0;", new { LeadId = leadId }, transaction: transaction, cancellationToken: cancellationToken));
+    }
+
+    private static async Task<string> GenerateAccountNumberAsync(IDbConnection connection, IDbTransaction transaction, string leadNumber, CancellationToken cancellationToken)
+    {
+        var seed = SanitizeNumberToken(leadNumber);
+        var candidate = $"ACC-{seed}";
+        var exists = await connection.ExecuteScalarAsync<int>(new CommandDefinition(@"
+SELECT COUNT(1) FROM Client.Account WHERE AccountNumber = @Candidate AND IsDeleted = 0;", new { Candidate = candidate }, transaction: transaction, cancellationToken: cancellationToken));
+        if (exists == 0)
+        {
+            return candidate;
+        }
+
+        return $"ACC-{DateTime.UtcNow:yyyyMMddHHmmss}";
+    }
+
+    private static async Task<string> GenerateOpportunityNumberAsync(IDbConnection connection, IDbTransaction transaction, string leadNumber, CancellationToken cancellationToken)
+    {
+        var seed = SanitizeNumberToken(leadNumber);
+        var candidate = $"OPP-{seed}";
+        var exists = await connection.ExecuteScalarAsync<int>(new CommandDefinition(@"
+SELECT COUNT(1) FROM CRM.Opportunity WHERE OpportunityNumber = @Candidate AND IsDeleted = 0;", new { Candidate = candidate }, transaction: transaction, cancellationToken: cancellationToken));
+        if (exists == 0)
+        {
+            return candidate;
+        }
+
+        return $"OPP-{DateTime.UtcNow:yyyyMMddHHmmss}";
+    }
+
+    private static async Task<Guid?> GetQualificationStageIdAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, CancellationToken cancellationToken)
+    {
+        return await connection.QuerySingleOrDefaultAsync<Guid?>(new CommandDefinition(@"
+IF OBJECT_ID(N'CRM.OpportunityStage', N'U') IS NULL
+BEGIN
+    SELECT CAST(NULL AS UNIQUEIDENTIFIER);
+    RETURN;
+END;
+
+SELECT TOP 1 OpportunityStageId
+FROM CRM.OpportunityStage
+WHERE TenantId = @TenantId
+  AND IsActive = 1
+  AND (StageName IN (N'Qualification', N'Qualify', N'Prospect') OR StageCode IN (N'QUALIFICATION', N'QUALIFY', N'PROSPECT'))
+ORDER BY SortOrder, StageName;", new { TenantId = tenantId }, transaction: transaction, cancellationToken: cancellationToken));
+    }
+
+    private static async Task<Guid?> UpsertConvertedContactAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, Guid accountId, LeadDto lead, Guid convertedByUserId, CancellationToken cancellationToken)
+    {
+        var firstName = Clean(lead.FirstName);
+        var lastName = Clean(lead.LastName);
+        var email = Clean(lead.Email);
+        var phone = Clean(lead.Phone);
+        if (string.IsNullOrWhiteSpace(firstName) && string.IsNullOrWhiteSpace(lastName) && string.IsNullOrWhiteSpace(email) && string.IsNullOrWhiteSpace(phone))
+        {
+            return null;
+        }
+
+        var existing = await connection.QuerySingleOrDefaultAsync<Guid?>(new CommandDefinition(@"
+SELECT TOP 1 ContactId
+FROM Client.Contact
+WHERE TenantId = @TenantId AND AccountId = @AccountId AND IsDeleted = 0
+  AND ((@Email IS NOT NULL AND Email = @Email) OR (@Phone IS NOT NULL AND Phone = @Phone))
+ORDER BY CreatedDateUtc DESC;", new { TenantId = tenantId, AccountId = accountId, Email = email, Phone = phone }, transaction: transaction, cancellationToken: cancellationToken));
+        if (existing.HasValue)
+        {
+            return existing.Value;
+        }
+
+        var contactId = Guid.NewGuid();
+        await connection.ExecuteAsync(new CommandDefinition(@"
+INSERT INTO Client.Contact
+(ContactId, TenantId, AccountId, FirstName, LastName, Email, Phone, JobTitle, ContactTypeCode, IsBillingContact, IsPortalUser, IsKeyContact, IsServiceContact, PreferredContactMethod, StatusCode, StatusCodeId, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+(@ContactId, @TenantId, @AccountId, @FirstName, @LastName, @Email, @Phone, @JobTitle, N'Primary', 0, 0, 1, 1, @PreferredContactMethod, N'Active', 1, SYSUTCDATETIME(), @CreatedByUserId, 0);", new
+        {
+            ContactId = contactId,
+            TenantId = tenantId,
+            AccountId = accountId,
+            FirstName = firstName ?? "Primary",
+            LastName = lastName ?? "Contact",
+            Email = email,
+            Phone = phone,
+            JobTitle = Clean(lead.InterestedService),
+            PreferredContactMethod = email is not null ? "Email" : phone is not null ? "Phone" : null,
+            CreatedByUserId = convertedByUserId
+        }, transaction: transaction, cancellationToken: cancellationToken));
+
+        return contactId;
+    }
+
+    private static async Task<Guid?> CopyLeadContactsToAccountAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, Guid leadId, Guid accountId, Guid convertedByUserId, Guid? currentPrimaryContactId, CancellationToken cancellationToken)
+    {
+        var contacts = (await connection.QueryAsync<LeadContactDto>(new CommandDefinition(@"
+SELECT ContactId, TenantId, LeadId, FirstName, LastName, Title, Email, Phone, IsPrimary, CreatedDateUtc, ModifiedDateUtc
+FROM CRM.LeadContact
+WHERE TenantId = @TenantId AND LeadId = @LeadId AND IsDeleted = 0
+ORDER BY IsPrimary DESC, CreatedDateUtc;", new { TenantId = tenantId, LeadId = leadId }, transaction: transaction, cancellationToken: cancellationToken))).AsList();
+
+        Guid? primaryContactId = currentPrimaryContactId;
+        foreach (var leadContact in contacts)
+        {
+            var email = Clean(leadContact.Email);
+            var phone = Clean(leadContact.Phone);
+            var existingContactId = await connection.QuerySingleOrDefaultAsync<Guid?>(new CommandDefinition(@"
+SELECT TOP 1 ContactId
+FROM Client.Contact
+WHERE TenantId = @TenantId AND AccountId = @AccountId AND IsDeleted = 0
+  AND ((@Email IS NOT NULL AND Email = @Email) OR (@Phone IS NOT NULL AND Phone = @Phone))
+ORDER BY CreatedDateUtc DESC;", new { TenantId = tenantId, AccountId = accountId, Email = email, Phone = phone }, transaction: transaction, cancellationToken: cancellationToken));
+
+            var contactId = existingContactId ?? Guid.NewGuid();
+            if (!existingContactId.HasValue)
+            {
+                await connection.ExecuteAsync(new CommandDefinition(@"
+INSERT INTO Client.Contact
+(ContactId, TenantId, AccountId, FirstName, LastName, Email, Phone, JobTitle, ContactTypeCode, IsBillingContact, IsPortalUser, IsKeyContact, IsServiceContact, PreferredContactMethod, StatusCode, StatusCodeId, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+(@ContactId, @TenantId, @AccountId, @FirstName, @LastName, @Email, @Phone, @JobTitle, N'Primary', 0, 0, @IsKeyContact, @IsServiceContact, @PreferredContactMethod, N'Active', 1, SYSUTCDATETIME(), @CreatedByUserId, 0);", new
+                {
+                    ContactId = contactId,
+                    TenantId = tenantId,
+                    AccountId = accountId,
+                    FirstName = Clean(leadContact.FirstName) ?? "Primary",
+                    LastName = Clean(leadContact.LastName) ?? "Contact",
+                    Email = email,
+                    Phone = phone,
+                    JobTitle = Clean(leadContact.Title),
+                    IsKeyContact = leadContact.IsPrimary,
+                    IsServiceContact = leadContact.IsPrimary,
+                    PreferredContactMethod = email is not null ? "Email" : phone is not null ? "Phone" : null,
+                    CreatedByUserId = convertedByUserId
+                }, transaction: transaction, cancellationToken: cancellationToken));
+            }
+
+            if (leadContact.IsPrimary || primaryContactId is null)
+            {
+                primaryContactId = contactId;
+            }
+        }
+
+        return primaryContactId;
+    }
+
+    private static async Task CreateOpportunityLinesFromLeadAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, Guid leadId, Guid opportunityId, Guid createdByUserId, string? fallbackLineOfBusiness, decimal fallbackEstimatedAmount, CancellationToken cancellationToken)
+    {
+        var inserted = await connection.ExecuteAsync(new CommandDefinition(@"
+INSERT INTO CRM.OpportunityLine
+(OpportunityLineId, TenantId, OpportunityId, LineOfBusiness, Carrier, EstPremium, Priority, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), TenantId, @OpportunityId, LineOfBusiness, Carrier, EstPremium, Priority, SYSUTCDATETIME(), @CreatedByUserId, 0
+FROM CRM.LeadInterestLine
+WHERE TenantId = @TenantId AND LeadId = @LeadId AND IsDeleted = 0;", new { TenantId = tenantId, LeadId = leadId, OpportunityId = opportunityId, CreatedByUserId = createdByUserId }, transaction: transaction, cancellationToken: cancellationToken));
+
+        if (inserted == 0 && !string.IsNullOrWhiteSpace(fallbackLineOfBusiness))
+        {
+            await connection.ExecuteAsync(new CommandDefinition(@"
+INSERT INTO CRM.OpportunityLine
+(OpportunityLineId, TenantId, OpportunityId, LineOfBusiness, EstPremium, Priority, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+(NEWID(), @TenantId, @OpportunityId, @LineOfBusiness, @EstPremium, N'Medium', SYSUTCDATETIME(), @CreatedByUserId, 0);", new { TenantId = tenantId, OpportunityId = opportunityId, LineOfBusiness = fallbackLineOfBusiness, EstPremium = fallbackEstimatedAmount, CreatedByUserId = createdByUserId }, transaction: transaction, cancellationToken: cancellationToken));
+        }
+    }
+
+    private static Task CopyLeadActivitiesToOpportunityAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, Guid leadId, Guid opportunityId, Guid createdByUserId, CancellationToken cancellationToken)
+        => connection.ExecuteAsync(new CommandDefinition(@"
+INSERT INTO CRM.OpportunityActivity
+(ActivityId, TenantId, OpportunityId, ActivityTypeCode, Subject, Notes, ActivityDate, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), TenantId, @OpportunityId, ActivityTypeCode, Subject, Notes, ActivityDate, SYSUTCDATETIME(), COALESCE(CreatedByUserId, @CreatedByUserId), 0
+FROM CRM.LeadActivity la
+WHERE la.TenantId = @TenantId
+  AND la.LeadId = @LeadId
+  AND la.IsDeleted = 0
+  AND NOT EXISTS
+  (
+      SELECT 1
+      FROM CRM.OpportunityActivity oa
+      WHERE oa.OpportunityId = @OpportunityId
+        AND oa.IsDeleted = 0
+        AND oa.Subject = la.Subject
+        AND oa.ActivityDate = la.ActivityDate
+  );
+
+UPDATE CRM.LeadActivity
+SET OpportunityId = @OpportunityId,
+    ModifiedByUserId = @CreatedByUserId,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE TenantId = @TenantId AND LeadId = @LeadId AND IsDeleted = 0 AND OpportunityId IS NULL;", new { TenantId = tenantId, LeadId = leadId, OpportunityId = opportunityId, CreatedByUserId = createdByUserId }, transaction: transaction, cancellationToken: cancellationToken));
+
+    private static string SanitizeNumberToken(string? value)
+    {
+        var token = string.IsNullOrWhiteSpace(value) ? Guid.NewGuid().ToString("N")[..10] : value.Trim();
+        foreach (var c in new[] { ' ', '/', '\\', '#', ':', ';', ',', '.', '\t', '\r', '\n' })
+        {
+            token = token.Replace(c, '-');
+        }
+
+        return token.Length <= 42 ? token : token[..42];
+    }
+
+    private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
     private static async Task<int?> CalculateLeadScoreAsync(System.Data.IDbConnection connection, LeadScoringInput lead, int? fallbackScore, CancellationToken cancellationToken)
     {
         if (lead.TenantId == Guid.Empty)
@@ -1019,6 +1568,8 @@ ORDER BY PointValue DESC, RuleName;";
         decimal? AnnualRevenue,
         string? SourceCode,
         DateTime CreatedDateUtc);
+
+    private sealed record SubmissionDraftLink(Guid SubmissionId, string SubmissionNumber);
 
     private sealed record CommunicationSync(Guid ThreadId, Guid MessageId);
 
