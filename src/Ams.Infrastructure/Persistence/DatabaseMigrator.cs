@@ -235,6 +235,10 @@ public sealed partial class DatabaseMigrator
         new("0197_Enterprise_AmsCapabilityMatrix", Migration0197_EnterpriseAmsCapabilityMatrix),
         new("0198_Enterprise_AmsCapabilityGapExtensions", Migration0198_EnterpriseAmsCapabilityGapExtensions),
         new("0199_CRM_LeadEngagement_CommunicationCampaignEnterprise", Migration0199_CrmLeadEngagementCommunicationCampaignEnterprise),
+        new("0200_DMS_CrmProcessDocumentGroupSeed", Migration0200_DmsCrmProcessDocumentGroupSeed),
+        new("0201_DMS_RemoveCrmDocumentGroupsSeedLead", Migration0201_DmsRemoveCrmDocumentGroupsSeedLead),
+        new("0202_DMS_DocumentCategoryEnterpriseSeed", Migration0202_DmsDocumentCategoryEnterpriseSeed),
+        new("0203_DMS_DocumentCategoryGroupSchemaCleanup", Migration0203_DmsDocumentCategoryGroupSchemaCleanup),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -15733,5 +15737,387 @@ BEGIN
     N'@DefaultTenant UNIQUEIDENTIFIER, @TargetLeadId UNIQUEIDENTIFIER, @CampaignId UNIQUEIDENTIFIER, @AdminUserId UNIQUEIDENTIFIER',
     @DefaultTenant = @DefaultTenant, @TargetLeadId = @TargetLeadId, @CampaignId = @CampaignId, @AdminUserId = @AdminUserId;
 END;
+""";
+
+    private const string Migration0200_DmsCrmProcessDocumentGroupSeed = """
+IF OBJECT_ID(N'DMS.DocumentKind', N'U') IS NULL OR OBJECT_ID(N'DMS.DocumentGroup', N'U') IS NULL OR OBJECT_ID(N'Master.Category', N'U') IS NULL
+    RETURN;
+
+IF COL_LENGTH(N'DMS.DocumentGroup', N'ConfigurationJson') IS NULL
+    ALTER TABLE DMS.DocumentGroup ADD ConfigurationJson NVARCHAR(4000) NULL;
+
+DECLARE @Tenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+INSERT INTO @Tenants (TenantId)
+SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0 AND IsActive = 1
+UNION SELECT DISTINCT TenantId FROM DMS.DocumentKind WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM @Tenants)
+    INSERT INTO @Tenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+MERGE DMS.DocumentKind AS target
+USING
+(
+    SELECT TenantId,
+           N'DocumentCategory' AS KindCode,
+           N'Document Categories' AS KindName,
+           N'Enterprise document category and group taxonomy used across CRM, account, opportunity, submission, quote, policy, and service workflows.' AS Description,
+           10 AS SortOrder
+    FROM @Tenants
+) AS source
+ON target.TenantId = source.TenantId AND target.KindCode = source.KindCode
+WHEN MATCHED THEN UPDATE SET KindName = source.KindName, Description = source.Description, IsActive = 1, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (DocumentKindId, TenantId, KindCode, KindName, Description, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.KindCode, source.KindName, source.Description, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+
+DECLARE @CrmCategories TABLE
+(
+    CategoryCode NVARCHAR(80) NOT NULL,
+    CategoryName NVARCHAR(200) NOT NULL,
+    CategoryDescription NVARCHAR(500) NULL,
+    ConfigurationJson NVARCHAR(4000) NULL,
+    SortOrder INT NOT NULL,
+    PRIMARY KEY (CategoryCode)
+);
+
+INSERT INTO @CrmCategories (CategoryCode, CategoryName, CategoryDescription, ConfigurationJson, SortOrder) VALUES
+(N'CRM_INTAKE', N'CRM Intake', N'Lead, prospect, and inbound inquiry documents captured at the start of the CRM process.', N'{"crmStage":"Lead","documentGroup":"Lead","workflow":"LeadIntake","portalVisible":false,"requiresIndexing":true,"source":"CrmProcessSeed"}', 300),
+(N'CRM_QUALIFICATION', N'CRM Qualification', N'Lead qualification, activity, and discovery documents used before account or opportunity conversion.', N'{"crmStage":"LeadQualification","documentGroup":"Lead","workflow":"LeadQualification","portalVisible":false,"requiresIndexing":true,"source":"CrmProcessSeed"}', 310),
+(N'CRM_ACCOUNT', N'CRM Account', N'Account discovery and relationship documents used after lead conversion.', N'{"crmStage":"Account","documentGroup":"Lead","workflow":"AccountDiscovery","portalVisible":false,"requiresIndexing":true,"source":"CrmProcessSeed"}', 320),
+(N'CRM_OPPORTUNITY', N'CRM Opportunity', N'Opportunity needs analysis, coverage review, and sales pursuit documents.', N'{"crmStage":"Opportunity","documentGroup":"Lead","workflow":"OpportunityDiscovery","portalVisible":false,"requiresIndexing":true,"source":"CrmProcessSeed"}', 330),
+(N'CRM_SUBMISSION', N'CRM Submission', N'Submission readiness and market placement documents produced from CRM opportunities.', N'{"crmStage":"Submission","documentGroup":"Lead","workflow":"SubmissionReadiness","portalVisible":false,"requiresIndexing":true,"packetEligible":true,"source":"CrmProcessSeed"}', 340),
+(N'CRM_MARKET_APPETITE', N'CRM Market Appetite', N'Market appetite and placement strategy documents produced from CRM opportunities.', N'{"crmStage":"Submission","documentGroup":"Lead","workflow":"MarketSelection","portalVisible":false,"requiresIndexing":true,"source":"CrmProcessSeed"}', 350),
+(N'CRM_QUOTE', N'CRM Quote', N'Quote comparison, proposal, and sales presentation documents for CRM opportunities.', N'{"crmStage":"Quote","documentGroup":"Lead","workflow":"QuoteReview","portalVisible":true,"requiresIndexing":true,"source":"CrmProcessSeed"}', 360),
+(N'CRM_CONVERSION', N'CRM Conversion', N'Conversion handoff documents used when CRM opportunities become bound accounts, policies, or service work.', N'{"crmStage":"Conversion","documentGroup":"Lead","workflow":"ConversionHandoff","portalVisible":false,"requiresIndexing":true,"source":"CrmProcessSeed"}', 370);
+
+MERGE Master.Category AS target
+USING
+(
+    SELECT dk.TenantId,
+           dk.DocumentKindId,
+           c.CategoryCode,
+           c.CategoryName,
+           c.CategoryDescription AS Description,
+           c.ConfigurationJson,
+           c.SortOrder
+    FROM @CrmCategories c
+    INNER JOIN DMS.DocumentKind dk ON dk.KindCode = N'DocumentCategory' AND dk.IsDeleted = 0
+) AS source
+ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.CategoryCode = source.CategoryCode
+WHEN MATCHED THEN UPDATE SET CategoryName = source.CategoryName, Description = source.Description, ConfigurationJson = COALESCE(target.ConfigurationJson, source.ConfigurationJson), IsActive = 1, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (CategoryId, TenantId, DocumentKindId, CategoryCode, CategoryName, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.DocumentKindId, source.CategoryCode, source.CategoryName, source.Description, source.ConfigurationJson, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+
+UPDATE g
+SET IsDeleted = 1,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM DMS.DocumentGroup g
+INNER JOIN DMS.DocumentKind dk ON dk.DocumentKindId = g.DocumentKindId AND dk.KindCode = N'DocumentCategory'
+WHERE g.GroupCode LIKE N'CRM[_]%'
+  AND g.GroupCode <> N'LEAD'
+  AND g.IsDeleted = 0;
+
+MERGE DMS.DocumentGroup AS target
+USING
+(
+    SELECT dk.TenantId,
+           dk.DocumentKindId,
+           mc.CategoryId,
+           N'LEAD' AS GroupCode,
+           N'Lead' AS GroupName,
+           N'Lead CRM process document group linked to CRM-prefixed document categories for intake, qualification, account, opportunity, submission, quote, and conversion workflows.' AS Description,
+           N'{"crmProcess":true,"linkedCategoryCodes":["CRM_INTAKE","CRM_QUALIFICATION","CRM_ACCOUNT","CRM_OPPORTUNITY","CRM_SUBMISSION","CRM_MARKET_APPETITE","CRM_QUOTE","CRM_CONVERSION"],"source":"CrmProcessSeed"}' AS ConfigurationJson,
+           300 AS SortOrder
+    FROM DMS.DocumentKind dk
+    INNER JOIN Master.Category mc ON mc.TenantId = dk.TenantId
+                                  AND mc.DocumentKindId = dk.DocumentKindId
+                                  AND mc.CategoryCode = N'CRM_INTAKE'
+                                  AND mc.IsDeleted = 0
+    WHERE dk.KindCode = N'DocumentCategory' AND dk.IsDeleted = 0
+) AS source
+ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.GroupCode = source.GroupCode
+WHEN MATCHED THEN UPDATE SET CategoryId = source.CategoryId, GroupName = source.GroupName, Description = source.Description, ConfigurationJson = source.ConfigurationJson, IsActive = 1, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (DocumentGroupId, TenantId, DocumentKindId, CategoryId, GroupCode, GroupName, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.DocumentKindId, source.CategoryId, source.GroupCode, source.GroupName, source.Description, source.ConfigurationJson, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+""";
+
+    private const string Migration0201_DmsRemoveCrmDocumentGroupsSeedLead = """
+IF OBJECT_ID(N'DMS.DocumentKind', N'U') IS NULL OR OBJECT_ID(N'DMS.DocumentGroup', N'U') IS NULL
+    RETURN;
+
+IF COL_LENGTH(N'DMS.DocumentGroup', N'ConfigurationJson') IS NULL
+    ALTER TABLE DMS.DocumentGroup ADD ConfigurationJson NVARCHAR(4000) NULL;
+
+DECLARE @Tenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+INSERT INTO @Tenants (TenantId)
+SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0 AND IsActive = 1
+UNION SELECT DISTINCT TenantId FROM DMS.DocumentKind WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM @Tenants)
+    INSERT INTO @Tenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+MERGE DMS.DocumentKind AS target
+USING
+(
+    SELECT TenantId,
+           N'DocumentCategory' AS KindCode,
+           N'Document Categories' AS KindName,
+           N'Enterprise document category and group taxonomy used across upload, portal, CRM, policy, and servicing screens.' AS Description,
+           10 AS SortOrder
+    FROM @Tenants
+) AS source
+ON target.TenantId = source.TenantId AND target.KindCode = source.KindCode
+WHEN MATCHED THEN UPDATE SET KindName = source.KindName, Description = source.Description, IsActive = 1, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (DocumentKindId, TenantId, KindCode, KindName, Description, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.KindCode, source.KindName, source.Description, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+
+UPDATE g
+SET IsDeleted = 1,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM DMS.DocumentGroup g
+INNER JOIN DMS.DocumentKind dk ON dk.DocumentKindId = g.DocumentKindId AND dk.KindCode = N'DocumentCategory'
+WHERE g.IsDeleted = 0
+  AND g.GroupCode <> N'LEAD'
+  AND (g.GroupCode LIKE N'CRM%' OR g.GroupName LIKE N'CRM%');
+
+MERGE DMS.DocumentGroup AS target
+USING
+(
+    SELECT dk.TenantId,
+           dk.DocumentKindId,
+           CAST(NULL AS UNIQUEIDENTIFIER) AS CategoryId,
+           N'LEAD' AS GroupCode,
+           N'Lead' AS GroupName,
+           N'Lead document group for CRM lead process documents.' AS Description,
+           N'{"crmProcess":true,"source":"LeadSeed"}' AS ConfigurationJson,
+           300 AS SortOrder
+    FROM DMS.DocumentKind dk
+    INNER JOIN @Tenants t ON t.TenantId = dk.TenantId
+    WHERE dk.KindCode = N'DocumentCategory' AND dk.IsDeleted = 0
+) AS source
+ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.GroupCode = source.GroupCode
+WHEN MATCHED THEN UPDATE SET CategoryId = source.CategoryId, GroupName = source.GroupName, Description = source.Description, ConfigurationJson = source.ConfigurationJson, IsActive = 1, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (DocumentGroupId, TenantId, DocumentKindId, CategoryId, GroupCode, GroupName, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.DocumentKindId, source.CategoryId, source.GroupCode, source.GroupName, source.Description, source.ConfigurationJson, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+""";
+
+    private const string Migration0202_DmsDocumentCategoryEnterpriseSeed = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'DMS') EXEC(N'CREATE SCHEMA DMS');
+
+IF OBJECT_ID(N'DMS.DocumentKind', N'U') IS NULL OR OBJECT_ID(N'DMS.DocumentGroup', N'U') IS NULL
+    RETURN;
+
+IF OBJECT_ID(N'DMS.DocumentCategory', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentCategory
+    (
+        DocumentCategoryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_DocumentCategory PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentKindId UNIQUEIDENTIFIER NOT NULL,
+        CategoryCode NVARCHAR(80) NOT NULL,
+        CategoryName NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        ConfigurationJson NVARCHAR(4000) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_DMS_DocumentCategory_IsActive DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_DMS_DocumentCategory_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DMS_DocumentCategory_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DMS_DocumentCategory_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'DMS.DocumentGroup', N'ConfigurationJson') IS NULL
+    ALTER TABLE DMS.DocumentGroup ADD ConfigurationJson NVARCHAR(4000) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.DocumentCategory') AND name = N'UX_DMS_DocumentCategory_TenantKindCode')
+    CREATE UNIQUE INDEX UX_DMS_DocumentCategory_TenantKindCode ON DMS.DocumentCategory(TenantId, DocumentKindId, CategoryCode) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.DocumentCategory') AND name = N'IX_DMS_DocumentCategory_TenantKindSort')
+    CREATE INDEX IX_DMS_DocumentCategory_TenantKindSort ON DMS.DocumentCategory(TenantId, DocumentKindId, IsDeleted, SortOrder, CategoryName);
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_DMS_DocumentCategory_DocumentKind')
+    ALTER TABLE DMS.DocumentCategory ADD CONSTRAINT FK_DMS_DocumentCategory_DocumentKind FOREIGN KEY (DocumentKindId) REFERENCES DMS.DocumentKind(DocumentKindId);
+
+DECLARE @DropDocumentGroupCategoryFksSql NVARCHAR(MAX) = N'';
+SELECT @DropDocumentGroupCategoryFksSql = @DropDocumentGroupCategoryFksSql + N'ALTER TABLE DMS.DocumentGroup DROP CONSTRAINT ' + QUOTENAME(fk.name) + N';'
+FROM sys.foreign_keys fk
+INNER JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
+INNER JOIN sys.columns c ON c.object_id = fkc.parent_object_id AND c.column_id = fkc.parent_column_id
+WHERE fk.parent_object_id = OBJECT_ID(N'DMS.DocumentGroup')
+  AND c.name = N'CategoryId';
+
+IF @DropDocumentGroupCategoryFksSql <> N''
+    EXEC sp_executesql @DropDocumentGroupCategoryFksSql;
+
+DECLARE @Tenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+INSERT INTO @Tenants (TenantId)
+SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0 AND IsActive = 1
+UNION SELECT DISTINCT TenantId FROM DMS.DocumentKind WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM @Tenants)
+    INSERT INTO @Tenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+MERGE DMS.DocumentKind AS target
+USING
+(
+    SELECT TenantId,
+           N'DocumentCategory' AS KindCode,
+           N'Document Categories' AS KindName,
+           N'Enterprise document category and group taxonomy used across upload, portal, CRM, policy, claims, billing, and servicing workflows.' AS Description,
+           10 AS SortOrder
+    FROM @Tenants
+) AS source
+ON target.TenantId = source.TenantId AND target.KindCode = source.KindCode
+WHEN MATCHED THEN UPDATE SET KindName = source.KindName, Description = source.Description, IsActive = 1, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (DocumentKindId, TenantId, KindCode, KindName, Description, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.KindCode, source.KindName, source.Description, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+
+DECLARE @Categories TABLE
+(
+    CategoryCode NVARCHAR(80) NOT NULL PRIMARY KEY,
+    CategoryName NVARCHAR(200) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    ConfigurationJson NVARCHAR(4000) NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO @Categories (CategoryCode, CategoryName, Description, ConfigurationJson, SortOrder) VALUES
+(N'INTAKE', N'Intake', N'Inbound client, prospect, and policy intake documents.', N'{"source":"DmsDocumentCategorySeed","area":"Intake"}', 10),
+(N'CRM', N'CRM', N'Lead, account, opportunity, submission, quote, and conversion documents.', N'{"source":"DmsDocumentCategorySeed","area":"CRM"}', 20),
+(N'SALES', N'Sales', N'Sales and producer-facing documents, proposals, and quote presentations.', N'{"source":"DmsDocumentCategorySeed","area":"Sales"}', 30),
+(N'SUBMISSIONS', N'Submissions', N'Carrier submission and market placement records.', N'{"source":"DmsDocumentCategorySeed","area":"Submissions"}', 40),
+(N'POLICY', N'Policy', N'Coverage evidence and policy lifecycle documents.', N'{"source":"DmsDocumentCategorySeed","area":"Policy"}', 50),
+(N'SERVICING', N'Servicing', N'Client service documents and evidence of insurance.', N'{"source":"DmsDocumentCategorySeed","area":"Servicing"}', 60),
+(N'BILLING', N'Billing', N'Billing, premium, invoice, and receivable documents.', N'{"source":"DmsDocumentCategorySeed","area":"Billing"}', 70),
+(N'ACCOUNTING', N'Accounting', N'Accounting, finance, commission, and reconciliation records.', N'{"source":"DmsDocumentCategorySeed","area":"Accounting"}', 80),
+(N'CLAIMS', N'Claims', N'Claims, loss history, incidents, and legal hold records.', N'{"source":"DmsDocumentCategorySeed","area":"Claims"}', 90),
+(N'COMMUNICATIONS', N'Communications', N'Email, letter, note, and communication records.', N'{"source":"DmsDocumentCategorySeed","area":"Communications"}', 100),
+(N'FORMS', N'Forms', N'Forms, supplements, checklists, and signed acknowledgements.', N'{"source":"DmsDocumentCategorySeed","area":"Forms"}', 110),
+(N'COMPLIANCE', N'Compliance', N'Compliance, licensing, contracts, audit, and regulatory records.', N'{"source":"DmsDocumentCategorySeed","area":"Compliance"}', 120),
+(N'PORTAL', N'Portal', N'Client portal delivery, upload, and sharing documents.', N'{"source":"DmsDocumentCategorySeed","area":"Portal"}', 130),
+(N'MARKETING', N'Marketing', N'Marketing campaign, cross-sell, referral, and nurture documents.', N'{"source":"DmsDocumentCategorySeed","area":"Marketing"}', 140),
+(N'GENERAL', N'General', N'General document management and miscellaneous records.', N'{"source":"DmsDocumentCategorySeed","area":"General"}', 990);
+
+MERGE DMS.DocumentCategory AS target
+USING
+(
+    SELECT dk.TenantId, dk.DocumentKindId, c.CategoryCode, c.CategoryName, c.Description, c.ConfigurationJson, c.SortOrder
+    FROM @Categories c
+    INNER JOIN DMS.DocumentKind dk ON dk.KindCode = N'DocumentCategory' AND dk.IsDeleted = 0
+) AS source
+ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.CategoryCode = source.CategoryCode
+WHEN MATCHED THEN UPDATE SET CategoryName = source.CategoryName, Description = source.Description, ConfigurationJson = source.ConfigurationJson, IsActive = 1, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (DocumentCategoryId, TenantId, DocumentKindId, CategoryCode, CategoryName, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.DocumentKindId, source.CategoryCode, source.CategoryName, source.Description, source.ConfigurationJson, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+
+UPDATE DMS.DocumentGroup
+SET IsDeleted = 1,
+    CategoryId = NULL,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE IsDeleted = 0 OR CategoryId IS NOT NULL;
+
+DECLARE @Groups TABLE
+(
+    CategoryCode NVARCHAR(80) NOT NULL,
+    GroupCode NVARCHAR(120) NOT NULL,
+    GroupName NVARCHAR(200) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    ConfigurationJson NVARCHAR(4000) NULL,
+    SortOrder INT NOT NULL,
+    PRIMARY KEY (GroupCode)
+);
+
+INSERT INTO @Groups (CategoryCode, GroupCode, GroupName, Description, ConfigurationJson, SortOrder) VALUES
+(N'INTAKE', N'APPLICATION', N'Application', N'Client, prospect, policy, and carrier application documents.', N'{"portalVisible":false,"requiresIndexing":true,"source":"DmsDocumentCategorySeed"}', 10),
+(N'CRM', N'LEAD', N'Lead', N'Lead CRM process documents and supporting artifacts.', N'{"crmProcess":true,"requiresIndexing":true,"source":"DmsDocumentCategorySeed"}', 20),
+(N'SALES', N'QUOTE', N'Quote', N'Carrier quotes, indications, premium options, and coverage comparisons.', N'{"portalVisible":true,"requiresIndexing":true,"workflow":"QuoteReview","source":"DmsDocumentCategorySeed"}', 30),
+(N'SALES', N'PROPOSAL', N'Proposal', N'Proposal, quote presentation, renewal proposal, and option comparison documents.', N'{"portalVisible":true,"requiresIndexing":true,"packetEligible":true,"source":"DmsDocumentCategorySeed"}', 40),
+(N'SUBMISSIONS', N'CARRIER_SUBMISSION', N'Carrier Submission', N'Carrier submission packets, applications, supplements, and market submissions.', N'{"portalVisible":false,"requiresIndexing":true,"source":"DmsDocumentCategorySeed"}', 50),
+(N'POLICY', N'BINDER', N'Binder', N'Binders, subjectivities, bind orders, and pre-policy coverage evidence.', N'{"portalVisible":true,"requiresIndexing":true,"retentionBasis":"CoverageRecord","source":"DmsDocumentCategorySeed"}', 60),
+(N'POLICY', N'POLICY', N'Policy', N'Policy declarations, forms, endorsements, binders, and policy documents.', N'{"portalVisible":true,"requiresIndexing":true,"retentionBasis":"CoverageRecord","source":"DmsDocumentCategorySeed"}', 70),
+(N'POLICY', N'ENDORSEMENT', N'Endorsement', N'Policy endorsements, change requests, and carrier confirmations.', N'{"portalVisible":true,"requiresIndexing":true,"workflow":"EndorsementReview","source":"DmsDocumentCategorySeed"}', 80),
+(N'POLICY', N'ID_CARD', N'ID Card', N'Auto ID cards and proof-of-coverage identification documents.', N'{"portalVisible":true,"requiresIndexing":true,"externalShareAllowed":true,"source":"DmsDocumentCategorySeed"}', 90),
+(N'SERVICING', N'CERTIFICATE', N'Certificate', N'Certificates of insurance, evidence forms, holder schedules, and delivery documents.', N'{"portalVisible":true,"requiresIndexing":true,"externalShareAllowed":true,"source":"DmsDocumentCategorySeed"}', 100),
+(N'SERVICING', N'SCHEDULE', N'Schedule', N'Vehicle, property, location, equipment, driver, and exposure schedules.', N'{"portalVisible":true,"requiresIndexing":true,"source":"DmsDocumentCategorySeed"}', 110),
+(N'SERVICING', N'RENEWAL', N'Renewal', N'Renewal strategy, exposure updates, renewal applications, and remarketing documentation.', N'{"portalVisible":true,"requiresIndexing":true,"workflow":"RenewalReview","source":"DmsDocumentCategorySeed"}', 120),
+(N'BILLING', N'INVOICE', N'Invoice', N'Premium, agency bill, direct bill, commission, and service invoices.', N'{"portalVisible":true,"requiresIndexing":true,"retentionBasis":"FinancialRecord","source":"DmsDocumentCategorySeed"}', 130),
+(N'ACCOUNTING', N'STATEMENT', N'Statement', N'Billing, premium, account, and carrier statement documents.', N'{"portalVisible":true,"requiresIndexing":true,"retentionBasis":"FinancialRecord","source":"DmsDocumentCategorySeed"}', 140),
+(N'ACCOUNTING', N'FINANCIAL', N'Financial', N'Financial statements, schedules, worksheets, and finance documents.', N'{"portalVisible":false,"requiresIndexing":true,"retentionBasis":"FinancialRecord","source":"DmsDocumentCategorySeed"}', 150),
+(N'CLAIMS', N'LOSS_RUN', N'Loss Run', N'Carrier loss run reports and loss history documents.', N'{"portalVisible":false,"legalHoldEligible":true,"requiresIndexing":true,"source":"DmsDocumentCategorySeed"}', 160),
+(N'CLAIMS', N'CLAIM', N'Claim', N'Claim notices, adjuster correspondence, photos, estimates, and claim documents.', N'{"portalVisible":true,"legalHoldEligible":true,"requiresIndexing":true,"source":"DmsDocumentCategorySeed"}', 170),
+(N'CLAIMS', N'INSPECTION', N'Inspection', N'Inspection reports, risk engineering documents, photos, and recommendations.', N'{"portalVisible":false,"requiresIndexing":true,"workflow":"RiskReview","source":"DmsDocumentCategorySeed"}', 180),
+(N'COMMUNICATIONS', N'CORRESPONDENCE', N'Correspondence', N'Email, letter, note, and other document correspondence.', N'{"portalVisible":true,"requiresIndexing":true,"source":"DmsDocumentCategorySeed"}', 190),
+(N'COMMUNICATIONS', N'NOTICE', N'Notice', N'Carrier, insured, regulator, cancellation, nonrenewal, and compliance notices.', N'{"portalVisible":true,"requiresIndexing":true,"notifyOnUpload":true,"source":"DmsDocumentCategorySeed"}', 200),
+(N'FORMS', N'FORM', N'Form', N'General forms, supplemental forms, signed forms, and intake forms.', N'{"portalVisible":true,"requiresIndexing":true,"source":"DmsDocumentCategorySeed"}', 210),
+(N'FORMS', N'ACORD', N'ACORD Form', N'ACORD forms and standardized insurance application forms.', N'{"portalVisible":false,"requiresIndexing":true,"ocrProfile":"AcordDefault","source":"DmsDocumentCategorySeed"}', 220),
+(N'FORMS', N'SIGNATURE', N'Signature / E-Sign', N'Signed forms, e-signature evidence, signer certificates, and consent records.', N'{"portalVisible":true,"requiresIndexing":true,"esignEvidence":true,"source":"DmsDocumentCategorySeed"}', 230),
+(N'COMPLIANCE', N'CONTRACT', N'Contract', N'Agency, vendor, producer, carrier, and client contracts.', N'{"portalVisible":false,"requiresApproval":true,"retentionBasis":"ContractRecord","source":"DmsDocumentCategorySeed"}', 240),
+(N'COMPLIANCE', N'LICENSE', N'License', N'Producer, agency, carrier appointment, and regulatory licensing records.', N'{"portalVisible":false,"requiresIndexing":true,"retentionBasis":"ComplianceRecord","source":"DmsDocumentCategorySeed"}', 250),
+(N'COMPLIANCE', N'AUDIT', N'Audit', N'Audit requests, responses, evidence, findings, and remediation records.', N'{"portalVisible":false,"legalHoldEligible":true,"requiresIndexing":true,"source":"DmsDocumentCategorySeed"}', 260),
+(N'POLICY', N'CANCELLATION', N'Cancellation / Nonrenewal', N'Cancellation, reinstatement, nonrenewal, intent-to-cancel, and lapse notices.', N'{"portalVisible":true,"requiresIndexing":true,"notifyOnUpload":true,"source":"DmsDocumentCategorySeed"}', 270),
+(N'PORTAL', N'PORTAL_UPLOAD', N'Portal Upload', N'Client portal uploads and shared documents pending agency review.', N'{"portalVisible":true,"requiresIndexing":true,"workflow":"PortalUploadReview","source":"DmsDocumentCategorySeed"}', 280),
+(N'MARKETING', N'MARKETING_CAMPAIGN', N'Marketing Campaign', N'Campaign, nurture, cross-sell, referral, and marketing collateral documents.', N'{"portalVisible":false,"requiresIndexing":true,"source":"DmsDocumentCategorySeed"}', 290),
+(N'GENERAL', N'PACKET', N'Packet', N'Generated packets, assembled delivery bundles, and packet manifests.', N'{"portalVisible":true,"packetEligible":true,"requiresIndexing":false,"source":"DmsDocumentCategorySeed"}', 300),
+(N'GENERAL', N'ATTACHMENT', N'Attachment', N'Supporting attachments and related supplemental files.', N'{"portalVisible":true,"requiresIndexing":false,"source":"DmsDocumentCategorySeed"}', 310),
+(N'GENERAL', N'OTHER', N'Other', N'General document category for records that do not fit a standard category.', N'{"portalVisible":true,"requiresIndexing":false,"source":"DmsDocumentCategorySeed"}', 990);
+
+MERGE DMS.DocumentGroup AS target
+USING
+(
+    SELECT dk.TenantId, dk.DocumentKindId, dc.DocumentCategoryId AS CategoryId, g.GroupCode, g.GroupName, g.Description, g.ConfigurationJson, g.SortOrder
+    FROM @Groups g
+    INNER JOIN DMS.DocumentKind dk ON dk.KindCode = N'DocumentCategory' AND dk.IsDeleted = 0
+    INNER JOIN DMS.DocumentCategory dc ON dc.TenantId = dk.TenantId AND dc.DocumentKindId = dk.DocumentKindId AND dc.CategoryCode = g.CategoryCode AND dc.IsDeleted = 0
+) AS source
+ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.GroupCode = source.GroupCode
+WHEN MATCHED THEN UPDATE SET CategoryId = source.CategoryId, GroupName = source.GroupName, Description = source.Description, ConfigurationJson = source.ConfigurationJson, IsActive = 1, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (DocumentGroupId, TenantId, DocumentKindId, CategoryId, GroupCode, GroupName, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.DocumentKindId, source.CategoryId, source.GroupCode, source.GroupName, source.Description, source.ConfigurationJson, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+
+UPDATE g
+SET CategoryId = NULL,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM DMS.DocumentGroup g
+WHERE g.CategoryId IS NOT NULL
+  AND NOT EXISTS
+  (
+      SELECT 1
+      FROM DMS.DocumentCategory dc
+      WHERE dc.DocumentCategoryId = g.CategoryId
+  );
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_DMS_DocumentGroup_DocumentCategory')
+    ALTER TABLE DMS.DocumentGroup ADD CONSTRAINT FK_DMS_DocumentGroup_DocumentCategory FOREIGN KEY (CategoryId) REFERENCES DMS.DocumentCategory(DocumentCategoryId);
+""";
+
+    private const string Migration0203_DmsDocumentCategoryGroupSchemaCleanup = """
+IF OBJECT_ID(N'DMS.DocumentCategory', N'U') IS NULL OR OBJECT_ID(N'DMS.DocumentGroup', N'U') IS NULL
+    RETURN;
+
+IF EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_DMS_DocumentCategory_DocumentGroup')
+    ALTER TABLE DMS.DocumentCategory DROP CONSTRAINT FK_DMS_DocumentCategory_DocumentGroup;
+
+IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.DocumentCategory') AND name = N'IX_DMS_DocumentCategory_DocumentGroup')
+    DROP INDEX IX_DMS_DocumentCategory_DocumentGroup ON DMS.DocumentCategory;
+
+IF COL_LENGTH(N'DMS.DocumentCategory', N'DocumentGroupId') IS NOT NULL
+    ALTER TABLE DMS.DocumentCategory DROP COLUMN DocumentGroupId;
+
+UPDATE g
+SET CategoryId = NULL,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM DMS.DocumentGroup g
+WHERE g.CategoryId IS NOT NULL
+  AND NOT EXISTS
+  (
+      SELECT 1
+      FROM DMS.DocumentCategory dc
+      WHERE dc.DocumentCategoryId = g.CategoryId
+        AND dc.IsDeleted = 0
+  );
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_DMS_DocumentGroup_DocumentCategory')
+    ALTER TABLE DMS.DocumentGroup ADD CONSTRAINT FK_DMS_DocumentGroup_DocumentCategory FOREIGN KEY (CategoryId) REFERENCES DMS.DocumentCategory(DocumentCategoryId);
 """;
 }

@@ -18,10 +18,21 @@ public sealed class DocumentConfigController : ControllerBase
     public async Task<IActionResult> Search([FromQuery] Guid tenantId, [FromQuery] string? kind, [FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 50, CancellationToken ct = default)
         => Ok(await _service.SearchAsync(tenantId, kind, searchTerm, pageNumber, pageSize, ct));
 
+    [HttpGet("groups")]
+    public async Task<IActionResult> SearchGroups([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 50, CancellationToken ct = default)
+        => Ok(await _service.SearchGroupsAsync(tenantId, searchTerm, pageNumber, pageSize, ct));
+
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateDocumentConfigItemRequest request, CancellationToken ct)
     {
         var id = await _service.CreateAsync(request, ct);
+        return CreatedAtAction(nameof(GetById), new { id }, new { id });
+    }
+
+    [HttpPost("groups")]
+    public async Task<IActionResult> CreateGroup([FromBody] CreateDocumentGroupRequest request, CancellationToken ct)
+    {
+        var id = await _service.CreateGroupAsync(request, ct);
         return CreatedAtAction(nameof(GetById), new { id }, new { id });
     }
 
@@ -32,10 +43,24 @@ public sealed class DocumentConfigController : ControllerBase
         return NoContent();
     }
 
+    [HttpPut("groups/{id:guid}")]
+    public async Task<IActionResult> UpdateGroup(Guid id, [FromBody] UpdateDocumentGroupRequest request, CancellationToken ct)
+    {
+        await _service.UpdateGroupAsync(id, request, ct);
+        return NoContent();
+    }
+
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         await _service.DeleteAsync(id, ct);
+        return NoContent();
+    }
+
+    [HttpDelete("groups/{id:guid}")]
+    public async Task<IActionResult> DeleteGroup(Guid id, CancellationToken ct)
+    {
+        await _service.DeleteGroupAsync(id, ct);
         return NoContent();
     }
 }

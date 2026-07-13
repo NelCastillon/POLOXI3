@@ -2814,6 +2814,7 @@ public sealed partial class ApiClient
         AddFormValue(content, nameof(request.TenantId), request.TenantId);
         AddFormValue(content, nameof(request.DocumentTypeCode), request.DocumentTypeCode);
         AddFormValue(content, nameof(request.CategoryCode), request.CategoryCode);
+        AddFormValue(content, nameof(request.FileExtension), request.FileExtension);
         AddFormValue(content, nameof(request.FileName), request.FileName);
         AddFormValue(content, nameof(request.EntityName), request.EntityName);
         AddFormValue(content, nameof(request.EntityId), request.EntityId);
@@ -2916,6 +2917,7 @@ public sealed partial class ApiClient
         public Guid TenantId { get; set; }
         public string DocumentTypeCode { get; set; } = string.Empty;
         public string CategoryCode { get; set; } = "Other";
+        public string? FileExtension { get; set; }
         public string? FileName { get; set; }
         public string OriginalFileName { get; set; } = string.Empty;
         public string? EntityName { get; set; }

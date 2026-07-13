@@ -801,10 +801,11 @@ else
             <DataAnnotationsValidator />
             <div class="a360-modal-body"><div class="a360-form-grid">
                 <div class="a360-field"><label>Category <span class="a360-text-danger">*</span></label><InputSelect @bind-Value="_documentForm.Category" class="a360-input">@foreach (var option in DocumentCategoryOptions) { <option value="@option.Value">@option.Label</option> }</InputSelect><ValidationMessage For="() => _documentForm.Category" class="text-danger" /></div>
+                <div class="a360-field"><label>Extension <span class="a360-text-danger">*</span></label><InputSelect @bind-Value="_documentForm.Extension" class="a360-input">@foreach (var extension in Enum.GetValues<DocumentFileExtension>()) { <option value="@extension">@DocumentFileExtensionLabel(extension)</option> }</InputSelect><ValidationMessage For="() => _documentForm.Extension" class="text-danger" /></div>
                 <div class="a360-field a360-field--full">
                     <label>Document File <span class="a360-text-danger">*</span></label>
                     <div class="@UploadDropClass" @ondragenter="SetUploadDragActive" @ondragover="SetUploadDragActive" @ondragleave="ClearUploadDragActive" @ondrop="ClearUploadDragActive" @ondragover:preventDefault="true">
-                        <InputFile OnChange="OnUploadFileSelected" class="a360-upload-input" accept=".pdf,.docx,.xlsx,.csv,.png,.jpg" />
+                        <InputFile OnChange="OnUploadFileSelected" class="a360-upload-input" accept="@DocumentFileAccept" />
                         <div class="a360-upload-content">
                             <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i>
                             <strong>Browse or drag and drop a document</strong>
@@ -1039,6 +1040,7 @@ else
     private Guid _loadedAccountId;
     private List<DocumentConfigItemDto> _documentCategories = [];
     private IEnumerable<LV> DocumentCategoryOptions => _documentCategories.Select(c => new LV(CategoryLabel(c), CategoryLabel(c)));
+    private static string DocumentFileAccept => string.Join(',', Enum.GetValues<DocumentFileExtension>().Select(DocumentFileExtensionValue));
 
     protected override async Task OnParametersSetAsync()
     {
@@ -1095,6 +1097,32 @@ else
     }
 
     private static string CategoryLabel(DocumentConfigItemDto category) => string.IsNullOrWhiteSpace(category.Name) ? category.Code : category.Name;
+
+    private static string DocumentFileExtensionLabel(DocumentFileExtension extension) => DocumentFileExtensionValue(extension).ToUpperInvariant();
+
+    private static string DocumentFileExtensionValue(DocumentFileExtension extension) => extension switch
+    {
+        DocumentFileExtension.Pdf => ".pdf",
+        DocumentFileExtension.Doc => ".doc",
+        DocumentFileExtension.Docx => ".docx",
+        DocumentFileExtension.Xls => ".xls",
+        DocumentFileExtension.Xlsx => ".xlsx",
+        DocumentFileExtension.Csv => ".csv",
+        DocumentFileExtension.Txt => ".txt",
+        DocumentFileExtension.Png => ".png",
+        DocumentFileExtension.Jpg => ".jpg",
+        DocumentFileExtension.Jpeg => ".jpeg",
+        _ => string.Empty
+    };
+
+    private static bool TryGetDocumentFileExtension(string fileName, out DocumentFileExtension extension)
+    {
+        var value = Path.GetExtension(fileName);
+        extension = Enum.GetValues<DocumentFileExtension>()
+            .FirstOrDefault(option => string.Equals(DocumentFileExtensionValue(option), value, StringComparison.OrdinalIgnoreCase));
+
+        return !string.IsNullOrWhiteSpace(value) && DocumentFileExtensionValue(extension).Length > 0;
+    }
 
     private void ClearTabData()
     {
@@ -1380,6 +1408,7 @@ else
                 TenantId = _userContext?.TenantId != Guid.Empty ? _userContext?.TenantId ?? _acct.TenantId : _acct.TenantId,
                 DocumentTypeCode = "Account",
                 CategoryCode = Normalize(_documentForm.Category) ?? "Other",
+                FileExtension = DocumentFileExtensionValue(_documentForm.Extension),
                 FileName = _selectedUploadFile.Name,
                 OriginalFileName = _selectedUploadFile.Name,
                 EntityName = "Account",
@@ -1421,7 +1450,16 @@ else
     private void CloseCommunicationDialog() { _showCompose = false; _editingCommunication = null; _communicationForm = new(); }
     private void OpenUpload() { _documentForm = new() { Category = "Other" }; _selectedUploadFile = null; _showUpload = true; }
     private void CloseUploadDialog() { _showUpload = false; _documentForm = new(); _selectedUploadFile = null; _uploadDragActive = false; }
-    private void OnUploadFileSelected(InputFileChangeEventArgs args) { _selectedUploadFile = args.File; _uploadDragActive = false; }
+    private void OnUploadFileSelected(InputFileChangeEventArgs args)
+    {
+        _selectedUploadFile = args.File;
+        _uploadDragActive = false;
+
+        if (TryGetDocumentFileExtension(_selectedUploadFile.Name, out var extension))
+        {
+            _documentForm.Extension = extension;
+        }
+    }
     private void SetUploadDragActive() => _uploadDragActive = true;
     private void ClearUploadDragActive() => _uploadDragActive = false;
     private void OpenFnol() { _editingClaim = null; _claimForm = new() { LossDate = DateTime.UtcNow }; _showFnol = true; }
@@ -1741,7 +1779,25 @@ else
         [Required(ErrorMessage = "Document category is required.")]
         [StringLength(100, ErrorMessage = "Document category cannot exceed 100 characters.")]
         public string Category { get; set; } = "Other";
+
+        [Required(ErrorMessage = "Document extension is required.")]
+        public DocumentFileExtension Extension { get; set; } = DocumentFileExtension.Pdf;
     }
+
+    private enum DocumentFileExtension
+    {
+        Pdf,
+        Doc,
+        Docx,
+        Xls,
+        Xlsx,
+        Csv,
+        Txt,
+        Png,
+        Jpg,
+        Jpeg
+    }
+
     private sealed class ClaimForm
     {
         [Required(ErrorMessage = "Policy number is required.")]

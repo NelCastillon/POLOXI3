@@ -13,7 +13,11 @@ public sealed class DocumentConfigService : IDocumentConfigService
 
     public Task<DocumentConfigItemDto?> GetByIdAsync(Guid id, CancellationToken ct = default) => _repo.GetByIdAsync(id, ct);
     public Task<PagedResult<DocumentConfigItemDto>> SearchAsync(Guid tenantId, string? kind, string? searchTerm, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default) => _repo.SearchAsync(tenantId, kind, searchTerm, pageNumber, pageSize, ct);
+    public Task<PagedResult<DocumentConfigItemDto>> SearchGroupsAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default) => _repo.SearchGroupsAsync(tenantId, searchTerm, pageNumber, pageSize, ct);
     public Task<Guid> CreateAsync(CreateDocumentConfigItemRequest request, CancellationToken ct = default) => _repo.CreateAsync(request, ct);
+    public Task<Guid> CreateGroupAsync(CreateDocumentGroupRequest request, CancellationToken ct = default) => _repo.CreateGroupAsync(request, ct);
     public Task UpdateAsync(Guid id, UpdateDocumentConfigItemRequest request, CancellationToken ct = default) => _repo.UpdateAsync(id, request, ct);
+    public Task UpdateGroupAsync(Guid id, UpdateDocumentGroupRequest request, CancellationToken ct = default) => _repo.UpdateGroupAsync(id, request, ct);
     public Task DeleteAsync(Guid id, CancellationToken ct = default) => _repo.DeleteAsync(id, ct);
+    public Task DeleteGroupAsync(Guid id, CancellationToken ct = default) => _repo.DeleteGroupAsync(id, ct);
 }

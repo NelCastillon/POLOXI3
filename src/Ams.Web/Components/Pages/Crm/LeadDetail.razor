@@ -167,7 +167,7 @@
                                 <div class="um-field um-field-wide"><label>Document file <span class="text-danger">*</span></label><InputFile class="um-input" OnChange="OnLeadDocumentSelected" accept="@DocumentAcceptExtensions" />@if (_selectedDocumentFile is not null) { <small class="ldd-text-muted">@_selectedDocumentFile.Name (@SizeText((int)Math.Ceiling(_selectedDocumentFile.Size / 1024m))) selected</small> }</div>
                             }
                             <div class="um-field um-field-wide"><label>File name <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_tabForm.FileName" /></div>
-                            <div class="um-field"><label>Extension <span class="text-danger">*</span></label><InputSelect class="um-input" @bind-Value="_tabForm.Extension"><option value="">Select type</option>@foreach (var extension in DocumentExtensionOptions) { <option value="@extension.Code">@extension.Label</option> }</InputSelect></div>
+                            <div class="um-field"><label>Extension <span class="text-danger">*</span></label><InputSelect class="um-input" @bind-Value="_tabForm.Extension"><option value="">Select type</option>@foreach (var extension in Enum.GetValues<DocumentFileExtension>()) { <option value="@DocumentFileExtensionValue(extension)">@DocumentFileExtensionLabel(extension)</option> }</InputSelect></div>
                             <div class="um-field"><label>Category <span class="text-danger">*</span></label><InputSelect class="um-input" @bind-Value="_tabForm.Category"><option value="">Select category</option>@foreach (var category in DocumentCategoryOptions) { <option value="@Safe(category.Name, category.Code)">@Safe(category.Name, category.Code)</option> }</InputSelect></div>
                             <div class="um-field"><label>Size KB</label><InputNumber class="um-input" @bind-Value="_tabForm.SizeKb" disabled="@(_selectedDocumentFile is not null)" /></div>
                             <div class="um-field"><label>Uploaded at <span class="text-danger">*</span></label><InputDate class="um-input" @bind-Value="_tabForm.UploadedAt" /></div>
@@ -740,15 +740,12 @@ else
     private IEnumerable<LeadEngagementOptionDto> LeadSourceOptions => EngagementOptions("LeadSource");
     private IEnumerable<LeadEngagementOptionDto> LeadStageOptions => EngagementOptions("LeadStage");
     private IEnumerable<LeadEngagementOptionDto> LeadPriorityOptions => EngagementOptions("LeadPriority");
-    private IEnumerable<LeadEngagementOptionDto> DocumentExtensionOptions => EngagementOptions("DocumentExtension");
     private IEnumerable<CarrierDto> CarrierOptions => _carrierOptions;
     private IEnumerable<LineOfBusinessDto> LineOfBusinessOptions => _lineOfBusinessOptions;
     private string DefaultLeadSource => DefaultEngagementOption("LeadSource");
     private string DefaultLeadStage => DefaultEngagementOption("LeadStage");
     private string DefaultLeadPriority => DefaultEngagementOption("LeadPriority");
-    private string DefaultDocumentCategory => DocumentCategoryOptions.FirstOrDefault() is { } category ? Safe(category.Name, category.Code) : string.Empty;
-    private string DefaultDocumentExtension => DefaultEngagementOption("DocumentExtension");
-    private string DocumentAcceptExtensions => string.Join(',', DocumentExtensionOptions.Select(o => o.Code).Where(c => !string.IsNullOrWhiteSpace(c)));
+    private static string DocumentAcceptExtensions => string.Join(',', Enum.GetValues<DocumentFileExtension>().Select(DocumentFileExtensionValue));
     private string TabFormIcon => _tabForm.Kind switch
     {
         LeadTabItemKind.Contact => "bi-person-plus",
@@ -797,8 +794,8 @@ else
             SentAt = DateTime.UtcNow,
             CampaignStatus = kind == LeadTabItemKind.Campaign ? DefaultCampaignStatus : string.Empty,
             EnrolledAt = DateTime.UtcNow,
-            Category = kind == LeadTabItemKind.Document ? DefaultDocumentCategory : string.Empty,
-            Extension = kind == LeadTabItemKind.Document ? DefaultDocumentExtension : string.Empty,
+            Category = string.Empty,
+            Extension = string.Empty,
             UploadedAt = DateTime.UtcNow
         };
         OnActivityTypeChanged();
@@ -890,7 +887,10 @@ else
         if (_selectedDocumentFile is null) return;
 
         _tabForm.FileName = _selectedDocumentFile.Name;
-        _tabForm.Extension = NormalizeExtension(Path.GetExtension(_selectedDocumentFile.Name));
+        if (TryGetDocumentFileExtension(_selectedDocumentFile.Name, out var extension))
+        {
+            _tabForm.Extension = DocumentFileExtensionValue(extension);
+        }
         _tabForm.SizeKb = Math.Max(1, (int)Math.Ceiling(_selectedDocumentFile.Size / 1024m));
         _tabForm.UploadedAt = DateTime.UtcNow;
     }
@@ -1300,6 +1300,7 @@ else
             TenantId = _lead?.TenantId ?? _tenantId,
             DocumentTypeCode = "Lead",
             CategoryCode = _tabForm.Category,
+            FileExtension = _tabForm.Extension,
             FileName = _tabForm.FileName.Trim(),
             OriginalFileName = _selectedDocumentFile.Name,
             EntityName = "CRM.Lead",
@@ -1384,6 +1385,32 @@ else
         if (string.IsNullOrWhiteSpace(extension)) return string.Empty;
         var normalized = extension.Trim().ToLowerInvariant();
         return normalized.StartsWith('.') ? normalized : $".{normalized}";
+    }
+
+    private static string DocumentFileExtensionLabel(DocumentFileExtension extension) => DocumentFileExtensionValue(extension).ToUpperInvariant();
+
+    private static string DocumentFileExtensionValue(DocumentFileExtension extension) => extension switch
+    {
+        DocumentFileExtension.Pdf => ".pdf",
+        DocumentFileExtension.Doc => ".doc",
+        DocumentFileExtension.Docx => ".docx",
+        DocumentFileExtension.Xls => ".xls",
+        DocumentFileExtension.Xlsx => ".xlsx",
+        DocumentFileExtension.Csv => ".csv",
+        DocumentFileExtension.Txt => ".txt",
+        DocumentFileExtension.Png => ".png",
+        DocumentFileExtension.Jpg => ".jpg",
+        DocumentFileExtension.Jpeg => ".jpeg",
+        _ => string.Empty
+    };
+
+    private static bool TryGetDocumentFileExtension(string fileName, out DocumentFileExtension extension)
+    {
+        var value = NormalizeExtension(Path.GetExtension(fileName));
+        extension = Enum.GetValues<DocumentFileExtension>()
+            .FirstOrDefault(option => string.Equals(DocumentFileExtensionValue(option), value, StringComparison.OrdinalIgnoreCase));
+
+        return !string.IsNullOrWhiteSpace(value) && DocumentFileExtensionValue(extension).Length > 0;
     }
 
     private static string? TrimOrNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
@@ -1848,6 +1875,7 @@ else
         [StringLength(20)]
         public string Extension { get; set; } = string.Empty;
 
+        [Required(ErrorMessage = "Category is required.")]
         [StringLength(100)]
         public string Category { get; set; } = string.Empty;
 
