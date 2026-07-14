@@ -1206,6 +1206,28 @@ public sealed partial class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
+    public async Task<Guid> UpsertOpportunityLineAsync(Guid opportunityId, UpsertOpportunityLineRequest request, CancellationToken cancellationToken = default)
+    {
+        var url = request.OpportunityLineId.HasValue ? $"api/opportunities/{opportunityId}/lines/{request.OpportunityLineId}" : $"api/opportunities/{opportunityId}/lines";
+        var response = request.OpportunityLineId.HasValue
+            ? await _httpClient.PutAsJsonAsync(url, request, cancellationToken)
+            : await _httpClient.PostAsJsonAsync(url, request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task SetPrimaryOpportunityLineAsync(Guid opportunityId, Guid opportunityLineId, SetPrimaryOpportunityLineRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/opportunities/{opportunityId}/lines/{opportunityLineId}/primary", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteOpportunityLineAsync(Guid opportunityLineId, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/opportunities/lines/{opportunityLineId}?modifiedByUserId={modifiedByUserId}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
     public async Task<Guid> UpsertOpportunityActivityAsync(Guid opportunityId, UpsertOpportunityActivityRequest request, CancellationToken cancellationToken = default)
     {
         var url = request.ActivityId.HasValue ? $"api/opportunities/{opportunityId}/activities/{request.ActivityId}" : $"api/opportunities/{opportunityId}/activities";

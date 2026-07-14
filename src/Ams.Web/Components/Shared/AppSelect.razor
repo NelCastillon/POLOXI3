@@ -1,0 +1,87 @@
+@typeparam TValue
+@typeparam TItem
+
+<select class="form-select native-control" style="@Style" value="@CurrentValue" @onchange="OnChanged">
+    @if (ShowClearButton || IsNullable || !string.IsNullOrWhiteSpace(Placeholder))
+    {
+        <option value="">@Placeholder</option>
+    }
+    @foreach (var item in Items)
+    {
+        var value = GetMember(item, ValueField);
+        <option value="@FormatValue(value)">@GetMember(item, TextField)</option>
+    }
+</select>
+@ChildContent
+
+@code {
+    [Parameter] public IEnumerable<TItem>? DataSource { get; set; }
+    [Parameter] public string? Placeholder { get; set; }
+    [Parameter] public bool ShowClearButton { get; set; }
+    [Parameter] public string? Width { get; set; }
+    [Parameter] public TValue? Value { get; set; }
+    [Parameter] public EventCallback<TValue?> ValueChanged { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter(CaptureUnmatchedValues = true)] public Dictionary<string, object>? AdditionalAttributes { get; set; }
+
+    private IEnumerable<TItem> Items => DataSource ?? [];
+    private string Style => string.IsNullOrWhiteSpace(Width) ? string.Empty : $"width:{Width}";
+    private string TextField => ResolveField("Text", "Label", "Name", "Title");
+    private string ValueField => ResolveField("Value", "Id", "Code", TextField);
+    private bool IsNullable => Nullable.GetUnderlyingType(typeof(TValue)) is not null || !typeof(TValue).IsValueType;
+    private string CurrentValue => FormatValue(Value);
+
+    private async Task OnChanged(ChangeEventArgs e)
+    {
+        await ValueChanged.InvokeAsync(ParseValue(e.Value?.ToString()));
+    }
+
+    private string ResolveField(params string[] candidates)
+    {
+        var item = Items.FirstOrDefault();
+        if (item is null)
+            return candidates.Last();
+
+        var properties = item.GetType().GetProperties().Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return candidates.FirstOrDefault(properties.Contains) ?? candidates.Last();
+    }
+
+    private static object? GetMember(object? item, string name)
+    {
+        if (item is null)
+            return null;
+
+        return item.GetType().GetProperty(name)?.GetValue(item) ?? item;
+    }
+
+    private static string FormatValue(object? value) => value switch
+    {
+        null => string.Empty,
+        DateTime date => date.ToString("yyyy-MM-dd"),
+        DateOnly date => date.ToString("yyyy-MM-dd"),
+        Guid guid => guid.ToString(),
+        _ => value.ToString() ?? string.Empty
+    };
+
+    private static TValue? ParseValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return default;
+
+        var targetType = Nullable.GetUnderlyingType(typeof(TValue)) ?? typeof(TValue);
+        if (targetType == typeof(string))
+            return (TValue)(object)value;
+        if (targetType == typeof(Guid) && Guid.TryParse(value, out var guid))
+            return (TValue)(object)guid;
+        if (targetType == typeof(int) && int.TryParse(value, out var number))
+            return (TValue)(object)number;
+        if (targetType == typeof(decimal) && decimal.TryParse(value, out var amount))
+            return (TValue)(object)amount;
+        if (targetType == typeof(bool) && bool.TryParse(value, out var flag))
+            return (TValue)(object)flag;
+        if (targetType.IsEnum)
+            return (TValue)Enum.Parse(targetType, value, true);
+
+        return (TValue?)Convert.ChangeType(value, targetType, System.Globalization.CultureInfo.InvariantCulture);
+    }
+}

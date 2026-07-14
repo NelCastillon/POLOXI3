@@ -58,6 +58,35 @@ public sealed class OpportunitiesController : ControllerBase
         return NoContent();
     }
 
+    [HttpPost("{id:guid}/lines")]
+    public async Task<IActionResult> UpsertLine(Guid id, [FromBody] UpsertOpportunityLineRequest request, CancellationToken cancellationToken)
+    {
+        request.OpportunityId = id;
+        return Ok(await _service.UpsertLineAsync(request, cancellationToken));
+    }
+
+    [HttpPut("{id:guid}/lines/{lineId:guid}")]
+    public async Task<IActionResult> UpdateLine(Guid id, Guid lineId, [FromBody] UpsertOpportunityLineRequest request, CancellationToken cancellationToken)
+    {
+        request.OpportunityId = id;
+        request.OpportunityLineId = lineId;
+        return Ok(await _service.UpsertLineAsync(request, cancellationToken));
+    }
+
+    [HttpPatch("{id:guid}/lines/{lineId:guid}/primary")]
+    public async Task<IActionResult> SetPrimaryLine(Guid id, Guid lineId, [FromBody] SetPrimaryOpportunityLineRequest request, CancellationToken cancellationToken)
+    {
+        await _service.SetPrimaryLineAsync(id, lineId, request.UserId, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("lines/{lineId:guid}")]
+    public async Task<IActionResult> DeleteLine(Guid lineId, [FromQuery] Guid? modifiedByUserId, CancellationToken cancellationToken)
+    {
+        await _service.DeleteLineAsync(lineId, modifiedByUserId, cancellationToken);
+        return NoContent();
+    }
+
     [HttpPost("{id:guid}/activities")]
     public async Task<IActionResult> UpsertActivity(Guid id, [FromBody] UpsertOpportunityActivityRequest request, CancellationToken cancellationToken)
     {

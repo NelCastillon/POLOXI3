@@ -230,12 +230,14 @@
     private List<ForecastOpportunityRow> _rows = [];
     private List<AccountDto> _accounts = [];
     private List<UserDto> _users = [];
+    private List<OpportunityStageDto> _stages = [];
+    private List<OpportunityForecastCategoryDto> _forecastCategories = [];
 
-    private static readonly string[] StageOptions = ["Qualification", "Needs Analysis", "Proposal", "Negotiation", "Closed Won", "Closed Lost"];
-    private static readonly string[] ForecastOptions = ["Pipeline", "Best Case", "Commit", "Closed"];
     private readonly ViewDef[] _views = [new("overview", "Overview", "bi-speedometer2"), new("forecast", "Forecast", "bi-graph-up-arrow"), new("timeline", "Timeline", "bi-calendar-range"), new("producers", "Producers", "bi-people"), new("table", "Action Table", "bi-table")];
 
     private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
+    private IReadOnlyList<string> StageOptions => OpportunityPageConstants.ActiveStageNames(_stages);
+    private IReadOnlyList<string> ForecastOptions => OpportunityPageConstants.ForecastCategoryNames(_forecastCategories);
     private IReadOnlyList<ForecastOpportunityRow> FilteredRows => ApplyFilters(_rows).ToList();
     private IReadOnlyList<DistributionRow> StageRows => BuildDistribution(FilteredRows.Select(r => new DistributionSource(r.Stage, r.Amount)));
     private IReadOnlyList<DistributionRow> ForecastRows => BuildDistribution(FilteredRows.Select(r => new DistributionSource(r.Forecast, r.WeightedAmount)));
@@ -274,8 +276,12 @@
             var opportunities = await Api.SearchOpportunitiesAsync(_tenantId, pageSize: 500);
             var accounts = await Api.SearchAccountsAsync(_tenantId, pageSize: 500);
             var users = await Api.SearchUsersAsync(_tenantId, pageSize: 500);
+            var stages = await Api.SearchOpportunityStagesAsync(_tenantId, pageSize: 200);
+            var forecastCategories = await Api.SearchOpportunityForecastCategoriesAsync(_tenantId, pageSize: 200);
             _accounts = accounts?.Items.ToList() ?? [];
             _users = users?.Items.ToList() ?? [];
+            _stages = stages?.Items.OrderBy(s => s.SortOrder).ThenBy(s => s.StageName).ToList() ?? [];
+            _forecastCategories = forecastCategories?.Items.OrderBy(c => c.SortOrder).ThenBy(c => c.CategoryName).ToList() ?? [];
             _rows = (opportunities?.Items ?? []).Select(MapOpportunity).OrderByDescending(r => r.ImportanceScore).ToList();
             _selected = _selected is null ? FilteredRows.FirstOrDefault() : _rows.FirstOrDefault(r => r.Id == _selected.Id) ?? FilteredRows.FirstOrDefault();
             _selectedOwner = null;
@@ -298,9 +304,8 @@
     {
         var stage = !string.IsNullOrWhiteSpace(dto.StageName) ? dto.StageName! : OpportunityPageConstants.StageName(dto.StatusCode);
         var owner = !string.IsNullOrWhiteSpace(dto.OwnerName) ? dto.OwnerName! : OwnerName(dto.OwnerUserId);
-        var close = dto.CloseDate ?? DateTime.UtcNow.AddDays(30);
-        var forecast = NormalizeForecast(dto.ForecastCategoryCode);
-        return new(dto.OpportunityId, dto.OpportunityNumber, dto.OpportunityName, dto.AccountId, dto.AccountName ?? AccountName(dto.AccountId), stage, dto.EstimatedAmount, dto.WinProbability, forecast, dto.OwnerUserId, owner, close, dto.Description, dto.SourceLead);
+        var forecast = OpportunityPageConstants.NormalizeForecast(dto.ForecastCategoryCode);
+        return new(dto.OpportunityId, dto.OpportunityNumber, dto.OpportunityName, dto.AccountId, dto.AccountName ?? AccountName(dto.AccountId), stage, dto.EstimatedAmount, dto.WinProbability, forecast, dto.OwnerUserId, owner, dto.CloseDate, dto.Description, dto.SourceLead);
     }
 
     private IEnumerable<ForecastOpportunityRow> ApplyFilters(IEnumerable<ForecastOpportunityRow> rows)
@@ -328,10 +333,10 @@
         var rows = new List<TimelineRow>
         {
             BuildTimelineRow("Overdue", "overdue", "bi-calendar-x", FilteredRows.Where(r => r.IsOverdue)),
-            BuildTimelineRow("This Week", "closing", "bi-calendar-week", FilteredRows.Where(r => r.IsOpen && r.CloseDate.Date >= now && r.CloseDate.Date <= now.AddDays(7))),
-            BuildTimelineRow("This Month", "closing", "bi-calendar-check", FilteredRows.Where(r => r.IsOpen && r.CloseDate.Month == now.Month && r.CloseDate.Year == now.Year)),
-            BuildTimelineRow("Next Month", "open", "bi-calendar-plus", FilteredRows.Where(r => r.IsOpen && r.CloseDate.Month == nextMonth.Month && r.CloseDate.Year == nextMonth.Year)),
-            BuildTimelineRow("Later", "open", "bi-calendar-range", FilteredRows.Where(r => r.IsOpen && r.CloseDate.Date > nextMonth.AddMonths(1).Date))
+            BuildTimelineRow("This Week", "closing", "bi-calendar-week", FilteredRows.Where(r => r.IsOpen && r.CloseDate.HasValue && r.CloseDate.Value.Date >= now && r.CloseDate.Value.Date <= now.AddDays(7))),
+            BuildTimelineRow("This Month", "closing", "bi-calendar-check", FilteredRows.Where(r => r.IsOpen && r.CloseDate.HasValue && r.CloseDate.Value.Month == now.Month && r.CloseDate.Value.Year == now.Year)),
+            BuildTimelineRow("Next Month", "open", "bi-calendar-plus", FilteredRows.Where(r => r.IsOpen && r.CloseDate.HasValue && r.CloseDate.Value.Month == nextMonth.Month && r.CloseDate.Value.Year == nextMonth.Year)),
+            BuildTimelineRow("Later", "open", "bi-calendar-range", FilteredRows.Where(r => r.IsOpen && r.CloseDate.HasValue && r.CloseDate.Value.Date > nextMonth.AddMonths(1).Date))
         };
         var max = Math.Max(1, rows.Select(r => r.WeightedAmount).DefaultIfEmpty(1).Max());
         return rows.Select(r => r with { Width = WidthPct(r.WeightedAmount, max) }).ToList();
@@ -428,12 +433,11 @@
     private string OwnerName(Guid? ownerId) { if (!ownerId.HasValue) return "Unassigned"; var user = _users.FirstOrDefault(u => u.UserId == ownerId.Value); return user is null ? "Unknown owner" : DisplayUser(user); }
     private static string DisplayUser(UserDto user) => !string.IsNullOrWhiteSpace(user.DisplayName) ? user.DisplayName : !string.IsNullOrWhiteSpace(user.FullName) ? user.FullName : user.UserName;
     private static string Initials(string name) { var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : parts.Length == 1 ? parts[0][..1] : "?"; }
-    private static string NormalizeForecast(string? value) => string.IsNullOrWhiteSpace(value) ? "Pipeline" : value.Equals("Closed Won", StringComparison.OrdinalIgnoreCase) ? "Closed" : value;
-    private static string NextStage(string stage) { var index = Array.IndexOf(StageOptions, stage); return index < 0 || index >= StageOptions.Length - 1 ? stage : StageOptions[index + 1]; }
+    private string NextStage(string stage) { var stages = StageOptions.ToList(); var index = stages.FindIndex(s => string.Equals(s, stage, StringComparison.OrdinalIgnoreCase)); return index < 0 || index >= stages.Count - 1 ? stage : stages[index + 1]; }
     private static string WinBand(decimal winPct) => winPct >= 75 ? "High 75%+" : winPct >= 50 ? "Medium 50-74%" : "Low <50%";
     private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
     private static string FormatCurrency(decimal value) => value.ToString("C0", CultureInfo.CurrentCulture);
-    private static string FormatDate(DateTime value) => value.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture);
+    private static string FormatDate(DateTime? value) => value.HasValue ? value.Value.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture) : "Not set";
     private static string WidthPct(decimal value, decimal max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, (double)(value / max * 100)))).ToString("F1", CultureInfo.InvariantCulture) + "%";
     private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : "success";
     private string MetricCardClass(Metric metric) => $"fce-kpi-card {metric.Tone} {(_activeFilter == metric.Filter ? "fce-kpi-card-active" : string.Empty)}";
@@ -471,11 +475,11 @@
     private sealed record ForecastCategoryRow(string Category, int Count, decimal TotalAmount, decimal WeightedAmount, decimal AvgWinPct, string Width);
     private sealed record TimelineRow(string Period, string Filter, string Icon, int Count, decimal TotalAmount, decimal WeightedAmount, decimal AvgWinPct, string Width);
     private sealed record OwnerForecastRow(string Owner, int Count, int OpenCount, int CommitCount, int ClosingCount, decimal TotalAmount, decimal WeightedAmount, int RiskCount, string Status, string Summary);
-    private sealed record ForecastOpportunityRow(Guid Id, string Number, string Name, Guid AccountId, string AccountName, string Stage, decimal Amount, decimal WinPct, string Forecast, Guid? OwnerUserId, string Owner, DateTime CloseDate, string? Description, string? SourceLead)
+    private sealed record ForecastOpportunityRow(Guid Id, string Number, string Name, Guid AccountId, string AccountName, string Stage, decimal Amount, decimal WinPct, string Forecast, Guid? OwnerUserId, string Owner, DateTime? CloseDate, string? Description, string? SourceLead)
     {
         public bool IsOpen => Stage is not "Closed Won" and not "Closed Lost";
-        public int DaysToClose => (int)Math.Ceiling((CloseDate.Date - DateTime.UtcNow.Date).TotalDays);
-        public bool IsOverdue => IsOpen && CloseDate.Date < DateTime.UtcNow.Date;
+        public int DaysToClose => CloseDate.HasValue ? (int)Math.Ceiling((CloseDate.Value.Date - DateTime.UtcNow.Date).TotalDays) : int.MaxValue;
+        public bool IsOverdue => IsOpen && CloseDate.HasValue && CloseDate.Value.Date < DateTime.UtcNow.Date;
         public decimal WeightedAmount => Amount * WinPct / 100m;
         public bool IsRisk => IsOverdue || Owner == "Unassigned" || (Forecast == "Commit" && WinPct < 70) || (IsOpen && DaysToClose <= 14 && WinPct < 50);
         public decimal ImportanceScore => (IsOpen ? 500000 : 0) + WeightedAmount + (Forecast == "Commit" ? 175000 : 0) + (Forecast == "Best Case" ? 90000 : 0) + (DaysToClose <= 14 ? 150000 : 0) + (IsRisk ? 200000 : 0) + (WinPct * 1000);

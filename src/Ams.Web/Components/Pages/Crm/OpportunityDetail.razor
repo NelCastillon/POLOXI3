@@ -45,7 +45,7 @@ else
                     <h1>@_opp.Name</h1>
                     <span><i class="bi bi-hash" aria-hidden="true"></i> @_opp.OppNumber</span>
                 </div>
-                <p>@_opp.AccountName ? @_opp.Owner ? Close @_opp.CloseDate.ToString("d")</p>
+                <p>@_opp.AccountName ? @_opp.Owner ? Close @FormatDate(_opp.CloseDate)</p>
             </div>
         </div>
         <div class="od-hero-actions">
@@ -101,6 +101,7 @@ else
         <button type="button" class='@KpiClass("stage")' title="Show workflow" @onclick='() => ActivateKpi("stage", 6)'><span class="od-kpi-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span><span><strong class="od-kpi-val">@_opp.WinPct%</strong><span class="od-kpi-lbl">Win probability</span><small>@_opp.ForecastCategory forecast</small></span></button>
         <button type="button" class='@KpiClass("activities")' title="Show activities" @onclick='() => ActivateKpi("activities", 1)'><span class="od-kpi-icon"><i class="bi bi-lightning-charge" aria-hidden="true"></i></span><span><strong class="od-kpi-val">@_activities.Count</strong><span class="od-kpi-lbl">Activities</span><small>@RecentActivityText</small></span></button>
         <button type="button" class='@KpiClass("submissions")' title="Show submissions" @onclick='() => ActivateKpi("submissions", 2)'><span class="od-kpi-icon"><i class="bi bi-send" aria-hidden="true"></i></span><span><strong class="od-kpi-val">@_submissions.Count</strong><span class="od-kpi-lbl">Submissions</span><small>@_quotes.Count quote(s)</small></span></button>
+        <button type="button" class='@KpiClass("policies")' title="Show current policies" @onclick='() => ActivateKpi("policies", 7)'><span class="od-kpi-icon"><i class="bi bi-shield-check" aria-hidden="true"></i></span><span><strong class="od-kpi-val">@_currentPolicies.Count</strong><span class="od-kpi-lbl">Current Policies</span><small>@CurrentPolicyPremiumText</small></span></button>
         <button type="button" class='@KpiClass("documents")' title="Show documents" @onclick='() => ActivateKpi("documents", 4)'><span class="od-kpi-icon"><i class="bi bi-folder2-open" aria-hidden="true"></i></span><span><strong class="od-kpi-val">@_documents.Count</strong><span class="od-kpi-lbl">Documents</span><small>Proposal package</small></span></button>
         <button type="button" class='@KpiClass("competitors")' title="Show competitors" @onclick='() => ActivateKpi("competitors", 5)'><span class="od-kpi-icon"><i class="bi bi-crosshair" aria-hidden="true"></i></span><span><strong class="od-kpi-val">@_competitors.Count</strong><span class="od-kpi-lbl">Competitors</span><small>Market intel</small></span></button>
     </section>
@@ -114,8 +115,8 @@ else
         <span class="od-chip od-mono od-bold"><i class="bi bi-cash-coin" aria-hidden="true"></i> @_opp.Amount.ToString("C0")</span>
         <span class="od-chip">
             <i class="bi bi-calendar3" aria-hidden="true"></i>
-            <span class="@(_opp.CloseDate < DateTime.UtcNow && _opp.Stage != "Closed Won" && _opp.Stage != "Closed Lost" ? "od-overdue" : "")">
-                Close @_opp.CloseDate.ToString("d")
+            <span class="@(_opp.CloseDate.HasValue && _opp.CloseDate.Value < DateTime.UtcNow && _opp.Stage != "Closed Won" && _opp.Stage != "Closed Lost" ? "od-overdue" : "")">
+                Close @FormatDate(_opp.CloseDate)
             </span>
         </span>
         <!-- Win probability gauge -->
@@ -136,6 +137,7 @@ else
                 @TabButton(4, "Documents", "bi-folder2")
                 @TabButton(5, "Competitors", "bi-crosshair")
                 @TabButton(6, "Workflow", "bi-diagram-3")
+                @TabButton(7, "Current Policies", "bi-shield-check")
             </div>
             <div class="od-native-panels">
                 @if (_tab == 0)
@@ -150,7 +152,7 @@ else
                                         @OField("Forecast",       _opp.ForecastCategory)
                                         @OField("Amount",         _opp.Amount.ToString("C0"))
                                         @OField("Win Probability",$"{_opp.WinPct}%")
-                                        @OField("Close Date",     _opp.CloseDate.ToString("d"))
+                                        @OField("Close Date",     FormatDate(_opp.CloseDate))
                                         @OField("Owner",          _opp.Owner)
                                         @OField("Source Lead",    _opp.SourceLead ?? "?")
                                         @OField("Campaign",       _opp.CampaignName ?? "?")
@@ -166,15 +168,18 @@ else
                                     </div>
                                 }
                                 <div class="od-info-card">
-                                    <h3 class="od-section-hdr">Lines of Interest</h3>
+                                    <div class="od-tab-toolbar">
+                                        <h3 class="od-section-hdr">Coverage Lines</h3>
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenAddLine"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Line</button>
+                                    </div>
                                     @if (_lines.Count == 0)
                                     { <p class="od-empty-sm">No lines added yet.</p> }
                                     else
                                     {
-                                        <div class="od-table-wrap"><table class="od-table"><thead><tr><th>Line</th><th>Carrier</th><th class="text-end">Est. Premium</th><th>Priority</th></tr></thead><tbody>
+                                        <div class="od-table-wrap"><table class="od-table"><thead><tr><th>Line</th><th>Carrier</th><th>Status</th><th class="text-end">Est. Premium</th><th>Priority</th><th class="text-end">Actions</th></tr></thead><tbody>
                                             @foreach (var l in _lines)
                                             {
-                                                <tr><td data-label="Line">@l.LineOfBusiness</td><td data-label="Carrier">@(l.Carrier ?? "?")</td><td data-label="Est. Premium" class="text-end od-mono od-bold">@l.EstPremium.ToString("C0")</td><td data-label="Priority"><span class="@PriBadge(l.Priority)">@l.Priority</span></td></tr>
+                                                <tr><td data-label="Line"><strong>@l.LineOfBusiness</strong>@if (l.IsPrimary) { <span class="od-related-chip ms-2">Primary</span> }</td><td data-label="Carrier">@(l.Carrier ?? "?")</td><td data-label="Status"><span class="@QSBadge(l.Status)">@l.Status</span></td><td data-label="Est. Premium" class="text-end od-mono od-bold">@l.EstPremium.ToString("C0")</td><td data-label="Priority"><span class="@PriBadge(l.Priority)">@l.Priority</span></td><td data-label="Actions" class="text-end"><div class="od-row-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditLine(l)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>@if (!l.IsPrimary) { <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => SetPrimaryLineAsync(l)"><i class="bi bi-star" aria-hidden="true"></i> Primary</button> }<button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDeleteLine(l)"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button></div></td></tr>
                                             }
                                         </tbody></table></div>
                                     }
@@ -265,7 +270,7 @@ else
                                     <div class="od-table-wrap"><table class="od-table"><thead><tr><th>Submission #</th><th>Line</th><th>Status</th><th class="text-end">Target Premium</th><th class="text-end">Quotes</th><th class="text-end">Actions</th></tr></thead><tbody>
                                         @foreach (var s in _submissions)
                                         {
-                                            <tr><td data-label="Submission #" class="od-mono od-bold">@s.SubmissionNumber</td><td data-label="Line">@s.LineOfBusiness</td><td data-label="Status"><span class="@QSBadge(s.Status)">@s.Status</span></td><td data-label="Target Premium" class="text-end od-mono od-bold">@s.TargetPremium.ToString("C0")</td><td data-label="Quotes" class="text-end">@s.QuoteCount</td><td data-label="Actions" class="text-end"><div class="od-row-actions"><button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenSubmission(s.SubmissionId)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditSubmission(s)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDeleteSubmission(s)"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td></tr>
+                                            <tr><td data-label="Submission #" class="od-mono od-bold">@s.SubmissionNumber</td><td data-label="Line"><strong>@s.LineOfBusiness</strong>@if (s.Lines.Count > 1) { <div class="od-line-list">@string.Join(", ", s.Lines.Select(l => l.LineOfBusiness))</div> }</td><td data-label="Status"><span class="@QSBadge(s.Status)">@s.Status</span></td><td data-label="Target Premium" class="text-end od-mono od-bold">@s.TargetPremium.ToString("C0")</td><td data-label="Quotes" class="text-end">@s.QuoteCount</td><td data-label="Actions" class="text-end"><div class="od-row-actions"><button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenSubmission(s.SubmissionId)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditSubmission(s)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDeleteSubmission(s)"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td></tr>
                                         }
                                     </tbody></table></div>
                                 }
@@ -310,6 +315,56 @@ else
                                 }
                             </div>
                 }
+                @if (_tab == 7)
+                {
+                            <div class="od-tab-body">
+                                <div class="od-tab-toolbar">
+                                    <span class="od-tab-count">@_currentPolicies.Count current polic@(_currentPolicies.Count == 1 ? "y" : "ies")</span>
+                                    <span class="od-readonly"><i class="bi bi-database-check" aria-hidden="true"></i> Synced from bound policy register</span>
+                                </div>
+                                @if (_currentPolicies.Count == 0) { @OEmpty("bi-shield-check", "No current policies", "No active or bound policies are currently linked to this opportunity account.") }
+                                else
+                                {
+                                    <div class="od-policy-grid">
+                                        @foreach (var policy in _currentPolicies)
+                                        {
+                                            <article class="od-policy-card">
+                                                <div class="od-policy-card-head">
+                                                    <span class="od-policy-icon"><i class="bi bi-shield-check" aria-hidden="true"></i></span>
+                                                    <div>
+                                                        <strong>@policy.PolicyNumber</strong>
+                                                        <small>@policy.LineOfBusiness</small>
+                                                    </div>
+                                                    <span class="@PolicyStatusBadge(policy.Status)">@policy.Status</span>
+                                                </div>
+                                                <div class="od-policy-meta">
+                                                    <span><i class="bi bi-building" aria-hidden="true"></i> @Safe(policy.CarrierName, "Carrier pending")</span>
+                                                    <span><i class="bi bi-calendar-range" aria-hidden="true"></i> @policy.EffectiveDate.ToString("d") - @policy.ExpirationDate.ToString("d")</span>
+                                                    <span class="@PolicyExpirationClass(policy)"><i class="bi bi-clock-history" aria-hidden="true"></i> @PolicyExpirationText(policy)</span>
+                                                </div>
+                                                <div class="od-policy-financials">
+                                                    <div><span>Annual premium</span><strong>@policy.AnnualPremium.ToString("C0")</strong></div>
+                                                    <div><span>Renewal stage</span><strong>@Safe(policy.RenewalStage, "Not Started")</strong></div>
+                                                    <div><span>Documents</span><strong>@policy.DocumentCount</strong></div>
+                                                    <div><span>Endorsements</span><strong>@policy.EndorsementCount</strong></div>
+                                                </div>
+                                                @if (!string.IsNullOrWhiteSpace(policy.LastAction))
+                                                {
+                                                    <p class="od-policy-last-action">@policy.LastAction</p>
+                                                }
+                                                <div class="od-policy-actions">
+                                                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenPolicy(policy.PolicyId)"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i> View Policy</button>
+                                                    @if (policy.SubmissionId != Guid.Empty)
+                                                    {
+                                                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenSubmission(policy.SubmissionId)"><i class="bi bi-send" aria-hidden="true"></i> Submission</button>
+                                                    }
+                                                </div>
+                                            </article>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                }
             </div>
         </div>
 
@@ -319,7 +374,7 @@ else
             <div class="od-panel-card">
                 <div class="od-panel-hdr"><i class="bi bi-signpost-2 od-pi--stage" aria-hidden="true"></i><span class="od-panel-title">Stage Progress</span></div>
                 <div class="od-stage-steps">
-                    @foreach (var st in _stageSteps)
+                    @foreach (var st in StageSteps)
                     {
                         var done = StageOrder(st) < StageOrder(_opp.Stage) || st == _opp.Stage;
                         var cur  = st == _opp.Stage;
@@ -341,10 +396,12 @@ else
                     @OMetric("Amount",        _opp.Amount.ToString("C0"),            "bi-cash-coin")
                     @OMetric("Weighted",      (_opp.Amount * (decimal)_opp.WinPct / 100).ToString("C0"), "bi-graph-up")
                     @OMetric("Days Open",     ((int)(DateTime.UtcNow - _opp.CreatedAt).TotalDays).ToString(), "bi-clock")
-                    @OMetric("Days to Close", Math.Max(0,(int)(_opp.CloseDate - DateTime.UtcNow).TotalDays).ToString(), "bi-calendar-check")
+                    @OMetric("Days to Close", DaysToCloseText, "bi-calendar-check")
                     @OMetric("Activities",    _activities.Count.ToString(), "bi-lightning")
                     @OMetric("Submissions",   _submissions.Count.ToString(),"bi-send")
                     @OMetric("Quotes",        _quotes.Count.ToString(),     "bi-file-text")
+                    @OMetric("Current Policies", _currentPolicies.Count.ToString(), "bi-shield-check")
+                    @OMetric("Policy Premium", CurrentPolicyPremiumText, "bi-cash-stack")
                 </div>
             </div>
 
@@ -382,11 +439,11 @@ else
             <div class="um-modal-body"><div class="um-form-grid">
                 <div class="um-field um-field--full"><label>Opportunity Name <span class="text-danger">*</span></label><InputText @bind-Value="_editForm.Name" class="um-input" /></div>
                 <div class="um-field"><label>Account Name <span class="text-danger">*</span></label><InputText @bind-Value="_editForm.AccountName" class="um-input" /></div>
-                <div class="um-field"><label>Stage <span class="text-danger">*</span></label><InputSelect @bind-Value="_editForm.Stage" class="um-input">@foreach (var option in _stageOpts) { <option value="@option.Value">@option.Label</option> }</InputSelect></div>
-                <div class="um-field"><label>Forecast <span class="text-danger">*</span></label><InputSelect @bind-Value="_editForm.ForecastCategory" class="um-input"><option value="Pipeline">Pipeline</option><option value="Best Case">Best Case</option><option value="Commit">Commit</option><option value="Closed">Closed</option></InputSelect></div>
+                <div class="um-field"><label>Stage <span class="text-danger">*</span></label><InputSelect @bind-Value="_editForm.Stage" class="um-input">@foreach (var option in StageOptions) { <option value="@option">@option</option> }</InputSelect></div>
+                <div class="um-field"><label>Forecast <span class="text-danger">*</span></label><InputSelect @bind-Value="_editForm.ForecastCategory" class="um-input">@foreach (var option in ForecastOptions) { <option value="@option">@option</option> }</InputSelect></div>
                 <div class="um-field"><label>Amount</label><InputNumber @bind-Value="_editForm.Amount" class="um-input" /></div>
                 <div class="um-field"><label>Win Probability</label><InputNumber @bind-Value="_editForm.WinPct" class="um-input" /></div>
-                <div class="um-field"><label>Close Date <span class="text-danger">*</span></label><InputDate @bind-Value="_editForm.CloseDate" class="um-input" /></div>
+                <div class="um-field"><label>Close Date</label><InputDate @bind-Value="_editForm.CloseDate" class="um-input" /></div>
                 <div class="um-field um-field--full"><label>Description</label><InputTextArea @bind-Value="_editForm.Description" class="um-input" rows="4" /></div>
             </div></div>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showEdit = false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_savingAction"><i class="bi bi-check-lg" aria-hidden="true"></i> Save Changes</button></div>
@@ -419,7 +476,7 @@ else
         <div class="um-modal-header"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i><span>Move Stage</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showStage = false"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
         <EditForm Model="_stageForm" OnValidSubmit="CommitStageAsync">
             <DataAnnotationsValidator />
-            <div class="um-modal-body"><div class="um-form-grid"><div class="um-field um-field--full"><label>Target Stage <span class="text-danger">*</span></label><InputSelect @bind-Value="_stageForm.Stage" class="um-input"><option value="">Select stage</option>@foreach (var option in _stageOpts) { <option value="@option.Value">@option.Label</option> }</InputSelect></div></div></div>
+            <div class="um-modal-body"><div class="um-form-grid"><div class="um-field um-field--full"><label>Target Stage <span class="text-danger">*</span></label><InputSelect @bind-Value="_stageForm.Stage" class="um-input"><option value="">Select stage</option>@foreach (var option in StageOptions) { <option value="@option">@option</option> }</InputSelect></div></div></div>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showStage = false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_savingAction"><i class="bi bi-check-lg" aria-hidden="true"></i> Move</button></div>
         </EditForm>
     </div></div>
@@ -520,6 +577,27 @@ else
     </div></div>
 }
 
+<!-- Add/Edit coverage line dialog -->
+@if (_showLine)
+{
+    <div class="od-modal-backdrop" role="presentation" @onclick="CloseLineDialog"><div class="od-modal od-modal-sm" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+        <div class="um-modal-header"><i class="bi bi-layers" aria-hidden="true"></i><span>@(_editingLine is null ? "Add Coverage Line" : "Edit Coverage Line")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseLineDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+        <EditForm Model="_lineForm" OnValidSubmit="CommitLineAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body"><div class="um-form-grid">
+                <div class="um-field"><label>Line of Business <span class="text-danger">*</span></label><InputText @bind-Value="_lineForm.LineOfBusiness" class="um-input" /></div>
+                <div class="um-field"><label>Carrier</label><InputText @bind-Value="_lineForm.Carrier" class="um-input" /></div>
+                <div class="um-field"><label>Estimated Premium</label><InputNumber @bind-Value="_lineForm.EstPremium" class="um-input" /></div>
+                <div class="um-field"><label>Priority <span class="text-danger">*</span></label><InputSelect @bind-Value="_lineForm.Priority" class="um-input"><option value="High">High</option><option value="Medium">Medium</option><option value="Low">Low</option></InputSelect></div>
+                <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_lineForm.Status" class="um-input"><option value="Draft">Draft</option><option value="Marketing">Marketing</option><option value="Quoted">Quoted</option><option value="Bound">Bound</option><option value="Declined">Declined</option><option value="Lost">Lost</option></InputSelect></div>
+                <div class="um-field"><label>Target Effective Date</label><InputDate @bind-Value="_lineForm.TargetEffectiveDate" class="um-input" /></div>
+                <label class="od-check-row um-field--full"><InputCheckbox @bind-Value="_lineForm.IsPrimary" /> <span>Use as primary line for naming and simple workflows</span></label>
+            </div></div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseLineDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_savingAction"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_editingLine is null ? "Add" : "Save")</button></div>
+        </EditForm>
+    </div></div>
+}
+
 <!-- New/Edit Submission dialog -->
 @if (_showSubmission)
 {
@@ -528,7 +606,25 @@ else
         <EditForm Model="_submissionForm" OnValidSubmit="CommitSubmissionAsync">
             <DataAnnotationsValidator />
             <div class="um-modal-body"><div class="um-form-grid">
-                <div class="um-field"><label>Line of Business <span class="text-danger">*</span></label><InputText @bind-Value="_submissionForm.LineOfBusiness" class="um-input" /></div>
+                <div class="um-field um-field--full">
+                    <label>Coverage Lines <span class="text-danger">*</span></label>
+                    @if (_lines.Count == 0)
+                    {
+                        <div class="od-empty-sm">Add coverage lines before creating a submission.</div>
+                    }
+                    else
+                    {
+                        <div class="od-line-picker">
+                            @foreach (var line in _lines)
+                            {
+                                <label class="od-line-option">
+                                    <input type="checkbox" checked="@_submissionForm.OpportunityLineIds.Contains(line.OpportunityLineId)" @onchange="args => ToggleSubmissionLine(line, args)" />
+                                    <span><strong>@line.LineOfBusiness</strong><small>@line.EstPremium.ToString("C0") @line.Priority</small></span>
+                                </label>
+                            }
+                        </div>
+                    }
+                </div>
                 <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_submissionForm.Status" class="um-input"><option value="Draft">Draft</option><option value="In Review">In Review</option><option value="Quoted">Quoted</option><option value="Bound">Bound</option><option value="Declined">Declined</option></InputSelect></div>
                 <div class="um-field"><label>Target Premium</label><InputNumber @bind-Value="_submissionForm.TargetPremium" class="um-input" /></div>
             </div></div>
@@ -575,9 +671,12 @@ else
     private List<ActivityRow> _activities = [];
     private List<SubmissionRow> _submissions = [];
     private List<QuoteRow>   _quotes      = [];
+    private List<CurrentPolicyRow> _currentPolicies = [];
     private List<DocRow>     _documents   = [];
     private List<CompetitorRow> _competitors = [];
     private List<WorkflowEventRow> _workflowEvents = [];
+    private List<OpportunityStageDto> _stages = [];
+    private List<OpportunityForecastCategoryDto> _forecastCategories = [];
     private OpportunityConversionLaunchDto? _conversionLaunch;
 
     private bool   _showEdit        = false;
@@ -588,6 +687,7 @@ else
     private bool   _showAddComp     = false;
     private bool   _showDeleteConfirm = false;
     private bool   _showSubmission = false;
+    private bool   _showLine = false;
 
     private OpportunityEditForm _editForm = new();
     private StageMoveForm _stageForm = new();
@@ -595,9 +695,11 @@ else
     private ActivityForm _activityForm = new();
     private CompetitorForm _competitorForm = new();
     private SubmissionForm _submissionForm = new();
+    private OpportunityLineForm _lineForm = new();
     private ActivityRow? _editingActivity;
     private CompetitorRow? _editingCompetitor;
     private SubmissionRow? _editingSubmission;
+    private OppLine? _editingLine;
     private string        _deleteTitle = string.Empty;
     private string        _deleteMessage = string.Empty;
     private Func<Task>?   _confirmDeleteAction;
@@ -614,11 +716,12 @@ else
         ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".png", ".jpg", ".jpeg", ".tif", ".tiff"
     };
     private static readonly List<LV> _actTypes    = [new("Call","Call"),new("Email","Email"),new("Meeting","Meeting"),new("Note","Note"),new("Task","Task")];
-    private static readonly List<LV> _stageOpts   = [new("Qualification","Qualification"),new("Needs Analysis","Needs Analysis"),new("Proposal","Proposal"),new("Negotiation","Negotiation"),new("Closed Won","Closed Won"),new("Closed Lost","Closed Lost")];
     private static readonly List<LV> _compStrengths = [new("Strong","Strong"),new("Moderate","Moderate"),new("Weak","Weak")];
-    private static readonly string[] _stageSteps  = ["Qualification","Needs Analysis","Proposal","Negotiation","Closed Won"];
     private List<DocumentConfigItemDto> _documentCategories = [];
     private IEnumerable<LV> DocumentCategoryOptions => _documentCategories.Select(c => new LV(CategoryLabel(c), CategoryLabel(c)));
+    private IReadOnlyList<string> StageOptions => OpportunityPageConstants.ActiveStageNames(_stages);
+    private IReadOnlyList<string> StageSteps => StageOptions.Where(s => !s.Equals("Closed Lost", StringComparison.OrdinalIgnoreCase)).ToList();
+    private IReadOnlyList<string> ForecastOptions => OpportunityPageConstants.ForecastCategoryNames(_forecastCategories);
 
     protected override async Task OnInitializedAsync()
     {
@@ -639,10 +742,15 @@ else
             }
 
             _opp = MapOpportunity(detail.Opportunity);
+            var stages = await Api.SearchOpportunityStagesAsync(_tenantId, pageSize: 200);
+            var forecastCategories = await Api.SearchOpportunityForecastCategoriesAsync(_tenantId, pageSize: 200);
+            _stages = stages?.Items.OrderBy(s => s.SortOrder).ThenBy(s => s.StageName).ToList() ?? [];
+            _forecastCategories = forecastCategories?.Items.OrderBy(c => c.SortOrder).ThenBy(c => c.CategoryName).ToList() ?? [];
             _lines = detail.Lines.Select(MapLine).ToList();
             _activities = detail.Activities.Select(MapActivity).ToList();
             _submissions = detail.Submissions.Select(MapSubmission).ToList();
             _quotes = detail.Quotes.Select(MapQuote).ToList();
+            _currentPolicies = detail.CurrentPolicies.Select(MapCurrentPolicy).ToList();
             _competitors = detail.Competitors.Select(MapCompetitor).ToList();
             _workflowEvents = detail.WorkflowEvents.Select(MapWorkflowEvent).ToList();
             await LoadDocumentCategoriesAsync();
@@ -885,22 +993,82 @@ else
     private void OpenAddCompetitor() { _editingCompetitor = null; _competitorForm = new() { Strength = "Moderate" }; _showAddComp = true; }
     private void OpenEditCompetitor(CompetitorRow row) { _editingCompetitor = row; _competitorForm = new() { Name = row.Name, Strength = row.Strength }; _showAddComp = true; }
     private void CloseCompetitorDialog() { _showAddComp = false; _editingCompetitor = null; _competitorForm = new(); }
-    private void OpenNewSubmission() { _editingSubmission = null; _submissionForm = new() { Status = "Draft" }; _showSubmission = true; }
-    private void OpenEditSubmission(SubmissionRow row) { _editingSubmission = row; _submissionForm = new() { LineOfBusiness = row.LineOfBusiness, Status = row.Status, TargetPremium = row.TargetPremium }; _showSubmission = true; }
+    private void OpenAddLine() { _editingLine = null; _lineForm = new() { Priority = "Medium", Status = "Draft", IsPrimary = _lines.Count == 0 }; _showLine = true; }
+    private void OpenEditLine(OppLine row) { _editingLine = row; _lineForm = new() { LineOfBusiness = row.LineOfBusiness, Carrier = row.Carrier, EstPremium = row.EstPremium, Priority = row.Priority, Status = row.Status, IsPrimary = row.IsPrimary, TargetEffectiveDate = row.TargetEffectiveDate }; _showLine = true; }
+    private void CloseLineDialog() { _showLine = false; _editingLine = null; _lineForm = new(); }
+
+    private async Task CommitLineAsync()
+    {
+        var isNew = _editingLine is null;
+        await Api.UpsertOpportunityLineAsync(OpportunityId, new UpsertOpportunityLineRequest
+        {
+            OpportunityLineId = _editingLine?.OpportunityLineId,
+            TenantId = _tenantId,
+            OpportunityId = OpportunityId,
+            LineOfBusiness = Normalize(_lineForm.LineOfBusiness) ?? string.Empty,
+            Carrier = Normalize(_lineForm.Carrier),
+            EstPremium = _lineForm.EstPremium,
+            Priority = _lineForm.Priority,
+            Status = _lineForm.Status,
+            IsPrimary = _lineForm.IsPrimary,
+            TargetEffectiveDate = _lineForm.TargetEffectiveDate,
+            UserId = _currentUserId
+        });
+        CloseLineDialog();
+        await LoadAsync();
+        await ShowToast(isNew ? "Coverage line added." : "Coverage line updated.");
+    }
+
+    private async Task SetPrimaryLineAsync(OppLine row)
+    {
+        await Api.SetPrimaryOpportunityLineAsync(OpportunityId, row.OpportunityLineId, new SetPrimaryOpportunityLineRequest { UserId = _currentUserId });
+        await LoadAsync();
+        await ShowToast($"{row.LineOfBusiness} is now the primary line.");
+    }
+    private void OpenNewSubmission()
+    {
+        _editingSubmission = null;
+        var primary = _lines.FirstOrDefault(l => l.IsPrimary) ?? _lines.FirstOrDefault();
+        _submissionForm = new() { Status = "Draft", TargetPremium = primary?.EstPremium ?? 0 };
+        if (primary is not null)
+            _submissionForm.OpportunityLineIds.Add(primary.OpportunityLineId);
+        _showSubmission = true;
+    }
+    private void OpenEditSubmission(SubmissionRow row)
+    {
+        _editingSubmission = row;
+        _submissionForm = new() { LineOfBusiness = row.LineOfBusiness, Status = row.Status, TargetPremium = row.TargetPremium, OpportunityLineIds = row.Lines.Select(l => l.OpportunityLineId).ToHashSet() };
+        if (_submissionForm.OpportunityLineIds.Count == 0)
+        {
+            foreach (var line in _lines.Where(l => string.Equals(l.LineOfBusiness, row.LineOfBusiness, StringComparison.OrdinalIgnoreCase)))
+                _submissionForm.OpportunityLineIds.Add(line.OpportunityLineId);
+        }
+        _showSubmission = true;
+    }
     private void CloseSubmissionDialog() { _showSubmission = false; _editingSubmission = null; _submissionForm = new(); }
 
     private async Task CommitSubmissionAsync()
     {
         var isNew = _editingSubmission is null;
+        var selectedLines = _lines.Where(l => _submissionForm.OpportunityLineIds.Contains(l.OpportunityLineId)).ToList();
+        if (selectedLines.Count == 0)
+        {
+            await ShowToast("Select at least one coverage line for the submission.", "e-toast-danger");
+            return;
+        }
+
+        var lineLabel = selectedLines.Count == 1 ? selectedLines[0].LineOfBusiness : $"{selectedLines.Count} line package";
+        var targetPremium = _submissionForm.TargetPremium > 0 ? _submissionForm.TargetPremium : selectedLines.Sum(l => l.EstPremium);
         await Api.UpsertOpportunitySubmissionAsync(OpportunityId, new UpsertOpportunitySubmissionRequest
         {
             SubmissionId = _editingSubmission?.SubmissionId,
             TenantId = _tenantId,
             OpportunityId = OpportunityId,
             SubmissionNumber = _editingSubmission?.SubmissionNumber,
-            LineOfBusiness = Normalize(_submissionForm.LineOfBusiness) ?? string.Empty,
+            LineOfBusiness = lineLabel,
+            OpportunityLineIds = selectedLines.Select(l => l.OpportunityLineId).ToList(),
             Status = _submissionForm.Status,
-            TargetPremium = _submissionForm.TargetPremium,
+            TargetPremium = targetPremium,
             UserId = _currentUserId
         });
         CloseSubmissionDialog();
@@ -908,7 +1076,21 @@ else
         await ShowToast(isNew ? "Submission created." : "Submission updated.");
     }
 
+    private void ToggleSubmissionLine(OppLine line, Microsoft.AspNetCore.Components.ChangeEventArgs args)
+    {
+        var selected = args.Value is bool b && b;
+        if (selected)
+            _submissionForm.OpportunityLineIds.Add(line.OpportunityLineId);
+        else
+            _submissionForm.OpportunityLineIds.Remove(line.OpportunityLineId);
+
+        var selectedLines = _lines.Where(l => _submissionForm.OpportunityLineIds.Contains(l.OpportunityLineId)).ToList();
+        if (selectedLines.Count > 0)
+            _submissionForm.TargetPremium = selectedLines.Sum(l => l.EstPremium);
+    }
+
     private void ConfirmDeleteActivity(ActivityRow row) => ConfirmDelete("Delete Activity", $"Delete activity {row.Subject}?", async () => { await Api.DeleteOpportunityActivityAsync(row.ActivityId, _currentUserId); await LoadAsync(); await ShowToast("Activity deleted."); });
+    private void ConfirmDeleteLine(OppLine row) => ConfirmDelete("Delete Coverage Line", $"Delete {row.LineOfBusiness} from this opportunity?", async () => { await Api.DeleteOpportunityLineAsync(row.OpportunityLineId, _currentUserId); await LoadAsync(); await ShowToast("Coverage line deleted."); });
     private void ConfirmDeleteSubmission(SubmissionRow row) => ConfirmDelete("Delete Submission", $"Delete submission {row.SubmissionNumber}?", async () => { await Api.DeleteOpportunitySubmissionAsync(row.SubmissionId, _currentUserId); await LoadAsync(); await ShowToast("Submission deleted."); });
     private void ConfirmDeleteDocument(DocRow row) => ConfirmDelete("Delete Document", $"Delete document {row.FileName}?", async () => { await Api.DeleteDocumentAsync(row.DocumentId, _currentUserId); await LoadOpportunityDocumentsAsync(); await ShowToast("Document deleted."); });
     private void ConfirmDeleteCompetitor(CompetitorRow row) => ConfirmDelete("Delete Competitor", $"Delete competitor {row.Name}?", async () => { await Api.DeleteOpportunityCompetitorAsync(row.CompetitorId, _currentUserId); await LoadAsync(); await ShowToast("Competitor deleted."); });
@@ -917,6 +1099,8 @@ else
         Nav.NavigateTo(Api.GetDocumentDownloadUrl(row.DocumentId), forceLoad: true);
         return Task.CompletedTask;
     }
+
+    private void OpenPolicy(Guid policyId) => Nav.NavigateTo($"/policies/{policyId}");
 
     private void ConfirmDelete(string title, string message, Func<Task> action)
     {
@@ -962,11 +1146,13 @@ else
 
     private int DaysOpen => _opp is null ? 0 : Math.Max(0, (int)(DateTime.UtcNow - _opp.CreatedAt).TotalDays);
 
-    private int DaysToClose => _opp is null ? 0 : Math.Max(0, (int)(_opp.CloseDate - DateTime.UtcNow).TotalDays);
+    private string DaysToCloseText => _opp?.CloseDate is null ? "Not set" : Math.Max(0, (int)(_opp.CloseDate.Value - DateTime.UtcNow).TotalDays).ToString();
 
     private string RecentActivityText => _activities.Count == 0
         ? "No recent activity"
         : _activities.OrderByDescending(x => x.OccurredAt).First().OccurredAt.ToString("MMM d");
+
+    private string CurrentPolicyPremiumText => _currentPolicies.Count == 0 ? "No current premium" : _currentPolicies.Sum(p => p.AnnualPremium).ToString("C0");
 
     private string KpiClass(string key) => _activeKpi == key ? "od-kpi-card od-kpi-card-active" : "od-kpi-card";
 
@@ -995,22 +1181,49 @@ else
         OppNumber = dto.OpportunityNumber,
         Name = dto.OpportunityName,
         AccountName = dto.AccountName ?? "?",
-        Stage = dto.StageName ?? "Qualification",
-        ForecastCategory = dto.ForecastCategoryCode ?? "Pipeline",
+        Stage = !string.IsNullOrWhiteSpace(dto.StageName) ? dto.StageName : OpportunityPageConstants.StageName(dto.StatusCode),
+        ForecastCategory = OpportunityPageConstants.NormalizeForecast(dto.ForecastCategoryCode),
         Amount = dto.EstimatedAmount,
         WinPct = (int)Math.Round(dto.WinProbability),
         Owner = dto.OwnerName ?? "Unassigned",
-        CloseDate = dto.CloseDate ?? DateTime.UtcNow,
+        CloseDate = dto.CloseDate,
         CreatedAt = dto.CreatedDateUtc == default ? DateTime.UtcNow : dto.CreatedDateUtc,
         ModifiedAt = dto.ModifiedDateUtc,
         Description = dto.Description,
         SourceLead = dto.SourceLead
     };
 
-    private static OppLine MapLine(OpportunityLineDto dto) => new() { OpportunityLineId = dto.OpportunityLineId, LineOfBusiness = dto.LineOfBusiness, Carrier = dto.Carrier, EstPremium = dto.EstPremium, Priority = dto.Priority };
+    private static OppLine MapLine(OpportunityLineDto dto) => new() { OpportunityLineId = dto.OpportunityLineId, LineOfBusiness = dto.LineOfBusiness, Carrier = dto.Carrier, EstPremium = dto.EstPremium, Priority = dto.Priority, Status = dto.Status, IsPrimary = dto.IsPrimary, TargetEffectiveDate = dto.TargetEffectiveDate };
     private static ActivityRow MapActivity(OpportunityActivityDto dto) => new() { ActivityId = dto.ActivityId, Type = dto.ActivityTypeCode, Subject = dto.Subject, Notes = dto.Notes, By = dto.CreatedByName ?? "System", OccurredAt = dto.ActivityDate };
-    private static SubmissionRow MapSubmission(OpportunitySubmissionDto dto) => new() { SubmissionId = dto.SubmissionId, SubmissionNumber = dto.SubmissionNumber, LineOfBusiness = dto.LineOfBusiness, Status = dto.Status, TargetPremium = dto.TargetPremium, QuoteCount = dto.QuoteCount };
+    private static SubmissionRow MapSubmission(OpportunitySubmissionDto dto) => new() { SubmissionId = dto.SubmissionId, SubmissionNumber = dto.SubmissionNumber, LineOfBusiness = dto.LineOfBusiness, Status = dto.Status, TargetPremium = dto.TargetPremium, QuoteCount = dto.QuoteCount, Lines = dto.Lines.Select(MapSubmissionLine).ToList() };
+    private static SubmissionLineRow MapSubmissionLine(OpportunitySubmissionLineDto dto) => new() { OpportunityLineId = dto.OpportunityLineId, LineOfBusiness = dto.LineOfBusiness, TargetPremium = dto.TargetPremium };
     private static QuoteRow MapQuote(QuoteDto dto) => new() { QuoteId = dto.QuoteId, QuoteNumber = dto.QuoteNumber, Premium = dto.TotalAmount, Status = dto.StatusCode, ExpiresAt = dto.ValidUntilDate ?? DateTime.UtcNow.AddDays(30), Carrier = dto.AccountName ?? string.Empty };
+    private static CurrentPolicyRow MapCurrentPolicy(OpportunityCurrentPolicyDto dto) => new()
+    {
+        PolicyId = dto.PolicyId,
+        SubmissionId = dto.SubmissionId,
+        QuoteId = dto.QuoteId,
+        PolicyNumber = dto.PolicyNumber,
+        CarrierName = dto.CarrierName,
+        Status = dto.Status,
+        LineOfBusiness = dto.LineOfBusiness,
+        Priority = dto.Priority,
+        AnnualPremium = dto.AnnualPremium,
+        WrittenPremium = dto.WrittenPremium,
+        EffectiveDate = dto.EffectiveDate,
+        ExpirationDate = dto.ExpirationDate,
+        BoundDateUtc = dto.BoundDateUtc,
+        AssignedToUserName = dto.AssignedToUserName,
+        ProducerName = dto.ProducerName,
+        CsrName = dto.CsrName,
+        DocumentCount = dto.DocumentCount,
+        ActivityCount = dto.ActivityCount,
+        EndorsementCount = dto.EndorsementCount,
+        RenewalStage = dto.RenewalStage,
+        LastAction = dto.LastAction,
+        DaysToExpiration = dto.DaysToExpiration,
+        IsActive = dto.IsActive
+    };
     private static CompetitorRow MapCompetitor(OpportunityCompetitorDto dto) => new() { CompetitorId = dto.CompetitorId, Name = dto.Name, Strength = dto.Strength };
     private static DocRow MapDocument(DocumentDto dto) => new() { DocumentId = dto.DocumentId, FileName = dto.FileName, Extension = Path.GetExtension(dto.FileName), Category = dto.CategoryCode, SizeKb = ToSizeKb(dto.FileSizeBytes ?? 0), UploadedBy = dto.UploadedByName ?? "System", UploadedAt = dto.CreatedDateUtc };
     private static WorkflowEventRow MapWorkflowEvent(OpportunityWorkflowEventDto dto) => new() { WorkflowEventId = dto.WorkflowEventId, EventType = dto.EventType, EventTitle = dto.EventTitle, EventDetail = dto.EventDetail, RelatedEntityName = dto.RelatedEntityName, RelatedEntityId = dto.RelatedEntityId, EventDateUtc = dto.EventDateUtc };
@@ -1040,12 +1253,20 @@ else
     private static string PriBadge(string p) => p switch { "High" => "ld-pri ld-pri--high","Medium" => "ld-pri ld-pri--normal",_ => "ld-pri ld-pri--low" };
     private static string QSBadge(string s)  => s switch { "Approved" => "ld-status ld-status--approved","Rejected" => "ld-status ld-status--rejected","Pending" => "ld-status ld-status--pending",_ => "ld-status ld-status--open" };
     private static string CompBadge(string s) => s switch { "Strong" => "od-comp-badge od-cb--strong","Weak" => "od-comp-badge od-cb--weak",_ => "od-comp-badge od-cb--mid" };
+    private static string PolicyStatusBadge(string s) => string.Equals(s, "Active", StringComparison.OrdinalIgnoreCase) || string.Equals(s, "Bound", StringComparison.OrdinalIgnoreCase) || string.Equals(s, "In Force", StringComparison.OrdinalIgnoreCase) ? "ld-status ld-status--approved" : string.Equals(s, "Expired", StringComparison.OrdinalIgnoreCase) || string.Equals(s, "Cancelled", StringComparison.OrdinalIgnoreCase) ? "ld-status ld-status--rejected" : "ld-status ld-status--open";
+    private static string PolicyExpirationClass(CurrentPolicyRow policy) => policy.DaysToExpiration < 0 ? "od-policy-exp od-policy-exp--expired" : policy.DaysToExpiration <= 30 ? "od-policy-exp od-policy-exp--urgent" : policy.DaysToExpiration <= 90 ? "od-policy-exp od-policy-exp--soon" : "od-policy-exp";
+    private static string PolicyExpirationText(CurrentPolicyRow policy) => policy.DaysToExpiration < 0 ? $"Expired {Math.Abs(policy.DaysToExpiration)} day(s) ago" : policy.DaysToExpiration == 0 ? "Expires today" : $"{policy.DaysToExpiration} day(s) to expiration";
     private static string ActivityIcon(string t) => t switch { "Call"=>"bi-telephone","Email"=>"bi-envelope","Meeting"=>"bi-calendar3","Note"=>"bi-sticky","Task"=>"bi-check2-square",_=>"bi-lightning" };
     private static string ActivityColor(string t) => t switch { "Call"=>"od-tl-ic--call","Email"=>"od-tl-ic--email","Meeting"=>"od-tl-ic--meeting","Note"=>"od-tl-ic--note",_=>"od-tl-ic--other" };
     private static string WorkflowIcon(string t) => t switch { "Created"=>"bi-plus-circle","Updated"=>"bi-pencil-square","Stage"=>"bi-arrow-right-circle","Submission" or "SubmissionUpdated"=>"bi-send","Quote"=>"bi-file-text","Activity" or "ActivityUpdated"=>"bi-lightning","Competitor" or "CompetitorUpdated"=>"bi-crosshair",_=>"bi-diagram-3" };
     private static string DocIcon(string ext) => ext.ToLower() switch { ".pdf"=>"bi-file-earmark-pdf",".docx"=>"bi-file-earmark-word",".xlsx"=>"bi-file-earmark-excel",_=>"bi-file-earmark" };
     private static string WinColor(int p) => p >= 70 ? "#16a34a" : p >= 40 ? "#b45309" : "#dc2626";
-    private static int StageOrder(string s) => s switch { "Qualification"=>0,"Needs Analysis"=>1,"Proposal"=>2,"Negotiation"=>3,"Closed Won"=>4,"Closed Lost"=>5,_=>99 };
+    private int StageOrder(string stage)
+    {
+        var index = StageOptions.ToList().FindIndex(s => string.Equals(s, stage, StringComparison.OrdinalIgnoreCase));
+        return index < 0 ? int.MaxValue : index;
+    }
+    private static string FormatDate(DateTime? value) => value.HasValue ? value.Value.ToString("d") : "Not set";
     private static int ToSizeKb(long bytes) => Math.Max(1, (int)Math.Ceiling(bytes / 1024.0));
     private static string FormatFileSize(long bytes)
     {
@@ -1076,12 +1297,12 @@ else
         public string   OppNumber       { get; set; } = string.Empty;
         public string   Name            { get; set; } = string.Empty;
         public string   AccountName     { get; set; } = string.Empty;
-        public string   Stage           { get; set; } = "Qualification";
-        public string   ForecastCategory{ get; set; } = "Pipeline";
+        public string   Stage           { get; set; } = string.Empty;
+        public string   ForecastCategory{ get; set; } = string.Empty;
         public decimal  Amount          { get; set; }
         public int      WinPct          { get; set; }
         public string   Owner           { get; set; } = string.Empty;
-        public DateTime CloseDate       { get; set; }
+        public DateTime? CloseDate      { get; set; }
         public DateTime CreatedAt       { get; set; }
         public DateTime? ModifiedAt     { get; set; }
         public string?  Description     { get; set; }
@@ -1100,11 +1321,11 @@ else
 
         [Required(ErrorMessage = "Stage is required.")]
         [StringLength(50, ErrorMessage = "Stage cannot exceed 50 characters.")]
-        public string Stage { get; set; } = "Qualification";
+        public string Stage { get; set; } = string.Empty;
 
         [Required(ErrorMessage = "Forecast category is required.")]
         [StringLength(50, ErrorMessage = "Forecast category cannot exceed 50 characters.")]
-        public string ForecastCategory { get; set; } = "Pipeline";
+        public string ForecastCategory { get; set; } = string.Empty;
 
         [Range(0, 999999999999, ErrorMessage = "Amount must be 0 or greater.")]
         public decimal Amount { get; set; }
@@ -1112,8 +1333,7 @@ else
         [Range(0, 100, ErrorMessage = "Win probability must be between 0 and 100.")]
         public int WinPct { get; set; }
 
-        [Required(ErrorMessage = "Close date is required.")]
-        public DateTime CloseDate { get; set; } = DateTime.UtcNow.AddMonths(1);
+        public DateTime? CloseDate { get; set; }
 
         [StringLength(2000, ErrorMessage = "Description cannot exceed 2,000 characters.")]
         public string? Description { get; set; }
@@ -1154,6 +1374,29 @@ else
         [StringLength(50, ErrorMessage = "Strength cannot exceed 50 characters.")]
         public string Strength { get; set; } = "Moderate";
     }
+    private sealed class OpportunityLineForm
+    {
+        [Required(ErrorMessage = "Line of business is required.")]
+        [StringLength(100, ErrorMessage = "Line of business cannot exceed 100 characters.")]
+        public string LineOfBusiness { get; set; } = string.Empty;
+
+        [StringLength(200, ErrorMessage = "Carrier cannot exceed 200 characters.")]
+        public string? Carrier { get; set; }
+
+        [Range(0, 999999999999, ErrorMessage = "Estimated premium must be 0 or greater.")]
+        public decimal EstPremium { get; set; }
+
+        [Required(ErrorMessage = "Priority is required.")]
+        [StringLength(50, ErrorMessage = "Priority cannot exceed 50 characters.")]
+        public string Priority { get; set; } = "Medium";
+
+        [Required(ErrorMessage = "Status is required.")]
+        [StringLength(50, ErrorMessage = "Status cannot exceed 50 characters.")]
+        public string Status { get; set; } = "Draft";
+
+        public bool IsPrimary { get; set; }
+        public DateTime? TargetEffectiveDate { get; set; }
+    }
     private sealed class SubmissionForm
     {
         [Required(ErrorMessage = "Line of business is required.")]
@@ -1166,11 +1409,15 @@ else
 
         [Range(0, 999999999999, ErrorMessage = "Target premium must be 0 or greater.")]
         public decimal TargetPremium { get; set; }
+
+        public HashSet<Guid> OpportunityLineIds { get; set; } = [];
     }
-    private sealed class OppLine     { public Guid OpportunityLineId { get; set; } public string LineOfBusiness { get; set; }=string.Empty; public string? Carrier { get; set; } public decimal EstPremium { get; set; } public string Priority { get; set; }="Medium"; }
-    private sealed class SubmissionRow { public Guid SubmissionId { get; set; }=Guid.NewGuid(); public string SubmissionNumber { get; set; }=string.Empty; public string LineOfBusiness { get; set; }=string.Empty; public string Status { get; set; }="Draft"; public decimal TargetPremium { get; set; } public int QuoteCount { get; set; } }
+    private sealed class OppLine     { public Guid OpportunityLineId { get; set; } public string LineOfBusiness { get; set; }=string.Empty; public string? Carrier { get; set; } public decimal EstPremium { get; set; } public string Priority { get; set; }="Medium"; public string Status { get; set; }="Draft"; public bool IsPrimary { get; set; } public DateTime? TargetEffectiveDate { get; set; } }
+    private sealed class SubmissionRow { public Guid SubmissionId { get; set; }=Guid.NewGuid(); public string SubmissionNumber { get; set; }=string.Empty; public string LineOfBusiness { get; set; }=string.Empty; public string Status { get; set; }="Draft"; public decimal TargetPremium { get; set; } public int QuoteCount { get; set; } public List<SubmissionLineRow> Lines { get; set; } = []; }
+    private sealed class SubmissionLineRow { public Guid OpportunityLineId { get; set; } public string LineOfBusiness { get; set; }=string.Empty; public decimal TargetPremium { get; set; } }
     private sealed class ActivityRow { public Guid ActivityId { get; set; } public string Type { get; set; }=string.Empty; public string Subject { get; set; }=string.Empty; public string? Notes { get; set; } public string By { get; set; }=string.Empty; public DateTime OccurredAt { get; set; }=DateTime.UtcNow; }
     private sealed class QuoteRow    { public Guid QuoteId { get; set; }=Guid.NewGuid(); public string QuoteNumber { get; set; }=string.Empty; public string LineOfBusiness { get; set; }=string.Empty; public string Carrier { get; set; }=string.Empty; public decimal Premium { get; set; } public string Status { get; set; }="Pending"; public DateTime ExpiresAt { get; set; }=DateTime.UtcNow.AddDays(30); }
+    private sealed class CurrentPolicyRow { public Guid PolicyId { get; set; } public Guid SubmissionId { get; set; } public Guid QuoteId { get; set; } public string PolicyNumber { get; set; }=string.Empty; public string CarrierName { get; set; }=string.Empty; public string Status { get; set; }=string.Empty; public string LineOfBusiness { get; set; }=string.Empty; public string Priority { get; set; }=string.Empty; public decimal AnnualPremium { get; set; } public decimal WrittenPremium { get; set; } public DateTime EffectiveDate { get; set; } public DateTime ExpirationDate { get; set; } public DateTime BoundDateUtc { get; set; } public string? AssignedToUserName { get; set; } public string ProducerName { get; set; }=string.Empty; public string CsrName { get; set; }=string.Empty; public int DocumentCount { get; set; } public int ActivityCount { get; set; } public int EndorsementCount { get; set; } public string RenewalStage { get; set; }=string.Empty; public string LastAction { get; set; }=string.Empty; public int DaysToExpiration { get; set; } public bool IsActive { get; set; } }
     private sealed class DocRow      { public Guid DocumentId { get; set; } public string FileName { get; set; }=string.Empty; public string Extension { get; set; }=string.Empty; public string Category { get; set; }=string.Empty; public int SizeKb { get; set; } public string UploadedBy { get; set; }=string.Empty; public DateTime UploadedAt { get; set; }=DateTime.UtcNow; }
     private sealed class WorkflowEventRow { public Guid WorkflowEventId { get; set; } public string EventType { get; set; }=string.Empty; public string EventTitle { get; set; }=string.Empty; public string? EventDetail { get; set; } public string? RelatedEntityName { get; set; } public Guid? RelatedEntityId { get; set; } public DateTime EventDateUtc { get; set; }=DateTime.UtcNow; }
     private sealed class UploadDocumentForm

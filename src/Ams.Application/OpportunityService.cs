@@ -45,6 +45,15 @@ public sealed class OpportunityService : IOpportunityService
     public Task UpdateStageAsync(Guid id, UpdateOpportunityStageRequest request, CancellationToken cancellationToken = default)
         => _repository.UpdateStageAsync(id, request, cancellationToken);
 
+    public Task<Guid> UpsertLineAsync(UpsertOpportunityLineRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpsertLineAsync(request, cancellationToken);
+
+    public Task SetPrimaryLineAsync(Guid opportunityId, Guid opportunityLineId, Guid? userId, CancellationToken cancellationToken = default)
+        => _repository.SetPrimaryLineAsync(opportunityId, opportunityLineId, userId, cancellationToken);
+
+    public Task DeleteLineAsync(Guid opportunityLineId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+        => _repository.DeleteLineAsync(opportunityLineId, modifiedByUserId, cancellationToken);
+
     public Task<Guid> UpsertActivityAsync(UpsertOpportunityActivityRequest request, CancellationToken cancellationToken = default)
         => _repository.UpsertActivityAsync(request, cancellationToken);
 

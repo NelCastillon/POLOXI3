@@ -72,8 +72,8 @@
 
     <section class="opn-workflow-strip" aria-label="Opportunity creation workflows">
         <button type="button" class="opn-workflow-card opn-workflow-primary" @onclick='() => SetSection("account")'><i class="bi bi-building-check" aria-hidden="true"></i><span><strong>Qualify account</strong><span>Link the opportunity to the correct client or prospect.</span></span></button>
-        <button type="button" class="opn-workflow-card" @onclick='() => ApplyScenario("commit")'><i class="bi bi-check2-circle" aria-hidden="true"></i><span><strong>Commit scenario</strong><span>Set high-confidence forecast defaults.</span></span></button>
-        <button type="button" class="opn-workflow-card" @onclick='() => ApplyScenario("pipeline")'><i class="bi bi-funnel" aria-hidden="true"></i><span><strong>Pipeline scenario</strong><span>Set early-stage opportunity defaults.</span></span></button>
+        <button type="button" class="opn-workflow-card" @onclick='() => SetSection("forecast")'><i class="bi bi-graph-up-arrow" aria-hidden="true"></i><span><strong>Forecast strategy</strong><span>Use tenant opportunity data to choose forecast category and probability.</span></span></button>
+        <button type="button" class="opn-workflow-card" @onclick='() => SetSection("owner")'><i class="bi bi-person-badge" aria-hidden="true"></i><span><strong>Owner assignment</strong><span>Assign an owner from synced tenant users.</span></span></button>
         <button type="button" class="opn-workflow-card" @onclick='() => SetSection("review")'><i class="bi bi-clipboard-data" aria-hidden="true"></i><span><strong>Review and create</strong><span>Confirm required fields and submit.</span></span></button>
     </section>
 
@@ -97,12 +97,8 @@
 
                     @if (_section == "compose")
                     {
-                        <div class="opn-section-head"><div><h2>Opportunity profile</h2><p>Define the core opportunity identity and initial revenue shape.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="GenerateOpportunityNumber"><i class="bi bi-magic" aria-hidden="true"></i> Regenerate Number</button></div>
+                        <div class="opn-section-head"><div><h2>Opportunity profile</h2><p>Define the core opportunity identity and initial revenue shape.</p></div></div>
                         <div class="opn-form-grid">
-                            <div class="opn-field">
-                                <label for="opportunityNumber">Opportunity Number <span class="text-danger">*</span></label>
-                                <InputText id="opportunityNumber" @bind-Value="_form.OpportunityNumber" class="opn-input" />
-                            </div>
                             <div class="opn-field">
                                 <label for="opportunityName">Opportunity Name <span class="text-danger">*</span></label>
                                 <InputText id="opportunityName" @bind-Value="_form.OpportunityName" class="opn-input" placeholder="Example: Workers Comp renewal - Acme" />
@@ -156,17 +152,12 @@
                             <div class="opn-field">
                                 <label for="forecastCategory">Forecast Category <span class="text-danger">*</span></label>
                                 <InputSelect id="forecastCategory" @bind-Value="_form.ForecastCategoryCode" class="opn-input">
-                                    @foreach (var cat in OpportunityPageConstants.ForecastCategories)
+                                    @foreach (var cat in ForecastCategoryOptions)
                                     {
                                         <option value="@cat">@cat</option>
                                     }
                                 </InputSelect>
                             </div>
-                        </div>
-                        <div class="opn-scenario-grid">
-                            <button type="button" class="opn-scenario-card" @onclick='() => ApplyScenario("pipeline")'><i class="bi bi-funnel" aria-hidden="true"></i><strong>Pipeline</strong><span>Early opportunity ?? 35% probability</span></button>
-                            <button type="button" class="opn-scenario-card" @onclick='() => ApplyScenario("bestcase")'><i class="bi bi-stars" aria-hidden="true"></i><strong>Best Case</strong><span>Qualified upside ?? 60% probability</span></button>
-                            <button type="button" class="opn-scenario-card" @onclick='() => ApplyScenario("commit")'><i class="bi bi-check2-circle" aria-hidden="true"></i><strong>Commit</strong><span>High confidence ?? 85% probability</span></button>
                         </div>
                     }
                     else if (_section == "owner")
@@ -260,6 +251,7 @@
     private List<AccountDto> _accounts = [];
     private List<UserDto> _users = [];
     private List<OpportunityDto> _opportunities = [];
+    private List<OpportunityForecastCategoryDto> _forecastCategories = [];
 
     private readonly SectionDef[] _sections = [new("compose", "Profile", "bi-pencil-square"), new("account", "Account", "bi-building"), new("forecast", "Forecast", "bi-graph-up-arrow"), new("owner", "Owner", "bi-person-badge"), new("review", "Review", "bi-clipboard-check")];
 
@@ -267,6 +259,7 @@
     private decimal WeightedDraftAmount => _form.EstimatedAmount * _form.WinProbability / 100m;
     private AccountDto? SelectedAccount => _accounts.FirstOrDefault(a => a.AccountId == _form.AccountId);
     private UserDto? SelectedOwner => _users.FirstOrDefault(u => u.UserId == _form.OwnerUserId);
+    private IReadOnlyList<string> ForecastCategoryOptions => OpportunityPageConstants.ForecastCategoryNames(_forecastCategories);
     private string AccountStatus => SelectedAccount is null ? "Needed" : "Linked";
     private string OwnerStatus => SelectedOwner is null ? "Optional" : "Assigned";
     private string SelectedOwnerName => SelectedOwner is null ? "Unassigned" : DisplayUser(SelectedOwner);
@@ -303,7 +296,7 @@
 
     private IReadOnlyList<ReviewItem> ReviewItems =>
     [
-        new("Opportunity", DraftTitle, _form.OpportunityNumber, "bi-trophy"),
+        new("Opportunity", DraftTitle, "Number generated on create", "bi-trophy"),
         new("Account", SelectedAccount?.AccountName ?? "Not selected", SelectedAccount?.AccountNumber ?? "Required", "bi-building"),
         new("Owner", SelectedOwnerName, _form.OwnerUserId.HasValue ? "Assigned" : "Optional", "bi-person-badge"),
         new("Forecast", _form.ForecastCategoryCode, $"{_form.WinProbability:F0}% probability", "bi-graph-up-arrow"),
@@ -343,9 +336,16 @@
             var accounts = await Api.SearchAccountsAsync(_tenantId, pageSize: 500);
             var users = await Api.SearchUsersAsync(_tenantId, pageSize: 500);
             var opportunities = await Api.SearchOpportunitiesAsync(_tenantId, pageSize: 500);
+            var forecastCategories = await Api.SearchOpportunityForecastCategoriesAsync(_tenantId, pageSize: 200);
             _accounts = accounts?.Items.ToList() ?? [];
             _users = users?.Items.ToList() ?? [];
             _opportunities = opportunities?.Items.ToList() ?? [];
+            _forecastCategories = forecastCategories?.Items.OrderBy(c => c.SortOrder).ThenBy(c => c.CategoryName).ToList() ?? [];
+            if (string.IsNullOrWhiteSpace(_form.ForecastCategoryCode))
+            {
+                _form.ForecastCategoryCode = ForecastCategoryOptions.FirstOrDefault() ?? OpportunityPageConstants.DefaultForecastCategory;
+                _editContext.NotifyFieldChanged(FieldIdentifier.Create(() => _form.ForecastCategoryCode));
+            }
         }
         catch (Exception ex)
         {
@@ -380,7 +380,6 @@
             var id = await Api.CreateOpportunityAsync(new CreateOpportunityRequest
             {
                 TenantId = _tenantId,
-                OpportunityNumber = _form.OpportunityNumber.Trim(),
                 AccountId = _form.AccountId.Value,
                 OpportunityName = _form.OpportunityName.Trim(),
                 EstimatedAmount = _form.EstimatedAmount,
@@ -407,6 +406,13 @@
     }
 
     private void SetSection(string section) => _section = section;
+    private void ResetDraft()
+    {
+        _form = new OpportunityFormModel { OwnerUserId = _currentUserId, ForecastCategoryCode = ForecastCategoryOptions.FirstOrDefault() ?? OpportunityPageConstants.DefaultForecastCategory };
+        _editContext = new(_form);
+        _accountSearch = string.Empty;
+        _section = "compose";
+    }
     private void HideToast() => _toastVisible = false;
     private void ShowToast(string message, string kind) { _toastMessage = message.Length <= 160 ? message : $"{message[..157]}..."; _toastKind = ToastKind(kind); _toastVisible = true; }
     private void OnAccountSearchChanged(BlazorChangeEventArgs e) => _accountSearch = e.Value?.ToString() ?? string.Empty;
@@ -414,19 +420,6 @@
     private void ClearAccountSelection() { _form.AccountId = null; _accountSearch = string.Empty; _editContext.NotifyFieldChanged(FieldIdentifier.Create(() => _form.AccountId)); }
     private void SelectOwner(UserDto user) { _form.OwnerUserId = user.UserId; _editContext.NotifyFieldChanged(FieldIdentifier.Create(() => _form.OwnerUserId)); }
     private void AutoAssignOwner() { var user = _users.OrderBy(u => OwnerOpportunityCount(u.UserId)).ThenBy(DisplayUser).FirstOrDefault(); if (user is not null) SelectOwner(user); }
-    private void GenerateOpportunityNumber() { _form.OpportunityNumber = $"OPP-{DateTime.UtcNow:yyyyMMddHHmmss}"; _editContext.NotifyFieldChanged(FieldIdentifier.Create(() => _form.OpportunityNumber)); }
-    private void ResetDraft() { _form = new() { OwnerUserId = _currentUserId }; _editContext = new(_form); _section = "compose"; _accountSearch = string.Empty; }
-
-    private void ApplyScenario(string scenario)
-    {
-        (_form.ForecastCategoryCode, _form.WinProbability) = scenario switch
-        {
-            "commit" => ("Commit", 85),
-            "bestcase" => ("Best Case", 60),
-            _ => ("Pipeline", 35)
-        };
-        _section = "forecast";
-    }
 
     private int OwnerOpportunityCount(Guid userId) => _opportunities.Count(o => o.OwnerUserId == userId && o.StatusCode is not 5 and not 6);
     private string OwnerLoadText(Guid userId) => $"{OwnerOpportunityCount(userId).ToString("N0", CultureInfo.CurrentCulture)} active opportunity(s)";

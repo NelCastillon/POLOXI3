@@ -10,14 +10,9 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Threading.RateLimiting;
-using Syncfusion.Blazor;
 using System.Security.Claims;
 
 var builder = WebApplication.CreateBuilder(args);
-
-var syncfusionKey = builder.Configuration["Syncfusion:LicenseKey"];
-if (!string.IsNullOrWhiteSpace(syncfusionKey))
-    Syncfusion.Licensing.SyncfusionLicenseProvider.RegisterLicense(syncfusionKey);
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
@@ -101,8 +96,6 @@ builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.Configure<ContactIntakeNotificationOptions>(builder.Configuration.GetSection("ContactIntake:Notification"));
 builder.Services.AddScoped<IContactIntakeNotificationService, SmtpContactIntakeNotificationService>();
-
-builder.Services.AddSyncfusionBlazor();
 
 // Scoped: each Blazor Server circuit gets its own shell state
 builder.Services.AddHttpContextAccessor();

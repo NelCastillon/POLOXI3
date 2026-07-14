@@ -24,19 +24,22 @@ public sealed class SubmissionIntakeService : ISubmissionIntakeService
     private readonly IAccountRepository _accountRepository;
     private readonly IOpportunityRepository _opportunityRepository;
     private readonly ISubmissionRepository _submissionRepository;
+    private readonly IOpportunityForecastCategoryService _forecastCategoryService;
 
     public SubmissionIntakeService(
         ISubmissionIntakeRepository intakeRepository,
         IAccountMatchingService matchingService,
         IAccountRepository accountRepository,
         IOpportunityRepository opportunityRepository,
-        ISubmissionRepository submissionRepository)
+        ISubmissionRepository submissionRepository,
+        IOpportunityForecastCategoryService forecastCategoryService)
     {
         _intakeRepository = intakeRepository;
         _matchingService = matchingService;
         _accountRepository = accountRepository;
         _opportunityRepository = opportunityRepository;
         _submissionRepository = submissionRepository;
+        _forecastCategoryService = forecastCategoryService;
     }
 
     public Task<PagedResult<SubmissionIntakeDto>> SearchAsync(Guid tenantId, string? searchTerm, string? status, string? source, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
@@ -109,19 +112,19 @@ public sealed class SubmissionIntakeService : ISubmissionIntakeService
 
         var stamp = DateTime.UtcNow.ToString("yyyyMMddHHmmssfff", CultureInfo.InvariantCulture);
         var accountName = ResolveAccountName(intake, stamp);
+        var forecastCategory = await ResolveDefaultForecastCategoryAsync(tenantId, cancellationToken);
 
         // 2. Create the Opportunity (mandatory sales/work container).
         var opportunityId = await _opportunityRepository.CreateAsync(new CreateOpportunityRequest
         {
             TenantId = tenantId,
-            OpportunityNumber = $"OPP-{stamp}",
             AccountId = accountId,
             OpportunityName = $"{accountName} - {intake.LineOfBusiness}",
             EstimatedAmount = intake.EstimatedPremium ?? 0,
             OwnerUserId = intake.AssignedToUserId,
             CloseDate = (intake.RequestedEffectiveDate ?? DateTime.UtcNow).AddDays(30),
             WinProbability = 20m,
-            ForecastCategoryCode = "Pipeline",
+            ForecastCategoryCode = forecastCategory,
             CreatedByUserId = request.ProcessedByUserId
         }, cancellationToken);
 
@@ -198,5 +201,23 @@ public sealed class SubmissionIntakeService : ISubmissionIntakeService
         if (!string.IsNullOrWhiteSpace(intake.BusinessName)) return intake.BusinessName.Trim();
         if (!string.IsNullOrWhiteSpace(intake.ApplicantName)) return intake.ApplicantName.Trim();
         return $"Prospect {stamp}";
+    }
+
+    private async Task<string> ResolveDefaultForecastCategoryAsync(Guid tenantId, CancellationToken cancellationToken)
+    {
+        var categories = await _forecastCategoryService.SearchAsync(tenantId, null, 1, 200, cancellationToken);
+        var category = categories.Items
+            .Where(c => c.IsActive)
+            .OrderByDescending(c => c.IsDefault)
+            .ThenBy(c => c.SortOrder)
+            .ThenBy(c => c.CategoryName)
+            .FirstOrDefault();
+
+        if (category is null)
+        {
+            throw new InvalidOperationException("Submission intake cannot create an opportunity because no DB-backed forecast category is configured.");
+        }
+
+        return category.CategoryName;
     }
 }

@@ -10,6 +10,7 @@
 @using Ams.Application.Features.Leads
 @using Ams.Application.Features.Opportunities
 @using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Components.Web
 @inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
 @inject CurrentUserContext CurrentUser
@@ -111,44 +112,114 @@
                         <span><i class="bi bi-send" aria-hidden="true"></i> Submission</span>
                     </div>
                     <div class="um-form-grid">
-                        <div class="um-field um-field-wide">
-                            <label>Account handling</label>
-                            <InputSelect class="um-input" @bind-Value="_convertForm.AccountMode" @bind-Value:after="OnConvertAccountModeChanged">
-                                <option value="Create">Create new account from lead</option>
-                                <option value="Link">Link existing account</option>
-                            </InputSelect>
+                        <div class="ldd-convert-section um-field-wide">
+                            <div class="ldd-convert-section-head">
+                                <span><i class="bi bi-building-gear" aria-hidden="true"></i> Account destination</span>
+                                <small>Choose whether AMS creates a new account or links this lead to a persisted account.</small>
+                            </div>
+                            <div class="ldd-convert-mode-toggle" role="radiogroup" aria-label="Account handling">
+                                <label class="ldd-convert-mode @( _convertForm.AccountMode == "Create" ? "ldd-convert-mode--active" : string.Empty )">
+                                    <input type="radio" name="convertAccountMode" value="Create" checked="@(_convertForm.AccountMode == "Create")" @onchange="OnConvertAccountModeSelected" disabled="@_busy" />
+                                    <span><i class="bi bi-plus-circle" aria-hidden="true"></i> Create new account</span>
+                                    <small>Use the lead company and contact details.</small>
+                                </label>
+                                <label class="ldd-convert-mode @( _convertForm.AccountMode == "Link" ? "ldd-convert-mode--active" : string.Empty )">
+                                    <input type="radio" name="convertAccountMode" value="Link" checked="@(_convertForm.AccountMode == "Link")" @onchange="OnConvertAccountModeSelected" disabled="@_busy" />
+                                    <span><i class="bi bi-link-45deg" aria-hidden="true"></i> Link existing account</span>
+                                    <small>Search DB accounts and convert under the selected account.</small>
+                                </label>
+                            </div>
                         </div>
                         @if (_convertForm.AccountMode == "Link")
                         {
-                            <div class="um-field um-field-wide">
-                                <label>Find existing account</label>
-                                <div class="d-flex gap-2">
-                                    <InputText class="um-input" @bind-Value="_convertAccountSearch" placeholder="Search DB accounts by name or email" />
-                                    <button type="button" class="um-btn um-btn-ghost" @onclick="LoadConvertAccountCandidatesAsync" disabled="@_busy"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
-                                </div>
-                            </div>
-                            <div class="um-field um-field-wide">
-                                <label>Existing account</label>
-                                <InputSelect class="um-input" @bind-Value="_convertForm.ExistingAccountId">
-                                    <option value="">Select account</option>
-                                    @foreach (var account in _accountCandidates)
+                            <div class="ldd-account-picker um-field um-field-wide">
+                                <label for="convertAccountPicker">Existing account</label>
+                                <div class="ldd-account-combobox">
+                                    <i class="bi bi-search" aria-hidden="true"></i>
+                                    <input id="convertAccountPicker"
+                                           @ref="_convertAccountPickerRef"
+                                           class="um-input"
+                                           value="@_convertAccountSearch"
+                                           placeholder="Search DB accounts by name, number, or email"
+                                           role="combobox"
+                                           aria-expanded="@_showConvertAccountPicker"
+                                           aria-controls="convertAccountPickerResults"
+                                           autocomplete="off"
+                                           disabled="@_busy"
+                                           @onfocus="ShowConvertAccountPicker"
+                                           @oninput="OnConvertAccountSearchInput" />
+                                    @if (_convertForm.ExistingAccountGuid.HasValue)
                                     {
-                                        <option value="@account.AccountId">@account.AccountName (@account.AccountNumber)</option>
+                                        <button type="button" class="ldd-account-clear" title="Clear selected account" @onclick="ClearConvertAccountSelection" disabled="@_busy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
                                     }
-                                </InputSelect>
+                                </div>
+                                <span class="ldd-field-hint @ConvertAccountPickerStatusClass">@ConvertAccountPickerStatus</span>
+                                @if (_showConvertAccountPicker)
+                                {
+                                    <div id="convertAccountPickerResults" class="ldd-account-picker-menu" role="listbox">
+                                        @if (_accountCandidates.Count == 0)
+                                        {
+                                            <div class="ldd-account-picker-empty">
+                                                <i class="bi bi-database-exclamation" aria-hidden="true"></i>
+                                                <span>No DB accounts found. Refine the search or create a new account.</span>
+                                            </div>
+                                        }
+                                        else
+                                        {
+                                            @foreach (var account in _accountCandidates)
+                                            {
+                                                <button type="button" class="ldd-account-option @(account.AccountId == _convertForm.ExistingAccountGuid ? "ldd-account-option--selected" : string.Empty)" role="option" aria-selected="@(account.AccountId == _convertForm.ExistingAccountGuid)" @onclick="() => SelectConvertAccount(account)" disabled="@_busy">
+                                                    <span class="ldd-account-option-icon"><i class="bi bi-building" aria-hidden="true"></i></span>
+                                                    <span class="ldd-account-option-main">
+                                                        <strong>@Safe(account.AccountName, "Unnamed account")</strong>
+                                                        <small>@ConvertAccountSubtitle(account)</small>
+                                                    </span>
+                                                    @if (account.AccountId == _convertForm.ExistingAccountGuid)
+                                                    {
+                                                        <i class="bi bi-check2-circle ldd-account-option-check" aria-hidden="true"></i>
+                                                    }
+                                                </button>
+                                            }
+                                        }
+                                    </div>
+                                }
+                            </div>
+                            @if (SelectedConvertAccount is not null)
+                            {
+                                <div class="ldd-selected-account um-field-wide">
+                                    <span class="ldd-selected-account-icon"><i class="bi bi-building-check" aria-hidden="true"></i></span>
+                                    <span>
+                                        <strong>@Safe(SelectedConvertAccount.AccountName, "Selected account")</strong>
+                                        <small>@ConvertAccountSubtitle(SelectedConvertAccount)</small>
+                                    </span>
+                                </div>
+                            }
+                            <div class="validation-message-placeholder d-none">
+                                <ValidationMessage For="() => _convertForm.ExistingAccountId" class="text-danger" />
                             </div>
                         }
                         else
                         {
                             <div class="um-field um-field-wide"><label>New account name</label><InputText class="um-input" @bind-Value="_convertForm.AccountName" /></div>
                         }
-                        <div class="um-field um-field-wide"><label>Opportunity name</label><InputText class="um-input" @bind-Value="_convertForm.OpportunityName" /></div>
-                        <div class="um-field"><label>Line of business</label><InputSelect class="um-input" @bind-Value="_convertForm.LineOfBusiness"><option value="">Select line</option>@foreach (var line in _lineOfBusinessOptions) { <option value="@line.LobName">@line.LobName</option> }</InputSelect></div>
-                        <div class="um-field"><label>Estimated premium</label><InputNumber class="um-input" @bind-Value="_convertForm.EstimatedAmount" /></div>
-                        <div class="um-field"><label>Target close date</label><InputDate class="um-input" @bind-Value="_convertForm.CloseDate" /></div>
-                        <div class="um-field"><label>Owner</label><InputSelect class="um-input" @bind-Value="_convertForm.OwnerUserId"><option value="">Use current owner</option>@foreach (var owner in _ownerOptions) { <option value="@owner.Value">@owner.Label</option> }</InputSelect></div>
-                        <div class="um-field um-field-wide"><label><InputCheckbox @bind-Value="_convertForm.CreateSubmissionDraft" /> Create draft submission during conversion</label><span class="ldd-text-muted">AMS creates the account, opportunity, and draft submission in one backend transaction, then opens the persisted submission.</span></div>
-                        <div class="um-field um-field-wide"><label>Conversion notes</label><InputTextArea class="um-input" rows="3" @bind-Value="_convertForm.Notes" /></div>
+                        <div class="ldd-convert-section um-field-wide">
+                            <div class="ldd-convert-section-head">
+                                <span><i class="bi bi-trophy" aria-hidden="true"></i> Opportunity setup</span>
+                                <small>Confirm the opportunity details that will be persisted during conversion.</small>
+                            </div>
+                            <div class="um-form-grid ldd-convert-inner-grid">
+                                <div class="um-field um-field-wide"><label>Opportunity name</label><InputText class="um-input" @bind-Value="_convertForm.OpportunityName" /></div>
+                                <div class="um-field"><label>Line of business</label><InputSelect TValue="string" class="um-input" Value="@_convertForm.LineOfBusiness" ValueChanged="@OnConvertLineOfBusinessChanged" ValueExpression="@(() => _convertForm.LineOfBusiness)"><option value="">Select line</option>@foreach (var line in _lineOfBusinessOptions) { <option value="@line.LobName">@line.LobName</option> }</InputSelect></div>
+                                <div class="um-field"><label>Estimated premium</label><InputNumber class="um-input" @bind-Value="_convertForm.EstimatedAmount" /></div>
+                                <div class="um-field"><label>Target close date</label><InputDate class="um-input" @bind-Value="_convertForm.CloseDate" /></div>
+                                <div class="um-field"><label>Owner</label><InputSelect class="um-input" @bind-Value="_convertForm.OwnerUserId"><option value="">Use current owner</option>@foreach (var owner in _ownerOptions) { <option value="@owner.Value">@owner.Label</option> }</InputSelect></div>
+                            </div>
+                        </div>
+                        <div class="ldd-convert-section um-field-wide">
+                            <label class="ldd-convert-checkbox"><InputCheckbox @bind-Value="_convertForm.CreateSubmissionDraft" /> <span>Create draft submission during conversion</span></label>
+                            <span class="ldd-text-muted">AMS creates the account, opportunity, and draft submission in one backend transaction, then opens the persisted submission.</span>
+                            <div class="um-field ldd-convert-notes"><label>Conversion notes</label><InputTextArea class="um-input" rows="3" @bind-Value="_convertForm.Notes" /></div>
+                        </div>
                     </div>
                 </div>
                 <div class="um-modal-footer">
@@ -654,6 +725,9 @@ else
     private List<OwnerOption> _ownerOptions = [];
     private List<AccountDto> _accountCandidates = [];
     private string _convertAccountSearch = string.Empty;
+    private bool _showConvertAccountPicker;
+    private bool _focusConvertAccountPicker;
+    private ElementReference _convertAccountPickerRef;
 
     private readonly TabDefinition[] _tabs =
     [
@@ -669,6 +743,14 @@ else
     {
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Leads", "/crm/leads"), new("Lead Detail", $"/crm/leads/{LeadId}"));
         await LoadAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_focusConvertAccountPicker) return;
+
+        _focusConvertAccountPicker = false;
+        await _convertAccountPickerRef.FocusAsync();
     }
 
     private async Task LoadAsync()
@@ -820,6 +902,13 @@ else
     private string DefaultLeadSource => DefaultEngagementOption("LeadSource");
     private string DefaultLeadStage => DefaultEngagementOption("LeadStage");
     private string DefaultLeadPriority => DefaultEngagementOption("LeadPriority");
+    private AccountDto? SelectedConvertAccount => _convertForm.ExistingAccountGuid is { } accountId ? _accountCandidates.FirstOrDefault(a => a.AccountId == accountId) : null;
+    private string ConvertAccountPickerStatus => SelectedConvertAccount is { } account
+        ? $"Selected DB account: {Safe(account.AccountName, account.AccountNumber)}"
+        : _accountCandidates.Count > 0
+            ? $"{_accountCandidates.Count} DB account match{(_accountCandidates.Count == 1 ? string.Empty : "es")} available."
+            : "Start typing to search DB accounts.";
+    private string ConvertAccountPickerStatusClass => SelectedConvertAccount is not null ? "ldd-hint-good" : "";
     private static string DocumentAcceptExtensions => string.Join(',', Enum.GetValues<DocumentFileExtension>().Select(DocumentFileExtensionValue));
     private string TabFormIcon => _tabForm.Kind switch
     {
@@ -1634,6 +1723,7 @@ else
             Notes = $"Converted from lead {Safe(_lead.LeadNumber, LeadId.ToString())}."
         };
         _convertAccountSearch = accountName;
+        _showConvertAccountPicker = false;
         _showConvert = true;
         _ = LoadConvertAccountCandidatesAsync();
     }
@@ -1675,18 +1765,66 @@ else
         }
     }
 
-    private void CloseConvert() => _showConvert = false;
-
-    private async Task OnConvertAccountModeChanged()
+    private void CloseConvert()
     {
+        _showConvert = false;
+        _showConvertAccountPicker = false;
+    }
+
+    private async Task OnConvertAccountModeSelected(Microsoft.AspNetCore.Components.ChangeEventArgs args)
+    {
+        _convertForm.AccountMode = args.Value?.ToString() == "Link" ? "Link" : "Create";
         if (_convertForm.AccountMode == "Link")
         {
+            _convertForm.ExistingAccountId = string.Empty;
+            _convertAccountSearch = string.Empty;
+            _showConvertAccountPicker = true;
+            _focusConvertAccountPicker = true;
             await LoadConvertAccountCandidatesAsync();
         }
         else
         {
             _convertForm.ExistingAccountId = string.Empty;
+            _showConvertAccountPicker = false;
         }
+    }
+
+    private async Task OnConvertAccountSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs args)
+    {
+        _convertAccountSearch = args.Value?.ToString() ?? string.Empty;
+        _convertForm.ExistingAccountId = string.Empty;
+        _showConvertAccountPicker = true;
+        await LoadConvertAccountCandidatesAsync();
+    }
+
+    private void ShowConvertAccountPicker()
+    {
+        if (_convertForm.AccountMode == "Link")
+        {
+            _showConvertAccountPicker = true;
+        }
+    }
+
+    private void SelectConvertAccount(AccountDto account)
+    {
+        _convertForm.ExistingAccountId = account.AccountId.ToString();
+        _convertAccountSearch = ConvertAccountDisplay(account);
+        _convertForm.OpportunityName = BuildConvertOpportunityName(Safe(account.AccountName, LeadDisplayName));
+        _showConvertAccountPicker = false;
+    }
+
+    private void OnConvertLineOfBusinessChanged(string value)
+    {
+        var oldLineOfBusiness = _convertForm.LineOfBusiness;
+        _convertForm.LineOfBusiness = value;
+        _convertForm.OpportunityName = ReplaceConvertOpportunityLineOfBusiness(_convertForm.OpportunityName, oldLineOfBusiness, value);
+    }
+
+    private void ClearConvertAccountSelection()
+    {
+        _convertForm.ExistingAccountId = string.Empty;
+        _convertAccountSearch = string.Empty;
+        _showConvertAccountPicker = true;
     }
 
     private async Task LoadConvertAccountCandidatesAsync()
@@ -1710,6 +1848,54 @@ else
         {
             ShowToast("danger", $"Account search failed: {ex.Message}");
         }
+    }
+
+    private static string ConvertAccountDisplay(AccountDto account)
+    {
+        var number = TrimOrNull(account.AccountNumber);
+        return number is null ? Safe(account.AccountName, "Unnamed account") : $"{Safe(account.AccountName, "Unnamed account")} ({number})";
+    }
+
+    private static string ConvertAccountSubtitle(AccountDto account)
+    {
+        var parts = new[]
+        {
+            TrimOrNull(account.AccountNumber),
+            TrimOrNull(account.MainEmail),
+            TrimOrNull(account.MainPhone),
+            TrimOrNull(account.StatusCode)
+        }.Where(p => !string.IsNullOrWhiteSpace(p));
+
+        return string.Join(" • ", parts);
+    }
+
+    private string BuildConvertOpportunityName(string accountName)
+    {
+        var lob = TrimOrNull(_convertForm.LineOfBusiness)
+            ?? _interestLines.OrderByDescending(l => l.EstPremium).FirstOrDefault()?.LineOfBusiness
+            ?? TrimOrNull(_lead?.InterestedService)
+            ?? "Opportunity";
+
+        return $"{Safe(accountName, "Account")} - {Safe(lob, "Opportunity")}";
+    }
+
+    private static string ReplaceConvertOpportunityLineOfBusiness(string opportunityName, string? oldLineOfBusiness, string? newLineOfBusiness)
+    {
+        var name = Safe(opportunityName, "Opportunity").Trim();
+        var oldSuffix = TrimOrNull(oldLineOfBusiness);
+        var newSuffix = TrimOrNull(newLineOfBusiness) ?? "Opportunity";
+        var baseName = name;
+
+        if (!string.IsNullOrWhiteSpace(oldSuffix) && name.EndsWith($" - {oldSuffix}", StringComparison.OrdinalIgnoreCase))
+        {
+            baseName = name[..^(oldSuffix.Length + 3)].Trim();
+        }
+        else if (name.EndsWith(" - Opportunity", StringComparison.OrdinalIgnoreCase))
+        {
+            baseName = name[..^14].Trim();
+        }
+
+        return $"{Safe(baseName, "Opportunity")} - {newSuffix}";
     }
 
     private async Task ExecuteConfirmedAsync()

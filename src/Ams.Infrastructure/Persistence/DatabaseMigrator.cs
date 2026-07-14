@@ -242,6 +242,8 @@ public sealed partial class DatabaseMigrator
         new("0204_CRM_LeadConversion_EnterpriseWorkflow", Migration0204_CrmLeadConversionEnterpriseWorkflow),
         new("0205_CRM_LeadConversion_SubmissionDraftLink", Migration0205_CrmLeadConversionSubmissionDraftLink),
         new("0206_CRM_OpportunityConversionLaunchActions", Migration0206_CrmOpportunityConversionLaunchActions),
+        new("0207_CRM_OpportunityForecastCategory_Config", Migration0207_CrmOpportunityForecastCategoryConfig),
+        new("0208_CRM_OpportunityMultiLineEnterprise", Migration0208_CrmOpportunityMultiLineEnterprise),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -16286,6 +16288,278 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.Oppor
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunityConversionLaunchAction') AND name = N'IX_OpportunityConversionLaunchAction_Tenant_Active')
     EXEC(N'CREATE INDEX IX_OpportunityConversionLaunchAction_Tenant_Active ON CRM.OpportunityConversionLaunchAction(TenantId, IsActive, IsDeleted, SortOrder);');
+""";
+
+    private const string Migration0207_CrmOpportunityForecastCategoryConfig = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM') EXEC(N'CREATE SCHEMA CRM');
+
+IF OBJECT_ID(N'CRM.OpportunityForecastCategory', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.OpportunityForecastCategory
+    (
+        OpportunityForecastCategoryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CRM_OpportunityForecastCategory PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CategoryCode NVARCHAR(80) NOT NULL,
+        CategoryName NVARCHAR(100) NOT NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_OpportunityForecastCategory_SortOrder DEFAULT 0,
+        DefaultProbabilityPercent DECIMAL(5,2) NULL,
+        IsClosedCategory BIT NOT NULL CONSTRAINT DF_OpportunityForecastCategory_IsClosed DEFAULT 0,
+        IsDefault BIT NOT NULL CONSTRAINT DF_OpportunityForecastCategory_IsDefault DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_OpportunityForecastCategory_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunityForecastCategory_CreatedDate DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_OpportunityForecastCategory_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'TenantId') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_OpportunityForecastCategory_TenantId_0207 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'CategoryCode') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD CategoryCode NVARCHAR(80) NOT NULL CONSTRAINT DF_OpportunityForecastCategory_Code_0207 DEFAULT N'PIPELINE';
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'CategoryName') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD CategoryName NVARCHAR(100) NOT NULL CONSTRAINT DF_OpportunityForecastCategory_Name_0207 DEFAULT N'Pipeline';
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'SortOrder') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD SortOrder INT NOT NULL CONSTRAINT DF_OpportunityForecastCategory_SortOrder_0207 DEFAULT 0;
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'DefaultProbabilityPercent') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD DefaultProbabilityPercent DECIMAL(5,2) NULL;
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'IsClosedCategory') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD IsClosedCategory BIT NOT NULL CONSTRAINT DF_OpportunityForecastCategory_IsClosed_0207 DEFAULT 0;
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'IsDefault') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD IsDefault BIT NOT NULL CONSTRAINT DF_OpportunityForecastCategory_IsDefault_0207 DEFAULT 0;
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'IsActive') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD IsActive BIT NOT NULL CONSTRAINT DF_OpportunityForecastCategory_IsActive_0207 DEFAULT 1;
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'CreatedDateUtc') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunityForecastCategory_CreatedDate_0207 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'CreatedByUserId') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'IsDeleted') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD IsDeleted BIT NOT NULL CONSTRAINT DF_OpportunityForecastCategory_IsDeleted_0207 DEFAULT 0;
+
+DECLARE @ForecastTenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO @ForecastTenants (TenantId)
+    SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0;
+END;
+
+IF OBJECT_ID(N'CRM.Opportunity', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO @ForecastTenants (TenantId)
+    SELECT DISTINCT TenantId
+    FROM CRM.Opportunity
+    WHERE IsDeleted = 0
+      AND NOT EXISTS (SELECT 1 FROM @ForecastTenants t WHERE t.TenantId = CRM.Opportunity.TenantId);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM @ForecastTenants)
+    INSERT INTO @ForecastTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+;WITH Seed AS
+(
+    SELECT TenantId, CategoryCode, CategoryName, SortOrder, DefaultProbabilityPercent, IsClosedCategory, IsDefault
+    FROM @ForecastTenants
+    CROSS APPLY (VALUES
+        (N'PIPELINE', N'Pipeline', 10, CONVERT(decimal(5,2), 35), CONVERT(bit, 0), CONVERT(bit, 1)),
+        (N'BEST_CASE', N'Best Case', 20, CONVERT(decimal(5,2), 60), CONVERT(bit, 0), CONVERT(bit, 0)),
+        (N'COMMIT', N'Commit', 30, CONVERT(decimal(5,2), 85), CONVERT(bit, 0), CONVERT(bit, 0)),
+        (N'CLOSED', N'Closed', 40, CONVERT(decimal(5,2), 100), CONVERT(bit, 1), CONVERT(bit, 0))
+    ) v(CategoryCode, CategoryName, SortOrder, DefaultProbabilityPercent, IsClosedCategory, IsDefault)
+)
+MERGE CRM.OpportunityForecastCategory AS target
+USING Seed AS source
+    ON target.TenantId = source.TenantId AND target.CategoryCode = source.CategoryCode AND target.IsDeleted = 0
+WHEN MATCHED THEN UPDATE SET
+    CategoryName = source.CategoryName,
+    SortOrder = source.SortOrder,
+    DefaultProbabilityPercent = source.DefaultProbabilityPercent,
+    IsClosedCategory = source.IsClosedCategory,
+    IsDefault = source.IsDefault,
+    IsActive = 1,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT
+    (OpportunityForecastCategoryId, TenantId, CategoryCode, CategoryName, SortOrder, DefaultProbabilityPercent, IsClosedCategory, IsDefault, IsActive, CreatedDateUtc, IsDeleted)
+VALUES
+    (NEWID(), source.TenantId, source.CategoryCode, source.CategoryName, source.SortOrder, source.DefaultProbabilityPercent, source.IsClosedCategory, source.IsDefault, 1, SYSUTCDATETIME(), 0);
+
+IF OBJECT_ID(N'CRM.Opportunity', N'U') IS NOT NULL
+BEGIN
+    ;WITH ExistingForecast AS
+    (
+        SELECT DISTINCT TenantId,
+               CategoryName = LTRIM(RTRIM(COALESCE(NULLIF(ForecastCategoryCode, N''), N'Pipeline')))
+        FROM CRM.Opportunity
+        WHERE IsDeleted = 0
+    ), Normalized AS
+    (
+        SELECT TenantId,
+               CategoryName,
+               CategoryCode = UPPER(REPLACE(REPLACE(REPLACE(CategoryName, N' ', N'_'), N'-', N'_'), N'/', N'_'))
+        FROM ExistingForecast
+        WHERE CategoryName IS NOT NULL AND CategoryName <> N''
+    )
+    INSERT INTO CRM.OpportunityForecastCategory
+        (OpportunityForecastCategoryId, TenantId, CategoryCode, CategoryName, SortOrder, DefaultProbabilityPercent, IsClosedCategory, IsDefault, IsActive, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), n.TenantId, LEFT(n.CategoryCode, 80), LEFT(n.CategoryName, 100), 100 + ROW_NUMBER() OVER (PARTITION BY n.TenantId ORDER BY n.CategoryName), NULL,
+           CASE WHEN n.CategoryName LIKE N'Closed%' THEN 1 ELSE 0 END, 0, 1, SYSUTCDATETIME(), 0
+    FROM Normalized n
+    WHERE NOT EXISTS
+    (
+        SELECT 1
+        FROM CRM.OpportunityForecastCategory c
+        WHERE c.TenantId = n.TenantId
+          AND c.IsDeleted = 0
+          AND (c.CategoryName = n.CategoryName OR c.CategoryCode = LEFT(n.CategoryCode, 80))
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunityForecastCategory') AND name = N'UX_OpportunityForecastCategory_Tenant_Code')
+    EXEC(N'CREATE UNIQUE INDEX UX_OpportunityForecastCategory_Tenant_Code ON CRM.OpportunityForecastCategory(TenantId, CategoryCode) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunityForecastCategory') AND name = N'IX_OpportunityForecastCategory_Tenant_Active')
+    EXEC(N'CREATE INDEX IX_OpportunityForecastCategory_Tenant_Active ON CRM.OpportunityForecastCategory(TenantId, IsActive, IsDeleted, SortOrder);');
+""";
+
+    private const string Migration0208_CrmOpportunityMultiLineEnterprise = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM') EXEC(N'CREATE SCHEMA CRM');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'CRM.OpportunityLine', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'CRM.OpportunityLine', N'Status') IS NULL ALTER TABLE CRM.OpportunityLine ADD Status NVARCHAR(50) NOT NULL CONSTRAINT DF_OpportunityLine_Status_0208 DEFAULT N'Draft';
+    IF COL_LENGTH(N'CRM.OpportunityLine', N'IsPrimary') IS NULL ALTER TABLE CRM.OpportunityLine ADD IsPrimary BIT NOT NULL CONSTRAINT DF_OpportunityLine_IsPrimary_0208 DEFAULT 0;
+    IF COL_LENGTH(N'CRM.OpportunityLine', N'TargetEffectiveDate') IS NULL ALTER TABLE CRM.OpportunityLine ADD TargetEffectiveDate DATETIME2 NULL;
+    IF COL_LENGTH(N'CRM.OpportunityLine', N'AssignedToUserId') IS NULL ALTER TABLE CRM.OpportunityLine ADD AssignedToUserId UNIQUEIDENTIFIER NULL;
+
+    EXEC(N'
+    ;WITH Ranked AS
+    (
+        SELECT OpportunityLineId,
+               rn = ROW_NUMBER() OVER (PARTITION BY OpportunityId ORDER BY CASE WHEN IsPrimary = 1 THEN 0 ELSE 1 END, EstPremium DESC, CreatedDateUtc)
+        FROM CRM.OpportunityLine
+        WHERE IsDeleted = 0
+    )
+    UPDATE line
+    SET IsPrimary = CASE WHEN Ranked.rn = 1 THEN 1 ELSE 0 END
+    FROM CRM.OpportunityLine line
+    INNER JOIN Ranked ON Ranked.OpportunityLineId = line.OpportunityLineId;
+    ');
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunityLine') AND name = N'UX_OpportunityLine_OnePrimary')
+        EXEC(N'CREATE UNIQUE INDEX UX_OpportunityLine_OnePrimary ON CRM.OpportunityLine(OpportunityId) WHERE IsDeleted = 0 AND IsPrimary = 1;');
+END;
+
+IF OBJECT_ID(N'CRM.Opportunity', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'CRM.Opportunity', N'PrimaryOpportunityLineId') IS NULL ALTER TABLE CRM.Opportunity ADD PrimaryOpportunityLineId UNIQUEIDENTIFIER NULL;
+
+    IF OBJECT_ID(N'CRM.OpportunityLine', N'U') IS NOT NULL
+    BEGIN
+        EXEC(N'
+        UPDATE o
+        SET PrimaryOpportunityLineId = primaryLine.OpportunityLineId,
+            EstimatedAmount = lineTotals.EstimatedAmount
+        FROM CRM.Opportunity o
+        OUTER APPLY
+        (
+            SELECT TOP 1 OpportunityLineId
+            FROM CRM.OpportunityLine line
+            WHERE line.OpportunityId = o.OpportunityId AND line.IsDeleted = 0
+            ORDER BY CASE WHEN line.IsPrimary = 1 THEN 0 ELSE 1 END, line.EstPremium DESC, line.CreatedDateUtc
+        ) primaryLine
+        OUTER APPLY
+        (
+            SELECT SUM(line.EstPremium) AS EstimatedAmount
+            FROM CRM.OpportunityLine line
+            WHERE line.OpportunityId = o.OpportunityId AND line.IsDeleted = 0
+        ) lineTotals
+        WHERE o.IsDeleted = 0
+          AND primaryLine.OpportunityLineId IS NOT NULL;
+        ');
+    END;
+END;
+
+IF OBJECT_ID(N'CRM.OpportunitySubmissionLine', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.OpportunitySubmissionLine
+    (
+        OpportunitySubmissionLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CRM_OpportunitySubmissionLine PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        OpportunityId UNIQUEIDENTIFIER NOT NULL,
+        OpportunityLineId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        TargetPremium DECIMAL(18,2) NOT NULL CONSTRAINT DF_OpportunitySubmissionLine_TargetPremium DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunitySubmissionLine_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_OpportunitySubmissionLine_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunitySubmissionLine') AND name = N'UX_OpportunitySubmissionLine_Submission_Line')
+    EXEC(N'CREATE UNIQUE INDEX UX_OpportunitySubmissionLine_Submission_Line ON CRM.OpportunitySubmissionLine(SubmissionId, OpportunityLineId) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunitySubmissionLine') AND name = N'IX_OpportunitySubmissionLine_Opportunity')
+    EXEC(N'CREATE INDEX IX_OpportunitySubmissionLine_Opportunity ON CRM.OpportunitySubmissionLine(OpportunityId, IsDeleted, SubmissionId);');
+
+IF OBJECT_ID(N'Submissions.SubmissionLine', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionLine
+    (
+        SubmissionLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_SubmissionLine PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        OpportunityId UNIQUEIDENTIFIER NULL,
+        OpportunityLineId UNIQUEIDENTIFIER NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        TargetPremium DECIMAL(18,2) NOT NULL CONSTRAINT DF_SubmissionLine_TargetPremium DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionLine_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionLine_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionLine') AND name = N'UX_SubmissionLine_Submission_Line')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionLine_Submission_Line ON Submissions.SubmissionLine(SubmissionId, OpportunityLineId) WHERE IsDeleted = 0 AND OpportunityLineId IS NOT NULL;');
+
+IF OBJECT_ID(N'Submissions.QuoteLine', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.QuoteLine
+    (
+        QuoteLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_QuoteLine PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        QuoteId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        OpportunityLineId UNIQUEIDENTIFIER NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        QuotedPremium DECIMAL(18,2) NOT NULL CONSTRAINT DF_SubmissionsQuoteLine_QuotedPremium DEFAULT 0,
+        Status NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionsQuoteLine_Status DEFAULT N'Quoted',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionsQuoteLine_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionsQuoteLine_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Submissions.PolicyLine', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.PolicyLine
+    (
+        PolicyLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_PolicyLine PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        QuoteId UNIQUEIDENTIFIER NULL,
+        OpportunityLineId UNIQUEIDENTIFIER NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        WrittenPremium DECIMAL(18,2) NOT NULL CONSTRAINT DF_SubmissionsPolicyLine_WrittenPremium DEFAULT 0,
+        Status NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionsPolicyLine_Status DEFAULT N'Bound',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionsPolicyLine_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionsPolicyLine_IsDeleted DEFAULT 0
+    );
+END;
+
+INSERT INTO CRM.OpportunitySubmissionLine (OpportunitySubmissionLineId, TenantId, SubmissionId, OpportunityId, OpportunityLineId, LineOfBusiness, TargetPremium, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), s.TenantId, s.SubmissionId, s.OpportunityId, line.OpportunityLineId, line.LineOfBusiness, COALESCE(NULLIF(s.TargetPremium, 0), line.EstPremium), SYSUTCDATETIME(), s.CreatedByUserId, 0
+FROM CRM.OpportunitySubmission s
+INNER JOIN CRM.OpportunityLine line ON line.OpportunityId = s.OpportunityId AND line.IsDeleted = 0
+WHERE s.IsDeleted = 0
+  AND (s.LineOfBusiness = line.LineOfBusiness OR NOT EXISTS (SELECT 1 FROM CRM.OpportunityLine exactLine WHERE exactLine.OpportunityId = s.OpportunityId AND exactLine.IsDeleted = 0 AND exactLine.LineOfBusiness = s.LineOfBusiness))
+  AND NOT EXISTS (SELECT 1 FROM CRM.OpportunitySubmissionLine existing WHERE existing.SubmissionId = s.SubmissionId AND existing.OpportunityLineId = line.OpportunityLineId AND existing.IsDeleted = 0);
 """;
 
     private const string Migration0203_DmsDocumentCategoryGroupSchemaCleanup = """

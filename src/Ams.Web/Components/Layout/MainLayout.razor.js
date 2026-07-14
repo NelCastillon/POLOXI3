@@ -160,7 +160,7 @@ export function init() {
     document.addEventListener('keydown', onDocumentKeydown);
     window.addEventListener('popstate', applyRouteClasses);
 
-    // Keep body scrolling locked while any modal backdrop / Syncfusion dialog is visible.
+    // Keep body scrolling locked while any modal backdrop / native dialog is visible.
     _modalObserver = new MutationObserver(lockBodyForModals);
     _modalObserver.observe(document.body, { childList: true, subtree: true });
     lockBodyForModals();

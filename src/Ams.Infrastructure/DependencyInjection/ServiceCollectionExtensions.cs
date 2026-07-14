@@ -479,6 +479,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILeadStatusService, LeadStatusService>();
         services.AddScoped<IOpportunityStageRepository, OpportunityStageRepository>();
         services.AddScoped<IOpportunityStageService, OpportunityStageService>();
+        services.AddScoped<IOpportunityForecastCategoryRepository, OpportunityForecastCategoryRepository>();
+        services.AddScoped<IOpportunityForecastCategoryService, OpportunityForecastCategoryService>();
         services.AddScoped<IPipelineSettingRepository, PipelineSettingRepository>();
         services.AddScoped<IPipelineSettingService, PipelineSettingService>();
         services.AddScoped<IDuplicateRuleRepository, DuplicateRuleRepository>();

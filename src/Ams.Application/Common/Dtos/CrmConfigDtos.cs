@@ -38,6 +38,20 @@ public sealed class OpportunityStageDto
     public bool     IsActive            { get; set; }
 }
 
+public sealed class OpportunityForecastCategoryDto
+{
+    public Guid     OpportunityForecastCategoryId { get; set; }
+    public Guid     TenantId                      { get; set; }
+    public string   CategoryCode                  { get; set; } = string.Empty;
+    public string   CategoryName                  { get; set; } = string.Empty;
+    public int      SortOrder                     { get; set; }
+    public decimal? DefaultProbabilityPercent     { get; set; }
+    public bool     IsClosedCategory              { get; set; }
+    public bool     IsDefault                     { get; set; }
+    public bool     IsActive                      { get; set; }
+    public DateTime CreatedDateUtc                { get; set; }
+}
+
 public sealed class PipelineSettingDto
 {
     public Guid     PipelineSettingId { get; set; }

@@ -401,20 +401,25 @@ ORDER BY CASE WHEN AccountName = @AccountName THEN 0 ELSE 1 END, CreatedDateUtc 
                 {
                     accountId = Guid.NewGuid();
                     var accountNumber = await GenerateAccountNumberAsync(cn, tx, lead.LeadNumber, cancellationToken);
+                    var accountDefaults = await GetConvertedAccountDefaultsAsync(cn, tx, request.TenantId, cancellationToken);
                     await cn.ExecuteAsync(new CommandDefinition(@"
 INSERT INTO Client.Account
-(AccountId, TenantId, AccountNumber, AccountName, AccountTypeCode, MainEmail, MainPhone, StatusCode, SegmentCode, OwnerUserId, LifecycleStageCode, Industry, AnnualRevenue, CreatedDateUtc, CreatedByUserId, IsDeleted)
+(AccountId, TenantId, AccountNumber, AccountName, AccountTypeCode, MainEmail, MainPhone, StatusCode, StatusCodeId, SegmentCode, OwnerUserId, LifecycleStageCode, Industry, AnnualRevenue, CreatedDateUtc, CreatedByUserId, IsDeleted)
 VALUES
-(@AccountId, @TenantId, @AccountNumber, @AccountName, N'Commercial', @MainEmail, @MainPhone, N'Active', @SegmentCode, @OwnerUserId, N'Prospect', @Industry, @AnnualRevenue, SYSUTCDATETIME(), @CreatedByUserId, 0);", new
+(@AccountId, @TenantId, @AccountNumber, @AccountName, @AccountTypeCode, @MainEmail, @MainPhone, @StatusCode, @StatusCodeId, @SegmentCode, @OwnerUserId, @LifecycleStageCode, @Industry, @AnnualRevenue, SYSUTCDATETIME(), @CreatedByUserId, 0);", new
                     {
                         AccountId = accountId.Value,
                         request.TenantId,
                         AccountNumber = accountNumber,
                         AccountName = accountName,
+                        AccountTypeCode = accountDefaults.AccountTypeCode,
                         MainEmail = Clean(lead.Email),
                         MainPhone = Clean(lead.Phone),
+                        StatusCode = accountDefaults.StatusCode,
+                        StatusCodeId = accountDefaults.StatusCodeId,
                         SegmentCode = estimatedAmount >= 150000m ? "Enterprise" : estimatedAmount >= 75000m ? "Mid-Market" : "Standard",
                         OwnerUserId = ownerUserId,
+                        LifecycleStageCode = accountDefaults.LifecycleStageCode,
                         Industry = lineOfBusiness,
                         AnnualRevenue = estimatedAmount > 0 ? estimatedAmount : lead.AnnualRevenue,
                         CreatedByUserId = request.ConvertedByUserId
@@ -426,13 +431,13 @@ VALUES
             contactId = await CopyLeadContactsToAccountAsync(cn, tx, request.TenantId, lead.LeadId, accountId.Value, request.ConvertedByUserId, contactId, cancellationToken) ?? contactId;
             var opportunityId = Guid.NewGuid();
             var opportunityNumber = await GenerateOpportunityNumberAsync(cn, tx, lead.LeadNumber, cancellationToken);
-            var stageId = await GetQualificationStageIdAsync(cn, tx, request.TenantId, cancellationToken);
+            var opportunityStage = await GetInitialOpportunityStageAsync(cn, tx, request.TenantId, cancellationToken);
 
             await cn.ExecuteAsync(new CommandDefinition(@"
 INSERT INTO CRM.Opportunity
-(OpportunityId, TenantId, OpportunityNumber, AccountId, OpportunityName, EstimatedAmount, OwnerUserId, CloseDate, LeadId, WinProbability, ForecastCategoryCode, StageName, OpportunityStageId, StatusCodeId, Description, CreatedDateUtc, CreatedByUserId, IsDeleted)
+(OpportunityId, TenantId, OpportunityNumber, AccountId, OpportunityName, EstimatedAmount, OwnerUserId, CloseDate, LeadId, WinProbability, StageName, OpportunityStageId, StatusCodeId, Description, CreatedDateUtc, CreatedByUserId, IsDeleted)
 VALUES
-(@OpportunityId, @TenantId, @OpportunityNumber, @AccountId, @OpportunityName, @EstimatedAmount, @OwnerUserId, @CloseDate, @LeadId, @WinProbability, N'Pipeline', N'Qualification', @OpportunityStageId, 1, @Description, SYSUTCDATETIME(), @CreatedByUserId, 0);", new
+(@OpportunityId, @TenantId, @OpportunityNumber, @AccountId, @OpportunityName, @EstimatedAmount, @OwnerUserId, @CloseDate, @LeadId, @WinProbability, @StageName, @OpportunityStageId, 1, @Description, SYSUTCDATETIME(), @CreatedByUserId, 0);", new
             {
                 OpportunityId = opportunityId,
                 request.TenantId,
@@ -444,7 +449,8 @@ VALUES
                 CloseDate = request.CloseDate,
                 LeadId = lead.LeadId,
                 WinProbability = lead.Score.HasValue ? Math.Clamp(lead.Score.Value, 25, 85) : 40,
-                OpportunityStageId = stageId,
+                StageName = opportunityStage.StageName,
+                OpportunityStageId = opportunityStage.OpportunityStageId,
                 Description = Clean(request.Notes) ?? $"Converted from lead {lead.LeadNumber}.",
                 CreatedByUserId = request.ConvertedByUserId
             }, transaction: tx, cancellationToken: cancellationToken));
@@ -467,18 +473,18 @@ WHERE LeadId = @LeadId AND TenantId = @TenantId AND IsDeleted = 0;", new { Accou
 
             var conversionId = Guid.NewGuid();
             var submissionNextStep = submissionDraft is not null ? "DraftCreated" : request.CreateSubmissionDraft ? "StartSubmission" : null;
-            await cn.ExecuteAsync(new CommandDefinition(@"
-INSERT INTO CRM.LeadConversion
-(LeadConversionId, TenantId, LeadId, AccountId, OpportunityId, ContactId, ConversionTypeCode, AccountActionCode, SubmissionNextStepCode, SubmissionId, SubmissionNumber, SourceLeadNumber, AccountNameSnapshot, OpportunityNameSnapshot, EstimatedAmount, LineOfBusiness, Notes, ConvertedDateUtc, ConvertedByUserId, CreatedDateUtc, CreatedByUserId, IsDeleted)
-VALUES
-(@LeadConversionId, @TenantId, @LeadId, @AccountId, @OpportunityId, @ContactId, N'AccountOpportunity', @AccountActionCode, @SubmissionNextStepCode, @SubmissionId, @SubmissionNumber, @SourceLeadNumber, @AccountNameSnapshot, @OpportunityNameSnapshot, @EstimatedAmount, @LineOfBusiness, @Notes, SYSUTCDATETIME(), @ConvertedByUserId, SYSUTCDATETIME(), @ConvertedByUserId, 0);", new
+            var conversionInsertSql = await BuildLeadConversionInsertSqlAsync(cn, tx, cancellationToken);
+            await cn.ExecuteAsync(new CommandDefinition(conversionInsertSql, new
             {
                 LeadConversionId = conversionId,
                 request.TenantId,
                 lead.LeadId,
                 AccountId = accountId.Value,
+                ConvertedAccountId = accountId.Value,
                 OpportunityId = opportunityId,
+                ConvertedOpportunityId = opportunityId,
                 ContactId = contactId,
+                ConvertedContactId = contactId,
                 AccountActionCode = accountActionCode,
                 SubmissionNextStepCode = submissionNextStep,
                 SubmissionId = submissionDraft?.SubmissionId,
@@ -489,7 +495,8 @@ VALUES
                 EstimatedAmount = estimatedAmount,
                 LineOfBusiness = lineOfBusiness,
                 Notes = Clean(request.Notes),
-                ConvertedByUserId = request.ConvertedByUserId
+                ConvertedByUserId = request.ConvertedByUserId,
+                CreatedByUserId = request.ConvertedByUserId
             }, transaction: tx, cancellationToken: cancellationToken));
 
             await cn.ExecuteAsync(new CommandDefinition(@"
@@ -539,6 +546,71 @@ IF EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('CRM.Lead'))
 AND COL_LENGTH('CRM.Lead', 'AccountId') IS NULL
     ALTER TABLE CRM.Lead ADD AccountId UNIQUEIDENTIFIER NULL;",
             cancellationToken: cancellationToken));
+
+    private static async Task<string> BuildLeadConversionInsertSqlAsync(IDbConnection connection, IDbTransaction transaction, CancellationToken cancellationToken)
+    {
+        var columns = (await connection.QueryAsync<string>(new CommandDefinition(@"
+SELECT c.name
+FROM sys.columns c
+WHERE c.object_id = OBJECT_ID(N'CRM.LeadConversion');", transaction: transaction, cancellationToken: cancellationToken))).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var insertColumns = new List<string>
+        {
+            "LeadConversionId",
+            "TenantId",
+            "LeadId",
+            "AccountId",
+            "OpportunityId",
+            "ContactId",
+            "ConversionTypeCode",
+            "AccountActionCode",
+            "SubmissionNextStepCode",
+            "SubmissionId",
+            "SubmissionNumber",
+            "SourceLeadNumber",
+            "AccountNameSnapshot",
+            "OpportunityNameSnapshot",
+            "EstimatedAmount",
+            "LineOfBusiness",
+            "Notes",
+            "ConvertedDateUtc",
+            "ConvertedByUserId",
+            "CreatedDateUtc",
+            "CreatedByUserId",
+            "IsDeleted"
+        }.Where(columns.Contains).ToList();
+
+        if (columns.Contains("ConvertedAccountId") && !insertColumns.Contains("ConvertedAccountId", StringComparer.OrdinalIgnoreCase))
+        {
+            insertColumns.Insert(insertColumns.IndexOf("OpportunityId"), "ConvertedAccountId");
+        }
+
+        if (columns.Contains("ConvertedOpportunityId") && !insertColumns.Contains("ConvertedOpportunityId", StringComparer.OrdinalIgnoreCase))
+        {
+            insertColumns.Insert(insertColumns.IndexOf("ContactId"), "ConvertedOpportunityId");
+        }
+
+        if (columns.Contains("ConvertedContactId") && !insertColumns.Contains("ConvertedContactId", StringComparer.OrdinalIgnoreCase))
+        {
+            insertColumns.Insert(insertColumns.IndexOf("ConversionTypeCode"), "ConvertedContactId");
+        }
+
+        var values = insertColumns.Select(static column => column switch
+        {
+            "ConversionTypeCode" => "N'AccountOpportunity'",
+            "ConvertedDateUtc" => "SYSUTCDATETIME()",
+            "CreatedDateUtc" => "SYSUTCDATETIME()",
+            "IsDeleted" => "0",
+            _ => "@" + column
+        });
+
+        return $"""
+INSERT INTO CRM.LeadConversion
+({string.Join(", ", insertColumns)})
+VALUES
+({string.Join(", ", values)});
+""";
+    }
 
     private static async Task<SubmissionDraftLink> CreateSubmissionDraftAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, Guid accountId, Guid opportunityId, string? lineOfBusiness, decimal? targetPremium, string? leadPriority, Guid assignedToUserId, Guid createdByUserId, DateTime? requestedEffectiveDate, CancellationToken cancellationToken)
     {
@@ -1276,22 +1348,77 @@ SELECT COUNT(1) FROM CRM.Opportunity WHERE OpportunityNumber = @Candidate AND Is
         return $"OPP-{DateTime.UtcNow:yyyyMMddHHmmss}";
     }
 
-    private static async Task<Guid?> GetQualificationStageIdAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, CancellationToken cancellationToken)
+    private static async Task<ConvertedAccountDefaults> GetConvertedAccountDefaultsAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, CancellationToken cancellationToken)
     {
-        return await connection.QuerySingleOrDefaultAsync<Guid?>(new CommandDefinition(@"
+        var defaults = await connection.QuerySingleAsync<ConvertedAccountDefaults>(new CommandDefinition(@"
+SELECT
+    AccountTypeCode = COALESCE(
+        (SELECT TOP 1 AccountTypeCode FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountTypeCode IS NOT NULL AND UPPER(AccountTypeCode) IN (N'PROSPECT', N'CLIENT', N'CUSTOMER') ORDER BY CASE UPPER(AccountTypeCode) WHEN N'PROSPECT' THEN 0 WHEN N'CLIENT' THEN 1 WHEN N'CUSTOMER' THEN 2 ELSE 3 END, CreatedDateUtc DESC),
+        (SELECT TOP 1 AccountTypeCode FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountTypeCode IS NOT NULL ORDER BY CreatedDateUtc DESC),
+        (SELECT TOP 1 AccountTypeCode FROM Client.Account WHERE IsDeleted = 0 AND AccountTypeCode IS NOT NULL AND UPPER(AccountTypeCode) IN (N'PROSPECT', N'CLIENT', N'CUSTOMER') ORDER BY CASE UPPER(AccountTypeCode) WHEN N'PROSPECT' THEN 0 WHEN N'CLIENT' THEN 1 WHEN N'CUSTOMER' THEN 2 ELSE 3 END, CreatedDateUtc DESC),
+        (SELECT TOP 1 AccountTypeCode FROM Client.Account WHERE IsDeleted = 0 AND AccountTypeCode IS NOT NULL ORDER BY CreatedDateUtc DESC)
+    ),
+    StatusCode = COALESCE(
+        (SELECT TOP 1 StatusCode FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND StatusCode IS NOT NULL AND StatusCodeId IS NOT NULL AND (UPPER(StatusCode) = N'ACTIVE' OR StatusCodeId = 1) ORDER BY CASE WHEN UPPER(StatusCode) = N'ACTIVE' THEN 0 ELSE 1 END, CreatedDateUtc DESC),
+        (SELECT TOP 1 StatusCode FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND StatusCode IS NOT NULL AND StatusCodeId IS NOT NULL ORDER BY CreatedDateUtc DESC),
+        (SELECT TOP 1 StatusCode FROM Client.Account WHERE IsDeleted = 0 AND StatusCode IS NOT NULL AND StatusCodeId IS NOT NULL AND (UPPER(StatusCode) = N'ACTIVE' OR StatusCodeId = 1) ORDER BY CASE WHEN UPPER(StatusCode) = N'ACTIVE' THEN 0 ELSE 1 END, CreatedDateUtc DESC),
+        (SELECT TOP 1 StatusCode FROM Client.Account WHERE IsDeleted = 0 AND StatusCode IS NOT NULL AND StatusCodeId IS NOT NULL ORDER BY CreatedDateUtc DESC)
+    ),
+    StatusCodeId = COALESCE(
+        (SELECT TOP 1 StatusCodeId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND StatusCodeId IS NOT NULL AND (UPPER(StatusCode) = N'ACTIVE' OR StatusCodeId = 1) ORDER BY CASE WHEN StatusCodeId = 1 THEN 0 ELSE 1 END, CreatedDateUtc DESC),
+        (SELECT TOP 1 StatusCodeId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND StatusCodeId IS NOT NULL ORDER BY CreatedDateUtc DESC),
+        (SELECT TOP 1 StatusCodeId FROM Client.Account WHERE IsDeleted = 0 AND StatusCodeId IS NOT NULL AND (UPPER(StatusCode) = N'ACTIVE' OR StatusCodeId = 1) ORDER BY CASE WHEN StatusCodeId = 1 THEN 0 ELSE 1 END, CreatedDateUtc DESC),
+        (SELECT TOP 1 StatusCodeId FROM Client.Account WHERE IsDeleted = 0 AND StatusCodeId IS NOT NULL ORDER BY CreatedDateUtc DESC)
+    ),
+    LifecycleStageCode = COALESCE(
+        (SELECT TOP 1 LifecycleStageCode FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND LifecycleStageCode IS NOT NULL AND UPPER(LifecycleStageCode) IN (N'PROSPECT', N'LEAD') ORDER BY CASE UPPER(LifecycleStageCode) WHEN N'PROSPECT' THEN 0 WHEN N'LEAD' THEN 1 ELSE 2 END, CreatedDateUtc DESC),
+        (SELECT TOP 1 LifecycleStageCode FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND LifecycleStageCode IS NOT NULL ORDER BY CreatedDateUtc DESC),
+        (SELECT TOP 1 LifecycleStageCode FROM Client.Account WHERE IsDeleted = 0 AND LifecycleStageCode IS NOT NULL AND UPPER(LifecycleStageCode) IN (N'PROSPECT', N'LEAD') ORDER BY CASE UPPER(LifecycleStageCode) WHEN N'PROSPECT' THEN 0 WHEN N'LEAD' THEN 1 ELSE 2 END, CreatedDateUtc DESC),
+        (SELECT TOP 1 LifecycleStageCode FROM Client.Account WHERE IsDeleted = 0 AND LifecycleStageCode IS NOT NULL ORDER BY CreatedDateUtc DESC)
+    );", new { TenantId = tenantId }, transaction: transaction, cancellationToken: cancellationToken));
+
+        if (string.IsNullOrWhiteSpace(defaults.AccountTypeCode))
+        {
+            throw new InvalidOperationException("Lead conversion cannot create an account because no DB-backed account type is configured.");
+        }
+
+        if (string.IsNullOrWhiteSpace(defaults.StatusCode) || !defaults.StatusCodeId.HasValue)
+        {
+            throw new InvalidOperationException("Lead conversion cannot create an account because no DB-backed account status is configured.");
+        }
+
+        if (string.IsNullOrWhiteSpace(defaults.LifecycleStageCode))
+        {
+            throw new InvalidOperationException("Lead conversion cannot create an account because no DB-backed account lifecycle stage is configured.");
+        }
+
+        return defaults;
+    }
+
+    private static async Task<ConvertedOpportunityStage> GetInitialOpportunityStageAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, CancellationToken cancellationToken)
+    {
+        var stage = await connection.QuerySingleOrDefaultAsync<ConvertedOpportunityStage>(new CommandDefinition(@"
 IF OBJECT_ID(N'CRM.OpportunityStage', N'U') IS NULL
 BEGIN
-    SELECT CAST(NULL AS UNIQUEIDENTIFIER);
+    SELECT CAST(NULL AS UNIQUEIDENTIFIER) AS OpportunityStageId, CAST(NULL AS NVARCHAR(100)) AS StageName;
     RETURN;
 END;
 
-SELECT TOP 1 OpportunityStageId
+SELECT TOP 1 OpportunityStageId, StageName
 FROM CRM.OpportunityStage
 WHERE TenantId = @TenantId
   AND IsActive = 1
-  AND (StageName IN (N'Qualification', N'Qualify', N'Prospect') OR StageCode IN (N'QUALIFICATION', N'QUALIFY', N'PROSPECT'))
 ORDER BY SortOrder, StageName;", new { TenantId = tenantId }, transaction: transaction, cancellationToken: cancellationToken));
+
+        if (stage is null || stage.OpportunityStageId == Guid.Empty || string.IsNullOrWhiteSpace(stage.StageName))
+        {
+            throw new InvalidOperationException("Lead conversion cannot create an opportunity because no DB-backed opportunity stage is configured.");
+        }
+
+        return stage;
     }
+
+    private sealed record ConvertedOpportunityStage(Guid OpportunityStageId, string StageName);
 
     private static async Task<Guid?> UpsertConvertedContactAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, Guid accountId, LeadDto lead, Guid convertedByUserId, CancellationToken cancellationToken)
     {
@@ -1570,6 +1697,8 @@ ORDER BY PointValue DESC, RuleName;";
         DateTime CreatedDateUtc);
 
     private sealed record SubmissionDraftLink(Guid SubmissionId, string SubmissionNumber);
+
+    private sealed record ConvertedAccountDefaults(string? AccountTypeCode, string? StatusCode, int? StatusCodeId, string? LifecycleStageCode);
 
     private sealed record CommunicationSync(Guid ThreadId, Guid MessageId);
 
